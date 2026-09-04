@@ -2,11 +2,12 @@ import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 
-// Mocked e2e for Settings → Team (#1157): a member with no team can create one
-// from the UI (the fix for "team is not editable, so projects are not usable or
-// sharable"), and a name that belongs to someone else's trust group comes back
-// as the upstream 409 rather than a silent success — joining stays an admin
-// grant (ADR-0047).
+// Mocked e2e for Settings → Team (#1157, copy corrected by ADR-0057): a member
+// with no team can create one from the UI (the fix for "team is not editable,
+// so projects are not usable or sharable"); a name that belongs to someone
+// else's trust group comes back as a conflict rather than a silent success —
+// joining stays an admin grant (ADR-0047); and leaving, which now unshares the
+// chats you shared with the team, confirms before it acts.
 
 async function mockShell(page: Page) {
   await page.route("**/api/session", (r: Route) =>
@@ -54,7 +55,11 @@ test("a member creates their own team from Settings → Team", async ({ page }) 
   await page.getByRole("button", { name: "Create team" }).click();
 
   await expect(page.getByTestId("team-current")).toHaveText("platform", { timeout: 15_000 });
-  await expect(page.getByText(/You are now in team/)).toBeVisible();
+  // The confirmation names the one path that actually adds teammates — the old
+  // copy told them to "join the same name", which the server refuses.
+  await expect(
+    page.getByText(/Teammates get added by an admin in Settings → Admin → Users/),
+  ).toBeVisible();
   expect(writes.map((w) => JSON.parse(w))).toEqual([{ team_id: "platform" }]);
 });
 
@@ -80,6 +85,54 @@ test("claiming another team's name surfaces the upstream conflict", async ({ pag
   await page.getByLabel("Team name").fill("leadership");
   await page.getByRole("button", { name: "Create team" }).click();
 
-  await expect(page.getByText(/ask an admin to add you to it/i)).toBeVisible({ timeout: 15_000 });
+  // The server cannot say whether a user or a team-shared PROJECT holds the
+  // name (ADR-0047), so the copy does not claim "that team exists" — it says
+  // the name is in use and names the fix.
+  await expect(
+    page.getByText(/That name is already in use\. An admin can add you/i),
+  ).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("team-current")).toHaveCount(0);
+});
+
+test("leaving confirms first, stating what it costs", async ({ page }) => {
+  await mockShell(page);
+
+  const writes: string[] = [];
+  await page.route("**/api/me/team", async (r: Route) => {
+    if (r.request().method() === "PUT") {
+      writes.push(r.request().postData() ?? "");
+      await r.fulfill({
+        json: { email: "e2e@example.com", role: "member", team_id: "", admin: false },
+      });
+      return;
+    }
+    await r.fulfill({
+      json: {
+        email: "e2e@example.com",
+        role: "member",
+        team_id: "platform",
+        admin: false,
+        shared_projects: 3,
+        shared_chats: 2,
+      },
+    });
+  });
+
+  await page.goto("/settings/team");
+  await expect(page.getByTestId("team-current")).toHaveText("platform", { timeout: 15_000 });
+
+  await page.getByRole("button", { name: "Leave team" }).click();
+
+  // Nothing is written until the consequences have been shown and accepted —
+  // leaving unshares the chats this user shared with the team (ADR-0057).
+  const dialog = page.getByRole("dialog", { name: "Leave platform?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("3 team-shared projects");
+  await expect(dialog).toContainText("2 chats you shared with the team");
+  await expect(dialog).toContainText("Projects you own stay yours");
+  expect(writes).toEqual([]);
+
+  await dialog.getByRole("button", { name: "Leave team" }).click();
+  await expect(page.getByText(/You left your team/)).toBeVisible({ timeout: 15_000 });
+  expect(writes.map((w) => JSON.parse(w))).toEqual([{ team_id: "" }]);
 });

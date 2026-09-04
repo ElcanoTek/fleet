@@ -226,6 +226,9 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 	email = normalizeEmail(email)
 	team := strings.TrimSpace(teamID)
 	if team == "" {
+		// Leaving unshares the chats this user shared with the team they are
+		// leaving (ADR-0057) — SetUserRoleTeam does it at the choke point, so
+		// the admin path behaves identically.
 		empty := ""
 		return s.SetUserRoleTeam(ctx, email, nil, &empty)
 	}
@@ -271,6 +274,11 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 		}
 	}
 
+	// Moving to a different team is still leaving the old one — in this tx, so
+	// the revoke and the move commit together or not at all.
+	if err := unshareOnTeamChangeTx(ctx, tx, email, team); err != nil {
+		return nil, err
+	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE users SET team_id = $2, updated_at = $3 WHERE email = $1`,
 		email, team, time.Now().Unix())
@@ -286,14 +294,63 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 	return s.GetUser(ctx, email)
 }
 
+// unshareOnTeamChange revokes the chats email shared with the team they are
+// LEAVING, whenever their team is about to change (to another team, or to
+// none). It is a no-op when the team is unchanged or was already empty.
+//
+// This lives at the choke point on purpose. The rule users are told — leaving a
+// team unshares the chats you shared with it — was implemented only on the
+// self-serve path, so an ADMIN moving someone between teams left the shares
+// behind. With the audience now stamped on the row (migration 054) that is no
+// longer a privacy leak, but it is still a lie: the chats stayed shared with a
+// team their owner is no longer in, and nothing on the owner's side listed them
+// to revoke. Both paths now behave the same way.
+//
+// It takes the caller's tx rather than reaching for s.db, so the revoke and the
+// team write commit together. Split across two connections, a revoke could
+// commit while the move that motivated it rolled back: the user is told the
+// move failed and is still in their old team, with their shares silently gone
+// and no record of it.
+func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam string) error {
+	var cur sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1 FOR UPDATE`, email).Scan(&cur); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // nothing to unshare; the caller's write will report it
+		}
+		return err
+	}
+	old := strings.TrimSpace(cur.String)
+	if old == "" || strings.EqualFold(old, strings.TrimSpace(newTeam)) {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, updated_at = $1
+		WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
+		time.Now().Unix(), email, old)
+	return err
+}
+
 // SetUserRoleTeam applies a partial role/team update (PATCH /admin/users/{email},
 // #237): a nil pointer leaves that column untouched, a non-nil one writes it (an
 // empty team_id string clears the team → NULL). Validates role against the CHECK
 // set. Returns the updated user, or ErrUserNotFound when the email is absent.
+//
+// A team change also takes the leaver's shares with it, in the SAME transaction
+// as the write (see unshareOnTeamChangeTx).
 func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*User, error) {
 	email = normalizeEmail(email)
 	if role != nil && !ValidRole(*role) {
 		return nil, fmt.Errorf("invalid role %q (want member|viewer|admin)", *role)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	if teamID != nil {
+		if err := unshareOnTeamChangeTx(ctx, tx, email, *teamID); err != nil {
+			return nil, err
+		}
 	}
 	// COALESCE($n, current) leaves a column untouched when its arg is NULL; an
 	// empty team_id is written as SQL NULL so "clear the team" round-trips.
@@ -305,7 +362,7 @@ func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID 
 			teamArg = strings.TrimSpace(*teamID)
 		}
 	}
-	res, err := s.db.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		UPDATE users
 		SET role     = COALESCE($2, role),
 		    team_id  = CASE WHEN $4::bool THEN $3 ELSE team_id END,
@@ -318,6 +375,9 @@ func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID 
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, ErrUserNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return s.GetUser(ctx, email)
 }
@@ -437,6 +497,26 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// A TEAM-SHARED project is not the account's to take with it. Deleting a
+	// departing owner used to destroy the project and every team learning in
+	// it, for people who are still here and never agreed to that — the routine
+	// admin action for "X left the company" quietly deleted the team's work.
+	// It now fails closed and names what to transfer first (ADR-0057).
+	// Personal projects still go with the account: nobody else can see them.
+	//
+	// FIRST statement, in this tx, with the matching rows locked. Read on s.db
+	// it was a second connection against a snapshot the tx could not see: an
+	// owner who shared a project between the check and the COMMIT would have
+	// had it deleted anyway — exactly the outcome the guard exists to prevent.
+	// FOR UPDATE also serializes against a concurrent PATCH.
+	shared, err := teamSharedProjectsOwnedByTx(ctx, tx, email)
+	if err != nil {
+		return fmt.Errorf("check owned team-shared projects: %w", err)
+	}
+	if len(shared) > 0 {
+		return &OwnsSharedProjectsError{Projects: shared}
+	}
+
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM conversations WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete conversations: %w", err)
@@ -463,9 +543,15 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// Owned projects: mirror DeleteProject — detach every member's
 	// conversations (the history belongs to its user), delete the shared
 	// project memories (they are project state), then the projects.
+	//
+	// updated_at is bumped for the same reason DeleteProject bumps it: losing
+	// the project re-arms the TTL sweep, and a detached chat carrying its
+	// original timestamp is sweep-eligible immediately. Members whose chats
+	// were filed in a departing owner's project get a full retention window,
+	// not none.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET project_id = NULL
-		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email); err != nil {
+		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, updated_at = $2
+		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email, time.Now().Unix()); err != nil {
 		return fmt.Errorf("detach project conversations: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,

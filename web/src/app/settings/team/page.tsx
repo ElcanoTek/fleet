@@ -16,6 +16,15 @@
 //
 // Admins are exempt upstream (they can type any team here, same as the Users
 // tab); the copy says so rather than pretending the gate applies to them.
+//
+// The copy tells the truth about the model in both directions. Creating a team
+// never invites teammates to "join the same name" — the server refuses a name
+// somebody else holds (409), so an admin adds them from the Users tab. And
+// LEAVING states its consequences before it happens (the counts come from GET
+// /api/me/team): the team-shared projects that go out of view, and the chats
+// this user shared into them, which are unshared by leaving because a
+// team-shared chat cannot outlive the place teammates would find it
+// (ADR-0057).
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -29,6 +38,16 @@ export type Me = {
   role: string;
   team_id: string;
   admin: boolean;
+  // What leaving would cost, computed server-side (GET /api/me/team):
+  // shared_projects = team-shared projects owned by OTHERS that go out of
+  // view; shared_chats = this user's own chats currently shared with the team,
+  // all of which leaving unshares. ABSENT when the server could not count
+  // them (the fields are omitempty pointers on purpose) → the confirm says it
+  // doesn't know rather than reporting a zero it never computed. A dialog
+  // whose whole job is stating consequences must not degrade to "nothing to
+  // lose".
+  shared_projects?: number;
+  shared_chats?: number;
 };
 
 export default function TeamSettingsPage() {
@@ -38,6 +57,9 @@ export default function TeamSettingsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Leaving is destructive in a way the old fire-then-report flow never said:
+  // it unshares chats. true = the confirm is open.
+  const [confirmLeave, setConfirmLeave] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -78,14 +100,23 @@ export default function TeamSettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ team_id: teamID }),
       });
+      if (res.status === 409) {
+        // The server refuses a name that is already in use — by another
+        // member OR by a team-shared project whose team has no members left
+        // (ADR-0047). It cannot say which, so neither does this: the fix is
+        // the same either way.
+        throw new Error(
+          "That name is already in use. An admin can add you to the team in Settings → Admin → Users.",
+        );
+      }
       if (!res.ok) throw new Error(await readError(res, `Save failed (${res.status}).`));
       const updated = (await res.json()) as Me;
       setMe(updated);
       setDraft("");
       setNotice(
         updated.team_id
-          ? `You are now in team “${updated.team_id}”. New projects can be shared with it.`
-          : "You left your team. Team-shared projects are no longer visible to you.",
+          ? `You’re in “${updated.team_id}”. Teammates get added by an admin in Settings → Admin → Users.`
+          : "You left your team. Team-shared projects are no longer visible to you, and the chats you shared into them are no longer shared.",
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save your team.");
@@ -132,7 +163,7 @@ export default function TeamSettingsPage() {
               type="button"
               className={btnClass({ sm: true, danger: true })}
               disabled={busy}
-              onClick={() => void write("")}
+              onClick={() => setConfirmLeave(true)}
             >
               Leave team
             </button>
@@ -140,8 +171,8 @@ export default function TeamSettingsPage() {
         ) : (
           <div className="grid gap-[0.55rem]">
             <p className="m-0 text-[0.9rem] text-[var(--color-text-primary)]">
-              You are not in a team yet. Name one to create it — everyone you want to share
-              with then joins the same name.
+              You are not in a team yet. Name a team to create it. Teammates are added by an
+              admin in Settings → Admin → Users.
             </p>
             <div className="flex flex-wrap items-center gap-[0.55rem]">
               <input
@@ -189,7 +220,9 @@ export default function TeamSettingsPage() {
               Shared conversations.
             </strong>{" "}
             A conversation stays private until you share it with your team from its own
-            menu; teammates then get a read-only view.
+            menu <strong className="font-semibold">inside a team-shared project</strong>;
+            teammates then find it on that project&rsquo;s home page and get a read-only
+            view they can branch from.
           </li>
           <li>
             Your chats, memories, and connectors stay yours — a team never exposes them on
@@ -204,7 +237,112 @@ export default function TeamSettingsPage() {
           .
         </p>
       </ConnPanel>
+
+      {confirmLeave && me?.team_id ? (
+        <LeaveTeamConfirm
+          team={me.team_id}
+          sharedProjects={me.shared_projects}
+          sharedChats={me.shared_chats}
+          busy={busy}
+          onCancel={() => setConfirmLeave(false)}
+          onConfirm={() => {
+            setConfirmLeave(false);
+            void write("");
+          }}
+        />
+      ) : null}
     </SetSection>
+  );
+}
+
+// LeaveTeamConfirm states what leaving costs BEFORE it happens (Item A4).
+// Three facts, each verified against the code that implements it:
+//
+//   - the team-shared projects you stop seeing (those you do not own),
+//   - the chats you shared into them, which leaving unshares — a team-shared
+//     chat cannot exist without a place teammates would find it (ADR-0057),
+//   - projects you OWN stay yours and stay shared with the team: ownership
+//     is not team membership, and store.ListProjectsForUser matches the owner
+//     regardless of team, so nothing about them changes.
+function LeaveTeamConfirm({
+  team,
+  sharedProjects,
+  sharedChats,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  team: string;
+  sharedProjects?: number;
+  sharedChats?: number;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const projects =
+    sharedProjects === undefined
+      ? "any project shared with it"
+      : sharedProjects === 0
+        ? "any project shared with it (there are none right now)"
+        : `${sharedProjects} team-shared project${sharedProjects === 1 ? "" : "s"}`;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <button
+        aria-label="Cancel leaving the team"
+        className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
+        type="button"
+        onClick={onCancel}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Leave ${team}?`}
+        className="relative z-10 w-full max-w-[26rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
+      >
+        <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+          Leave {team}?
+        </h2>
+        <ul className="mb-4 grid list-disc gap-[0.35rem] pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
+          <li>You&rsquo;ll lose access to {projects}.</li>
+          {sharedChats === undefined || sharedChats > 0 ? (
+            <li>
+              {sharedChats === undefined
+                ? "Chats you shared with the team stop being shared"
+                : `${sharedChats} chat${sharedChats === 1 ? "" : "s"} you shared with the team stop${sharedChats === 1 ? "s" : ""} being shared`}
+              {" "}— they stay yours, teammates just can&rsquo;t open them any more.
+            </li>
+          ) : null}
+          <li>
+            Chats you filed in {team}&rsquo;s projects stay yours, but move back
+            to Temporary — pin the ones you want to keep.
+          </li>
+          <li>Projects you own stay yours, and stay shared with {team}.</li>
+        </ul>
+        {sharedProjects === undefined || sharedChats === undefined ? (
+          <p className="mb-4 text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
+            We couldn&rsquo;t work out the exact numbers just now, so they
+            aren&rsquo;t shown above.
+          </p>
+        ) : null}
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            className={btnClass({ sm: true })}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={btnClass({ sm: true, danger: true })}
+            disabled={busy}
+            onClick={onConfirm}
+          >
+            Leave team
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

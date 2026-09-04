@@ -1,6 +1,6 @@
 # ADR-0013: Team RBAC — roles + opt-in, team-scoped conversation reads
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0057](0057-team-shared-chats-live-in-team-shared-projects.md)
 - **Date:** 2026-06-30
 - **Deciders:** fleet maintainers
 

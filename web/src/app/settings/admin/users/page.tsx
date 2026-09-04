@@ -184,6 +184,84 @@ function PermissionFields({
   );
 }
 
+// TeamPicker replaces the free-text team field (Item A5). Typing a team name
+// silently created a new one on any typo or case difference — "Testing" and
+// "testing" became two trust groups, and the difference only shows up later,
+// as a project a teammate cannot see. Assignment is now a choice from the
+// teams that exist, with "New team…" as the deliberate way to make one.
+//
+// The list comes from the accounts on this page, so a team whose only holder
+// is a team-shared project (its members all left) is not offered — "New team…"
+// still types that name if an admin needs it, and the server's own guards
+// apply either way.
+function TeamPicker({
+  label,
+  teams,
+  value,
+  onChange,
+  className,
+}: {
+  label: string;
+  teams: string[];
+  value: string;
+  onChange: (team: string) => void;
+  className?: string;
+}) {
+  // Creating a new team is a mode, not a value: the select shows "New team…"
+  // while the adjacent input holds the draft. It opens automatically when the
+  // current value is a name no account holds yet (a fresh team mid-edit).
+  //
+  // RESYNCED when `value` changes, not derived once. The kebab popover this
+  // renders in is reused across rows, so choosing "New team…" for one account
+  // and then opening another account's kebab left the mode set: the second
+  // account's real team appeared inside a "New team name" box while the select
+  // claimed a new team was being created.
+  const known = value === "" || teams.includes(value);
+  const [creating, setCreating] = useState(!known);
+  const [seenValue, setSeenValue] = useState(value);
+  if (value !== seenValue) {
+    setSeenValue(value);
+    setCreating(!(value === "" || teams.includes(value)));
+  }
+  const showInput = creating || !known;
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-[0.35rem]">
+      <select
+        aria-label={label}
+        value={showInput ? "__new__" : value}
+        onChange={(e) => {
+          if (e.target.value === "__new__") {
+            setCreating(true);
+            onChange("");
+            return;
+          }
+          setCreating(false);
+          onChange(e.target.value);
+        }}
+        className={className}
+      >
+        <option value="">— No team</option>
+        {teams.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+        <option value="__new__">New team…</option>
+      </select>
+      {showInput ? (
+        <input
+          aria-label={`${label}: new team name`}
+          placeholder="Team name"
+          maxLength={64}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={className}
+        />
+      ) : null}
+    </span>
+  );
+}
+
 // generatePassword returns a random 16-char password from an unambiguous
 // alphabet (no 0/O/1/l/I). crypto.getRandomValues + rejection sampling keeps
 // the distribution uniform; 16 chars over 55 symbols ≈ 92 bits.
@@ -685,17 +763,6 @@ export default function AdminUsersPage() {
         <NoticeBanner tone="danger">{error}</NoticeBanner>
       ) : (
         <ConnPanel>
-          {/* Existing team names as type-ahead suggestions for every team
-              input on the page (free text still allowed for new teams). */}
-          <datalist id="admin-users-teams">
-            {teams.map((t) => (
-              // aria-label, not child text: a datalist suggestion has no
-              // rendered label of its own for AT to read, and giving the
-              // <option> children would make browsers that show label AND
-              // value (Chrome) print the team name twice in the dropdown.
-              <option key={t} value={t} aria-label={t} />
-            ))}
-          </datalist>
           {/* ── discovery toolbar: search on its own bar, filters sharing one
               row as equal thirds (SETTINGS_INPUT carries w-full, so the
               selects need the important override to sit side by side). ── */}
@@ -1001,12 +1068,11 @@ export default function AdminUsersPage() {
                 <span className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
                   Team
                 </span>
-                <input
-                  aria-label={`Team for ${menu.email}`}
+                <TeamPicker
+                  label={`Team for ${menu.email}`}
+                  teams={teams}
                   value={menu.team}
-                  placeholder="—"
-                  list="admin-users-teams"
-                  onChange={(e) => setMenu({ ...menu, team: e.target.value })}
+                  onChange={(team) => setMenu({ ...menu, team })}
                   className={`${SETTINGS_INPUT} min-h-[2.1rem]! min-w-0 flex-1 px-[0.55rem]! py-[0.3rem]! text-[0.78rem]!`}
                 />
               </div>
@@ -1054,6 +1120,17 @@ export default function AdminUsersPage() {
                   }}
                 />
               </div>
+              {/* Deleting an account is a cascade, not a de-provision, and the
+                  two-click button alone said none of it. The one thing it
+                  CANNOT take is a team-shared project — the server refuses and
+                  names what to transfer — so say that here too, where the
+                  admin decides. */}
+              <p className="mt-2 text-[0.7rem] leading-[1.5] text-[var(--color-text-muted)]">
+                Deleting removes their chats, memories, connected MCP servers
+                (and stored credentials), connector settings, skills and
+                personal projects. Projects they share with a team are kept —
+                transfer those first, from the project&rsquo;s settings.
+              </p>
             </div>
           ) : null}
 
@@ -1107,12 +1184,11 @@ export default function AdminUsersPage() {
                   />
                 </div>
                 <ConnField label="Team" grow>
-                  <input
-                    aria-label="New user team"
+                  <TeamPicker
+                    label="New user team"
+                    teams={teams}
                     value={newTeam}
-                    placeholder="—"
-                    list="admin-users-teams"
-                    onChange={(e) => setNewTeam(e.target.value)}
+                    onChange={setNewTeam}
                     className={SETTINGS_INPUT}
                   />
                 </ConnField>

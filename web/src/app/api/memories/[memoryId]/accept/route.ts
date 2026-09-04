@@ -15,8 +15,14 @@ export async function POST(request: NextRequest, { params }: Params) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { memoryId } = await params;
+  // Body is optional and forwarded verbatim: {"project_id": ...} accepts the
+  // proposal into that project's team learnings instead of personal memory
+  // (the destination picker on the approval card). Membership is re-checked
+  // upstream.
+  const body = await request.text();
   const { upstream, error } = await chatServerProxy(session, `/memories/${encodeURIComponent(memoryId)}/accept`, {
     method: "POST",
+    body,
   });
   if (error) return error;
   const text = await upstream.text();

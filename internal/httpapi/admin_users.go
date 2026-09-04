@@ -132,6 +132,19 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
 		}
+		// The account still owns team-shared projects. Deleting it would take
+		// those projects — and every team learning in them — from people who
+		// are still here, so the delete fails closed and names what to transfer
+		// first (ADR-0057). 409, not 500: nothing is wrong, there is a step
+		// missing.
+		var owns *store.OwnsSharedProjectsError
+		if errors.As(err, &owns) {
+			http.Error(w,
+				"this account still owns team-shared projects ("+strings.Join(owns.Projects, ", ")+
+					") — transfer them to another member first, then delete the account",
+				http.StatusConflict)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -218,9 +218,60 @@ describe("AdminUsersPage", () => {
     await screen.findByText("bob@x.com");
 
     openKebab("bob@x.com");
+    // A5: the field is a picker over the teams that exist, not free text —
+    // "blue" is alice's team, chosen rather than retyped (and mistyped).
     fireEvent.change(screen.getByLabelText("Team for bob@x.com"), {
-      target: { value: "platform" },
+      target: { value: "blue" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(JSON.parse(calls[0].body)).toEqual({ team_id: "blue" });
+  });
+
+  // A5: a genuinely new team is still reachable, but only deliberately —
+  // "New team…" opens a name field. Typing a near-miss of an existing name is
+  // now a choice, not the default outcome of a typo.
+  it("creates a new team only through the explicit New team… option", async () => {
+    const calls: { body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/bob%40x.com" && init?.method === "PATCH") {
+        calls.push({ body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            email: "bob@x.com",
+            role: "member",
+            team_id: "platform",
+            created_at: 1,
+            updated_at: 2,
+          }),
+          { status: 200 },
+        );
+      }
+      return listImpl()(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("bob@x.com");
+
+    openKebab("bob@x.com");
+    const select = screen.getByLabelText("Team for bob@x.com");
+    // Existing teams are offered; the free-text field is not there until asked
+    // for.
+    expect(
+      within(select as HTMLSelectElement)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["— No team", "blue", "New team…"]);
+    expect(
+      screen.queryByLabelText("Team for bob@x.com: new team name"),
+    ).toBeNull();
+
+    fireEvent.change(select, { target: { value: "__new__" } });
+    fireEvent.change(
+      screen.getByLabelText("Team for bob@x.com: new team name"),
+      { target: { value: "platform" } },
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(calls.length).toBe(1));
@@ -533,6 +584,9 @@ describe("AdminUsersPage", () => {
     fireEvent.click(within(chat).getByRole("button", { name: "Viewer" }));
     fireEvent.click(within(ops).getByRole("button", { name: "Contributor" }));
     fireEvent.change(screen.getByLabelText("New user team"), {
+      target: { value: "__new__" },
+    });
+    fireEvent.change(screen.getByLabelText("New user team: new team name"), {
       target: { value: "platform" },
     });
     expect(addButton).toBeEnabled();

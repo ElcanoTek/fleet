@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
@@ -26,8 +27,16 @@ export type Project = {
 };
 
 // The caller's own team, from /api/me/team (#1157). "Share with my team" is
-// meaningless without one, and until this modal could say so — and offer to
-// create a team on the spot — the checkbox just produced a server error.
+// meaningless without one, so the teamless state says where teams are managed
+// instead of rendering a control that could only 400.
+//
+// It used to offer to CREATE a team inline, with copy telling teammates to
+// "join the same name" — a path the server refuses (ADR-0047: joining is
+// admin-granted; an existing name returns 409). Team creation is a
+// once-per-account act with two surfaces that already own it (Settings → Team
+// for your own, Settings → Admin → Users for anyone's); this modal is now
+// display-only about teams, so there is nothing here to type and nothing to
+// get wrong.
 type Me = {
   email: string;
   role: string;
@@ -64,10 +73,10 @@ export function ProjectsModal({
   const [memories, setMemories] = useState<ProjectMemory[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // null = the team read has not resolved yet. The share control renders
+  // nothing until it does, so a slow read can never flash the wrong state
+  // (the "create a team" prompt for someone who has one, or vice versa).
   const [me, setMe] = useState<Me | null>(null);
-  // Draft team name for the inline "create a team" affordance below the share
-  // checkbox (null = the affordance is closed).
-  const [teamDraft, setTeamDraft] = useState<string | null>(null);
 
   // Draft form state (create or edit).
   const [editing, setEditing] = useState(Boolean(initialCreate));
@@ -99,31 +108,6 @@ export function ProjectsModal({
       // Offline / transient: leave `me` null and fall back to the neutral copy.
     }
   }, []);
-
-  // Create (or set) the caller's team from inside the modal, so "share this
-  // project" does not dead-end in Settings. Joining someone else's team is
-  // refused upstream (409) — the message says to ask an admin.
-  const createTeam = async () => {
-    const team = (teamDraft ?? "").trim();
-    if (!team || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/me/team", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ team_id: team }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      setMe((await res.json()) as Me);
-      setTeamDraft(null);
-      setTeamShared(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to set your team.");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const loadMemories = useCallback(async (id: string) => {
     try {
@@ -170,10 +154,34 @@ export function ProjectsModal({
 
   const save = async () => {
     if (busy || !name.trim()) return;
+    // Turning sharing OFF unshares every chat members shared into the project.
+    // The project home says so in red beside its checkbox; this one PATCHed
+    // the identical body and said nothing.
+    const wasShared = Boolean(projects.find((p) => p.id === selectedId)?.team_id);
+    if (
+      selectedId &&
+      wasShared &&
+      !teamShared &&
+      !window.confirm(
+        "Stop sharing this project with your team? Every chat members shared into it stops being shared too.",
+      )
+    )
+      return;
     setBusy(true);
     setError(null);
     try {
-      const body = JSON.stringify({ name: name.trim(), instructions, team_shared: teamShared });
+      // team_shared is sent only when it CHANGED. Sent unconditionally it
+      // re-resolved the audience server-side on every save, so an owner whose
+      // own team had changed handed the project — and every team learning in
+      // it — to their new team by renaming it. (The server now refuses to
+      // re-point an already-shared project for the same reason; this keeps
+      // the request honest about what the user asked for.)
+      const patch: Record<string, unknown> = {
+        name: name.trim(),
+        instructions,
+      };
+      if (!selectedId || teamShared !== wasShared) patch.team_shared = teamShared;
+      const body = JSON.stringify(patch);
       const res = selectedId
         ? await fetch(`/api/projects/${encodeURIComponent(selectedId)}`, {
             method: "PATCH",
@@ -198,7 +206,16 @@ export function ProjectsModal({
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm("Delete this project? Conversations are kept (detached); shared project memories are removed.")) return;
+    // The project home's delete confirm quotes real counts and offers the
+    // export; this list has no page to load them on, so it states the same
+    // two consequences in words and points at the richer path.
+    const p = projects.find((x) => x.id === id);
+    if (
+      !window.confirm(
+        `Delete ${p?.name ?? "this project"}? Its team learnings are lost, and every member's chats leave the project and become temporary. Open the project to see the counts and export first.`,
+      )
+    )
+      return;
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
@@ -240,7 +257,13 @@ export function ProjectsModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <button aria-label="Close projects" className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]" type="button" onClick={onClose} />
-      <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[40rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+      {/* Opaque surface, not a translucent composer panel: page content
+          behind the modal was showing through enough to compete with the form
+          — placeholder text and the primary button lost legibility on a busy
+          background. --color-surface-1 + the standard shadow are exactly what
+          the project settings dialog and the New Task modal already use, so
+          all three now read as one family. */}
+      <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[40rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Projects</h2>
@@ -271,42 +294,33 @@ export function ProjectsModal({
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
             />
-            {me && !me.team_id ? (
-              // No team → the checkbox would only produce a server error, so
-              // offer the one thing that makes it work instead.
-              <div className="grid gap-1 rounded-[0.75rem] border border-dashed border-[var(--color-border-strong)] px-3 py-2">
-                <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                  To share a project you need a team. Name one to create it — teammates join
-                  the same name.
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    className="min-w-0 flex-1 rounded-[0.7rem] border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                    placeholder="Team name (e.g. platform)"
-                    aria-label="Team name"
-                    maxLength={64}
-                    value={teamDraft ?? ""}
-                    onChange={(e) => setTeamDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void createTeam();
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="rounded-full border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.72rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-40"
-                    disabled={busy || !(teamDraft ?? "").trim()}
-                    onClick={() => void createTeam()}
-                  >
-                    Create team
-                  </button>
-                </div>
-              </div>
+            {me === null ? (
+              // The team read has not landed. Render nothing rather than
+              // guessing: either branch below would be a wrong-state flash.
+              <p className="m-0 text-[0.8125rem] text-[var(--color-text-muted)]">Checking your team…</p>
+            ) : !me.team_id ? (
+              // No team → display-only. Where to fix it depends on who is
+              // asking: most users on a fleet box ARE admins, so sending them
+              // to ask someone else would be worse than useless.
+              <p className="m-0 rounded-[0.75rem] border border-dashed border-[var(--color-border-strong)] px-3 py-2 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
+                {me.admin
+                  ? "You’re not on a team yet. Add yourself to one in Settings → Admin → Users, or create one in Settings → Team."
+                  : "You’re not on a team yet. Ask an admin to add you in Settings → Admin → Users."}
+              </p>
             ) : (
-              <label className="flex items-center gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
-                <input type="checkbox" checked={teamShared} onChange={(e) => setTeamShared(e.target.checked)} />
-                Share with my team{me?.team_id ? ` (${me.team_id})` : ""} — members can chat in it
-                and read/write its shared memory
-              </label>
+              <div className="grid gap-1">
+                <label className="flex items-center gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
+                  <input type="checkbox" checked={teamShared} onChange={(e) => setTeamShared(e.target.checked)} />
+                  Share with my team ({me.team_id}) — members can chat in it and read/write its
+                  team learnings
+                </label>
+                <Link
+                  href="/settings/team"
+                  className="justify-self-start text-[0.72rem] text-[var(--color-text-muted)] underline hover:text-[var(--color-text-primary)]"
+                >
+                  Manage your team
+                </Link>
+              </div>
             )}
             <div className="flex items-center justify-end gap-2">
               <button type="button" className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]" onClick={() => setEditing(false)}>
@@ -359,10 +373,12 @@ export function ProjectsModal({
                   {p.id === selectedId ? (
                     <div className="mt-3 border-t border-[var(--color-border)] pt-2">
                       <p className="mb-1 text-[0.72rem] font-medium text-[var(--color-text-muted)]">
-                        Shared project memory {isOwner || selected?.team_id ? "(visible to all members)" : ""}
+                        Team learnings {isOwner || selected?.team_id ? "(visible to all members)" : ""}
                       </p>
                       {memories.length === 0 ? (
-                        <p className="text-[0.75rem] text-[var(--color-text-muted)]">No shared memories yet.</p>
+                        <p className="text-[0.75rem] text-[var(--color-text-muted)]">
+                          No team learnings yet. Save one from any chat in this project.
+                        </p>
                       ) : (
                         <ul className="grid gap-1">
                           {memories.map((m) => (
@@ -381,7 +397,7 @@ export function ProjectsModal({
                       <div className="mt-2 flex items-center gap-2">
                         <input
                           className="min-w-0 flex-1 rounded-[0.7rem] border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                          placeholder="Add a shared fact the whole project should know…"
+                          placeholder="Add a learning the whole project should know…"
                           value={memoryDraft}
                           onChange={(e) => setMemoryDraft(e.target.value)}
                         />

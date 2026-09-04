@@ -64,11 +64,42 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.meResponseFor(u))
 }
 
+// teamResponse is meResponse plus what LEAVING would cost — the two counts the
+// Leave confirm quotes ("you'll lose access to N team-shared projects; M chats
+// you shared there stop being shared"). Only GET /me/team computes them: /me is
+// read on every page and must stay one query.
+type teamResponse struct {
+	meResponse
+	store.LeaveTeamImpact
+}
+
+// handleMyTeamGet serves GET /me/team — the caller's own team plus the leave
+// impact, so Settings → Team can state consequences BEFORE acting rather than
+// reporting them afterwards (Item A4).
+func (s *Server) handleMyTeamGet(w http.ResponseWriter, r *http.Request) {
+	u, err := s.store.GetUser(r.Context(), userFromCtx(r.Context()))
+	if err != nil {
+		s.writeUserLookupError(w, err)
+		return
+	}
+	out := teamResponse{meResponse: s.meResponseFor(u)}
+	// Best-effort: the counts are confirm-dialog copy, so a failure leaves them
+	// ABSENT rather than breaking the page that shows which team you are in.
+	// Absent, not zero — the counts are pointers precisely so the confirm can
+	// tell "nothing to lose" from "we couldn't check", and quoting a zero it
+	// never computed is how a user agrees to lose work they were told was not
+	// there.
+	if impact, ierr := s.store.LeaveTeamImpact(r.Context(), u.Email, u.TeamID); ierr == nil {
+		out.LeaveTeamImpact = impact
+	}
+	writeJSON(w, out)
+}
+
 // handleMyTeam serves PUT /me/team — set the caller's own team.
 // Body: {"team_id": "platform"} (empty string leaves the current team).
 func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		s.handleMe(w, r)
+		s.handleMyTeamGet(w, r)
 		return
 	}
 	if r.Method != http.MethodPut && r.Method != http.MethodPatch {

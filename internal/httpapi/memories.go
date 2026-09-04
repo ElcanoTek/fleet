@@ -6,6 +6,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -91,6 +93,41 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 		sub = parts[1]
 	}
 	if sub == "accept" && r.Method == http.MethodPost {
+		// Destination (Item D1): an optional {"project_id": ...} accepts the
+		// proposal into that project's TEAM LEARNINGS instead of the caller's
+		// personal memory — the choice the approval card now shows before the
+		// user saves, rather than defaulting silently. Membership is
+		// re-checked here; the body is optional, so a client that never sends
+		// one keeps the personal behavior byte for byte.
+		var dest struct {
+			ProjectID string `json:"project_id"`
+		}
+		if r.Body != nil {
+			// A MALFORMED body is refused, not ignored. Swallowing the error
+			// fell through to the personal-memory accept and answered 200 —
+			// so a client that meant "save this to the team" was told it
+			// succeeded while the memory went somewhere else. io.EOF is the
+			// legitimate empty body (the personal path) and is not an error.
+			if derr := json.NewDecoder(r.Body).Decode(&dest); derr != nil && !errors.Is(derr, io.EOF) {
+				http.Error(w, "bad json: "+derr.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if projectID := strings.TrimSpace(dest.ProjectID); projectID != "" {
+			p := s.projectForMember(w, r, user, projectID)
+			if p == nil {
+				return
+			}
+			memory, err := s.store.AcceptMemoryProposalIntoProject(r.Context(), user, id, p.ID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			// No graph extraction: the knowledge graph is a personal-memory
+			// derivation (#523) and a project row is not part of it.
+			writeJSON(w, map[string]any{"memory": memory, "supersede": store.SupersedeNone, "project_id": p.ID})
+			return
+		}
 		memory, supersede, err := s.store.AcceptMemoryProposal(r.Context(), user, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
