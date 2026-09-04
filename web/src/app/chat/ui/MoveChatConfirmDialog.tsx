@@ -80,7 +80,7 @@ export function MoveChatConfirmDialog({
   onPinAndConfirm: () => void;
 }) {
   const team = (
-    <NameChip icon={<TeamGlyph className="size-3 shrink-0" />}>
+    <NameChip icon={<TeamGlyph className="size-3 shrink-0" />} suffix=".">
       {confirm.team || "your team"}
     </NameChip>
   );
@@ -113,13 +113,13 @@ export function MoveChatConfirmDialog({
     >
       {confirm.kind === "unshare-move" ? (
         <>
-          This chat is shared with {team}. Moving it to{" "}
-          <NameChip>{confirm.targetProjectName}</NameChip>, which isn&apos;t
+          This chat is shared with {team} Moving it to{" "}
+          <NameChip suffix=",">{confirm.targetProjectName}</NameChip> which isn&apos;t
           shared with your team, will unshare it. Continue?
         </>
       ) : (
         <>
-          This chat is shared with {team}. Removing it from the project will
+          This chat is shared with {team} Removing it from the project will
           unshare it. Continue?
         </>
       )}
