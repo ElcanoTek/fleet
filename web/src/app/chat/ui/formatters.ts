@@ -28,6 +28,109 @@ export function formatBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+// ── LaTeX / TeX math ─────────────────────────────────────────────────────────
+//
+// A preview never renders math either, so `$…$` and `$$…$$` reached the UI as
+// raw TeX: `$\text{CPM} = 1{,}000 \times \frac{\text{Cost}}{\text{Impressions}}$`.
+// These two tables plus texToText are the smallest thing that turns that into
+// words and numbers — NOT a renderer, exactly as the rest of this module is
+// not a markdown parser.
+const TEX_SYMBOLS: Record<string, string> = {
+  times: "×",
+  cdot: "·",
+  div: "÷",
+  pm: "±",
+  mp: "∓",
+  approx: "≈",
+  neq: "≠",
+  ne: "≠",
+  equiv: "≡",
+  le: "≤",
+  leq: "≤",
+  ge: "≥",
+  geq: "≥",
+  to: "→",
+  rightarrow: "→",
+  leftarrow: "←",
+  Rightarrow: "⇒",
+  ldots: "…",
+  dots: "…",
+  cdots: "…",
+  sum: "∑",
+  prod: "∏",
+  sqrt: "√",
+  infty: "∞",
+  partial: "∂",
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  delta: "δ",
+  Delta: "Δ",
+  epsilon: "ε",
+  theta: "θ",
+  lambda: "λ",
+  mu: "μ",
+  pi: "π",
+  rho: "ρ",
+  sigma: "σ",
+  Sigma: "Σ",
+  tau: "τ",
+  phi: "φ",
+  omega: "ω",
+};
+
+// Commands that contribute nothing to a plain-text reading, so they vanish
+// without leaving the space every other unknown command leaves behind.
+const TEX_DROP = new Set([
+  "left",
+  "right",
+  "displaystyle",
+  "textstyle",
+  "limits",
+  "nolimits",
+  "quad",
+  "qquad",
+  "big",
+  "Big",
+  "bigg",
+  "Bigg",
+]);
+
+// A `$…$` run is only treated as math when it carries one of TeX's own
+// markers. Prices are the reason: "it costs $5 and $7" is two dollar signs
+// around ordinary prose, and stripping it as math would silently delete the
+// currency from the preview.
+const TEX_HINT = /[\\{}^_]/;
+
+function texToText(tex: string): string {
+  return (
+    tex
+      // \text{…} and its relatives wrap literal words — keep them, lose the
+      // wrapper. Innermost-first, so \frac{\text{Cost}}{…} is unwrapped
+      // before the fraction rule below needs brace-free arguments.
+      .replace(
+        /\\(?:text|textrm|textbf|textit|mathrm|mathbf|mathit|mathsf|mathtt|operatorname)\s*\{([^{}]*)\}/g,
+        "$1",
+      )
+      // A fraction reads as a division on one line.
+      .replace(/\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "$1/$2")
+      // Escaped literals keep the character they escape.
+      .replace(/\\([%$&#_{}])/g, "$1")
+      // The line break and the spacing commands are whitespace.
+      .replace(/\\\\|\\[,;:!]|\\ /g, " ")
+      // Everything else: a known symbol, nothing, or a space — an unknown
+      // command must not fuse the words either side of it.
+      .replace(/\\([A-Za-z]+)/g, (_m, name: string) =>
+        TEX_SYMBOLS[name] ?? (TEX_DROP.has(name) ? "" : " "),
+      )
+      // Grouping braces, alignment tabs and the sub/superscript markers are
+      // pure notation: `1{,}000` is 1,000 and `x^2` is x2 to a one-line
+      // reader.
+      .replace(/[{}&^_]/g, "")
+      .replace(/~/g, " ")
+  );
+}
+
 // stripMarkdown renders a snippet as plain text for the one-line previews that
 // have no markdown pipeline behind them (the project home's chat list). The
 // server's preview is the raw last message, so a reply that opened with
@@ -53,6 +156,31 @@ export function stripMarkdown(input: string): string {
       // Fenced code: drop the fence lines (and any language tag) entirely.
       .replace(/```[^\n`]*\n?/g, "")
       .replace(/`+([^`]*)`+/g, "$1")
+      // Math, after the code rules (a `$5` in backticks is a price, not TeX)
+      // and before everything that pairs a backslash or an underscore.
+      // Display math first, so `$$…$$` is never seen as two empty `$…$` runs.
+      .replace(/\$\$([\s\S]*?)\$\$/g, (_m, body: string) => ` ${texToText(body)} `)
+      .replace(/\$([^$\n]*)\$/g, (m, body: string) =>
+        TEX_HINT.test(body) ? ` ${texToText(body)} ` : m,
+      )
+      // An UNCLOSED trailing run: the preview is clipped upstream, so the
+      // closing delimiter is routinely the thing that got cut — which is how
+      // the reported case (`$\text{CPM} = 1{,}000 \times \frac{…`) arrives.
+      .replace(/\$([^$]*)$/, (m, body: string) =>
+        TEX_HINT.test(body) ? ` ${texToText(body)} ` : m,
+      )
+      // Pipe tables. The alignment row carries no content at all, so it goes;
+      // a data row keeps its cells and loses the pipes. A row is recognized by
+      // a leading pipe or by two of them, which leaves a lone shell pipe
+      // ("grep foo | wc -l") in ordinary prose alone.
+      .replace(/^[ \t]*(?=[^\n]*\|)(?=[^\n]*-)[ \t|:-]+$/gm, "")
+      .replace(/^[ \t]*(?:\|[^\n]*|[^\n|]*\|[^\n|]*\|[^\n]*)$/gm, (line) =>
+        line
+          .replace(/^[ \t]*\|/, "")
+          .replace(/\|[ \t]*$/, "")
+          .replace(/\|/g, " ")
+          .trim(),
+      )
       // Horizontal rules become nothing — BEFORE the bullet and emphasis
       // rules, which would otherwise eat a marker each and leave the rest
       // behind. Ordered after this rule, `***` came out as a bare `*` and

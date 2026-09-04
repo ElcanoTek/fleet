@@ -612,8 +612,14 @@ func TestDeleteUserRefusesToTakeTeamSharedProjects(t *testing.T) {
 	if !errors.As(err, &owns) {
 		t.Fatalf("delete: got %v, want OwnsSharedProjectsError", err)
 	}
-	if len(owns.Projects) != 1 || owns.Projects[0] != "Quant" {
-		t.Errorf("named projects = %v, want [Quant]", owns.Projects)
+	if len(owns.Projects) != 1 || owns.Projects[0].Name != "Quant" {
+		t.Errorf("named projects = %v, want [Quant]", owns.ProjectNames())
+	}
+	// The id travels with the name: without it the refusal is a dead end,
+	// because an admin cannot resolve a project name to an id from their own
+	// surfaces (QA #21).
+	if len(owns.Projects) == 1 && owns.Projects[0].ID != f.project.ID {
+		t.Errorf("project id = %q, want %q", owns.Projects[0].ID, f.project.ID)
 	}
 	// Nothing was destroyed on the way to that refusal.
 	if p, _ := f.s.GetProject(f.ctx, f.project.ID); p == nil {
@@ -1083,5 +1089,341 @@ func TestDeletingAProjectGivesMembersAFullRetentionWindow(t *testing.T) {
 	}
 	if got, _ := f.s.Get(f.ctx, "bob@x.com", c.ID); got == nil {
 		t.Fatal("a member's chat was hard-deleted by the very sweep the project had been exempting it from")
+	}
+}
+
+// filingState reads the two things the filing invariant is about, for one chat:
+// whether it is still filed in a project, and whether it is still team-shared.
+// It reads the row directly (not Get) so a chat filed in a project nobody can
+// see is still observable — which is the whole bug this pins.
+func filingState(t *testing.T, f teamFixture, convID string) (projectID string, shared bool) {
+	t.Helper()
+	var pid *string
+	if err := f.s.db.QueryRowContext(f.ctx,
+		`SELECT project_id, team_visible FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+		convID,
+	).Scan(&pid, &shared); err != nil {
+		t.Fatalf("read filing state of %s: %v", convID, err)
+	}
+	if pid != nil {
+		projectID = *pid
+	}
+	return projectID, shared
+}
+
+// listedByItsOwner reports whether the chat appears in its owner's own rail
+// listing — the check that "unfiled" means "back in Temporary" rather than
+// "gone".
+func listedByItsOwner(t *testing.T, f teamFixture, owner, convID string) bool {
+	t.Helper()
+	list, err := f.s.List(f.ctx, owner, false)
+	if err != nil {
+		t.Fatalf("List(%s): %v", owner, err)
+	}
+	for _, c := range list {
+		if c.ID == convID {
+			return true
+		}
+	}
+	return false
+}
+
+// Every path that takes a member's access to a project away UNFILES their
+// chats — it never deletes them, and never leaves them filed in a project only
+// somebody else can see.
+//
+// Red/green: the rail lists chats through the projects the CALLER can see, so a
+// chat left filed in a project they cannot see is rendered by nothing — not
+// Projects, not Temporary, not Archived. Unticking "Share with my team" on a
+// project therefore made every teammate's chats in it VANISH from their own
+// rail (re-ticking brought them back, which is how we know they were hidden
+// rather than deleted). Each case below unshares, and each must also unfile.
+func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
+	const (
+		alice = "alice@x.com" // owner of the fixture's team-shared project
+		bob   = "bob@x.com"   // a teammate with a chat filed in it
+	)
+	for _, tc := range []struct {
+		name string
+		// revoke performs the access-removing act; chats maps a chat owner's
+		// email to their chat id in the project.
+		revoke func(t *testing.T, f teamFixture, chats map[string]string)
+		// wantFiled / wantShared, per chat owner, AFTER the revocation.
+		wantFiled  map[string]bool
+		wantShared map[string]bool
+	}{
+		{
+			name: "the owner unticks Share with my team",
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
+				personal := ""
+				if _, err := f.s.UpdateProject(f.ctx, alice, f.project.ID, ProjectPatch{TeamID: &personal}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			// Alice keeps her own chats where they are — she still owns the
+			// project — and loses only the share.
+			wantFiled:  map[string]bool{alice: true, bob: false},
+			wantShared: map[string]bool{alice: false, bob: false},
+		},
+		{
+			name: "the project is re-pointed at another team",
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
+				ops := "ops"
+				if _, err := f.s.UpdateProject(f.ctx, alice, f.project.ID, ProjectPatch{TeamID: &ops}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantFiled:  map[string]bool{alice: true, bob: false},
+			wantShared: map[string]bool{alice: false, bob: false},
+		},
+		{
+			name: "the project is deleted",
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
+				if err := f.s.DeleteProject(f.ctx, alice, f.project.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			// Nobody can see a project that no longer exists, the owner
+			// included: every chat is unfiled. This path already behaved this
+			// way; it is the behavior the others were brought into line with.
+			wantFiled:  map[string]bool{alice: false, bob: false},
+			wantShared: map[string]bool{alice: false, bob: false},
+		},
+		{
+			name: "the teammate leaves the team",
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
+				if _, err := f.s.SetOwnTeam(f.ctx, bob, "", false); err != nil {
+					t.Fatal(err)
+				}
+			},
+			// Alice is untouched by someone else leaving: her chat stays filed
+			// AND stays shared with the team she named.
+			wantFiled:  map[string]bool{alice: true, bob: false},
+			wantShared: map[string]bool{alice: true, bob: false},
+		},
+		{
+			name: "an admin moves the teammate to another team",
+			revoke: func(t *testing.T, f teamFixture, _ map[string]string) {
+				ops := "ops"
+				if _, err := f.s.SetUserRoleTeam(f.ctx, bob, nil, &ops); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantFiled:  map[string]bool{alice: true, bob: false},
+			wantShared: map[string]bool{alice: true, bob: false},
+		},
+		{
+			name: "the owner is moved out of the team, then hands the project over",
+			revoke: func(t *testing.T, f teamFixture, chats map[string]string) {
+				// Alice keeps access while she owns it, even from another team…
+				ops := "ops"
+				if _, err := f.s.SetUserRoleTeam(f.ctx, alice, nil, &ops); err != nil {
+					t.Fatal(err)
+				}
+				if pid, _ := filingState(t, f, chats[alice]); pid != f.project.ID {
+					t.Fatalf("the owner must keep her own project's chats filed: project_id = %q", pid)
+				}
+				// …and loses it the moment the project is someone else's.
+				if _, err := f.s.TransferProjectOwnership(f.ctx, f.project.ID, bob); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantFiled:  map[string]bool{alice: false, bob: true},
+			wantShared: map[string]bool{alice: false, bob: true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTeamFixture(t)
+			chats := map[string]string{
+				alice: f.sharedChat(t, alice, f.project.ID, "Alice's study").ID,
+				bob:   f.sharedChat(t, bob, f.project.ID, "Bob's branch").ID,
+			}
+
+			tc.revoke(t, f, chats)
+
+			for _, owner := range []string{alice, bob} {
+				convID := chats[owner]
+				pid, shared := filingState(t, f, convID)
+				wantPID := ""
+				if tc.wantFiled[owner] {
+					wantPID = f.project.ID
+				}
+				if pid != wantPID {
+					t.Errorf("%s: project_id = %q, want %q", owner, pid, wantPID)
+				}
+				if shared != tc.wantShared[owner] {
+					t.Errorf("%s: team_visible = %v, want %v", owner, shared, tc.wantShared[owner])
+				}
+				// Nothing is ever deleted to satisfy the invariant, and an
+				// unfiled chat is back in its owner's Temporary list — not
+				// hidden behind a project they cannot see.
+				if got, err := f.s.Get(f.ctx, owner, convID); err != nil || got == nil {
+					t.Fatalf("%s: the chat must still exist (err=%v)", owner, err)
+				}
+				if !listedByItsOwner(t, f, owner, convID) {
+					t.Errorf("%s: the chat is missing from its own owner's listing", owner)
+				}
+			}
+		})
+	}
+}
+
+// The counts the untick confirm quotes: how many chats from teammates the
+// project holds, and how many people they belong to — and that acting on the
+// project unfiles exactly those.
+func TestProjectImpactCountsChatsFromTeammates(t *testing.T) {
+	f := newTeamFixture(t)
+	mine := f.sharedChat(t, "alice@x.com", f.project.ID, "Mine")
+	bobs := f.sharedChat(t, "bob@x.com", f.project.ID, "Bob's")
+	bobs2 := f.sharedChat(t, "bob@x.com", f.project.ID, "Bob's second")
+	// Dana is in another team: a chat of hers filed here is the state an admin
+	// team move leaves behind, and it counts as a teammate's chat either way —
+	// what the confirm promises is "these move to their unfiled chats".
+	danas, err := f.s.CreateConversation(f.ctx, "dana@x.com", "Dana's", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.SetConversationProject(f.ctx, "dana@x.com", danas.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	impact, err := f.s.ProjectImpact(f.ctx, f.project.ID)
+	if err != nil {
+		t.Fatalf("ProjectImpact: %v", err)
+	}
+	if impact.Chats != 4 || impact.Members != 3 {
+		t.Errorf("impact = %+v, want 4 chats / 3 members", impact)
+	}
+	if impact.ChatsFromTeammates != 3 || impact.TeammatesWithChats != 2 {
+		t.Errorf("teammate counts = %d chats / %d members, want 3 / 2",
+			impact.ChatsFromTeammates, impact.TeammatesWithChats)
+	}
+
+	// The number is not decoration: unticking moves exactly those chats.
+	personal := ""
+	if _, err := f.s.UpdateProject(f.ctx, "alice@x.com", f.project.ID, ProjectPatch{TeamID: &personal}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{bobs.ID, bobs2.ID, danas.ID} {
+		if pid, _ := filingState(t, f, id); pid != "" {
+			t.Errorf("chat %s stayed filed in a project its owner cannot see", id)
+		}
+	}
+	if pid, _ := filingState(t, f, mine.ID); pid != f.project.ID {
+		t.Errorf("the owner's own chat must not move: project_id = %q", pid)
+	}
+	after, err := f.s.ProjectImpact(f.ctx, f.project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ChatsFromTeammates != 0 || after.TeammatesWithChats != 0 {
+		t.Errorf("after the untick, teammate counts = %+v, want zeroes", after)
+	}
+}
+
+// embeddedMigrationSQL returns the SQL of one embedded migration by version.
+func embeddedMigrationSQL(t *testing.T, version int) string {
+	t.Helper()
+	ms, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+	for _, m := range ms {
+		if m.version == version {
+			return m.sql
+		}
+	}
+	t.Fatalf("migration %03d is not embedded", version)
+	return ""
+}
+
+// Migration 055 repairs the rows the pre-fix write paths stranded: a chat filed
+// in a project its owner cannot see is unfiled, never deleted.
+//
+// The stranded state is seeded directly (the fixed paths can no longer produce
+// it) and the migration is applied INSIDE a transaction that is rolled back, so
+// the shared test database keeps its already-migrated schema — the same
+// technique TestMigration046_NormalizesLegacyPositionTies uses.
+func TestMigration055UnfilesChatsTheirOwnersCannotSee(t *testing.T) {
+	f := newTeamFixture(t)
+	stranded := f.sharedChat(t, "bob@x.com", f.project.ID, "Bob's branch")
+	owners := f.sharedChat(t, "alice@x.com", f.project.ID, "Alice's study")
+	ancient := time.Now().Add(-90 * 24 * time.Hour).Unix()
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, ancient, stranded.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The pre-fix leave-team: unshared, still filed, and its owner no longer in
+	// the team that made the project visible to them.
+	if _, err := f.s.db.ExecContext(f.ctx,
+		`UPDATE users SET team_id = NULL WHERE email = 'bob@x.com'`); err != nil {
+		t.Fatal(err)
+	}
+	if pid, _ := filingState(t, f, stranded.ID); pid != f.project.ID {
+		t.Fatalf("fixture: the chat should start out stranded, project_id = %q", pid)
+	}
+
+	tx, err := f.s.db.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	sqlText := embeddedMigrationSQL(t, 55)
+	res, err := tx.ExecContext(f.ctx, sqlText)
+	if err != nil {
+		t.Fatalf("apply migration 055: %v", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Errorf("migration touched %d rows, want 1 (the stranded chat only)", n)
+	}
+	// Re-running it must be a no-op: every row it repaired now has a NULL
+	// project_id, so nothing matches a second time.
+	res, err = tx.ExecContext(f.ctx, sqlText)
+	if err != nil {
+		t.Fatalf("re-apply migration 055: %v", err)
+	}
+	if n, _ := res.RowsAffected(); n != 0 {
+		t.Errorf("re-applying the migration touched %d rows, want 0 (it must be idempotent)", n)
+	}
+
+	var pid *string
+	var visible bool
+	var audience *string
+	var updatedAt int64
+	if err := tx.QueryRowContext(f.ctx,
+		`SELECT project_id, team_visible, team_shared_with, updated_at
+		   FROM conversations WHERE id = $1`, stranded.ID,
+	).Scan(&pid, &visible, &audience, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if pid != nil || visible || audience != nil {
+		t.Errorf("stranded chat: project_id=%v team_visible=%v team_shared_with=%v, want NULL/false/NULL",
+			pid, visible, audience)
+	}
+	// The chat survives, and its retention clock restarts — an unfiled chat is
+	// sweep-eligible, so keeping the old timestamp would have made a
+	// months-old chat reapable on the next turn, with no window to pin it.
+	if updatedAt <= ancient {
+		t.Errorf("updated_at = %d, want a bump past %d so the TTL window restarts", updatedAt, ancient)
+	}
+	var n int
+	if err := tx.QueryRowContext(f.ctx,
+		`SELECT count(*) FROM conversations WHERE id = $1`, stranded.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Error("the migration must unfile the chat, never delete it")
+	}
+
+	// The owner's own chat is not touched at all: she can see her project, so
+	// neither its filing nor its share is the migration's business.
+	if err := tx.QueryRowContext(f.ctx,
+		`SELECT project_id, team_visible FROM conversations WHERE id = $1`, owners.ID,
+	).Scan(&pid, &visible); err != nil {
+		t.Fatal(err)
+	}
+	if pid == nil || *pid != f.project.ID || !visible {
+		t.Errorf("the owner's chat = project_id %v / team_visible %v, want it left alone", pid, visible)
 	}
 }

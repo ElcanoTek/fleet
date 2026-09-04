@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
 // binding object for standing instructions, curated connectors, default
@@ -84,6 +86,10 @@ export function ProjectsModal({
   const [instructions, setInstructions] = useState("");
   const [teamShared, setTeamShared] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("");
+  // The two confirms this surface used to hand to window.confirm(). Copy
+  // unchanged; only the dialog is now part of the app.
+  const [confirmUnshare, setConfirmUnshare] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const selected = projects.find((p) => p.id === selectedId) ?? null;
   const isOwner = selected ? selected.owner_email === userEmail : false;
@@ -152,21 +158,15 @@ export function ProjectsModal({
     setSelectedId(p?.id ?? null);
   };
 
+  // Turning sharing OFF unshares every chat members shared into the project
+  // (and unfiles the ones that are theirs). The project home says so in red
+  // beside its checkbox; this one PATCHed the identical body and said nothing,
+  // so Save asks first — in the app, not through the browser.
+  const wasShared = Boolean(projects.find((p) => p.id === selectedId)?.team_id);
+  const unsharing = Boolean(selectedId) && wasShared && !teamShared;
+
   const save = async () => {
     if (busy || !name.trim()) return;
-    // Turning sharing OFF unshares every chat members shared into the project.
-    // The project home says so in red beside its checkbox; this one PATCHed
-    // the identical body and said nothing.
-    const wasShared = Boolean(projects.find((p) => p.id === selectedId)?.team_id);
-    if (
-      selectedId &&
-      wasShared &&
-      !teamShared &&
-      !window.confirm(
-        "Stop sharing this project with your team? Every chat members shared into it stops being shared too.",
-      )
-    )
-      return;
     setBusy(true);
     setError(null);
     try {
@@ -206,16 +206,6 @@ export function ProjectsModal({
   };
 
   const remove = async (id: string) => {
-    // The project home's delete confirm quotes real counts and offers the
-    // export; this list has no page to load them on, so it states the same
-    // two consequences in words and points at the richer path.
-    const p = projects.find((x) => x.id === id);
-    if (
-      !window.confirm(
-        `Delete ${p?.name ?? "this project"}? Its team learnings are lost, and every member's chats leave the project and become temporary. Open the project to see the counts and export first.`,
-      )
-    )
-      return;
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
@@ -255,15 +245,18 @@ export function ProjectsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button aria-label="Close projects" className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]" type="button" onClick={onClose} />
-      {/* Opaque surface, not a translucent composer panel: page content
-          behind the modal was showing through enough to compete with the form
-          — placeholder text and the primary button lost legibility on a busy
-          background. --color-surface-1 + the standard shadow are exactly what
-          the project settings dialog and the New Task modal already use, so
-          all three now read as one family. */}
-      <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[40rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]">
+    <>
+      {/* The opaque panel, the scrim and the dialog semantics come from the
+          shared DialogShell — page content used to read straight through this
+          modal, and that fix now lives in one place for every dialog. The two
+          confirms below are siblings of the panel, not children of it: each
+          paints its own layer above it. */}
+      <DialogShell
+        label="Projects"
+        scrimLabel="Close projects"
+        onDismiss={onClose}
+        className="flex max-h-[88vh] max-w-[40rem] flex-col gap-4 overflow-hidden p-5"
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Projects</h2>
@@ -326,7 +319,18 @@ export function ProjectsModal({
               <button type="button" className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]" onClick={() => setEditing(false)}>
                 Cancel
               </button>
-              <button type="button" className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40" disabled={busy || !name.trim()} onClick={() => void save()}>
+              <button
+                type="button"
+                className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+                disabled={busy || !name.trim()}
+                onClick={() => {
+                  if (unsharing) {
+                    setConfirmUnshare(true);
+                    return;
+                  }
+                  void save();
+                }}
+              >
                 {busy ? "Saving…" : selectedId ? "Save changes" : "Create project"}
               </button>
             </div>
@@ -360,7 +364,7 @@ export function ProjectsModal({
                           <button type="button" className="hover:text-[var(--color-text-primary)]" onClick={() => openEditor(p)}>
                             Edit
                           </button>
-                          <button type="button" className="hover:text-[var(--color-danger)]" onClick={() => void remove(p.id)}>
+                          <button type="button" className="hover:text-[var(--color-danger)]" onClick={() => setConfirmDeleteId(p.id)}>
                             Delete
                           </button>
                         </>
@@ -412,7 +416,45 @@ export function ProjectsModal({
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </DialogShell>
+      {confirmUnshare ? (
+        <ConfirmDialog
+          title="Stop sharing this project with your team?"
+          confirmLabel="Stop sharing"
+          confirmTone="danger"
+          layer="stacked"
+          busy={busy}
+          onCancel={() => setConfirmUnshare(false)}
+          onConfirm={() => {
+            setConfirmUnshare(false);
+            void save();
+          }}
+        >
+          <p className="m-0">
+            Every chat members shared into it stops being shared too.
+          </p>
+        </ConfirmDialog>
+      ) : null}
+      {confirmDeleteId ? (
+        <ConfirmDialog
+          title={`Delete ${projects.find((p) => p.id === confirmDeleteId)?.name ?? "this project"}?`}
+          confirmLabel="Delete project"
+          confirmTone="danger"
+          layer="stacked"
+          onCancel={() => setConfirmDeleteId(null)}
+          onConfirm={() => {
+            const id = confirmDeleteId;
+            setConfirmDeleteId(null);
+            void remove(id);
+          }}
+        >
+          <p className="m-0">
+            Its team learnings are lost, and every member&rsquo;s chats leave
+            the project and become temporary. Open the project to see the
+            counts and export first.
+          </p>
+        </ConfirmDialog>
+      ) : null}
+    </>
   );
 }

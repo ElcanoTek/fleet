@@ -59,6 +59,39 @@ describe("historyToMessages", () => {
     expect(msgs[1]).toMatchObject({ role: "user", content: "second" });
   });
 
+  // QA finding #6: server-injected context (the attachment manifest, the
+  // "Shared file library (files your administrator published…)" block, …) now
+  // arrives in its own field so the transcript can render it outside the user's
+  // bubble. `content.text` must be exactly what the user typed.
+  it("carries injected_context beside the user's text without merging it in", () => {
+    const injected =
+      "\n\n---\n**Shared file library (files your administrator published):**\n- `rates.csv`\n";
+    const msgs = historyToMessages([
+      { role: "user", type: "text", content: { text: "what is the CPM?" }, injected_context: injected },
+    ]);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe("what is the CPM?");
+    expect(msgs[0].injectedContext).toBe(injected);
+  });
+
+  it("leaves a legacy row alone — blocks stay in the text, no injectedContext", () => {
+    // Rows written before migration 056 have the column empty and the blocks
+    // still inside content.text. We deliberately do NOT parse them back out.
+    const legacy = "what is the CPM?\n\n---\n**User attached files:**\n- `spend.csv`";
+    const msgs = historyToMessages([user(legacy)]);
+    expect(msgs[0].content).toBe(legacy);
+    expect(msgs[0].injectedContext).toBeUndefined();
+  });
+
+  it("normalises an absent or blank injected_context to undefined", () => {
+    expect(historyToMessages([user("hi")])[0].injectedContext).toBeUndefined();
+    expect(
+      historyToMessages([
+        { role: "user", type: "text", content: { text: "hi" }, injected_context: "   \n " },
+      ])[0].injectedContext,
+    ).toBeUndefined();
+  });
+
   it("coalesces assistant text + reasoning + tool calls into one Message", () => {
     const msgs = historyToMessages([
       user("go"),

@@ -82,4 +82,50 @@ describe("stripMarkdown", () => {
     );
     expect(stripMarkdown("a \\_b\\_ c")).toBe("a _b_ c");
   });
+  // Item B-3, second pass: the strip removed asterisks but left LaTeX and
+  // table syntax — the two kinds of markup an analytics reply is most likely
+  // to end on, so the preview showed raw TeX and a row of pipes.
+  it("reads LaTeX math as words and numbers", () => {
+    expect(
+      stripMarkdown(
+        "$\\text{CPM} = 1{,}000 \\times \\frac{\\text{Cost}}{\\text{Impressions}}$",
+      ),
+    ).toBe("CPM = 1,000 × Cost/Impressions");
+    expect(stripMarkdown("$$E = mc^2$$")).toBe("E = mc2");
+    expect(stripMarkdown("Roughly $\\pi \\approx 3.14$ per unit")).toBe(
+      "Roughly π ≈ 3.14 per unit",
+    );
+  });
+
+  it("handles a math span the upstream truncation cut in half", () => {
+    // The reported preview, verbatim: clipped mid-expression, so there is no
+    // closing delimiter to pair with.
+    expect(stripMarkdown("$\\text{CPM} = 1{,}000 \\times \\frac{…}")).toBe(
+      "CPM = 1,000 × …",
+    );
+  });
+
+  it("leaves prices alone — a $ is only math with TeX inside it", () => {
+    expect(stripMarkdown("it costs $5 and $7")).toBe("it costs $5 and $7");
+    expect(stripMarkdown("Spend was $1,000 last week")).toBe(
+      "Spend was $1,000 last week",
+    );
+  });
+
+  it("collapses a pipe table to its cells and drops the separator row", () => {
+    expect(
+      stripMarkdown("| Channel | Spend |\n| --- | --- |\n| Search | 1,000 |"),
+    ).toBe("Channel Spend Search 1,000");
+    // Alignment colons are separator syntax too.
+    expect(
+      stripMarkdown(
+        "Totals below:\n\n| Channel | Spend | CPM |\n|:---|---:|:-:|\n| Search | $1,000 | $4.20 |",
+      ),
+    ).toBe("Totals below: Channel Spend CPM Search $1,000 $4.20");
+  });
+
+  it("keeps a lone shell pipe in prose", () => {
+    // One pipe, no leading pipe: that is a command, not a table row.
+    expect(stripMarkdown("run grep foo | wc -l")).toBe("run grep foo | wc -l");
+  });
 });

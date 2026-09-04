@@ -9,6 +9,7 @@ import {
   normalizeLabel,
   pinnedUnfiled,
   projectGroups,
+  railProjectEmptyState,
   recentUnfiled,
   removeLabel,
   visibleConversationOrder,
@@ -249,5 +250,46 @@ describe("chats whose project the viewer cannot see", () => {
         knownProjectIds: known,
       }).map((c) => c.title),
     ).toEqual(["pinned, lost project", "loose", "in a lost project"]);
+  });
+});
+
+// The rail lists only the viewer's OWN chats (ADR-0057 keeps the project home
+// as the single discovery surface for team-shared ones), so "No chats yet" was
+// a false statement to a teammate whose colleagues had filed two shared chats
+// into the project: the rail called it empty while its home listed content.
+describe("railProjectEmptyState", () => {
+  it("keeps the plain filing copy for a personal project", () => {
+    // No count consulted: team sharing is refused outside a team-shared
+    // project and every way of losing that home clears the flag, so zero is
+    // certain here rather than unknown.
+    expect(railProjectEmptyState({ teamShared: false })).toEqual({
+      kind: "no-chats",
+    });
+    expect(
+      railProjectEmptyState({ teamShared: false, teamSharedChatCount: 0 }),
+    ).toEqual({ kind: "no-chats" });
+  });
+
+  it("quotes the team's chats when the project has some", () => {
+    expect(
+      railProjectEmptyState({ teamShared: true, teamSharedChatCount: 2 }),
+    ).toEqual({ kind: "team-has-chats", count: 2 });
+    expect(
+      railProjectEmptyState({ teamShared: true, teamSharedChatCount: 1 }),
+    ).toEqual({ kind: "team-has-chats", count: 1 });
+  });
+
+  it("keeps the plain filing copy when a team-shared project really is empty", () => {
+    expect(
+      railProjectEmptyState({ teamShared: true, teamSharedChatCount: 0 }),
+    ).toEqual({ kind: "no-chats" });
+  });
+
+  it("asserts no number when the count is unknown", () => {
+    // Never invent a count — and never fall back to "empty", which is the one
+    // claim that was wrong.
+    expect(railProjectEmptyState({ teamShared: true })).toEqual({
+      kind: "team-count-unknown",
+    });
   });
 });

@@ -12,6 +12,12 @@ package store
 // project, deleting the project, leaving the team — clear the flag instead of
 // leaving a chat visible to a team with no surface listing it.
 //
+// The mirror-image rule, which those same paths get wrong in the other
+// direction, lives in projects.go: a chat's project_id must never point at a
+// project ITS OWNER cannot see, so every revocation of access unfiles the
+// affected chats (never deletes them). Unsharing a team-shared chat that stays
+// filed in a project only somebody else can see hides it from its own owner.
+//
 // The read path (GetTeamVisibleConversation) is the SECOND cross-user
 // conversation read in the store, after ListTeamConversations, and carries the
 // same two gates: a shared users.team_id AND the owner's explicit per-chat
@@ -271,6 +277,19 @@ type ProjectImpact struct {
 	// TeamSharedChats is how many of those chats are currently team-visible;
 	// detaching unshares them.
 	TeamSharedChats int `json:"team_shared_chats"`
+	// ChatsFromTeammates / TeammatesWithChats are the same numbers restricted
+	// to chats somebody OTHER than the project owner filed here — what
+	// "Share with my team" being unticked costs, as opposed to what deleting
+	// the project costs. Making a project personal leaves the owner's own
+	// chats exactly where they are and unfiles every other member's (they can
+	// no longer see the project), so the untick confirm quotes these two:
+	// "{N} chats from teammates will move to their unfiled chats."
+	//
+	// Plain ints, unlike LeaveTeamImpact's pointers, because the whole struct
+	// comes from one query that either succeeds or fails the request — there
+	// is no half-known state to distinguish from zero.
+	ChatsFromTeammates int `json:"chats_from_teammates"`
+	TeammatesWithChats int `json:"teammates_with_chats"`
 }
 
 // ErrNotAProjectMember is returned when a transfer names someone who is not in
@@ -283,17 +302,42 @@ var ErrNotAProjectMember = errors.New("the new owner must be a member of the pro
 // owns team-shared projects. Deleting it would take those projects — and every
 // team learning in them — away from people who are still here, so the delete
 // fails closed and names what to transfer first.
-type OwnsSharedProjectsError struct{ Projects []string }
+type OwnsSharedProjectsError struct{ Projects []ProjectRef }
 
 func (e *OwnsSharedProjectsError) Error() string {
-	return "account still owns team-shared projects: " + strings.Join(e.Projects, ", ")
+	return "account still owns team-shared projects: " + strings.Join(e.ProjectNames(), ", ")
 }
 
-// TeamSharedProjectsOwnedBy lists the NAMES of team-shared projects the user
-// owns — what a delete would destroy, and what an admin must transfer first.
+// ProjectNames is the display half of the refusal — what a human reads in the
+// sentence. The ids travel alongside it so the client can link to the control
+// that resolves the refusal; see ProjectRef.
+func (e *OwnsSharedProjectsError) ProjectNames() []string {
+	out := make([]string, 0, len(e.Projects))
+	for _, p := range e.Projects {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+// ProjectRef is a project's identity and its label together.
+//
+// The refusal used to carry NAMES only, which made it a dead end: the admin
+// was told to "transfer them to another member first" and had no route to the
+// transfer control. Resolving a name to an id from the admin surface is not
+// possible either — GET /projects is scoped to the caller's own and
+// team-visible projects, and an admin is usually neither the owner nor a
+// member of the project they are being asked to have transferred. So the id
+// travels with the name, and the client links straight at it (QA #21).
+type ProjectRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// TeamSharedProjectsOwnedBy lists the team-shared projects the user owns —
+// what a delete would destroy, and what an admin must transfer first.
 // Personal projects are excluded: nobody else can see them, so they belong
 // with the account.
-func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]string, error) {
+func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]ProjectRef, error) {
 	return teamSharedProjectsOwnedBy(ctx, s.db, normalizeEmail(email), "")
 }
 
@@ -301,7 +345,7 @@ func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]
 // the matching rows locked — what DeleteUser's fail-closed guard needs so a
 // concurrent "share this project" cannot slip past the check and be deleted by
 // the very statement the check was protecting against.
-func teamSharedProjectsOwnedByTx(ctx context.Context, tx *sql.Tx, email string) ([]string, error) {
+func teamSharedProjectsOwnedByTx(ctx context.Context, tx *sql.Tx, email string) ([]ProjectRef, error) {
 	return teamSharedProjectsOwnedBy(ctx, tx, normalizeEmail(email), " FOR UPDATE")
 }
 
@@ -310,18 +354,18 @@ type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-func teamSharedProjectsOwnedBy(ctx context.Context, q queryer, email, lock string) ([]string, error) {
+func teamSharedProjectsOwnedBy(ctx context.Context, q queryer, email, lock string) ([]ProjectRef, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name`+lock,
+		`SELECT id, name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name`+lock,
 		email)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []ProjectRef
 	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
+		var n ProjectRef
+		if err := rows.Scan(&n.ID, &n.Name); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
@@ -415,7 +459,12 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 	if strings.TrimSpace(target.TeamID) != p.TeamID {
 		return nil, ErrNotAProjectMember
 	}
-	row := s.db.QueryRowContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after a successful Commit
+	row := tx.QueryRowContext(ctx,
 		`UPDATE projects SET owner_email = $1, updated_at = $2 WHERE id = $3
 		 RETURNING `+projectColumns,
 		newOwner, time.Now().Unix(), projectID)
@@ -426,12 +475,26 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 		}
 		return nil, err
 	}
+	// Everyone's access is untouched — with one exception the sentence above
+	// used to gloss over: the OUTGOING owner saw the project through
+	// owner_email, and after this statement they see it only if they are in its
+	// team. An owner who has left the team (the case the admin arm exists for)
+	// therefore loses access to a project their own chats may still be filed
+	// in, which the rail would render nowhere. Unfile them, in this
+	// transaction, per the filing invariant in projects.go.
+	if err := unfileChatsWithoutProjectAccessTx(ctx, tx, projectID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return updated, nil
 }
 
-// ProjectImpact counts what a delete would take with it. Best-effort display
-// data: the counts are read outside the delete transaction, so a chat filed a
-// moment later is simply not reflected.
+// ProjectImpact counts what a delete would take with it, and what making the
+// project personal would unfile. Best-effort display data: the counts are read
+// outside the transaction that acts on them, so a chat filed a moment later is
+// simply not reflected.
 func (s *Store) ProjectImpact(ctx context.Context, projectID string) (ProjectImpact, error) {
 	var out ProjectImpact
 	if err := s.db.QueryRowContext(ctx,
@@ -439,12 +502,20 @@ func (s *Store) ProjectImpact(ctx context.Context, projectID string) (ProjectImp
 	).Scan(&out.Memories); err != nil {
 		return out, err
 	}
+	// The teammate counts compare each chat's owner against the project's
+	// owner_email — the definition of "loses the project when it goes
+	// personal", since a personal project is visible to its owner and nobody
+	// else. A missing project makes the scalar subquery NULL, so the FILTERs
+	// match nothing and the counts are 0 rather than an error.
 	err := s.db.QueryRowContext(ctx, `
+		WITH owner AS (SELECT owner_email FROM projects WHERE id = $1)
 		SELECT count(*), count(DISTINCT user_email),
-		       count(*) FILTER (WHERE team_visible)
+		       count(*) FILTER (WHERE team_visible),
+		       count(*) FILTER (WHERE user_email <> (SELECT owner_email FROM owner)),
+		       count(DISTINCT user_email) FILTER (WHERE user_email <> (SELECT owner_email FROM owner))
 		FROM conversations WHERE project_id = $1 AND deleted_at IS NULL`,
 		projectID,
-	).Scan(&out.Chats, &out.Members, &out.TeamSharedChats)
+	).Scan(&out.Chats, &out.Members, &out.TeamSharedChats, &out.ChatsFromTeammates, &out.TeammatesWithChats)
 	if err != nil {
 		return out, err
 	}

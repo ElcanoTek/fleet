@@ -341,15 +341,18 @@ for bash and python. Four things to be honest about:
   contents. It also cannot widen anything: the flag only re-admits *read-only*
   anchors for roots the operator already configured, and the read still runs
   inside the sandbox. A wrong declaration surfaces as a not-found read.
-- **Only the bundle's own doc dirs are covered.** Other entries in the mount
-  list (the uploads root) live in control-plane state no image can contain;
-  they stay dropped, with a log line each. Chat attachments don't need that
-  mount here: under this backend the chat server copies each validated
-  non-image attachment into the conversation's workspace directory
-  (`<workspace>/<convID>/attachments/`) — inside the claim every pod mounts —
-  and the prompt block advertises the staged path, so `view_file`/`bash`
-  reads work without the uploads root. (Image attachments reach the model
-  host-side as vision input on both backends and need no staging.)
+- **Only the bundle's own doc dirs are covered.** Any other host root in the
+  mount list lives in control-plane state no image can contain; those stay
+  dropped, with a log line each. Chat attachments were once such an entry and
+  are no longer in the list at all: on **both** backends the chat server copies
+  each validated non-image attachment into the sending conversation's workspace
+  directory (`<workspace>/<convID>/attachments/`) — inside the claim every pod
+  mounts — and the prompt block advertises the staged path, so
+  `view_file`/`bash` reads work with the uploads root mounted nowhere
+  ([ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md),
+  [ADR-0058](adr/0058-per-conversation-attachment-scoping.md)). (Image
+  attachments reach the model host-side as vision input on both backends and
+  need no staging.)
 - **Skills are not this flag's business.** The skills tree reaches pods by
   staging (below), declared or not; `bundle_docs_in_image` vouches only for
   the three roots above.

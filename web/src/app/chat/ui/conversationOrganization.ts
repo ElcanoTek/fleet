@@ -194,3 +194,48 @@ export function visibleConversationOrder<T extends OrganizableConversation>(args
     ...recentUnfiled(args.all, args.knownProjectIds),
   ];
 }
+
+// railProjectEmptyState picks which empty-state copy a project group in the
+// rail shows when it holds none of the VIEWER'S OWN chats.
+//
+// The rail lists only the viewer's own chats, deliberately: a team-shared
+// chat's one discovery surface is the project home's Team section (ADR-0057),
+// and duplicating it here would be the second organizing axis that ADR
+// rejected. But "No chats yet" was then a false statement to a teammate whose
+// colleagues had filed two shared chats into the project — the rail said the
+// project was empty while its home listed content. So the copy is
+// viewer-aware: it says the project holds nothing OF THEIRS and points at the
+// home, without moving the shared chats into the rail.
+//
+//   • "no-chats"           — nothing here for anyone. The filing-paths copy.
+//   • "team-has-chats"     — teammates have shared `teamSharedChatCount` chats
+//                            into it; the copy quotes the number and links to
+//                            the home.
+//   • "team-count-unknown" — a team-shared project whose count has not loaded
+//                            (or failed to). Point at the home, assert NO
+//                            number: a count we don't have must not be
+//                            invented, and "empty" is exactly the claim that
+//                            was wrong.
+//
+// A PERSONAL project resolves to "no-chats" without consulting any count:
+// team sharing is refused outside a team-shared project and every way of
+// removing that home clears the flag (ADR-0057), so zero there is certain
+// rather than merely unknown.
+export type RailProjectEmptyState =
+  | { kind: "no-chats" }
+  // count is > 0 by construction, so the copy can quote it without a fallback.
+  | { kind: "team-has-chats"; count: number }
+  | { kind: "team-count-unknown" };
+
+export function railProjectEmptyState(args: {
+  // Whether the project is shared with a team (Project.team_id is set).
+  teamShared: boolean;
+  // How many team-shared chats OTHER members contributed to this project.
+  // undefined = not known (never loaded, or the read failed).
+  teamSharedChatCount?: number;
+}): RailProjectEmptyState {
+  if (!args.teamShared) return { kind: "no-chats" };
+  const count = args.teamSharedChatCount;
+  if (count === undefined) return { kind: "team-count-unknown" };
+  return count > 0 ? { kind: "team-has-chats", count } : { kind: "no-chats" };
+}

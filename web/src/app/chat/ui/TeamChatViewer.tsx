@@ -186,6 +186,7 @@ export function TeamChatViewer({
 
         <ReadOnlyTranscript
           bubbles={bubbles}
+          audience="team"
           renderAssistant={(text) => (
             <Suspense fallback={<div className="whitespace-pre-wrap">{text}</div>}>
               <AssistantMarkdown content={text} />
@@ -204,25 +205,46 @@ export function TeamChatViewer({
             dead end: this is the one thing a reader can do with someone
             else's chat, and it needs no permission from them. */}
         {snapshot && branchPoint ? (
-          <div className="sticky bottom-0 mt-8 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] pb-2 pt-4">
+          <div className="sticky bottom-0 z-10 mt-8 pb-2 pt-4" data-testid="team-branch-cta">
+            {/* Legibility over the scrolling transcript comes from the SAME
+                treatment the live composer uses (--sticky-fade, see the
+                composer section in chat-experience.tsx): a soft gradient that
+                starts fully transparent 4rem above the CTA and reaches the
+                page background behind it, bleeding past the reading column's
+                padding so there is no edge anywhere. The flat panel this
+                replaces drew a hard border and an opaque plate across the
+                transcript. The token is theme-swapped in globals.css, so each
+                theme fades to its own --color-bg.
+
+                The `image:` hint is load-bearing: --sticky-fade is a gradient,
+                and the un-hinted arbitrary-value form emits background-color,
+                which drops gradient values (same note as Composer.tsx). */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -left-4 -right-4 -top-16 bottom-0 bg-[image:var(--sticky-fade)] sm:-left-8 sm:-right-8"
+            />
             {error ? (
               <p
                 role="alert"
-                className="mb-2 rounded-[0.75rem] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.8rem] text-[var(--color-danger)]"
+                className="relative mb-2 rounded-[0.75rem] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.8rem] text-[var(--color-danger)]"
               >
                 {error}
               </p>
             ) : null}
+            {/* Opaque control (--color-surface-1 is a solid colour in both
+                themes) with a soft shadow, so the button reads as a control
+                sitting above the page rather than a panel cut into it.
+                Size, placement and label are unchanged. */}
             <button
               type="button"
               disabled={branching}
-              className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-4 py-3 text-[0.9rem] font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
+              className="relative flex w-full items-center justify-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-4 py-3 text-[0.9rem] font-medium text-[var(--color-text-primary)] shadow-[var(--shadow-md)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-60"
               onClick={() => void branch()}
             >
               <Icon name="plus" className="size-4 shrink-0" />
               {branching ? "Branching…" : "Branch to continue in your own chat"}
             </button>
-            <p className="mt-1.5 text-center text-[0.7rem] text-[var(--color-text-muted)]">
+            <p className="relative mt-1.5 text-center text-[0.7rem] text-[var(--color-text-muted)]">
               You get your own copy in this project — private until you share
               it. {shortName(snapshot.owner_email)}’s chat is unchanged.
             </p>

@@ -29,6 +29,7 @@ import {
 } from "./history";
 import { Icon } from "./Icon";
 import { formatBytes, formatDuration, formatTokens, formatUsd } from "./formatters";
+import { TeamGlyph } from "./ShareGlyphs";
 
 // PendingAttachment describes a file the user has picked to send with the
 // next turn. We carry the live File object for display (chip name/size
@@ -509,6 +510,46 @@ export function PendingAttachmentChip({
         <Icon name="close" className="size-3" />
       </button>
     </span>
+  );
+}
+
+// ── "Shared with team" chip (chat header) ────────────────────────────────
+//
+// The same pill the project home puts beside a team-shared project's name,
+// reused on the one chat surface that stays visible while you type.
+//
+// The rail row and the project-home row both badge a team-shared chat, and
+// both of those are gone exactly when it matters: the rail collapses, and
+// under 900px it is a drawer. So a member composing in a shared chat had no
+// way to see that what they were typing would be readable by their team
+// without leaving the chat. It is a real button, because the thing a user
+// wants when they notice the badge is the dialog that controls it.
+//
+// The audience is NAMED, never inferred (ADR-0057): the team the chat is
+// stamped with, falling back to "your team" when the caller hasn't loaded a
+// team name. The label collapses to the glyph on a phone, the same way the
+// Lockdown badge next door does; the accessible name carries the audience at
+// every width.
+export function TeamSharedChip({
+  audience,
+  onClick,
+}: {
+  audience?: string;
+  onClick: () => void;
+}) {
+  const label = `Shared with ${audience || "your team"}`;
+  return (
+    <button
+      type="button"
+      aria-label={`${label} — open sharing`}
+      title={`${label} — read-only. Click to change sharing.`}
+      data-testid="chat-header-team-shared-chip"
+      onClick={onClick}
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+    >
+      <TeamGlyph className="size-3 shrink-0" />
+      <span className="hidden sm:inline">Shared with team</span>
+    </button>
   );
 }
 

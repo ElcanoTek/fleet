@@ -22,6 +22,15 @@ import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 // fillable placeholders, the numbered steps with the tools each used, the
 // output shape, and the pitfalls. That is what makes a good chat worth
 // keeping — a teammate can run it next quarter against different inputs.
+//
+// Not on the shared DialogShell (the B-2 pass), deliberately: this is the
+// full-bleed "sheet" shape, not a centred panel — it portals to <body>, fills
+// the viewport below sm:, carries its own header bar and a backdrop that is
+// not click-to-dismiss, and traps Tab through useDialogA11y. Its panel is
+// already opaque (--color-surface-1), which is the defect that pass fixed, so
+// moving it onto the shell would only buy props that switch the shell's
+// defaults back off. PromptLibrary, DownloadChatDialog and SavePromptDialog
+// share this shape with each other.
 // Saving one exchange, or one refined ask, would keep the answer and lose the
 // method, so the synthesis always reads the entire conversation.
 

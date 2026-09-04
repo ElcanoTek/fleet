@@ -529,6 +529,30 @@ func TestProjectMembersEndpoint(t *testing.T) {
 	if w := projectSub(t, f.srv, "GET", "zoe@x.com", f.project.ID+"/members", ""); w.Code != 404 {
 		t.Errorf("non-member: status %d, want 404", w.Code)
 	}
+
+	// An ADMIN who is in no team and owns nothing can read it — the case the
+	// endpoint exists for. It used to sit behind the membership gate while
+	// carrying its own owner-or-admin check, so that check was unreachable for
+	// exactly this caller: an admin got the same 404 a stranger does, could
+	// POST the handover, and could not ask who to hand it to.
+	w = httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/projects/"+f.project.ID+"/members", nil)
+	req = req.WithContext(context.WithValue(
+		context.WithValue(req.Context(), ctxKeyUser, "root@x.com"),
+		ctxKeyRole, store.RoleAdmin))
+	f.srv.projectByID(w, req)
+	if w.Code != 200 {
+		t.Fatalf("admin members: status %d body %s", w.Code, w.Body.String())
+	}
+	var adminOut struct {
+		Members []string `json:"members"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &adminOut); err != nil {
+		t.Fatal(err)
+	}
+	if len(adminOut.Members) != 2 {
+		t.Errorf("admin members = %v, want alice + bob", adminOut.Members)
+	}
 }
 
 // Deleting an account that still owns a team-shared project is refused with a
@@ -550,6 +574,31 @@ func TestAdminUserDeleteRefusesOwnedSharedProjects(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "Quant") {
 		t.Errorf("the 409 must name the project to transfer: %s", w.Body.String())
+	}
+	// The body is JSON and carries the project ID alongside the name. Names
+	// alone made the refusal a dead end: it told the admin to transfer the
+	// project and gave them no route to the control that does it, and the id
+	// cannot be recovered client-side (GET /projects is scoped to the caller's
+	// own and team-visible projects; an admin is usually neither).
+	var refusal struct {
+		Error    string `json:"error"`
+		Projects []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"owns_shared_projects"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &refusal); err != nil {
+		t.Fatalf("409 body is not JSON: %v (%s)", err, w.Body.String())
+	}
+	if !strings.Contains(refusal.Error, "transfer them to another member first") {
+		t.Errorf("error prose = %q, want the next step spelled out", refusal.Error)
+	}
+	if len(refusal.Projects) != 1 {
+		t.Fatalf("owns_shared_projects = %+v, want exactly one", refusal.Projects)
+	}
+	if refusal.Projects[0].ID != f.project.ID || refusal.Projects[0].Name != "Quant" {
+		t.Errorf("owns_shared_projects[0] = %+v, want {%s Quant}",
+			refusal.Projects[0], f.project.ID)
 	}
 	if u, err := f.st.GetUser(f.ctx, "alice@x.com"); err != nil || u == nil {
 		t.Error("the refused delete must leave the account intact")
@@ -666,5 +715,91 @@ func TestShareWithTeamReportsWhatItStored(t *testing.T) {
 	}
 	if got, _ := st.Get(f.ctx, "alice@x.com", c2.ID); got.TeamVisible {
 		t.Error("a refused share must leave the flag FALSE")
+	}
+}
+
+// Unticking "Share with my team" over HTTP moves a teammate's chats into their
+// own unfiled chats — and the confirm's counts are on the impact read that
+// precedes it.
+//
+// Red/green: the PATCH unshared the chats and left them FILED in a project the
+// teammate could no longer see, and the rail lists chats through the projects
+// the viewer can see — so their own conversations disappeared from Projects,
+// Temporary and Archived alike, with nothing deleted and nothing said.
+func TestUntickingTeamSharingUnfilesTeammateChats(t *testing.T) {
+	f := newTeamHTTPFixture(t)
+	// Bob's own chat, filed in Alice's team-shared project (a branch of hers is
+	// how this normally happens) and shared back with the team.
+	bobs, err := f.st.CreateConversation(f.ctx, "bob@x.com", "Bob's branch", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetConversationProject(f.ctx, "bob@x.com", bobs.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := f.st.SetConversationTeamVisible(f.ctx, "bob@x.com", bobs.ID, true); err != nil || !stored {
+		t.Fatalf("SetConversationTeamVisible = (%v, %v), want (true, nil)", stored, err)
+	}
+
+	// The confirm's numbers, by their JSON names — this is the contract the
+	// dialog's copy ("{N} chats from teammates will move to their unfiled
+	// chats.") is rendered from.
+	w := projectSub(t, f.srv, "GET", "alice@x.com", f.project.ID+"/impact", "")
+	if w.Code != 200 {
+		t.Fatalf("impact: status %d body %s", w.Code, w.Body.String())
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	for field, want := range map[string]float64{
+		"chats_from_teammates": 1,
+		"teammates_with_chats": 1,
+	} {
+		got, ok := raw[field]
+		if !ok {
+			t.Fatalf("impact response is missing %q: %s", field, w.Body.String())
+		}
+		if got != want {
+			t.Errorf("%s = %v, want %v", field, got, want)
+		}
+	}
+
+	// The untick itself.
+	w = projectSub(t, f.srv, "PATCH", "alice@x.com", f.project.ID, `{"team_shared":false}`)
+	if w.Code != 200 {
+		t.Fatalf("untick: status %d body %s", w.Code, w.Body.String())
+	}
+
+	// Bob's chat is his again: unfiled, unshared, still there, still listed.
+	got, err := f.st.Get(f.ctx, "bob@x.com", bobs.ID)
+	if err != nil || got == nil {
+		t.Fatalf("bob's chat must still exist (err=%v)", err)
+	}
+	if got.ProjectID != "" || got.TeamVisible {
+		t.Errorf("bob's chat = project %q / team_visible %v, want unfiled and unshared",
+			got.ProjectID, got.TeamVisible)
+	}
+	list, err := f.st.List(f.ctx, "bob@x.com", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed bool
+	for _, c := range list {
+		if c.ID == bobs.ID {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Error("bob's chat is missing from his own listing — the vanishing bug is back")
+	}
+	// Alice keeps her own chat where it was; she still owns the project.
+	mine, err := f.st.Get(f.ctx, "alice@x.com", f.chat.ID)
+	if err != nil || mine == nil {
+		t.Fatalf("alice's chat: %v", err)
+	}
+	if mine.ProjectID != f.project.ID || mine.TeamVisible {
+		t.Errorf("alice's chat = project %q / team_visible %v, want still filed and unshared",
+			mine.ProjectID, mine.TeamVisible)
 	}
 }

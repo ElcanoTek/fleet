@@ -165,15 +165,21 @@ func (s *Store) appendHistoryProvenanceTx(ctx context.Context, tx *sql.Tx, convI
 	now := time.Now().Unix()
 
 	var b strings.Builder
-	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at, turn_id, turn_seq) VALUES `)
-	args := make([]any, 0, len(entries)*7)
+	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at, turn_id, turn_seq, injected_context) VALUES `)
+	const cols = 8
+	args := make([]any, 0, len(entries)*cols)
 	for i, e := range entries {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		base := i*7 + 1
-		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4, base+5, base+6)
-		args = append(args, convID, e.Role, e.Type, string(e.Content), now, turnID, startSeq+int64(i))
+		base := i*cols + 1
+		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7)
+		// This is the write that matters for injected_context: the turn's user
+		// entry (turn_seq 1) carries the server-derived suffix the model was
+		// shown, stored beside the user's own text rather than inside it
+		// (migration 056 / ADR-0058).
+		args = append(args, convID, e.Role, e.Type, string(e.Content), now, turnID, startSeq+int64(i), e.InjectedContext)
 	}
 	b.WriteString(" RETURNING id")
 	ids := make([]int64, 0, len(entries))
