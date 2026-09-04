@@ -29,6 +29,11 @@ than by a major-version bump.
 
 ### Security
 
+- **Sandbox Tornado update:** the generic image replaces Fedora’s vulnerable
+  Tornado 6.5.7 with upstream 6.5.8 or newer, removes the stale RPM copy, and
+  verifies the runtime imports the patched overlay. Rebuild the sandbox image
+  to pick up the fix. Client bundles own their corresponding image definitions.
+
 - Confine host-side attachment staging and artifact opens to conversation roots,
   closing workspace-symlink escapes and a download validation/open race. Keep
   shared-file quota admission under the write lock so concurrent uploads cannot

@@ -73,6 +73,33 @@ run’s magic-link fixtures. See [the recording instructions](generating-demo-gi
 Contributor instructions now use the tagged Makefile test/vet path and the
 complete web gate, including dependency audits and the override canary.
 
+## Live validation follow-up
+
+The Omarchy host now has rootless Podman, kind, kubectl, and Helm installed.
+The full live browser suite passed against PostgreSQL, both Go listeners, and
+real sandbox execution; only the model endpoint was replaced by the fake LLM.
+All seven CI sandbox isolation invariants ran and passed without skips.
+
+A Grype scan of the freshly built generic image found Tornado 6.5.7, affected by
+[GHSA-mpf4-983q-p7j4](https://github.com/advisories/GHSA-mpf4-983q-p7j4).
+The image now overlays upstream Tornado 6.5.8 or newer and removes the stale
+RPM copy, following the existing image security-update policy. The rebuilt
+image imports 6.5.8 and its Grype scan reports no vulnerabilities. Deployments
+must rebuild their own bundle’s sandbox image to receive the update.
+
+The real Kubernetes integration test uses a disposable rootless kind cluster,
+Calico enforcement, a dedicated service account, and a shared workspace PVC.
+It tests preflight, bash/Python/file operations, read-only root, absent service
+account tokens, and an open-network TCP control versus a sealed-network denial.
+This exercises the sandbox backend; it is not a full Kubernetes control-plane
+deployment or a managed-cluster certification.
+
+The intermittent labels-menu dismissal was reproduced: a queued ancestor scroll
+from bringing the button into view arrived after the menu opened. Menus now
+ignore scroll notifications when the anchor has not moved, while still closing
+when scrolling actually changes its position. The browser regression no longer
+retries opening the menu to conceal the race.
+
 ## Deliberate limits
 
 This is a targeted code and behavior review, not a certification of the entire
@@ -80,4 +107,5 @@ repository or a penetration test. No feature was removed solely because it was
 large or unfamiliar. Independent modal implementations were not consolidated.
 The backend-specific Podman/Kubernetes execution paths remain mandatory; this
 review does not introduce a host fallback or change their deployment contract.
-Live sandbox and cluster integration still require their dedicated environments.
+Kata/microVM and privileged systemd-hardening coverage still require dedicated
+host capabilities; those are not covered by the rootless local runs.
