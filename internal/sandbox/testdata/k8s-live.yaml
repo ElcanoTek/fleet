@@ -1,0 +1,128 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fleet-sandbox-test
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: fleet-sandbox-test-workspace
+spec:
+  capacity: {storage: 1Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /fleet-review-workspace
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: workspace
+  namespace: fleet-sandbox-test
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 1Gi}
+  storageClassName: ""
+  volumeName: fleet-sandbox-test-workspace
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fleet-runner
+  namespace: fleet-sandbox-test
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fleet-runner
+  namespace: fleet-sandbox-test
+rules:
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [create, get, list, delete]
+- apiGroups: [""]
+  resources: [pods/exec]
+  verbs: [create, get]
+- apiGroups: [""]
+  resources: [persistentvolumeclaims]
+  verbs: [get]
+- apiGroups: [networking.k8s.io]
+  resources: [networkpolicies]
+  verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fleet-runner
+  namespace: fleet-sandbox-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fleet-runner
+subjects:
+- kind: ServiceAccount
+  name: fleet-runner
+  namespace: fleet-sandbox-test
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fleet-sandbox-deny-all
+  namespace: fleet-sandbox-test
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fleet-sandbox
+      fleet.elcanotek.com/egress: none
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fleet-sandbox-open-egress
+  namespace: fleet-sandbox-test
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fleet-sandbox
+      fleet.elcanotek.com/egress: open
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - podSelector:
+        matchLabels: {app: fleet-test-target}
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: egress-target
+  namespace: fleet-sandbox-test
+  labels: {app: fleet-test-target}
+spec:
+  automountServiceAccountToken: false
+  containers:
+  - name: target
+    image: localhost/fleet-sandbox:latest
+    imagePullPolicy: Never
+    command: [python3, -m, http.server, '8080']
+    ports:
+    - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-target
+  namespace: fleet-sandbox-test
+spec:
+  selector: {app: fleet-test-target}
+  ports:
+  - port: 8080
+    targetPort: 8080

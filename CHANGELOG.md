@@ -27,6 +27,14 @@ than by a major-version bump.
 
 ## Recent changes
 
+### Added
+
+- **Opt-in real-cluster sandbox test:** `TestKubernetesLiveSandbox` runs the
+  Kubernetes backend against a disposable cluster — real exec streams, shared
+  PVC file operations, pod isolation, and CNI-enforced sealed egress. It skips
+  unless `FLEET_TEST_K8S_KUBECONFIG` is set; setup is in
+  [`docs/KUBERNETES-LIVE-TEST.md`](docs/KUBERNETES-LIVE-TEST.md).
+
 ### Security
 
 - **Sandbox Tornado update:** the generic image replaces Fedora’s vulnerable

@@ -92,7 +92,9 @@ Calico enforcement, a dedicated service account, and a shared workspace PVC.
 It tests preflight, bash/Python/file operations, read-only root, absent service
 account tokens, and an open-network TCP control versus a sealed-network denial.
 This exercises the sandbox backend; it is not a full Kubernetes control-plane
-deployment or a managed-cluster certification.
+deployment or a managed-cluster certification. The suite is opt-in
+(`FLEET_TEST_K8S_KUBECONFIG`) and its cluster setup is documented in
+[`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md).
 
 The intermittent labels-menu dismissal was reproduced: a queued ancestor scroll
 from bringing the button into view arrived after the menu opened. Menus now
