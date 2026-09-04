@@ -5453,7 +5453,7 @@ export function ChatExperience({
                   un-hinted arbitrary-value form emits background-color, which
                   drops gradient values (see Composer.tsx's own note). Without
                   it this fade painted nothing at all. */}
-              <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[image:var(--sticky-fade)]" />
+              <div data-testid="composer-fade" className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[image:var(--sticky-fade)]" />
               <div className="mx-auto mb-1 w-full max-w-[53rem] px-1 sm:mb-1.5 sm:px-0">
                 {showStats ? (
                   <ConversationTotalsChip
