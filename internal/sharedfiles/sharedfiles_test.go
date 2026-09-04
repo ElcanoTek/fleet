@@ -6,7 +6,11 @@ package sharedfiles
 // direction — missing file, wrong-sized file, stray file, stray empty folder.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,6 +180,15 @@ func TestUnsafeManifestRowsAreRefused(t *testing.T) {
 		if err := l.Stage(f); err == nil {
 			t.Errorf("Stage accepted unsafe row %+v", f)
 		}
+		// Unstage is the destructive primitive: it os.Removes a path derived
+		// from DB state, so StagedPath is the only thing between a hand-edited
+		// row and an arbitrary unlink. Stage and StagedPath were asserted
+		// here; the delete was not. Gated on the id like StagedPath above,
+		// because Unstage derives its path from name+folder only — an unsafe
+		// ID has nothing to reject (it never reaches canonicalPath).
+		if err := l.Unstage(f); f.ID == "ok" && err == nil {
+			t.Errorf("Unstage accepted unsafe row %+v", f)
+		}
 	}
 	if _, _, err := l.SaveCanonical("../escape", strings.NewReader("x")); err == nil {
 		t.Errorf("SaveCanonical accepted unsafe id")
@@ -255,5 +268,114 @@ func TestTotalBytes(t *testing.T) {
 	files := []store.SharedFile{{SizeBytes: 3}, {SizeBytes: 39}}
 	if got := TotalBytes(files); got != 42 {
 		t.Errorf("TotalBytes = %d, want 42", got)
+	}
+}
+
+// TestUnstageKeepsFolderWithSurvivingSibling pins the direction the folder
+// prune must NOT go. Unstage's os.Remove of the folder is best-effort and
+// relies on ENOTEMPTY being swallowed; a refactor to RemoveAll would read as
+// equivalent and would silently delete another admin's shared file. Only the
+// empty-folder prune was covered.
+func TestUnstageKeepsFolderWithSurvivingSibling(t *testing.T) {
+	l := testLibrary(t)
+	a := saveFile(t, l, store.SharedFile{ID: "ida", Name: "a.csv", Folder: "q3"}, "aaaa")
+	b := saveFile(t, l, store.SharedFile{ID: "idb", Name: "b.csv", Folder: "q3"}, "bbbb")
+	for _, f := range []store.SharedFile{a, b} {
+		if err := l.Stage(f); err != nil {
+			t.Fatalf("stage %s: %v", f.ID, err)
+		}
+	}
+
+	if err := l.Unstage(a); err != nil {
+		t.Fatalf("unstage a: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(l.StagedRoot, "q3", "a.csv")); !os.IsNotExist(err) {
+		t.Fatalf("a.csv survived unstage: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(l.StagedRoot, "q3", "b.csv"))
+	if err != nil || string(got) != "bbbb" {
+		t.Fatalf("sibling b.csv = (%q, %v); the folder prune must not touch it", got, err)
+	}
+
+	// Once the last file goes, the folder does too.
+	if err := l.Unstage(b); err != nil {
+		t.Fatalf("unstage b: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(l.StagedRoot, "q3")); !os.IsNotExist(err) {
+		t.Fatalf("emptied folder survived: %v", err)
+	}
+}
+
+// TestSyncIsBestEffortPerRow pins the invariant Sync's doc comment states and
+// nothing exercised: one bad row must not stop the rest of the library from
+// healing. Asserts only that an error came back, never which one — note()
+// keeps the first, and the map it iterates has no order.
+func TestSyncIsBestEffortPerRow(t *testing.T) {
+	l := testLibrary(t)
+	good := saveFile(t, l, store.SharedFile{ID: "idgood", Name: "good.csv"}, "good")
+	// Row whose canonical bytes are gone: fails inside Stage's open.
+	missing := saveFile(t, l, store.SharedFile{ID: "idgone", Name: "gone.csv"}, "gone")
+	if err := l.RemoveCanonical(missing.ID); err != nil {
+		t.Fatalf("RemoveCanonical: %v", err)
+	}
+	// Row that fails earlier still, in stagedRel.
+	unsafe := store.SharedFile{ID: "idunsafe", Name: "../escape"}
+
+	err := l.Sync([]store.SharedFile{missing, unsafe, good})
+	if err == nil {
+		t.Fatalf("Sync must report the first failure, got nil")
+	}
+	staged, readErr := os.ReadFile(filepath.Join(l.StagedRoot, "good.csv"))
+	if readErr != nil || string(staged) != "good" {
+		t.Fatalf("good row = (%q, %v); a bad row must not stop the healthy ones", staged, readErr)
+	}
+}
+
+// errReader fails partway through, so the copy inside SaveCanonical breaks
+// after bytes have already landed in the temp file.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
+
+// TestSaveCanonicalMidStreamFailureLeavesNothing pins SaveCanonical's
+// crash-safety claim. It matters more than it looks: Sync reconciles only the
+// staged tree, so nothing ever sweeps strays out of CanonicalDir — a leaked
+// .upload-* temp there is permanent.
+func TestSaveCanonicalMidStreamFailureLeavesNothing(t *testing.T) {
+	l := testLibrary(t)
+	r := io.MultiReader(strings.NewReader("abc"), errReader{})
+	if _, _, err := l.SaveCanonical("idpartial", r); err == nil {
+		t.Fatalf("SaveCanonical accepted a failing reader")
+	}
+	if _, err := os.Stat(filepath.Join(l.CanonicalDir, "idpartial")); !os.IsNotExist(err) {
+		t.Fatalf("partial canonical file was published: %v", err)
+	}
+	entries, err := os.ReadDir(l.CanonicalDir)
+	if err != nil {
+		t.Fatalf("read canonical dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".upload-") {
+			t.Fatalf("leaked staging temp %q — nothing ever sweeps CanonicalDir", e.Name())
+		}
+	}
+}
+
+// TestSaveCanonicalReturnsTrueDigest asserts the exact hash rather than
+// "non-empty", which is what every other assertion on this value settles for —
+// a hasher fed the wrong stream, or none, passes those.
+func TestSaveCanonicalReturnsTrueDigest(t *testing.T) {
+	l := testLibrary(t)
+	const body = "a,b\n1,2\n"
+	sum := sha256.Sum256([]byte(body))
+	n, sha, err := l.SaveCanonical("iddigest", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("SaveCanonical: %v", err)
+	}
+	if n != int64(len(body)) {
+		t.Fatalf("size = %d, want %d", n, len(body))
+	}
+	if want := hex.EncodeToString(sum[:]); sha != want {
+		t.Fatalf("sha256 = %q, want %q", sha, want)
 	}
 }

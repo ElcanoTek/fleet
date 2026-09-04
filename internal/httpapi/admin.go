@@ -101,8 +101,7 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			CacheHitRatePct:          hitRate,
 		})
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(adminStats{Users: users})
+	writeJSON(w, adminStats{Users: users})
 }
 
 // adminUser is the JSON shape of one row in the admin Users tab (#237).
@@ -167,8 +166,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		au.OpsCenterAdmin = au.OpsCenterRole == "admin"
 		out = append(out, au)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"users": out})
+	writeJSON(w, map[string]any{"users": out})
 }
 
 // handleAdminUserItem dispatches the /admin/users/{email}[/password] item
@@ -287,6 +285,5 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 		//nolint:gosec // G706: %q escapes CR/LF; ops_role is validated above.
 		log.Printf("admin users: set ops role of %q to %s by %q", u.Email, *body.OpsRole, userFromCtx(r.Context()))
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.toAdminUserAnnotated(r, *u))
+	writeJSON(w, s.toAdminUserAnnotated(r, *u))
 }

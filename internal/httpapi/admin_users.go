@@ -263,6 +263,5 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("admin teams: renamed %q -> %q (%d users, %d projects) by %q",
 		body.From, body.To, usersN, projectsN, userFromCtx(r.Context()))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"users_updated": usersN, "projects_updated": projectsN})
+	writeJSON(w, map[string]any{"users_updated": usersN, "projects_updated": projectsN})
 }

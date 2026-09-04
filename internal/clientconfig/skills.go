@@ -100,7 +100,15 @@ func (d *declaredToolList) UnmarshalYAML(unmarshal func(any) error) error {
 	// Fall back to a scalar: "Read, Grep" or "Read Grep".
 	var scalar string
 	if err := unmarshal(&scalar); err != nil {
-		return err
+		// Neither shape — a mapping, say, if the standard grows one. Returning
+		// the error here failed the whole frontmatter parse, which dropped the
+		// entire skill from the roster over a field that is surfaced for review
+		// and never enforced. That contradicts the non-strict contract the
+		// surrounding comments promise ("a future-standard skill still loads"),
+		// so an unrecognized shape leaves the list absent and the skill loads.
+		*d = nil
+		//nolint:nilerr // deliberate: the unmarshal error is DISCARDED, not lost. An unrecognized allowed-tools shape must cost the field, not drop the whole skill (see above) — propagating it fails the entire frontmatter parse, which is the bug this replaced.
+		return nil
 	}
 	*d = normalizeToolList(strings.FieldsFunc(scalar, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\t' || r == '\n'

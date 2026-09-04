@@ -451,7 +451,7 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 			"Content-Disposition",
 			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "json", "chat")),
 		)
-		_ = json.NewEncoder(w).Encode(body)
+		writeJSON(w, body)
 	}
 }
 

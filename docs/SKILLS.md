@@ -99,6 +99,14 @@ gate. This is deliberate, not a gap:
   need to defend against, so treating a self-declared list as a security
   boundary would be theater. Surfacing it for human review is the honest use.
 
+**Parsing is non-strict, and that extends to the value's shape.**
+`allowed-tools` accepts both forms the standard permits — a YAML list
+(`[Read, Grep]`) and a scalar (`"Read, Grep"` or `"Read Grep"`) — and an
+unrecognized third shape costs the *field*, not the skill: the declared list is
+left absent and the skill still loads. Since the field is surfaced for review
+and never enforced, dropping a whole skill from the roster over a shape fleet
+does not understand would trade a working skill for a review annotation.
+
 **Portability note:** skills imported from Claude Code declare tools by *its*
 names (`Read`, `Grep`, `Bash`), which differ from fleet's (`read_file`,
 `bash`, `run_python`). fleet surfaces the declared names verbatim and does not
