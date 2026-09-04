@@ -89,7 +89,8 @@ func newTestRepo(t *testing.T) *testRepo {
 		t.Fatalf("mkdir scripts: %v", err)
 	}
 	r.script = filepath.Join(r.dir, "scripts", "version.sh")
-	if err := os.WriteFile(r.script, body, 0o700); err != nil { //nolint:gosec // executable test fixture
+	// 0o700: the script has to be executable to be the thing under test.
+	if err := os.WriteFile(r.script, body, 0o700); err != nil {
 		t.Fatalf("write version.sh: %v", err)
 	}
 	r.git(git, "add", "scripts/version.sh")
@@ -477,7 +478,8 @@ func TestIdentityIsNotBorrowedFromAnEnclosingRepo(t *testing.T) {
 		t.Fatalf("read version.sh: %v", err)
 	}
 	script := filepath.Join(unpacked, "scripts", "version.sh")
-	if err := os.WriteFile(script, body, 0o700); err != nil { //nolint:gosec // executable test fixture
+	// 0o700: the script has to be executable to be the thing under test.
+	if err := os.WriteFile(script, body, 0o700); err != nil {
 		t.Fatalf("write version.sh: %v", err)
 	}
 
