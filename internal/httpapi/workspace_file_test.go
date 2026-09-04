@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,5 +217,48 @@ func TestWorkspaceFile_NotFound(t *testing.T) {
 		"/conversations/"+convID+"/workspace/does-not-exist.png", nil, "owner@example.com")
 	if w.Code != http.StatusNotFound {
 		t.Errorf("missing file: %d (want 404), body=%q", w.Code, w.Body.String())
+	}
+}
+
+// TestWorkspaceFile_PercentInName: a filename containing a literal `%` is
+// served. net/http decodes r.URL.Path once; the handler used to decode it a
+// SECOND time, so `100%.png` was a "bad path encoding" 400 and
+// `rate%20final.csv` was looked up as `rate final.csv` (404). The web proxy
+// encodes each segment exactly once, so one decode is the contract.
+func TestWorkspaceFile_PercentInName(t *testing.T) {
+	s := serverFixture(t)
+	h := s.Routes()
+
+	w := do(t, h, http.MethodPost, "/conversations",
+		map[string]any{"persona": "victoria"}, "owner@example.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var createResp struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	convID := createResp.ID
+
+	wsRoot := t.TempDir()
+	t.Setenv("CHAT_WORKSPACE_ROOT", wsRoot)
+	convDir := filepath.Join(wsRoot, convID)
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatalf("mkdir convDir: %v", err)
+	}
+	for _, name := range []string{"100%.txt", "rate%20final.csv", "with space.txt"} {
+		if err := os.WriteFile(filepath.Join(convDir, name), []byte("body of "+name), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		// One encode on the wire, as the proxy does.
+		w = do(t, h, http.MethodGet, "/conversations/"+convID+"/workspace/"+url.PathEscape(name), nil, "owner@example.com")
+		if w.Code != http.StatusOK {
+			t.Fatalf("get %q: %d %s", name, w.Code, w.Body.String())
+		}
+		if w.Body.String() != "body of "+name {
+			t.Fatalf("get %q: served wrong file: %q", name, w.Body.String())
+		}
 	}
 }

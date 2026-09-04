@@ -8,9 +8,13 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -174,6 +178,26 @@ func TestConversationSubroute404Bodies(t *testing.T) {
 		// the lockdown gate, and historically answers via http.NotFound.
 		{name: "model POST", method: http.MethodPost, sub: "model",
 			body: map[string]string{"model": "some/model"}, wantBody: "404 page not found\n"},
+		// The mutators below gate ownership inside the store (0 rows affected →
+		// store.ErrConversationNotFound). They used to surface that as a 500;
+		// writeConversationMutationError maps the sentinel to 404 for all of
+		// them so a stale tab is never told the server is broken.
+		{name: "item DELETE", method: http.MethodDelete, sub: "", wantBody: "conversation not found\n"},
+		{name: "pin POST", method: http.MethodPost, sub: "pin",
+			body: map[string]bool{"pinned": true}, wantBody: "conversation not found\n"},
+		{name: "archive POST", method: http.MethodPost, sub: "archive",
+			body: map[string]bool{"archived": true}, wantBody: "conversation not found\n"},
+		{name: "rename POST", method: http.MethodPost, sub: "rename",
+			body: map[string]string{"title": "x"}, wantBody: "conversation not found\n"},
+		{name: "model POST (clear)", method: http.MethodPost, sub: "model",
+			body: map[string]string{"model": ""}, wantBody: "conversation not found\n"},
+		{name: "approval-timeout POST", method: http.MethodPost, sub: "approval-timeout",
+			body: map[string]any{"approval_timeout_seconds": 60}, wantBody: "conversation not found\n"},
+		{name: "thinking_config PUT", method: http.MethodPut, sub: "thinking_config",
+			body: map[string]any{"enabled": true, "budget_tokens": 0}, wantBody: "conversation not found\n"},
+		{name: "thinking_config DELETE", method: http.MethodDelete, sub: "thinking_config", wantBody: "conversation not found\n"},
+		{name: "truncate POST", method: http.MethodPost, sub: "truncate",
+			body: map[string]any{"after_message_id": 1}, wantBody: "conversation not found\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -220,5 +244,70 @@ func TestConversationSubrouteUnmatched405(t *testing.T) {
 				t.Fatalf("%s /%s: 405 body %q, want %q", tc.method, tc.sub, w.Body.String(), "method not allowed\n")
 			}
 		})
+	}
+}
+
+// TestConversationRenameCapsAtRuneBoundary pins that a long title is capped
+// at a UTF-8 rune boundary. The old title[:200] byte slice could cut a
+// multi-byte character in half; Postgres rejects the invalid byte sequence
+// and the user got a 500 for renaming a chat to a long non-ASCII title.
+func TestConversationRenameCapsAtRuneBoundary(t *testing.T) {
+	s := serverFixture(t)
+	h := s.Routes()
+	const user = "router@x.com"
+	id := newRouteProbeConversation(t, h, user)
+
+	// 3-byte runes: 200 is not a multiple of 3, so a byte slice at 200 lands
+	// mid-rune. 70 of them is 210 bytes, past the cap.
+	long := strings.Repeat("語", 70)
+	w := do(t, h, http.MethodPost, "/conversations/"+id+"/rename", map[string]string{"title": long}, user)
+	if w.Code != http.StatusOK {
+		t.Fatalf("rename: got %d want 200 body=%q", w.Code, w.Body.String())
+	}
+	conv, err := s.store.Get(context.Background(), user, id)
+	if err != nil || conv == nil {
+		t.Fatalf("get: conv=%v err=%v", conv, err)
+	}
+	if !utf8.ValidString(conv.Title) {
+		t.Fatalf("stored title is not valid UTF-8: %q", conv.Title)
+	}
+	if len(conv.Title) > 200 || len(conv.Title) != 198 {
+		t.Fatalf("stored title is %d bytes, want 198 (66 whole runes)", len(conv.Title))
+	}
+}
+
+// TestOptionalBodyMalformedIs400 pins that the optional-body routes refuse a
+// present-but-malformed body instead of decoding it to the zero value and
+// acting on that: share (would mint a non-expiring link), share-with-team
+// (would un-share), branch (would report "must be a positive message id"),
+// summarize (would silently ignore the model override).
+func TestOptionalBodyMalformedIs400(t *testing.T) {
+	s := serverFixture(t)
+	s.agent = &fakeEngine{}
+	h := s.Routes()
+	const user = "router@x.com"
+	id := newRouteProbeConversation(t, h, user)
+
+	for _, sub := range []string{"share", "share-with-team", "branch", "summarize"} {
+		t.Run(sub, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+				"/conversations/"+id+"/"+sub, strings.NewReader(`{"expires_at": "not a number", "visible": "yes", "branch_point_message_id": "1"`))
+			req.Header.Set("X-Chat-Server-Token", "tok")
+			req.Header.Set("X-User-Email", user)
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("%s with malformed body: got %d want 400 body=%q", sub, w.Code, w.Body.String())
+			}
+			if !strings.HasPrefix(w.Body.String(), "bad json") {
+				t.Fatalf("%s: body %q, want a bad json 400", sub, w.Body.String())
+			}
+		})
+	}
+	// And the empty body still means "defaults": share mints a link.
+	w := do(t, h, http.MethodPost, "/conversations/"+id+"/share", nil, user)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("share with empty body: got %d want 201 body=%q", w.Code, w.Body.String())
 	}
 }

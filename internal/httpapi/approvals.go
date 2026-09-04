@@ -1322,6 +1322,15 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// as the sweep, so a concurrent sweep tick can't double-resolve; if we lose
 	// that race the writeResolvedApprovalState fallback below reports whatever
 	// state won. Default-deny stays authoritative either way: nothing executes.
+	// Every write that follows a successful claim runs on execCtx, detached
+	// from the request: once the row is durably resolved, the matching
+	// tool_result breadcrumb MUST land too, or the next turn's model reads a
+	// dangling APPROVAL_REQUIRED and may re-stage the very action the user
+	// just declined. A tab closed between the two writes used to do exactly
+	// that on the reject and expired paths (the approve path was already
+	// detached; the asymmetry was the bug).
+	execCtx := context.WithoutCancel(r.Context())
+
 	if approval.ExpiresAt > 0 && approval.ExpiresAt <= time.Now().Unix() {
 		resultText := timeoutResultTextFor(approval.ToolName)
 		claimed, err := s.store.ClaimExpiredApproval(r.Context(), user, approvalID, "rejected", resultText)
@@ -1330,7 +1339,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 			return
 		}
 		if claimed {
-			appendToolResultToHistory(r.Context(), s.store, convID, approval.ToolName,
+			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 				resolutionCallID(approval), resultText, false)
 			writeJSON(w, map[string]any{"status": "rejected", "result_text": resultText})
 			return
@@ -1345,7 +1354,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// Branch before the generic Send path so we don't accidentally
 	// route it through runStagedTool.
 	if approval.ToolName == tools.SuggestAdvancedModelToolName {
-		s.handleSuggestAdvancedApproval(w, r, user, approval, req)
+		s.handleSuggestAdvancedApproval(w, r, execCtx, user, approval, req)
 		return
 	}
 
@@ -1364,7 +1373,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// sees the rejection and the model knows not to retry. Use the
 		// original tool_call id so the chip in the UI updates instead
 		// of orphaning a second result row keyed off the approval id.
-		appendToolResultToHistory(r.Context(), s.store, convID, approval.ToolName,
+		appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 			resolutionCallID(approval), historyMsg, false)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 		writeJSON(w, map[string]any{"status": "rejected"})
@@ -1390,10 +1399,9 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 
 	// Fire the MCP tool. Mock mode short-circuits here so Playwright can
 	// exercise the approval UX without real SendGrid credentials. The
-	// user already committed to the send, so detach from the request
-	// context — a tab close mid-flight must not abandon a claimed
+	// user already committed to the send, so this runs on the detached
+	// execCtx — a tab close mid-flight must not abandon a claimed
 	// approval half-executed (runStagedTool applies its own 60s cap).
-	execCtx := context.WithoutCancel(r.Context())
 	var (
 		text    string
 		toolErr error
@@ -1476,18 +1484,31 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 //
 // The response carries `model` (the new effective slug) so the UI can
 // update its local conversation state without a separate refetch.
-func (s *Server) handleSuggestAdvancedApproval(w http.ResponseWriter, r *http.Request, user string, approval *store.Approval, req approvalRequest) {
+//
+// Claim discipline matches the generic path: the pending→resolved flip is
+// claimed FIRST, and only the winner writes the history breadcrumb and (on
+// accept) flips the model. Before, the accept path flipped the model and
+// appended history and only then tried to resolve, so two concurrent clicks
+// (a double-click, two tabs) both passed the in-memory "still pending" check
+// and landed two tool_result rows — and the losing dismiss click got a 500
+// ("already resolved") instead of the idempotent resolved-state echo.
+func (s *Server) handleSuggestAdvancedApproval(w http.ResponseWriter, r *http.Request, execCtx context.Context, user string, approval *store.Approval, req approvalRequest) {
 	switchAction := req.Action == "switch_and_retry" || req.Action == "switch_only" ||
 		(req.Action == "" && req.Approved)
 	if !switchAction {
 		// Treat anything else as a dismissal. Record the rejection so
 		// the cooldown gate in StageSuggestion sees it.
-		if err := s.store.ResolveApproval(r.Context(), user, approval.ID, "rejected",
-			"User dismissed the model-switch suggestion."); err != nil {
+		claimed, err := s.store.ClaimApproval(r.Context(), user, approval.ID, "rejected",
+			"User dismissed the model-switch suggestion.")
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		appendToolResultToHistory(r.Context(), s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
+		if !claimed {
+			s.writeResolvedApprovalState(w, r, user, approval.ID)
+			return
+		}
+		appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
 			"User dismissed the model-switch suggestion. Continue working with the current model.", false)
 		writeJSON(w, map[string]any{
 			"status": "rejected",
@@ -1496,19 +1517,27 @@ func (s *Server) handleSuggestAdvancedApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// User accepted. Pin the conversation to the advanced model first;
-	// the resolution row is only useful if the side effect succeeds.
+	// User accepted. Claim, then pin the conversation to the advanced model.
+	// The model flip is pure metadata (no external side effect), so a claim
+	// that wins and then fails to pin is reported as an error to THIS caller
+	// — the resolution row records what was attempted, not a success.
 	advancedModel := agentcore.CurrentAdvancedModel()
-	if err := s.store.SetModel(r.Context(), user, approval.ConversationID, advancedModel); err != nil {
+	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", advancedModel)
+	claimed, err := s.store.ClaimApproval(r.Context(), user, approval.ID, "approved", resultText)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !claimed {
+		s.writeResolvedApprovalState(w, r, user, approval.ID)
+		return
+	}
+	if err := s.store.SetModel(execCtx, user, approval.ConversationID, advancedModel); err != nil {
 		log.Printf("SetModel (suggest_advanced approval): %v", err)
 		http.Error(w, "could not pin conversation model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", advancedModel)
-	if err := s.store.ResolveApproval(r.Context(), user, approval.ID, "approved", resultText); err != nil {
-		log.Printf("ResolveApproval (suggest_advanced): %v", err)
-	}
-	appendToolResultToHistory(r.Context(), s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
+	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
 		resultText, false)
 
 	action := req.Action

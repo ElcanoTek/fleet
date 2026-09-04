@@ -280,7 +280,11 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 		//nolint:gosec // G706: %q escapes CR/LF, so request-supplied values cannot forge a log line; role is store-validated.
 		log.Printf("admin users: set role of %q to %s by %q", u.Email, u.Role, userFromCtx(r.Context()))
 	}
-	if body.OpsRole != nil {
+	// Same precedence as POST /admin/users: Chat Admin is the unified grant
+	// and wins over any narrower ops_role in the same request, so
+	// {role:"admin", ops_role:"readonly"} ends as ops admin on both endpoints
+	// instead of the PATCH quietly downgrading the grant it just made.
+	if body.OpsRole != nil && !(body.Role != nil && *body.Role == store.RoleAdmin) {
 		s.setOpsRole(r, u.Email, *body.OpsRole)
 		//nolint:gosec // G706: %q escapes CR/LF; ops_role is validated above.
 		log.Printf("admin users: set ops role of %q to %s by %q", u.Email, *body.OpsRole, userFromCtx(r.Context()))

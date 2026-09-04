@@ -577,11 +577,17 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// The full patch, validity window included: the request type carries
+		// valid_from/valid_to and the personal-memory PATCH honors them, so
+		// dropping them here answered 200 to a team-learning window change
+		// that never happened.
 		memory, err := s.store.UpdateProjectMemory(r.Context(), p.ID, memID, store.MemoryPatch{
-			Content: req.Content,
-			Kind:    req.Kind,
-			Pinned:  req.Pinned,
-			Retired: req.Retired,
+			Content:   req.Content,
+			Kind:      req.Kind,
+			Pinned:    req.Pinned,
+			Retired:   req.Retired,
+			ValidFrom: req.ValidFrom,
+			ValidTo:   req.ValidTo,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

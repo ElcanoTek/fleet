@@ -410,6 +410,21 @@ func withOwnedConversation(notFound string, handler ownedConversationHandler) co
 	}
 }
 
+// writeConversationMutationError answers a failed per-conversation store
+// mutation (delete, pin, archive, rename, model, …). The store reports "no
+// such conversation for this caller" with store.ErrConversationNotFound; that
+// is the caller's problem (404), not the server's, so it must not be reported
+// as a 500 — which is what every sibling did before this helper, leaving the
+// client unable to tell a stale tab from an outage. Everything else is a
+// genuine fault.
+func writeConversationMutationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrConversationNotFound) {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
 // decodeJSONBody decodes r's JSON body into dst, answering the shared
 // "bad json" 400 on failure. Reports whether decoding succeeded. Only for
 // handlers that REQUIRE a well-formed body — branches with lenient decode
@@ -417,6 +432,23 @@ func withOwnedConversation(notFound string, handler ownedConversationHandler) co
 // their own decode inline.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// decodeOptionalJSONBody is decodeJSONBody for handlers whose body is
+// OPTIONAL: a missing or empty body (io.EOF) leaves dst at its zero value and
+// succeeds, while a present-but-malformed body is still a 400. The distinction
+// matters because the lenient `_ = Decode(...)` idiom it replaces turned a
+// client's typo into the zero value — a non-expiring share link, an un-share,
+// a "message id must be positive" — and reported success.
+func decodeOptionalJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if r.Body == nil {
+		return true
+	}
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return false
 	}

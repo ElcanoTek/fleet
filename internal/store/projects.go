@@ -482,7 +482,7 @@ func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, p
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return tx.Commit()
 }
@@ -559,7 +559,8 @@ func (s *Store) GetProjectMemory(ctx context.Context, projectID, memoryID string
 // Retirement is the intended "remove" for a team learning: the entry stops
 // being injected but the record — and who wrote it — survives.
 func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID string, patch MemoryPatch) (*Memory, error) {
-	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil && patch.Retired == nil {
+	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil &&
+		patch.Retired == nil && patch.ValidFrom == nil && patch.ValidTo == nil {
 		return nil, errors.New("empty memory patch")
 	}
 	var content *string
@@ -589,10 +590,18 @@ func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID str
 				WHEN $4::boolean IS NULL THEN retired_by
 				WHEN $4::boolean THEN retired_by
 				ELSE NULL END,
+			valid_from = CASE
+				WHEN $6::bigint IS NULL THEN valid_from
+				WHEN $6::bigint = 0 THEN NULL
+				ELSE $6::bigint END,
+			valid_to = CASE
+				WHEN $7::bigint IS NULL THEN valid_to
+				WHEN $7::bigint = 0 THEN NULL
+				ELSE $7::bigint END,
 			updated_at = $5
-		 WHERE id = $6 AND project_id = $7
+		 WHERE id = $8 AND project_id = $9
 		 RETURNING `+memoryColumns,
-		content, kind, patch.Pinned, patch.Retired, now, memoryID, projectID,
+		content, kind, patch.Pinned, patch.Retired, now, patch.ValidFrom, patch.ValidTo, memoryID, projectID,
 	)
 	m, err := scanMemory(row)
 	if err != nil {
