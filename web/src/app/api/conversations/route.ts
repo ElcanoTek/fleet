@@ -13,8 +13,17 @@ export async function GET(request: NextRequest) {
   // Forward the ?archived=true filter (#282) — the archived sidebar section
   // relies on it. Without this the param is dropped and the backend returns the
   // active list, so the archived view would silently show active conversations.
+  // Forward ?scope=team too (ADR-0057): the rail's per-project "N shared by
+  // your team" count is reduced from this one read, and without the param the
+  // backend would answer with the caller's OWN active list — i.e. a count of
+  // the wrong population, silently.
   const archived = request.nextUrl.searchParams.get("archived") === "true";
-  const path = archived ? "/conversations?archived=true" : "/conversations";
+  const teamScope = request.nextUrl.searchParams.get("scope") === "team";
+  const path = teamScope
+    ? "/conversations?scope=team"
+    : archived
+      ? "/conversations?archived=true"
+      : "/conversations";
   const { upstream, error } = await chatServerProxy(session, path, { method: "GET" });
   if (error) return error;
   return passthrough(upstream);

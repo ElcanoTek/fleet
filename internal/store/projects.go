@@ -163,6 +163,93 @@ type ProjectPatch struct {
 	Pinned         *bool
 }
 
+// ── the filing invariant: project_id never outlives its owner's access ──
+//
+// A chat's project_id must NEVER point at a project its owner cannot see, and
+// no revocation may reach that state by DELETING a chat: it unfiles it
+// (project_id → NULL), which is where the chat came from and where the rail
+// already has a home for it (Temporary).
+//
+// The bug this exists to close: the rail's own lists are read through the
+// caller's visible projects, so a chat filed in a project the caller can no
+// longer see is rendered by NOTHING — not Projects, not Temporary, not
+// Archived. Turning off "Share with my team" on a project therefore made every
+// teammate's chat in it vanish from their own rail. The data was intact (the
+// owner re-ticking the box brought them back), which is precisely what made it
+// so bad: the teammate lost access to chats THEY own, with no trace and no
+// explanation, for as long as someone else's setting stayed off.
+//
+// Unfiled chats become temporary again — TTL-eligible, expiring unless pinned.
+// That is the accepted cost and it is exactly what deleting a project already
+// does to members' chats; updated_at is bumped for the same reason
+// DeleteProject bumps it, so the retention clock starts when access is lost
+// instead of leaving an old chat instantly sweep-eligible.
+//
+// Two shapes of the same rule, one per revocation axis:
+//
+//   - the PROJECT changed hands or audience → unfileChatsWithoutProjectAccessTx
+//     (UpdateProject, TransferProjectOwnership),
+//   - the USER's team changed → unfileChatsInInaccessibleProjectsTx
+//     (SetOwnTeam / SetUserRoleTeam, through unshareOnTeamChangeTx).
+//
+// Both take the caller's tx: the unfile commits with the revocation that caused
+// it, or neither happens. Migration 055 backfills the rows written before this
+// rule existed.
+//
+// "Can see" is ListProjectsForUser's rule, restated: the project's owner
+// always, otherwise an EXACT match between the project's non-empty team_id and
+// the chat owner's users.team_id. Exact, because every other team gate in the
+// store is exact — a loose compare here would leave a chat filed in a project
+// the read path refuses to list.
+
+// unfileChatsWithoutProjectAccessTx unfiles every conversation filed in
+// projectID whose OWNER can no longer see it, reading the project row as the
+// caller's transaction has already left it.
+func unfileChatsWithoutProjectAccessTx(ctx context.Context, tx *sql.Tx, projectID string) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE conversations c SET
+			project_id = NULL,
+			team_visible = FALSE,
+			team_shared_with = NULL,
+			updated_at = $2
+		WHERE c.project_id = $1
+		  AND NOT EXISTS (
+			SELECT 1 FROM projects p
+			 WHERE p.id = $1
+			   AND (p.owner_email = c.user_email
+			        OR (p.team_id <> '' AND p.team_id = (
+			              SELECT u.team_id FROM users u WHERE u.email = c.user_email)))
+		  )`,
+		projectID, time.Now().Unix())
+	return err
+}
+
+// unfileChatsInInaccessibleProjectsTx unfiles every conversation owned by email
+// that is filed in a project the user will not be able to see once their team
+// is newTeam (empty = no team).
+//
+// newTeam is passed rather than read from users, because the callers run this
+// BEFORE their own write to users.team_id — the whole point is that the unfile
+// and the team write commit together.
+func unfileChatsInInaccessibleProjectsTx(ctx context.Context, tx *sql.Tx, email, newTeam string) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE conversations c SET
+			project_id = NULL,
+			team_visible = FALSE,
+			team_shared_with = NULL,
+			updated_at = $2
+		WHERE c.user_email = $1
+		  AND c.project_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM projects p
+			 WHERE p.id = c.project_id
+			   AND (p.owner_email = c.user_email
+			        OR (p.team_id <> '' AND p.team_id = NULLIF($3::text, '')))
+		  )`,
+		normalizeEmail(email), time.Now().Unix(), strings.TrimSpace(newTeam))
+	return err
+}
+
 // UpdateProject applies a partial update, owner-only (the WHERE enforces it).
 //
 // Changing who the project is shared with also unshares every team-visible
@@ -171,6 +258,13 @@ type ProjectPatch struct {
 // pairing says a team-shared chat never outlives the place it appears. That
 // covers turning sharing off AND handing the project to a different team —
 // the second case is reachable whenever the owner's own team changes.
+//
+// The same change also revokes ACCESS for everyone who saw the project through
+// the old team, so every chat of theirs filed here is unfiled in the same
+// transaction (see the filing-invariant block above). Unshared and still filed
+// was the wrong half of the fix: the chat is its owner's, it stays theirs, and
+// it goes back to their Temporary list rather than into a project only somebody
+// else can see.
 func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch ProjectPatch) (*Project, error) {
 	if patch.Name != nil {
 		n := strings.TrimSpace(*patch.Name)
@@ -230,6 +324,13 @@ func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch 
 			time.Now().Unix(), id, p.TeamID); err != nil {
 			return nil, err
 		}
+		// …and unfile every chat whose owner just lost sight of the project.
+		// Making it personal strands every OTHER member's chats; re-pointing it
+		// at a different team strands the old team's. Never a delete: the chat
+		// belongs to its owner and lands back in their Temporary list.
+		if err := unfileChatsWithoutProjectAccessTx(ctx, tx, id); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -265,6 +366,12 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 	// confirm promises members their chats "become temporary, and expire
 	// unless pinned"; without this bump there was no window in which to pin
 	// one. Now the clock starts when they lose the project.
+	//
+	// This is also the filing invariant at its simplest: the project stops
+	// existing, so NOBODY can see it, so every chat in it is unfiled — which
+	// is why delete never needed the access-scoped sweep UpdateProject and
+	// TransferProjectOwnership run. It is the behavior the other revocation
+	// paths were brought into line with, not an exception to them.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, updated_at = $2
 		 WHERE project_id = $1`, id, time.Now().Unix()); err != nil {

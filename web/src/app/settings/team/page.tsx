@@ -32,6 +32,7 @@ import Link from "next/link";
 import { btnClass, SETTINGS_INPUT } from "../ui/atoms";
 import { ConnPanel, ConnPanelHead, ConnPanelSub, SetSection } from "../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 
 export type Me = {
   email: string;
@@ -286,63 +287,55 @@ function LeaveTeamConfirm({
         ? "any project shared with it (there are none right now)"
         : `${sharedProjects} team-shared project${sharedProjects === 1 ? "" : "s"}`;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button
-        aria-label="Cancel leaving the team"
-        className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
-        type="button"
-        onClick={onCancel}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Leave ${team}?`}
-        className="relative z-10 w-full max-w-[26rem] rounded-[1rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-md)]"
-      >
-        <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-          Leave {team}?
-        </h2>
-        <ul className="mb-4 grid list-disc gap-[0.35rem] pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
-          <li>You&rsquo;ll lose access to {projects}.</li>
-          {sharedChats === undefined || sharedChats > 0 ? (
-            <li>
-              {sharedChats === undefined
-                ? "Chats you shared with the team stop being shared"
-                : `${sharedChats} chat${sharedChats === 1 ? "" : "s"} you shared with the team stop${sharedChats === 1 ? "s" : ""} being shared`}
-              {" "}— they stay yours, teammates just can&rsquo;t open them any more.
-            </li>
-          ) : null}
+    <DialogShell
+      label={`Leave ${team}?`}
+      scrimLabel="Cancel leaving the team"
+      onDismiss={onCancel}
+      className="max-w-[26rem] p-5"
+    >
+      <h2 className="mb-2 text-[1rem] font-semibold text-[var(--color-text-primary)]">
+        Leave {team}?
+      </h2>
+      <ul className="mb-4 grid list-disc gap-[0.35rem] pl-[1.1rem] text-[0.85rem] leading-[1.55] text-[var(--color-text-secondary)]">
+        <li>You&rsquo;ll lose access to {projects}.</li>
+        {sharedChats === undefined || sharedChats > 0 ? (
           <li>
-            Chats you filed in {team}&rsquo;s projects stay yours, but move back
-            to Temporary — pin the ones you want to keep.
+            {sharedChats === undefined
+              ? "Chats you shared with the team stop being shared"
+              : `${sharedChats} chat${sharedChats === 1 ? "" : "s"} you shared with the team stop${sharedChats === 1 ? "s" : ""} being shared`}
+            {" "}— they stay yours, teammates just can&rsquo;t open them any more.
           </li>
-          <li>Projects you own stay yours, and stay shared with {team}.</li>
-        </ul>
-        {sharedProjects === undefined || sharedChats === undefined ? (
-          <p className="mb-4 text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
-            We couldn&rsquo;t work out the exact numbers just now, so they
-            aren&rsquo;t shown above.
-          </p>
         ) : null}
-        <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            className={btnClass({ sm: true })}
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className={btnClass({ sm: true, danger: true })}
-            disabled={busy}
-            onClick={onConfirm}
-          >
-            Leave team
-          </button>
-        </div>
+        <li>
+          Chats you filed in {team}&rsquo;s projects stay yours, but move back
+          to Temporary — pin the ones you want to keep.
+        </li>
+        <li>Projects you own stay yours, and stay shared with {team}.</li>
+      </ul>
+      {sharedProjects === undefined || sharedChats === undefined ? (
+        <p className="mb-4 text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
+          We couldn&rsquo;t work out the exact numbers just now, so they
+          aren&rsquo;t shown above.
+        </p>
+      ) : null}
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          className={btnClass({ sm: true })}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={btnClass({ sm: true, danger: true })}
+          disabled={busy}
+          onClick={onConfirm}
+        >
+          Leave team
+        </button>
       </div>
-    </div>
+    </DialogShell>
   );
 }
 

@@ -115,7 +115,42 @@ Concretely:
    projects along with every team learning in them, for people still using
    them. `DeleteUser` now fails closed on an account owning team-shared
    projects and names them; personal projects still go with the account.
-7. **Two audiences, two badges.** Share-by-link and share-with-team are
+7. **Revocation unfiles a chat; it never hides one, and it never deletes one.**
+   A chat's `project_id` must never point at a project **its owner cannot
+   see**. Item 3 above kept the *share* honest and left the *filing* alone,
+   which turned out to be the more visible half of the same mistake: the rail
+   lists chats through the projects the viewer can see, so a chat filed in a
+   project the viewer has lost access to appears in no list at all — not
+   Projects, not Temporary, not Archived. An owner unticking "Share with my
+   team" made every teammate's chats in that project vanish from their own
+   rail. Nothing was destroyed — re-ticking the checkbox brought them back,
+   because the rows still pointed at the project — and that is what made it
+   unacceptable rather than merely awkward: a member lost access to
+   conversations **they own**, silently, for as long as somebody else's setting
+   stayed off, with no message that could have explained it.
+
+   So every path that removes access unfiles the affected chats
+   (`project_id → NULL`, back into their owner's Temporary list) in the same
+   transaction as the revocation: `UpdateProject` (made personal, or re-pointed
+   at another team), `DeleteProject`, `SetOwnTeam("")` and `SetUserRoleTeam`
+   (through the one `unshareOnTeamChangeTx` choke point),
+   `TransferProjectOwnership` (the *outgoing* owner, who saw the project
+   through `owner_email` and may not be in its team), and `DeleteUser`. The two
+   project-shaped paths share one statement and the two team-shaped paths share
+   one choke point, so a third way to do either cannot miss the rule.
+   **Deleting a chat is never how the invariant is restored** — the chat is its
+   owner's, and the fix is to give it back to them, not to take it away.
+
+   Two costs, accepted rather than hidden. An unfiled chat is **temporary
+   again**: it counts against the unpinned cap and the TTL sweep will reap it
+   unless its owner pins or re-files it — which is exactly what deleting a
+   project has always done to members' chats, and strictly better than being
+   filed somewhere invisible. `updated_at` is bumped so the retention clock
+   starts when access is lost. And **migration 055** backfills the rows the old
+   paths stranded, by the same "can see" rule `ListProjectsForUser` uses
+   (owner, or an exact non-empty team match); it is idempotent and leaves every
+   chat whose owner can still see its project untouched.
+8. **Two audiences, two badges.** Share-by-link and share-with-team are
    independent (a chat can carry one, both, or neither) and are drawn with
    different glyphs, each always labeled with its audience. One unlabeled chain
    link previously stood for the only scope that existed, which inside a
@@ -135,7 +170,12 @@ Concretely:
   project leaves members a full retention window, the project-scoped Team listing, branching from a
   shared chat, the leave/delete impact counts, ownership transfer (including
   the cross-team refusal), and that deleting an owner of a team-shared project
-  is refused before anything is destroyed.
+  is refused before anything is destroyed, that every revocation path unfiles a
+  non-owner's chats instead of stranding them (a table-driven case per path:
+  untick, re-point at another team, delete, leave, admin move, transfer),
+  proving in each that the chat still exists and is listed by its own owner,
+  and that migration 055 repairs a stranded row idempotently without touching a
+  chat whose owner can still see its project.
 - `internal/httpapi/team_sharing_http_test.go` — `team-view` over HTTP including
   the 404-for-everything-else rule, a teammate's branch landing in the project,
   the Team section and delete-impact endpoints, the team-learnings permission
@@ -183,6 +223,20 @@ Concretely:
 - **Leaving a team is now destructive in a way it was not.** It unshares the
   leaver's chats. Settings → Team therefore confirms first and quotes the
   counts, rather than acting and reporting afterwards.
+- **Revoking access now MOVES other people's chats.** Unticking a project's
+  team sharing, re-pointing it, leaving a team, an admin team move and a
+  transfer all unfile the affected chats into their owners' unfiled
+  (Temporary) list, where the TTL applies again. That is a write to rows the
+  actor does not own, which is why the confirms quote it: `GET
+  /projects/{id}/impact` reports `chats_from_teammates` and
+  `teammates_with_chats`, and the untick dialog says "{N} chats from teammates
+  will move to their unfiled chats." The alternative — leaving them filed — is
+  a chat its own owner cannot reach from any screen.
+- **Migration 055 moves existing rows on upgrade.** Boxes that ran the earlier
+  behavior have chats filed in projects their owners cannot see; those become
+  unfiled (and TTL-eligible, with a fresh `updated_at`) the first time the new
+  binary migrates. Nothing is deleted by the migration, and no chat whose owner
+  can still see its project is touched.
 - **Deleting a user can now fail.** An account owning team-shared projects is
   refused until they are transferred. That is a new way for a previously
   always-succeeding admin action to stop, and it is the point: the old

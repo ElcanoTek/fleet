@@ -58,6 +58,7 @@ import {
 } from "../ui/panels";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
 import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
+import { DialogShell } from "@/app/shared/ui/DialogShell";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -774,78 +775,16 @@ function DirectoryCard({
   );
 }
 
-// ModalShell — the overlay chrome shared by this page's three dialogs (the
-// guided manual-OAuth setup form, the post-add sign-in prompt, and the
-// third-party consent step).
-//
-// The dialog semantics live on the PANEL, not on the backdrop: the panel is
-// what a screen reader should enter, and `role="dialog"` on the full-screen
-// wrapper made the wrapper (a non-interactive element) carry the
-// dismiss-on-click handler. The backdrop is now a real <button> whose
-// accessible name is the close action — the pattern
-// shared/ui/KeyboardShortcutsOverlay already uses — so "click outside to
-// dismiss" is reachable by keyboard instead of being mouse-only. Because that
-// button is a SIBLING of the panel rather than its ancestor, clicks inside the
-// panel can never reach it and the old stopPropagation shim is gone. Escape
-// closes as well, and focus moves into the panel on open so a keyboard user
-// lands in the dialog instead of tabbing on through the page behind it.
-function ModalShell({
-  label,
-  closeLabel,
-  onClose,
-  children,
-}: {
-  label: string;
-  closeLabel: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // Only the top-most dialog reacts: the consent step can open on top of
-      // the guided setup form, and one Escape should dismiss one layer.
-      const dialogs = document.querySelectorAll('[role="dialog"]');
-      if (dialogs.length && dialogs[dialogs.length - 1] !== panelRef.current) {
-        return;
-      }
-      onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  // Mount-only: the dialog takes focus when it opens and hands it back to
-  // whatever opened it when it closes, so a keyboard user resumes where they
-  // were instead of at the top of the page. (A trigger that the add removed
-  // or disabled simply cannot take it back — the browser falls back to the
-  // document, which is the same place focus used to sit the whole time.)
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
-    return () => opener?.focus?.();
-  }, []);
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button
-        type="button"
-        aria-label={closeLabel}
-        onClick={onClose}
-        className="absolute inset-0 bg-[var(--color-overlay-strong)]"
-      />
-      <div
-        ref={panelRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-        className="relative z-10 w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)] focus:outline-none"
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
+// This page's three dialogs (the guided manual-OAuth setup form, the post-add
+// sign-in prompt, and the third-party consent step) all sit on the shared
+// DialogShell — the same base the chat surface's dialogs use. It owns the
+// opaque panel, the scrim-as-<button> (so "click outside to dismiss" is
+// reachable from the keyboard and its accessible name says what it does), the
+// dialog semantics on the PANEL rather than on the full-screen wrapper,
+// Escape, and moving focus into the dialog on open / back to the opener on
+// close. It also answers Escape one layer at a time, which is what this page
+// needed a hand-rolled "is this the top-most [role=dialog]?" check for: the
+// consent step can open on top of the guided setup form.
 
 // FormShell hosts a directory card's guided add form either inline (the card
 // grows downward — placeholders, API keys) or, for manual OAuth client
@@ -874,10 +813,11 @@ function FormShell({
   if (!modal) return body;
   const guide = setupLink(entry);
   return (
-    <ModalShell
+    <DialogShell
       label={`Set up ${entry.display_name}`}
-      closeLabel={`Close the ${entry.display_name} setup dialog`}
-      onClose={onClose}
+      scrimLabel={`Close the ${entry.display_name} setup dialog`}
+      onDismiss={onClose}
+      className="max-w-md p-5"
     >
       <h3 className="mb-2 text-[0.9375rem] font-semibold">
         Set up {entry.display_name}
@@ -901,7 +841,7 @@ function FormShell({
         </p>
       ) : null}
       {body}
-    </ModalShell>
+    </DialogShell>
   );
 }
 
@@ -2353,10 +2293,11 @@ function ConnectionsPageInner() {
           login to finish connecting. Offer it here so the user doesn't have
           to scroll up to the "Your connections" row to click Connect. */}
       {connectPromptFor ? (
-        <ModalShell
+        <DialogShell
           label={`Sign in to ${connectPromptFor.name}?`}
-          closeLabel={`Dismiss the ${connectPromptFor.name} sign-in prompt`}
-          onClose={() => setConnectPromptFor(null)}
+          scrimLabel={`Dismiss the ${connectPromptFor.name} sign-in prompt`}
+          onDismiss={() => setConnectPromptFor(null)}
+          className="max-w-md p-5"
         >
           <h3 className="mb-2 text-[0.9375rem] font-semibold">
             {connectPromptFor.name} added — sign in now?
@@ -2386,13 +2327,14 @@ function ConnectionsPageInner() {
               Sign in
             </button>
           </div>
-        </ModalShell>
+        </DialogShell>
       ) : null}
       {consentFor ? (
-        <ModalShell
+        <DialogShell
           label={`Connect ${consentFor.entry.display_name}?`}
-          closeLabel={`Dismiss the ${consentFor.entry.display_name} connect dialog`}
-          onClose={() => setConsentFor(null)}
+          scrimLabel={`Dismiss the ${consentFor.entry.display_name} connect dialog`}
+          onDismiss={() => setConsentFor(null)}
+          className="max-w-md p-5"
         >
           <div className="mb-2 flex items-center gap-2">
             <h3 className="text-[0.9375rem] font-semibold">
@@ -2471,7 +2413,7 @@ function ConnectionsPageInner() {
               I trust this operator — add
             </button>
           </div>
-        </ModalShell>
+        </DialogShell>
       ) : null}
     </SetSection>
   );

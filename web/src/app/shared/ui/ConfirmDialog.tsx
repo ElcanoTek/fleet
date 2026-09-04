@@ -3,6 +3,19 @@
 // Modal confirm/alert dialog for the orchestrator view. Replaces moc's
 // imperative showConfirm()/showAlert() (modals.js) with a controlled React
 // component. Rendered by the dashboard, driven by state.
+//
+// This is NOT the chat surface's ConfirmDialog (chat/ui/ConfirmDialog.tsx) and
+// it deliberately did not join the B-2 dialog unification. The orchestrator is
+// a second design system: its dialogs are the `.modal-overlay` / `.modal` /
+// `.btn` CSS classes in globals.css, shared with TaskCreateModal, DatasetsPanel
+// and LogViewer, and the stacking rule this file depends on
+// (`confirm-overlay` painting above ordinary `.modal-overlay` peers) is one of
+// those classes. Rebasing this one dialog onto the Tailwind-token DialogShell
+// would leave it looking foreign among its four siblings and would fork the
+// orchestrator's overlay stacking across two mechanisms — for no gain, since
+// `.modal` is already opaque and so has none of the bleed-through the B-2
+// finding is about. If the orchestrator ever moves onto the token surfaces, it
+// moves as a set.
 
 export type ConfirmDialogProps = {
   open: boolean;

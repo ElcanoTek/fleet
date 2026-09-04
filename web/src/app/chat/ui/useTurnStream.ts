@@ -635,9 +635,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // would otherwise show a stranded "Thinking…" with no question
       // above it. Insert the user slot if it's missing — keyed on
       // adjacency to the assistant slot so we don't double-up.
-      const p = payload as { text?: string; steered?: boolean };
+      const p = payload as {
+        text?: string;
+        steered?: boolean;
+        injected_context?: string;
+      };
       const text = (p.text ?? "").trim();
       if (!text) return;
+      // The server-added suffix for this turn, on its own field since
+      // migration 056 (docs/ATTACHMENT-SCOPING.md). Carried onto the bubble so
+      // a reattach mid-turn shows the collapsed "context fleet added" note the
+      // reload path shows — without it the same turn renders two ways.
+      const injectedContext = (p.injected_context ?? "").trim()
+        ? p.injected_context
+        : undefined;
       if (p.steered) {
         // A steered mid-turn input accepted at a step boundary (#785): render
         // its user bubble above the streaming assistant slot. This must be
@@ -657,6 +668,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             id: nowMs(),
             role: "user" as const,
             content: text,
+            injectedContext,
             state: "done" as const,
           };
           if (aIdx >= 0) next.splice(aIdx, 0, bubble);
@@ -669,12 +681,27 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const assistantIdx = current.findIndex((m) => m.id === ctx.assistantId);
         if (assistantIdx < 0) return current;
         const prev = assistantIdx > 0 ? current[assistantIdx - 1] : null;
-        if (prev && prev.role === "user" && prev.content === text) return current;
-        if (prev && prev.role === "user") return current; // already a user msg, leave it (could be edited text)
+        if (prev && prev.role === "user") {
+          // The optimistic row submitPrompt inserted. It is already showing the
+          // right words, so the row stays — but the SERVER's injected context
+          // is new information, and only this frame carries it. Merging it in
+          // rather than returning early is what makes the live turn show the
+          // same collapsed note the turn shows after a reload; without it a
+          // plain turn silently dropped the workspace inventory and shared
+          // library notes, and an attachment turn showed only the composer's
+          // own receipt. Nothing else about the row is touched (its text may
+          // legitimately differ — an edited resend).
+          if (injectedContext === undefined) return current;
+          if (prev.injectedContext === injectedContext) return current;
+          const next = current.slice();
+          next[assistantIdx - 1] = { ...prev, injectedContext };
+          return next;
+        }
         const userMsg: Message = {
           id: ctx.assistantId - 1,
           role: "user",
           content: text,
+          injectedContext,
           state: "done",
         };
         const next = current.slice();
@@ -2005,17 +2032,29 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const baseId = nowMs();
     const assistantId = baseId + 1;
 
-    // Tack a short markdown block onto the displayed user message so the
-    // chips the user saw in the composer don't silently disappear — it
-    // mirrors what chat-server appends server-side for the LLM.
-    const displayedContent = uploadedAttachments.length > 0
-      ? `${value}\n\n---\n**Attached files:**\n${uploadedAttachments
-          .map((a) => `- ${a.name} (${formatBytes(a.size)})`)
-          .join("\n")}`
-      : value;
+    // The receipt for the chips the user saw in the composer, so an
+    // attachment doesn't silently disappear on send. It goes on
+    // injectedContext, NOT into content: it is not what the user typed, and
+    // putting it in the bubble is the same defect the server fix removed from
+    // the stored message (docs/ATTACHMENT-SCOPING.md). It also has to match
+    // where the same turn lands after a reload — the server returns the
+    // block on its own field, so concatenating here made one turn render two
+    // different ways depending on whether you had refreshed.
+    const attachmentReceipt =
+      uploadedAttachments.length > 0
+        ? `\n\n---\n**Attached files:**\n${uploadedAttachments
+            .map((a) => `- ${a.name} (${formatBytes(a.size)})`)
+            .join("\n")}`
+        : undefined;
 
     const nextMessages: Message[] = [
-      { id: baseId, role: "user", content: displayedContent, state: "done" },
+      {
+        id: baseId,
+        role: "user",
+        content: value,
+        injectedContext: attachmentReceipt,
+        state: "done",
+      },
       { id: assistantId, role: "assistant", content: "", state: "thinking" },
     ];
 

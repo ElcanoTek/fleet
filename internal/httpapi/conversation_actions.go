@@ -122,8 +122,12 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		memProposals = append(memProposals, entry)
 	}
 	writeJSON(w, map[string]any{
-		"conversation":             conv,
-		"history":                  history,
+		"conversation": conv,
+		// historyForClient, not the raw entries: the owner's own read is the
+		// one surface that carries each turn's `injected_context` as its own
+		// field, so the transcript can render server-injected context outside
+		// the user's bubble (history_response.go, ADR-0058).
+		"history":                  historyForClient(history),
 		"pending_approvals":        approvals,
 		"resolved_approvals":       resolvedCards,
 		"pending_memory_proposals": memProposals,
@@ -443,8 +447,12 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 	default:
 		body := map[string]any{
 			"conversation": conv,
-			"history":      history,
-			"exported_at":  exportedAt.Format(time.RFC3339),
+			// historyForClient so the ARCHIVAL shape really does carry every
+			// field: each entry's server-injected context rides as its own
+			// `injected_context` (history_response.go), not merged into the
+			// user's text the way it was before migration 056.
+			"history":     historyForClient(history),
+			"exported_at": exportedAt.Format(time.RFC3339),
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set(

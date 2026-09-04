@@ -1,0 +1,44 @@
+-- 056_message_injected_context.sql — store a turn's SERVER-INJECTED context
+-- next to the user's message instead of inside it.
+--
+-- Every chat turn appends server-derived blocks to the user's message before
+-- the model sees it: the attachment manifest (with absolute paths), the
+-- workspace inventory, the shared file library announcement, expanded
+-- `@file`/`@url` context handles, the skill-invocation note, connector
+-- recommendations. Until now those blocks were concatenated INTO
+-- messages.content.text, which made them indistinguishable from what the user
+-- typed. Two consequences, both real:
+--
+--   * Branching a teammate's team-shared chat copies the parent's user
+--     messages. The copy therefore carried the OWNER'S attachment paths, and
+--     the brancher's sandbox read those files by path — the brancher attached
+--     nothing (docs/ATTACHMENT-SCOPING.md, ADR-0058).
+--   * The transcript renders the user bubble from that same text, so an
+--     admin-published "Shared file library" block reads as if the user typed
+--     it.
+--
+-- This column is the separation: content.text keeps exactly what the user
+-- wrote, injected_context keeps the derived suffix. The model still sees both
+-- (the prompt assembly concatenates them, byte-for-byte as before); the branch
+-- copy takes the text and leaves the suffix behind.
+--
+-- Additive and backward compatible: NULLABLE with no default, so no table
+-- rewrite is needed and every existing row reads as NULL.
+--
+-- NULL is not merely "empty" — it is the LEGACY DISCRIMINATOR, and the reason
+-- this column is not NOT NULL DEFAULT ''. Every write after this migration
+-- supplies a value: the derived suffix, or '' when a turn injected nothing. So
+-- NULL means exactly "written before the split existed, so the blocks may
+-- still be inside content.text", and '' means "written after, and this turn
+-- genuinely had no injected context". Without that distinction the two are
+-- indistinguishable, and the marker-based legacy strip on the branch path
+-- would have to run against every message ever written — including ones typed
+-- after this migration, where a user who legitimately writes a separator
+-- followed by "**Shared file library**" (documenting fleet, say) would have
+-- that text and everything after it silently cut from the copy.
+--
+-- With the discriminator, the strip runs ONLY on NULL rows, where nothing
+-- newer can be caught by it, and a post-migration message is copied verbatim
+-- no matter what its author typed.
+ALTER TABLE messages
+    ADD COLUMN IF NOT EXISTS injected_context TEXT;

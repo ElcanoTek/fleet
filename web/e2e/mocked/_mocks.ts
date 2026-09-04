@@ -86,6 +86,39 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
     if (r.request().method() === "GET") return r.fulfill({ json: { conversations: seededConversations } });
     return r.fulfill({ json: {} });
   });
+  // The same list read, with a query string. The glob above matches the bare
+  // path only, so `?archived=true` and `?scope=team` fell through to the Next
+  // proxy and 502'd against the absent Go backend — twice per page load for
+  // the rail's team-shared counts alone. Registered AFTER the bare route
+  // because Playwright checks the most recent registration first.
+  //
+  // `?scope=team` is the team-visible read (ADR-0057): every chat a teammate
+  // shared, which the rail reduces into a per-project count for its
+  // "{N} shared by your team" empty state. Serving the seeded team-visible
+  // rows means the specs exercise that path instead of its failure branch.
+  await page.route("**/api/conversations?*", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    const url = new URL(r.request().url());
+    if (url.searchParams.get("scope") === "team") {
+      return r.fulfill({
+        json: {
+          conversations: seededConversations.filter(
+            (c) => (c as { team_visible?: boolean }).team_visible,
+          ),
+        },
+      });
+    }
+    const archived = url.searchParams.get("archived") === "true";
+    return r.fulfill({
+      json: {
+        conversations: seededConversations.filter((c) =>
+          archived
+            ? (c as { archived_at?: unknown }).archived_at !== null
+            : (c as { archived_at?: unknown }).archived_at === null,
+        ),
+      },
+    });
+  });
   // Per-conversation GET (loadConversation): return the seeded summary with an
   // empty history so opening a conversation — on boot or via the keyboard —
   // resolves cleanly instead of 502-ing against the absent Go backend.

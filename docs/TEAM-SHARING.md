@@ -90,6 +90,62 @@ another team by an admin all unshare it — in the same statement or transaction
 as the change that caused it. See ADR-0057 for why, and
 `internal/store/team_sharing.go` for where.
 
+**And no chat is left filed in a project its owner cannot see.** That is the
+other half of the same rule, and unsharing alone got it wrong. The rail lists
+chats *through the projects the viewer can see*, so a chat whose `project_id`
+points at a project the viewer has lost access to is rendered by **nothing** —
+not Projects, not Temporary, not Archived. Unticking "Share with my team" on a
+project therefore made every teammate's chats in it vanish from their own rail.
+Nothing was deleted (re-ticking the owner's checkbox brought them straight
+back), which is exactly what made it bad: a member lost access to conversations
+*they own*, with no trace and no explanation, for as long as somebody else's
+setting stayed off.
+
+So every path that takes a member's access away now **unfiles** their chats —
+`project_id = NULL`, back into their own Temporary list — in the same
+transaction as the revocation, and **never deletes one to get there**:
+
+| Path | What it unfiles |
+| --- | --- |
+| Untick "Share with my team" (`UpdateProject`) | every **other** member's chats; the owner's stay filed |
+| Re-point the project at a different team (`UpdateProject`) | the old team's members' chats |
+| Delete the project (`DeleteProject`) | everyone's — nobody can see a project that is gone |
+| Leave the team (`SetOwnTeam("")`) | the leaver's chats in team-shared projects they don't own |
+| An admin moves someone between teams (`SetUserRoleTeam`) | the same, on the path the owner doesn't control |
+| Hand the project over (`TransferProjectOwnership`) | the outgoing owner's chats, when they are not in its team |
+| Delete the account (`DeleteUser`) | every member's chats in the projects that go with it |
+
+The two team paths share one choke point (`unshareOnTeamChangeTx`), and the two
+project paths share one statement (`unfileChatsWithoutProjectAccessTx`), so a
+third way to change a team or re-point a project cannot quietly miss it. "Can
+see" is `ListProjectsForUser`'s rule restated: the project's owner always,
+otherwise an exact match between the project's non-empty `team_id` and the chat
+owner's `users.team_id`.
+
+Two honest consequences. **An unfiled chat is temporary again** — it counts
+against the unpinned cap and the TTL sweep will reap it unless its owner pins
+or re-files it. That is the accepted cost, and it is precisely what deleting a
+project has always done to members' chats; `updated_at` is bumped so the
+retention clock starts when access is lost rather than leaving a months-old
+chat instantly sweep-eligible. And **migration 055 backfills the rows the old
+paths stranded**, unfiling every chat whose owner is neither its project's owner
+nor a member of its project's team. It is idempotent and touches nothing whose
+owner can still see its project.
+
+**The untick confirm quotes real counts.** `GET /projects/{id}/impact` (the
+same read the delete confirm uses) reports two extra numbers about the chats
+somebody *other than the owner* has filed in the project:
+
+| Field | Means |
+| --- | --- |
+| `chats_from_teammates` | how many chats making the project personal would unfile |
+| `teammates_with_chats` | how many distinct people those chats belong to |
+
+— the numbers the untick dialog's sentence is built from: *"{N} chats from
+teammates will move to their unfiled chats."* They are a strict subset of the delete counts
+(`chats` / `members` / `team_shared_chats` / `memories`) on purpose — one read,
+one shape, nothing to keep in sync.
+
 **A share names its audience; it does not infer one.** Opting in stamps the
 owner's team onto the chat (`conversations.team_shared_with`, migration 054),
 and every read compares that stamp against the *caller's* team. The flag alone
@@ -108,6 +164,7 @@ than re-pointing them.
 | `GET /conversations/{id}/team-view` | a teammate (or the owner) | the read-only transcript |
 | `POST /conversations/{id}/branch` | anyone who can *read* the parent | fork into a chat you own |
 | `GET /projects/{id}/team-conversations` | members | the project home's Team section |
+| `GET /projects/{id}/impact` | members | the counts both destructive confirms quote: what a delete destroys, and how many teammates' chats an untick would unfile |
 
 Every refusal on the read paths is a `404`, indistinguishable from "no such
 chat" — team membership is not probeable from here.
@@ -181,10 +238,18 @@ once-per-account act, and two surfaces already own it. So:
 - **Leaving confirms first**, quoting real counts: the team-shared projects you
   stop seeing, the chats of yours that stop being shared, and the fact that
   projects you own stay yours and stay shared with the team (verified against
-  `ListProjectsForUser`, which matches the owner regardless of team).
+  `ListProjectsForUser`, which matches the owner regardless of team). Your own
+  chats filed in the projects you stop seeing are **unfiled** rather than
+  hidden (see above) — they are still yours, in your unfiled chats. The confirm
+  does not put a number on that one; `LeaveTeamImpact` reports the two counts
+  above and nothing else, and this doc says so rather than implying a third.
 - **Deleting a team-shared project confirms too**: how many team learnings die
   with it, how many chats from how many members leave it and become temporary,
   and the existing export offered inline.
+- **Unticking "Share with my team" confirms with the same numbers**, narrowed
+  to what it actually costs: the teammates' chats it unfiles
+  (`chats_from_teammates` / `teammates_with_chats`), which move to their own
+  unfiled chats rather than disappearing.
 - **Admin → Users assigns a team from a list**, with an explicit "New team…"
   option. The field was free text, so "Testing" and "testing" silently became
   two trust groups — a difference that only surfaces later, as a project a
@@ -295,6 +360,39 @@ Both are fixed:
 The UI is a collapsed **Transfer ownership…** control in the project settings
 dialog (it is a once-in-a-project action, not a routine one), backed by
 `GET /projects/{id}/members` for the picker.
+
+**The refusal names projects as data, not only as prose, because a name alone
+was a dead end.** The `409` body is JSON:
+
+```json
+{"error": "this account still owns team-shared projects (Quant) — transfer them to another member first, then delete the account",
+ "owns_shared_projects": [{"id": "…", "name": "Quant"}]}
+```
+
+The ids are the point, and **the transfer happens in that panel**, not through
+a link. A link could not work for the caller this is written for: an admin is
+usually neither the project's owner nor a member of its team, so every
+membership-gated surface — the chat rail's project list, the project home —
+answers them with a 404, and "Transfer alpha" would land on a page that cannot
+show the project, let alone its transfer control. The two routes that *do*
+authorize an admin are called from the refusal directly: `GET
+/projects/{id}/members` for the picker and `POST /projects/{id}/transfer` for
+the handover, after which the delete is retried automatically — unblocking it
+is the only reason the control is there. The current owner is not offered as
+their own successor, since handing the project back is a no-op that leaves the
+delete blocked.
+
+`GET /projects/{id}/members` had to move to make that work. It sat *behind* the
+membership gate while carrying its own owner-or-admin check, so the check was
+unreachable for exactly the caller it names: an admin got the same 404 a
+stranger does. It is now dispatched before the gate, like `transfer`, and
+authorizes itself the same way. That left the transfer half-reachable
+otherwise — an admin could POST the handover but could not ask who to hand it
+to, which is the entire content of the decision.
+
+The `error` field keeps the exact sentence, so a client that predates the
+structured body still shows the explanation; without ids it names the manual
+step rather than offering a control that cannot work.
 
 ## Deviations from the brief
 

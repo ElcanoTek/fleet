@@ -139,10 +139,20 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		// missing.
 		var owns *store.OwnsSharedProjectsError
 		if errors.As(err, &owns) {
-			http.Error(w,
-				"this account still owns team-shared projects ("+strings.Join(owns.Projects, ", ")+
+			// JSON, not http.Error's plain text, because the sentence alone was
+			// a dead end: it named the projects and gave the admin no route to
+			// the transfer control that resolves it, and the id cannot be
+			// recovered client-side (GET /projects is scoped to the caller's
+			// own and team-visible projects, and an admin is usually neither).
+			// `error` keeps the exact prose an older client already renders;
+			// `owns_shared_projects` carries {id, name} so the refusal can link
+			// straight at each project's transfer control (QA #21).
+			writeJSONStatus(w, http.StatusConflict, map[string]any{
+				"error": "this account still owns team-shared projects (" +
+					strings.Join(owns.ProjectNames(), ", ") +
 					") — transfer them to another member first, then delete the account",
-				http.StatusConflict)
+				"owns_shared_projects": owns.Projects,
+			})
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)

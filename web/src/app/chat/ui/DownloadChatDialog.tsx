@@ -17,6 +17,15 @@ import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 //
 // The dialog is presentational: the caller owns the fetch + save, so the
 // download path stays in one place (chat-experience) for every entry point.
+//
+// Not on the shared DialogShell (the B-2 pass), deliberately: this is the
+// full-bleed "sheet" shape, not a centred panel — it portals to <body>, fills
+// the viewport below sm:, carries its own header bar and a backdrop that is
+// not click-to-dismiss, and traps Tab through useDialogA11y. Its panel is
+// already opaque (--color-surface-1), which is the defect that pass fixed, so
+// moving it onto the shell would only buy props that switch the shell's
+// defaults back off. PromptLibrary, DownloadChatDialog and SavePromptDialog
+// share this shape with each other.
 
 export type DownloadFormat = "html" | "markdown" | "json";
 

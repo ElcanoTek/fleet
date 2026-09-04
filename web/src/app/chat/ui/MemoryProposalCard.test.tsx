@@ -96,14 +96,13 @@ describe("MemoryProposalCard", () => {
 // Item D1: inside a project the card asks WHERE the memory goes, and shows
 // the answer before the user saves rather than defaulting silently.
 //
-// The default is MY MEMORY even in a team-shared project. This card holds text
-// the MODEL extracted from the turn, not text the user picked, and publishing
-// is one-way in the direction that matters — a retired team learning was still
-// read. People have been clicking Save on these cards to mean "keep this"; a
-// default that published to the whole project would turn that habit into a
-// disclosure the first time the model lifted something sensitive out of a
-// conversation. The team is one visible click away. (The explicit Save action
-// on a message the user chose defaults the other way — see ChatTranscript.)
+// Inside a TEAM-SHARED project the preselected destination is Team learnings
+// (docs/TEAM-SHARING.md, "Capturing one"). Finding #17: it used to preselect
+// My memory, which disagreed with the context and with the assistant's own
+// framing — "remember that this project is for testing purposes" is a fact
+// about the project, and one lazy click filed it privately. Outside a
+// team-shared project there is no team to learn anything, so My memory is the
+// preselection. Either way the picker is visible and one click flips it.
 describe("MemoryProposalCard destination", () => {
   const project = { id: "p1", name: "Quant", teamShared: true };
 
@@ -112,7 +111,7 @@ describe("MemoryProposalCard destination", () => {
     expect(screen.queryByRole("group", { name: /where to save/i })).toBeNull();
   });
 
-  it("offers team learnings but does not preselect it, and posts the project id when chosen", async () => {
+  it("preselects team learnings in a team-shared project, and posts the project id", async () => {
     const fetchMock = mockFetch({ supersede: "none" });
     const resolved: MemoryProposal[] = [];
     render(
@@ -123,16 +122,20 @@ describe("MemoryProposalCard destination", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "My memory" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Team learnings" }));
     expect(
       screen.getByRole("button", { name: "Team learnings" }),
     ).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("button", { name: "My memory" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // The helper text switches with the selection, so the destination is
+    // stated in words as well as in the toggle.
+    expect(screen.getByText("everyone in Quant")).toBeInTheDocument();
 
+    // Saving with the preselection is what the finding is about: no extra
+    // click, and the project id goes with it.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ project_id: "p1" });
@@ -140,14 +143,74 @@ describe("MemoryProposalCard destination", () => {
     expect(resolved[0].savedTo).toBe("Quant");
   });
 
-  it("saving without touching the picker posts no project id", async () => {
+  it("flips to my memory on one click, and then posts no project id", async () => {
     const fetchMock = mockFetch({ supersede: "none" });
     render(
       <MemoryProposalCard proposal={base} project={project} onResolved={() => {}} />,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "My memory" }));
+    expect(screen.getByRole("button", { name: "My memory" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByText("only you, in every chat")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({});
+  });
+
+  it("adopts a project that arrives after the first render", async () => {
+    // On a boot restore the projects list can land after the card has already
+    // painted, so the preselection is synced rather than read once at mount.
+    const { rerender } = render(
+      <MemoryProposalCard proposal={base} onResolved={() => {}} />,
+    );
+    expect(screen.queryByRole("group", { name: /where to save/i })).toBeNull();
+    rerender(
+      <MemoryProposalCard proposal={base} project={project} onResolved={() => {}} />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Team learnings" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not stomp an explicit choice when the project arrives late", async () => {
+    const fetchMock = mockFetch({ supersede: "none" });
+    const { rerender } = render(
+      <MemoryProposalCard
+        proposal={base}
+        project={{ ...project, teamShared: false }}
+        onResolved={() => {}}
+      />,
+    );
+    // The user picks Team learnings while the project still reads personal…
+    fireEvent.click(screen.getByRole("button", { name: "Team learnings" }));
+    // …and then the real (team-shared) project lands.
+    rerender(
+      <MemoryProposalCard proposal={base} project={project} onResolved={() => {}} />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Team learnings" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    // …and the same guard in the other direction: an explicit My memory
+    // survives the project turning out to be team-shared.
+    fireEvent.click(screen.getByRole("button", { name: "My memory" }));
+    rerender(
+      <MemoryProposalCard
+        proposal={base}
+        project={{ ...project, name: "Quant II" }}
+        onResolved={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "My memory" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({});
@@ -181,7 +244,8 @@ describe("MemoryProposalCard destination", () => {
     expect(screen.queryByText("Dismissed.")).toBeNull();
   });
 
-  it("defaults to My memory in a personal project", () => {
+  it("preselects My memory in a personal project", () => {
+    // A personal project has no team to learn anything.
     render(
       <MemoryProposalCard
         proposal={base}
@@ -193,5 +257,8 @@ describe("MemoryProposalCard destination", () => {
       "aria-pressed",
       "true",
     );
+    expect(
+      screen.getByRole("button", { name: "Team learnings" }),
+    ).toHaveAttribute("aria-pressed", "false");
   });
 });
