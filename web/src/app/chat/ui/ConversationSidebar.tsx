@@ -32,6 +32,7 @@ import {
   isFiltering as computeIsFiltering,
   pinnedUnfiled,
   projectGroups,
+  railProjectEmptyState,
   recentUnfiled,
   type LabelSummary,
 } from "./conversationOrganization";
@@ -1043,6 +1044,7 @@ export function ConversationSidebar({
   onRenameProject,
   onDeleteProject,
   projects,
+  teamSharedChatCounts,
   onMoveToProject,
 }: {
   sidebarOpen: boolean;
@@ -1078,7 +1080,10 @@ export function ConversationSidebar({
     options?: { preserveScroll?: boolean },
   ) => Promise<void>;
   streamingConvs: Set<string>;
-  togglePin: (conversation: ConversationSummary) => Promise<void>;
+  // Resolves to whether the pin stuck. The rail ignores it (a failed pin
+  // reverts itself via a refresh); the "Pin it and remove" confirm does not,
+  // because there the pin is what keeps the copy's promise.
+  togglePin: (conversation: ConversationSummary) => Promise<unknown>;
   toggleArchive: (
     conversation: ConversationSummary,
     archived: boolean,
@@ -1143,6 +1148,15 @@ export function ConversationSidebar({
   // by recent update render as expandable groups + drag targets. The full
   // list/management stays in the modal.
   projects: Project[];
+  // Per-project count of the team-shared chats OTHER members contributed —
+  // i.e. the size of that project's home "Team" section. Keyed by project id;
+  // a loaded map omits projects with none, so a missing key means zero.
+  //
+  // `undefined` for the whole map means "not known yet" (still loading, or the
+  // read failed), and the rail then falls back to copy that asserts no number.
+  // The shared chats themselves stay OUT of the rail (ADR-0057: the project
+  // home is the one discovery surface) — this is a count, not a listing.
+  teamSharedChatCounts?: Record<string, number>;
   // Re-files a conversation into a project ("" = unfile) — drag-and-drop and
   // the kebab's "Move to project" both land here; the parent owns the
   // optimistic state + POST.
@@ -1394,6 +1408,30 @@ export function ConversationSidebar({
           visibleProjectTree.map(({ project, chats }) => {
             const expanded = expandedProjects.has(project.id);
             const dropReady = dragOverProject === project.id;
+            // Team sharing, on the row itself. Until now the only tell was
+            // the "Shared with team" chip on the project's home, so a rail
+            // holding one shared and one personal project looked like two of
+            // the same thing — testers renamed their projects by hand to keep
+            // them apart. Same glyph as the chat badge, same rule: always
+            // labeled with its audience, never a bare "shared"
+            // (docs/TEAM-SHARING.md vocabulary).
+            const teamShared = Boolean(project.team_id);
+            const teamSharedLabel = `Shared with ${project.team_id}`;
+            // undefined = the counts haven't loaded (or the read failed); a
+            // loaded map omits projects with none, so a missing key is a real
+            // zero. The difference decides whether the empty state may quote
+            // a number at all.
+            const sharedChats = teamSharedChatCounts
+              ? (teamSharedChatCounts[project.id] ?? 0)
+              : undefined;
+            const emptyState = railProjectEmptyState({
+              teamShared,
+              teamSharedChatCount: sharedChats,
+            });
+            const openHome = () => {
+              setSidebarOpen(false);
+              onOpenProjectHome(project.id);
+            };
             return (
               // The WHOLE group (header row + expanded children) is the drop
               // zone, not just the header — dropping a dragged chat onto an
@@ -1489,10 +1527,25 @@ export function ConversationSidebar({
                           className="size-3 shrink-0 text-[var(--color-accent)]"
                         />
                       ) : null}
+                      {teamShared ? (
+                        // Decorative HERE on purpose: this button carries its
+                        // own aria-label (the row's name + chat count), which
+                        // swallows any label nested inside it. The audience
+                        // text therefore lives in the sr-only sibling just
+                        // below, outside the button, where a screen reader
+                        // actually reaches it — the badge is never
+                        // title-attribute-only.
+                        <span title={teamSharedLabel} className="flex shrink-0">
+                          <TeamGlyph className="size-3 text-[var(--color-accent)]" />
+                        </span>
+                      ) : null}
                       <span className="min-w-0 flex-1 truncate text-left">
                         {project.name}
                       </span>
                     </button>
+                    {teamShared ? (
+                      <span className="sr-only">{teamSharedLabel}</span>
+                    ) : null}
                     <div className="absolute inset-y-0 right-1 flex items-center gap-0.5">
                       <PortalTipIconButton
                         tip="Open project"
@@ -1503,10 +1556,7 @@ export function ConversationSidebar({
                           "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
                           "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
                         ].join(" ")}
-                        onClick={() => {
-                          setSidebarOpen(false);
-                          onOpenProjectHome(project.id);
-                        }}
+                        onClick={openHome}
                       />
                       <ProjectKebab
                         projectName={project.name}
@@ -1530,12 +1580,49 @@ export function ConversationSidebar({
                 {expanded ? (
                   chats.length === 0 ? (
                     <p className="py-1 pl-7 pr-2 text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
-                      {/* Both filing paths, and the payoff. The old copy named
-                          drag alone (mouse-only) and never said why to bother
-                          — a project chat is exempt from expiry, which is the
-                          whole reason to file one (Item E2). */}
-                      No chats yet — drag one here, or use “Move to project”
-                      from a chat’s ⋮ menu. Chats in a project don’t expire.
+                      {/* Three empty states, because "empty" means different
+                          things to the owner and to a teammate. See
+                          railProjectEmptyState. */}
+                      {emptyState.kind === "team-has-chats" ? (
+                        <>
+                          No chats of yours yet &middot;{" "}
+                          <button
+                            type="button"
+                            aria-label={`Open ${project.name} — ${emptyState.count} ${
+                              emptyState.count === 1 ? "chat" : "chats"
+                            } shared by your team`}
+                            className="rounded text-left text-[var(--color-accent)] underline decoration-dotted underline-offset-2 transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                            onClick={openHome}
+                          >
+                            {emptyState.count} shared by your team{" "}
+                            <span aria-hidden="true">&rarr;</span>
+                          </button>
+                        </>
+                      ) : emptyState.kind === "team-count-unknown" ? (
+                        <>
+                          No chats of yours yet — drag one here, or use
+                          “Move to project” from a chat’s ⋮ menu.{" "}
+                          <button
+                            type="button"
+                            aria-label={`Open ${project.name} — anything your team shared is on the project home`}
+                            className="rounded text-left text-[var(--color-accent)] underline decoration-dotted underline-offset-2 transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                            onClick={openHome}
+                          >
+                            Anything your team shared is on the project home{" "}
+                            <span aria-hidden="true">&rarr;</span>
+                          </button>
+                        </>
+                      ) : (
+                        /* Both filing paths, and the payoff. The old copy named
+                           drag alone (mouse-only) and never said why to bother
+                           — a project chat is exempt from expiry, which is the
+                           whole reason to file one (Item E2). */
+                        <>
+                          No chats yet — drag one here, or use “Move to
+                          project” from a chat’s ⋮ menu. Chats in a project
+                          don’t expire.
+                        </>
+                      )}
                     </p>
                   ) : (
                     <div className="ml-3 border-l border-[var(--color-border)] pl-1">

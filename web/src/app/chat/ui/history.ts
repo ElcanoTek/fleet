@@ -555,6 +555,17 @@ export type Message = {
    */
   kind?: "text" | "summary";
   content: string;
+  /**
+   * Server-injected context for a user turn — everything fleet appended to the
+   * message before the model saw it (see HistoryEntry.injected_context). Never
+   * part of `content`, which is what the user typed. The transcript renders it
+   * as a collapsed note *outside* the user's bubble, because presenting it
+   * inside reads as words the user wrote (QA finding #6).
+   *
+   * Empty/undefined for: assistant messages, legacy rows (pre-056, where the
+   * blocks are still inside `content`), and turns with nothing injected.
+   */
+  injectedContext?: string;
   state: MessageState;
   reasoning?: string;
   toolCalls?: ToolCall[];
@@ -722,6 +733,23 @@ export type HistoryEntry = {
   role: "user" | "assistant" | "tool";
   type: "text" | "reasoning" | "tool_call" | "tool_result" | "turn_summary" | "summary";
   content: Record<string, unknown>;
+  /**
+   * The server-derived suffix for this turn, kept OUT of `content.text`
+   * (migration 056; docs/ATTACHMENT-SCOPING.md, ADR-0058): the attachment
+   * manifest, the workspace inventory, the shared file library announcement,
+   * expanded `@file`/`@url` handles, the skill note, connector hints.
+   *
+   * Owner-facing `GET /conversations/{id}` only — omitted when empty, and
+   * present only on user `text` entries. It is context fleet added, not words
+   * the user wrote, so the transcript renders it outside the user's bubble.
+   *
+   * Rows written before migration 056 carry it empty with the blocks still
+   * inside `content.text`. Those render exactly as they always did: we do NOT
+   * try to parse the markers back out of legacy text (a half-parsed bubble is
+   * worse than an honest historical one, and the server deliberately did not
+   * rewrite history).
+   */
+  injected_context?: string;
 };
 
 /**
@@ -765,11 +793,17 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
   for (const e of entries) {
     if (e.type === "text" && e.role === "user") {
       flush();
+      // `injected_context` is omitted when empty, so normalise absent/blank to
+      // undefined: the renderer's "is there a note to show?" test is then a
+      // plain truthiness check, and a whitespace-only column value (nothing a
+      // reader could learn from) never draws an empty disclosure.
+      const injected = String(e.injected_context ?? "");
       messages.push({
         id: nextId++,
         dbId: e.id,
         role: "user",
         content: String((e.content as { text?: string }).text ?? ""),
+        injectedContext: injected.trim() ? injected : undefined,
         state: "done",
       });
       continue;

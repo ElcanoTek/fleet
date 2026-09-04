@@ -220,8 +220,10 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	buf.Emit("turn.started", map[string]any{"turn_id": turnID, "persona": conv.Persona})
 	buf.Emit("user.message", map[string]any{"text": prompt})
 
-	// Surface any files persisted from earlier turns (empty on this first turn).
-	userMessage := appendWorkspaceInventoryBlock(prompt, tools.WorkspaceDirForConversation(conv.ID))
+	// Surface any files persisted from earlier turns (empty on this first
+	// turn). Accumulated as the turn's INJECTED context, separate from the
+	// trigger prompt itself, exactly as the chat path does (ADR-0058).
+	injected := appendWorkspaceInventoryBlock("", tools.WorkspaceDirForConversation(conv.ID))
 
 	s.activeTurns.Add(1)
 	s.activeTurnCount.Add(1)
@@ -231,7 +233,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 			s.activeTurns.Done()
 		}()
 		defer releaseSlot()
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, userMessage, history, memoryContents(memories), "", nil, nil)
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, injected, history, memoryContents(memories), "", nil, nil)
 		// Webhook turns participate in the #785 drain loop too: anything
 		// queued behind this turn must not stall until the next submission.
 		s.maybeDrainQueue(conv.ID)

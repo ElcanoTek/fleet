@@ -58,14 +58,15 @@ func TestToAgentImageAttachments(t *testing.T) {
 }
 
 // TestValidateAttachments_ConfinesToUploadsRoot pins that validateAttachments
-// only accepts regular files that live under <EmailAttachmentDir>/uploads: an
-// absolute path or a ".." escape pointing outside the uploads root is dropped, so
-// a hostile client can't smuggle a host file (e.g. a secret) into a turn's
-// attachment set. This is the confinement the filepath.Rel + filepath.IsLocal
-// gate enforces.
+// only accepts regular files that live under THE CALLER'S uploads subtree
+// (<EmailAttachmentDir>/uploads/<user>): an absolute path or a ".." escape
+// pointing outside it is dropped, so a hostile client can't smuggle a host
+// file (e.g. a secret) into a turn's attachment set. This is the confinement
+// the filepath.Rel + filepath.IsLocal gate enforces.
 func TestValidateAttachments_ConfinesToUploadsRoot(t *testing.T) {
+	const owner = "alice@example.com"
 	base := t.TempDir()
-	uploads := filepath.Join(base, "uploads", "tok")
+	uploads := filepath.Join(userUploadsRoot(base, owner), "tok")
 	if err := os.MkdirAll(uploads, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +82,8 @@ func TestValidateAttachments_ConfinesToUploadsRoot(t *testing.T) {
 
 	s := &Server{cfg: &config.Config{EmailAttachmentDir: base}}
 
-	got := s.validateAttachments([]chatAttachment{
-		{Name: "chart.png", Path: good},                                            // legit, under uploads root
+	got := s.validateAttachments(owner, []chatAttachment{
+		{Name: "chart.png", Path: good},                                            // legit, under the caller's uploads root
 		{Name: "escape", Path: secret},                                             // absolute, outside uploads root
 		{Name: "traverse", Path: filepath.Join(uploads, "..", "..", "secret.txt")}, // ".." escape
 	})
@@ -95,10 +96,159 @@ func TestValidateAttachments_ConfinesToUploadsRoot(t *testing.T) {
 	}
 }
 
+// TestValidateAttachments_RefusesAnotherUsersUpload is the host-side half of
+// ADR-0058's answer to "any user who learns a path can read any upload".
+//
+// Learning the path is the easy part — before migration 056 it sat inside the
+// user message text, so it rode along into every export and every branched
+// transcript. What must not follow is a read: naming another user's upload in
+// your OWN /chat request has to be a rejection, both for the sandbox (the
+// entry would otherwise be staged into your conversation) and for vision input
+// (agent.loadImageAttachments reads a validated path host-side with no further
+// ownership check — its documented caller contract).
+func TestValidateAttachments_RefusesAnotherUsersUpload(t *testing.T) {
+	base := t.TempDir()
+	const owner, other = "alice@example.com", "bob@example.com"
+
+	ownerDir := filepath.Join(userUploadsRoot(base, owner), "fq6xyz")
+	if err := os.MkdirAll(ownerDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ownersFile := filepath.Join(ownerDir, "fleet-team-share-test.csv")
+	if err := os.WriteFile(ownersFile, []byte("row,MARKER-ZEBRA-7741\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ownersImage := filepath.Join(ownerDir, "private.png")
+	if err := os.WriteFile(ownersImage, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{cfg: &config.Config{EmailAttachmentDir: base}}
+
+	// Bob knows both paths exactly and claims them as his attachments.
+	if got := s.validateAttachments(other, []chatAttachment{
+		{Name: "fleet-team-share-test.csv", Path: ownersFile},
+		{Name: "private.png", Path: ownersImage, MIME: "image/png"},
+	}); len(got) != 0 {
+		t.Fatalf("another user's uploads were accepted: %#v", got)
+	}
+	// The owner still reaches her own files (the gate is ownership, not a ban).
+	if got := s.validateAttachments(owner, []chatAttachment{{Name: "c.csv", Path: ownersFile}}); len(got) != 1 {
+		t.Fatalf("owner's own upload was rejected: %#v", got)
+	}
+	// The flat pre-ADR-0058 layout validates for nobody — it carries no
+	// ownership, so it cannot be attributed to a caller.
+	legacy := filepath.Join(base, "uploads", "tok", "legacy.csv")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range []string{owner, other} {
+		if got := s.validateAttachments(who, []chatAttachment{{Name: "legacy.csv", Path: legacy}}); len(got) != 0 {
+			t.Errorf("legacy flat upload accepted for %s: %#v", who, got)
+		}
+	}
+}
+
+// TestPostAttachments_ScopesPathsPerUser: two callers uploading the same
+// filename land in disjoint subtrees, and neither can validate the other's
+// path. The segment is derived from the authenticated identity, so it is not
+// something a request body can choose.
+func TestPostAttachments_ScopesPathsPerUser(t *testing.T) {
+	s := attachmentServerFixture(t, 1<<20)
+	const alice, bob = "alice@example.com", "bob@example.com"
+
+	upload := func(user string) uploadedAttachment {
+		t.Helper()
+		body, ct := multipartBody(t, map[string][]byte{"report.csv": []byte("a,b\n1,2\n")})
+		req := httptest.NewRequestWithContext(
+			context.WithValue(context.Background(), ctxKeyUser, user),
+			http.MethodPost, "/attachments", body)
+		req.Header.Set("Content-Type", ct)
+		rec := httptest.NewRecorder()
+		s.postAttachments(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+		}
+		var resp struct {
+			Attachments []uploadedAttachment `json:"attachments"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(resp.Attachments) != 1 {
+			t.Fatalf("attachments = %d, want 1", len(resp.Attachments))
+		}
+		return resp.Attachments[0]
+	}
+
+	aliceFile, bobFile := upload(alice), upload(bob)
+	if aliceFile.Path == bobFile.Path {
+		t.Fatalf("both users got the same path %q", aliceFile.Path)
+	}
+	for user, root := range map[string]string{alice: userUploadsRoot(s.cfg.EmailAttachmentDir, alice), bob: userUploadsRoot(s.cfg.EmailAttachmentDir, bob)} {
+		path := aliceFile.Path
+		if user == bob {
+			path = bobFile.Path
+		}
+		if !strings.HasPrefix(filepath.FromSlash(path), filepath.Clean(root)+string(filepath.Separator)) {
+			t.Errorf("%s uploaded to %q, want it under %q", user, path, root)
+		}
+	}
+	// Cross-claims are refused in both directions.
+	if got := s.validateAttachments(bob, []chatAttachment{{Name: "report.csv", Path: aliceFile.Path}}); len(got) != 0 {
+		t.Errorf("bob validated alice's upload: %#v", got)
+	}
+	if got := s.validateAttachments(alice, []chatAttachment{{Name: "report.csv", Path: bobFile.Path}}); len(got) != 0 {
+		t.Errorf("alice validated bob's upload: %#v", got)
+	}
+}
+
+// TestStagedAttachmentsAreScopedPerConversation: the staged copy the agent
+// actually reads lands under the SENDING conversation's workspace, so one
+// chat's turn is never handed a path in another chat's directory — and a
+// conversation cannot pull in another conversation's staged copy by naming it,
+// because a workspace path is not under any uploads root.
+func TestStagedAttachmentsAreScopedPerConversation(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	base := t.TempDir()
+	const owner = "alice@example.com"
+	uploads := userUploadsRoot(base, owner)
+	src := filepath.Join(uploads, "tok", "spend.csv")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("row,MARKER-ZEBRA-7741\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stagedA := stageAttachmentsIntoWorkspace(uploads, "conv-a",
+		[]chatAttachment{{Name: "spend.csv", Path: src, Size: 22}})
+	wantA := filepath.Join(tools.WorkspaceDirForConversation("conv-a"), "attachments",
+		uploadSlug(uploads, src), "spend.csv")
+	if len(stagedA) != 1 || filepath.Clean(stagedA[0].Path) != filepath.Clean(wantA) {
+		t.Fatalf("staged = %#v, want the copy at %q", stagedA, wantA)
+	}
+
+	// conv-b never receives conv-a's path from the server; if a client claims
+	// it anyway, validation refuses it — a workspace path is under no uploads
+	// root, so it cannot be re-staged into another conversation.
+	s := &Server{cfg: &config.Config{EmailAttachmentDir: base}}
+	if got := s.validateAttachments(owner, []chatAttachment{{Name: "spend.csv", Path: stagedA[0].Path}}); len(got) != 0 {
+		t.Errorf("a staged workspace path validated as an attachment: %#v", got)
+	}
+	convB := filepath.Join(tools.WorkspaceDirForConversation("conv-b"), "attachments")
+	if entries, _ := os.ReadDir(convB); len(entries) != 0 {
+		t.Errorf("conv-b's attachments dir is not empty: %v", entries)
+	}
+}
+
 func TestAppendAttachmentsBlock_ImagesAndOthers(t *testing.T) {
 	images := []chatAttachment{{Name: "shot.png", Size: 100}}
 	others := []chatAttachment{{Name: "data.csv", Path: "/uploads/abc/data.csv", Size: 1024}}
-	got := appendAttachmentsBlock("hi", images, others, false)
+	got := appendAttachmentsBlock("hi", images, others)
 	if !strings.Contains(got, "User attached images") {
 		t.Errorf("missing image header in:\n%s", got)
 	}
@@ -117,7 +267,7 @@ func TestAppendAttachmentsBlock_ImagesAndOthers(t *testing.T) {
 }
 
 func TestAppendAttachmentsBlock_NoAttachmentsIsNoOp(t *testing.T) {
-	got := appendAttachmentsBlock("hello", nil, nil, false)
+	got := appendAttachmentsBlock("hello", nil, nil)
 	if got != "hello" {
 		t.Errorf("expected unchanged, got %q", got)
 	}
@@ -406,7 +556,8 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 	if len(staged) != 1 {
 		t.Fatalf("staged = %v", staged)
 	}
-	want := filepath.Join(tools.WorkspaceDirForConversation("conv-stage"), "attachments", "data.csv")
+	want := filepath.Join(tools.WorkspaceDirForConversation("conv-stage"), "attachments",
+		uploadSlug(uploads, src), "data.csv")
 	if filepath.Clean(staged[0].Path) != filepath.Clean(want) {
 		t.Fatalf("staged path = %q, want %q", staged[0].Path, want)
 	}
@@ -414,7 +565,7 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 		t.Fatalf("staged content = (%q, %v)", got, err)
 	}
 
-	// Queue-drain echo: same name + size reuses the staged copy.
+	// Queue-drain echo: the same upload resolves to the same copy.
 	again := stageAttachmentsIntoWorkspace(uploads, "conv-stage", atts)
 	if again[0].Path != staged[0].Path {
 		t.Fatalf("re-stage path = %q, want the reused %q", again[0].Path, staged[0].Path)
@@ -424,8 +575,8 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 		t.Fatalf("re-stage duplicated the file: %v", entries)
 	}
 
-	// A NEW attachment reusing the filename (different size) gets a variant,
-	// never a clobber of the copy the agent may already have read.
+	// A NEW upload reusing the filename gets its own directory, so neither
+	// copy clobbers or shadows the other.
 	src2 := filepath.Join(uploads, "tok2", "data.csv")
 	if err := os.MkdirAll(filepath.Dir(src2), 0o755); err != nil {
 		t.Fatal(err)
@@ -434,14 +585,67 @@ func TestStageAttachmentsIntoWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	variant := stageAttachmentsIntoWorkspace(uploads, "conv-stage", []chatAttachment{{Name: "data.csv", Path: src2, Size: 16}})
-	if got := filepath.Base(variant[0].Path); got != "data-2.csv" {
-		t.Fatalf("variant name = %q, want data-2.csv", got)
+	if variant[0].Path == staged[0].Path {
+		t.Fatalf("a different upload reused the first upload's staged path %q", variant[0].Path)
+	}
+	if got := filepath.Base(variant[0].Path); got != "data.csv" {
+		t.Fatalf("variant name = %q — the name is kept; the DIRECTORY separates uploads", got)
 	}
 	if got, err := os.ReadFile(filepath.Clean(variant[0].Path)); err != nil || string(got) != "different bytes!" {
 		t.Fatalf("variant content = (%q, %v)", got, err)
 	}
 	if got, err := os.ReadFile(staged[0].Path); err != nil || string(got) != "a,b\n1,2\n" {
 		t.Fatalf("original staged copy was clobbered: (%q, %v)", got, err)
+	}
+}
+
+// A corrected re-upload that keeps the filename AND the byte count must reach
+// the agent as its own bytes.
+//
+// Reuse was keyed on name + size, so an edited value or a swapped column — the
+// common shape of a fix-and-resend — landed on the "already staged" branch and
+// handed back the PREVIOUS file. The prompt named the new attachment and the
+// model silently analyzed the old one, with nothing anywhere reporting a
+// mismatch. Two uploads are two tokens, so they can no longer collide however
+// alike their bytes.
+func TestStageAttachmentsIntoWorkspace_SameNameSameSizeIsNotTheSameFile(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	uploads := t.TempDir()
+	write := func(token, body string) string {
+		p := filepath.Join(uploads, token, "spend.csv")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// Identical length, different content — the case the old key could not see.
+	const before = "channel,spend\nsearch,100\n"
+	const after = "channel,spend\nsearch,900\n"
+	if len(before) != len(after) {
+		t.Fatalf("fixture must keep the byte count identical")
+	}
+	first := write("tok-first", before)
+	second := write("tok-second", after)
+
+	staged := stageAttachmentsIntoWorkspace(uploads, "conv-resend",
+		[]chatAttachment{{Name: "spend.csv", Path: first, Size: int64(len(before))}})
+	restaged := stageAttachmentsIntoWorkspace(uploads, "conv-resend",
+		[]chatAttachment{{Name: "spend.csv", Path: second, Size: int64(len(after))}})
+
+	if restaged[0].Path == staged[0].Path {
+		t.Fatalf("the corrected upload reused the first upload's staged copy at %q", restaged[0].Path)
+	}
+	got, err := os.ReadFile(filepath.Clean(restaged[0].Path))
+	if err != nil || string(got) != after {
+		t.Fatalf("staged content = (%q, %v), want the corrected bytes %q", got, err, after)
+	}
+	// And the first copy is untouched — a turn already reading it keeps
+	// reading what it was given.
+	if got, err := os.ReadFile(staged[0].Path); err != nil || string(got) != before {
+		t.Fatalf("first staged copy = (%q, %v), want %q", got, err, before)
 	}
 }
 
@@ -477,7 +681,7 @@ func TestStageAttachmentsIntoWorkspace_RefusesEscapedSource(t *testing.T) {
 
 func TestAppendAttachmentsBlock_StagedTrailer(t *testing.T) {
 	others := []chatAttachment{{Name: "d.csv", Path: "/ws/conv/attachments/d.csv", Size: 8}}
-	got := appendAttachmentsBlock("hi", nil, others, true)
+	got := appendAttachmentsBlock("hi", nil, others)
 	if !strings.Contains(got, "conversation's workspace") {
 		t.Errorf("staged trailer missing in:\n%s", got)
 	}

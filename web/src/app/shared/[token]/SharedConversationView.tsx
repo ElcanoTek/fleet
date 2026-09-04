@@ -5,6 +5,9 @@
 // reuses the same markdown pipeline as the live chat (renderAssistantContent);
 // user text renders verbatim. Tool calls / reasoning are intentionally omitted
 // — this is the conversation transcript, not the agent's full working trace.
+// Neither are the files it names: this page has no session, so the owner-scoped
+// workspace route those links point at answers nothing for its reader.
+// ReadOnlyTranscript renders them as plain text rather than as dead links.
 
 import { renderAssistantContent } from "@/app/chat/ui/AssistantContent";
 import {
@@ -49,6 +52,10 @@ export function SharedConversationView({ snapshot }: { snapshot: SharedSnapshot 
       ) : (
         <ReadOnlyTranscript
           bubbles={bubbles}
+          // Same withholding as a team view — a snapshot anyone with the URL
+          // can open has no session, so the owner-scoped workspace route
+          // would 404 for every reader — worded for the reader it has.
+          audience="link"
           renderAssistant={(text) => renderAssistantContent(text, false, null)}
         />
       )}
