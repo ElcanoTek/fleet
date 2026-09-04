@@ -3024,7 +3024,13 @@ export function ChatExperience({
     conversationId: string,
     projectID: string,
   ): Promise<boolean> => {
-    const conv = conversations.find((c) => c.id === conversationId);
+    // An ARCHIVED chat can be moved too — the Share dialog reaches one, and it
+    // resolves its conversation from either list. Updating only the active
+    // list left the archived row (and the still-open dialog) showing the old
+    // project until a reload, so both collections move together.
+    const conv =
+      conversations.find((c) => c.id === conversationId) ??
+      archivedConversations.find((c) => c.id === conversationId);
     // A team-shared chat cannot exist outside a team-shared project — the
     // server clears the flag on the way out (ADR-0057) — so clear it locally
     // in the same update, rather than letting the rail claim a share the
@@ -3032,18 +3038,18 @@ export function ChatExperience({
     const leavingTeamShare =
       Boolean(conv?.team_visible) &&
       !projects.some((p) => p.id === projectID && p.team_id);
+    const refile = (c: ConversationSummary): ConversationSummary =>
+      c.id === conversationId
+        ? {
+            ...c,
+            project_id: projectID || undefined,
+            team_visible: leavingTeamShare ? false : c.team_visible,
+          }
+        : c;
     const prev = conversations;
-    setConversations((cs) =>
-      cs.map((c) =>
-        c.id === conversationId
-          ? {
-              ...c,
-              project_id: projectID || undefined,
-              team_visible: leavingTeamShare ? false : c.team_visible,
-            }
-          : c,
-      ),
-    );
+    const prevArchived = archivedConversations;
+    setConversations((cs) => cs.map(refile));
+    setArchivedConversations((cs) => cs.map(refile));
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(conversationId)}/project`,
@@ -3063,6 +3069,7 @@ export function ChatExperience({
           `Couldn't move the chat (HTTP ${response.status})${response.status === 404 ? " — the server may predate this feature; update the deployment" : ""}.`,
         );
         setConversations(prev);
+        setArchivedConversations(prevArchived);
         return false;
       }
       return true;
@@ -3070,6 +3077,7 @@ export function ChatExperience({
       console.error("move to project error:", err);
       showRailError("Couldn't move the chat — network error.");
       setConversations(prev);
+      setArchivedConversations(prevArchived);
       return false;
     }
   };
@@ -3089,7 +3097,9 @@ export function ChatExperience({
     conversationId: string,
     projectID: string,
   ) => {
-    const conv = conversations.find((c) => c.id === conversationId);
+    const conv =
+      conversations.find((c) => c.id === conversationId) ??
+      archivedConversations.find((c) => c.id === conversationId);
     const target = projects.find((p) => p.id === projectID);
     const confirm = decideMoveConfirm({
       conversation: conv,
@@ -5032,10 +5042,15 @@ export function ChatExperience({
               null
             }
             project={
+              // Resolved from whichever list holds the chat — the dialog opens
+              // for archived conversations too, and reading only the active
+              // list left the project blank (and the move affordance wrong)
+              // for exactly those.
               projects.find(
                 (p) =>
                   p.id ===
-                  (conversations.find((c) => c.id === shareDialog.id)
+                  ((conversations.find((c) => c.id === shareDialog.id) ??
+                    archivedConversations.find((c) => c.id === shareDialog.id))
                     ?.project_id ?? ""),
               ) ?? null
             }

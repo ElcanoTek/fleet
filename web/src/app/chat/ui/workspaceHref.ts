@@ -235,35 +235,31 @@ export function unsharedFileName(raw: string | undefined | null): string | null 
   const value = typeof raw === "string" ? raw.trim() : "";
   if (!value) return null;
 
-  // An already-resolved route, either `/api/…` or `https://host/api/…`.
+  // An already-resolved route — `/api/conversations/<id>/workspace/<file>` or
+  // the task equivalent, ROOT-RELATIVE ONLY.
   //
-  // On an ABSOLUTE url the origin decides first. The route shape is specific,
-  // but it is not ours to claim on someone else's host: a third-party page at
-  // `https://example.com/api/conversations/42/workspace/chart.png` is a link
-  // the reader can simply follow, and withholding it would replace a working
-  // link with "file not shared" — a false statement, and the exact dead
-  // promise this function exists to remove. Only a same-origin URL names a
-  // file behind THIS deployment's owner-scoped route.
+  // A fully-qualified `https://host/api/…` is never withheld, and that is a
+  // deliberate pair of decisions rather than an oversight.
   //
-  // Server-side (no `location`), an absolute URL is treated as external: the
-  // renderer runs again in the browser, where the origin is knowable, and
-  // under-withholding for one pass shows a link that the client pass then
-  // resolves — whereas over-withholding would blank a legitimate link
-  // permanently in any non-hydrating context.
-  let path = value;
-  if (/^https?:\/\//i.test(value)) {
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch {
-      return null;
-    }
-    if (typeof location === "undefined" || url.origin !== location.origin) {
-      return null;
-    }
-    path = url.pathname;
-  }
-  if (OWNER_SCOPED_FILE_ROUTE.test(path)) return routeBasename(path);
+  // It is not ours to claim. The route shape is specific, but a third-party
+  // page at `https://example.com/api/conversations/42/workspace/chart.png` is
+  // a link the reader can simply follow, and replacing it with "file not
+  // shared" would be a false statement — the exact dead promise this function
+  // exists to remove.
+  //
+  // And the obvious refinement — withhold when the origin matches ours —
+  // cannot be made deterministic here. `location` does not exist during the
+  // server pass, so the same href would render as a live link on the server
+  // and as plain text after hydration: a mismatch, a flash, and in the public
+  // shared transcript (which is prerendered) a dead owner-scoped link visible
+  // until hydration replaced it. An origin-dependent answer is worse than a
+  // consistent one.
+  //
+  // Nothing is lost in practice: resolveWorkspaceHref only ever PRODUCES
+  // root-relative routes, so an absolute self-referencing URL can only arrive
+  // by a model typing one out, and the shapes that actually occur — relative
+  // paths, sandbox: paths, root-relative routes — are all still caught.
+  if (OWNER_SCOPED_FILE_ROUTE.test(value)) return routeBasename(value);
 
   const scoped = resolveScopedWorkspaceHref(value, "/");
   return scoped.isWorkspaceFile ? scoped.downloadFilename : null;
@@ -360,16 +356,31 @@ export function redactUnsharedFiles(
 
 type ScannedLine = { text: string; code: boolean };
 
-/** Tag each line with whether it sits inside a fenced code block (or is a fence). */
+/** Tag each line with whether it sits inside a fenced code block (or is a fence).
+ *
+ * A closing fence must use the same character AND be at least as long as the
+ * opener — CommonMark's rule, and load-bearing here rather than pedantry:
+ * documentation quotes a ``` block inside a ```` one, and comparing only the
+ * marker character closed the outer block on the inner fence. Everything after
+ * it was then treated as prose (so workspace-looking text inside the sample got
+ * rewritten) and the real closing fence opened a phantom block (so genuine
+ * links after it escaped redaction) — wrong in both directions at once.
+ */
 function scanFenced(lines: string[]): ScannedLine[] {
   let fence: string | null = null;
   return lines.map((text) => {
     const marker = CODE_FENCE.exec(text)?.[1];
-    if (marker && (!fence || marker[0] === fence[0])) {
-      fence = fence ? null : marker;
+    if (!marker) return { text, code: fence !== null };
+    if (!fence) {
+      fence = marker;
       return { text, code: true };
     }
-    return { text, code: fence !== null };
+    if (marker[0] === fence[0] && marker.length >= fence.length) {
+      fence = null;
+      return { text, code: true };
+    }
+    // A shorter or different-character run inside the block is content.
+    return { text, code: true };
   });
 }
 
