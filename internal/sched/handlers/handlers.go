@@ -2087,6 +2087,10 @@ type taskRerunOverrides struct {
 	// empty array clears the copy's connector selection. This matches Tags and
 	// lets the terminal-task editor resubmit exactly what its picker displays.
 	MCPSelection models.MCPSelection `json:"mcp_selection,omitempty"`
+	// Files replaces the attachment set when present; [] clears it. Replacing
+	// files also clears inherited logical names unless new names are supplied.
+	Files     []string `json:"files,omitempty"`
+	FileNames []string `json:"file_names,omitempty"`
 }
 
 // taskRerunRequest is the (optional) body of POST /tasks/{id}/rerun|clone.
@@ -2263,6 +2267,13 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 	if o.MCPSelection != nil {
 		tc.MCPSelection = o.MCPSelection
+	}
+	if o.Files != nil {
+		tc.Files = o.Files
+		tc.FileNames = nil
+	}
+	if o.FileNames != nil {
+		tc.FileNames = o.FileNames
 	}
 }
 

@@ -1269,11 +1269,16 @@ paths:
                     fallback_model: { type: string }
                     max_iterations: { type: integer }
                     priority: { type: integer }
-                    runtime_flavor: { type: string }
                     allow_network: { type: boolean }
                     description: { type: string }
                     title: { type: string, description: "Relabel the copy; omitted inherits the source's title." }
                     tags: { type: array, items: { type: string } }
+                    files: { type: array, items: { type: string }, description: "Replaces attachments; omitted inherits, an empty array clears. Values are uploaded filenames." }
+                    file_names: { type: array, items: { type: string }, description: "Optional logical names paired 1:1 with files. Replacing files clears inherited names unless supplied here." }
+                    allow_delegation: { type: boolean }
+                    thinking_budget_tokens: { type: integer, description: "Negative clears to the global default; omitted inherits the source." }
+                    persona: { type: string }
+                    mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
       responses:
         "201":
           description: Created
@@ -1300,6 +1305,7 @@ paths:
               properties:
                 overrides:
                   type: object
+                  description: "Accepts the same override fields as POST /tasks/{task_id}/rerun, including files and file_names."
       responses:
         "201":
           description: Created

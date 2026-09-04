@@ -1,6 +1,11 @@
 package handlers
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,4 +180,62 @@ func TestApplyRerunOverrides(t *testing.T) {
 			t.Fatalf("explicit empty MCP selection should clear, got %+v", tc.MCPSelection)
 		}
 	})
+}
+
+// Exercise the wire format as well as the shared create validator: omitted,
+// empty, and replacement attachments must not collapse to the same operation.
+func TestRerunAttachmentOverrides(t *testing.T) {
+	h := newValidateTestHandlers()
+	h.config.DataDir = t.TempDir()
+	uploads := filepath.Join(h.config.DataDir, "temp_uploads")
+	if err := os.MkdirAll(uploads, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"original.csv", "replacement.csv"} {
+		if err := os.WriteFile(filepath.Join(uploads, name), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := &models.Task{Prompt: "review attachments", Files: []string{"original.csv"}, FileNames: []string{"report.csv"}}
+	cases := []struct {
+		name, body   string
+		files, names []string
+		wantError    string
+	}{
+		{name: "inherit", body: `{}`, files: source.Files, names: source.FileNames},
+		{name: "clear", body: `{"overrides":{"files":[]}}`, files: []string{}},
+		{name: "replace", body: `{"overrides":{"files":["replacement.csv"]}}`, files: []string{"replacement.csv"}},
+		{name: "replace with logical names", body: `{"overrides":{"files":["replacement.csv"],"file_names":["new.csv"]}}`, files: []string{"replacement.csv"}, names: []string{"new.csv"}},
+		{name: "missing upload", body: `{"overrides":{"files":["missing.csv"]}}`, wantError: "file not found"},
+		{name: "path traversal", body: `{"overrides":{"files":["../outside"]}}`, wantError: "invalid file name"},
+		{name: "logical name mismatch", body: `{"overrides":{"files":["replacement.csv"],"file_names":["one.csv","two.csv"]}}`, wantError: "pair 1:1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var req taskRerunRequest
+			if err := json.Unmarshal([]byte(c.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			tc, err := buildRerunTaskCreate(source, false, req.Overrides, time.UTC)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = h.validateTaskCreate(&tc)
+			if c.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantError) {
+					t.Fatalf("validation = %v, want %q", err, c.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(tc.Files, c.files) || !reflect.DeepEqual(tc.FileNames, c.names) {
+				t.Fatalf("attachments = %v / %v, want %v / %v", tc.Files, tc.FileNames, c.files, c.names)
+			}
+			if source.Files[0] != "original.csv" || source.FileNames[0] != "report.csv" {
+				t.Fatal("source attachments changed")
+			}
+		})
+	}
 }
