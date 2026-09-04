@@ -454,6 +454,21 @@ func TestProjectMemoryManagement(t *testing.T) {
 		t.Error("promoting another user's memory must fail")
 	}
 
+	// A PENDING PROPOSAL is not promotable either (source <> 'proposed'). It is
+	// not a memory yet — it is a question the user has not answered — and
+	// moving it would publish to the whole team something they never accepted
+	// even for themselves. The way to put a proposal in front of the team is
+	// AcceptMemoryProposalIntoProject, below, which is an approval.
+	pending, err := f.s.CreateMemoryProposal(f.ctx, "bob@x.com", "", MemoryProposalParams{
+		Content: "bob is interviewing elsewhere", Kind: "fact",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.MoveMemoryToProject(f.ctx, "bob@x.com", pending.ID, f.project.ID); err == nil {
+		t.Error("an unanswered proposal must not be promotable into a project")
+	}
+
 	// A proposal can be accepted straight into the project.
 	prop, err := f.s.CreateMemoryProposal(f.ctx, "bob@x.com", "", MemoryProposalParams{
 		Content: "settlement is T+1", Kind: "fact",
