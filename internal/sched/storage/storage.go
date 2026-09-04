@@ -686,7 +686,7 @@ func (s *Storage) GetUserByUsername(username string) (*models.User, error) {
 
 // EnsureAdminUser provisions (or promotes) username as an admin so a bootstrap
 // operator reaches the Operations Center through the shared chat session cookie
-// without a manual `fleet-admin sched user add` step (#458). username is the
+// without a manual `fleet sched user add` step (#458). username is the
 // lowercased email the header-trust/cookie path resolves against (lookupMember).
 // Idempotent and config-authoritative: an existing admin is left untouched, an
 // existing non-admin is promoted to admin, and a missing user is created with a
@@ -1501,7 +1501,7 @@ func (s *Storage) DeadLetterTaskWithContext(ctx context.Context, taskID, nodeID 
 }
 
 // GetDeadLetteredTasks returns dead-lettered tasks (#253), newest-quarantined
-// first, for the DLQ review listing (`fleet-admin sched dlq list`). limit/offset
+// first, for the DLQ review listing (`fleet sched dlq list`). limit/offset
 // paginate; a non-positive limit returns all matching rows.
 func (s *Storage) GetDeadLetteredTasks(ctx context.Context, limit, offset int) ([]*models.Task, error) {
 	return s.db.GetDeadLetteredTasks(ctx, limit, offset)

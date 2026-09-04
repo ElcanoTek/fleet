@@ -21,7 +21,7 @@
 # changed. Services self-migrate on restart, so this script NEVER runs
 # application migrations.
 #
-# Invoked by `fleet-admin update`, but also runnable directly on the host.
+# Invoked by `fleet update`, but also runnable directly on the host.
 #
 # Patterned after moc's + gig's scripts/update.sh, including the "re-exec the
 # fresh copy when update.sh itself changed during the pull" trick: bash holds the
@@ -121,8 +121,8 @@ CLIENT_DIR_EXPLICIT=0
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 # Where the running unit's binaries live. Resolved (in order): --install-dir /
 # $FLEET_INSTALL_DIR, else the dir of the unit's ExecStart, else /opt/fleet. The
-# freshly built $SRC_DIR/{fleet,fleet-admin} are installed here so the restart
-# actually runs the new code (a build alone leaves the live ExecStart untouched).
+# The freshly built $SRC_DIR/fleet is installed here so the restart actually
+# runs the new code (a build alone leaves the live ExecStart untouched).
 INSTALL_DIR="${FLEET_INSTALL_DIR:-}"
 NO_PULL="${FLEET_UPDATE_NO_PULL:-0}"
 # REEXEC is an INTERNAL marker set only by the self-update re-exec below (never a
@@ -388,11 +388,15 @@ if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
   fi
 else
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would: git fetch origin && fast-forward the current branch"
+    info "[dry-run] would: git fetch --tags origin && fast-forward the current branch"
     after_sha="$before_sha"
     target_branch="$(git rev-parse --abbrev-ref HEAD)"
   else
-    git fetch --quiet origin
+    # --tags is explicit rather than relying on git's tag-following: the build
+    # stamps its version from the release tags (docs/VERSIONING.md), so a
+    # checkout that fetched commits but not tags would rebuild and then report
+    # `dev+g<sha>` instead of the release it is actually running.
+    git fetch --quiet --tags origin
     target_branch="${BRANCH_OVERRIDE:-$(git rev-parse --abbrev-ref HEAD)}"
     # Refuse to act on a detached HEAD: we need a named branch both so
     # origin/$target_branch resolves and so the checkout stays reattached.
@@ -1088,8 +1092,10 @@ if [[ -n "$web_origin" ]]; then
   fi
 fi
 if [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
-  info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
+  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet"
+  info "[dry-run] would install fleet → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
+  info "[dry-run] would remove a leftover fleet-admin shim from the install dir and /usr/local/bin, if present"
+  info "[dry-run] would refresh /etc/profile.d/fleet-motd.sh (login banner) if it differs from deploy/fleet-motd.sh"
   info "[dry-run] would refresh /usr/local/bin/fleet-web-start.sh and set FLEET_NODE_BIN in /etc/fleet/fleet-web.env"
   info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env, on the node+npm the gate resolved above"
   info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
@@ -1097,9 +1103,9 @@ else
   require_go_toolchain
 
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
-  [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
-    || die "make build did not emit ${SRC_DIR}/fleet + ${SRC_DIR}/fleet-admin"
-  ok "fleet + fleet-admin binaries built"
+  [[ -x "$SRC_DIR/fleet" ]] \
+    || die "make build did not emit ${SRC_DIR}/fleet"
+  ok "fleet binary built"
 
   # Install the freshly built binaries to the unit's ExecStart location so the
   # restart below actually runs the NEW code. Without this the build is a no-op
@@ -1125,11 +1131,56 @@ else
   # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
   if [[ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd || echo "$INSTALL_DIR")" == "$SRC_DIR" ]]; then
     info "install dir == source checkout (${SRC_DIR}) — running in place, no copy needed."
-  elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" 2>/dev/null \
-       && install -D -m 0755 "$SRC_DIR/fleet-admin" "$INSTALL_DIR/fleet-admin" 2>/dev/null; then
-    ok "installed fleet + fleet-admin → ${INSTALL_DIR}"
+  elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" 2>/dev/null; then
+    ok "installed fleet → ${INSTALL_DIR}"
   else
     die "could not install binaries into ${INSTALL_DIR} (need root? set --install-dir or FLEET_INSTALL_DIR) — live binary left in place"
+  fi
+
+  # Evict the retired `fleet-admin` shim (ADR-0060). Deleting it from the repo
+  # is not what removes it from a BOX: a copy installed by an earlier update
+  # keeps sitting on PATH, still runs, and — because it is never rebuilt again —
+  # answers `fleet-admin update` with however old the code was on the day it was
+  # last installed. A stale operator CLI that silently does the wrong thing is
+  # worse than a missing one, so the update that retires the shim is also the
+  # update that removes it. `fleet <verb>` has been the supported spelling since
+  # #461 and does everything it did.
+  # `-e || -L` and not just `-e`: bootstrap.sh symlinked /usr/local/bin/fleet-admin
+  # at $INSTALL_DIR/fleet-admin, so removing the target first leaves a DANGLING
+  # symlink — for which `-e` is false. Testing only `-e` would leave the broken
+  # link on PATH, which is the one outcome worse than leaving the stale binary.
+  for stale in "$INSTALL_DIR/fleet-admin" /usr/local/bin/fleet-admin; do
+    [[ -e "$stale" || -L "$stale" ]] || continue
+    if rm -f "$stale" 2>/dev/null; then
+      ok "removed the retired fleet-admin shim: ${stale} (use \`fleet <verb>\`)"
+    else
+      warn "could not remove the retired fleet-admin shim at ${stale} (need root?) — it is stale, will never be rebuilt, and should be deleted by hand"
+    fi
+  done
+
+  # The login banner hook (#461). `fleet motd` renders dynamically from the
+  # installed binary, so the BANNER was never stale — but the /etc/profile.d
+  # shim that invokes it is shipped content that only scripts/bootstrap.sh ever
+  # installed. A box provisioned before the hook existed never got one, and an
+  # edit to deploy/fleet-motd.sh reached no existing box: the one file in the
+  # deploy set with no refresh path. Same treatment as fleet-web-start.sh below
+  # — shipped content with no operator-tunable parts, refreshed unconditionally,
+  # and never fatal: a login banner must not be able to fail an update.
+  #
+  # cmp-gated so a re-run is silent rather than announcing a no-op every time.
+  # The MODE is part of "current", not just the bytes: profile.d is sourced by
+  # every login shell as the logging-in user, so a hook that drifted to 0600 is
+  # unreadable to everyone but root and the banner stays broken — while a
+  # content-only comparison would report it current and never reinstall it.
+  if [[ -f "$SRC_DIR/deploy/fleet-motd.sh" ]] && [[ -d /etc/profile.d ]]; then
+    if cmp -s "$SRC_DIR/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh \
+      && [[ "$(stat -c '%a' /etc/profile.d/fleet-motd.sh 2>/dev/null)" == "644" ]]; then
+      : # already current
+    elif install -D -m 0644 "$SRC_DIR/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh 2>/dev/null; then
+      ok "refreshed /etc/profile.d/fleet-motd.sh (login banner)"
+    else
+      warn "could not refresh /etc/profile.d/fleet-motd.sh (need root?) — the login banner may be stale or missing"
+    fi
   fi
 
   if [[ -f "$SRC_DIR/web/package.json" ]]; then
@@ -1647,7 +1698,7 @@ say
 # bundle — so an update that advanced fleet while the bundle stood still is a
 # half-update, and saying "✓ fleet updated" alone is how that goes unnoticed.
 report_bundle_state
-say "  Health:    ${c_dim}fleet-admin status${c_reset}"
+say "  Health:    ${c_dim}fleet status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
 if [[ "$before_sha" != "$after_sha" ]]; then
   say "  Roll back: ${c_dim}cd $SRC_DIR && git checkout $before_sha && scripts/update.sh --no-pull${c_reset}"

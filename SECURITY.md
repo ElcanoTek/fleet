@@ -33,9 +33,14 @@ any public disclosure.
 
 ## Supported versions
 
-fleet is pre-1.0 and under active development. Only the latest `main` is
-supported — fixes land on `main` and there are no maintained release branches
-yet. Please reproduce against current `main` before reporting.
+fleet ships from a rolling release train: every green push to `main` is tagged
+`vYYYY.MM.DD.N` automatically, and **only the newest release is supported**.
+Fixes land on `main` and reach operators on their next `fleet update`; there are
+no maintained release branches and no backports to an older date. Please
+reproduce against current `main` (or the newest release tag) before reporting,
+and include the output of `fleet version` — it names the release the box is on
+and how many commits past it, which is exactly what we need to tell "already
+fixed" from "still broken". See [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
 ## Secret scanning
 

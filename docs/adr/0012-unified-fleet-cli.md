@@ -1,6 +1,6 @@
 # ADR-0012: One `fleet` binary — `serve` plus the operator CLI (back-compat preserved)
 
-- **Status:** Accepted
+- **Status:** Accepted; the shim removed by ADR-0060 (trigger re-anchored by ADR-0059)
 - **Date:** 2026-06-30
 - **Deciders:** fleet maintainers
 
@@ -50,6 +50,27 @@ There is **one `fleet` binary** (`cmd/fleet`) with subcommand dispatch
   the first release after 1.0.0.** Until then it stays, and it is 20 lines that
   fork no logic — it shares `internal/admincli.Run` with `fleet`, so it adds no
   second governance path.
+
+  **Discharged 2026-09-04 by [ADR-0060](0060-remove-the-fleet-admin-shim.md).**
+  The shim is gone: `cmd/fleet-admin` is deleted, the build emits one binary, and
+  `fleet update` / `fleet doctor` delete a copy already installed on a box —
+  the step every version of this checklist missed, and without which "removed"
+  would have meant "removed from the repo, still on your PATH running old code".
+  `fleet <verb>` is the only operator CLI. Everything below is the record of how
+  the window was reasoned about; the window itself no longer exists.
+
+  **Re-anchored 2026-09-04 by [ADR-0059](0059-date-based-rolling-releases.md).**
+  The 2026-08-22 amendment above diagnosed the problem correctly and then picked
+  a trigger with the same defect. There is no 1.0.0 and there will not be one:
+  releases are now date-based (`vYYYY.MM.DD.N`) and tagged automatically on every
+  green push to `main`, so "the first release after 1.0.0" is a condition that
+  can never be met — the second unanchored clock in a row. **The shim is removed
+  in the first release on or after 2026-12-01**, which is a real date a real tag
+  passes. Everything else above stands: removal is still the coordinated change
+  across four scripts and two test assertions that the amendment describes, and
+  `scripts/check_release_version_test.go` now asserts every file carrying this
+  window states the dated form, so the eight restatements cannot drift apart
+  again.
 
 `make install` puts `fleet` (and the shim) on `PATH` — the actual fix for "isn't
 installed" on a dev box. The systemd unit is **not** force-migrated to

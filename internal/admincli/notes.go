@@ -14,7 +14,7 @@ import (
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 )
 
-// cmdNotes dispatches `fleet-admin notes ...` — the admin notes wiki. The CLI
+// cmdNotes dispatches `fleet notes ...` — the admin notes wiki. The CLI
 // runs in-process with the sched pool (no HTTP hop). Body content arrives on
 // stdin (CI-friendly, matches the mcp-account / create-user convention).
 //

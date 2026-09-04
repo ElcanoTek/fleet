@@ -13,7 +13,7 @@ import (
 // missing user as admin, promotes an existing non-admin, leaves an existing
 // admin untouched, and treats a blank username as a no-op. This is what lets a
 // configured operator reach the Operations Center through the chat session
-// cookie without a manual `fleet-admin sched user add`.
+// cookie without a manual `fleet sched user add`.
 func TestEnsureAdminUser(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()

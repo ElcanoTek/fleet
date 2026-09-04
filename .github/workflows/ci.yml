@@ -448,7 +448,7 @@ jobs:
         # The runner ships client 16; the postgres service is server 18, and
         # pg_dump refuses to dump a newer server ("server version mismatch"). Pull
         # the matching client from PGDG so the backup/restore round-trip test
-        # (cmd/fleet-admin) runs for real.
+        # (internal/admincli/backup_test.go) runs for real.
         #
         # NOT best-effort, and that is a deliberate change. This step used to end
         # in `|| echo "... will skip on version mismatch"`, which meant an

@@ -371,7 +371,7 @@ func decodeImportEnvelope(r *http.Request, env *models.TaskExportEnvelope) error
 		return yaml.Unmarshal(body, env)
 	}
 	// Try JSON first; fall back to YAML for a body that isn't valid JSON. This
-	// makes `fleet-admin task import --from tasks.yaml | curl -T` work without
+	// makes `fleet task import --from tasks.yaml | curl -T` work without
 	// the caller having to set Content-Type.
 	if err := json.Unmarshal(body, env); err == nil {
 		return nil

@@ -213,7 +213,7 @@ func isTerminal(f *os.File) bool {
 	return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
 }
 
-// cmdBackup handles `fleet-admin backup [--db=chat|sched|all] [--out DIR]`.
+// cmdBackup handles `fleet backup [--db=chat|sched|all] [--out DIR]`.
 func cmdBackup(argv []string) int {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	db := fs.String("db", "all", "which database to back up: chat|sched|all")
@@ -265,7 +265,7 @@ func cmdBackup(argv []string) int {
 	return 0
 }
 
-// cmdRestore handles `fleet-admin restore --db=chat|sched FILE`. Restore is
+// cmdRestore handles `fleet restore --db=chat|sched FILE`. Restore is
 // single-DB on purpose: it overwrites a live database, so the operator names the
 // target explicitly (no --db=all foot-gun).
 func cmdRestore(argv []string) int {
@@ -335,7 +335,7 @@ func selectDBs(db string) ([]string, error) {
 }
 
 // dsnFor resolves the DSN for a named DB, reusing the same precedence the other
-// fleet-admin verbs use (flag → FLEET_<DB>_DATABASE_URL → DATABASE_URL).
+// fleet verbs use (flag → FLEET_<DB>_DATABASE_URL → DATABASE_URL).
 func dsnFor(name, chatURL, schedURL string) (string, error) {
 	switch name {
 	case "chat":

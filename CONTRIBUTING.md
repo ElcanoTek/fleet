@@ -12,7 +12,7 @@ your first sandbox session (a passing `make test` and one streamed chat turn).
 fleet is a Go monorepo with a Next.js frontend:
 
 ```
-cmd/        entrypoints (the one unified fleet binary — server + operator CLI; fleet-admin is a transitional deprecation shim; helpers)
+cmd/        entrypoints (the one fleet binary — server + operator CLI; helpers)
 internal/   the Go implementation (agent runtime, sandbox, MCP, scheduler, HTTP API, …)
 web/        the Next.js app (the /chat and /orchestrator views)
 config/     the generic client-config bundle baked into the repo (config/default)
@@ -23,8 +23,8 @@ scripts/    bootstrap / update / status and e2e helpers
 
 See the top-level `README.md` for the architecture overview. The server runs via
 `fleet serve` (bare `fleet` also serves, for back-compat); all other verbs are the
-operator CLI. (`fleet-admin <verb>` still works but is deprecated; it is
-removed in the first release after 1.0.0 — see `docs/adr/0012-unified-fleet-cli.md`.)
+operator CLI. (The `fleet-admin` shim was removed — see
+`docs/adr/0060-remove-the-fleet-admin-shim.md`.)
 
 ## Prerequisites
 
@@ -213,6 +213,30 @@ If the trees differ, do **not** use `-s ours` — resolve the divergence for
 real first (dev commits that landed mid-promotion are content main genuinely
 lacks; `-s ours` from main's side would be wrong, and from dev's side it is
 only safe once you have confirmed main brings nothing new).
+
+### Releases (there is nothing to do)
+
+You never cut a release, tag one, or bump a version. Every promotion that goes
+green on `main` is tagged `vYYYY.MM.DD.N` by the `Release` workflow
+([`.github/workflows/release.yml`](.github/workflows/release.yml)) — UTC date,
+plus an ordinal because several promotions in a day is normal — and published as
+a GitHub release whose notes are generated from the commits since the previous
+tag. There is no `VERSION` file to touch and no semver decision to make; a red
+`main` simply gets no tag, and the next green push takes the next ordinal.
+
+Two consequences for a PR:
+
+- **Do not add a hand-authored version number** anywhere — not in a doc, a
+  chart, a `package.json`, or a Go string. Builds derive their identity from the
+  tags (`scripts/version.sh`); `scripts/check_release_version_test.go` fails if
+  one comes back.
+- **Date your deprecation windows**, never number them: "removed in the first
+  release on or after `YYYY-MM-DD`". A window keyed to a release number can
+  never come due here.
+
+`CHANGELOG.md` is still yours to update for a user-visible change — it carries
+the *why* that generated notes cannot. See
+[`docs/VERSIONING.md`](docs/VERSIONING.md).
 
 ## Commit messages
 

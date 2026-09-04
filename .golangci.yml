@@ -114,8 +114,8 @@ linters:
           # Production call sites use exec.CommandContext rather than
           # exec.Command — cmd/fleet/{mcp_broker_runtime,health,validate_config}.go
           # and internal/admincli/backup.go. (This note used to name
-          # cmd/fleet-admin, which has held no exec call since the CLI was
-          # unified in #461.)
+          # cmd/fleet-admin, which held no exec call after the CLI was unified
+          # in #461 and was removed outright in ADR-0060.)
           - noctx
       # Exclude shadow checking for err variables (common pattern)
       - text: 'shadow: declaration of "err"'

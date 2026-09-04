@@ -5,8 +5,8 @@
 # builds, installs, and `systemctl restart`s in one shot; this script wraps that
 # same install+restart with two operator-grade guarantees update.sh does NOT give:
 #
-#   1. BACKUP + AUTO-ROLLBACK. The live fleet + fleet-admin binaries are copied
-#      aside BEFORE the new ones are installed. If the new process fails to pass
+#   1. BACKUP + AUTO-ROLLBACK. The live fleet binary is copied
+#      aside BEFORE the new one is installed. If the new process fails to pass
 #      /readyz after restart, this script reinstalls the backups and restarts —
 #      so a bad build self-heals to the last-known-good binary instead of leaving
 #      the box in a crash loop.
@@ -169,20 +169,20 @@ if [[ "$ASSUME_YES" != "1" && "$DRY_RUN" != "1" && -t 0 ]]; then
 fi
 
 # ── 1. build the new binaries (unless --no-build) ────────────────────────────
-step "1/5  Building fleet + fleet-admin"
+step "1/5  Building fleet"
 if [[ "$NO_BUILD" == "1" ]]; then
   info "--no-build: using the binaries already in ${SRC_DIR}"
-  if [[ "$DRY_RUN" != "1" && ( ! -x "$SRC_DIR/fleet" || ! -x "$SRC_DIR/fleet-admin" ) ]]; then
-    die "--no-build but ${SRC_DIR}/fleet or fleet-admin is missing — build first (make build)"
+  if [[ "$DRY_RUN" != "1" && ! -x "$SRC_DIR/fleet" ]]; then
+    die "--no-build but ${SRC_DIR}/fleet is missing — build first (make build)"
   fi
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
+  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet"
 else
   require_go_toolchain
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binaries left in place"
-  [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
-    || die "make build did not emit ${SRC_DIR}/fleet + ${SRC_DIR}/fleet-admin"
-  ok "built fleet + fleet-admin"
+  [[ -x "$SRC_DIR/fleet" ]] \
+    || die "make build did not emit ${SRC_DIR}/fleet"
+  ok "built fleet"
 fi
 
 # ── resolve INSTALL_DIR (the live binaries' location) ────────────────────────
@@ -214,7 +214,7 @@ if [[ -z "$INSTALL_DIR" ]]; then
     INSTALL_DIR="/opt/fleet"
   fi
 fi
-info "live binaries: ${INSTALL_DIR}/{fleet,fleet-admin}"
+info "live binary: ${INSTALL_DIR}/fleet"
 
 # Detect the in-place dev case (source == install dir): there is nothing to back
 # up or swap, so rollback is impossible. update.sh skips the copy here too.
@@ -229,13 +229,12 @@ BACKUP_DIR=""
 if [[ "$IN_PLACE" == "1" ]]; then
   info "install dir == source checkout (${SRC_DIR}) — running in place; no backup/swap."
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would copy ${INSTALL_DIR}/{fleet,fleet-admin} → ${INSTALL_DIR}/.fleet-upgrade-backup/"
+  info "[dry-run] would copy ${INSTALL_DIR}/fleet → ${INSTALL_DIR}/.fleet-upgrade-backup/"
 elif [[ -x "$INSTALL_DIR/fleet" ]]; then
   BACKUP_DIR="$INSTALL_DIR/.fleet-upgrade-backup"
   install -d -m 0755 "$BACKUP_DIR" || die "cannot create backup dir ${BACKUP_DIR} (need root? set --install-dir)"
   cp -p "$INSTALL_DIR/fleet" "$BACKUP_DIR/fleet" || die "cannot back up ${INSTALL_DIR}/fleet"
-  [[ -x "$INSTALL_DIR/fleet-admin" ]] && cp -p "$INSTALL_DIR/fleet-admin" "$BACKUP_DIR/fleet-admin"
-  ok "backed up live binaries → ${BACKUP_DIR}"
+  ok "backed up the live binary → ${BACKUP_DIR}"
 else
   warn "no existing ${INSTALL_DIR}/fleet to back up — proceeding, but rollback will be unavailable."
 fi
@@ -245,10 +244,9 @@ step "3/5  Installing the new binaries"
 if [[ "$IN_PLACE" == "1" ]]; then
   info "running in place — the freshly built binaries are already at ${INSTALL_DIR}."
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would install ${SRC_DIR}/{fleet,fleet-admin} → ${INSTALL_DIR}/ (0755)"
-elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" \
-     && install -D -m 0755 "$SRC_DIR/fleet-admin" "$INSTALL_DIR/fleet-admin"; then
-  ok "installed new binaries → ${INSTALL_DIR}"
+  info "[dry-run] would install ${SRC_DIR}/fleet → ${INSTALL_DIR}/ (0755)"
+elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet"; then
+  ok "installed the new binary → ${INSTALL_DIR}"
 else
   die "could not install binaries into ${INSTALL_DIR} (need root? set --install-dir)"
 fi
@@ -315,11 +313,10 @@ rollback() {
     return
   fi
   step "Rolling back to the previous binary (${BACKUP_DIR})"
-  if install -m 0755 "$BACKUP_DIR/fleet" "$INSTALL_DIR/fleet" \
-     && { [[ ! -x "$BACKUP_DIR/fleet-admin" ]] || install -m 0755 "$BACKUP_DIR/fleet-admin" "$INSTALL_DIR/fleet-admin"; }; then
-    ok "restored previous binaries"
+  if install -m 0755 "$BACKUP_DIR/fleet" "$INSTALL_DIR/fleet"; then
+    ok "restored the previous binary"
   else
-    warn "could not restore the backup binaries — restore manually from ${BACKUP_DIR}"
+    warn "could not restore the backup binary — restore manually from ${BACKUP_DIR}"
     return
   fi
   if restart_service; then
@@ -357,7 +354,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
 elif ! command -v systemctl >/dev/null 2>&1; then
   info "no systemd — skipping the readiness gate (nothing was restarted by this script)."
 elif ! command -v curl >/dev/null 2>&1; then
-  warn "curl not found — cannot poll ${HEALTH_URL}. Verify health manually: fleet-admin status"
+  warn "curl not found — cannot poll ${HEALTH_URL}. Verify health manually: fleet status"
 else
   healthy=0
   start="$(date +%s)"
@@ -410,7 +407,7 @@ else
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$_banner_c" "$c_reset"
 say
-say "  Health:    ${c_dim}fleet-admin status${c_reset}"
+say "  Health:    ${c_dim}fleet status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
 if [[ -n "$BACKUP_DIR" && "$DRY_RUN" != "1" ]]; then
   say "  Roll back: ${c_dim}install -m0755 ${BACKUP_DIR}/fleet ${INSTALL_DIR}/fleet && systemctl restart ${SERVICE_NAME}${c_reset}"

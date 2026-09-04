@@ -1,7 +1,7 @@
 {
   "name": "fleet-rampart-service",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.0.0",
   "description": "Reference Rampart PII detection service for fleet (docs/PII-REDACTION.md)",
   "type": "module",
   "main": "server.mjs",

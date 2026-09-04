@@ -22,7 +22,7 @@ func parseTaskID(raw string) (uuid.UUID, bool) {
 	return id, true
 }
 
-// taskMemories dispatches `fleet-admin task memories ...` — operator inspection
+// taskMemories dispatches `fleet task memories ...` — operator inspection
 // and clearing of a scheduled task's persistent memory (#198). Memory is written
 // automatically by a Captain's Log task's remember tool; these subcommands let an
 // operator observe and reset it.
@@ -127,7 +127,7 @@ func taskMemoriesDelete(argv []string) int {
 		return errf(1, "a valid task id is required")
 	}
 	if strings.TrimSpace(key) == "" {
-		return errf(1, "a key is required: fleet-admin task memories delete <task_id> <key>")
+		return errf(1, "a key is required: fleet task memories delete <task_id> <key>")
 	}
 	st, closeStore, code := openNotesStore(*dbURL)
 	if st == nil {

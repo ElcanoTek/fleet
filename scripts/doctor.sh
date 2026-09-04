@@ -244,7 +244,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate, podman info as ${SERVICE_USER}"
-  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
+  info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
@@ -757,6 +757,52 @@ else
     fi
   fi
   [[ "$units_changed" == "1" ]] && systemctl daemon-reload
+
+  # The login banner hook (#461). `fleet motd` renders dynamically from the
+  # installed binary, so what drifts is never the banner's CONTENT — it is this
+  # /etc/profile.d shim, which until now only scripts/bootstrap.sh ever wrote. A
+  # box provisioned before the hook existed has none, and an edit to
+  # deploy/fleet-motd.sh reached no existing box. Same treatment as the shim
+  # above: shipped content with no operator-tunable parts, so it is installed
+  # rather than merely reported. No restart and no daemon-reload — profile.d is
+  # read at the next login.
+  # The retired `fleet-admin` shim (ADR-0060). Deleting it from the repo does
+  # not remove it from a BOX: bootstrap/update installed a copy at
+  # $INSTALL_DIR/fleet-admin and symlinked /usr/local/bin/fleet-admin at it, and
+  # nothing ever removed either. Left alone it stays on PATH and still runs —
+  # forever, against whatever code was current the day it was last built, which
+  # is a worse failure than a missing command. doctor is the repair pass, so it
+  # repairs this too. `-e || -L` because removing the target first leaves a
+  # DANGLING symlink, for which `-e` is false.
+  for stale in "$INSTALL_DIR/fleet-admin" /usr/local/bin/fleet-admin; do
+    if [[ -e "$stale" || -L "$stale" ]]; then
+      if [[ "$CHECK_ONLY" == "1" ]]; then
+        fail "${stale} is the retired fleet-admin shim — stale, never rebuilt, and still on PATH. Use \`fleet <verb>\`; a doctor run without --check removes it."
+      else
+        rm -f "$stale" && fixed "removed the retired fleet-admin shim: ${stale}" \
+          || fail "could not remove ${stale}"
+      fi
+    fi
+  done
+
+  motd_src="$SRC_DIR/deploy/fleet-motd.sh"
+  motd_dst="/etc/profile.d/fleet-motd.sh"
+  # The MODE is part of "matches", not just the bytes: profile.d is sourced by
+  # every login shell as the logging-in user, so a hook that drifted to 0600 is
+  # unreadable to everyone but root and the banner stays broken — while a
+  # content-only comparison reports it current and neither verb reinstalls it.
+  motd_mode() { stat -c '%a' "$1" 2>/dev/null || echo '?'; }
+  if [[ -f "$motd_src" && -d /etc/profile.d ]]; then
+    if [[ -f "$motd_dst" ]] && cmp -s "$motd_src" "$motd_dst" && [[ "$(motd_mode "$motd_dst")" == "644" ]]; then
+      pass "fleet-motd.sh matches deploy/"
+    elif [[ "$CHECK_ONLY" == "1" ]]; then
+      fail "${motd_dst} missing, drifted, or not mode 0644 — the login banner is stale, absent, or unreadable to non-root logins (diff: $motd_dst $motd_src)"
+    else
+      install -D -m 0644 "$motd_src" "$motd_dst" \
+        && fixed "installed ${motd_dst} from deploy/ (login banner)" \
+        || fail "could not install ${motd_dst}"
+    fi
+  fi
 
   # Now that any reload has happened, check what systemd ACTUALLY resolved —
   # not what we wrote. Every earlier check here compares FILES, which is a

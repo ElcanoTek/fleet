@@ -17,7 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 )
 
-// cmdStatus is the `fleet-admin status` (a.k.a. doctor) health report. It runs a
+// cmdStatus is the `fleet status` (a.k.a. doctor) health report. It runs a
 // set of read-only checks against the local deployment and prints a ✓/✗ line per
 // check, exiting non-zero if ANY required check failed. It is safe to run any
 // time: it pings the databases (no migrations, no writes), runs a throwaway
@@ -256,7 +256,7 @@ func checkService(r *report, name string) {
 
 // report accumulates the ✓/✗ check lines and the failure count. The per-check
 // lines go to `out` and the header/summary lines to `summary`; newReport wires
-// both to the terminal (stdout/stderr) so `fleet-admin status` is unchanged.
+// both to the terminal (stdout/stderr) so `fleet status` is unchanged.
 // `fleet diagnose` reuses the SAME check helpers by pointing both writers at an
 // in-memory buffer (see captureHealth in diagnose.go) — there is no second copy
 // of the health logic.
@@ -267,13 +267,13 @@ type report struct {
 }
 
 // newReport returns a report that prints check lines to stdout and the
-// header/summary to stderr — the original `fleet-admin status` behavior.
+// header/summary to stderr — the original `fleet status` behavior.
 func newReport() *report {
 	return &report{out: os.Stdout, summary: os.Stderr}
 }
 
 func (r *report) head() {
-	fmt.Fprintln(r.summary, "fleet-admin status — deployment health")
+	fmt.Fprintln(r.summary, "fleet status — deployment health")
 }
 
 func (r *report) pass(label, detail string)     { fmt.Fprintf(r.out, "✓ %-22s %s\n", label, detail) }

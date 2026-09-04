@@ -101,7 +101,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags "-X github.com/ElcanoTek/fleet/internal/version.version=$(cat VERSION)" -o /out/fleet ./cmd/fleet
+# The version stamp comes from the release tags via scripts/version.sh, so build
+# from a checkout WITH tags (`git clone` brings them; a `--depth`/`--no-tags`
+# clone or a source tarball stamps the honest `dev` sentinel instead). See
+# docs/VERSIONING.md.
+RUN CGO_ENABLED=0 go build -ldflags "-X github.com/ElcanoTek/fleet/internal/version.version=$(scripts/version.sh describe)" -o /out/fleet ./cmd/fleet
 
 # ── runtime stage ──
 FROM registry.fedoraproject.org/fedora-minimal:latest

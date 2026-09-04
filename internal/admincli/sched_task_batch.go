@@ -33,7 +33,7 @@ var _ batchTaskStore = (*storage.Storage)(nil)
 // tasks are inserted while invalid ones are skipped; the returned result lists
 // per-task successes and failures so the CLI can print a summary.
 //
-// This mirrors sched task import's DB-direct seam (the fleet-admin CLI talks to
+// This mirrors sched task import's DB-direct seam (the fleet CLI talks to
 // the sched DB directly, not over HTTP), so the batch-create path exercises the
 // same storage.AddTaskBatch the POST /tasks/batch handler uses.
 func batchCreateTasks(ctx context.Context, st batchTaskStore, r io.Reader, atomic bool) (models.BatchTaskResult, error) {
@@ -141,7 +141,7 @@ func validateBatchTaskCreate(tc *models.TaskCreate) error {
 // without importing the handlers package (which would pull in HTTP deps).
 const MaxBatchSize = 100
 
-// schedTaskBatchCreate is the `fleet-admin sched task batch-create` subcommand.
+// schedTaskBatchCreate is the `fleet sched task batch-create` subcommand.
 // It reads a JSON array of TaskCreate objects from --from-file (or stdin when
 // the value is "-" or the flag is omitted), optionally runs in atomic mode, and
 // prints a summary table of created (with IDs) and failed (with indices and

@@ -1,0 +1,194 @@
+# Automatic date-based release tagging (ADR-0059, docs/VERSIONING.md).
+#
+# fleet ships from a rolling release train: `dev` integrates, every promotion
+# squash-merges into `main`, and every commit on `main` is a shippable release.
+# There is no release ceremony, no VERSION file to bump, no semver argument, and
+# NOBODY EVER TYPES A VERSION NUMBER — this workflow stamps the tag.
+#
+# Each release is `vYYYY.MM.DD.N` (UTC date, N counting that day's releases from
+# 1) — several a day is the normal case. scripts/version.sh owns the format and
+# derives N from the tags already on the repo; builds derive their own identity
+# from `git describe` against these tags, which is what makes the tag the only
+# artifact a release needs.
+#
+# WHY `workflow_run` RATHER THAN A JOB IN ci.yml: a release job would have to
+# `needs: [ci-gate]`, and scripts/check_gate_needs_test.go requires every job in
+# ci.yml to be in ci-gate's OWN needs — the two rules cannot both hold without a
+# dependency cycle, and the test is the more valuable of the pair (it is what
+# stops a red-but-not-required job). Keying off CI's completion instead gets the
+# same gate honestly: `conclusion == 'success'` covers the whole workflow, so it
+# is strictly no weaker than the `CI gate` job that reports inside it.
+#
+# Consequence, stated plainly: a push to `main` whose CI is red gets NO tag. That
+# is the intent — a rolling train releases what passed, and the next green push
+# takes the next ordinal. Nothing here can be run by hand to release a red tree.
+#
+# Second consequence, smaller: the ordinal records the order releases were
+# TAGGED, not the order the commits landed. Two pushes whose CI runs finish out
+# of order would take ordinals out of order. Accepted — an ordinal disambiguates
+# a day's releases, it is not a topological sort, and the tag still points at the
+# commit its own CI run certified.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Keyed to the COMMIT, not to "release".
+  #
+  # A single `release` group looks like the right answer — serialize, never
+  # cancel — and is not: GitHub keeps at most one running plus one pending run
+  # per group, and a newly queued run DISPLACES the pending one even when
+  # `cancel-in-progress` is false. Three green pushes landing while one tag job
+  # runs would drop the middle one, and a commit that passed CI would never be
+  # tagged — the exact invariant this workflow exists to hold.
+  #
+  # Keying on the head SHA means runs for different commits never contend at
+  # all, and the only thing the group still collapses is a re-run for the SAME
+  # commit, which is what it should collapse. Two commits tagging concurrently
+  # is then handled where it belongs: the retry loop below recomputes the
+  # ordinal against refetched tags when a push is rejected.
+  group: release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only a GREEN CI run on a real push to main. `workflow_dispatch` runs of
+    # ci.yml (which exist to re-produce the required check on a promotion PR
+    # whose webhook was dropped) carry a PR head ref and must not release.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == 'main' }}
+    permissions:
+      contents: write # creates the tag and the GitHub release
+    steps:
+      # Checks out the DEFAULT BRANCH, deliberately NOT the SHA from the event.
+      #
+      # This job runs with `contents: write` on a `workflow_run` trigger, so it
+      # holds a privileged token, and this step is the one place that puts code
+      # on disk that the next step then EXECUTES (scripts/version.sh). Checking
+      # out a ref taken from the event payload there is the untrusted-checkout
+      # escalation both scanners flag (CodeQL `actions/untrusted-checkout/high`,
+      # Semgrep `workflow-run-target-code-checkout`) — and they are right to,
+      # even though the job's `if:` already narrows the trigger to a push on
+      # main: a filter is a condition, not a boundary, and the fix that removes
+      # the sink is better than the waiver that argues about it.
+      #
+      # Nothing is lost. `fetch-depth: 0` brings the whole graph, so the
+      # certified SHA is present as an OBJECT to tag even though it is not what
+      # is checked out — and the next step proves it is on this branch before
+      # tagging it. So the code that runs is main's, and the commit that gets
+      # named is still exactly the one CI certified.
+      - name: Check out the default branch (trusted code) with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Tags are the ordinal's source of truth, so they must all be here;
+          # fetch-depth 0 also gives `git describe` a real commit graph.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Create and push the next date-based tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # The certified SHA is a tag TARGET here, never a checkout ref (see
+          # the step above). Prove it is actually on the branch we checked out
+          # before naming it: the event says CI passed on this commit, and this
+          # is what makes "and it is still part of main's history" a checked
+          # fact rather than a trusted claim. A force-push or a rewritten
+          # history lands here and fails loudly instead of minting a release
+          # tag on an orphaned commit.
+          if ! git merge-base --is-ancestor "${HEAD_SHA}" HEAD; then
+            echo "::error::${HEAD_SHA} is not an ancestor of the checked-out default branch. main was rewritten, or this run does not belong to it. Refusing to tag."
+            exit 1
+          fi
+
+          # Idempotence: a re-run of this workflow (or a CI re-run on a commit
+          # that already released) must not open a SECOND ordinal for the same
+          # tree. `released-at` answers "is there a release tag on this commit",
+          # strictly — a `v2026.09.04.1oops` tag would otherwise read as a
+          # release here and the real tag would never be cut.
+          #
+          # It reports the tag through the step outputs rather than exiting: the
+          # tag push and the release publication are two operations, and the
+          # second can fail on its own (a transient API error, a cancelled run).
+          # Exiting here without outputs would skip the publish step forever,
+          # leaving that tag permanently without its release and needing a human.
+          # The publish step is idempotent, so re-running is the recovery.
+          if existing="$(scripts/version.sh released-at "${HEAD_SHA}")" && [ -n "${existing}" ]; then
+            echo "::notice::${HEAD_SHA} is already tagged ${existing}; not re-tagging. Checking its release is published."
+            {
+              echo "tag=${existing}"
+              echo "released=true"
+            } >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Retry loop for the one race the concurrency group cannot rule out:
+          # a tag pushed between our `next` computation and our push (a manual
+          # push, or a queued run that started before our fetch). Recompute the
+          # ordinal against the refreshed tags rather than forcing ours.
+          for attempt in 1 2 3; do
+            tag="$(scripts/version.sh next)"
+            echo "attempt ${attempt}: tagging ${HEAD_SHA} as ${tag}"
+
+            git tag -a "${tag}" "${HEAD_SHA}" -m "fleet ${tag#v}
+
+          Rolling release, tagged automatically from the green CI run on main.
+          CI: ${RUN_URL}"
+
+            if git push origin "refs/tags/${tag}"; then
+              echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+              echo "released=true" >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
+
+            echo "::warning::pushing ${tag} was rejected; refetching tags and recomputing the ordinal"
+            git tag -d "${tag}"
+            git fetch --force --tags origin
+          done
+
+          echo "::error::could not push a release tag after 3 attempts."
+          exit 1
+        id: tag
+
+      - name: Publish the GitHub release
+        if: ${{ steps.tag.outputs.released == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Idempotent by construction: this step also runs on a re-run for a
+          # commit that was already tagged (see the step above), which is what
+          # recovers a tag whose publication failed the first time. `gh release
+          # create` errors on an existing release, so ask first.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::notice::release ${TAG} is already published; nothing to do."
+            exit 0
+          fi
+          # --generate-notes writes the notes from the commits/PRs since the
+          # previous tag, which is exactly the changelog for a rolling train —
+          # the reason CHANGELOG.md no longer carries a hand-curated release
+          # section (docs/VERSIONING.md).
+          gh release create "${TAG}" \
+            --title "fleet ${TAG#v}" \
+            --generate-notes \
+            --latest \
+            --verify-tag

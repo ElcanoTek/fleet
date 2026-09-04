@@ -34,7 +34,7 @@ type taskExportEnvelope struct {
 	Tasks   []*models.Task `json:"tasks"`
 }
 
-// cmdSchedTask dispatches `fleet-admin sched task list|export|import|set-model|set-credentials|set-description|set-limits`.
+// cmdSchedTask dispatches `fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
 		return errf(1, "usage: fleet sched task list|export|import|set-model|set-credentials|set-description|set-limits|tag|estimate|batch-create")
@@ -206,7 +206,7 @@ func taskModel(t *models.Task) string {
 // schedTaskEstimate prints a pre-submission cost forecast for a would-be task
 // without creating it (#233):
 //
-//	fleet-admin sched task estimate --model anthropic/claude-sonnet-4-5 \
+//	fleet sched task estimate --model anthropic/claude-sonnet-4-5 \
 //	    --max-iter 20 --prompt "Summarize all issues opened in the last 7 days"
 //
 // It is pure local computation over the same agentcore forecast the
@@ -280,7 +280,7 @@ func printForecast(fc agentcore.CostForecast) {
 
 // schedTaskTag adds and/or removes tags on a task (#212):
 //
-//	fleet-admin sched task tag <task_id> --add nightly --add prod --remove staging
+//	fleet sched task tag <task_id> --add nightly --add prod --remove staging
 func schedTaskTag(argv []string) int {
 	fs := flag.NewFlagSet("sched task tag", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")

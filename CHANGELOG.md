@@ -2,16 +2,158 @@
 
 All notable changes to fleet are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project aims to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+**This is a running log, not a version history.** fleet ships from a rolling
+release train: `dev` integrates, every promotion squash-merges into `main`, and
+**every green push to `main` is tagged `vYYYY.MM.DD.N` automatically** — several
+a day is normal, and nobody ever types a version number. There is no `VERSION`
+file and no semver bump, so there are no per-version sections here to curate;
+the notes *for a given release* are generated from the commits between its tag
+and the previous one, and appear on the GitHub release. See
+[`docs/VERSIONING.md`](docs/VERSIONING.md) and
+[ADR-0059](docs/adr/0059-date-based-rolling-releases.md).
 
-The current release number lives in the top-level [`VERSION`](VERSION) file — the
-single source of truth that the build stamps into both binaries (run
-`./fleet version` or `./fleet-admin version` to read it back). fleet has not cut
-a tagged release yet, so the history below starts at the Unreleased section; no
-prior versions are listed because none have shipped.
+What this file is for is the part a generated diff cannot say: **why** a change
+was made, what an operator has to do about it, and what deliberately did not
+ship. New entries go at the top of the section below. To find out which build a
+box is on, run `fleet version` — it prints the release plus how far past it the
+checkout is.
 
-## [Unreleased]
+Entry style follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)'s
+categories (Added / Changed / Fixed / Removed / Security). It does **not** follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html): a date says when a
+tree shipped, and makes no compatibility promise. A breaking change is announced
+in prose in its entry here — and in an ADR when it touches an invariant — rather
+than by a major-version bump.
+
+## Recent changes
+
+### Removed
+
+- **The `fleet-admin` shim is gone — and `fleet update` deletes the copy on your
+  box.** `fleet-admin <verb>` has been a 24-line forwarder to the same dispatch
+  `fleet <verb>` uses since #461, printing a deprecation notice on every
+  invocation. Its removal trigger never worked: "one release" when no release had
+  ever been cut, then "the first release after 1.0.0" on a train that will never
+  cut one, then a date. Waiting longer bought nobody anything — no unit, timer or
+  Helm template ever referenced it, nothing switches on `argv[0]`, and it was
+  never even equivalent (`task run` is dispatched by `cmd/fleet` before
+  `admincli`, so the shim could only print an explanation). So it is removed now,
+  and ADR-0012's dated window is discharged rather than restated for a third
+  time.
+
+  **`fleet-admin <verb>` stops working. Use `fleet <verb>` — same flags, same
+  behaviour.** Nothing on the box breaks by itself; a person or a script has to
+  type it. If you have one that does, that is the one-word fix.
+
+  The part every previous checklist missed: deleting the shim from the repo does
+  **not** remove it from a box. `bootstrap` installed a copy at
+  `$INSTALL_DIR/fleet-admin` and symlinked `/usr/local/bin/fleet-admin` at it,
+  `update` reinstalled it every time, and nothing ever deleted either — so an
+  existing box would keep a fully working operator CLI on `PATH` that is never
+  rebuilt again, dispatching against today's databases with whatever code it was
+  compiled from. That is worse than a missing command, so **`fleet update` and
+  `fleet doctor` now delete both paths** and say what they removed (failure only
+  warns; `doctor --check` reports without removing). The existence test is
+  `-e || -L`, because removing the target first leaves the bootstrap symlink
+  dangling — and a broken link on `PATH` would be worse still.
+
+  `make build` now emits one binary. Two hard-fail guards (`update.sh`,
+  `fleet-upgrade.sh`) and one silent-skip guard in `bootstrap.sh` — the last of
+  which would have skipped installing `fleet` itself, reporting success having
+  installed nothing — are gone with it. `internal/admincli` is untouched: it is
+  `fleet`'s own dispatch and always was. See
+  [ADR-0060](docs/adr/0060-remove-the-fleet-admin-shim.md).
+
+### Changed
+
+- **Releases are date-based now, and nobody ever tags one by hand.** fleet had a
+  top-level `VERSION` file containing `0.0.0`, described right here as "the
+  single source of truth", and a claim that the project "aims to adhere to
+  Semantic Versioning" — over a changelog with exactly one heading and ~8 400
+  lines of shipped work under it. `git tag` returned nothing; no release had ever
+  been cut. Meanwhile three *other* version strings disagreed with it (the Helm
+  chart's `0.1.0` / `"unreleased"`, `web/package.json`'s `0.1.0`) and the
+  `/api-info` example advertised a `fleet_version` of `1.2.0` that never
+  existed. The number promised compatibility between releases nobody could name
+  or fetch.
+
+  So the number is gone. **Every green push to `main` is now tagged
+  `vYYYY.MM.DD.N` automatically** — UTC date, plus an ordinal because several
+  promotions in a day is the normal case — and published as a GitHub release
+  whose notes are generated from the commits since the previous tag. The new
+  `Release` workflow does it on CI's completion, gated on a green *push* to
+  `main`, tagging the exact SHA the gate certified; a red `main` gets no tag, and
+  nothing can be run by hand to release a rejected tree. Re-runs are idempotent.
+  There is no release commit, no version-bump PR, and no artifact to publish: the
+  deploy path is still a git checkout that `fleet update` rebuilds in place, so
+  the tag *is* the release.
+
+  Builds derive their identity from those tags instead of a file:
+  `scripts/version.sh` (`describe` / `current` / `next` / `semver`) is the one
+  thing that knows the format, and the Makefile stamps `describe` through the
+  same `-ldflags -X`. `fleet version` now reads `2026.09.04.2 (a1b2c3d4e5f6)` at
+  a release and `2026.09.04.2+3.g<sha> (…)` three commits past one — so an
+  operator can finally see *which* release a box is on and how stale it is, which
+  `0.0.0` never told anyone. An unstamped build still says `dev`, honestly.
+
+  **What operators need to know:** nothing changes about how you upgrade, but
+  `fleet update` now fetches `--tags` explicitly (a checkout with no tags stamps
+  `dev+g<sha>` — visible rather than silently wrong), and `fleet version` is the
+  string to quote in an issue or a security report. Don't parse it.
+
+  **Deprecation windows are dated, not numbered.** ADR-0012 pinned the
+  `fleet-admin` shim's removal to "the first release after 1.0.0" — restated
+  across eight files and unreachable in all of them, since no 1.0.0 will ever be
+  cut. It is re-anchored to **the first release on or after 2026-12-01**, and a
+  test now asserts every one of those eight files states the dated form, so they
+  cannot drift apart again.
+
+  The Helm chart and both `package.json` files keep `0.0.0` **placeholders**
+  because Helm and npm parse those fields and neither artifact is published
+  separately; `make helm-package` stamps the real value from the tags, rendered
+  as strict SemVer (`2026.09.04.1` → `2026.904.1`) since a four-component version
+  is not valid there. The chart's `NOTES.txt` no longer prints a chart version at
+  all — it points at `fleet version` instead. The HTTP API's own version (`/v1`,
+  `X-Fleet-API-Version`) is untouched and stays independent: that is where
+  fleet's real compatibility contract lives, and a date makes no compatibility
+  promise. Also swept up: the outbound OpenRouter `User-Agent`, frozen at
+  `fleet/1.0`, now reports the actual build.
+
+  See [`docs/VERSIONING.md`](docs/VERSIONING.md) and
+  [ADR-0059](docs/adr/0059-date-based-rolling-releases.md).
+
+- **Hardening from review, all in the release path.** Git's glob syntax reads
+  `[0-9]*` as "one digit then *anything*", so a tag like `v2026.09.04.1oops`
+  matched the release-tag pattern — aborting `semver` on `10#1oops`, and worse,
+  reading as "already released" in the tagging workflow so the real tag was never
+  cut; an anchored regex now decides, with the glob only pre-filtering what git
+  walks. `current` answers with the newest release **reachable from HEAD** rather
+  than the newest tag anywhere, so packaging an older checkout in a clone that
+  has fetched newer tags no longer labels the artifact with a release it does not
+  contain. The dirty check counts **untracked** build inputs (a stray `.go` file
+  changes what `make build` produces, and `git diff HEAD` never saw it). Identity
+  is derived only when git discovery lands on fleet's own checkout, so a source
+  archive unpacked inside an unrelated repository reports `dev` instead of
+  borrowing that repository's tags. The release workflow's concurrency group
+  keys on the commit: a single group would have let a third queued run displace
+  the *pending* one — dropping a green commit's tag entirely, which is the one
+  invariant it exists to hold. And a tag whose `gh release create` failed is now
+  recoverable by re-running, instead of staying permanently unpublished. Finally,
+  the MOTD convergence check compares the file's **mode** as well as its bytes: a
+  hook that drifted to `0600` is unreadable to every non-root login, and a
+  content-only comparison called it current.
+
+- **`fleet update` and `fleet doctor` now refresh the login-banner hook.**
+  `/etc/profile.d/fleet-motd.sh` was installed by `scripts/bootstrap.sh` and by
+  nothing else, which made it the one file in `deploy/` with no path onto an
+  existing box: a box provisioned before the hook existed never got one, and an
+  edit to `deploy/fleet-motd.sh` reached nobody. Both verbs now install it when
+  it is missing or differs from `deploy/` — cmp-gated, so a re-run is silent, and
+  never fatal, because a login banner must not be able to fail an update.
+  (`doctor --check` reports the drift instead of fixing it, like every other
+  artifact check.) The banner's *contents* were never stale: `fleet motd` renders
+  the version and service state live from the installed binary — which, with this
+  release, now names a date-based release instead of `0.0.0`.
 
 ### Added
 
