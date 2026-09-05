@@ -161,8 +161,14 @@ func (h *Handlers) ListDatasetRows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit, ok := parseLimit(w, r, datasetRowsDefaultLimit, datasetRowsLimitMax)
+	if !ok {
+		return
+	}
+	offset, ok := parseOffset(w, r)
+	if !ok {
+		return
+	}
 	rows, err := h.storage.ListDatasetRows(r.Context(), d.ID, status, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to list rows")

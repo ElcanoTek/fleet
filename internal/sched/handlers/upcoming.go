@@ -8,7 +8,6 @@ package handlers
 import (
 	"net/http"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -55,12 +54,9 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = upcomingDefaultLimit
-	}
-	if limit > upcomingLimitMax {
-		limit = upcomingLimitMax
+	limit, ok := parseLimit(w, r, upcomingDefaultLimit, upcomingLimitMax)
+	if !ok {
+		return
 	}
 	var horizon time.Time // zero = count-based projection (legacy)
 	if raw := r.URL.Query().Get("until"); raw != "" {

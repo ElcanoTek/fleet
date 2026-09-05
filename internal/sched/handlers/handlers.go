@@ -1135,25 +1135,13 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 	user := p.user
 
 	// Parse pagination parameters (default: limit=50, offset=0)
-	limit := 50
-	offset := 0
-
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		parsed, err := strconv.Atoi(limitStr)
-		if err != nil || parsed < 1 || parsed > 500 {
-			writeError(w, http.StatusBadRequest, "Invalid limit parameter (must be 1-500)")
-			return
-		}
-		limit = parsed
+	limit, ok := parseLimit(w, r, taskListDefaultLimit, taskListLimitMax)
+	if !ok {
+		return
 	}
-
-	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
-		parsed, err := strconv.Atoi(offsetStr)
-		if err != nil || parsed < 0 {
-			writeError(w, http.StatusBadRequest, "Invalid offset parameter")
-			return
-		}
-		offset = parsed
+	offset, ok := parseOffset(w, r)
+	if !ok {
+		return
 	}
 
 	// Parse filter parameters
