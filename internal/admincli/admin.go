@@ -166,7 +166,7 @@ func adminList(argv []string) int {
 		}
 		rows := make([]row, 0, len(users))
 		for _, u := range users {
-			rows = append(rows, row{Email: u.Email, Role: string(u.Role), OpsCenterAdmin: opsAdmins[strings.ToLower(u.Email)]})
+			rows = append(rows, row{Email: u.Email, Role: u.Role, OpsCenterAdmin: opsAdmins[strings.ToLower(u.Email)]})
 		}
 		return printJSON(rows)
 	}

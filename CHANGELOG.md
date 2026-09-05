@@ -29,6 +29,28 @@ than by a major-version bump.
 
 ### Added
 
+- **`--json` on every operator list verb** — `fleet sched apikey list`,
+  `sched user list`, `chat user list`, `admin list`, `sched trigger list`,
+  `sched budget list`, `notes list` and `mcp account list` all take `--json`
+  (an empty list is `[]`), so key inventories and user lists no longer have to
+  be parsed out of tab-separated columns. Trigger and API-key rows carry the
+  same fields as the text listing — never a secret or a raw key.
+- **Resubmit-with-changes honors the whole form.** `POST /tasks/{id}/rerun`
+  and `/clone` accept `expected_duration_minutes`, `sla_warn_multiplier`,
+  `sla_fail_multiplier`, `sandbox_limits`, `run_if`, `carry_context` and
+  `instruction_self_improve` as overrides (absent inherits; an explicit `null`
+  / `0` clears). The task modal's terminal-task "Resubmit with changes" showed
+  those fields as editable and then dropped them, so the copy ran with the
+  source task's SLA, limits, gate and flags whatever the form said.
+- **Recurrence lineage for context carry.** A recurring occurrence is a fresh
+  `tasks` row, and `carry_context` looked up the run's OWN id for the prior
+  transcript — which a genuine recurrence never has — so the "## Previous
+  Run" handoff only ever fired on a retry of the same row. The spawn now
+  stamps `previous_occurrence_id` (sched migration 068) and the handoff
+  follows it (`docs/SCHEDULER-UX.md`).
+- `fleet --help` lists the four in-binary verbs it omitted — `validate-config`,
+  `mcp test`, `eval`, `generate-vapid-keys` — and an exit-code legend.
+
 - **Opt-in real-cluster sandbox test:** `TestKubernetesLiveSandbox` runs the
   Kubernetes backend against a disposable cluster — real exec streams, shared
   PVC file operations, pod isolation, and CNI-enforced sealed egress. It skips
@@ -36,6 +58,28 @@ than by a major-version bump.
   [`docs/KUBERNETES-LIVE-TEST.md`](docs/KUBERNETES-LIVE-TEST.md).
 
 ### Security
+
+- **Email attachment paths are contained and never env-expanded.** The
+  `attachments[].path` / `inline_attachments[].path` a model writes went
+  through `os.ExpandEnv` and `~` expansion, so `$OPENROUTER_API_KEY/x.png`
+  substituted the VALUE of a host env var — any connector secret the host
+  holds — into the persisted approval args and the approval card. Expansion
+  is gone, and every path must resolve under the workspace root (the
+  connector opens it host-side at send time), so a prompt-injected
+  `/etc/fleet/fleet.env` is refused at staging instead of one click from
+  being emailed.
+- A failed `download_url` fetch of a protected `fleet-download://` handle no
+  longer echoes the vaulted bearer URL through the transport error; the
+  failure path now hides it as carefully as the success path did.
+- A task whose `credential_allowlist` column cannot be decoded is treated as
+  **deny-all**, not as "no allowlist" (which meant every global seat).
+- An unreadable connector-preferences read mounts **no** remote MCP
+  connectors for that run instead of every connected one, the user's
+  disabled connectors included.
+- Inline HTTP MCP tools, `web_search` and `tavily_search` cap their response
+  bodies; the SSRF guard also blocks `0.0.0.0/8`, the NAT64 prefixes
+  (`64:ff9b::/96`, `64:ff9b:1::/48`) and IPv4-compatible IPv6 (`::/96`) forms
+  of internal addresses.
 
 - **Sandbox Tornado update:** the generic image replaces Fedora’s vulnerable
   Tornado 6.5.7 with upstream 6.5.8 or newer, removes the stale RPM copy, and
@@ -48,6 +92,103 @@ than by a major-version bump.
   exceed the configured library limit.
 
 ### Fixed
+
+- **Web UI, chat:** the three chat delete paths, header rename and archive
+  report a failed request in the rail (and roll the optimistic change back)
+  instead of an unhandled rejection that left the dialog gone and the chat
+  still there; approval cards keep Approve/Deny after a transient error
+  instead of marking the approval "failed" client-side while the server still
+  had it pending; the model picker's search text is a draft that never
+  becomes the selected model until Enter or a row pick (typing "cla" and
+  clicking away used to select the slug "cla"); Send is disabled while the
+  model check has an error rather than silently no-op'ing.
+- **Web UI, Operations Center:** "Resubmit with changes" on a finished task
+  sends every field the form shows (see the rerun override note above); the
+  New Task form resets title, repeat-end and delegation so a reopened form
+  is not dirty with the last task's values; adding a recipient counts as a
+  change worth the discard guard; the gate-timeout field can be cleared
+  while retyping. The tasks table shows a loading line and a "Couldn't load
+  tasks — Retry" state instead of "No tasks created yet" during the first
+  fetch and on a backend outage; the log viewer follows the task's live
+  status so it flips from Live activity to the transcript when the run ends;
+  the tab is mirrored into `?tab=` and an admin-only deep link clamps to
+  Recent Tasks for a non-admin. Datasets: a slower row fetch can no longer
+  overwrite a newer selection, the empty state waits for the first response,
+  and Delete uses the app's confirm dialog. The shared confirm dialog and the
+  log/live/dataset overlays gain the keyboard contract every other modal has
+  (Escape, Tab trap, initial focus, focus return) and a `busy` state that
+  disables confirm while the action is in flight. CSV downloads fetch and
+  save instead of navigating, so a 401 no longer replaces the dashboard with
+  an error page. Counts read "1 row / 2 rows", not "row(s)"; the Upcoming
+  view survives a browser that blocks `localStorage`.
+- **Web UI, settings:** the PII-install poll stops when the panel unmounts
+  and its requests report failures inline; feature toggles are busy per row,
+  not all at once; the providers page shows an error with Retry instead of
+  "Loading…" forever; the skills detail pane cannot show one skill's body
+  under another's header, and an empty library says so instead of `No skills
+  match ""`; storage cleanup, password reset, "Share with everyone" and the
+  notification-settings revert ask for confirmation like their siblings;
+  "Send test" is disabled while the notification form is dirty (it tested
+  the saved config); the upload hint states the configured limit.
+
+- **Ordinary scheduled tasks are now metered.** `task_iterations` — the
+  only task-side ledger the usage report and per-principal budgets aggregate
+  — was written by looped tasks only, so a plain task accrued $0 against
+  every budget and was missing from `/admin/usage`. Every single-pass run
+  records an iteration row (`docs/USAGE-ANALYTICS.md`).
+- Editing a pending task's priority changes when it runs: `effective_priority`
+  (the only column the claim path orders by) is re-synced on edit and on an
+  import replace, keeping a starvation promotion that is still more urgent.
+- Conversation delete / pin / archive / rename / model / approval-timeout /
+  thinking-config / truncate / mcp-servers answer **404** for a conversation
+  the caller does not own instead of 500, so a stale tab can tell "gone" from
+  "the server broke". Renaming to a long non-ASCII title no longer 500s (the
+  cap is at a UTF-8 rune boundary now, not a byte slice).
+- Share, share-with-team, branch and summarize refuse a **malformed** optional
+  body with 400 instead of decoding it to the zero value — a bad
+  `expires_at` used to mint a non-expiring link, and a bad `visible` body
+  silently un-shared the chat. Summarize also reads a chunked body.
+- Memory and project mutations map store errors honestly: 404 for a missing
+  row, 403 for a project member who is not the owner, 400 only for bad
+  input, 500 for a database fault (everything used to be 400).
+- A multi-file shared-library upload is all-or-nothing: a name collision
+  anywhere in the batch refuses the whole batch before anything is written,
+  instead of leaving files 1..N-1 created and unreported behind a 409.
+- Approval resolution: the reject and expired paths write the history
+  breadcrumb on a detached context like the approve path (a tab closed
+  between the claim and the write left a dangling APPROVAL_REQUIRED for the
+  model to re-stage), and `suggest_advanced_model` resolution is claim-gated
+  so a double click cannot land two tool results or 500 on the loser.
+- A chat turn's `turn_events` ledger is attached on a background context, so
+  a POST dropped in the first milliseconds cannot leave a turn running with
+  nothing to replay on reconnect.
+- Workspace file fetch no longer percent-decodes the path twice: an
+  agent-written `100%.png` was a "bad path encoding" 400 and
+  `rate%20final.csv` a 404.
+- `PATCH /admin/users/{email}` with `role:"admin"` plus a narrower
+  `ops_role` ends as ops admin, matching `POST /admin/users`.
+- `PATCH /projects/{id}/memories/{memID}` applies `valid_from` / `valid_to`
+  instead of answering 200 and dropping them.
+- SLA monitor: `sla_warn` fires once per run (it re-fired every 60s tick) and
+  an already-breached run is not warned about; a success after a retry clears
+  the retry's `error_message`; a recurrence cancelled at its `run_if` gate
+  gets a `completed_at` so the retention sweeps can prune it.
+- `fleet status` (and every DB-backed verb) fall back to the deployment env
+  file when the shell lacks the variables — the shipped unit deliberately
+  does not export them — so a fresh root shell no longer reports a healthy
+  box as unhealthy; warnings print `!` instead of `✓`.
+- `doctor.sh`: `FLEET_MOCK_MODE=false` no longer counts as mock mode (a
+  missing model key was downgraded to an advisory); the sandbox smoke resolves
+  `sandbox.image` before `sandbox.tag` like bootstrap/update, so a bundle with
+  a registry image no longer fails the check forever; a failed service restart
+  is reported as a failure instead of "services restarted".
+- `fleet doctor`'s no-checkout fallback honors `--dry-run` (no sandbox probe)
+  and names the flags it drops; `fleet update --check` refuses flags it would
+  silently ignore; `fleet migrate status` names the real golang-migrate
+  `force` command; `sched apikey list/revoke/delete` reject stray arguments.
+- Docs: `docs/MAINTENANCE.md` uses the knob names the loader actually reads
+  (`CONVERSATION_TTL_DAYS`, `FLEET_TURN_TIMEOUT_SECONDS`), and
+  `docs/OPERATORS.md` documents the loader knobs that had no page.
 
 - The build identity no longer states the same fact twice. `fleet version`, the
   login banner and the admin health summary rendered an untagged, modified

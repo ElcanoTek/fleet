@@ -1279,6 +1279,27 @@ paths:
                     thinking_budget_tokens: { type: integer, description: "Negative clears to the global default; omitted inherits the source." }
                     persona: { type: string }
                     mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
+                    expected_duration_minutes: { type: integer, description: "SLA expectation for the copy; 0 clears it, omitted inherits the source." }
+                    sla_warn_multiplier: { type: number, description: "0 = the default (1.5); omitted inherits." }
+                    sla_fail_multiplier: { type: number, description: "0 = the default (2.0); omitted inherits." }
+                    sandbox_limits:
+                      type: object
+                      nullable: true
+                      description: "Per-run sandbox cgroup override; an explicit null (or an all-zero object) clears to the global defaults, omitted inherits."
+                      properties:
+                        memory_mb: { type: integer }
+                        cpus: { type: number }
+                        pids: { type: integer }
+                    run_if:
+                      type: object
+                      nullable: true
+                      description: "Pre-run shell gate for the copy (POSIX sh); an explicit null clears it, omitted inherits."
+                      properties:
+                        command: { type: string }
+                        exit_code_is: { type: integer }
+                        timeout_seconds: { type: integer }
+                    carry_context: { type: boolean }
+                    instruction_self_improve: { type: boolean }
       responses:
         "201":
           description: Created

@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openrouter"
 )
 
 func TestIsImageMIME(t *testing.T) {
@@ -252,5 +255,63 @@ func TestRunGenerateImage_RequiresPrompt(t *testing.T) {
 		Prompt: "",
 	}); err == nil {
 		t.Error("expected prompt-required error")
+	}
+}
+
+// TestRunGenerateImage_MetersIntoRun: the image call's spend reaches the
+// run's usage recorder (the seam agentcore.Run installs for its cost/token
+// ceilings) attributed to the model that ran, carrying the provider cost and
+// token counts. Before, generate_image spent the operator's key with nothing
+// charged to the run.
+func TestRunGenerateImage_MetersIntoRun(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "k")
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	tmp := t.TempDir()
+	t.Setenv("FLEET_ALLOWED_DIRS", tmp)
+	t.Chdir(tmp)
+
+	dataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("PNG"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"images":[{"image_url":{"url":"` + dataURI + `"}}]}}],"usage":{"prompt_tokens":120,"completion_tokens":1290,"total_tokens":1410,"cost":0.134}}`))
+	}))
+	defer srv.Close()
+
+	var (
+		calls    int
+		gotSlug  string
+		gotUsage fantasy.Usage
+		gotCost  float64
+	)
+	ctx := WithUsageRecorder(context.Background(), func(slug string, u fantasy.Usage, md fantasy.ProviderMetadata) {
+		calls++
+		gotSlug, gotUsage = slug, u
+		if raw, ok := md[openrouter.Name].(*openrouter.ProviderMetadata); ok {
+			gotCost = raw.Usage.Cost
+		}
+	})
+	client := &http.Client{Transport: rewriteRoundTripper{target: srv.URL}}
+	if _, err := runGenerateImage(ctx, fsTestSandbox(t), client, GenerateImageParams{Prompt: "x", Model: "google/gemini-3-pro-image"}); err != nil {
+		t.Fatalf("runGenerateImage: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("UsageRecorder called %d times, want 1", calls)
+	}
+	if gotSlug != "google/gemini-3-pro-image" {
+		t.Errorf("metered slug = %q, want the model that ran", gotSlug)
+	}
+	if gotUsage.InputTokens != 120 || gotUsage.OutputTokens != 1290 {
+		t.Errorf("metered usage = %+v", gotUsage)
+	}
+	if gotCost != 0.134 {
+		t.Errorf("metered provider cost = %v, want 0.134", gotCost)
+	}
+
+	// No usage block at all: still metered (zero tokens, no provider cost),
+	// and a nil recorder (no governed run) is simply skipped.
+	if md := imageGenProviderMetadata(nil); md != nil {
+		t.Errorf("nil cost should yield no provider metadata, got %v", md)
+	}
+	if u := imageGenUsage([]byte(`{"choices":[]}`)); u != (fantasy.Usage{}) {
+		t.Errorf("no usage block should meter zero, got %+v", u)
 	}
 }

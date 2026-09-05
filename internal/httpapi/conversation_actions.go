@@ -140,8 +140,10 @@ func (s *Server) handleConversationDelete(w http.ResponseWriter, r *http.Request
 		writeConversationMutationError(w, err)
 		return
 	}
-	// Reclaim the conversation's persistent run_python sandbox (#213), if any.
+	// Reclaim the conversation's persistent run_python sandbox (#213), if any,
+	// and its in-memory session pre-approvals (#300).
 	s.releasePersistentSandbox(id)
+	s.sessionApprovals.Forget(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 

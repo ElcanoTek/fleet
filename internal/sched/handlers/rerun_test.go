@@ -129,7 +129,7 @@ func TestApplyRerunOverrides(t *testing.T) {
 
 	t.Run("nil overrides leave everything", func(t *testing.T) {
 		tc := base()
-		applyRerunOverrides(&tc, taskRerunOverrides{})
+		_ = applyRerunOverrides(&tc, taskRerunOverrides{})
 		if tc.Prompt != "orig" || tc.Priority != 1 || len(tc.Tags) != 1 {
 			t.Errorf("empty overrides changed fields: %+v", tc)
 		}
@@ -138,7 +138,7 @@ func TestApplyRerunOverrides(t *testing.T) {
 	t.Run("set fields override", func(t *testing.T) {
 		tc := base()
 		newPrompt, newPri := "changed", 9
-		applyRerunOverrides(&tc, taskRerunOverrides{Prompt: &newPrompt, Priority: &newPri})
+		_ = applyRerunOverrides(&tc, taskRerunOverrides{Prompt: &newPrompt, Priority: &newPri})
 		if tc.Prompt != "changed" || tc.Priority != 9 {
 			t.Errorf("overrides not applied: prompt=%q priority=%d", tc.Prompt, tc.Priority)
 		}
@@ -149,12 +149,12 @@ func TestApplyRerunOverrides(t *testing.T) {
 
 	t.Run("nil tags inherit, non-nil tags replace", func(t *testing.T) {
 		tc := base()
-		applyRerunOverrides(&tc, taskRerunOverrides{}) // nil tags
+		_ = applyRerunOverrides(&tc, taskRerunOverrides{}) // nil tags
 		if len(tc.Tags) != 1 || tc.Tags[0] != "a" {
 			t.Errorf("nil tags should inherit, got %v", tc.Tags)
 		}
 		tc = base()
-		applyRerunOverrides(&tc, taskRerunOverrides{Tags: []string{}}) // explicit empty → replace
+		_ = applyRerunOverrides(&tc, taskRerunOverrides{Tags: []string{}}) // explicit empty → replace
 		if len(tc.Tags) != 0 {
 			t.Errorf("explicit empty tags should clear, got %v", tc.Tags)
 		}
@@ -163,7 +163,7 @@ func TestApplyRerunOverrides(t *testing.T) {
 	t.Run("nil MCP selection inherits, non-nil selection replaces", func(t *testing.T) {
 		tc := base()
 		tc.MCPSelection = models.MCPSelection{{Server: "source"}}
-		applyRerunOverrides(&tc, taskRerunOverrides{})
+		_ = applyRerunOverrides(&tc, taskRerunOverrides{})
 		if len(tc.MCPSelection) != 1 || tc.MCPSelection[0].Server != "source" {
 			t.Fatalf("nil MCP selection should inherit, got %+v", tc.MCPSelection)
 		}
@@ -175,7 +175,7 @@ func TestApplyRerunOverrides(t *testing.T) {
 			t.Fatalf("explicit MCP selection should replace, got %+v", tc.MCPSelection)
 		}
 
-		applyRerunOverrides(&tc, taskRerunOverrides{MCPSelection: models.MCPSelection{}})
+		_ = applyRerunOverrides(&tc, taskRerunOverrides{MCPSelection: models.MCPSelection{}})
 		if tc.MCPSelection == nil || len(tc.MCPSelection) != 0 {
 			t.Fatalf("explicit empty MCP selection should clear, got %+v", tc.MCPSelection)
 		}
@@ -238,4 +238,89 @@ func TestRerunAttachmentOverrides(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestApplyRerunOverridesAdvancedSection: the fields the task modal shows as
+// editable on "Resubmit with changes" are honored, with absent = inherit and
+// an explicit null / zero = clear. Before, the struct had no such fields and
+// the UI dropped them silently.
+func TestApplyRerunOverridesAdvancedSection(t *testing.T) {
+	ten := 10
+	base := func() models.TaskCreate {
+		return models.TaskCreate{
+			Prompt:                  "orig",
+			ExpectedDurationMinutes: &ten,
+			SLAWarnMultiplier:       1.5,
+			SLAFailMultiplier:       2.0,
+			SandboxLimits:           &models.TaskSandboxLimits{MemoryMB: 1024},
+			RunIf:                   &models.RunIf{Command: "true"},
+			CarryContext:            true,
+			InstructionSelfImprove:  true,
+		}
+	}
+
+	t.Run("absent inherits every field", func(t *testing.T) {
+		tc := base()
+		if err := applyRerunOverrides(&tc, taskRerunOverrides{}); err != nil {
+			t.Fatal(err)
+		}
+		if tc.ExpectedDurationMinutes == nil || *tc.ExpectedDurationMinutes != 10 || tc.SandboxLimits == nil || tc.RunIf == nil || !tc.CarryContext || !tc.InstructionSelfImprove {
+			t.Errorf("absent overrides changed the source definition: %+v", tc)
+		}
+	})
+
+	t.Run("explicit values replace", func(t *testing.T) {
+		tc := base()
+		forty, warn, off := 40, 3.0, false
+		err := applyRerunOverrides(&tc, taskRerunOverrides{
+			ExpectedDurationMinutes: &forty,
+			SLAWarnMultiplier:       &warn,
+			SandboxLimits:           json.RawMessage(`{"memory_mb":4096,"cpus":2}`),
+			RunIf:                   json.RawMessage(`{"command":"test -f ready","timeout_seconds":5}`),
+			CarryContext:            &off,
+			InstructionSelfImprove:  &off,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *tc.ExpectedDurationMinutes != 40 || tc.SLAWarnMultiplier != 3.0 || tc.SLAFailMultiplier != 2.0 {
+			t.Errorf("SLA overrides: %+v", tc)
+		}
+		if tc.SandboxLimits == nil || tc.SandboxLimits.MemoryMB != 4096 || tc.SandboxLimits.CPUs != 2 {
+			t.Errorf("sandbox_limits override: %+v", tc.SandboxLimits)
+		}
+		if tc.RunIf == nil || tc.RunIf.Command != "test -f ready" || tc.RunIf.TimeoutSeconds != 5 {
+			t.Errorf("run_if override: %+v", tc.RunIf)
+		}
+		if tc.CarryContext || tc.InstructionSelfImprove {
+			t.Errorf("flags should be off: carry=%v learn=%v", tc.CarryContext, tc.InstructionSelfImprove)
+		}
+	})
+
+	t.Run("zero and null clear", func(t *testing.T) {
+		tc := base()
+		zero := 0
+		err := applyRerunOverrides(&tc, taskRerunOverrides{
+			ExpectedDurationMinutes: &zero,
+			SandboxLimits:           json.RawMessage(`null`),
+			RunIf:                   json.RawMessage(`null`),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.ExpectedDurationMinutes != nil || tc.SandboxLimits != nil || tc.RunIf != nil {
+			t.Errorf("clears not applied: dur=%v limits=%v runif=%v", tc.ExpectedDurationMinutes, tc.SandboxLimits, tc.RunIf)
+		}
+		tc = base()
+		if err := applyRerunOverrides(&tc, taskRerunOverrides{SandboxLimits: json.RawMessage(`{}`)}); err != nil || tc.SandboxLimits != nil {
+			t.Errorf("all-zero limits should clear to global defaults: err=%v limits=%+v", err, tc.SandboxLimits)
+		}
+	})
+
+	t.Run("malformed object is the caller's error", func(t *testing.T) {
+		tc := base()
+		if err := applyRerunOverrides(&tc, taskRerunOverrides{RunIf: json.RawMessage(`{"command": 5}`)}); err == nil {
+			t.Error("expected an error for a malformed run_if")
+		}
+	})
 }

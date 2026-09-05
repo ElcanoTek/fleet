@@ -163,6 +163,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			// the pool's idle reaper to reclaim instead.
 			for _, cid := range req.ConversationIDs {
 				s.releasePersistentSandbox(cid)
+				s.sessionApprovals.Forget(cid)
 			}
 			writeJSON(w, map[string]any{"deleted": n})
 		default:

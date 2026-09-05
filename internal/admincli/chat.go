@@ -206,7 +206,7 @@ func chatUserList(argv []string) int {
 		}
 		rows := make([]row, 0, len(users))
 		for _, u := range users {
-			rows = append(rows, row{Email: u.Email, Role: string(u.Role), Team: u.TeamID})
+			rows = append(rows, row{Email: u.Email, Role: u.Role, Team: u.TeamID})
 		}
 		return printJSON(rows)
 	}

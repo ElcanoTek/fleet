@@ -206,7 +206,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		size, sha, err := lib.SaveCanonical(id, src)
 		_ = src.Close()
 		if err != nil {
-			log.Printf("shared files: save canonical %q: %v", name, err) //nolint:gosec // G706: name is %q-quoted (and SanitizeName-vetted)
+			log.Printf("shared files: save canonical %q: %v", name, err)
 			http.Error(w, "save upload: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -233,7 +233,7 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 			// The row exists and the canonical bytes are safe; the staged copy
 			// self-heals on the next Sync. Log and keep going rather than
 			// failing an upload that IS durably recorded.
-			log.Printf("shared files: stage %q: %v (will self-heal on the next maintenance pass)", name, err) //nolint:gosec // G706: name is %q-quoted (and SanitizeName-vetted)
+			log.Printf("shared files: stage %q: %v (will self-heal on the next maintenance pass)", name, err)
 		}
 		out = append(out, row)
 	}

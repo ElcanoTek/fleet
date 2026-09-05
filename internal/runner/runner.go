@@ -427,12 +427,22 @@ func (p *Pool) Run(ctx context.Context) {
 		log.Printf("runner: per-task wall-clock timeout OFF (FLEET_TASK_WALL_TIMEOUT=0)")
 	}
 
+	// Lease renewal runs until the in-flight tasks have DRAINED, not until ctx
+	// is cancelled: cancellation only stops claiming, and draining tasks keep
+	// running for up to drainGrace. With renewal stopping at cancel, a grace
+	// longer than the lease let a draining task's lease expire mid-run, and a
+	// freshly started replacement process's RecoverExpiredLeases re-queued it
+	// while the old process was still finishing — the duplicate-side-effect
+	// window #1116 exists to close. renewStop is closed once Run has waited
+	// on taskWG, so a renewal can never outlive the pool.
 	renewTicker := time.NewTicker(p.leaseRenewInterval)
 	defer renewTicker.Stop()
+	renewStop := make(chan struct{})
+	defer close(renewStop)
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
+			case <-renewStop:
 				return
 			case <-renewTicker.C:
 				p.renewActiveLeases()

@@ -2,13 +2,14 @@ package admincli
 
 import (
 	"fmt"
-	"github.com/ElcanoTek/fleet/internal/creds"
 	"io"
 	"os"
 	"strings"
 	"sync"
 
 	"golang.org/x/term"
+
+	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
 // readStdinValue reads a secret/value from stdin (used when a flag is "-"),

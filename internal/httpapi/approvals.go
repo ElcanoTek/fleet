@@ -1354,7 +1354,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// Branch before the generic Send path so we don't accidentally
 	// route it through runStagedTool.
 	if approval.ToolName == tools.SuggestAdvancedModelToolName {
-		s.handleSuggestAdvancedApproval(w, r, execCtx, user, approval, req)
+		s.handleSuggestAdvancedApproval(execCtx, w, r, user, approval, req)
 		return
 	}
 
@@ -1492,7 +1492,7 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 // (a double-click, two tabs) both passed the in-memory "still pending" check
 // and landed two tool_result rows — and the losing dismiss click got a 500
 // ("already resolved") instead of the idempotent resolved-state echo.
-func (s *Server) handleSuggestAdvancedApproval(w http.ResponseWriter, r *http.Request, execCtx context.Context, user string, approval *store.Approval, req approvalRequest) {
+func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.ResponseWriter, r *http.Request, user string, approval *store.Approval, req approvalRequest) {
 	switchAction := req.Action == "switch_and_retry" || req.Action == "switch_only" ||
 		(req.Action == "" && req.Approved)
 	if !switchAction {

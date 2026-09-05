@@ -82,10 +82,10 @@ func conversationRoutePairs() []routePairProbe {
 // newRouteProbeConversation creates a fresh conversation owned by user, so
 // each probed pair runs against untouched state (DELETE, project and archive
 // probes mutate theirs).
-func newRouteProbeConversation(t *testing.T, h http.Handler, user string) string {
+func newRouteProbeConversation(t *testing.T, h http.Handler) string {
 	t.Helper()
 	w := do(t, h, http.MethodPost, "/conversations",
-		map[string]string{"title": "route probe", "persona": "generic"}, user)
+		map[string]string{"title": "route probe", "persona": "generic"}, "router@x.com")
 	if w.Code != http.StatusOK {
 		t.Fatalf("create conversation: %d body=%s", w.Code, w.Body.String())
 	}
@@ -125,7 +125,7 @@ func TestConversationSubrouteTable(t *testing.T) {
 			name = "item"
 		}
 		t.Run(name+" "+p.method, func(t *testing.T) {
-			id := newRouteProbeConversation(t, h, user)
+			id := newRouteProbeConversation(t, h)
 			path := "/conversations/" + id
 			if p.sub != "" {
 				path += "/" + p.sub
@@ -140,7 +140,7 @@ func TestConversationSubrouteTable(t *testing.T) {
 	// The method-agnostic queue branch (not a table entry — it matches any
 	// method and dispatches internally).
 	t.Run("queue GET", func(t *testing.T) {
-		id := newRouteProbeConversation(t, h, user)
+		id := newRouteProbeConversation(t, h)
 		w := do(t, h, http.MethodGet, "/conversations/"+id+"/queue", nil, user)
 		if w.Code != http.StatusOK {
 			t.Fatalf("queue snapshot: got %d want 200 body=%q", w.Code, w.Body.String())
@@ -224,7 +224,7 @@ func TestConversationSubrouteUnmatched405(t *testing.T) {
 	s := serverFixture(t)
 	h := s.Routes()
 	const user = "router@x.com"
-	id := newRouteProbeConversation(t, h, user)
+	id := newRouteProbeConversation(t, h)
 
 	cases := []struct {
 		name   string
@@ -255,7 +255,7 @@ func TestConversationRenameCapsAtRuneBoundary(t *testing.T) {
 	s := serverFixture(t)
 	h := s.Routes()
 	const user = "router@x.com"
-	id := newRouteProbeConversation(t, h, user)
+	id := newRouteProbeConversation(t, h)
 
 	// 3-byte runes: 200 is not a multiple of 3, so a byte slice at 200 lands
 	// mid-rune. 70 of them is 210 bytes, past the cap.
@@ -286,7 +286,7 @@ func TestOptionalBodyMalformedIs400(t *testing.T) {
 	s.agent = &fakeEngine{}
 	h := s.Routes()
 	const user = "router@x.com"
-	id := newRouteProbeConversation(t, h, user)
+	id := newRouteProbeConversation(t, h)
 
 	for _, sub := range []string{"share", "share-with-team", "branch", "summarize"} {
 		t.Run(sub, func(t *testing.T) {

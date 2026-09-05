@@ -164,7 +164,7 @@ func notesList(argv []string) int {
 		}
 		rows := make([]row, 0, len(notes))
 		for _, n := range notes {
-			rows = append(rows, row{Slug: n.Slug, Version: int(n.Version), Status: string(n.Status), Title: n.Title})
+			rows = append(rows, row{Slug: n.Slug, Version: n.Version, Status: n.Status, Title: n.Title})
 		}
 		return printJSON(rows)
 	}
