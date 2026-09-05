@@ -20,8 +20,11 @@ vi.mock("@/app/shared/lib/orchestratorApi", () => ({
     datasetRows: (...args: unknown[]) => datasetRows(...args),
     deleteDataset: (...args: unknown[]) => deleteDataset(...args),
     createDataset: (...args: unknown[]) => createDataset(...args),
+    approveDatasetRows: (...args: unknown[]) => approveDatasetRows(...args),
   },
 }));
+
+const approveDatasetRows = vi.fn();
 
 afterEach(() => {
   cleanup();
@@ -178,6 +181,53 @@ describe("DatasetsPanel rows paging", () => {
     fireEvent.change(screen.getByLabelText("Filter rows by status"), { target: { value: "failed" } });
     await waitFor(() =>
       expect(datasetRows).toHaveBeenLastCalledWith("a", `?limit=${ROWS_PAGE_SIZE}&offset=0&status=failed`),
+    );
+  });
+});
+
+describe("DatasetsPanel rows paging shrink", () => {
+  it("clamps the page when the row count drops under it", async () => {
+    datasets.mockResolvedValue({ datasets: [dataset("a", "alpha")] });
+    // 250 rows → 2 pages. Go to page 2, then let the count fall to a single
+    // page (the last row of page 2 was approved or rerun out of the filter).
+    datasetRows.mockResolvedValue({
+      rows: Array.from({ length: ROWS_PAGE_SIZE }, (_, i) => ({ ...row(`r${i}`, `Co ${i}`), row_index: i })),
+      // Some rows are still proposals, which is what enables Approve.
+      row_counts: { pending: 200, proposed: 50 },
+    });
+    render(<DatasetsPanel />);
+    fireEvent.click(await screen.findByRole("tab", { name: /alpha/ }));
+    await waitFor(() => expect(screen.getByText("Page 1 of 2")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Next rows page" }));
+    await waitFor(() =>
+      expect(datasetRows).toHaveBeenLastCalledWith("a", `?limit=${ROWS_PAGE_SIZE}&offset=${ROWS_PAGE_SIZE}`),
+    );
+
+    // Approving refetches in place — the filter and dataset never change, so
+    // the existing page-reset paths do not fire. This is the real trigger: the
+    // count falls to one page's worth while the reader sits on page 2.
+    approveDatasetRows.mockResolvedValue({ approved: 50 });
+    datasetRows.mockResolvedValue({
+      rows: Array.from({ length: ROWS_PAGE_SIZE }, (_, i) => ({ ...row(`r${i}`, `Co ${i}`), row_index: i })),
+      row_counts: { pending: ROWS_PAGE_SIZE },
+    });
+    const callsBefore = datasetRows.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: /Approve all proposed/ }));
+
+    // Without the clamp the panel keeps offset 200 while the pager — which
+    // renders only when there is more than one page — disappears, stranding
+    // the reader on an empty table with no way back.
+    await waitFor(() =>
+      expect(datasetRows).toHaveBeenLastCalledWith("a", `?limit=${ROWS_PAGE_SIZE}&offset=0`),
+    );
+    // The panel settles on a page that exists, with rows on it — the pager
+    // has already hidden itself by now (it needs more than one page), so a
+    // reader left on the old offset would have no control to recover with.
+    expect(datasetRows.mock.calls.length).toBeGreaterThan(callsBefore);
+    expect(screen.queryByText(/Page 2 of/)).toBeNull();
+    expect(screen.getByTestId("dataset-rows-showing")).toHaveTextContent(
+      `Showing 1-${ROWS_PAGE_SIZE} of ${ROWS_PAGE_SIZE} rows`,
     );
   });
 });

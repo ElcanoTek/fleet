@@ -411,6 +411,25 @@ type failNthCreateSharedFile struct {
 	calls  int
 }
 
+// cancelOnNthCreateSharedFile reproduces the client-disconnect shape: the Nth
+// create cancels the request context and then fails, exactly as a real
+// cancellation would make the next store call fail.
+type cancelOnNthCreateSharedFile struct {
+	chatStore
+	cancel context.CancelFunc
+	failAt int
+	calls  int
+}
+
+func (f *cancelOnNthCreateSharedFile) CreateSharedFile(ctx context.Context, row store.SharedFile) (store.SharedFile, error) {
+	f.calls++
+	if f.calls == f.failAt {
+		f.cancel()
+		return store.SharedFile{}, context.Canceled
+	}
+	return f.chatStore.CreateSharedFile(ctx, row)
+}
+
 func (f *failNthCreateSharedFile) CreateSharedFile(ctx context.Context, row store.SharedFile) (store.SharedFile, error) {
 	f.calls++
 	if f.calls == f.failAt {
@@ -424,6 +443,56 @@ func (f *failNthCreateSharedFile) CreateSharedFile(ctx context.Context, row stor
 // staged copy, canonical bytes) before the error is written, and the body
 // says so. Before this, file 1 stayed durably created and unmentioned while
 // the response reported only file 2's failure.
+// The rollback must survive the request context being cancelled — which is the
+// MOST likely way to reach it, since a client that disconnects mid-upload is
+// what makes the next store call fail in the first place. Running the cleanup
+// on the dead request context made every delete fail instantly and left the
+// half-written library the "nothing was saved" contract rules out.
+func TestSharedFilesBatchUploadRollsBackAfterContextCancel(t *testing.T) {
+	srv, _ := sharedFilesFixture(t)
+	lib := srv.sharedFilesLibrary()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv.store = &cancelOnNthCreateSharedFile{chatStore: srv.store, cancel: cancel, failAt: 2}
+	h := srv.Routes()
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("folder", "Q4")
+	for _, name := range []string{"a.csv", "b.csv"} {
+		fw, err := mw.CreateFormFile("files", name)
+		if err != nil {
+			t.Fatalf("form file: %v", err)
+		}
+		if _, err := fw.Write([]byte("content of " + name)); err != nil {
+			t.Fatalf("write form file: %v", err)
+		}
+	}
+	_ = mw.Close()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/shared-files", &buf)
+	req.Header.Set("X-Chat-Server-Token", "tok")
+	req.Header.Set("X-User-Email", "admin@x")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	// The contract is about the LIBRARY, not the status line — a disconnected
+	// client never reads the response anyway.
+	files, err := srv.store.ListSharedFiles(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("rows survived a cancelled batch: %+v", files)
+	}
+	for _, name := range []string{"a.csv", "b.csv"} {
+		if _, err := os.Stat(filepath.Join(lib.StagedRoot, "Q4", name)); !os.IsNotExist(err) {
+			t.Errorf("%s staged copy exists (err=%v) after the cancelled batch", name, err)
+		}
+	}
+}
+
 func TestSharedFilesBatchUploadRollsBackOnMidLoopFailure(t *testing.T) {
 	srv, _ := sharedFilesFixture(t)
 	failing := &failNthCreateSharedFile{chatStore: srv.store, failAt: 2}

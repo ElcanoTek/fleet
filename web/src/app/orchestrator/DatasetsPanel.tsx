@@ -49,6 +49,10 @@ export function DatasetsPanel() {
   const [statusFilter, setStatusFilterState] = useState("");
   // 1-based page into the selected dataset's (filtered) rows.
   const [rowsPage, setRowsPage] = useState(1);
+  // The page count implied by the most recent rows response. A ref, not state:
+  // it is read while BUILDING the next request, and deriving it during render
+  // instead would need a setState-in-effect to feed it back to the fetch.
+  const rowsPagesRef = useRef(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -78,12 +82,27 @@ export function DatasetsPanel() {
     try {
       const params = new URLSearchParams();
       params.set("limit", String(ROWS_PAGE_SIZE));
-      params.set("offset", String((rowsPage - 1) * ROWS_PAGE_SIZE));
+      // Clamp against the page count the LAST response implied. Approving or
+      // rerunning the final rows of a page drops the total below this page's
+      // offset while the dataset and filter stay put, so neither reset path
+      // fires: without this the request asks for an offset past the end, the
+      // table renders empty, and the pager hides itself (it needs more than
+      // one page), leaving no control to get back.
+      const page = Math.min(rowsPage, rowsPagesRef.current);
+      params.set("offset", String((page - 1) * ROWS_PAGE_SIZE));
       if (statusFilter) params.set("status", statusFilter);
       const res = await orchestratorApi.datasetRows(selectedId, `?${params.toString()}`);
       if (runId !== rowsRunRef.current) return; // superseded by a newer selection
       setRows(res.rows ?? []);
-      setRowCounts(res.row_counts ?? {});
+      const counts = res.row_counts ?? {};
+      setRowCounts(counts);
+      const total = statusFilter
+        ? (counts[statusFilter] ?? 0)
+        : Object.values(counts).reduce((sum, n) => sum + n, 0);
+      rowsPagesRef.current = Math.max(1, Math.ceil(total / ROWS_PAGE_SIZE));
+      // Settle the control state on what was actually fetched, so Prev/Next
+      // and the "Page N of M" label cannot disagree with the rows on screen.
+      if (page > rowsPagesRef.current) setRowsPage(rowsPagesRef.current);
     } catch (err) {
       if (runId !== rowsRunRef.current) return;
       showToast(`Failed to load rows: ${(err as Error).message}`, "error");
