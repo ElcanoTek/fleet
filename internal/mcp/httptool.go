@@ -216,9 +216,16 @@ func executeHTTPTool(ctx context.Context, client *http.Client, spec HTTPToolSpec
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Capped like every other transport in this package (#1108): {param}
+	// values are model-controlled, and this runs in the credential-owning
+	// process, so an endpoint that echoes or paginates by parameter must not
+	// be able to steer it into buffering a multi-GB body.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, int64(httpResponseCaptureCap)+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
+	}
+	if len(respBody) > httpResponseCaptureCap {
+		return nil, fmt.Errorf("response body exceeds the %d-byte capture cap", httpResponseCaptureCap)
 	}
 
 	out := string(respBody)

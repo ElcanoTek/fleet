@@ -181,7 +181,9 @@ func (t *WebSearchTool) searchDuckDuckGo(ctx context.Context, query string, maxR
 		return nil, fmt.Errorf("search failed with status code: %d (DuckDuckGo may be rate limiting requests)", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Bounded like web_fetch: a fixed vendor host, but a hijacked CDN or a
+	// runaway SERP page must not buffer without limit.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}

@@ -96,3 +96,36 @@ func TestDownloadURL_ExpiredOpaqueHandleFailsClosed(t *testing.T) {
 		t.Fatalf("expired handle leaked its former bearer URL: %+v", res)
 	}
 }
+
+// TestDownloadURL_ProtectedHandleFetchFailureDoesNotLeakURL: the FAILURE path
+// must hide the vaulted URL as carefully as the success path does. client.Do
+// returns a *url.Error whose Error() prints the full request URL; before
+// transportErrForDisplay that string — bearer token included — went straight
+// into res.Error → the tool result → the model context on any dial, TLS,
+// timeout or redirect failure.
+func TestDownloadURL_ProtectedHandleFetchFailureDoesNotLeakURL(t *testing.T) {
+	// A server that closes the listener before the request lands → dial error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
+	dead := srv.URL
+	srv.Close()
+
+	ctx, _ := downloadCtx(t)
+	raw := dead + "/node/read/?token=server-side-only-secret"
+	handle := registerDownloadURLHandle(raw)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: handle})
+	if res.Status != downloadStatusError {
+		t.Fatalf("expected a failed fetch, got %+v", res)
+	}
+	if strings.Contains(res.Error, "server-side-only-secret") || strings.Contains(res.Error, dead) {
+		t.Fatalf("failed protected fetch leaked the vaulted URL: %q", res.Error)
+	}
+	if !strings.Contains(res.Error, handle) || !strings.Contains(res.Error, "protected URL") {
+		t.Fatalf("error should name the handle and say the URL is protected: %q", res.Error)
+	}
+
+	// An unprotected URL keeps the full, actionable error.
+	res = runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: dead + "/plain"})
+	if res.Status != downloadStatusError || !strings.Contains(res.Error, dead) {
+		t.Fatalf("unprotected fetch failure should name the URL: %+v", res)
+	}
+}

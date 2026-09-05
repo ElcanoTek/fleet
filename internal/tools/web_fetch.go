@@ -166,6 +166,9 @@ func FetchURLForContext(ctx context.Context, url string) (string, error) {
 		Timeout:   DefaultTimeout,
 		Transport: &http.Transport{DialContext: newSSRFGuardedDialer().DialContext},
 	}
+	// Per-call Transport: release its pooled connections with the call rather
+	// than leaving keep-alive goroutines parked until the remote hangs up.
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)

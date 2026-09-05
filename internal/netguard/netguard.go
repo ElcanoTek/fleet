@@ -27,6 +27,13 @@ import "net"
 //   - 192.0.2.0/24   — RFC 5737 TEST-NET-1 (documentation-only).
 //   - 198.18.0.0/15  — RFC 2544 benchmarking.
 //   - 240.0.0.0/4    — RFC 1112 reserved, incl. 255.255.255.255 broadcast.
+//   - 0.0.0.0/8      — RFC 1122 "this network"; 0.x.y.z connects to the local
+//     host on some stacks, and only 0.0.0.0 itself is caught by IsUnspecified.
+//   - 64:ff9b::/96 and 64:ff9b:1::/48 — RFC 6052 / RFC 8215 NAT64 prefixes.
+//     `64:ff9b::7f00:1` IS 127.0.0.1 on a host with a NAT64 gateway, and none
+//     of the v4 classifiers see it because To4() is nil for these.
+//   - ::/96          — IPv4-compatible IPv6 (deprecated, RFC 4291 §2.5.5.1):
+//     `::7f00:1` is loopback by the same trick.
 //
 // Parsed once at package init; net.IPNet.Contains handles IPv4-mapped IPv6
 // forms (e.g. ::ffff:100.100.100.200) via its internal To4 conversion.
@@ -36,6 +43,10 @@ var ssrfBlockedNets = func() []*net.IPNet {
 		"192.0.2.0/24",
 		"198.18.0.0/15",
 		"240.0.0.0/4",
+		"0.0.0.0/8",
+		"64:ff9b::/96",
+		"64:ff9b:1::/48",
+		"::/96",
 	}
 	nets := make([]*net.IPNet, 0, len(cidrs))
 	for _, cidr := range cidrs {
