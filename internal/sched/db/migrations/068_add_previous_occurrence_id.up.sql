@@ -1,0 +1,16 @@
+-- 068_add_previous_occurrence_id.up.sql — recurrence lineage for context carry.
+--
+-- Each firing of a recurring task is a NEW tasks row (storage.scheduleNextRecurrence
+-- clones the completing occurrence via TaskToCreate under a fresh id), and the
+-- run transcript (logs) is keyed by task id. carry_context promised the next
+-- run "the previous occurrence's final answer", but priorRunHandoff could only
+-- look up the run's OWN id — which, for a genuine recurrence, has no log yet —
+-- so the handoff was always empty except on a retry of the same row.
+--
+-- previous_occurrence_id is stamped by the spawn on the successor and points at
+-- the occurrence that just completed. Immutable lineage: written by the
+-- creating insert only (excluded from the upsert and UpdateTaskTx sets), never
+-- exported (a re-imported definition has no predecessor). NULL for every
+-- non-recurring task, for the first occurrence, and for every pre-existing row.
+-- TEXT like source_task_id / created_by_task_id, the other lineage pointers.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS previous_occurrence_id TEXT;

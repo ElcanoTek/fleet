@@ -1374,11 +1374,12 @@ function LogViewerBody({
   );
 }
 
-// TaskRunHistory lists the other runs of this task. Fleet has no first-class
-// lineage for recurring occurrences (each firing is a fresh row with name
-// blanked and no source_task_id — see storage.scheduleNextRecurrence), so
-// runs are grouped the same way the SLA report buckets them: exact prompt
-// equality. The server-side q= search narrows by prompt substring; the exact
+// TaskRunHistory lists the other runs of this task. Each recurring firing is a
+// fresh row with name blanked and no source_task_id (see
+// storage.scheduleNextRecurrence); the server stamps previous_occurrence_id
+// for context-carry, but that is a single back-pointer, not a queryable
+// chain, so runs are grouped the same way the SLA report buckets them: exact
+// prompt equality. The server-side q= search narrows by prompt substring; the exact
 // match is enforced client-side (ILIKE wildcards in a prompt can over-match,
 // never under-match).
 function TaskRunHistory({

@@ -1746,6 +1746,13 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// Carry the originating API key forward so recurring task cost keeps counting
 	// against the key's usage bucket (and any scope=key budget).
 	newTask.CreatedByKeyID = task.CreatedByKeyID
+	// Lineage (migration 068): the successor points at the occurrence that just
+	// completed, so carry_context can read THAT run's transcript. Without it
+	// the handoff looked up the successor's own (still empty) log and every
+	// genuine recurrence started cold — the feature only ever fired on a
+	// retry of the same row.
+	prev := task.ID
+	newTask.PreviousOccurrenceID = &prev
 	// Mirror AddTaskWithContext's stored-contract validation (the pre-#1116 spawn
 	// went through it): the insert below is the tx-scoped db.AddTaskTx, which
 	// does not validate.

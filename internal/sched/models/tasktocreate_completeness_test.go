@@ -27,6 +27,7 @@ func TestTaskToCreateCarriesEveryDefinitionField(t *testing.T) {
 		"SLABreached":           "runtime-latched by the SLA monitor (#274)",
 		"ActualDurationSeconds": "runtime, populated on the terminal transition (#274)",
 		"A2ADelegationDepth":    "delegation provenance (#1368): stamped by the inbound A2A server from the peer's header; a clone/re-run/recurrence is operator work, not a hop in a peer chain",
+		"PreviousOccurrenceID":  "per-spawn recurrence lineage (migration 068): scheduleNextRecurrence stamps the successor itself; a clone/re-run has no predecessor occurrence",
 	}
 
 	var task Task
