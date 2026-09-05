@@ -125,8 +125,10 @@ func Run(argv []string) int {
 	case "import":
 		return cmdImport(argv[1:])
 	case "version", "--version", "-v":
-		// Build identity: the release version stamped from the top-level VERSION
-		// file plus the VCS revision. Touches no DB/host, so it works anywhere.
+		// Build identity: the date-based release stamped by scripts/version.sh
+		// at build time (there is no VERSION file — ADR-0059), plus the VCS
+		// revision when the stamp lacks it. Touches no DB/host, so it works
+		// anywhere.
 		fmt.Println("fleet " + version.String())
 		return 0
 	case "-h", "--help", "help":
@@ -146,6 +148,17 @@ Chat with the agent (TUI, #457):
   fleet chat                                          (interactive Bubble Tea chat with the fleet agent)
   fleet chat --message "<text>" [--no-tui]            (one-shot: stream the reply to stdout; scriptable)
   fleet chat [--conversation <id>] [--model <slug>] [--email …] [--server …] [--token-file <path>]
+
+Preflight & diagnostics (in-binary; no server needed):
+  fleet validate-config [--client-config <dir>] [--check-model-api] [--json]
+                                                      (dry-run the boot: every env knob, the bundle manifest, MCP catalog,
+                                                       personas; exit 0 = would boot, 1 = refused, 2 = usage)
+  fleet mcp test [--all | <server> ...] [--deep] [--bundle-path <dir>] [--timeout 30s] [--json]
+                                                      (per-server smoke: spawn it host-side like the broker, handshake,
+                                                       tools/list; --deep also calls its auth-status/probe tool — docs/MCP-TESTING.md)
+  fleet eval run <set> | list | history [set] | capture ...   (golden-set regression harness — docs/EVALS.md;
+                                                       fleet eval alone prints the per-subcommand flags)
+  fleet generate-vapid-keys                           (mint the Web Push VAPID key pair for the env file — docs/PUSH-NOTIFICATIONS.md)
 
 Operator lifecycle (bootstrap → update → status/doctor):
   fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
@@ -277,5 +290,9 @@ env vars set, the client bundle loads, and the systemd unit state.
 Passwords are read from stdin with --password - (never on argv).
 
   fleet version                                       (print build version + VCS revision; a.k.a. --version)
+
+Exit codes (every verb): 0 ok · 1 usage error or refused preflight · 2 usage error on the
+  in-binary verbs (validate-config, eval, mcp test) and cleanup/timers · 5 operational failure
+  (DB, filesystem, service) · 6 fleet status found the box unhealthy.
 `)
 }

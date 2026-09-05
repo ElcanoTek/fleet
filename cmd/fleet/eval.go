@@ -189,7 +189,7 @@ func evalRun(args []string) int {
 	// on a box with no orchestrator DB, e.g. a bundle repo's CI job).
 	var baseline *models.EvalRun
 	if !*noDB {
-		if st, code := openEvalStorage(); code == 0 {
+		if st, code := openEvalStorage(true); code == 0 {
 			baseline, _ = st.LatestEvalRun(context.Background(), set.Name)
 			if err := persistEvalRun(st, result); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: persist eval run: %v\n", err)
@@ -234,11 +234,18 @@ func shortSHA(sha string) string {
 // openEvalStorage opens the orchestrator DB from the same DSN resolution the
 // server uses (FLEET_SCHED_DATABASE_URL / SCHED_DATABASE_URL / DATABASE_URL /
 // DB_* parts). Returns (nil, nonzero) with a warning when no DSN is available.
-func openEvalStorage() (*storage.Storage, int) {
+//
+// hasNoDBFlag says whether the CALLING subcommand accepts --no-db (only `eval
+// run` does), so the hint to use it is printed only where it would work.
+func openEvalStorage(hasNoDBFlag bool) (*storage.Storage, int) {
 	dsn := schedDSN()
 	if dsn == "" && strings.TrimSpace(os.Getenv("DATABASE_URL")) == "" &&
 		strings.TrimSpace(os.Getenv("DB_HOST")) == "" {
-		fmt.Fprintln(os.Stderr, "warning: no orchestrator DB configured (DATABASE_URL); skipping eval_runs persistence — use --no-db to silence")
+		msg := "warning: no orchestrator DB configured (DATABASE_URL); skipping eval_runs persistence"
+		if hasNoDBFlag {
+			msg += " — use --no-db to silence"
+		}
+		fmt.Fprintln(os.Stderr, msg)
 		return nil, 1
 	}
 	st := storage.New()
@@ -363,7 +370,7 @@ func evalHistory(args []string) int {
 	if fs.NArg() > 0 {
 		setName = fs.Arg(0)
 	}
-	st, code := openEvalStorage()
+	st, code := openEvalStorage(false)
 	if st == nil {
 		return code
 	}
@@ -467,7 +474,7 @@ func captureFromTask(id string) (evals.Case, error) {
 	if err != nil {
 		return evals.Case{}, fmt.Errorf("--task: %w", err)
 	}
-	st, code := openEvalStorage()
+	st, code := openEvalStorage(false)
 	if st == nil || code != 0 {
 		return evals.Case{}, errors.New("orchestrator DB required for --task capture (set DATABASE_URL)")
 	}

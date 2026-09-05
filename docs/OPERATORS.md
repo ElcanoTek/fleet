@@ -131,6 +131,21 @@ out-of-loader, blocking and advisory — before starting the service; config
 hot-reload applies the same rules to the knobs it can reload (see
 [CONFIG-RELOAD.md](CONFIG-RELOAD.md)).
 
+**Less-travelled knobs** the loader reads that have no page of their own
+(every one is optional; the default is what an unset value means):
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `FLEET_TURN_TIMEOUT_SECONDS` | `1800` | Hard deadline on one interactive chat turn (legacy alias `CHAT_TURN_TIMEOUT_SECONDS`). |
+| `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | `0` (off) | Auto-archive a conversation this many days after its last activity; `0` leaves archiving to the user. |
+| `CONVERSATION_TTL_DAYS` | `14` | Retention of unpinned conversations before the maintenance sweep deletes them (no `FLEET_` prefix). |
+| `FLEET_CHAT_DB_MAX_CONNS` / `_MIN_CONNS` / `_MAX_CONN_IDLE_TIME` / `_MAX_CONN_LIFETIME` | pgx defaults | Chat-store connection-pool sizing; the `FLEET_SCHED_DB_*` quartet is the same for the scheduler DB. Durations take Go syntax. |
+| `FLEET_TLS_HTTP_ADDR` | `:80` | The HTTP→HTTPS redirect + ACME challenge listener when fleet terminates TLS itself. |
+| `FLEET_LOCKDOWN_ALLOWED_MODELS` | (empty) | Comma-separated model slugs a lockdown-mode conversation may switch to. |
+| `FLEET_KEEP_RUNS_PER_TASK` | `10` | Superseded run logs kept per scheduled task before the retention sweep prunes the oldest. |
+| `FLEET_TASK_FALLBACK_MODEL` | (empty) | Model the scheduler falls back to when a task's own model is unavailable. |
+| `FLEET_SENTRY_DSN` | (empty) | Optional Sentry-protocol endpoint for error reporting; unset disables it. |
+
 ## The client-config checkout
 
 fleet ships **no** client content; it loads a **client config bundle** from

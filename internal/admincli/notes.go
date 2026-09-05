@@ -141,6 +141,7 @@ func notesList(argv []string) int {
 	fs := flag.NewFlagSet("notes list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
 	all := fs.Bool("all", false, "include archived notes")
+	asJSON := fs.Bool("json", false, "machine-readable output")
 	_, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
@@ -153,6 +154,19 @@ func notesList(argv []string) int {
 	notes, err := st.ListNotes(context.Background(), *all)
 	if err != nil {
 		return errf(5, "%v", err)
+	}
+	if *asJSON {
+		type row struct {
+			Slug    string `json:"slug"`
+			Version int    `json:"version"`
+			Status  string `json:"status"`
+			Title   string `json:"title"`
+		}
+		rows := make([]row, 0, len(notes))
+		for _, n := range notes {
+			rows = append(rows, row{Slug: n.Slug, Version: int(n.Version), Status: string(n.Status), Title: n.Title})
+		}
+		return printJSON(rows)
 	}
 	if len(notes) == 0 {
 		fmt.Fprintln(os.Stderr, "(no notes)")

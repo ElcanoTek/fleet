@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -259,6 +260,7 @@ func schedUserDel(argv []string) int {
 func schedUserList(argv []string) int {
 	fs := flag.NewFlagSet("sched user list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	asJSON := fs.Bool("json", false, "machine-readable output")
 	_, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
@@ -271,6 +273,17 @@ func schedUserList(argv []string) int {
 	users, err := st.ListUsers(context.Background())
 	if err != nil {
 		return errf(5, "%v", err)
+	}
+	if *asJSON {
+		type row struct {
+			Username string `json:"username"`
+			Role     string `json:"role"`
+		}
+		rows := make([]row, 0, len(users))
+		for _, u := range users {
+			rows = append(rows, row{Username: u.Username, Role: u.Role})
+		}
+		return printJSON(rows)
 	}
 	if len(users) == 0 {
 		fmt.Fprintln(os.Stderr, "no sched users yet — add one with: fleet sched user add <username> --role admin --password -")
@@ -397,12 +410,41 @@ func schedAPIKeyCreate(argv []string) int {
 	return 0
 }
 
-func schedAPIKeyList(_ []string) int {
+func schedAPIKeyList(argv []string) int {
+	fs := flag.NewFlagSet("sched apikey list", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	// Parse argv in full (this verb takes no positional), so a typo'd flag or a
+	// stray argument is an error rather than silently ignored — it used to
+	// discard argv entirely, so `apikey list --josn` printed the list and 0.
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "sched apikey list takes no arguments (got %q)", fs.Args())
+	}
 	mgr, _, code := openKeyManager()
 	if mgr == nil {
 		return code
 	}
 	keys := mgr.ListKeys()
+	if *asJSON {
+		type row struct {
+			KeyID   string `json:"key_id"`
+			Name    string `json:"name"`
+			Type    string `json:"type"`
+			Enabled bool   `json:"enabled"`
+		}
+		rows := make([]row, 0, len(keys))
+		for _, k := range keys {
+			typeStr := string(k.Type)
+			if typeStr == "" {
+				typeStr = "legacy"
+			}
+			// Never the raw key — the same fields as the text listing.
+			rows = append(rows, row{KeyID: k.KeyID, Name: k.Name, Type: typeStr, Enabled: k.Enabled})
+		}
+		return printJSON(rows)
+	}
 	if len(keys) == 0 {
 		fmt.Fprintln(os.Stderr, "(no API keys)")
 		return 0
@@ -419,9 +461,12 @@ func schedAPIKeyList(_ []string) int {
 }
 
 func schedAPIKeyRevoke(argv []string) int {
-	keyID, _ := splitPositional(argv)
+	keyID, rest := splitPositional(argv)
 	if keyID == "" {
 		return errf(1, "key id required")
+	}
+	if len(rest) > 0 {
+		return errf(1, "sched apikey revoke takes only <key-id> (unexpected: %q)", rest)
 	}
 	mgr, ks, code := openKeyManager()
 	if mgr == nil {
@@ -466,9 +511,12 @@ func schedAPIKeyRotate(argv []string) int {
 }
 
 func schedAPIKeyDelete(argv []string) int {
-	keyID, _ := splitPositional(argv)
+	keyID, rest := splitPositional(argv)
 	if keyID == "" {
 		return errf(1, "key id required")
+	}
+	if len(rest) > 0 {
+		return errf(1, "sched apikey delete takes only <key-id> (unexpected: %q)", rest)
 	}
 	mgr, ks, code := openKeyManager()
 	if mgr == nil {
@@ -512,4 +560,16 @@ func parseCSVList(raw string) []string {
 		}
 	}
 	return out
+}
+
+// printJSON writes v to stdout as indented JSON — the one encoder every
+// `--json` list verb shares, so machine callers get the same shape rules
+// everywhere (an empty list is `[]`, never null or a "(none)" line on stderr).
+func printJSON(v any) int {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return errf(5, "encode json: %v", err)
+	}
+	return 0
 }

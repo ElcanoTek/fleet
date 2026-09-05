@@ -178,6 +178,7 @@ func schedTriggerList(argv []string) int {
 	fs := flag.NewFlagSet("sched trigger list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
 	taskID := fs.String("task", "", "filter to one task ID (optional)")
+	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -200,6 +201,21 @@ func schedTriggerList(argv []string) int {
 	triggers, err := st.ListTriggers(context.Background(), filter)
 	if err != nil {
 		return errf(5, "list triggers: %v", err)
+	}
+	if *asJSON {
+		// An explicit row type, not the model: the model carries the signing
+		// secret, which must never reach stdout in either format.
+		type row struct {
+			ID     string `json:"id"`
+			Kind   string `json:"kind"`
+			Slug   string `json:"slug"`
+			TaskID string `json:"task_id"`
+		}
+		rows := make([]row, 0, len(triggers))
+		for _, t := range triggers {
+			rows = append(rows, row{ID: t.ID.String(), Kind: string(t.KindOrWebhook()), Slug: t.Slug, TaskID: t.TaskID.String()})
+		}
+		return printJSON(rows)
 	}
 	if len(triggers) == 0 {
 		fmt.Fprintln(os.Stderr, "(no triggers)")

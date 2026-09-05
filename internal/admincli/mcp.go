@@ -196,6 +196,7 @@ func mcpAccountSet(argv []string) int {
 func mcpAccountList(argv []string) int {
 	fs := flag.NewFlagSet("mcp account list", flag.ContinueOnError)
 	envFile := fs.String("env-file", "", "credential env file (default .env.local / FLEET_ENV_FILE)")
+	asJSON := fs.Bool("json", false, "machine-readable output (the seat variable NAMES; never values)")
 	server, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
@@ -221,6 +222,12 @@ func mcpAccountList(argv []string) int {
 		matched = append(matched, k)
 	}
 	sort.Strings(matched)
+	if *asJSON {
+		if matched == nil {
+			matched = []string{}
+		}
+		return printJSON(matched)
+	}
 	if len(matched) == 0 {
 		fmt.Fprintf(os.Stderr, "(no account seats provisioned for server %q in %s)\n", server, path)
 		return 0

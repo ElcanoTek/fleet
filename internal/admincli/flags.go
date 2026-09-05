@@ -2,9 +2,11 @@ package admincli
 
 import (
 	"fmt"
+	"github.com/ElcanoTek/fleet/internal/creds"
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"golang.org/x/term"
 )
@@ -74,13 +76,13 @@ func chatDSN(dbURL string) (string, error) {
 	if v := strings.TrimSpace(dbURL); v != "" {
 		return v, nil
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_CHAT_DATABASE_URL")); v != "" {
+	if v := strings.TrimSpace(envOrFile("FLEET_CHAT_DATABASE_URL")); v != "" {
 		return v, nil
 	}
-	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
+	if v := strings.TrimSpace(envOrFile("DATABASE_URL")); v != "" {
 		return v, nil
 	}
-	return "", fmt.Errorf("chat DB DSN unset — pass --database-url or set FLEET_CHAT_DATABASE_URL / DATABASE_URL")
+	return "", fmt.Errorf("chat DB DSN unset — pass --database-url or set FLEET_CHAT_DATABASE_URL / DATABASE_URL (in the shell or in %s)", serverEnvFile(""))
 }
 
 // schedDSN resolves the sched DB DSN: --database-url, else
@@ -89,14 +91,40 @@ func schedDSN(dbURL string) (string, error) {
 	if v := strings.TrimSpace(dbURL); v != "" {
 		return v, nil
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_SCHED_DATABASE_URL")); v != "" {
+	if v := strings.TrimSpace(envOrFile("FLEET_SCHED_DATABASE_URL")); v != "" {
 		return v, nil
 	}
-	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
+	if v := strings.TrimSpace(envOrFile("DATABASE_URL")); v != "" {
 		return v, nil
 	}
-	return "", fmt.Errorf("sched DB DSN unset — pass --database-url or set FLEET_SCHED_DATABASE_URL / DATABASE_URL")
+	return "", fmt.Errorf("sched DB DSN unset — pass --database-url or set FLEET_SCHED_DATABASE_URL / DATABASE_URL (in the shell or in %s)", serverEnvFile(""))
 }
+
+// envOrFile reads key from the process environment, falling back to the
+// deployment's server env file (serverEnvFile: FLEET_ENV_FILE, else
+// /etc/fleet/fleet.env on a provisioned box, else .env.local). The shipped
+// unit reads that file itself and deliberately does not export it to login
+// shells, so from a fresh root shell `fleet status` reported a healthy box as
+// "✗ OPENROUTER_API_KEY unset / DSN unresolved" and every DB-backed verb
+// demanded --database-url — the same fallback keystore.go already applies for
+// FLEET_DATA_DIR. The process env always wins so an operator override still
+// works; the file is read once per process.
+func envOrFile(key string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	envFileOnce.Do(func() {
+		if vals, err := creds.ReadEnvValues(serverEnvFile("")); err == nil {
+			envFileValues = vals
+		}
+	})
+	return envFileValues[key]
+}
+
+var (
+	envFileOnce   sync.Once
+	envFileValues map[string]string
+)
 
 // envFilePath resolves the credential env file: --env-file, else
 // FLEET_ENV_FILE, else .env.local.
