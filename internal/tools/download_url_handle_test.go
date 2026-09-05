@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -185,6 +186,81 @@ func TestProtectFastIODownloadURLs_FailsLoudOnFormatDrift(t *testing.T) {
 	got = ProtectFastIODownloadURLs(drifted)
 	if strings.Contains(got, "secret-bearer-value") || strings.Contains(got, "https://cdn.fast.io/opaque/path") || !strings.Contains(got, web) {
 		t.Fatalf("drifted-heading response mis-handled:\n%s", got)
+	}
+}
+
+// downloadHandleTokenRe matches exactly one issued handle: the scheme plus the
+// base64url id, and nothing of the prose around it.
+var downloadHandleTokenRe = regexp.MustCompile(`fleet-download://[A-Za-z0-9_-]+`)
+
+// A URL vaulted out of PROSE routinely ends a sentence or sits in a markdown
+// link, and the URL regex stops only at whitespace and angle/quote characters —
+// so it swallows the trailing "." or ")". Vaulting the swallowed form keys the
+// handle to an address that does not exist, and download_url then fails on a
+// link that was perfectly good.
+func TestProtectFastIODownloadURLs_TrimsTrailingPunctuation(t *testing.T) {
+	const bearer = "https://cdn.fast.io/o/x?token=prose-bearer-value"
+	cases := []struct {
+		name, line, wantTail string
+	}{
+		{"sentence period", "Grab it from " + bearer + ".", "."},
+		{"comma", "Use " + bearer + ", then continue.", ","},
+		{"markdown link", "See [the file](" + bearer + ")", ")"},
+		{"parenthetical sentence", "(fetch " + bearer + ".)", ".)"},
+		{"no punctuation", "Grab it from " + bearer, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ProtectFastIODownloadURLs(c.line + "\n")
+			if strings.Contains(got, "prose-bearer-value") {
+				t.Fatalf("bearer leaked: %q", got)
+			}
+			i := strings.Index(got, downloadURLHandlePrefix)
+			if i < 0 {
+				t.Fatalf("no handle issued: %q", got)
+			}
+			// The punctuation must stay in the TEXT, not ride into the handle.
+			// Extract the handle by its own alphabet (base64url id) rather than
+			// by trimming, so a URL mid-sentence does not drag the rest of the
+			// line in and mask the very thing under test.
+			handle := downloadHandleTokenRe.FindString(got[i:])
+			if handle == "" {
+				t.Fatalf("no well-formed handle in %q", got)
+			}
+			resolved, protected, err := resolveDownloadURLHandle(handle)
+			if err != nil || !protected {
+				t.Fatalf("resolve %q: (%q, %v, %v)", handle, resolved, protected, err)
+			}
+			if resolved != bearer {
+				t.Fatalf("handle resolved to %q, want %q — the trailing %q was vaulted with the URL",
+					resolved, bearer, c.wantTail)
+			}
+			// The tail must sit immediately after the handle, in the text —
+			// checking end-of-line instead would pass vacuously for a URL that
+			// appears mid-sentence.
+			if c.wantTail != "" && !strings.Contains(got, handle+c.wantTail) {
+				t.Errorf("trailing %q was lost from the text: %q", c.wantTail, got)
+			}
+		})
+	}
+}
+
+func TestSplitTrailingPunctuation(t *testing.T) {
+	cases := []struct{ in, url, tail string }{
+		{"https://x/y?token=a.", "https://x/y?token=a", "."},
+		{"https://x/y?token=a", "https://x/y?token=a", ""},
+		{"https://x/y?token=a).", "https://x/y?token=a", ")."},
+		// Punctuation INSIDE the address, with nothing after it, stays put.
+		{"https://x/y?a=(b)c", "https://x/y?a=(b)c", ""},
+		// A degenerate all-punctuation match is returned whole rather than
+		// yielding an empty address.
+		{"...", "...", ""},
+	}
+	for _, c := range cases {
+		url, tail := splitTrailingPunctuation(c.in)
+		if url != c.url || tail != c.tail {
+			t.Errorf("splitTrailingPunctuation(%q) = (%q, %q), want (%q, %q)", c.in, url, tail, c.url, c.tail)
+		}
 	}
 }
 

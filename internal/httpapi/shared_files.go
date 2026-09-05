@@ -198,7 +198,18 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 	// upload was saved" contract holds for every exit — not only the 409s.
 	// Under sharedFilesMu nothing else can have referenced those rows yet.
 	fail := func(status int, msg string) {
-		s.rollbackSharedFileBatch(r.Context(), lib, out)
+		// The rollback runs on a context DETACHED from the request. The most
+		// likely way to reach this path is the request context being cancelled
+		// mid-batch (the client navigated away during a multi-file upload):
+		// that cancellation is what makes the next store call fail, and passing
+		// the same dead context on would make every DeleteSharedFile fail
+		// instantly — leaving exactly the half-written library the "nothing was
+		// saved" contract promises cannot happen, in the one case that triggers
+		// it most. Cleanup work must outlive the request that provoked it; the
+		// timeout keeps a wedged database from pinning the handler.
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), sharedFileRollbackTimeout)
+		defer cancel()
+		s.rollbackSharedFileBatch(rbCtx, lib, out)
 		http.Error(w, msg+" (nothing from this upload was saved)", status)
 	}
 	for i, fh := range files {
@@ -258,6 +269,11 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 // logged and the remaining rows are still attempted, because a half-undone
 // batch is better than one that stopped undoing at the first hiccup. Caller
 // holds sharedFilesMu.
+// sharedFileRollbackTimeout bounds the detached batch rollback. Generous
+// enough for a handful of row deletes, short enough that a wedged database
+// cannot hold the handler open indefinitely.
+const sharedFileRollbackTimeout = 10 * time.Second
+
 func (s *Server) rollbackSharedFileBatch(ctx context.Context, lib sharedfiles.Library, created []store.SharedFile) {
 	for _, row := range created {
 		if _, err := s.store.DeleteSharedFile(ctx, row.ID); err != nil {

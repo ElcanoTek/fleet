@@ -187,9 +187,16 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 	// createTaskFromRecord) an export envelope was an unmetered route around
 	// every create gate.
 	creator := creatorFromPrincipal(p)
-	if err := h.budgetCapError(r.Context(), creator); err != nil {
-		writeBudgetRefusal(w, err)
-		return
+	// ...but NOT for a dry run. dry_run=true writes no row (every create and
+	// replace below is behind `if !dryRun`) and therefore spends nothing, so
+	// refusing it on an exhausted window would deny the validation-only plan
+	// precisely when an operator most needs to see what an import would do.
+	// The gate belongs on the writes, not on the preview of them.
+	if !dryRun {
+		if err := h.budgetCapError(r.Context(), creator); err != nil {
+			writeBudgetRefusal(w, err)
+			return
+		}
 	}
 
 	// Detect duplicate names WITHIN the import payload itself — two records

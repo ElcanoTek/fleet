@@ -36,6 +36,28 @@ var downloadURLHandles = struct {
 
 var httpURLInLine = regexp.MustCompile(`https?://[^\s<>"']+`)
 
+// urlTrailingPunctuation is the set trimmed from the end of a URL found in
+// prose. Every one of these is legal INSIDE a URL, which is why the trim is
+// applied only to a trailing run: "?token=abc." almost certainly ends a
+// sentence, while "?a=(b)" mid-string is left alone because nothing follows it.
+const urlTrailingPunctuation = `.,;:!?)]}'"`
+
+// splitTrailingPunctuation divides a matched URL into the address and the
+// sentence/markdown punctuation that follows it, so the address can be vaulted
+// without the tail and the tail can stay in the surrounding text.
+func splitTrailingPunctuation(raw string) (url, tail string) {
+	cut := len(raw)
+	for cut > 0 && strings.ContainsRune(urlTrailingPunctuation, rune(raw[cut-1])) {
+		cut--
+	}
+	// A match that is nothing but punctuation is not a URL; leave it whole
+	// rather than returning an empty address.
+	if cut == 0 {
+		return raw, ""
+	}
+	return raw[:cut], raw[cut:]
+}
+
 // downloadURLDriftOnce rate-limits the format-drift warning to once per
 // process: the condition is a property of the upstream response shape, not of
 // one call, and the message is the same every time.
@@ -92,13 +114,20 @@ func ProtectFastIODownloadURLs(text string) string {
 			continue
 		}
 		// Outside a protected section: vault anyway when the URL itself says it
-		// is a bearer (fail loud, not open).
+		// is a bearer (fail loud, not open). Here the URL is embedded in PROSE,
+		// so unlike the section case it routinely ends a sentence or sits in a
+		// markdown link — and httpURLInLine, which stops only at whitespace and
+		// angle/quote characters, swallows that punctuation. Vaulting the
+		// swallowed form would key the handle to a URL with a trailing "." or
+		// ")", so resolving it later would fetch a different, invalid address.
+		// Split the tail off, vault the URL, and put the tail back in the text.
 		lines[i] = httpURLInLine.ReplaceAllStringFunc(line, func(raw string) string {
-			if !hasCredentialQuery(raw) {
+			url, tail := splitTrailingPunctuation(raw)
+			if !hasCredentialQuery(url) {
 				return raw
 			}
 			drift = true
-			return vault(raw)
+			return vault(url) + tail
 		})
 	}
 

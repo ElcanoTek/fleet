@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,6 +120,12 @@ func setupBudgetEnv(t *testing.T) (*budgetTestEnv, func()) {
 	r := chi.NewRouter()
 	r.Post("/tasks", h.CreateTask)
 	r.Post("/tasks/batch", h.CreateTaskBatch)
+	// Import is the third bulk-create path and runs the same budget gate, so
+	// the harness must reach it to assert that (and that a dry run does NOT).
+	// Unlike CreateTask — which resolves its creator from the request itself —
+	// this handler reads the principal from the CONTEXT, so it needs the same
+	// auth middleware the real router puts in front of it.
+	r.With(h.AdminOrUserAuthMiddleware).Post("/tasks/import", h.HandleTaskImport)
 	// The CRUD endpoints gate in-handler on PermissionAdmin (like
 	// /admin/usage), so the test router registers them bare and calls them
 	// with the admin API key.
@@ -167,7 +174,12 @@ func (env *budgetTestEnv) seedKeySpend(t *testing.T, keyID string, costUSD float
 
 func (env *budgetTestEnv) createKey(t *testing.T) (keyID, raw string) {
 	t.Helper()
-	key, raw, err := env.keyMgr.CreateKey("budgeted", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	// create_task AND view_tasks: an untyped (legacy) key needs view_tasks to
+	// clear AdminOrUserAuthMiddleware, which the context-reading handlers sit
+	// behind, and a real create key carries both anyway. The budget gate keys
+	// on spend, not permissions, so this does not soften any assertion here.
+	key, raw, err := env.keyMgr.CreateKey("budgeted",
+		[]models.Permission{models.PermissionCreateTask, models.PermissionViewTasks}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -290,6 +302,26 @@ func TestBudgetHardRefusal_SingleAndBatch(t *testing.T) {
 	wb := env.do(t, "POST", "/tasks/batch", `{"tasks":[{"prompt":"batched over the bound"}]}`, raw)
 	if wb.Code != http.StatusPaymentRequired {
 		t.Fatalf("batch create over bound: got %d, want 402 (%s)", wb.Code, wb.Body.String())
+	}
+
+	// Import is a bulk create and refuses the same way...
+	envelope := `{"version":1,"tasks":[{"name":"imported-over-bound","prompt":"p","schedule_kind":"once"}]}`
+	if wi := env.do(t, "POST", "/tasks/import", envelope, raw); wi.Code != http.StatusPaymentRequired {
+		t.Fatalf("import over bound: got %d, want 402 (%s)", wi.Code, wi.Body.String())
+	}
+	// ...but a DRY RUN writes no row and spends nothing, so the budget must not
+	// deny the validation-only plan. Refusing it would withhold "what would this
+	// import do" from an operator at exactly the moment they are over budget and
+	// most need to look before acting.
+	wd := env.do(t, "POST", "/tasks/import?dry_run=true", envelope, raw)
+	if wd.Code == http.StatusPaymentRequired {
+		t.Fatalf("dry-run import refused on budget: %s", wd.Body.String())
+	}
+	if wd.Code != http.StatusOK && wd.Code != http.StatusMultiStatus {
+		t.Fatalf("dry-run import: got %d, want 200/207 (%s)", wd.Code, wd.Body.String())
+	}
+	if !strings.Contains(wd.Body.String(), `"dry_run":true`) {
+		t.Errorf("dry-run response should report dry_run: %s", wd.Body.String())
 	}
 
 	// The admin key carries no budget principal and is unaffected.

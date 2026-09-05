@@ -151,6 +151,33 @@ than by a major-version bump.
 
 ### Fixed
 
+- **Follow-ups from the hardening pass's own review.** Five defects in the
+  fixes that shipped in the previous entry, each found by review rather than by
+  a test, and each now covered by one:
+  - The all-or-nothing shared-file upload rolled back on the REQUEST context.
+    A client disconnecting mid-upload is the most likely way to reach that path
+    at all — the cancellation is what makes the next store call fail — and it
+    made every rollback delete fail instantly, leaving exactly the half-written
+    library the "nothing was saved" contract rules out. The cleanup now runs on
+    a detached, time-bounded context.
+  - `POST /tasks/import?dry_run=true` was refused with 402 once a principal's
+    budget window was exhausted, even though a dry run writes no row and spends
+    nothing. The gate belongs on the writes, not on the preview of them.
+  - The dataset row pager could strand a reader on a page that no longer
+    exists: approving or rerunning the last rows of a page drops the total
+    while the dataset and filter stay put, so neither existing reset fired, the
+    table went empty, and the pager hid itself (it renders only above one page)
+    leaving no control to get back.
+  - Revocation authenticated with the token endpoint's advertised methods, but
+    RFC 8414 defines a separate `revocation_endpoint_auth_methods_supported`.
+    A confidential client refused for AUTHENTICATION now retries once with the
+    other form — revocation is idempotent, which is what makes that safe — so a
+    server that differs between the two endpoints no longer leaves a live
+    refresh token behind a successful-looking Disconnect.
+  - The credential-URL drift fallback vaulted URLs found in PROSE, where the
+    URL pattern swallows the trailing `.` or `)` that ends the sentence or
+    closes a markdown link. The handle was then keyed to an address that does
+    not exist, so `download_url` failed on a link that was perfectly good.
 - **Sub-agent file tools work at all.** Child write isolation (#1043) forces a
   spawned sub-agent's cwd to `<workspace>/subagents/<child-id>`, and the file
   tools scope their requests to that directory — but the sandbox armed the

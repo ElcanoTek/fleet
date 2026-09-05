@@ -200,3 +200,77 @@ func TestRevokeToken(t *testing.T) {
 		}
 	})
 }
+
+// TestRevokeToken_AuthFormRetry covers which client-authentication form a
+// revocation uses, and the one retry that makes a wrong first guess recoverable.
+// RFC 8414 lets an AS advertise a different form for revocation than for the
+// token endpoint, and the list fleet stores is the token endpoint's — so a
+// mismatch used to end as a 401 with the token still live at the AS while the
+// local record was deleted anyway.
+func TestRevokeToken_AuthFormRetry(t *testing.T) {
+	t.Run("retries with the other auth form when the AS refuses authentication", func(t *testing.T) {
+		var forms []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, _, ok := r.BasicAuth(); ok {
+				forms = append(forms, "basic")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+				return
+			}
+			forms = append(forms, "post")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer ts.Close()
+
+		// Advertises client_secret_basic, so Basic is tried first and refused;
+		// the post retry succeeds and the overall call reports success.
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token",
+			[]string{"client_secret_basic"}); err != nil {
+			t.Errorf("expected the retry to succeed, got %v", err)
+		}
+		if len(forms) != 2 || forms[0] != "basic" || forms[1] != "post" {
+			t.Errorf("attempts = %v, want [basic post]", forms)
+		}
+	})
+
+	t.Run("a public client does not retry", func(t *testing.T) {
+		attempts := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			attempts++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+		}))
+		defer ts.Close()
+
+		// No secret: there is no second form to try, so one attempt and the
+		// refusal is reported.
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "", "test_token", nil); err == nil {
+			t.Error("expected the refusal to be reported")
+		}
+		if attempts != 1 {
+			t.Errorf("attempts = %d, want 1", attempts)
+		}
+	})
+
+	t.Run("a non-auth refusal is not retried", func(t *testing.T) {
+		attempts := 0
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			attempts++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_request"}`))
+		}))
+		defer ts.Close()
+
+		// invalid_request says nothing about the auth form; retrying it would
+		// just double the noise on a request that is wrong on its merits.
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token", nil); err == nil {
+			t.Error("expected the refusal to be reported")
+		}
+		if attempts != 1 {
+			t.Errorf("attempts = %d, want 1", attempts)
+		}
+	})
+}
