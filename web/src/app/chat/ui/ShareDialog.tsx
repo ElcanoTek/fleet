@@ -46,7 +46,7 @@
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
-import { useId } from "react";
+import { useId, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 
@@ -192,6 +192,13 @@ export function ShareDialog({
   const teamCheckboxId = useId();
 
   const toggleUnavailable = busy || Boolean(unavailable);
+
+  // Revoking a link is destructive for whoever holds the URL (it dies the
+  // moment the DELETE lands), so it takes the same two-step confirm as the
+  // app's other irreversible actions — inline, because a dialog over a dialog
+  // is worse than a second sentence. Cleared whenever the link goes away.
+  const [confirmStop, setConfirmStop] = useState(false);
+  const stopArmed = confirmStop && Boolean(token);
 
   return (
     <DialogShell
@@ -378,13 +385,41 @@ export function ShareDialog({
                     {copied ? "Copied ✓" : "Copy link"}
                   </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onStopLink(conversation)}
-                  className="mt-2 rounded-full border border-[var(--color-danger-border)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)]"
-                >
-                  Stop sharing the link
-                </button>
+                {stopArmed ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
+                      Anyone holding the link loses access at once.
+                    </span>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setConfirmStop(false);
+                        onStopLink(conversation);
+                      }}
+                      className="rounded-full border border-[var(--color-danger-border)] bg-[var(--color-danger)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {busy ? "Stopping…" : "Stop sharing"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setConfirmStop(false)}
+                      className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                    >
+                      Keep the link
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmStop(true)}
+                    className="mt-2 rounded-full border border-[var(--color-danger-border)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Stop sharing the link
+                  </button>
+                )}
               </>
             ) : (
               <>
@@ -392,12 +427,15 @@ export function ShareDialog({
                   Creates a URL anyone can open — read-only, and not limited
                   to your team. Revocable any time.
                 </p>
+                {/* `disabled` while a share request is in flight: a second
+                    click used to mint a second POST (and a second toast). */}
                 <button
                   type="button"
+                  disabled={busy}
                   onClick={() => onCreateLink(conversation)}
-                  className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                  className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Create link
+                  {busy ? "Creating…" : "Create link"}
                 </button>
               </>
             )}

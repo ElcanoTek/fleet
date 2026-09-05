@@ -3,7 +3,6 @@ package admincli
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -43,7 +42,11 @@ func cmdMigrate(argv []string) int {
 // its applied vs pending migrations. A database whose DSN is unset is skipped
 // with a note rather than treated as an error; a DSN that IS set but fails to
 // connect or query is a hard error. Exit 0 when at least one DB reported cleanly
-// and none errored; 1 otherwise.
+// and none errored; 1 otherwise. With --json the envelope is ALWAYS emitted —
+// {"chat": {...}, "sched": {...}} with a per-DB "error" member in place of the
+// report fields when that DB could not be read — so a CI consumer parsing the
+// output sees which side failed and why instead of an empty stdout or a
+// silently missing key (both of which it used to get).
 func cmdMigrateStatus(argv []string) int {
 	fs := flag.NewFlagSet("migrate status", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "Postgres DSN override for both DBs (default per-DB FLEET_*_DATABASE_URL / DATABASE_URL)")
@@ -54,41 +57,46 @@ func cmdMigrateStatus(argv []string) int {
 	ctx := context.Background()
 
 	var (
-		chat  *store.MigrationReport
-		sched *scheddb.MigrationReport
-		exit  int
+		chat     *store.MigrationReport
+		sched    *scheddb.MigrationReport
+		chatErr  error
+		schedErr error
+		exit     int
 	)
 
 	if dsn, err := chatDSN(*dbURL); err != nil {
-		fmt.Fprintf(os.Stderr, "chat DB: %v\n", err)
+		chatErr = err
 	} else if rep, err := chatMigrationStatus(ctx, dsn); err != nil {
-		fmt.Fprintf(os.Stderr, "chat DB: %v\n", err)
+		chatErr = err
 		exit = 1
 	} else {
 		chat = &rep
 	}
 
 	if dsn, err := schedDSN(*dbURL); err != nil {
-		fmt.Fprintf(os.Stderr, "sched DB: %v\n", err)
+		schedErr = err
 	} else if rep, err := schedMigrationStatus(ctx, dsn); err != nil {
-		fmt.Fprintf(os.Stderr, "sched DB: %v\n", err)
+		schedErr = err
 		exit = 1
 	} else {
 		sched = &rep
 	}
 
 	if chat == nil && sched == nil {
-		return 1
+		exit = 1
 	}
 
 	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(struct {
-			Chat  *store.MigrationReport   `json:"chat,omitempty"`
-			Sched *scheddb.MigrationReport `json:"sched,omitempty"`
-		}{Chat: chat, Sched: sched})
+		if code := printJSON(migrateStatusEnvelope(chat, chatErr, sched, schedErr)); code != 0 {
+			return code
+		}
 		return exit
+	}
+	if chatErr != nil {
+		fmt.Fprintf(os.Stderr, "chat DB: %v\n", chatErr)
+	}
+	if schedErr != nil {
+		fmt.Fprintf(os.Stderr, "sched DB: %v\n", schedErr)
 	}
 	if chat != nil {
 		printChatMigrations(*chat)
@@ -97,6 +105,41 @@ func cmdMigrateStatus(argv []string) int {
 		printSchedMigrations(*sched)
 	}
 	return exit
+}
+
+// migrateStatusJSON is the --json envelope. Each DB member is the report's
+// fields flattened (the embedded pointer) plus an "error" string when the DB
+// could not be read; a failed DB is therefore {"error": "..."} rather than
+// absent, and the envelope is emitted even when both fail. Two concrete
+// wrappers rather than one generic: Go cannot embed a type parameter, and the
+// flattening is the point.
+type migrateStatusJSON struct {
+	Chat  migrateChatJSON  `json:"chat"`
+	Sched migrateSchedJSON `json:"sched"`
+}
+
+type migrateChatJSON struct {
+	*store.MigrationReport
+	Error string `json:"error,omitempty"`
+}
+
+type migrateSchedJSON struct {
+	*scheddb.MigrationReport
+	Error string `json:"error,omitempty"`
+}
+
+func migrateStatusEnvelope(chat *store.MigrationReport, chatErr error, sched *scheddb.MigrationReport, schedErr error) migrateStatusJSON {
+	env := migrateStatusJSON{
+		Chat:  migrateChatJSON{MigrationReport: chat},
+		Sched: migrateSchedJSON{MigrationReport: sched},
+	}
+	if chatErr != nil {
+		env.Chat.Error = chatErr.Error()
+	}
+	if schedErr != nil {
+		env.Sched.Error = schedErr.Error()
+	}
+	return env
 }
 
 func chatMigrationStatus(ctx context.Context, dsn string) (store.MigrationReport, error) {

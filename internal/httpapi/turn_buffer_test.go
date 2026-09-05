@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // testRecorder implements http.ResponseWriter + http.Flusher for SSE
@@ -182,5 +184,53 @@ func TestTurnBuffer_EmitAfterFinishIsNoOp(t *testing.T) {
 	_ = buf.Attach(context.Background(), 0, rw, nil)
 	if strings.Contains(rw.Body(), "should-be-dropped") {
 		t.Error("post-Finish Emit leaked into replay")
+	}
+}
+
+// failingCreateTurnPersister records what the buffer asks of it while every
+// CreateTurn fails — the seam for a turn whose row never got inserted.
+type failingCreateTurnPersister struct {
+	mu       sync.Mutex
+	finishes int
+	inserts  int
+}
+
+func (p *failingCreateTurnPersister) CreateTurn(context.Context, string, string, int64) error {
+	return fmt.Errorf("simulated CreateTurn failure")
+}
+
+func (p *failingCreateTurnPersister) InsertTurnEvents(context.Context, []store.TurnEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.inserts++
+	return nil
+}
+
+func (p *failingCreateTurnPersister) FinishTurn(context.Context, string, store.TurnStatus, int64, bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.finishes++
+	return nil
+}
+
+// A failed attach leaves the buffer with NO persister: Finish must not call
+// FinishTurn (or backfill) against a turn row CreateTurn never inserted.
+// The persister used to be assigned before CreateTurn ran, so the abandoned
+// turn still tried to seal a row that did not exist.
+func TestTurnBuffer_AttachPersisterFailureLeavesNoPersister(t *testing.T) {
+	buf := newTurnBuffer("conv-1", "turn-1")
+	p := &failingCreateTurnPersister{}
+	if err := buf.attachPersister(context.Background(), p); err == nil {
+		t.Fatal("attachPersister should surface the CreateTurn failure")
+	}
+	if buf.persister != nil {
+		t.Fatal("persister must not be wired when CreateTurn failed")
+	}
+	buf.Emit("a", map[string]any{"n": 1})
+	buf.Finish()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.finishes != 0 || p.inserts != 0 {
+		t.Errorf("FinishTurn calls = %d, InsertTurnEvents calls = %d, want 0/0 for a turn that was never created", p.finishes, p.inserts)
 	}
 }

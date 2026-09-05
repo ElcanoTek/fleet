@@ -80,7 +80,7 @@ func screenSeedMessages(ctx context.Context, messages []fantasy.Message) error {
 				continue
 			}
 			blocked, err := screenText(ctx, "user_message", text.Text)
-			if err != nil || blocked {
+			if err := seedScreenError(blocked, err); err != nil {
 				return err
 			}
 		}
@@ -88,8 +88,39 @@ func screenSeedMessages(ctx context.Context, messages []fantasy.Message) error {
 	return nil
 }
 
+// maxGuardrailScreenBytes bounds the text handed to the out-of-process
+// detector. Tool output is governed BEFORE the model-output cap
+// (governToolOutput → boundModelToolOutput), so without this bound a multi-MB
+// bash log is marshalled whole into a 5 s HTTP call; the resulting timeout is a
+// detector_error, which in block mode replaces perfectly benign output with the
+// [BLOCKED] marker. The screened sample keeps the head and tail (where an
+// injection payload is most likely to be placed to survive the model cap) and
+// marks the elision; the tool result itself is not altered here.
+const maxGuardrailScreenBytes = 256 << 10
+
+// guardrailScreenSample returns the bounded head+tail sample of text that is
+// sent to the detector.
+func guardrailScreenSample(text string) string {
+	return headTailPreview(text, maxGuardrailScreenBytes)
+}
+
+// seedScreenError maps a screenText outcome to the error screenSeedMessages
+// returns. screenText pairs blocked with a wrapped ErrGuardrailBlocked today,
+// but the block must be structural: a (blocked=true, err=nil) shape from any
+// future detector path must never degrade into "seed accepted", so it fails
+// closed here rather than relying on the pairing.
+func seedScreenError(blocked bool, err error) error {
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return fmt.Errorf("%w: user_message", ErrGuardrailBlocked)
+	}
+	return nil
+}
+
 func screenToolOutput(ctx context.Context, toolName, text string) (string, bool) {
-	blocked, err := screenText(ctx, "tool_output", text)
+	blocked, err := screenText(ctx, "tool_output", guardrailScreenSample(text))
 	if err != nil || blocked {
 		log.Printf("guardrail: withheld output from %s", toolName)
 		return "[BLOCKED: workspace content guardrail]", true

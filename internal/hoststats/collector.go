@@ -12,8 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/diskguard"
 )
 
 type CPU struct {
@@ -266,15 +267,21 @@ func readMemory(path string) (Memory, error) {
 	return Memory{Available: true, TotalBytes: total, UsedBytes: total - available, AvailableBytes: available, SwapTotalBytes: swapTotal, SwapUsedBytes: swapTotal - swapFree}, nil
 }
 
+// readDisk measures the filesystem at path through diskguard.Usage — the one
+// statfs implementation the whole process shares (the boxdoctor disk check,
+// the Prometheus gauges, the backpressure decision) — with the same
+// used = total − available definition. It used to compute used from Bfree
+// (root-reserved blocks counted as usable), so the admin panel and
+// `fleet doctor` disagreed by the reserve (~5%) on the same disk.
 func readDisk(path string) (Disk, error) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(path, &st); err != nil {
+	total, available, err := diskguard.Usage(path)
+	if err != nil {
 		return Disk{}, err
 	}
-	blockSize := uint64(st.Bsize) // #nosec G115 -- kernel block sizes are non-negative and bounded.
-	total := st.Blocks * blockSize
-	available := st.Bavail * blockSize
-	used := total - st.Bfree*blockSize
+	if available > total {
+		available = total
+	}
+	used := total - available
 	usage := 0.0
 	if total > 0 {
 		usage = 100 * float64(used) / float64(total)

@@ -41,11 +41,14 @@ type pushSubscribeRequest struct {
 // pushSubscribe handles POST /push/subscribe: upsert the caller's
 // subscription keyed on the relay endpoint. 204 on success.
 func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
-	if !s.pushReady(w) {
-		return
-	}
+	// Method first, then readiness: a wrong verb is the client's mistake
+	// whether or not push is configured, and answering it 501 on an
+	// unconfigured box misreported a routing bug as a missing feature.
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.pushReady(w) {
 		return
 	}
 	var req pushSubscribeRequest
@@ -69,11 +72,14 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 // subscription for the given endpoint. Owner-scoped in the store so a user
 // can never remove another's row; idempotent 204 either way.
 func (s *Server) pushUnsubscribe(w http.ResponseWriter, r *http.Request) {
-	if !s.pushReady(w) {
-		return
-	}
+	// Method first, then readiness: a wrong verb is the client's mistake
+	// whether or not push is configured, and answering it 501 on an
+	// unconfigured box misreported a routing bug as a missing feature.
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.pushReady(w) {
 		return
 	}
 	var req pushSubscribeRequest
@@ -97,11 +103,14 @@ func (s *Server) pushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 // application server key the browser subscribes with. Served here so the
 // client never needs a build-time NEXT_PUBLIC_* embed of it.
 func (s *Server) pushVAPIDPublicKey(w http.ResponseWriter, r *http.Request) {
-	if !s.pushReady(w) {
-		return
-	}
+	// Method first, then readiness: a wrong verb is the client's mistake
+	// whether or not push is configured, and answering it 501 on an
+	// unconfigured box misreported a routing bug as a missing feature.
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.pushReady(w) {
 		return
 	}
 	writeJSON(w, map[string]string{"key": s.push.PublicKey()})

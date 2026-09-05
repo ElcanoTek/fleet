@@ -81,9 +81,30 @@ describe("AdminDoctorPage", () => {
     await waitFor(() => expect(screen.getByText(/^deep run ·/)).toBeInTheDocument());
   });
 
+  it("keeps the last report on screen, dated, when a re-run fails", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => HEALTHY })
+      .mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AdminDoctorPage />);
+    const panel = await screen.findByTestId("doctor-panel");
+    // The report says when it was generated, so a stale one is recognisable.
+    expect(screen.getByTestId("doctor-generated-at")).toHaveAttribute("dateTime", "2026-07-22T12:00:00Z");
+
+    fireEvent.click(screen.getByRole("button", { name: "Re-run checks" }));
+    const banner = await screen.findByTestId("doctor-error");
+    expect(banner).toHaveTextContent("502");
+    expect(banner).toHaveTextContent("showing the last completed report");
+    expect(panel).toBeInTheDocument();
+    expect(panel).toHaveTextContent("chat database");
+  });
+
   it("shows the error banner when the report cannot load", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => ({}) }));
     render(<AdminDoctorPage />);
     expect(await screen.findByTestId("doctor-error")).toHaveTextContent("502");
+    expect(screen.queryByTestId("doctor-panel")).toBeNull();
+    expect(screen.queryByTestId("doctor-loading")).toBeNull();
   });
 });

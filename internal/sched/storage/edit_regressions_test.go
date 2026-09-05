@@ -8,6 +8,8 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -155,5 +157,88 @@ func TestPriorityEditChangesDispatchOrder(t *testing.T) {
 	want := min(models.StarvationFloorPriority, models.PriorityLow)
 	if edited.EffectivePriority != want {
 		t.Fatalf("effective_priority after edit = %d, want %d (keep the more urgent of the promotion and the new priority)", edited.EffectivePriority, want)
+	}
+}
+
+// TaskEditFromTask is the overlay the chat manage_tasks adapter builds its
+// few-field edit on so it can go through UpdateEditableTask instead of the
+// unlocked UpdateTask upsert (#1104). It must carry every definition field
+// through unchanged, and the write it feeds must refuse a task that has since
+// been claimed — the exact rewind the upsert used to perform.
+func TestTaskEditFromTaskRoundTripsAndRefusesALiveRun(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	future := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	until := future.Add(48 * time.Hour)
+	remaining, maxIter, think := 3, 7, 2048
+	model, fallback := "test/model", "test/fallback"
+	task := &models.Task{
+		ID: uuid.New(), Prompt: "definition-heavy task", Title: "Heavy", Description: "docs",
+		Status: models.TaskStatusScheduled, ScheduledFor: &future, Recurrence: "0 9 * * *", Timezone: "UTC",
+		RecurrenceUntil: &until, RecurrenceRemaining: &remaining,
+		Model: &model, FallbackModel: &fallback, MaxIterations: &maxIter, ThinkingBudgetTokens: &think,
+		Priority: models.PriorityHigh, Persona: "analyst", Tags: []string{"nightly"},
+		Files: []string{"a.csv"}, FileNames: []string{"input"},
+		AllowNetwork: true, CarryContext: true, InstructionSelfImprove: true,
+		RunIf:         &models.RunIf{Command: "true", TimeoutSeconds: 5},
+		SandboxLimits: &models.TaskSandboxLimits{MemoryMB: 512},
+		CreatedAt:     time.Now().UTC(),
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	before, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	edit := TaskEditFromTask(before)
+	edit.Prompt = "only the prompt changes"
+	updated, err := store.UpdateEditableTask(ctx, task.ID, edit)
+	if err != nil {
+		t.Fatalf("UpdateEditableTask: %v", err)
+	}
+	if updated.Prompt != "only the prompt changes" {
+		t.Fatalf("prompt not applied: %q", updated.Prompt)
+	}
+	after, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	// Everything but the prompt must survive the overlay byte-for-byte.
+	before.Prompt = after.Prompt
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("TaskEditFromTask overlay changed more than the prompt:\n before=%+v\n after =%+v", before, after)
+	}
+
+	// A runner claims the task; the same edit must now be refused, not written
+	// over the lease.
+	owner := uuid.New()
+	if _, err := store.db.Conn().ExecContext(ctx, `UPDATE tasks SET status = 'pending', scheduled_for = NULL WHERE id = $1`, task.ID); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if leased, err := store.leaseTaskToOwner(task.ID, owner); err != nil || leased == nil {
+		t.Fatalf("lease: task=%v err=%v", leased, err)
+	}
+	edit.Prompt = "a stale edit against a running task"
+	if _, err := store.UpdateEditableTask(ctx, task.ID, edit); !errors.Is(err, ErrTaskNotEditable) {
+		t.Fatalf("edit of a running task: err=%v, want ErrTaskNotEditable", err)
+	}
+	live, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("reload live: %v", err)
+	}
+	// The refused edit must not have reached the row, and the lease must be
+	// intact: a write that landed here would be the #1104 shape — an edit built
+	// from a stale read resurrecting status/lease columns under a live runner.
+	if live.Prompt == edit.Prompt {
+		t.Fatalf("refused edit still reached the live row: prompt=%q", live.Prompt)
+	}
+	if live.Status != models.TaskStatusLeased {
+		t.Fatalf("lease was disturbed by the refused edit: status=%s, want %s", live.Status, models.TaskStatusLeased)
+	}
+	if live.LeaseOwner == nil || *live.LeaseOwner != owner.String() {
+		t.Fatalf("lease owner lost: %v, want %s", live.LeaseOwner, owner)
 	}
 }

@@ -122,3 +122,60 @@ func TestCheckVersion(t *testing.T) {
 		t.Errorf("an absent header must be interpreted as 0.3 per §3.6.2, got %v", err)
 	}
 }
+
+// TestResponseEnvelopeCarriesExactlyOneMember pins the JSON-RPC 2.0 rule the
+// package's own client enforces on receipt: a success envelope always has a
+// result member (even for shapes `omitempty` used to drop, such as an empty
+// struct or a nil-able value), an error envelope never has one, and a nil
+// result never reaches the wire as `"result": null` — NewResponse turns it
+// into an InternalError so the bug is visible instead of decoding as a
+// zero-valued task at the peer.
+func TestResponseEnvelopeCarriesExactlyOneMember(t *testing.T) {
+	keys := func(t *testing.T, resp Response) map[string]json.RawMessage {
+		t.Helper()
+		raw, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("%v: %s", err, raw)
+		}
+		return m
+	}
+	id := json.RawMessage(`1`)
+
+	m := keys(t, NewResponse(id, struct{}{}))
+	if string(m["result"]) != "{}" || m["error"] != nil {
+		t.Errorf("empty-struct result: %v", m)
+	}
+	m = keys(t, NewResponse(id, map[string]any{"ok": true}))
+	if _, ok := m["result"]; !ok || m["error"] != nil {
+		t.Errorf("map result: %v", m)
+	}
+
+	m = keys(t, NewErrorResponse(id, wire.ErrTaskNotFound, "", nil))
+	if _, ok := m["result"]; ok || m["error"] == nil {
+		t.Errorf("error envelope must carry no result member: %v", m)
+	}
+
+	var nilTask *wire.Task
+	for name, result := range map[string]any{
+		"untyped nil": nil,
+		"nil pointer": nilTask,
+		"empty raw":   json.RawMessage(nil),
+		"null raw":    json.RawMessage("null"),
+		"nil map":     map[string]any(nil),
+		"nil slice":   []string(nil),
+	} {
+		m := keys(t, NewResponse(id, result))
+		if _, ok := m["result"]; ok {
+			t.Errorf("%s: emitted a result member: %v", name, m)
+			continue
+		}
+		var e ErrorObject
+		if err := json.Unmarshal(m["error"], &e); err != nil || e.Code != CodeFor(wire.ErrInternalError) {
+			t.Errorf("%s: want -32603 error envelope, got %s (err=%v)", name, m["error"], err)
+		}
+	}
+}

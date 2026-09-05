@@ -442,6 +442,7 @@ Day-2 conveniences over the host systemd unit, so you never drop to raw
 `systemctl`/`journalctl`:
 
 ```
+fleet start                   # systemctl start the fleet unit
 fleet restart                 # systemctl restart the fleet unit
 fleet stop                    # systemctl stop the fleet unit
 fleet logs                    # tail the last 50 journal lines (a.k.a. `tail`)
@@ -455,6 +456,42 @@ The unit is resolved from `--service`, else `$FLEET_SERVICE_NAME`, else `fleet`.
 they need root/sudo; systemctl's own permission error surfaces via the exit code.
 `logs` reads the journal (usually permitted unprivileged) and exits non-zero if
 the unit isn't installed.
+
+## notes — the shared wiki, and the proposal queue
+
+Notes are the workspace's shared reference pages: an agent reads them by slug,
+and an operator curates them from here. They live in the **sched** database, so
+these verbs take `--database-url` (else `DATABASE_URL`, else the env file).
+
+```
+fleet notes set <slug> --title "..."   # body on stdin; bumps the version
+fleet notes get <slug>                 # print one note
+fleet notes list [--all] [--json]      # slug · version · status · title
+fleet notes rm <slug>                  # archive (also: del/delete/archive)
+```
+
+`list` shows live notes; `--all` includes archived ones. `rm` archives rather
+than destroys, so a slug can be brought back.
+
+**The proposal queue is the part with an approval semantic.** An agent that
+wants to change a note does not write it: it files a *proposal*, which stays
+pending until an operator decides. That decision is this pair of verbs, and
+there is no third outcome — a proposal is either published or rejected with a
+stated reason:
+
+```
+fleet notes proposal publish <id> [--note "..."]     # apply it; the note's version bumps
+fleet notes proposal reject  <id> --reason "..."     # refuse it; --reason is REQUIRED
+```
+
+Both take `--by` to record who decided (default `admin`). Publishing prints the
+resulting slug and version. An unknown or already-decided id exits **2** (the
+not-found code the other admin verbs use), so a script can tell "no such
+proposal" from an operational failure (5).
+
+There is **no** `notes proposal list` verb today — the CLI covers the decision,
+not the browsing. To find the ids awaiting a decision, read the orchestrator's
+`GET /notes/proposals?status=pending`.
 
 ## process logs — stderr by default, optional rotating file
 

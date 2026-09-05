@@ -191,23 +191,33 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 
 	lib := s.sharedFilesLibrary()
 	out := make([]store.SharedFile, 0, len(files))
+	// The batch is all-or-nothing. The admission checks above catch what can
+	// be known up front; a failure INSIDE the loop (a token, an unreadable
+	// part, a full disk, a store error) rolls back the rows this request
+	// already created before the error is written, so the "nothing from this
+	// upload was saved" contract holds for every exit — not only the 409s.
+	// Under sharedFilesMu nothing else can have referenced those rows yet.
+	fail := func(status int, msg string) {
+		s.rollbackSharedFileBatch(r.Context(), lib, out)
+		http.Error(w, msg+" (nothing from this upload was saved)", status)
+	}
 	for i, fh := range files {
 		name := names[i]
 		id, err := randomToken()
 		if err != nil {
-			http.Error(w, "token: "+err.Error(), http.StatusInternalServerError)
+			fail(http.StatusInternalServerError, "token: "+err.Error())
 			return
 		}
 		src, err := fh.Open()
 		if err != nil {
-			http.Error(w, "open upload: "+err.Error(), http.StatusInternalServerError)
+			fail(http.StatusInternalServerError, "open upload: "+err.Error())
 			return
 		}
 		size, sha, err := lib.SaveCanonical(id, src)
 		_ = src.Close()
 		if err != nil {
 			log.Printf("shared files: save canonical %q: %v", name, err)
-			http.Error(w, "save upload: "+err.Error(), http.StatusInternalServerError)
+			fail(http.StatusInternalServerError, "save upload: "+err.Error())
 			return
 		}
 		row, err := s.store.CreateSharedFile(r.Context(), store.SharedFile{
@@ -223,10 +233,10 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			_ = lib.RemoveCanonical(id)
 			if errors.Is(err, store.ErrSharedFileExists) || errors.Is(err, store.ErrSharedFileNameIsFolder) {
-				http.Error(w, fmt.Sprintf("%s: %v", name, err), http.StatusConflict)
+				fail(http.StatusConflict, fmt.Sprintf("%s: %v", name, err))
 				return
 			}
-			http.Error(w, "save shared file: "+err.Error(), http.StatusInternalServerError)
+			fail(http.StatusInternalServerError, "save shared file: "+err.Error())
 			return
 		}
 		if err := lib.Stage(row); err != nil {
@@ -238,6 +248,29 @@ func (s *Server) postSharedFiles(w http.ResponseWriter, r *http.Request) {
 		out = append(out, row)
 	}
 	writeJSON(w, map[string]any{"files": out})
+}
+
+// rollbackSharedFileBatch undoes the rows one upload request created before
+// it failed part-way: the manifest row (the source of truth) goes first, then
+// the staged copy and the canonical bytes — the same order deleteSharedFile
+// uses, so a crash mid-rollback leaves at worst orphaned files the next Sync
+// pass reclaims, never a row without bytes. Best-effort per row: a failure is
+// logged and the remaining rows are still attempted, because a half-undone
+// batch is better than one that stopped undoing at the first hiccup. Caller
+// holds sharedFilesMu.
+func (s *Server) rollbackSharedFileBatch(ctx context.Context, lib sharedfiles.Library, created []store.SharedFile) {
+	for _, row := range created {
+		if _, err := s.store.DeleteSharedFile(ctx, row.ID); err != nil {
+			log.Printf("shared files: roll back row %q: %v", row.ID, err)
+			continue
+		}
+		if err := lib.Unstage(row); err != nil {
+			log.Printf("shared files: roll back staged %q: %v (will self-heal on the next maintenance pass)", row.ID, err)
+		}
+		if err := lib.RemoveCanonical(row.ID); err != nil {
+			log.Printf("shared files: roll back canonical %q: %v", row.ID, err)
+		}
+	}
 }
 
 // sharedFilePatch is the PATCH body: nil = leave alone. Folder and description

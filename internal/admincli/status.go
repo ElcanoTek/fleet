@@ -66,7 +66,15 @@ func cmdStatus(argv []string) int {
 
 // ── check helpers ──────────────────────────────────────────────────────────
 
+// checkBundle loads the bundle from --client-config, else FLEET_CLIENT_CONFIG_DIR
+// — read through envOrFile, like checkEnv reads it, so the two lines of the same
+// report cannot contradict each other (an env-file-only value used to print
+// "✓ env FLEET_CLIENT_CONFIG_DIR set" one line below a bundle loaded from
+// config/default). An empty dir still means clientconfig's own default.
 func checkBundle(r *report, dir string) *clientconfig.Bundle {
+	if dir == "" {
+		dir = strings.TrimSpace(envOrFile(clientconfig.EnvDir))
+	}
 	b, err := clientconfig.Load(dir)
 	if err != nil {
 		r.fail("client bundle", fmt.Sprintf("load failed: %v", err))
@@ -150,10 +158,7 @@ func checkDB(r *report, label, flagURL string, resolve func(string) (string, err
 // ResolvedImageRef) and runs a throwaway `podman run --rm <ref> true` to confirm
 // the image is present + the runtime can launch it.
 func checkSandbox(r *report, bundle *clientconfig.Bundle) {
-	ref := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_IMAGE"))
-	if ref == "" {
-		ref = strings.TrimSpace(os.Getenv("CHAT_SANDBOX_IMAGE"))
-	}
+	ref := sandboxImageEnv()
 	if ref == "" && bundle != nil {
 		ref = strings.TrimSpace(bundle.Sandbox().ResolvedImageRef())
 	}
@@ -192,6 +197,17 @@ func checkSandbox(r *report, bundle *clientconfig.Bundle) {
 		return
 	}
 	r.pass("sandbox image", ref+" present + runnable"+storeNote)
+}
+
+// sandboxImageEnv is the operator's sandbox image override — FLEET_SANDBOX_IMAGE,
+// else the legacy CHAT_SANDBOX_IMAGE — read from the process env or the env
+// file (envOrFile), which is where doctor.sh reads it too. status and diagnose
+// share it so neither can probe a different image than the unit runs.
+func sandboxImageEnv() string {
+	if ref := strings.TrimSpace(envOrFile("FLEET_SANDBOX_IMAGE")); ref != "" {
+		return ref
+	}
+	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE"))
 }
 
 // sandboxProbeArgv builds the `podman run --rm <ref> true` probe. As root with

@@ -22,10 +22,16 @@ type SearchResult struct {
 	Position int
 }
 
+// duckDuckGoHTMLEndpoint is the no-JavaScript HTML SERP the tool posts to.
+const duckDuckGoHTMLEndpoint = "https://html.duckduckgo.com/html"
+
 // WebSearchTool performs web searches using DuckDuckGo
 type WebSearchTool struct {
 	client      *http.Client
 	rateLimiter *rateLimiter
+	// endpoint is the SERP URL; NewWebSearchTool sets duckDuckGoHTMLEndpoint and
+	// tests point it at a local server.
+	endpoint string
 }
 
 // rateLimiter implements simple rate limiting for web requests
@@ -113,6 +119,7 @@ func NewWebSearchTool() *WebSearchTool {
 			},
 		},
 		rateLimiter: newRateLimiter(2 * time.Second), // Minimum 2 seconds between requests
+		endpoint:    duckDuckGoHTMLEndpoint,
 	}
 }
 
@@ -157,7 +164,11 @@ func (t *WebSearchTool) searchDuckDuckGo(ctx context.Context, query string, maxR
 	formData.Set("b", "")
 	formData.Set("kl", "")
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://html.duckduckgo.com/html", strings.NewReader(formData.Encode()))
+	endpoint := t.endpoint
+	if endpoint == "" {
+		endpoint = duckDuckGoHTMLEndpoint
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(formData.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -166,7 +177,12 @@ func (t *WebSearchTool) searchDuckDuckGo(ctx context.Context, query string, maxR
 	req.Header.Set("User-Agent", BrowserUserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	// Accept-Encoding is deliberately NOT set here. Go's Transport adds
+	// "Accept-Encoding: gzip" itself and transparently decompresses the reply
+	// — but only when the request did not set the header. Setting it by hand
+	// (the browser-mimicking "gzip, deflate" this once carried) switches that
+	// off, so the compressed SERP bytes reached html.Parse verbatim, no
+	// div.result was ever found, and every search reported "No results".
 	req.Header.Set("Referer", "https://duckduckgo.com/")
 
 	resp, err := t.client.Do(req)

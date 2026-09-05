@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { DatasetsPanel } from "./DatasetsPanel";
+import { DatasetsPanel, ROWS_PAGE_SIZE } from "./DatasetsPanel";
+import { ToastProvider } from "@/app/shared/ui/Toast";
 import type { Dataset, DatasetRow } from "@/app/shared/lib/orchestratorApi";
 
 // DatasetsPanel (#514) — the dataset tab strip, the per-dataset row table and
@@ -147,5 +148,92 @@ describe("DatasetsPanel", () => {
     expect(screen.getByPlaceholderText("prospect-leads")).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(modal).not.toBeInTheDocument();
+  });
+});
+
+describe("DatasetsPanel rows paging", () => {
+  it("requests an explicit page and says how many rows the filter covers", async () => {
+    datasets.mockResolvedValue({ datasets: [dataset("a", "alpha")] });
+    // 250 pending rows: more than one page at the server's 200 default, which
+    // the panel used to request implicitly and then show as the whole table.
+    datasetRows.mockResolvedValue({
+      rows: Array.from({ length: ROWS_PAGE_SIZE }, (_, i) => ({ ...row(`r${i}`, `Co ${i}`), row_index: i })),
+      row_counts: { pending: 250 },
+    });
+    render(<DatasetsPanel />);
+    fireEvent.click(await screen.findByRole("tab", { name: /alpha/ }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("dataset-rows-showing")).toHaveTextContent(`Showing 1-${ROWS_PAGE_SIZE} of 250 rows`),
+    );
+    expect(datasetRows).toHaveBeenLastCalledWith("a", `?limit=${ROWS_PAGE_SIZE}&offset=0`);
+    expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next rows page" }));
+    await waitFor(() =>
+      expect(datasetRows).toHaveBeenLastCalledWith("a", `?limit=${ROWS_PAGE_SIZE}&offset=${ROWS_PAGE_SIZE}`),
+    );
+
+    // A filter change re-buckets the rows, so it snaps back to page 1.
+    fireEvent.change(screen.getByLabelText("Filter rows by status"), { target: { value: "failed" } });
+    await waitFor(() =>
+      expect(datasetRows).toHaveBeenLastCalledWith("a", `?limit=${ROWS_PAGE_SIZE}&offset=0&status=failed`),
+    );
+  });
+});
+
+describe("DatasetsPanel Export CSV", () => {
+  it("fetches the export and saves it instead of navigating", async () => {
+    datasets.mockResolvedValue({ datasets: [dataset("a", "alpha")] });
+    datasetRows.mockResolvedValue({ rows: [], row_counts: {} });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("company\n", { status: 200, headers: { "Content-Type": "text/csv" } }));
+    // jsdom has no object URLs; the helper's save step needs both to exist.
+    const createURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fleet/dataset");
+    const revokeURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const before = window.location.href;
+    render(<DatasetsPanel />);
+    fireEvent.click(await screen.findByRole("tab", { name: /alpha/ }));
+    fireEvent.click(await screen.findByTestId("dataset-export-csv"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(String(fetchSpy.mock.calls[0][0])).toBe("/api/orchestrator/datasets/a/export");
+    expect(window.location.href).toBe(before);
+    fetchSpy.mockRestore();
+    createURL.mockRestore();
+    revokeURL.mockRestore();
+  });
+
+  it("reports a failed export as a toast, in place", async () => {
+    datasets.mockResolvedValue({ datasets: [dataset("a", "alpha")] });
+    datasetRows.mockResolvedValue({ rows: [], row_counts: {} });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ error: "session expired" }), { status: 401 }));
+    const before = window.location.href;
+    render(
+      <ToastProvider>
+        <DatasetsPanel />
+      </ToastProvider>,
+    );
+    fireEvent.click(await screen.findByRole("tab", { name: /alpha/ }));
+    fireEvent.click(await screen.findByTestId("dataset-export-csv"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Export failed: session expired");
+    expect(window.location.href).toBe(before);
+    fetchSpy.mockRestore();
+  });
+});
+
+describe("DatasetsPanel create modal columns", () => {
+  it("keeps each column draft's inputs with it when the row above is removed", async () => {
+    datasets.mockResolvedValue({ datasets: [] });
+    render(<DatasetsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "New dataset" }));
+    fireEvent.change(screen.getByLabelText("Column 1 name"), { target: { value: "first" } });
+    fireEvent.change(screen.getByLabelText("Column 2 name"), { target: { value: "second" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove column" })[0]);
+    // The surviving draft is "second", now in slot 1 — with its own value.
+    expect(screen.getByLabelText("Column 1 name")).toHaveValue("second");
+    expect(screen.queryByLabelText("Column 2 name")).toBeNull();
   });
 });

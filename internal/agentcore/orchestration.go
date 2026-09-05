@@ -398,6 +398,24 @@ func (o *orchestrationState) checkBudgetWindDown(fraction float64) budgetWindDow
 
 // windDownNotice renders the request-local wrap-up message for an active
 // wind-down state. Wording adapted from Prime Agent's goal budget wind-down.
+// budgetWindDownNoticePrefix is the exact leading substring of every wind-down
+// notice. The prompt-cache step matches on it to keep the notice out of the
+// rolling recency breakpoints: the notice is request-local, appended fresh
+// each step and carries live spend figures, so its bytes never repeat — a
+// breakpoint on it can never hit and would waste one of the two rolling slots
+// (docs/PROMPT-CACHE-CONTRACT.md).
+const budgetWindDownNoticePrefix = "BUDGET WIND-DOWN:"
+
+// isBudgetWindDownNotice reports whether m is the request-local wind-down
+// notice budgetWindDownStep appends.
+func isBudgetWindDownNotice(m fantasy.Message) bool {
+	if m.Role != fantasy.MessageRoleUser || len(m.Content) == 0 {
+		return false
+	}
+	text, ok := fantasy.AsMessagePart[fantasy.TextPart](m.Content[0])
+	return ok && strings.HasPrefix(text.Text, budgetWindDownNoticePrefix)
+}
+
 func (st budgetWindDownState) windDownNotice() string {
 	var parts []string
 	if st.maxCostUSD > 0 {
@@ -407,7 +425,7 @@ func (st budgetWindDownState) windDownNotice() string {
 		parts = append(parts, fmt.Sprintf("%d of the %d uncached-token ceiling", st.spentTokens, st.maxTokens))
 	}
 	return fmt.Sprintf(
-		"BUDGET WIND-DOWN: this run has used %s. Do not start new substantive work. "+
+		budgetWindDownNoticePrefix+" this run has used %s. Do not start new substantive work. "+
 			"Finish or checkpoint what is in progress and wrap up soon with: progress made, remaining work, blockers, and a concrete next step. "+
 			"The run is hard-stopped at the ceiling.",
 		strings.Join(parts, " and "))

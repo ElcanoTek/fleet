@@ -231,8 +231,12 @@ func (s *Server) handleConversationRefile(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	// The store reports a conversation that is not there — or not this
+	// caller's — as ErrConversationNotFound; writeConversationMutationError
+	// turns that into the 404 every sibling mutation answers, instead of a
+	// 500 that told the client the server was at fault.
 	if err := s.store.SetConversationProject(r.Context(), user, id, req.ProjectID); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

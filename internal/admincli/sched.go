@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -261,9 +262,13 @@ func schedUserList(argv []string) int {
 	fs := flag.NewFlagSet("sched user list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
 	asJSON := fs.Bool("json", false, "machine-readable output")
-	_, flagArgs := splitPositional(argv)
-	if err := fs.Parse(flagArgs); err != nil {
+	// No positional: a stray argument is an error, not silently discarded (the
+	// same rule as `sched apikey list`).
+	if err := fs.Parse(argv); err != nil {
 		return 1
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "sched user list takes no arguments (got %q)", fs.Args())
 	}
 	st, code := openSchedStorage(*dbURL)
 	if st == nil {
@@ -289,8 +294,12 @@ func schedUserList(argv []string) int {
 		fmt.Fprintln(os.Stderr, "no sched users yet — add one with: fleet sched user add <username> --role admin --password -")
 		return 0
 	}
+	rows := make([][]string, 0, len(users))
 	for _, u := range users {
-		fmt.Printf("%s\t%s\n", u.Username, u.Role)
+		rows = append(rows, []string{u.Username, u.Role})
+	}
+	if err := renderTable(os.Stdout, []string{"USERNAME", "ROLE"}, rows); err != nil {
+		return errf(5, "render: %v", err)
 	}
 	return 0
 }
@@ -338,20 +347,56 @@ func openKeyManager() (*apikeys.Manager, keyStore, int) {
 	return mgr, ks, 0
 }
 
-func schedAPIKeyCreate(argv []string) int {
+// apiKeyCreateFlags is the parsed `sched apikey create` flag surface, built by
+// newAPIKeyCreateFlagSet so the rate-limit alias handling is unit-testable.
+type apiKeyCreateFlags struct {
+	keyType, triggerSlugs, role string
+	rateLimit                   int
+	// legacyRateLimit is the deprecated --rate-limit spelling (#722: the
+	// primary flag names its unit because v1's numbers were per HOUR).
+	legacyRateLimit int
+}
+
+func newAPIKeyCreateFlagSet() (*flag.FlagSet, *apiKeyCreateFlags) {
 	fs := flag.NewFlagSet("sched apikey create", flag.ContinueOnError)
-	keyType := fs.String("type", "", "typed key class: admin|task|webhook|readonly (#190). When set, supersedes --role")
-	triggerSlugs := fs.String("trigger-slugs", "", "comma-separated trigger slugs a webhook key may fire (required for --type webhook)")
-	role := fs.String("role", "admin", "legacy role granted to the key (used only when --type is empty)")
+	f := &apiKeyCreateFlags{}
+	fs.StringVar(&f.keyType, "type", "", "typed key class: admin|task|webhook|readonly (#190). When set, supersedes --role")
+	fs.StringVar(&f.triggerSlugs, "trigger-slugs", "", "comma-separated trigger slugs a webhook key may fire (required for --type webhook)")
+	fs.StringVar(&f.role, "role", "admin", "legacy role granted to the key (used only when --type is empty)")
 	// #722: the flag names its unit so an operator porting v1 numbers (which
 	// were per-HOUR) can't silently set a 60× stricter cap.
-	rateLimit := fs.Int("rate-limit-per-minute", 0, "per-minute request rate limit (0 = unlimited)")
+	fs.IntVar(&f.rateLimit, "rate-limit-per-minute", 0, "per-minute request rate limit (0 = unlimited)")
+	fs.IntVar(&f.legacyRateLimit, "rate-limit", 0, "DEPRECATED alias for --rate-limit-per-minute (same per-MINUTE unit; warns)")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]")
 		fmt.Fprintln(fs.Output(), "  "+keyFormatNote)
 		fmt.Fprintln(fs.Output(), "  The key is written to the store the fleet.service process reads (announced as \"key store:\"); FLEET_DATA_DIR overrides.")
 		fs.PrintDefaults()
 	}
+	return fs, f
+}
+
+// effectiveRateLimit resolves the per-minute cap from the primary flag and the
+// deprecated --rate-limit alias (docs/FEATURE-NOTES.md #722 promises the alias
+// "remains and warns"). The alias only fills in when the primary was not given;
+// passing both is a usage error rather than a silent pick. The warning goes to
+// errW so a scripted create still gets clean stdout.
+func effectiveRateLimit(fs *flag.FlagSet, f *apiKeyCreateFlags, errW io.Writer) (int, error) {
+	set := map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+	switch {
+	case set["rate-limit"] && set["rate-limit-per-minute"]:
+		return 0, fmt.Errorf("pass --rate-limit-per-minute or its deprecated alias --rate-limit, not both")
+	case set["rate-limit"]:
+		fmt.Fprintf(errW, "warning: --rate-limit is deprecated — use --rate-limit-per-minute %d (the unit is per MINUTE; v1's flag was per hour)\n", f.legacyRateLimit)
+		return f.legacyRateLimit, nil
+	default:
+		return f.rateLimit, nil
+	}
+}
+
+func schedAPIKeyCreate(argv []string) int {
+	fs, f := newAPIKeyCreateFlagSet()
 	name, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
@@ -359,6 +404,12 @@ func schedAPIKeyCreate(argv []string) int {
 	if strings.TrimSpace(name) == "" {
 		return errf(1, "key name required")
 	}
+	rateLimitPerMinute, err := effectiveRateLimit(fs, f, os.Stderr)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	keyType, triggerSlugs, role := &f.keyType, &f.triggerSlugs, &f.role
+	rateLimit := &rateLimitPerMinute
 	mgr, ks, code := openKeyManager()
 	if mgr == nil {
 		return code

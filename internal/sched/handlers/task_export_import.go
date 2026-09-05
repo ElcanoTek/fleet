@@ -179,6 +179,19 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Per-principal rolling budget (#601 part 2): import is a bulk create, so it
+	// runs the SAME budgetCapError gate POST /tasks and /tasks/batch run, once
+	// up front for the whole envelope — the budget bounds the principal, not
+	// any one record, so an exhausted window refuses the import before any row
+	// is written. Without it (and the per-record priority ceiling in
+	// createTaskFromRecord) an export envelope was an unmetered route around
+	// every create gate.
+	creator := creatorFromPrincipal(p)
+	if err := h.budgetCapError(r.Context(), creator); err != nil {
+		writeBudgetRefusal(w, err)
+		return
+	}
+
 	// Detect duplicate names WITHIN the import payload itself — two records
 	// sharing a name can't both be created (the second would collide with the
 	// first), and conflict=error/skip/replace all treat intra-batch dupes as an
@@ -236,7 +249,7 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 			resp.Skipped++
 		case collision && conflict == models.TaskImportConflictReplace:
 			if !dryRun {
-				id, rerr := h.replaceTaskByName(r, rec)
+				id, rerr := h.replaceTaskByName(r, rec, creator)
 				if rerr != nil {
 					result.Status = models.TaskImportErrored
 					result.Error = rerr.Error()
@@ -251,7 +264,7 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 		default:
 			// No collision (or unnamed record — never collides by name).
 			if !dryRun {
-				id, cerr := h.createTaskFromRecord(r, rec, p)
+				id, cerr := h.createTaskFromRecord(r, rec, creator)
 				if cerr != nil {
 					result.Status = models.TaskImportErrored
 					result.Error = cerr.Error()
@@ -280,15 +293,22 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 // "create" path) and persists it. It reuses the handler's validateTaskCreate so
 // the imported definition is subject to the SAME routing/cron/timezone/model
 // validation as POST /tasks — import cannot mint a task the create path would
-// reject. The creator is the importing principal (re-attributed on import).
-func (h *Handlers) createTaskFromRecord(_ *http.Request, rec models.TaskExportRecord, p principal) (uuid.UUID, error) {
+// reject, nor one more urgent than the importing key's priority ceiling. The
+// creator is the importing principal (re-attributed on import — user AND key,
+// via taskCreator.attribute, so a key-imported task is visible to that key).
+func (h *Handlers) createTaskFromRecord(r *http.Request, rec models.TaskExportRecord, creator taskCreator) (uuid.UUID, error) {
 	tc := models.ExportRecordToTaskCreate(rec)
 	if err := h.validateTaskCreate(&tc); err != nil {
 		return uuid.Nil, err
 	}
 	task := models.NewTask(tc)
-	task.CreatedBy = p.ownerID()
-	if _, err := h.storage.AddTask(task); err != nil {
+	creator.attribute(task)
+	// Per-key priority ceiling (#230): the same per-record cap the batch path
+	// applies, on the post-default priority.
+	if err := priorityCapError(creator.creatorKeyMaxPriority, task.Priority); err != nil {
+		return uuid.Nil, err
+	}
+	if _, err := h.storage.AddTaskWithContext(r.Context(), task); err != nil {
 		return uuid.Nil, err
 	}
 	return task.ID, nil
@@ -302,7 +322,7 @@ func (h *Handlers) createTaskFromRecord(_ *http.Request, rec models.TaskExportRe
 // record), and recomputes the dispatch state (#1104). A task that was claimed
 // or finished since the pre-flight is therefore refused per-record instead of
 // having its status/lease silently rewound into a second execution.
-func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecord) (uuid.UUID, error) {
+func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecord, creator taskCreator) (uuid.UUID, error) {
 	existing, err := h.storage.GetTaskByName(r.Context(), rec.Name)
 	if err != nil {
 		return uuid.Nil, err
@@ -310,7 +330,7 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	if existing == nil {
 		// Raced: the task was deleted between the pre-flight and now. Treat as a
 		// create so the import still lands the record.
-		return h.createTaskFromRecord(r, rec, h.principalFromRequest(r))
+		return h.createTaskFromRecord(r, rec, creator)
 	}
 	tc := models.ExportRecordToTaskCreate(rec)
 	if err := h.validateTaskCreate(&tc); err != nil {
@@ -321,7 +341,7 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 		// Deleted between the name lookup and the row lock: the same race as the
 		// nil branch above, with the same answer — land the record as a create.
 		if errors.Is(err, sql.ErrNoRows) {
-			return h.createTaskFromRecord(r, rec, h.principalFromRequest(r))
+			return h.createTaskFromRecord(r, rec, creator)
 		}
 		return uuid.Nil, err
 	}

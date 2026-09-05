@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -143,5 +145,45 @@ func TestTurnBuffer_EvictedSubscriberGetsEvictedFrame(t *testing.T) {
 	}
 	if buf.Sealed() {
 		t.Error("buffer must still be live — eviction is not Finish")
+	}
+}
+
+// parseLastEventID accepts only a clean unsigned integer. Sscanf("%d") took
+// "12abc" as 12 and resumed a client from an id it never sent; anything
+// malformed now falls back to 0 — a full replay, which is always safe.
+func TestParseLastEventID(t *testing.T) {
+	cases := []struct {
+		header, query string
+		want          uint64
+	}{
+		{"", "", 0},
+		{"12", "", 12},
+		{"", "7", 7},
+		{"12", "7", 12}, // the header wins over the query fallback
+		{"12abc", "", 0},
+		{"-3", "", 0},
+		{"abc", "", 0},
+		{" 5", "", 0},
+		{"99999999999999999999999", "", 0}, // overflow → full replay, not a wrapped id
+		// Above MaxInt64 is refused rather than accepted: the value is handed
+		// to Postgres as int64 downstream, where it would wrap NEGATIVE and
+		// make `WHERE event_id > ...` match every row. MaxInt64 itself is
+		// still accepted — the bound is the int64 range, not an arbitrary cap.
+		{"9223372036854775808", "", 0},                   // MaxInt64+1
+		{"18446744073709551615", "", 0},                  // MaxUint64
+		{"9223372036854775807", "", 9223372036854775807}, // MaxInt64, still fine
+	}
+	for _, c := range cases {
+		target := "/conversations/c/stream"
+		if c.query != "" {
+			target += "?last_event_id=" + c.query
+		}
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		if c.header != "" {
+			req.Header.Set("Last-Event-ID", c.header)
+		}
+		if got := parseLastEventID(req); got != c.want {
+			t.Errorf("parseLastEventID(header=%q query=%q) = %d, want %d", c.header, c.query, got, c.want)
+		}
 	}
 }

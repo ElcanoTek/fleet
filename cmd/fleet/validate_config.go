@@ -98,15 +98,48 @@ func runValidateConfig(args []string) int {
 // --bundle-path defaults to the resolved bundle dir (FLEET_CLIENT_CONFIG_DIR or
 // config/default), network checks are ON unless --skip-network-checks.
 func parseValidateFlags(args []string) (validateOptions, error) {
-	fs := flag.NewFlagSet("validate-config", flag.ContinueOnError)
 	var opts validateOptions
-	fs.StringVar(&opts.bundlePath, "bundle-path", "", "client-config bundle dir (overrides FLEET_CLIENT_CONFIG_DIR; default config/default)")
-	fs.BoolVar(&opts.skipNetworkChecks, "skip-network-checks", false, "skip the DB live probe, MCP HTTP ping, and OpenRouter key check (CI with no outbound access)")
-	fs.BoolVar(&opts.jsonOutput, "json", false, "emit the report as JSON for CI parsing")
+	fs := newValidateFlagSet(&opts)
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
 	return opts, nil
+}
+
+// newValidateFlagSet is the verb's real flag surface, split from the parse so
+// the top-level usage text (admincli.UsageText) can be checked against it —
+// the usage once advertised two flags this set never defined.
+func newValidateFlagSet(opts *validateOptions) *flag.FlagSet {
+	fs := flag.NewFlagSet("validate-config", flag.ContinueOnError)
+	fs.StringVar(&opts.bundlePath, "bundle-path", "", "client-config bundle dir (overrides FLEET_CLIENT_CONFIG_DIR; default config/default)")
+	fs.BoolVar(&opts.skipNetworkChecks, "skip-network-checks", false, "skip the DB live probe, MCP HTTP ping, and OpenRouter key check (CI with no outbound access)")
+	fs.BoolVar(&opts.jsonOutput, "json", false, "emit the report as JSON for CI parsing")
+	return fs
+}
+
+// preflightEnvFile resolves the env file the in-binary preflight verbs
+// (validate-config, eval, mcp test) load, and pins FLEET_ENV_FILE to it in the
+// process env when the shell left it unset. The resolution is
+// config.ResolveEnvFile's — $FLEET_ENV_FILE, else /etc/fleet/fleet.env on a
+// provisioned box, else .env.local — the same order the operator CLI's
+// credential writers use, so the file `fleet config set-openrouter-key` just
+// wrote is the file `fleet validate-config` then checks. These verbs used to
+// pass a bare os.Getenv("FLEET_ENV_FILE") to config.Load: on a provisioned box
+// the unit UnsetEnvironment=s that variable, so the empty path loaded nothing
+// and a healthy deployment preflighted as "OPENROUTER_API_KEY missing".
+//
+// Setting the variable (rather than only returning the path) matters because
+// clientconfig.Load folds the SAME file into the process env for manifest
+// interpolation, and reads the path from FLEET_ENV_FILE only (#1123) — without
+// the pin, a ${CONNECTOR_KEY} in the manifest would still resolve against an
+// empty env. It is the same in-process override these verbs already apply for
+// --bundle-path (clientconfig.EnvDir).
+func preflightEnvFile() string {
+	path := config.ResolveEnvFile("")
+	if strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")) == "" {
+		_ = os.Setenv("FLEET_ENV_FILE", path)
+	}
+	return path
 }
 
 // runChecks loads the bundle + config and runs every preflight check in the
@@ -116,16 +149,17 @@ func parseValidateFlags(args []string) (validateOptions, error) {
 func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 	results := make([]checkResult, 0, 7)
 
+	envFile := preflightEnvFile()
 	bundle, bundleErr := clientconfig.Load(clientconfig.Dir())
 
-	// config.Load reads the env file (FLEET_ENV_FILE) and the process env. Register
-	// the bundle's connector env-var names first — the SAME ordering the server boot
-	// uses — so a .env-supplied credential survives the allowlist and the credential
+	// config.Load reads the env file and the process env. Register the bundle's
+	// connector env-var names first — the SAME ordering the server boot uses —
+	// so a .env-supplied credential survives the allowlist and the credential
 	// check below sees it.
 	if bundleErr == nil {
 		config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
 	}
-	cfg, cfgErr := config.Load(os.Getenv("FLEET_ENV_FILE"))
+	cfg, cfgErr := config.Load(envFile)
 	if cfgErr == nil && bundleErr == nil {
 		cfg.MCPServers = bundle.MCPServerConfigs()
 		cfg.HTTPTools = bundle.HTTPToolConfigs()

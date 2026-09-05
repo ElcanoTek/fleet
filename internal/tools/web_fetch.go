@@ -3,8 +3,6 @@ package tools
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +11,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -23,6 +20,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/ElcanoTek/fleet/internal/netguard"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 const (
@@ -38,76 +36,17 @@ const (
 
 var multipleNewlinesRe = regexp.MustCompile(`\n{3,}`)
 
-// cacheEntry represents a cached web fetch result
-type cacheEntry struct {
-	content   string
-	timestamp time.Time
-}
-
-// fetchCache provides simple in-memory caching for web fetches
-type fetchCache struct {
-	mu      sync.RWMutex
-	entries map[string]*cacheEntry
-	ttl     time.Duration
-}
-
-func newFetchCache() *fetchCache {
-	return &fetchCache{
-		entries: make(map[string]*cacheEntry),
-		ttl:     5 * time.Minute,
-	}
-}
-
-func (c *fetchCache) get(url string) (string, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	entry, exists := c.entries[c.hashURL(url)]
-	if !exists {
-		return "", false
-	}
-
-	// Check if cache entry is still valid
-	if time.Since(entry.timestamp) > c.ttl {
-		return "", false
-	}
-
-	return entry.content, true
-}
-
-func (c *fetchCache) set(url, content string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.entries[c.hashURL(url)] = &cacheEntry{
-		content:   content,
-		timestamp: time.Now(),
-	}
-
-	// Simple cleanup: remove expired entries if cache is getting large
-	if len(c.entries) > 100 {
-		c.cleanup()
-	}
-}
-
-func (c *fetchCache) cleanup() {
-	now := time.Now()
-	for key, entry := range c.entries {
-		if now.Sub(entry.timestamp) > c.ttl {
-			delete(c.entries, key)
-		}
-	}
-}
-
-func (c *fetchCache) hashURL(url string) string {
-	hash := sha256.Sum256([]byte(url))
-	return hex.EncodeToString(hash[:])
-}
-
-// webFetchTool fetches web pages and converts them to markdown
+// webFetchTool fetches web pages and converts them to markdown.
+//
+// There is deliberately no fetch cache here. One used to sit on this struct,
+// but NewWebFetchTool is called per turn, so the cache never outlived the turn
+// that filled it, and it never evicted on read — the model saw a "cached" flag
+// that was true only for a repeat fetch of the same URL inside one turn, and a
+// stale body if the page changed in that window. A cache worth having would be
+// process-wide, bounded and keyed per conversation; until one is needed, every
+// fetch is live and the result says so by having no cached flag at all.
 type webFetchTool struct {
 	client      *http.Client
-	cache       *fetchCache
 	rateLimiter *rateLimiter
 }
 
@@ -221,7 +160,6 @@ func NewWebFetchTool() fantasy.AgentTool {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		cache:       newFetchCache(),
 		rateLimiter: newRateLimiter(1 * time.Second),
 	}
 	return fantasy.NewAgentTool("web_fetch",
@@ -241,7 +179,6 @@ type webFetchResult struct {
 	Stdout          string `json:"stdout"`
 	StatusCode      int    `json:"status_code"`
 	ContentType     string `json:"content_type,omitempty"`
-	Cached          bool   `json:"cached"`
 	ExecutionTimeMs int64  `json:"execution_time_ms"`
 	ContentBytes    int    `json:"content_bytes"`
 	Error           string `json:"error,omitempty"`
@@ -253,23 +190,6 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 	}
 
 	start := time.Now()
-
-	// Check cache first
-	if cached, found := t.cache.get(url); found {
-		result := webFetchResult{
-			URL:             url,
-			Stdout:          cached,
-			StatusCode:      200,
-			Cached:          true,
-			ExecutionTimeMs: time.Since(start).Milliseconds(),
-			ContentBytes:    len(cached),
-		}
-		jsonBytes, err := json.Marshal(result)
-		if err != nil {
-			return cached, err
-		}
-		return string(jsonBytes), nil
-	}
 
 	// Apply rate limiting
 	if err := t.rateLimiter.wait(ctx, "fetch"); err != nil {
@@ -292,8 +212,6 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 	} else {
 		result.Stdout = content
 		result.ContentBytes = len(content)
-		// Cache the result
-		t.cache.set(url, content)
 	}
 
 	jsonBytes, marshalErr := json.Marshal(result)
@@ -330,10 +248,7 @@ func (t *webFetchTool) fetchURLAndConvertStructured(ctx context.Context, url str
 	if resp.StatusCode != http.StatusOK {
 		// Read error body for context
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		errPreview := strings.TrimSpace(string(errBody))
-		if len(errPreview) > 200 {
-			errPreview = errPreview[:200] + "..."
-		}
+		errPreview := truncate.Clamp(strings.TrimSpace(string(errBody)), 200, "...")
 		return "", statusCode, contentType, fmt.Errorf("HTTP %d: %s", resp.StatusCode, errPreview)
 	}
 

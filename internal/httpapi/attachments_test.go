@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/config"
 
@@ -743,5 +744,18 @@ func TestStageAttachmentsIntoWorkspace_RefusesDestinationSymlinks(t *testing.T) 
 				t.Fatalf("staging wrote outside the conversation: %v", entries)
 			}
 		})
+	}
+}
+
+// A long non-ASCII upload name is capped at a rune boundary, extension kept:
+// the byte slice it replaces produced invalid UTF-8 that Postgres refused
+// when the attachment path was persisted.
+func TestSanitizeFilename_CapsAtRuneBoundary(t *testing.T) {
+	got := sanitizeFilename(strings.Repeat("é", 150) + ".pdf")
+	if !utf8.ValidString(got) {
+		t.Fatalf("sanitizeFilename produced invalid UTF-8: %q", got)
+	}
+	if len(got) > 200 || !strings.HasSuffix(got, ".pdf") {
+		t.Errorf("got %d bytes ending %q, want <= 200 bytes with .pdf kept", len(got), got[len(got)-4:])
 	}
 }

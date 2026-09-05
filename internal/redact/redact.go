@@ -124,13 +124,22 @@ func canonicalPatterns() []pattern {
 	return []pattern{
 		// Entire PEM private-key blocks.
 		{regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`), "[REDACTED PRIVATE KEY]"},
-		// Vendor API-key prefixes (specific → generic).
-		{regexp.MustCompile(`sk-ant-[A-Za-z0-9\-_]{20,}`), placeholder},   // Anthropic
-		{regexp.MustCompile(`sk-or-v1-[A-Za-z0-9\-_]{20,}`), placeholder}, // OpenRouter
-		{regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`), placeholder},          // OpenAI + generic sk-
-		{regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`), placeholder},   // GitHub PAT/OAuth/refresh
-		{regexp.MustCompile(`glpat-[A-Za-z0-9\-_]{20,}`), placeholder},    // GitLab PAT
-		{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), placeholder},             // AWS access key ID
+		// Vendor API-key prefixes (specific → generic). Every prefix rule is
+		// anchored with \b so a hyphenated prose word that happens to END in a
+		// prefix ("desk-mounted-display-arm-…") is not eaten: the generic sk-
+		// rule below admits `-` and `_` because current OpenAI keys carry
+		// hyphenated sub-prefixes (sk-proj-…, sk-svcacct-…, sk-admin-…) that the
+		// old alnum-only tail never matched past the first hyphen.
+		{regexp.MustCompile(`\bsk-ant-[A-Za-z0-9\-_]{20,}`), placeholder},           // Anthropic
+		{regexp.MustCompile(`\bsk-or-v1-[A-Za-z0-9\-_]{20,}`), placeholder},         // OpenRouter
+		{regexp.MustCompile(`\bsk-[A-Za-z0-9\-_]{20,}`), placeholder},               // OpenAI (incl. sk-proj-/sk-svcacct-) + generic sk-
+		{regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}`), placeholder},         // GitHub fine-grained PAT
+		{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`), placeholder},           // GitHub classic PAT/OAuth/refresh
+		{regexp.MustCompile(`\bglpat-[A-Za-z0-9\-_]{20,}`), placeholder},            // GitLab PAT
+		{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}`), placeholder},        // Slack bot/user/app/refresh/config tokens
+		{regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}`), placeholder}, // Stripe secret / restricted keys
+		{regexp.MustCompile(`\bAIza[0-9A-Za-z\-_]{35}`), placeholder},               // Google API key
+		{regexp.MustCompile(`\bAKIA[A-Z0-9]{16}`), placeholder},                     // AWS access key ID
 		// HTTP Authorization: Bearer <token> (e.g. in captured curl/wget output).
 		{regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)([A-Za-z0-9\-._~+/]+=*)`), "${1}" + placeholder},
 		// HTTP Authorization: Basic <base64(user:pass)>. A dedicated pattern

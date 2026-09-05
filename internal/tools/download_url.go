@@ -19,6 +19,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // downloadURLDialContext is the dial function download_url's HTTP client
@@ -233,10 +234,7 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 		// Preserve a snippet of the error body so the model can react
 		// to e.g. "Token expired" without an extra fetch.
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		preview := strings.TrimSpace(string(errBody))
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
+		preview := truncate.Clamp(strings.TrimSpace(string(errBody)), 200, "...")
 		res.Status = downloadStatusError
 		res.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, preview)
 		return res

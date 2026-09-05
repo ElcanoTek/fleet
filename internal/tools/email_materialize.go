@@ -115,15 +115,18 @@ func MaterializeContentFile(convID, rawInput string) (string, error) {
 // attachment file not found." Doing this at staging time means the staged args
 // row carries absolute paths, and the replay after approval works.
 //
-// Near-symmetric with MaterializeContentFile: same convID, same workspace
-// anchoring for relative paths (plus the historical `~/` and `$VAR` expansion) —
-// but unlike content_file (whose bytes this process reads and inlines, so it is
-// containment-gated per #573), attachment paths are only REWRITTEN here; the
-// sendgrid MCP subprocess is what opens them at send time, and files need not
-// exist at staging time. Skips entries that are already absolute,
-// unparseable args, missing arrays, or non-string path fields. Files don't need
-// to exist at staging time — preview_email stages before the file is necessarily
-// on disk in some flows; the real MCP call is the one that needs the file.
+// Symmetric with MaterializeContentFile on the two rules that matter: the same
+// convID workspace anchoring for relative paths, NO `~/` or `$VAR` expansion
+// (the path is model-authored, and os.ExpandEnv used to substitute host env
+// values — connector secrets — into persisted approval args), and the same
+// containment gate — every path, absolute ones included, must resolve under the
+// workspace root (attachmentPathContained), because the connector opens it
+// HOST-side at send time and an absolute path here is a request to email a host
+// file. Unlike content_file, whose bytes this process reads and inlines, the
+// path is only REWRITTEN here; the sendgrid MCP subprocess is what opens it, so
+// the file need not exist at staging time (preview_email stages before the file
+// is necessarily on disk in some flows). Skips unparseable args, missing
+// arrays, and non-string path fields.
 func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {

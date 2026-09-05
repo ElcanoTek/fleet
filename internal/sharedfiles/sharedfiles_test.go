@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -65,6 +66,27 @@ func TestSanitizeName(t *testing.T) {
 		if !c.wantErr && got != c.want {
 			t.Errorf("SanitizeName(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// A long non-ASCII name is capped on a RUNE boundary: a byte slice through a
+// multi-byte character produced invalid UTF-8, which Postgres rejected — so
+// the upload 500'd instead of landing under a shortened name.
+func TestSanitizeNameCapsAtRuneBoundary(t *testing.T) {
+	// 'é' is 2 bytes; 150 of them = 300 bytes, over maxNameLen (200) with the
+	// cut landing mid-rune at any odd offset.
+	got, err := SanitizeName(strings.Repeat("é", 150) + ".csv")
+	if err != nil {
+		t.Fatalf("SanitizeName: %v", err)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("SanitizeName produced invalid UTF-8: %q", got)
+	}
+	if len(got) > maxNameLen {
+		t.Errorf("len = %d bytes, want <= %d", len(got), maxNameLen)
+	}
+	if !strings.HasSuffix(got, ".csv") {
+		t.Errorf("extension dropped: %q", got)
 	}
 }
 

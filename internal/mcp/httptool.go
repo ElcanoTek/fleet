@@ -3,8 +3,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,6 +14,8 @@ import (
 	"time"
 
 	"github.com/itchyny/gojq"
+
+	"github.com/ElcanoTek/fleet/internal/netguard"
 )
 
 // Inline HTTP tools — lightweight REST API tools a client-config bundle declares
@@ -30,6 +34,16 @@ import (
 // never logged here, and never enter the sandbox or the model context. The model
 // supplies only the declared input params (substituted into the URL/body) and sees
 // only the (downstream-redacted) response body.
+//
+// NETWORK — the request is dialed through the shared netguard SSRF classifier
+// (httpToolDialContext), the same guard every other host-side fetch uses: an
+// inline tool reaches PUBLIC hosts only. The bundle author fixes the scheme and
+// host at Load (a {param} token is refused there), but a redirect's destination
+// is the remote's choice, and this process holds every connector credential —
+// so loopback, RFC 1918, link-local (cloud metadata) and the rest of the
+// blocklist are refused on the origin and on every hop. An internal service an
+// operator wants the agent to reach belongs behind an MCP server, not an
+// http_tool.
 
 // HTTPToolServerName is the synthetic MCP-server name inline HTTP tools register
 // under. Mirrors clientconfig.HTTPToolServerName (kept in sync; the two packages
@@ -40,6 +54,68 @@ const HTTPToolServerName = "_http"
 // spec: 30s, redirects followed (credential headers are dropped when a hop
 // leaves the original origin — stripHeadersOnCrossOriginRedirect).
 const httpToolClientTimeout = 30 * time.Second
+
+// errHTTPToolBlockedAddress is what the guarded dialer returns for a target
+// that resolves into a range the SSRF classifier refuses. Like mcpoauth's
+// counterpart it names the class, not the address, so an error surfaced to the
+// model does not double as a scanner.
+var errHTTPToolBlockedAddress = errors.New("http tool: connection to a private, loopback, or link-local address is not allowed")
+
+// httpToolDialContext is the dial function the inline-HTTP-tool client uses.
+// Production keeps the netguard SSRF guard: the request runs in the
+// credential-owning process with the tool's resolved secrets on it, and while
+// the bundle author fixes the scheme and host (clientconfig.validateHTTPTools
+// refuses a {param} token there), the DESTINATION of a redirect is chosen by
+// the remote — an endpoint that 302s to 169.254.169.254 or an internal service
+// would otherwise be fetched host-side, and stripping the headers on the hop
+// does not stop the fetch itself. Guarding every dial (the origin and each hop)
+// is what does; it also matches the posture of every other host-side fetch
+// (web_fetch, download_url, remotemcp). Tests exercising the tool against local
+// httptest servers (loopback) substitute a plain dialer.
+var httpToolDialContext = guardedDialContext(netguard.IsBlockedIP)
+
+// guardedDialContext returns a DialContext that resolves the host, rejects any
+// resolved IP the isBlocked classifier refuses, and dials a validated address
+// directly — the same resolve-then-dial shape as mcpoauth.safeDialContext, so
+// a hostname that re-resolves to an internal IP between check and connect (DNS
+// rebinding) cannot slip through. isBlocked is a parameter only so a test can
+// admit its loopback origin while still refusing the redirect target.
+func guardedDialContext(isBlocked func(net.IP) bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("split host:port: %w", err)
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			if isBlocked(ip) {
+				return nil, errHTTPToolBlockedAddress
+			}
+			return dialer.DialContext(ctx, network, addr)
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %q: %w", host, err)
+		}
+		var lastErr error
+		for _, ipa := range ips {
+			if isBlocked(ipa.IP) {
+				lastErr = errHTTPToolBlockedAddress
+				continue
+			}
+			conn, derr := dialer.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), port))
+			if derr != nil {
+				lastErr = derr
+				continue
+			}
+			return conn, nil
+		}
+		if lastErr == nil {
+			lastErr = errHTTPToolBlockedAddress
+		}
+		return nil, lastErr
+	}
+}
 
 // HTTPToolSpec is one inline HTTP tool to register, in the credential-bearing
 // runtime shape: Headers already carry their resolved values (the caller expanded
@@ -133,9 +209,12 @@ type httpToolTransport struct {
 	// documented mid-session reload registering tools concurrently with an
 	// in-flight _http call is a concurrent map read+write — a fatal runtime
 	// error in the process that brokers every credential — without this.
-	mu     sync.RWMutex
-	tools  map[string]HTTPToolSpec
-	client *http.Client
+	mu    sync.RWMutex
+	tools map[string]HTTPToolSpec
+	// client is built once, on first use (clientOnce): concurrent first calls
+	// on the same synthetic server must not race to assign it.
+	clientOnce sync.Once
+	client     *http.Client
 }
 
 // Call handles the one method the registration path drives at runtime: tools/call.
@@ -175,15 +254,31 @@ func (t *httpToolTransport) Close() error { return nil }
 // httpClient lazily builds the bounded client (30s timeout; redirects followed
 // but the tool's resolved credential headers are stripped on a cross-origin
 // hop — see stripHeadersOnCrossOriginRedirect) the first time a tool is
-// invoked.
+// invoked. The Transport dials through httpToolDialContext, so the origin AND
+// every redirect hop are refused when they resolve to an internal address —
+// http.DefaultTransport would have followed a 30x straight to cloud metadata.
 func (t *httpToolTransport) httpClient() *http.Client {
-	if t.client == nil {
-		t.client = &http.Client{
-			Timeout:       httpToolClientTimeout,
-			CheckRedirect: stripHeadersOnCrossOriginRedirect,
-		}
-	}
+	t.clientOnce.Do(func() {
+		t.client = newHTTPToolClient(httpToolDialContext)
+	})
 	return t.client
+}
+
+// newHTTPToolClient builds the inline-HTTP-tool client around dial. Split out
+// from httpClient so a test can hand it a dialer that admits loopback.
+func newHTTPToolClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
+	return &http.Client{
+		Timeout: httpToolClientTimeout,
+		Transport: &http.Transport{
+			DialContext:           dial,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          20,
+			IdleConnTimeout:       60 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+		CheckRedirect: stripHeadersOnCrossOriginRedirect,
+	}
 }
 
 // executeHTTPTool runs one inline HTTP tool and returns it as a ToolResult. The

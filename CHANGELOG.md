@@ -59,6 +59,64 @@ than by a major-version bump.
 
 ### Security
 
+- **`run_if` gates can no longer be attached by a rerun.** A `run_if` command
+  runs ON THE HOST as the fleet user, so only an admin may attach or change
+  one — but `POST /tasks/{id}/rerun` and `/clone` applied a `run_if` from the
+  request body and never ran that gate. Any `create_task` principal (a
+  `client`-role user, a scoped `fleet_task_*` key) could therefore rerun a
+  task it could see with an arbitrary host command attached and have the
+  scheduler execute it at the next tick. Rerun/clone now go through the same
+  `createTaskGoverned` pipeline as `POST /tasks`, which applies the edit-shaped
+  rule `UpdateTask` already used: an INHERITED gate rides along (it was
+  admin-authorized when the source task was made), a CHANGED one is refused
+  without admin.
+- **`/datasets` endpoints enforce permissions.** Every dataset route sat behind
+  a middleware that authenticates but does no role check, so a `readonly` user
+  or key could create, delete, import into, export and *run* datasets — and a
+  run executes the agent per row at the dataset's pinned model, i.e. unmetered
+  spend. Reads now require `view_tasks` and every mutation `create_task`,
+  mirroring the task surface.
+- **Rerun, clone and import attribute the API key that made the task.** All
+  three set only `CreatedBy`, which is nil for every API-key principal, so a
+  key-created task carried neither owner nor key and was readable by nobody
+  except fleet-wide grant holders (ADR-0043) — the creating key could not even
+  read back its own task's logs. They now attribute user AND key through the
+  shared `taskCreator.attribute` seam, which also restores cost attribution for
+  key-scoped budgets.
+- **Rerun, clone and import are metered like the create paths.** None of them
+  ran the budget gate or the per-key priority ceiling, and their routes carried
+  no rate limiter — so `{"overrides":{"priority":0}}` jumped a capped key past
+  its ceiling, and an unmetered bulk-create path sat one loop away. All three
+  now run the same gates in the same order and are registered with
+  `SchedRateLimitMiddleware`.
+- **The redactor matches today's key formats.** `sk-[A-Za-z0-9]{20,}` stops at
+  the first hyphen, so OpenAI's current `sk-proj-…` and `sk-svcacct-…` keys
+  were never redacted; GitHub's fine-grained `github_pat_…`, Slack `xox*-`,
+  Stripe `sk_live_/sk_test_` and Google `AIza…` had no pattern at all. This is
+  the last line of defence for a secret that is not a registered literal — a
+  connector echoing its own token, or a key an agent reads out of a file — so
+  it is what stands between such a value and the host log.
+- **Inline `_http` tools dial through netguard.** Every other host-side fetch
+  uses a netguard-guarded dialer; this one used `http.DefaultTransport` inside
+  the credential-owning broker process and followed redirects, so a vendor
+  endpoint that 302'd to `169.254.169.254` was fetched and its body returned to
+  the model. `http_tools[].url` is also validated like an A2A peer now (parsed;
+  http(s) with a host; no userinfo; no `{param}` token in the scheme or host).
+- **The bash secret-path denylist covers fleet's own env file.** The tool
+  description has promised since it shipped that ".env files" are blocked, but
+  only `.env.local` and `.env.production` were listed — not `/etc/fleet/fleet.env`
+  (every connector credential the host holds, in one file), not a bare `.env`,
+  and not `/proc/<pid>/environ`. A component-aware `.env` pattern keeps
+  `.env.example` and `.envrc` allowed.
+- **OAuth revocation authenticates the way the server asked.** `RevokeToken`
+  always used HTTP Basic while the token endpoint consulted the AS's advertised
+  methods, so against a `client_secret_post`-only server the revocation 401'd —
+  and because revocation is best-effort and its error was discarded, the local
+  record was deleted anyway. A user who clicked Disconnect kept a live refresh
+  token at the authorization server, and nothing said so. Both endpoints now
+  share one decision, and a failed revocation is logged with both secrets
+  masked.
+
 - **Email attachment paths are contained and never env-expanded.** The
   `attachments[].path` / `inline_attachments[].path` a model writes went
   through `os.ExpandEnv` and `~` expansion, so `$OPENROUTER_API_KEY/x.png`
@@ -92,6 +150,148 @@ than by a major-version bump.
   exceed the configured library limit.
 
 ### Fixed
+
+- **Sub-agent file tools work at all.** Child write isolation (#1043) forces a
+  spawned sub-agent's cwd to `<workspace>/subagents/<child-id>`, and the file
+  tools scope their requests to that directory — but the sandbox armed the
+  writable FileOp capability only on an EXACT match with the root bound for the
+  turn. On both container backends every child `view_file`, `write_file` and
+  `edit_file` therefore failed closed ("writable fileop root was not bound
+  before the turn"); only the host executor, which has no such gate, let the
+  tests pass, and the e2e test asserted the tool was *offered*, not that it
+  worked. A request scoped beneath the bound root is now re-anchored at it and
+  carries its dev/ino identity guard, so the guard travels with the narrower
+  scope instead of being skipped by it.
+- **Web search returned nothing, always.** `web_search` set
+  `Accept-Encoding: gzip, deflate` by hand, which switches OFF Go's transparent
+  gzip decoding — so compressed SERP bytes reached the HTML parser, which found
+  zero results and reported "no results found", classified as "blocked". On any
+  deployment without a Tavily key this is the only web search there is.
+- **The default webhook notification emitted invalid JSON.** The template
+  interpolated the task name — the first 60 runes of a free-form prompt —
+  through `text/template` with no escaping, so a prompt containing a double
+  quote produced a malformed body that every retry re-sent; and progress
+  events, which never set the cost field, rendered `"cost_usd":,`
+  unconditionally.
+- **A guardrail timeout no longer reads as a block.** Tool output is screened
+  BEFORE the model-output cap, so a multi-megabyte bash log (the capture cap is
+  64 MiB) was marshalled whole into a 5-second HTTP call; the timeout became a
+  detector error, and in `block` mode replaced perfectly benign output with the
+  blocked marker. The detector now sees a bounded head+tail sample, refuses an
+  oversized body outright, and a non-loopback detector URL must be https.
+- **A chat-approved task edit can no longer rewind a live run.** The
+  `manage_tasks` write path used `storage.UpdateTask` — an unlocked full-row
+  upsert fed by a task read moments earlier — so status, lease and result
+  columns were written back over a run the scheduler had since advanced (the
+  #1104 double-execution shape). It now builds a `TaskEdit` and goes through
+  `UpdateEditableTask`, which locks the row and refuses one that is no longer
+  pending/scheduled, and it validates a new cron before storing it.
+- **A `run_if` check that crashed counted as a clean skip.** Only a timeout
+  produced an error; a gate killed by a signal, or one that never started (a
+  missing binary, a fork failure), returned "exit -1" and was settled as a
+  SKIP — so the documented `on_error: run` default never fired for two of its
+  three cases and a recurring job whose gate binary vanished silently stopped
+  running.
+- **Unguarded goroutines could take the process down.** The dataset runner's
+  run and worker goroutines, and the rampart installer's, had no
+  `safe.Recover`, contrary to the rule `internal/safe` documents — so a panic
+  in a row execution killed the whole fleet process, every chat turn and
+  scheduled task with it. (The installer additionally left its state stuck at
+  "running" forever, wedging both Start and Uninstall.)
+- **Sub-agent, cancellation and truncation edges.** A cancelled sandbox command
+  scored as a real exit code (a race could score it PASS and end a scheduled
+  loop as "goal met"); `WaitForUpdate`'s fallback used `context.WithoutCancel`,
+  which stripped the caller's cancellation as well as the wait deadline; and
+  `view_file`, `wake`, `download_url` and the image tools truncated on raw byte
+  boundaries, emitting invalid UTF-8 into the model context and, for one path,
+  into a Postgres TEXT parameter.
+- **The egress proxy no longer truncates a long download.** Once one direction
+  of a tunnel finished, an ABSOLUTE 60-second deadline covered all remaining
+  I/O, so a large allowlisted transfer was cut mid-body — and the copy error
+  was discarded, so nothing said so. The deadline is now idle-based and a
+  reaped transfer is logged.
+- **The rampart image is built from the lockfile CI audits.** The build context
+  embedded `package.json` but not `package-lock.json` and ran `npm install`, so
+  the image an admin built resolved dependencies fresh at build time and was
+  not the audited tree; two admins installing on different days got different
+  dependency graphs. It now ships the lockfile and runs `npm ci`.
+- **A large `Last-Event-ID` can no longer force a full replay.** The SSE
+  resume header is client-supplied and reaches Postgres as an int64, so a value
+  above MaxInt64 wrapped NEGATIVE and turned `WHERE event_id > ...` into "every
+  row". It is now parsed at 63 bits, which refuses such an id (falling back to
+  a replay, the documented behaviour for anything malformed) and keeps the
+  downstream conversion provably in range.
+- **Uniform paging, truncation and error mapping across the HTTP API.** `GET
+  /search` and the conversation audit listing silently swallowed a malformed
+  `?limit=`/`?offset=`/`?from=` (answering with a different page than asked
+  for); refiling a conversation to a project, renaming a team, and loading a
+  sub-agent transcript reported a store failure as 400/404/500 rather than
+  distinguishing "not found" from "the database is down"; approval cards,
+  shared-file names and attachment filenames truncated on byte boundaries
+  through multi-byte characters (a long non-ASCII shared-file name 500'd on
+  Postgres); `@url:`/`@file:` context handles expanded out of message order and
+  the cap dropped every file handle when the message held eight URLs; a
+  mid-batch failure in a shared-file upload left earlier files saved despite
+  the "nothing from this upload was saved" contract; `GET /personas` answered
+  any HTTP method; and a turn buffer could try to finish a row that was never
+  inserted.
+- **Operator CLI reads the deployment's env file consistently.** `envOrFile`
+  was introduced but wired to only four call sites, so on a provisioned box
+  (where the unit clears `FLEET_ENV_FILE` and the values live in
+  `/etc/fleet/fleet.env`) `fleet validate-config` reported a missing
+  `OPENROUTER_API_KEY`, `fleet status` contradicted itself between its bundle
+  and env checks, `status`/`diagnose` probed a different sandbox image than
+  `fleet doctor`, `fleet mcp reload` could not find its admin key, and
+  `fleet mcp account set` silently wrote a seat to `/root/.env.local` that the
+  service never read. The diagnose bundle also reported "nothing configured" on
+  every provisioned box, and seeded its redactor from an empty env.
+- **Operator CLI honesty round.** `fleet --help` documented flags
+  `validate-config` does not have (both copy-pasted invocations failed) and an
+  exit-code legend that omitted 3 and 4 and mis-described 2; `fleet cleanup`
+  exited 0 even when every prune failed, making the maintenance timer's
+  failure check unreachable; `fleet serve --help` booted the daemon; four list
+  verbs silently ignored a stray positional; `fleet generate-vapid-keys` wrote
+  its error to stdout, i.e. into the env file the documented invocation appends
+  to; `sudo fleet backup` ignored `FLEET_BACKUP_DIR` from the env file and left
+  a world-readable dump of every conversation and user row; `fleet migrate
+  status --json` emitted nothing at all when both databases failed; and the
+  disk-usage percentage differed between `fleet status`, the host panel and
+  `doctor.sh` despite a comment promising one implementation.
+- **Secret-shaped test fixtures no longer need an allowlist entry.** The new
+  vendor patterns can only be tested with a sample of each shape, and a sample
+  realistic enough to exercise the regex also trips gitleaks AND GitHub push
+  protection — which blocks the push outright. The fixtures are now assembled
+  from parts and omit each vendor's structural marker (OpenAI's `T3BlbkFJ`
+  segment, Stripe's `51` account prefix), so the text scanners see nothing
+  while `Redact` still receives the identical assembled value. `.gitleaksignore`
+  now covers exactly the ten live findings and no more, and its header records
+  the two traps that make this file rot: a fingerprint embeds a line number, so
+  an edit above a fixture silently un-ignores it — and the rule set differs
+  BETWEEN gitleaks versions, so pruning "stale" entries with anything other than
+  the version pinned in the workflow deletes entries CI still needs.
+- **Helm chart accepts only values it reads.** `values.schema.json` accepted
+  `postgres.password` (which the chart auto-generates into a Secret and no
+  template reads — `--set postgres.password=…` validated and was ignored) plus
+  three renamed `sandbox.kubernetes.*` keys, so setting the old spelling passed
+  `helm lint` and did nothing. `serviceAccount.annotations` was accepted and
+  never rendered, silently dropping the EKS IRSA / GKE Workload Identity
+  annotation that is the main reason to set it; it now renders.
+- **Web UI: failures look like failures.** A failed storage cleanup replaced
+  the whole panel with "Storage statistics unavailable"; a failed team-chat or
+  skills fetch rendered as "nothing shared yet" and a permanent "Loading…"; a
+  transient host-stats poll error wiped a page of good data; and an admin
+  permission probe that failed once left every admin page blank forever with no
+  message and no retry. Each now reports what actually failed, keeps the last
+  good data where it has some, and offers a retry.
+- **Web UI: the numbers and controls tell the truth.** Changing page size
+  stranded the table on an empty page reading "Page 5 of 2"; the sleeping-tasks
+  count showed the page size rather than the total and never refreshed; the
+  upcoming board paged forever past its own 14-day data horizon; "Auto-refresh
+  every N seconds" was printed under tabs that never refresh; a storage-cleanup
+  sentence quoted a count computed for a different cutoff; a team rename
+  reported members but not the shared projects it also relabelled; a repeated
+  identical failure showed no second toast; and the one-time reset password had
+  neither a copy button nor a way to dismiss it.
 
 - **List endpoints validate paging the same way.** `GET /tasks/upcoming`,
   `/tasks/paused` and `/datasets/{id}/rows` parsed `?limit=` (and the rows

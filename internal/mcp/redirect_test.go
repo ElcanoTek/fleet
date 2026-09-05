@@ -100,6 +100,9 @@ func recordingServer(t *testing.T) (*httptest.Server, *http.Header) {
 }
 
 func TestExecuteHTTPTool_RedirectHeaderHandling(t *testing.T) {
+	// httptest listens on loopback, which the production SSRF guard refuses;
+	// this test is about the header policy, so admit loopback for its duration.
+	allowLoopbackHTTPToolDial(t)
 	transport := &httpToolTransport{}
 	client := transport.httpClient()
 

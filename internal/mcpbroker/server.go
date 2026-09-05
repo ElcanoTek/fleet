@@ -143,8 +143,13 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			mu.Unlock()
 			wg.Add(1)
 			go func(req request) {
-				defer recoverBackendPanic("mcpbroker.call", req.ID, write)
+				// wg.Done is registered FIRST so it runs LAST: deferred calls
+				// unwind LIFO, and the recovery below writes the incident
+				// response — that write must land before the drain in Serve
+				// sees the group empty, or Serve can return with the panic
+				// response still unwritten.
 				defer wg.Done()
+				defer recoverBackendPanic("mcpbroker.call", req.ID, write)
 				defer func() {
 					mu.Lock()
 					delete(inflight, req.ID)
@@ -186,8 +191,13 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		case methodListTools:
 			wg.Add(1)
 			go func(req request) {
-				defer recoverBackendPanic("mcpbroker.list_tools", req.ID, write)
+				// wg.Done is registered FIRST so it runs LAST: deferred calls
+				// unwind LIFO, and the recovery below writes the incident
+				// response — that write must land before the drain in Serve
+				// sees the group empty, or Serve can return with the panic
+				// response still unwritten.
 				defer wg.Done()
+				defer recoverBackendPanic("mcpbroker.list_tools", req.ID, write)
 				tools, err := s.backend.ListTools(ctx)
 				resp := response{ID: req.ID}
 				if err != nil {
@@ -202,8 +212,13 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		case methodListAccounts:
 			wg.Add(1)
 			go func(req request) {
-				defer recoverBackendPanic("mcpbroker.list_accounts", req.ID, write)
+				// wg.Done is registered FIRST so it runs LAST: deferred calls
+				// unwind LIFO, and the recovery below writes the incident
+				// response — that write must land before the drain in Serve
+				// sees the group empty, or Serve can return with the panic
+				// response still unwritten.
 				defer wg.Done()
+				defer recoverBackendPanic("mcpbroker.list_accounts", req.ID, write)
 				accounts, err := s.backend.ListAccounts(ctx, req.Server, req.BaseVars)
 				resp := response{ID: req.ID}
 				if err != nil {
@@ -222,8 +237,13 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			mu.Unlock()
 			wg.Add(1)
 			go func(req request) {
-				defer recoverBackendPanic("mcpbroker.scope_open", req.ID, write)
+				// wg.Done is registered FIRST so it runs LAST: deferred calls
+				// unwind LIFO, and the recovery below writes the incident
+				// response — that write must land before the drain in Serve
+				// sees the group empty, or Serve can return with the panic
+				// response still unwritten.
 				defer wg.Done()
+				defer recoverBackendPanic("mcpbroker.scope_open", req.ID, write)
 				defer func() {
 					mu.Lock()
 					delete(inflight, req.ID)
@@ -252,8 +272,13 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			mu.Unlock()
 			wg.Add(1)
 			go func(req request) {
-				defer recoverBackendPanic("mcpbroker.scope_close", req.ID, write)
+				// wg.Done is registered FIRST so it runs LAST: deferred calls
+				// unwind LIFO, and the recovery below writes the incident
+				// response — that write must land before the drain in Serve
+				// sees the group empty, or Serve can return with the panic
+				// response still unwritten.
 				defer wg.Done()
+				defer recoverBackendPanic("mcpbroker.scope_close", req.ID, write)
 				defer func() {
 					mu.Lock()
 					delete(inflight, req.ID)
@@ -279,8 +304,13 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			mu.Unlock()
 			wg.Add(1)
 			go func(req request) {
-				defer recoverBackendPanic("mcpbroker.reload", req.ID, write)
+				// wg.Done is registered FIRST so it runs LAST: deferred calls
+				// unwind LIFO, and the recovery below writes the incident
+				// response — that write must land before the drain in Serve
+				// sees the group empty, or Serve can return with the panic
+				// response still unwritten.
 				defer wg.Done()
+				defer recoverBackendPanic("mcpbroker.reload", req.ID, write)
 				defer func() {
 					mu.Lock()
 					delete(inflight, req.ID)

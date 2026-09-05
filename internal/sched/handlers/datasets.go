@@ -8,6 +8,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -51,8 +52,26 @@ type datasetCreateRequest struct {
 	Concurrency int                    `json:"concurrency,omitempty"`
 }
 
+// requireDatasetPermission is the permission gate every /datasets handler
+// opens with. The routes sit in the AdminOrUserAuthMiddleware group, which
+// only authenticates — it does no role check — so before this existed a
+// readonly user or key could create, delete, import into and RUN datasets
+// (each row runs the agent at the dataset's pinned model, i.e. unmetered
+// spend). Mirrors the task surface: reads need view_tasks, mutations need
+// create_task. Returns false after writing the 403.
+func (h *Handlers) requireDatasetPermission(w http.ResponseWriter, r *http.Request, perm models.Permission) bool {
+	if !h.principalFromRequest(r).hasPermission(perm) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return false
+	}
+	return true
+}
+
 // CreateDataset handles POST /datasets.
 func (h *Handlers) CreateDataset(w http.ResponseWriter, r *http.Request) {
+	if !h.requireDatasetPermission(w, r, models.PermissionCreateTask) {
+		return
+	}
 	var req datasetCreateRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
@@ -103,6 +122,9 @@ func (h *Handlers) CreateDataset(w http.ResponseWriter, r *http.Request) {
 
 // ListDatasets handles GET /datasets.
 func (h *Handlers) ListDatasets(w http.ResponseWriter, r *http.Request) {
+	if !h.requireDatasetPermission(w, r, models.PermissionViewTasks) {
+		return
+	}
 	out, err := h.storage.ListDatasets(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to list datasets")
@@ -114,7 +136,15 @@ func (h *Handlers) ListDatasets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"datasets": out})
 }
 
-func (h *Handlers) datasetFromPath(w http.ResponseWriter, r *http.Request) (*models.Dataset, bool) {
+// datasetFromPath loads the {datasetID} path dataset after checking perm,
+// writing the 403/400/404/500 itself. Only a missing row is a 404: the DB
+// layer returns sql.ErrNoRows unwrapped for that case, and anything else (a
+// pool exhausted, a column decode failure) is a 500, so an outage does not
+// masquerade as "the dataset is gone" to a client that would then recreate it.
+func (h *Handlers) datasetFromPath(w http.ResponseWriter, r *http.Request, perm models.Permission) (*models.Dataset, bool) {
+	if !h.requireDatasetPermission(w, r, perm) {
+		return nil, false
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "datasetID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid dataset id")
@@ -122,7 +152,15 @@ func (h *Handlers) datasetFromPath(w http.ResponseWriter, r *http.Request) (*mod
 	}
 	d, err := h.storage.GetDataset(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "Dataset not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "Dataset not found")
+			return nil, false
+		}
+		//nolint:gosec // G706 false positive: id is a uuid.UUID already parsed
+		// from the path (its String() is hex + dashes), and it is passed
+		// through logSafe as well — it cannot carry CR/LF to forge a log line.
+		log.Printf("dataset %s: load: %v", logSafe(id.String()), err)
+		writeError(w, http.StatusInternalServerError, "Failed to load dataset")
 		return nil, false
 	}
 	return d, true
@@ -130,7 +168,7 @@ func (h *Handlers) datasetFromPath(w http.ResponseWriter, r *http.Request) (*mod
 
 // GetDataset handles GET /datasets/{datasetID}.
 func (h *Handlers) GetDataset(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionViewTasks)
 	if !ok {
 		return
 	}
@@ -139,7 +177,7 @@ func (h *Handlers) GetDataset(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDataset handles DELETE /datasets/{datasetID}.
 func (h *Handlers) DeleteDataset(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionCreateTask)
 	if !ok {
 		return
 	}
@@ -156,7 +194,7 @@ func (h *Handlers) DeleteDataset(w http.ResponseWriter, r *http.Request) {
 
 // ListDatasetRows handles GET /datasets/{datasetID}/rows?status=&limit=&offset=.
 func (h *Handlers) ListDatasetRows(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionViewTasks)
 	if !ok {
 		return
 	}
@@ -185,10 +223,14 @@ func (h *Handlers) ListDatasetRows(w http.ResponseWriter, r *http.Request) {
 // column names). Values land in INPUT columns only; unknown names are
 // rejected loudly rather than silently dropped.
 func (h *Handlers) ImportDatasetRows(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionCreateTask)
 	if !ok {
 		return
 	}
+	// This is the operative body cap: BodySizeLimitMiddleware exempts the
+	// dataset import path (like /upload) from its 1 MiB JSON limit precisely so
+	// this 16 MiB CSV/JSON cap governs — otherwise a 2 MiB CSV failed under the
+	// global limit with a misleading error and this line was dead code.
 	r.Body = http.MaxBytesReader(w, r.Body, maxImportBytes)
 
 	inputCols := map[string]models.DatasetColumn{}
@@ -313,7 +355,7 @@ func validateImportRows(rows []map[string]any, inputCols map[string]models.Datas
 
 // RunDataset handles POST /datasets/{datasetID}/run.
 func (h *Handlers) RunDataset(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionCreateTask)
 	if !ok {
 		return
 	}
@@ -330,7 +372,7 @@ func (h *Handlers) RunDataset(w http.ResponseWriter, r *http.Request) {
 
 // PauseDataset handles POST /datasets/{datasetID}/pause.
 func (h *Handlers) PauseDataset(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionCreateTask)
 	if !ok {
 		return
 	}
@@ -353,7 +395,7 @@ type datasetRowActionRequest struct {
 // queue's bulk approve: merge proposed values into cells for the given rows
 // (all proposed rows when row_ids is empty).
 func (h *Handlers) ApproveDatasetRows(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionCreateTask)
 	if !ok {
 		return
 	}
@@ -373,7 +415,7 @@ func (h *Handlers) ApproveDatasetRows(w http.ResponseWriter, r *http.Request) {
 // RerunDatasetRows handles POST /datasets/{datasetID}/rerun — reset the given
 // rows (or every failed row when row_ids is empty) to pending.
 func (h *Handlers) RerunDatasetRows(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionCreateTask)
 	if !ok {
 		return
 	}
@@ -393,7 +435,7 @@ func (h *Handlers) RerunDatasetRows(w http.ResponseWriter, r *http.Request) {
 // ExportDataset handles GET /datasets/{datasetID}/export — a CSV of every
 // row: all columns (approved values merged into cells) + status/note/error.
 func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
-	d, ok := h.datasetFromPath(w, r)
+	d, ok := h.datasetFromPath(w, r, models.PermissionViewTasks)
 	if !ok {
 		return
 	}
@@ -408,13 +450,17 @@ func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
 	header = append(header, "_status", "_note", "_error")
 	_ = writer.Write(header)
 
-	// Page through every row (export is unbounded by the list default).
+	// Page through every row (export is unbounded by the list default). The 200
+	// and the header are already on the wire by the first page, so a mid-stream
+	// failure (a paging query erroring, the client going away) cannot be turned
+	// into an error status: abort the connection instead, so the client sees a
+	// truncated transfer rather than a clean 200 over a silently short file.
 	const page = 500
 	for offset := 0; ; offset += page {
 		rows, err := h.storage.ListDatasetRows(r.Context(), d.ID, "", page, offset)
 		if err != nil {
 			log.Printf("dataset export %s: %v", logSafe(d.ID.String()), err)
-			return
+			panic(http.ErrAbortHandler)
 		}
 		for _, row := range rows {
 			var cells map[string]any
@@ -426,11 +472,15 @@ func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
 			record = append(record, row.Status, row.ResultNote, row.Error)
 			_ = writer.Write(record)
 		}
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			log.Printf("dataset export %s: write: %v", logSafe(d.ID.String()), err)
+			panic(http.ErrAbortHandler)
+		}
 		if len(rows) < page {
 			break
 		}
 	}
-	writer.Flush()
 }
 
 func cellString(v any) string {

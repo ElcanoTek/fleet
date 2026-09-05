@@ -2104,9 +2104,10 @@ func (b *Bundle) validatePersonas() error {
 }
 
 // validateHTTPTools fails the load on a malformed http_tools[] entry — a missing
-// name/method/url, an unsupported method, a name that collides with an MCP server
-// or another http_tool, an input_schema that is not a JSON-Schema object, or a
-// response_jq that does not parse. The jq syntax check runs HERE (at Load) so a
+// name/method/url, an unsupported method, a url that is not http(s) with a fixed
+// host (no userinfo, no {param} in the scheme or host), a name that collides with
+// an MCP server or another http_tool, an input_schema that is not a JSON-Schema
+// object, or a response_jq that does not parse. The jq syntax check runs HERE (at Load) so a
 // typo'd jq program fails startup loudly rather than at the first model call. The
 // already-populated `seen` set enforces the single shared name namespace.
 func (b *Bundle) validateHTTPTools(seen map[string]bool) error {
@@ -2132,9 +2133,36 @@ func (b *Bundle) validateHTTPTools(seen map[string]bool) error {
 			return fmt.Errorf("http_tools[%q]: unsupported method %q (want GET|POST|PUT|PATCH|DELETE)", name, t.Method)
 		}
 		t.Method = method // normalize so the executor sees a canonical verb
-		if strings.TrimSpace(t.URL) == "" {
+		// The URL gets the same shape check as an a2a_peers rpc_url: an http(s)
+		// URL with a host, never file:// (or any non-network scheme) and never
+		// userinfo (the credential goes in headers, resolved host-side). The
+		// scheme and host must also be FIXED — {param} tokens are substituted
+		// from model-supplied arguments at call time, so a token in either
+		// would hand the model the destination of a credential-bearing request
+		// made from the process that owns every connector secret (SSRF). Tokens
+		// in the path and query are the feature and stay allowed; the executor
+		// percent-encodes them.
+		rawURL := strings.TrimSpace(t.URL)
+		if rawURL == "" {
 			return fmt.Errorf("http_tools[%q]: url is required", name)
 		}
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			return fmt.Errorf("http_tools[%q]: url does not parse: %w", name, err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("http_tools[%q]: url scheme must be http or https, got %q", name, u.Scheme)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("http_tools[%q]: url has no host", name)
+		}
+		if u.User != nil {
+			return fmt.Errorf("http_tools[%q]: url must not carry userinfo; put the credential in headers as a ${ENV_VAR} reference", name)
+		}
+		if strings.ContainsAny(u.Scheme+u.Host, "{}") {
+			return fmt.Errorf("http_tools[%q]: url scheme and host must be fixed; {param} tokens are allowed only in the path and query", name)
+		}
+		t.URL = rawURL
 		// input_schema, when present, must be a JSON-Schema object so the model is
 		// handed a well-formed tool parameter schema. An absent schema is allowed
 		// (a no-parameter tool); the executor advertises an empty object schema.

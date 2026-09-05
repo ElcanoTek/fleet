@@ -151,7 +151,13 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-func (s *Server) listPersonas(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
+	// Read-only route: the mux registers the bare path, so the method check
+	// lives here (as in listSkills) — without it a POST/PUT/DELETE answered 200.
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	names, err := s.agent.ListPersonas()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

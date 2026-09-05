@@ -88,3 +88,39 @@ func TestAppendConnectorRecommendationBlock(t *testing.T) {
 		t.Errorf("block should warn the model the tools aren't available yet: %q", got)
 	}
 }
+
+// The persisted opt-in list is lowercased on write while catalog names keep
+// their bundle spelling; a case-sensitive lookup used to recommend "Slack" to
+// a chat that already had "slack" enabled.
+func TestRecommendConnectors_ExcludesEnabledCaseInsensitively(t *testing.T) {
+	catalog := []agent.OptionalServerInfo{
+		{Name: "Slack", DisplayName: "Slack", Description: "send and read Slack messages and channels"},
+	}
+	recs := recommendConnectors("post to slack", catalog, enabledConnectorSet([]string{"slack"}), 2)
+	if len(recs) != 0 {
+		t.Errorf("an enabled connector must not be recommended regardless of case: %+v", recs)
+	}
+}
+
+// Regression for the turn-two bug: only conversation creation carries
+// enabled_optional, so the "already enabled" set must union the
+// conversation's PERSISTED list with the request seed — either source alone
+// counts as enabled.
+func TestEnabledConnectorSet_UnionsPersistedAndRequest(t *testing.T) {
+	got := enabledConnectorSet([]string{"slack"}, []string{" Jira ", ""})
+	for _, want := range []string{"slack", "jira"} {
+		if !got[want] {
+			t.Errorf("enabledConnectorSet missing %q: %v", want, got)
+		}
+	}
+	if got[""] {
+		t.Errorf("blank names must not be recorded: %v", got)
+	}
+	// A follow-up turn: no request seed, persisted list only → still enabled.
+	recs := recommendConnectors("post to slack", testCatalog(), enabledConnectorSet([]string{"slack"}, nil), 2)
+	for _, r := range recs {
+		if r.Name == "slack" {
+			t.Errorf("persisted-only enabled connector recommended on a later turn: %+v", recs)
+		}
+	}
+}

@@ -428,7 +428,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Connector auto-recommendation (#512, opt-in): if the message is relevant to
 	// an Optional connector the user hasn't enabled, note it so the agent can
 	// suggest connecting it via /settings/connections (never auto-connecting).
-	injected = s.applyConnectorRecommendations(injected, req.Message, req.EnabledOptional)
+	// "Enabled" is judged against the conversation's PERSISTED opt-in list —
+	// the set the turn runs with — not only the creation-time request seed,
+	// which later turns never carry.
+	injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The

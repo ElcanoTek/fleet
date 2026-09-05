@@ -21,6 +21,12 @@ const maxConnectorRecommendations = 2
 // (BM25) and returns up to `limit` connectors that are RELEVANT but NOT already
 // enabled for this turn. An already-enabled connector is never recommended; a
 // message with no term overlap yields nothing (BM25 excludes zero-score hits).
+//
+// enabled is keyed by LOWERCASED server name (see enabledConnectorSet): the
+// persisted opt-in list is lowercased on write (seedConversationMCP /
+// setOptionalMCPServers) while catalog names keep their bundle spelling, so a
+// case-sensitive lookup would let a connector the chat already has through as
+// "NOT connected".
 func recommendConnectors(userMessage string, catalog []agent.OptionalServerInfo, enabled map[string]bool, limit int) []agent.OptionalServerInfo {
 	msg := strings.TrimSpace(userMessage)
 	if msg == "" || len(catalog) == 0 || limit <= 0 {
@@ -29,7 +35,7 @@ func recommendConnectors(userMessage string, catalog []agent.OptionalServerInfo,
 	byName := make(map[string]agent.OptionalServerInfo, len(catalog))
 	docs := make([]tools.BM25Doc, 0, len(catalog))
 	for _, srv := range catalog {
-		if enabled[srv.Name] {
+		if enabled[strings.ToLower(strings.TrimSpace(srv.Name))] {
 			continue // already enabled/connected — nothing to recommend
 		}
 		byName[srv.Name] = srv
@@ -78,17 +84,37 @@ func appendConnectorRecommendationBlock(message string, recs []agent.OptionalSer
 	return b.String()
 }
 
+// enabledConnectorSet unions the connector name lists into one lookup set keyed
+// by lowercased, trimmed name — the normalization the opt-in list is persisted
+// under — so membership is decided the way the turn actually resolves servers.
+func enabledConnectorSet(lists ...[]string) map[string]bool {
+	enabled := make(map[string]bool)
+	for _, list := range lists {
+		for _, n := range list {
+			if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+				enabled[n] = true
+			}
+		}
+	}
+	return enabled
+}
+
 // applyConnectorRecommendations appends connector recommendations to userMessage
 // when the feature is enabled (#512), else returns it unchanged. A method so
 // postChat stays a single statement (no added complexity).
-func (s *Server) applyConnectorRecommendations(userMessage, rawMessage string, enabledOptional []string) string {
+//
+// The "already enabled" set is the UNION of the conversation's persisted opt-in
+// list (conv.OptionalMCPServersEnabled — the set the turn really runs with,
+// see runTurnAsync) and the request's creation-time seed. The request seed
+// alone is wrong on every turn after the first: a follow-up message and a
+// queue-drained turn (launchQueuedTurn) never carry enabled_optional, so
+// judging by the seed told the model a connector the chat HAS was "NOT
+// enabled" and had it steer the user to reconnect it.
+func (s *Server) applyConnectorRecommendations(userMessage, rawMessage string, persistedEnabled, requestEnabled []string) string {
 	if !s.cfg.LiveConnectorRecommendationsEnabled() || s.agent == nil {
 		return userMessage
 	}
-	enabled := make(map[string]bool, len(enabledOptional))
-	for _, n := range enabledOptional {
-		enabled[n] = true
-	}
+	enabled := enabledConnectorSet(persistedEnabled, requestEnabled)
 	recs := recommendConnectors(rawMessage, s.agent.MCPServerCatalog(), enabled, maxConnectorRecommendations)
 	return appendConnectorRecommendationBlock(userMessage, recs)
 }

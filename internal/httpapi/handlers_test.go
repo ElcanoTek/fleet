@@ -551,3 +551,18 @@ func TestCreateConversation_Lockdown(t *testing.T) {
 		}
 	})
 }
+
+// GET /personas is read-only: any other verb is a 405 before the persona
+// roster is consulted (it used to answer 200 to POST/PUT/DELETE). DB- and
+// engine-independent: the method check runs first, so a bare Server suffices.
+func TestPersonas_MethodNotAllowed(t *testing.T) {
+	s := &Server{}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/personas", nil)
+		w := httptest.NewRecorder()
+		s.listPersonas(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /personas: status %d, want 405", method, w.Code)
+		}
+	}
+}

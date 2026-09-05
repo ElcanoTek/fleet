@@ -3,12 +3,16 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/netguard"
 )
 
 // TestSubstituteTokens covers {param} substitution in each context: URL
@@ -242,6 +246,7 @@ func TestExecuteHTTPTool_Non2xx(t *testing.T) {
 // only in the spec's Headers and is written onto the outbound request — it must
 // not leak into the schema, description, or response.
 func TestHTTPToolSecretsNotExposedToModel(t *testing.T) {
+	allowLoopbackHTTPToolDial(t)
 	const secret = "super-secret-token-value"
 
 	var sawSecretOnWire bool
@@ -377,4 +382,92 @@ func TestAddHTTPTools_ConcurrentWithCall(t *testing.T) {
 		_, _ = c.CallToolOn(context.Background(), HTTPToolServerName, "missing", nil)
 	}
 	<-done
+}
+
+// allowLoopbackHTTPToolDial substitutes a plain dialer for the production SSRF
+// guard so a test can drive the synthetic server's OWN client (the CallToolOn
+// path) against an httptest server, which listens on loopback — an address the
+// guard refuses. Restored on cleanup.
+func allowLoopbackHTTPToolDial(t *testing.T) {
+	t.Helper()
+	prev := httpToolDialContext
+	httpToolDialContext = (&net.Dialer{}).DialContext
+	t.Cleanup(func() { httpToolDialContext = prev })
+}
+
+// TestHTTPToolDialContext_RefusesInternalAddresses pins the production dialer
+// to the netguard blocklist: loopback, RFC 1918 and the cloud-metadata
+// link-local address are refused before any connection is attempted. This is
+// the invariant the inline-HTTP-tool client was missing while it rode
+// http.DefaultTransport.
+func TestHTTPToolDialContext_RefusesInternalAddresses(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:1", "[::1]:1", "10.0.0.1:80", "169.254.169.254:80", "100.100.100.200:80"} {
+		conn, err := httpToolDialContext(context.Background(), "tcp", addr)
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if !errors.Is(err, errHTTPToolBlockedAddress) {
+			t.Errorf("dial %s: err = %v, want errHTTPToolBlockedAddress", addr, err)
+		}
+	}
+}
+
+// TestHTTPToolClient_UsesGuardedTransport asserts the lazily built client
+// carries its own Transport (the guarded one) rather than falling through to
+// http.DefaultTransport, and that the build happens exactly once under
+// concurrent first use.
+func TestHTTPToolClient_UsesGuardedTransport(t *testing.T) {
+	tr := &httpToolTransport{tools: map[string]HTTPToolSpec{}}
+	var first *http.Client
+	done := make(chan *http.Client, 8)
+	for i := 0; i < 8; i++ {
+		go func() { done <- tr.httpClient() }()
+	}
+	for i := 0; i < 8; i++ {
+		c := <-done
+		if first == nil {
+			first = c
+		} else if c != first {
+			t.Fatal("httpClient built more than one client")
+		}
+	}
+	ht, ok := first.Transport.(*http.Transport)
+	if !ok || ht == nil {
+		t.Fatalf("Transport = %T, want a dedicated *http.Transport (not DefaultTransport)", first.Transport)
+	}
+	if ht.DialContext == nil {
+		t.Fatal("Transport.DialContext is nil; the SSRF guard is not wired")
+	}
+	if first.CheckRedirect == nil {
+		t.Fatal("CheckRedirect is nil; cross-origin header stripping is not wired")
+	}
+}
+
+// TestExecuteHTTPTool_RedirectToInternalAddressIsRefused drives the real
+// redirect path: the origin (admitted here so the test can use httptest) 302s
+// to the cloud-metadata address. stripHeadersOnCrossOriginRedirect drops the
+// credential headers on that hop, but only the guarded dialer stops the FETCH
+// itself — with DefaultTransport the metadata document would have come back to
+// the model.
+func TestExecuteHTTPTool_RedirectToInternalAddressIsRefused(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	// Production classifier, minus loopback so the httptest origin is reachable.
+	client := newHTTPToolClient(guardedDialContext(func(ip net.IP) bool {
+		return !ip.IsLoopback() && netguard.IsBlockedIP(ip)
+	}))
+	spec := HTTPToolSpec{Name: "bounce", Method: "GET", URL: origin.URL + "/go", Headers: map[string]string{"X-Api-Key": "resolved-secret"}}
+	res, err := executeHTTPTool(context.Background(), client, spec, nil)
+	if err == nil {
+		t.Fatalf("expected the redirect hop to be refused, got result %+v", res)
+	}
+	if !errors.Is(err, errHTTPToolBlockedAddress) {
+		t.Fatalf("err = %v, want errHTTPToolBlockedAddress", err)
+	}
+	if strings.Contains(err.Error(), "resolved-secret") {
+		t.Fatalf("error text echoes the credential: %v", err)
+	}
 }

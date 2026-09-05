@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
 
@@ -211,5 +211,26 @@ describe("archiving a chat against a failing backend", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByRole("button", { name: /Archived conversations/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("creating a share link against a failing backend", () => {
+  it("reports inside the Share dialog, not through the rail toast", async () => {
+    mockBackend((url) =>
+      url.endsWith("/share") ? new Response("nope", { status: 500 }) : new Response("{}", { status: 200 }),
+    );
+    await mountChat();
+
+    await pickRowAction("Beta chat", "Share…");
+    const dialog = await screen.findByRole("dialog", { name: "Share this chat" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create link" }));
+
+    // The dialog carries its own failure line…
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't create the link (HTTP 500).");
+    // …and the viewport-level rail toast stays quiet: a share failure is not a
+    // rail failure, and the two used to share one state.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(within(dialog).getByRole("button", { name: "Create link" })).toBeEnabled();
   });
 });

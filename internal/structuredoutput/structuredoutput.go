@@ -150,6 +150,11 @@ func ValidateOutput(finalText string, schema json.RawMessage) (json.RawMessage, 
 	}
 	candidates := extractJSONCandidates(finalText)
 	parsedAny := false
+	// The validation failure reported on a miss is the LAST candidate's — the
+	// value the model stated last is its answer, so that is the error worth
+	// retrying against. The loop walks candidates in reverse, so "last
+	// candidate" is the FIRST failure seen; keep that one rather than letting
+	// each earlier (less relevant) candidate overwrite it.
 	var lastValidationErr error
 	for i := len(candidates) - 1; i >= 0; i-- {
 		var v any
@@ -163,7 +168,9 @@ func ValidateOutput(finalText string, schema json.RawMessage) (json.RawMessage, 
 		}
 		parsedAny = true
 		if err := sch.Validate(v); err != nil {
-			lastValidationErr = err
+			if lastValidationErr == nil {
+				lastValidationErr = err
+			}
 			continue
 		}
 		// Re-marshal so what we persist is compact, canonical JSON regardless

@@ -46,8 +46,19 @@ or run ceilings. Blocked tool text is replaced before it can reach the model or
 turn history. Seed-message blocks happen before any provider call.
 
 The detector receives raw text. Keep it in Fleet's trust domain and protect its
-transport accordingly. Fleet records source, profile, mode, score, and outcome,
-never the screened text.
+transport accordingly: `FLEET_GUARDRAIL_URL` must be `https://` unless the host
+is loopback (`127.0.0.1`, `::1`, `localhost`), where plain `http://` is
+accepted. Fleet records source, profile, mode, score, and outcome, never the
+screened text.
+
+Tool output is screened as a bounded sample — the first and last portions of
+the text up to 256 KiB total, with an elision marker between them — rather than
+the whole result. Screening runs before the model-output cap, so without the
+bound a multi-megabyte bash log would time out the 5 s detector call and, in
+`block` mode, replace benign output with the `[BLOCKED]` marker. The sample
+covers where an injection payload has to sit to survive the model-output cap;
+the tool result the model sees is unchanged by the sampling. The detector
+client also refuses any single request over 1 MiB rather than time out on it.
 
 ## Honest scope
 

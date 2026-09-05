@@ -20,6 +20,22 @@ vi.mock("../useIsAdmin", () => ({
   useIsAdmin: () => "member",
 }));
 
+// The page reports every action outcome as a toast, so capturing them is the
+// only way to assert what the user was actually told.
+const toasts: string[] = [];
+// The real useToast returns a STABLE showToast (useCallback), and the page's
+// toast effects list it as a dependency — so the mock must be stable too. A
+// fresh function per render would re-fire those effects on every render and
+// mask exactly the repeat-delivery behaviour these tests check.
+const stableShowToast = (message: string) => {
+  toasts.push(message);
+};
+const stableToastValue = { showToast: stableShowToast };
+vi.mock("@/app/shared/ui/Toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/shared/ui/Toast")>()),
+  useToast: () => stableToastValue,
+}));
+
 const BROWSERBASE = {
   name: "browserbase",
   display_name: "Browserbase",
@@ -423,6 +439,30 @@ describe("ConnectionsPage multi-login seats", () => {
       ).toBe(true),
     );
     await waitFor(() => expect(listGets()).toBeGreaterThan(before));
+  });
+
+  it("toasts every Set default, even when the message repeats", async () => {
+    // setDefaultSeat clears the ERROR banner but not the NOTICE one, and both
+    // successes say "Default account updated." Keyed on the message value, the
+    // second success changed no state and produced no toast — so switching the
+    // default a second time looked like it had done nothing.
+    toasts.length = 0;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, {
+        ...EMPTY_LIST,
+        servers: [GAMMA_PRIMARY, GAMMA_WORK],
+      }),
+    );
+    visit("");
+
+    const group = await screen.findByTestId("remote-group-gamma");
+    fireEvent.click(within(group).getByRole("button", { name: "Set default" }));
+    await waitFor(() => expect(toasts.length).toBe(1));
+
+    fireEvent.click(within(group).getByRole("button", { name: "Set default" }));
+    await waitFor(() => expect(toasts.length).toBe(2));
+    expect(toasts[0]).toBe(toasts[1]);
   });
 
   it("Rename PUTs the new label to /{id}/account", async () => {

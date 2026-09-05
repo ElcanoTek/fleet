@@ -129,3 +129,86 @@ func TestDownloadURL_ProtectedHandleFetchFailureDoesNotLeakURL(t *testing.T) {
 		t.Fatalf("unprotected fetch failure should name the URL: %+v", res)
 	}
 }
+
+// TestProtectFastIODownloadURLs_FailsLoudOnFormatDrift pins the fallback: when
+// the upstream response no longer carries the "# download_url" heading the
+// section scanner keys off, a URL that is a bearer in its own right (a token=
+// / signature= / X-Amz-* query) is vaulted anyway instead of flowing to the
+// model, while ordinary URLs — with no query, or with a non-credential query —
+// are left alone.
+func TestProtectFastIODownloadURLs_FailsLoudOnFormatDrift(t *testing.T) {
+	const (
+		tokenURL = "https://api.fast.io/current/workspace/123/storage/node/read/?token=secret-bearer-value"
+		sigV4URL = "https://bucket.s3.amazonaws.com/obj?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef&X-Amz-Credential=AKIA%2F20260905"
+		azureURL = "https://acct.blob.core.windows.net/c/b?sv=2022-11-02&sig=abc123"
+		web      = "https://elcano.fast.io/workspace/general/preview/node"
+		paged    = "https://api.fast.io/current/workspace/123/list?page=2&limit=50"
+	)
+	// No "# " heading anywhere: the pre-fix scanner returned this verbatim.
+	input := "Result: success\nDownload: " + tokenURL + "\nSigned: " + sigV4URL + "\nBlob: " + azureURL + "\nPreview: " + web + "\nNext: " + paged + "\n"
+
+	got := ProtectFastIODownloadURLs(input)
+	for _, leaked := range []string{tokenURL, sigV4URL, azureURL, "secret-bearer-value", "deadbeef", "sig=abc123"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("credential-bearing URL leaked past the drift fallback (%q):\n%s", leaked, got)
+		}
+	}
+	for _, kept := range []string{web, paged} {
+		if !strings.Contains(got, kept) {
+			t.Fatalf("non-credential URL %q should be untouched:\n%s", kept, got)
+		}
+	}
+	if n := strings.Count(got, downloadURLHandlePrefix); n != 3 {
+		t.Fatalf("want 3 opaque handles, got %d:\n%s", n, got)
+	}
+	// Each handle resolves to its bearer URL, so the download_url flow still
+	// works end to end for a drifted response.
+	for _, line := range strings.Split(got, "\n") {
+		i := strings.Index(line, downloadURLHandlePrefix)
+		if i < 0 {
+			continue
+		}
+		handle := strings.TrimSpace(line[i:])
+		resolved, protected, err := resolveDownloadURLHandle(handle)
+		if err != nil || !protected {
+			t.Fatalf("resolve %q: (%q, %v, %v)", handle, resolved, protected, err)
+		}
+		if resolved != tokenURL && resolved != sigV4URL && resolved != azureURL {
+			t.Fatalf("handle resolved to an unexpected URL %q", resolved)
+		}
+	}
+
+	// A response with a heading that DRIFTED (renamed) is covered by the same
+	// fallback, and the still-recognized zip_url section keeps its whole-URL
+	// vaulting (no credential heuristic needed there).
+	drifted := "# file_url\n" + tokenURL + "\n# zip_url\nhttps://cdn.fast.io/opaque/path\n# web_url\n" + web + "\n"
+	got = ProtectFastIODownloadURLs(drifted)
+	if strings.Contains(got, "secret-bearer-value") || strings.Contains(got, "https://cdn.fast.io/opaque/path") || !strings.Contains(got, web) {
+		t.Fatalf("drifted-heading response mis-handled:\n%s", got)
+	}
+}
+
+func TestHasCredentialQuery(t *testing.T) {
+	cases := map[string]bool{
+		"https://h/p?token=abc":                        true,
+		"https://h/p?TOKEN=abc":                        true,
+		"https://h/p?access_token=abc":                 true,
+		"https://h/p?signature=abc":                    true,
+		"https://h/p?sv=1&sig=abc":                     true,
+		"https://h/p?X-Amz-Signature=abc":              true,
+		"https://h/p?x-goog-signature=abc":             true,
+		"https://h/p":                                  false,
+		"https://h/p?page=2&limit=10":                  false,
+		"https://h/p?tokenizer=bpe":                    false, // exact key match, not substring
+		"https://h/p?q=token":                          false, // credential words in VALUES are not keys
+		"https://h/token/signature":                    false, // path, not query
+		"https://h/p?%zz=1":                            false, // unparseable
+		"https://h/p?utm_source=x&sig=":                true,  // empty value still names the param
+		"http://169.254.169.254/latest?token=metadata": true,
+	}
+	for raw, want := range cases {
+		if got := hasCredentialQuery(raw); got != want {
+			t.Errorf("hasCredentialQuery(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}

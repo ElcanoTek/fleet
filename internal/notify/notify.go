@@ -56,6 +56,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -132,6 +133,8 @@ type Event struct {
 	// CostUSD is the run's cost formatted to 4 decimal places (e.g. "0.1234").
 	// Pre-formatted as a string so the webhook template and email body share one
 	// representation and a template author cannot accidentally reformat it.
+	// Empty for a StatusProgress event (no run cost to report yet); the default
+	// webhook template renders that as 0.
 	CostUSD string
 	// DurationSeconds is the wall-clock run time, in whole seconds.
 	DurationSeconds int
@@ -491,7 +494,7 @@ func RenderWebhookBody(tmpl string, ev Event) ([]byte, error) {
 	if strings.TrimSpace(tmpl) == "" {
 		tmpl = defaultWebhookTemplate
 	}
-	t, err := template.New("webhook").Option("missingkey=error").Parse(tmpl)
+	t, err := template.New("webhook").Option("missingkey=error").Funcs(webhookTemplateFuncs).Parse(tmpl)
 	if err != nil {
 		return nil, fmt.Errorf("parse webhook body_template: %w", err)
 	}
@@ -502,10 +505,50 @@ func RenderWebhookBody(tmpl string, ev Event) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// webhookTemplateFuncs are the helpers available to body templates (the
+// default and operator-authored ones alike):
+//
+//	json   — JSON-encode a value, quotes included, so a free-text field can be
+//	         interpolated into a JSON body safely.
+//	number — render a pre-formatted decimal string as a bare JSON number, or 0
+//	         when it is empty/unparseable.
+//
+// Name is the first ~60 runes of a free-form prompt and LogURL is a URL, and
+// text/template interpolates both verbatim: a prompt containing a quote,
+// backslash or newline produced an invalid body, and a progress event (which
+// carries no cost) rendered `"cost_usd":,`.
+var webhookTemplateFuncs = template.FuncMap{
+	"json":   jsonEncode,
+	"number": jsonNumber,
+}
+
+// jsonEncode returns v as a JSON literal (a string gets its quotes). Errors are
+// impossible for the Event's field types; they are folded into "" defensively
+// so a template never observes a Go error string in a body.
+func jsonEncode(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return `""`
+	}
+	return string(b)
+}
+
+// jsonNumber renders a decimal string as a bare JSON number. Empty (a progress
+// event has no cost to report) or anything that is not a finite decimal
+// renders as 0 — the terminal-event shape is unchanged (still numeric, still
+// four decimals) and the body is always valid JSON.
+func jsonNumber(s string) string {
+	if _, err := strconv.ParseFloat(s, 64); err != nil {
+		return "0"
+	}
+	return s
+}
+
 // defaultWebhookTemplate is the fallback payload when no body template is
-// configured. JSON-encoding-safe for the simple value types it interpolates
-// (a UUID, a closed-set status, a numeric cost/duration, and a URL we build).
-const defaultWebhookTemplate = `{"task_id":"{{.TaskID}}","name":"{{.Name}}","status":"{{.Status}}","cost_usd":{{.CostUSD}},"duration_seconds":{{.DurationSeconds}},"log_url":"{{.LogURL}}"}`
+// configured. Every free-text field goes through the json helper and the cost
+// through number, so the body is valid JSON for any prompt and for events
+// that carry no cost.
+const defaultWebhookTemplate = `{"task_id":{{json .TaskID}},"name":{{json .Name}},"status":{{json .Status}},"cost_usd":{{number .CostUSD}},"duration_seconds":{{.DurationSeconds}},"log_url":{{json .LogURL}}}`
 
 // SignWebhook returns the canonical X-Fleet-Signature value for body under
 // secret, binding in timestamp (Unix seconds, as it appears in the

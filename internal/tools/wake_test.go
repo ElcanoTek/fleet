@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fixedNow pins the wake tools' clock so deadline assertions are exact.
@@ -101,5 +102,30 @@ func TestWakeOnEventTool(t *testing.T) {
 	}
 	if r := runToolCtx(context.Background(), t, NewWakeOnEventTool(nowFixed), `{"event":"e","note":"n"}`); !r.IsError || !strings.Contains(r.Content, "WAKE_UNAVAILABLE") {
 		t.Fatalf("wake_on_event without handler must error clearly: %+v", r)
+	}
+}
+
+// TestValidateWakeNote_ClampsOnRuneBoundary: the note is persisted to
+// Postgres, which rejects a TEXT value holding a rune split on the byte cap, so
+// the clamp must land on a rune boundary rather than at byte wakeNoteMaxLen.
+func TestValidateWakeNote_ClampsOnRuneBoundary(t *testing.T) {
+	// wakeNoteMaxLen-1 ASCII bytes, then a 2-byte rune straddling the cap.
+	in := strings.Repeat("a", wakeNoteMaxLen-1) + "é" + "tail"
+	note, problem := validateWakeNote(in)
+	if problem != "" {
+		t.Fatalf("unexpected problem: %s", problem)
+	}
+	if !utf8.ValidString(note) {
+		t.Fatalf("clamped note is invalid UTF-8 (split rune at the cap)")
+	}
+	if len(note) > wakeNoteMaxLen {
+		t.Fatalf("len = %d, want <= %d", len(note), wakeNoteMaxLen)
+	}
+	if want := strings.Repeat("a", wakeNoteMaxLen-1); note != want {
+		t.Fatalf("note = %q… (len %d), want the %d ASCII bytes before the straddling rune", note[:16], len(note), wakeNoteMaxLen-1)
+	}
+	// Under the cap: untouched.
+	if got, _ := validateWakeNote(" keep me "); got != "keep me" {
+		t.Fatalf("short note = %q", got)
 	}
 }

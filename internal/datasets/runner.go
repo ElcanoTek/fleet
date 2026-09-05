@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	"github.com/ElcanoTek/fleet/internal/truncate"
@@ -81,10 +82,15 @@ func (r *Runner) Start(ctx context.Context, id uuid.UUID) error {
 	r.cancels[id] = cancel
 	r.mu.Unlock()
 
-	go func() {
+	// safe.Go: this goroutine is detached from net/http's per-request
+	// recovery, so an unrecovered panic in the run loop would take the whole
+	// process down (internal/safe). run's own defer still parks the dataset
+	// status during the unwind, so a recovered panic surfaces as a parked
+	// dataset, not a stuck 'running' one.
+	safe.Go("datasets.run", func() {
 		defer cancel()
 		r.run(runCtx, d)
-	}()
+	})
 	return nil
 }
 
@@ -147,7 +153,14 @@ func (r *Runner) run(ctx context.Context, d *models.Dataset) {
 	for w := 0; w < concurrency; w++ {
 		wg.Add(1)
 		go func() {
+			// Recover is deferred AFTER wg.Done so it runs first on unwind
+			// (defers are LIFO): the panic is recovered and emitted, then
+			// wg.Done releases the run loop — a dead worker must never leave
+			// wg.Wait parked forever. runRow has its own per-row recovery
+			// that marks the row failed; this is the backstop for a panic
+			// in the claim loop itself.
 			defer wg.Done()
+			defer safe.Recover("datasets.worker", nil)
 			for {
 				if ctx.Err() != nil {
 					return
@@ -183,6 +196,15 @@ func (noopSink) Emit(string, any) {}
 // uses a cancel-detached context so a Pause mid-write still persists the
 // result of work already paid for.
 func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.DatasetRow, schema json.RawMessage) {
+	// A panic in one row's turn (a nil turn result, a schema edge case) is
+	// that ROW's failure, not the process's: record it as failed so it is not
+	// stranded 'running', and let the worker continue with the next row.
+	defer safe.Recover("datasets.runRow", func(v any) {
+		msg := clamp("row run panicked: "+safe.PanicClass(v), maxNoteChars)
+		if ferr := r.store.FinishDatasetRow(context.WithoutCancel(ctx), row.ID, nil, "", msg, 0); ferr != nil {
+			log.Printf("dataset %s row %d: record panic: %v", d.ID, row.RowIndex, ferr)
+		}
+	})
 	prompt, err := RowPrompt(d, row)
 	if err != nil {
 		_ = r.store.FinishDatasetRow(context.WithoutCancel(ctx), row.ID, nil, "", err.Error(), 0)
@@ -212,6 +234,15 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 		}
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", clamp(err.Error(), maxNoteChars), 0); ferr != nil {
 			log.Printf("dataset %s row %d: record failure: %v", d.ID, row.RowIndex, ferr)
+		}
+		return
+	}
+
+	if turn == nil {
+		// A (nil, nil) from the turn runner is a contract violation, not a
+		// row outcome to dereference: fail the row explicitly.
+		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", "turn runner returned no result", 0); ferr != nil {
+			log.Printf("dataset %s row %d: record missing result: %v", d.ID, row.RowIndex, ferr)
 		}
 		return
 	}

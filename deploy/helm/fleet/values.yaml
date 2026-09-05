@@ -32,6 +32,10 @@ serviceAccount:
   # Control-plane ServiceAccount (holds the RBAC grant for sandbox pods).
   create: true
   name: ""
+  # Annotations stamped on the created ServiceAccount — this is where a cloud
+  # identity binding goes (EKS IRSA eks.amazonaws.com/role-arn, GKE Workload
+  # Identity iam.gke.io/gcp-service-account).
+  annotations: {}
 
 sandbox:
   # REQUIRED: the sandbox image sandbox pods run

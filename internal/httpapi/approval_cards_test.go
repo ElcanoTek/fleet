@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -200,5 +201,39 @@ func TestHandleApproval_ExpiredClickResolvesTimeoutNow(t *testing.T) {
 	}
 	if fake.appendedText != approvalTimeoutResultText {
 		t.Errorf("history breadcrumb = %q, want the timeout wording so the next turn's model knows", fake.appendedText)
+	}
+}
+
+// Every card preview truncates by RUNES so a multibyte payload is never cut
+// mid-character into a replacement glyph; the 1 MiB email content cap is a
+// byte budget snapped back to a rune boundary.
+func TestCardPreviewsTruncateOnRuneBoundaries(t *testing.T) {
+	if got := excerpt(strings.Repeat("é", 50), 10); !utf8.ValidString(got) || utf8.RuneCountInString(got) != 11 {
+		t.Errorf("excerpt = %q (runes=%d), want 10 runes + ellipsis, valid UTF-8", got, utf8.RuneCountInString(got))
+	}
+	if got := excerpt("short", 10); got != "short" {
+		t.Errorf("excerpt under the cap = %q, want unchanged", got)
+	}
+
+	long := strings.Repeat("é", 700)
+	bash := summarizeBashInput("bash", `{"command":"`+long+`"}`)
+	if p := bash["preview"].(string); !utf8.ValidString(p) || !strings.HasPrefix(p, strings.Repeat("é", 600)+"…") {
+		t.Errorf("bash preview cut mid-rune or at the wrong length: runes=%d", utf8.RuneCountInString(p))
+	}
+
+	email := summarizeSendEmailInput("send_email", `{"content":"`+long+`","content_type":"text/plain"}`, "")
+	if p := email["preview"].(string); !utf8.ValidString(p) || !strings.HasPrefix(p, strings.Repeat("é", 600)+"…") {
+		t.Errorf("email preview cut mid-rune or at the wrong length: runes=%d", utf8.RuneCountInString(p))
+	}
+
+	// Content over 1 MiB: cut at a rune boundary, flagged as overflowed.
+	huge := strings.Repeat("é", (1<<20)/2+5) // 2-byte runes, over the byte cap by an odd margin
+	email = summarizeSendEmailInput("send_email", `{"content":"`+huge+`","content_type":"text/plain"}`, "")
+	content := email["content"].(string)
+	if !utf8.ValidString(content) || len(content) > 1<<20 {
+		t.Errorf("email content cap: valid=%v len=%d", utf8.ValidString(content), len(content))
+	}
+	if overflow, _ := email["content_overflow"].(bool); !overflow {
+		t.Errorf("content over the cap should be flagged: %v", email["content_overflow"])
 	}
 }

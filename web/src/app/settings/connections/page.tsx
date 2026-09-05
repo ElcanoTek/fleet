@@ -901,8 +901,26 @@ function ConnectionsPageInner() {
     entry: CatalogThirdParty;
     overrides?: AddOverrides;
   } | null>(null);
-  const [error, setError] = useState<string | null>(initialBanner.error);
-  const [notice, setNotice] = useState<string | null>(initialBanner.notice);
+  // A banner is delivered as a one-shot TOAST, so it must fire again when the
+  // same message repeats. Keyed on the message VALUE, a retry that failed
+  // identically ("Connection refused" twice) changed no state, so no second
+  // toast appeared and the retry read as success. Carry a monotonic sequence
+  // beside the text and key the effects on the whole record, so every call to
+  // setError/setNotice is one user-visible event regardless of its wording.
+  const [errorBanner, setErrorBanner] = useState<{
+    text: string | null;
+    seq: number;
+  }>(() => ({ text: initialBanner.error, seq: 0 }));
+  const [noticeBanner, setNoticeBanner] = useState<{
+    text: string | null;
+    seq: number;
+  }>(() => ({ text: initialBanner.notice, seq: 0 }));
+  const setError = useCallback((text: string | null) => {
+    setErrorBanner((prev) => ({ text, seq: prev.seq + 1 }));
+  }, []);
+  const setNotice = useCallback((text: string | null) => {
+    setNoticeBanner((prev) => ({ text, seq: prev.seq + 1 }));
+  }, []);
   const { showToast } = useToast();
   // Post-add "sign in now?" prompt for OAuth servers (id + display name).
   const [connectPromptFor, setConnectPromptFor] = useState<{
@@ -916,11 +934,11 @@ function ConnectionsPageInner() {
   // ?connected / ?error result) surfaces as a toast — visible from anywhere
   // on this long page; there is no inline banner copy.
   useEffect(() => {
-    if (error) showToast(error, "error", 6000);
-  }, [error, showToast]);
+    if (errorBanner.text) showToast(errorBanner.text, "error", 6000);
+  }, [errorBanner, showToast]);
   useEffect(() => {
-    if (notice) showToast(notice, "success");
-  }, [notice, showToast]);
+    if (noticeBanner.text) showToast(noticeBanner.text, "success");
+  }, [noticeBanner, showToast]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
@@ -958,13 +976,13 @@ function ConnectionsPageInner() {
         if (isStale()) return;
         setLoading(false);
       });
-  }, []);
+  }, [setError]);
 
   const refresh = useCallback(() => {
     setError(null);
     setLoading(true);
     apply(() => false);
-  }, [apply]);
+  }, [apply, setError]);
 
   // refreshCatalog re-reads bundled accounts + third-party entries — called
   // after credential-account changes so new seats appear in the card selects.

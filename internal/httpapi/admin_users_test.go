@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -283,5 +284,45 @@ func TestAdminUserOpsRole(t *testing.T) {
 		map[string]any{"email": "both@x.com", "password": "both-planes-pw", "role": "admin", "ops_role": "readonly"}, "boss@x.com")
 	if got = decode(w); w.Code != http.StatusCreated || got.OpsCenterRole != "admin" {
 		t.Fatalf("POST role=admin + ops_role=readonly: status %d, got %+v", w.Code, got)
+	}
+}
+
+// failingRenameTeamStore is a chatStore whose RenameTeam fails with a plain
+// (non-input) error — the seam for a transaction failure.
+type failingRenameTeamStore struct{ chatStore }
+
+func (failingRenameTeamStore) RenameTeam(context.Context, string, string) (int64, int64, error) {
+	return 0, 0, errors.New("simulated postgres outage")
+}
+
+// POST /admin/teams/rename tells the caller's mistakes (blank or equal names,
+// an unknown team → 400) apart from the server's (a failed transaction →
+// 500). Every store error used to come back 400 with the raw driver text, so
+// a Postgres outage read as the admin's own bad request.
+func TestAdminTeamRenameErrorSplit(t *testing.T) {
+	s := memberFixture(t, "boss@x.com")
+	setRole(t, s, "boss@x.com", "admin", "devops")
+	h := s.Routes()
+
+	for _, body := range []map[string]string{
+		{"from": "", "to": "platform"},
+		{"from": "devops", "to": "devops"},
+		{"from": "no-such-team", "to": "platform"},
+	} {
+		w := do(t, h, http.MethodPost, "/admin/teams/rename", body, "boss@x.com")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("rename %v: status %d body=%q, want 400", body, w.Code, w.Body.String())
+		}
+	}
+	w := do(t, h, http.MethodPost, "/admin/teams/rename", map[string]string{"from": "devops", "to": "platform"}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("valid rename: status %d body=%q", w.Code, w.Body.String())
+	}
+
+	s.store = failingRenameTeamStore{s.store}
+	h = s.Routes()
+	w = do(t, h, http.MethodPost, "/admin/teams/rename", map[string]string{"from": "platform", "to": "infra"}, "boss@x.com")
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("store failure: status %d body=%q, want 500", w.Code, w.Body.String())
 	}
 }

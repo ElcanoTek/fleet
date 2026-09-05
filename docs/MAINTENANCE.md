@@ -255,10 +255,17 @@ What this does **not** do:
   runtime guard does not watch it.
 - **`fleet_disk_shedding` is not exported per mount.** One fleet process, one
   data directory, one series.
-- **The worktree sweep is age-based only.** It cannot tell a crashed run's
-  worktree from a running task's, which is why the default (24h) is longer than
-  the default wall-clock ceiling (4h). Lower it only on a box whose tasks are
-  known to be short.
+- **The worktree sweep is age-based, with two guards.** Age alone cannot tell
+  a crashed run's worktree from a running task's, which is why the default
+  (24h) is longer than the default wall-clock ceiling (4h). The age is
+  **floored at 4h** (`worktree.MinPruneAge`, the default ceiling) whatever
+  `--older-than` / `FLEET_WORKTREE_PRUNE_AGE` says — a smaller value is raised
+  with a warning, never honoured. Aged candidates are then cross-checked
+  against `git worktree list --porcelain`: a worktree git reports as
+  **locked** is kept, one git knows is removed through git, and only a
+  directory git does not list is deleted directly. A box whose wall-clock
+  ceiling is raised above 4h must raise the prune age to match; the floor
+  cannot see the override.
 - **The persistent-session cap stays soft.** See above; a busy session is never
   evicted, so the live count can exceed the limit transiently.
 - **No automatic `--deep` prune.** Named-image removal stays a human decision.

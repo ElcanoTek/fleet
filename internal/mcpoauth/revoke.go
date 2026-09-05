@@ -12,10 +12,15 @@ import (
 // RevokeToken makes a best-effort RFC 7009 token revocation request. Best-effort
 // describes the caller's posture, not the report: a transport failure and a
 // non-2xx refusal both come back as errors, so a caller that wants to log or
-// retry can, while today's caller discards it — the local record is deleted
-// regardless, and an unreachable or non-supporting AS shouldn't block the user
-// from disconnecting. token is the refresh (or access) token to revoke.
-func RevokeToken(ctx context.Context, httpClient *http.Client, revocationEndpoint, clientID, clientSecret, token string) error {
+// retry can — the local record is deleted regardless, and an unreachable or
+// non-supporting AS shouldn't block the user from disconnecting. token is the
+// refresh (or access) token to revoke. authMethods is the AS's advertised
+// token_endpoint_auth_methods_supported (nil when it advertised none): RFC 7009
+// §2.1 has the client authenticate exactly as it does at the token endpoint, so
+// the same basicAuthAllowed decision the exchange and refresh use picks Basic
+// vs. client_secret_post here — a mismatch is a 401 the AS answers with the
+// token still live.
+func RevokeToken(ctx context.Context, httpClient *http.Client, revocationEndpoint, clientID, clientSecret, token string, authMethods []string) error {
 	if revocationEndpoint == "" || token == "" {
 		return nil
 	}
@@ -23,9 +28,13 @@ func RevokeToken(ctx context.Context, httpClient *http.Client, revocationEndpoin
 	form.Set("token", token)
 	form.Set("token_type_hint", "refresh_token")
 
-	useBasic := clientSecret != ""
+	useBasic := clientSecret != "" && basicAuthAllowed(authMethods)
 	if !useBasic {
+		// Public client, or client_secret_post: client_id (and secret) in body.
 		form.Set("client_id", clientID)
+		if clientSecret != "" {
+			form.Set("client_secret", clientSecret)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, revocationEndpoint, strings.NewReader(form.Encode()))

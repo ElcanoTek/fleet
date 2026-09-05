@@ -2870,6 +2870,21 @@ export function ChatExperience({
     if (railErrorTimer.current) window.clearTimeout(railErrorTimer.current);
     railErrorTimer.current = window.setTimeout(() => setRailError(null), 5000);
   };
+  // The auto-dismiss timer outlives an unmount otherwise (a failed rail
+  // action just before navigating away fires setState on a gone component).
+  useEffect(
+    () => () => {
+      if (railErrorTimer.current) window.clearTimeout(railErrorTimer.current);
+    },
+    [],
+  );
+
+  // The Share dialog's own failure line. Share/unshare/team-share failures
+  // used to go through the rail toast AND be passed into the dialog as its
+  // `error`, so an unrelated rail failure (a rename that 500ed behind the
+  // modal) showed up inside Share as if the share had failed. Kept apart:
+  // this is set only by the three share actions, and cleared on open/close.
+  const [shareError, setShareError] = useState<string | null>(null);
 
   // Rail project management (#509 follow-up): rename inline (PATCH just the
   // name — the API's pointer-field patch leaves everything else untouched)
@@ -3188,6 +3203,7 @@ export function ChatExperience({
   // a public link as a side effect: creating one is a deliberate click inside.
   const openShareDialog = (conversation: ConversationSummary) => {
     setShareLinkCopied(false);
+    setShareError(null);
     setShareDialog({ id: conversation.id });
   };
 
@@ -3217,6 +3233,7 @@ export function ChatExperience({
     conversation: ConversationSummary,
   ): Promise<boolean> => {
     setShareBusy(true);
+    setShareError(null);
     let response: Response;
     try {
       response = await fetch(`/api/conversations/${conversation.id}/share`, {
@@ -3228,14 +3245,14 @@ export function ChatExperience({
       // A thrown fetch (offline, DNS, proxy reset) used to escape as an
       // unhandled rejection and leave the button silent: the user clicked
       // "Create link", nothing changed, and nothing said why.
-      showRailError("Couldn't reach the server — no link was created.");
+      setShareError("Couldn't reach the server — no link was created.");
       setShareBusy(false);
       return false;
     } finally {
       setShareBusy(false);
     }
     if (!response.ok) {
-      showRailError(`Couldn't create the link (HTTP ${response.status}).`);
+      setShareError(`Couldn't create the link (HTTP ${response.status}).`);
       await refreshConversations();
       return false;
     }
@@ -3268,19 +3285,20 @@ export function ChatExperience({
   const unshareConversation = async (conversation: ConversationSummary) => {
     patchShareToken(conversation.id, "");
     setShareBusy(true);
+    setShareError(null);
     try {
       const response = await fetch(
         `/api/conversations/${conversation.id}/share`,
         { method: "DELETE" },
       );
       if (!response.ok) {
-        showRailError(
+        setShareError(
           `Couldn't stop sharing the link (HTTP ${response.status}) — it is still live.`,
         );
         await refreshConversations();
       }
     } catch {
-      showRailError("Couldn't reach the server — the link is still live.");
+      setShareError("Couldn't reach the server — the link is still live.");
       await refreshConversations();
     } finally {
       setShareBusy(false);
@@ -3295,6 +3313,7 @@ export function ChatExperience({
     visible: boolean,
   ): Promise<void> => {
     setShareBusy(true);
+    setShareError(null);
     const patch = (c: ConversationSummary) =>
       c.id === conversation.id ? { ...c, team_visible: visible } : c;
     setConversations((current) => current.map(patch));
@@ -3316,7 +3335,7 @@ export function ChatExperience({
           response.status === 409
             ? (await response.text()).trim()
             : `Couldn't ${visible ? "share" : "unshare"} the chat with your team (HTTP ${response.status}).`;
-        showRailError(reason || "Couldn't share the chat with your team.");
+        setShareError(reason || "Couldn't share the chat with your team.");
         await refreshConversations();
       } else {
         // Trust the STORED state, not what we asked for.
@@ -3328,7 +3347,7 @@ export function ChatExperience({
         }
       }
     } catch {
-      showRailError("Couldn't reach the server — the chat's team sharing is unchanged.");
+      setShareError("Couldn't reach the server — the chat's team sharing is unchanged.");
       await refreshConversations();
     } finally {
       setShareBusy(false);
@@ -5147,7 +5166,7 @@ export function ChatExperience({
             userEmail={userEmail}
             isAdmin={myTeamAdmin}
             teamSharedProjects={teamSharedProjects}
-            error={railError}
+            error={shareError}
             busy={shareBusy}
             copied={shareLinkCopied}
             buildShareUrl={buildShareUrl}
@@ -5175,7 +5194,10 @@ export function ChatExperience({
               setShareDialog(null);
               setProjectsModal({});
             }}
-            onClose={() => setShareDialog(null)}
+            onClose={() => {
+              setShareError(null);
+              setShareDialog(null);
+            }}
           />
         ) : null}
 

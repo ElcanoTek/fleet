@@ -248,3 +248,27 @@ func TestValidateOutputPicksLastConforming(t *testing.T) {
 		t.Errorf("want parse error, got %v", err)
 	}
 }
+
+// TestValidateOutputReportsLastCandidateError: when nothing conforms, the
+// error must describe the LAST candidate (the model's restated final answer),
+// not the first intermediate value. The reverse walk sees the last candidate
+// first, so a loop that overwrote the error on every iteration reported the
+// least relevant failure.
+func TestValidateOutputReportsLastCandidateError(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"sum":{"type":"integer"}},"required":["sum"],"additionalProperties":false}`)
+	// First candidate is missing "sum"; the last has "sum" of the wrong type.
+	text := "working: {\"step\":\"compute\"}\nFinal answer:\n{\"sum\": \"six hundred fifty\"}"
+	_, err := ValidateOutput(text, schema)
+	if err == nil {
+		t.Fatal("expected a conformance error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "does not conform") {
+		t.Fatalf("want conform error, got %v", err)
+	}
+	// The last candidate's failure is a type mismatch on "sum"; the first
+	// candidate's is a missing required property (and an unexpected "step").
+	if !strings.Contains(msg, "sum") || strings.Contains(msg, "step") {
+		t.Errorf("error should describe the LAST candidate's failure (sum type), got: %s", msg)
+	}
+}

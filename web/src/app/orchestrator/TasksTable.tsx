@@ -60,6 +60,9 @@ export type TasksTableProps = {
   pageSize: number;
   filters: TaskFilters;
   onFilters: (next: Partial<TaskFilters>) => void;
+  // Reset every filter at once (useDashboardData.clearFilters). The button
+  // only renders while some filter is set, and only when the parent wires it.
+  onClearFilters?: () => void;
   onPage: (page: number) => void;
   onPageSize: (size: number) => void;
   onOpenLogs: (task: Task) => void;
@@ -102,6 +105,7 @@ export function TasksTable({
   pageSize,
   filters,
   onFilters,
+  onClearFilters,
   onPage,
   onPageSize,
   onOpenLogs,
@@ -140,6 +144,13 @@ export function TasksTable({
       setQueryDraft(filters.query);
     }
   }, [filters.query]);
+
+  const anyFilter =
+    filters.status !== "" ||
+    filters.query !== "" ||
+    filters.scheduledOnly ||
+    filters.completedToday ||
+    filters.createdBy !== "";
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const start = total > 0 ? Math.min((page - 1) * pageSize + 1, total) : 0;
@@ -212,6 +223,23 @@ export function TasksTable({
             onChange={(e) => setQueryDraft(e.target.value)}
           />
         </div>
+        {onClearFilters && anyFilter ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            data-testid="tasks-clear-filters"
+            onClick={() => {
+              // Drop the search draft too: text typed inside the debounce
+              // window has not reached filters.query yet, and the re-seed
+              // effect below only fires when THAT changes.
+              lastPropagated.current = "";
+              setQueryDraft("");
+              onClearFilters();
+            }}
+          >
+            Clear filters
+          </button>
+        ) : null}
       </div>
 
       <div className="table-wrapper tasks-table-wrapper">

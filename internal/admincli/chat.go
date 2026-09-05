@@ -181,9 +181,13 @@ func chatUserList(argv []string) int {
 	fs := flag.NewFlagSet("chat user list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "chat Postgres DSN")
 	asJSON := fs.Bool("json", false, "machine-readable output")
-	_, flagArgs := splitPositional(argv)
-	if err := fs.Parse(flagArgs); err != nil {
+	// No positional: a stray argument is an error, not silently discarded (the
+	// same rule as `sched apikey list`).
+	if err := fs.Parse(argv); err != nil {
 		return 1
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "chat user list takes no arguments (got %q)", fs.Args())
 	}
 	dsn, err := chatDSN(*dbURL)
 	if err != nil {
@@ -214,13 +218,16 @@ func chatUserList(argv []string) int {
 		fmt.Fprintln(os.Stderr, "no chat users yet — add one with: fleet chat user add <email> --password -")
 		return 0
 	}
+	rows := make([][]string, 0, len(users))
 	for _, u := range users {
 		team := u.TeamID
 		if team == "" {
 			team = "-"
 		}
-		// email  role  team — tab-separated so it stays greppable/column-able.
-		fmt.Printf("%s\t%s\t%s\n", u.Email, u.Role, team)
+		rows = append(rows, []string{u.Email, u.Role, team})
+	}
+	if err := renderTable(os.Stdout, []string{"EMAIL", "ROLE", "TEAM"}, rows); err != nil {
+		return errf(5, "render: %v", err)
 	}
 	return 0
 }

@@ -18,8 +18,13 @@ vi.mock("next/navigation", () => ({
 
 // Admin gate: visibility-only; force "admin" so the page renders. (The real
 // hook probes an admin endpoint; authorization stays server-side regardless.)
+// `adminState` is swapped by the one test that exercises the gate's own
+// fallback rendering.
+let adminState = "admin";
+const retryAdminProbe = vi.fn(() => Promise.resolve(adminState));
 vi.mock("../useIsAdmin", () => ({
-  useIsAdmin: () => "admin",
+  useIsAdmin: () => adminState,
+  retryAdminProbe: () => retryAdminProbe(),
 }));
 
 const SUMMARY = {
@@ -84,6 +89,29 @@ function mockFetch({ summary = SUMMARY as unknown, healthStatus = 200 } = {}) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  adminState = "admin";
+});
+
+describe("AdminOverviewPage admin gate", () => {
+  it("renders a retryable notice, not a blank page, when the permission probe fails", () => {
+    vi.stubGlobal("fetch", mockFetch());
+    adminState = "unavailable";
+    render(<AdminOverviewPage />);
+    // Nothing admin-only is fetched or shown…
+    expect(screen.queryByTestId("health-panel-loading")).toBeNull();
+    const notice = screen.getByTestId("admin-gate-unavailable");
+    expect(notice).toHaveTextContent("Couldn’t check your permissions");
+    // …but the reader has a way forward.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retryAdminProbe).toHaveBeenCalled();
+  });
+
+  it("still renders nothing while the probe is unresolved", () => {
+    vi.stubGlobal("fetch", mockFetch());
+    adminState = "unknown";
+    const { container } = render(<AdminOverviewPage />);
+    expect(container).toBeEmptyDOMElement();
+  });
 });
 
 describe("AdminOverviewPage system health", () => {

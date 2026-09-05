@@ -166,10 +166,29 @@ func (s *Sandbox) RunFileOp(ctx context.Context, req FileOpRequest) (FileOpResul
 	if !inside {
 		return FileOpResult{}, ErrFileOpUnsafePath
 	}
-	if boundRoot != "" && filepath.Clean(req.Root) == boundRoot {
-		req.rootBound = true
-		req.expectedDev = boundIdentity.Dev
-		req.expectedIno = boundIdentity.Ino
+	if boundRoot != "" {
+		// The tool layer may scope a request to a NARROWER root than the one
+		// bound for this turn: a sub-agent's forced working directory is
+		// <bound root>/subagents/<child> (#1043), and git-worktree isolation
+		// hands out a similar sub-tree. That scope is a write de-confliction
+		// default, not a capability of its own — the blessed capability is the
+		// bound root, and a sub-tree of it is by construction inside it. So a
+		// root that is the bound root OR lies beneath it is re-anchored at the
+		// bound root and carries its identity guard; the container backends
+		// then walk from the verified anchor, dirfd-relative and no-follow,
+		// down through the sub-tree to the target. Matching the bound root by
+		// exact equality alone made every sub-agent view_file/write_file/
+		// edit_file fail closed on the podman and kubernetes backends ("writable
+		// fileop root was not bound before the turn") while the host executor,
+		// which has no such gate, let the tests pass. A root OUTSIDE the bound
+		// root (a read-only supporting-doc mount) is left as-is: it is anchored
+		// by the backend's own mount table and never writable.
+		if inside, werr := pathWithin(boundRoot, req.Root); werr == nil && inside {
+			req.Root = boundRoot
+			req.rootBound = true
+			req.expectedDev = boundIdentity.Dev
+			req.expectedIno = boundIdentity.Ino
+		}
 	}
 	return s.impl.runFileOp(ctx, req)
 }

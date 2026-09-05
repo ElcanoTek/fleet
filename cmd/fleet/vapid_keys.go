@@ -17,11 +17,21 @@ import (
 // env-file, never in the repo or a log.
 
 // runGenerateVAPIDKeys generates the pair and writes the env lines to w.
-// Returns the process exit code.
-func runGenerateVAPIDKeys(w io.Writer) int {
-	priv, pub, err := webpushgo.GenerateVAPIDKeys()
+// Returns the process exit code. A generation failure goes to errW, never w:
+// the documented use is `fleet generate-vapid-keys >> fleet.env`, so anything
+// on stdout must be an env line the loader will parse — an error message there
+// would land in the env file as a silently-skipped garbage line.
+func runGenerateVAPIDKeys(w, errW io.Writer) int {
+	return generateVAPIDKeysWith(webpushgo.GenerateVAPIDKeys, w, errW)
+}
+
+// generateVAPIDKeysWith is runGenerateVAPIDKeys with the key generator injected,
+// so the error path (unreachable with the real generator short of an entropy
+// failure) is testable.
+func generateVAPIDKeysWith(gen func() (privateKey, publicKey string, err error), w, errW io.Writer) int {
+	priv, pub, err := gen()
 	if err != nil {
-		fmt.Fprintf(w, "generate VAPID keys: %v\n", err)
+		fmt.Fprintf(errW, "generate VAPID keys: %v\n", err)
 		return 1
 	}
 	fmt.Fprint(w, vapidEnvLines(pub, priv))

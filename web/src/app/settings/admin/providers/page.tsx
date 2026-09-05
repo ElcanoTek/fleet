@@ -34,6 +34,7 @@ import {
   SetSection,
 } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
+import { AdminGateFallback } from "../../AdminGateFallback";
 
 export type LLMProvider = {
   id: string;
@@ -206,7 +207,7 @@ export default function ProvidersAdminPage() {
   useEffect(() => {
     if (admin === "member") router.replace("/settings");
   }, [admin, router]);
-  if (admin !== "admin") return null;
+  if (admin !== "admin") return <AdminGateFallback state={admin} />;
   return <ProvidersAdmin />;
 }
 

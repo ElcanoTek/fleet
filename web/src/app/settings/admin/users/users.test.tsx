@@ -353,6 +353,35 @@ describe("AdminUsersPage", () => {
     );
   });
 
+  it("names the shared projects a team rename also relabelled", async () => {
+    // The server relabels team-shared PROJECTS as well as members and returns
+    // both counts; reporting only members hid the wider half of the rename.
+    mockFetch((url, init) => {
+      if (url === "/api/admin/teams/rename" && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({ users_updated: 3, projects_updated: 2 }),
+          { status: 200 },
+        );
+      }
+      return listImpl()(url);
+    });
+    render(<AdminUsersPage />);
+    await screen.findByText("alice@x.com");
+
+    fireEvent.change(screen.getByLabelText("Filter by team"), {
+      target: { value: "blue" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rename team" }));
+    fireEvent.change(screen.getByLabelText("New name for team blue"), {
+      target: { value: "green" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    expect(
+      await screen.findByText(/3 members, 2 shared projects/),
+    ).toBeInTheDocument();
+  });
+
   it("surfaces a 403 as an admin-only message", async () => {
     mockFetch(() => new Response("forbidden", { status: 403 }));
     render(<AdminUsersPage />);

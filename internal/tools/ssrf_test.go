@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestIsPrivateIP covers the SSRF allow/deny classifier directly: every
@@ -115,7 +116,6 @@ func TestWebFetchSSRFBlocksLoopback(t *testing.T) {
 			Timeout:   DefaultTimeout,
 			Transport: &http.Transport{DialContext: newSSRFGuardedDialer().DialContext},
 		},
-		cache:       newFetchCache(),
 		rateLimiter: newRateLimiter(0),
 	}
 	raw, err := guarded.run(context.Background(), srv.URL)
@@ -137,7 +137,6 @@ func TestWebFetchSSRFBlocksLoopback(t *testing.T) {
 	// confirming the block above was the guard and not a dead port.
 	allowed := &webFetchTool{
 		client:      &http.Client{Timeout: DefaultTimeout},
-		cache:       newFetchCache(),
 		rateLimiter: newRateLimiter(0),
 	}
 	raw, err = allowed.run(context.Background(), srv.URL)
@@ -157,3 +156,33 @@ func TestWebFetchSSRFBlocksLoopback(t *testing.T) {
 }
 
 // TestDownloadURLSSRFBlocksLoopback proves download_url enforces the same
+
+// TestWebFetch_HTTPErrorPreviewIsRuneSafe mirrors the download_url check for
+// web_fetch's own 200-byte error-body preview.
+func TestWebFetch_HTTPErrorPreviewIsRuneSafe(t *testing.T) {
+	body := strings.Repeat("x", 199) + "é" + strings.Repeat("y", 50)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	tool := &webFetchTool{client: srv.Client(), rateLimiter: newRateLimiter(0)}
+	raw, err := tool.run(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	var res webFetchResult
+	if err := json.Unmarshal([]byte(raw), &res); err != nil {
+		t.Fatalf("result not JSON: %v", err)
+	}
+	if res.StatusCode != http.StatusBadGateway || res.Error == "" {
+		t.Fatalf("want a 502 error result, got %+v", res)
+	}
+	if !utf8.ValidString(res.Error) {
+		t.Fatalf("error preview is invalid UTF-8: %q", res.Error)
+	}
+	if !strings.HasSuffix(res.Error, strings.Repeat("x", 199)+"...") {
+		t.Fatalf("preview should stop before the straddling rune, got %q", res.Error)
+	}
+}

@@ -176,3 +176,41 @@ func TestProjectRuns_HonorsRecurrenceRemaining(t *testing.T) {
 		t.Fatalf("expected the 2-run budget to cap the count projection, got %d", len(runs))
 	}
 }
+
+// The row's scheduled_for is what the scheduler promotes on, so a recurring
+// task that was postponed (an edit, a run_if skip backoff, a reconcile) must
+// project THAT instant first and walk the cron from it. Seeding from now
+// showed a run the scheduler would never make.
+func TestProjectRuns_RecurringSeedsFromScheduledFor(t *testing.T) {
+	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	// Daily at 09:00, but the row was pushed out to July 2nd 14:00 — past the
+	// July 1st and July 2nd 09:00 fires a walk from now would have invented.
+	postponed := time.Date(2026, 7, 2, 14, 0, 0, 0, time.UTC)
+	task := &models.Task{ID: uuid.New(), Recurrence: "0 9 * * *", Timezone: "UTC", ScheduledFor: &postponed}
+	runs := projectRuns(task, now, time.Time{})
+	if len(runs) != upcomingPerTaskMax {
+		t.Fatalf("expected %d occurrences, got %d", upcomingPerTaskMax, len(runs))
+	}
+	if !runs[0].NextRun.Equal(postponed) || !runs[0].Recurring {
+		t.Fatalf("first occurrence = %v (recurring=%v), want the row's scheduled_for %v", runs[0].NextRun, runs[0].Recurring, postponed)
+	}
+	if want := time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC); !runs[1].NextRun.Equal(want) {
+		t.Fatalf("second occurrence = %v, want the first cron fire after scheduled_for (%v)", runs[1].NextRun, want)
+	}
+
+	// A due row (scheduled_for in the past) is about to be promoted; the walk
+	// falls back to now, as the one-shot branch does.
+	due := now.Add(-time.Hour)
+	task.ScheduledFor = &due
+	runs = projectRuns(task, now, time.Time{})
+	if len(runs) == 0 || !runs[0].NextRun.Equal(time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("due row should walk from now, got %+v", runs)
+	}
+
+	// The horizon and the recurrence_until end condition apply to the seeded
+	// occurrence too.
+	task.ScheduledFor = &postponed
+	if runs := projectRuns(task, now, now.Add(24*time.Hour)); len(runs) != 0 {
+		t.Fatalf("scheduled_for beyond the horizon must project nothing, got %+v", runs)
+	}
+}
