@@ -93,6 +93,17 @@ than by a major-version bump.
 
 ### Fixed
 
+- **List endpoints validate paging the same way.** `GET /tasks/upcoming`,
+  `/tasks/paused` and `/datasets/{id}/rows` parsed `?limit=` (and the rows
+  endpoint `?offset=`) by hand and discarded the parse error, so `limit=abc`
+  silently fell back to the default while the sibling `GET /tasks` returned
+  a 400, the rows endpoint had no upper bound on `limit`, and `offset=-1`
+  reached Postgres and came back as an opaque 500 ("Failed to list rows").
+  All four now share one parser: absent keeps each endpoint's default; a
+  non-integer, zero, negative or over-cap `limit` (500 for `/tasks`, 1000
+  elsewhere) and a negative `offset` are a 400 that names the accepted range.
+  The OpenAPI spec now states the bounds, and documents the upcoming feed's
+  `?until=` horizon, which it had omitted.
 - **Web UI, chat:** the three chat delete paths, header rename and archive
   report a failed request in the rail (and roll the optimistic change back)
   instead of an unhandled rejection that left the dialog gone and the chat

@@ -7,7 +7,6 @@ package handlers
 import (
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -112,7 +111,10 @@ func (h *Handlers) ListPausedTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Insufficient permissions")
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit, ok := parseLimit(w, r, pausedDefaultLimit, pausedLimitMax)
+	if !ok {
+		return
+	}
 	tasks, err := h.storage.ListPausedTasks(r.Context(), limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to list paused tasks")
