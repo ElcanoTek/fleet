@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   btnClass,
@@ -88,6 +88,10 @@ export default function SkillsPage() {
   const [query, setQuery] = useState("");
   const [openSkill, setOpenSkill] = useState<string | null>(null);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
+  // Monotonic ticket for view(): each click takes a new number and a response
+  // only lands if its ticket is still current, so clicking A then B can never
+  // paint A's body under B's header when A's fetch finishes last.
+  const viewSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [mine, setMine] = useState<UserSkill[] | null>(null);
   // Which personal skill is expanded (by id — a personal skill may share a
@@ -215,6 +219,7 @@ export default function SkillsPage() {
   };
 
   const view = (name: string) => {
+    const seq = ++viewSeq.current;
     if (openSkill === name) {
       setOpenSkill(null);
       setDetail(null);
@@ -227,8 +232,14 @@ export default function SkillsPage() {
         if (!res.ok) throw new Error(`Failed to load skill: ${res.status}`);
         return (await res.json()) as SkillDetail;
       })
-      .then(setDetail)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load skill."));
+      .then((d) => {
+        if (seq === viewSeq.current) setDetail(d);
+      })
+      .catch((e: unknown) => {
+        // A superseded request's failure is about a skill no longer open.
+        if (seq !== viewSeq.current) return;
+        setError(e instanceof Error ? e.message : "Failed to load skill.");
+      });
   };
 
   const q = query.trim().toLowerCase();
@@ -419,7 +430,11 @@ export default function SkillsPage() {
         {skills === null ? (
           <p className={LOADING}>Loading…</p>
         ) : filtered.length === 0 ? (
-          <ConnEmpty>No skills match “{query}”.</ConnEmpty>
+          q ? (
+            <ConnEmpty>No skills match “{query}”.</ConnEmpty>
+          ) : (
+            <ConnEmpty>No skills are installed on this deployment.</ConnEmpty>
+          )
         ) : (
           <ConnRows>
             {filtered.map((s) => (
@@ -453,7 +468,9 @@ export default function SkillsPage() {
                   </p>
                 ) : null}
                 {openSkill === s.name ? (
-                  detail ? (
+                  // The name check is a second guard on top of view()'s ticket:
+                  // a body only ever renders under its own header.
+                  detail && detail.name === s.name ? (
                     <pre className={SKILL_MD}>{detail.content}</pre>
                   ) : (
                     <p className="m-0 text-[0.74rem] text-[var(--color-text-muted)]">Loading…</p>

@@ -686,7 +686,7 @@ describe("AdminUsersPage", () => {
     );
   });
 
-  it("resets a password and shows the generated value once", async () => {
+  it("resets a password only on the confirming second click and shows the value once", async () => {
     const puts: { url: string; body: string }[] = [];
     mockFetch((url, init) => {
       if (
@@ -703,8 +703,13 @@ describe("AdminUsersPage", () => {
     await screen.findByText("bob@x.com");
 
     openKebab("bob@x.com");
+    // First click arms (the current password is still valid); no PUT yet.
     fireEvent.click(screen.getByRole("button", { name: "Reset password" }));
-    // The popover closes and the mutation lands.
+    expect(puts.length).toBe(0);
+    expect(screen.getByRole("button", { name: "Confirm reset" })).toBeInTheDocument();
+    // Second click fires: the popover closes and the mutation lands.
+    fireEvent.click(screen.getByRole("button", { name: "Confirm reset" }));
+    expect(screen.queryByRole("button", { name: "Confirm reset" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reset password" })).toBeNull();
     await waitFor(() => expect(puts.length).toBe(1));
     const sent = JSON.parse(puts[0].body) as { password: string };

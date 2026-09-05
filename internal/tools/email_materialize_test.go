@@ -234,7 +234,11 @@ func TestMaterializeAttachmentPathsRewritesRelativePaths(t *testing.T) {
 }
 
 func TestMaterializeAttachmentPathsLeavesAbsolutePathsAlone(t *testing.T) {
-	abs := "/tmp/already-absolute.png"
+	root := t.TempDir()
+	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	// Absolute and already inside the workspace root (a shared-library file
+	// staged directly under the root, say): passes through unchanged.
+	abs := filepath.Join(root, "shared", "already-absolute.png")
 	raw, _ := json.Marshal(map[string]any{
 		"inline_attachments": []map[string]any{{"path": abs, "cid": "x"}},
 	})
@@ -246,7 +250,56 @@ func TestMaterializeAttachmentPathsLeavesAbsolutePathsAlone(t *testing.T) {
 	_ = json.Unmarshal([]byte(out), &got)
 	path := got["inline_attachments"].([]any)[0].(map[string]any)["path"].(string)
 	if path != abs {
-		t.Errorf("absolute path should pass through unchanged: want %q, got %q", abs, path)
+		t.Errorf("absolute in-root path should pass through unchanged: want %q, got %q", abs, path)
+	}
+}
+
+// TestMaterializeAttachmentPathsRefusesEscapes: the connector opens attachment
+// paths host-side, so a model-authored path must stay under the workspace
+// root. Three ways out used to be open: an absolute host path, a `..` walk,
+// and $VAR expansion — os.ExpandEnv substituted the VALUE of any fleet env var
+// (every connector secret the host holds) into the persisted approval args.
+func TestMaterializeAttachmentPathsRefusesEscapes(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	t.Setenv("FLEET_TEST_FAKE_SECRET", "leaked-host-env-value")
+
+	cases := map[string]string{
+		"absolute host file":    "/etc/fleet/fleet.env",
+		"dot-dot walk":          "../../etc/passwd",
+		"env var stays literal": "$FLEET_TEST_FAKE_SECRET/report.csv",
+		"tilde stays literal":   "~/report.csv",
+	}
+	for name, p := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw, _ := json.Marshal(map[string]any{"attachments": []map[string]any{{"path": p}}})
+			out, err := MaterializeAttachmentPaths("conv-escape", string(raw))
+			switch name {
+			case "absolute host file", "dot-dot walk":
+				if err == nil {
+					t.Fatalf("expected a containment error for %q, got %s", p, out)
+				}
+				if strings.Contains(err.Error(), "leaked-host-env-value") {
+					t.Fatalf("error leaked a secret: %v", err)
+				}
+			default:
+				// `$VAR` and `~` are just characters in a filename now: the
+				// path is anchored under the conversation workspace verbatim,
+				// and the env var's VALUE appears nowhere.
+				if err != nil {
+					t.Fatalf("literal path %q should be accepted, got %v", p, err)
+				}
+				if strings.Contains(out, "leaked-host-env-value") {
+					t.Fatalf("env var value leaked into the args: %s", out)
+				}
+				var got map[string]any
+				_ = json.Unmarshal([]byte(out), &got)
+				path := got["attachments"].([]any)[0].(map[string]any)["path"].(string)
+				if want := filepath.Join(root, "conv-escape", p); path != want {
+					t.Fatalf("path = %q, want %q (literal, anchored in the workspace)", path, want)
+				}
+			}
+		})
 	}
 }
 

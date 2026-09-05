@@ -31,6 +31,12 @@ import (
 func cmdUpdate(argv []string) int {
 	for _, a := range argv {
 		if a == "--check" {
+			// --check is read-only and takes no other flags; refusing the
+			// extras beats silently ignoring `--client-config X` on a probe
+			// that then reports on the wrong bundle.
+			if len(argv) > 1 {
+				return errf(1, "fleet update --check takes no other arguments (got %q)", argv)
+			}
 			return updateCheck()
 		}
 	}

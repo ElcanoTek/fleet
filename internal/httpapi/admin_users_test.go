@@ -270,4 +270,18 @@ func TestAdminUserOpsRole(t *testing.T) {
 	if got = decode(w); got.OpsCenterRole != "" {
 		t.Fatalf("ops_role none did not revoke: %+v", got)
 	}
+
+	// Chat Admin in the same request wins over a narrower ops_role — on PATCH
+	// exactly as on POST. The PATCH used to apply the implied ops-admin grant
+	// and then overwrite it with the narrower role from the same body.
+	w = do(t, h, http.MethodPatch, "/admin/users/op@x.com",
+		map[string]any{"role": "admin", "ops_role": "readonly"}, "boss@x.com")
+	if got = decode(w); got.Role != "admin" || got.OpsCenterRole != "admin" {
+		t.Fatalf("PATCH role=admin + ops_role=readonly: want ops admin, got %+v", got)
+	}
+	w = do(t, h, http.MethodPost, "/admin/users",
+		map[string]any{"email": "both@x.com", "password": "both-planes-pw", "role": "admin", "ops_role": "readonly"}, "boss@x.com")
+	if got = decode(w); w.Code != http.StatusCreated || got.OpsCenterRole != "admin" {
+		t.Fatalf("POST role=admin + ops_role=readonly: status %d, got %+v", w.Code, got)
+	}
 }

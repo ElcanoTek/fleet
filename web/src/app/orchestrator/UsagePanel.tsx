@@ -10,6 +10,8 @@ import {
   type UsageReport,
 } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
+import { downloadFile } from "./downloadFile";
+import { plural } from "./plural";
 
 // UsagePanel — the Operations Center Usage tab (#601 part 1): cost/token
 // roll-ups over the persisted metering (task iterations + chat turns), grouped
@@ -87,6 +89,8 @@ function bucketDisplayName(b: UsageBucket, groupBy: UsageGroupBy): string {
 
 export function UsagePanel() {
   const [rangeDays, setRangeDays] = useState<number>(30);
+  // A failed CSV download is shown in place (the button used to navigate).
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<UsageGroupBy>("user");
   const [measure, setMeasure] = useState<"cost" | "tokens">("cost");
 
@@ -160,7 +164,11 @@ export function UsagePanel() {
                 .toISOString()
                 .slice(0, 10);
               const qs = new URLSearchParams({ format: "csv", group_by: groupBy, from });
-              window.location.href = `/api/orchestrator/admin/usage?${qs.toString()}`;
+              // Fetch-then-save (downloadFile) instead of navigating: a 401/500
+              // used to replace the dashboard with the server's error body.
+              void downloadFile(`/api/orchestrator/admin/usage?${qs.toString()}`, `usage-${groupBy}-${from}.csv`).catch(
+                (err: unknown) => setDownloadError(err instanceof Error ? err.message : "download failed"),
+              );
             }}
           >
             Download CSV
@@ -168,6 +176,11 @@ export function UsagePanel() {
         </div>
       </div>
 
+      {downloadError ? (
+        <div className="table-error" role="alert" data-testid="usage-download-error">
+          Couldn&apos;t download the CSV: {downloadError}
+        </div>
+      ) : null}
       {error ? (
         <div className="table-error">Failed to load usage report: {error}</div>
       ) : !report && loading ? (
@@ -191,7 +204,7 @@ export function UsagePanel() {
           <p className="refresh-note">
             {new Date(report.from).toISOString().slice(0, 10)} →{" "}
             {new Date(report.to).toISOString().slice(0, 10)} · sources: {report.sources.join(" + ")}{" "}
-            · {report.buckets.length} bucket(s)
+            · {plural(report.buckets.length, "bucket")}
           </p>
         </div>
       )}

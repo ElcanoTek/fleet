@@ -144,6 +144,14 @@ func TestRecurringTaskRescheduling(t *testing.T) {
 	} else if !nextTask.ScheduledFor.After(time.Now().UTC()) {
 		t.Errorf("Next task scheduled in the past: %s", nextTask.ScheduledFor)
 	}
+	// Lineage (migration 068): the successor points at the occurrence it
+	// follows, which is what lets carry_context read that run's transcript.
+	if nextTask.PreviousOccurrenceID == nil || *nextTask.PreviousOccurrenceID != recurringTask.ID {
+		t.Errorf("Next task previous_occurrence_id = %v, want %s", nextTask.PreviousOccurrenceID, recurringTask.ID)
+	}
+	if nextTask.SourceTaskID != nil {
+		t.Errorf("a recurrence spawn must not masquerade as a re-run/clone (source_task_id = %v)", nextTask.SourceTaskID)
+	}
 
 	// Error status also reschedules.
 	recurringTask2 := &models.Task{ID: uuid.New(), Prompt: "recurring task that fails", Status: models.TaskStatusPending, Priority: 10, Recurrence: "@hourly", CreatedAt: time.Now().UTC()}

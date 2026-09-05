@@ -90,6 +90,40 @@ describe("AdminServerPage", () => {
     expect(screen.getByTestId("storage-cleanup-run")).toBeEnabled();
   });
 
+  it("runs cleanup only after the inline confirm's second click", async () => {
+    const CLEANED = {
+      deleted_conversations: 7,
+      removed_workspaces: 3,
+      removed_upload_files: 1,
+      removed_temp_files: 0,
+      bytes_freed: 1024 ** 3,
+    };
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = url.includes("/storage/cleanup") && init?.method === "POST"
+        ? CLEANED
+        : url.includes("/api/admin/storage")
+          ? STORAGE
+          : STATS;
+      return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AdminServerPage />);
+    const run = await screen.findByTestId("storage-cleanup-run");
+    const posts = () =>
+      fetchMock.mock.calls.filter(([u, i]) => String(u).includes("/storage/cleanup") && i?.method === "POST");
+    // First click arms; nothing is deleted yet.
+    fireEvent.click(run);
+    expect(run).toHaveTextContent("Confirm cleanup");
+    expect(posts()).toHaveLength(0);
+    // Second click fires the POST and the result line reports what went.
+    fireEvent.click(run);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(await screen.findByTestId("storage-cleanup-result")).toHaveTextContent(
+      "Removed 7 conversations, 3 workspace dirs, 1 file",
+    );
+  });
+
   it("degrades to an error banner when the storage endpoint is missing", async () => {
     // Older server: /api/admin/storage returns a non-storage payload.
     vi.stubGlobal("fetch", routedFetch(STATS, { error: "not found" }));

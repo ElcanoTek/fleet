@@ -106,6 +106,33 @@ func (s *Store) CreateSharedFile(ctx context.Context, f SharedFile) (SharedFile,
 	return out, err
 }
 
+// SharedFilePathAvailable reports whether a NEW row at (folder, name) could be
+// created right now: nil when the path is free, ErrSharedFileExists when a row
+// already claims it, ErrSharedFileNameIsFolder when a file/folder namespace
+// collision would make it unrepresentable. It is the same two checks
+// CreateSharedFile enforces, run ahead of any write so a multi-file upload can
+// refuse the whole batch before file 1 is durably saved (the caller holds the
+// library mutex, so the answer stays true until its own inserts land).
+func (s *Store) SharedFilePathAvailable(ctx context.Context, folder, name string) error {
+	var taken, conflict int
+	// The spliced predicate reads $1 = excluded id (none here: a new row
+	// excludes nothing, and no id is the empty string), $2 = name, $3 = folder.
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM shared_files WHERE folder = $3 AND name = $2)::int,
+		        EXISTS (`+sharedPathNamespaceConflict+`)::int`,
+		"", name, folder).Scan(&taken, &conflict)
+	if err != nil {
+		return err
+	}
+	if taken == 1 {
+		return ErrSharedFileExists
+	}
+	if conflict == 1 {
+		return ErrSharedFileNameIsFolder
+	}
+	return nil
+}
+
 // ListSharedFiles returns the whole library, folder-then-name ordered so the
 // listing is stable for both the admin UI and the per-turn prompt block.
 func (s *Store) ListSharedFiles(ctx context.Context) ([]SharedFile, error) {

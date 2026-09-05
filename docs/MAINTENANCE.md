@@ -39,7 +39,7 @@ iteration.
 
 | Step | Reclaims | Bound |
 | --- | --- | --- |
-| `SweepExpired` | Conversations past `FLEET_CONVERSATION_TTL_DAYS`, plus per-user cap eviction | TTL / cap |
+| `SweepExpired` | Conversations past `CONVERSATION_TTL_DAYS` (default 14; no `FLEET_` prefix — it predates the alias chain), plus per-user cap eviction | TTL / cap |
 | `PurgeTerminalInputs` | Terminal input-queue rows | `FLEET_INPUT_QUEUE_RETENTION_DAYS` (30) |
 | `SweepTurnEvents` | Finished turns' durable SSE ledgers | `FLEET_TURN_EVENT_RETENTION_DAYS` (14) |
 | `SweepAttachments` | Attachment files past the conversation TTL | conversation TTL |
@@ -179,7 +179,7 @@ A task can stop making progress in several ways. Each has a bound:
 | `running`, lease stolen | `errTaskLeaseLost` cancels the stale run | immediate |
 | `paused_awaiting_input` | `ExpirePausedTasks` fails it terminally | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` (off by default) |
 | `paused_awaiting_wake`, unreachable | `ExpireStrandedWakeTasks` fails it terminally | 24h past the deadline |
-| Interactive turn hung | Per-turn context deadline | `CHAT_TURN_TIMEOUT_SECONDS` |
+| Interactive turn hung | Per-turn context deadline | `FLEET_TURN_TIMEOUT_SECONDS` (default 1800; legacy alias `CHAT_TURN_TIMEOUT_SECONDS`) |
 
 `paused_awaiting_wake` was the gap. `WakeDueTasks` filters on
 `wake_at IS NOT NULL`, so a row without one can never wake — and

@@ -5,6 +5,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -2091,6 +2092,33 @@ type taskRerunOverrides struct {
 	// files also clears inherited logical names unless new names are supplied.
 	Files     []string `json:"files,omitempty"`
 	FileNames []string `json:"file_names,omitempty"`
+	// The advanced-section fields the task modal shows as editable on a
+	// terminal task's "Resubmit with changes". They used to be absent here, so
+	// the UI dropped them silently and the resubmit ran with the SOURCE task's
+	// SLA, sandbox limits, gate and context/learning flags, whatever the form
+	// said. Semantics match the rest of the struct — absent inherits:
+	//   - ExpectedDurationMinutes: present sets it; 0 clears the SLA.
+	//   - SLAWarnMultiplier / SLAFailMultiplier: present sets it; 0 = default.
+	//   - SandboxLimits / RunIf: json.RawMessage so an explicit `null` (clear)
+	//     is distinguishable from an omitted key (inherit).
+	//   - CarryContext / InstructionSelfImprove: present sets the flag.
+	ExpectedDurationMinutes *int            `json:"expected_duration_minutes,omitempty"`
+	SLAWarnMultiplier       *float64        `json:"sla_warn_multiplier,omitempty"`
+	SLAFailMultiplier       *float64        `json:"sla_fail_multiplier,omitempty"`
+	SandboxLimits           json.RawMessage `json:"sandbox_limits,omitempty"`
+	RunIf                   json.RawMessage `json:"run_if,omitempty"`
+	CarryContext            *bool           `json:"carry_context,omitempty"`
+	InstructionSelfImprove  *bool           `json:"instruction_self_improve,omitempty"`
+}
+
+// rawJSONPresent reports whether an omitempty json.RawMessage field was present
+// in the request at all (an explicit `null` decodes to the 4-byte literal, an
+// omitted key to nil), and whether it was the null literal.
+func rawJSONPresent(raw json.RawMessage) (present, isNull bool) {
+	if len(raw) == 0 {
+		return false, false
+	}
+	return true, bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 // taskRerunRequest is the (optional) body of POST /tasks/{id}/rerun|clone.
@@ -2217,13 +2245,16 @@ func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunO
 			tc.Recurrence = "" // rerun is one-time
 		}
 	}
-	applyRerunOverrides(&tc, o)
+	if err := applyRerunOverrides(&tc, o); err != nil {
+		return tc, err
+	}
 	return tc, nil
 }
 
 // applyRerunOverrides mutates tc with any non-nil override fields (#270). Tags,
-// when provided (non-nil, possibly empty), replace the inherited set.
-func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
+// when provided (non-nil, possibly empty), replace the inherited set. The only
+// error is a malformed sandbox_limits / run_if object.
+func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) error {
 	if o.Prompt != nil {
 		tc.Prompt = *o.Prompt
 	}
@@ -2275,6 +2306,61 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	if o.FileNames != nil {
 		tc.FileNames = o.FileNames
 	}
+	if o.ExpectedDurationMinutes != nil {
+		if *o.ExpectedDurationMinutes <= 0 {
+			tc.ExpectedDurationMinutes = nil // clear the SLA
+		} else {
+			v := *o.ExpectedDurationMinutes
+			tc.ExpectedDurationMinutes = &v
+		}
+	}
+	if o.SLAWarnMultiplier != nil {
+		tc.SLAWarnMultiplier = *o.SLAWarnMultiplier // 0 → default (ResolveSLAMultipliers)
+	}
+	if o.SLAFailMultiplier != nil {
+		tc.SLAFailMultiplier = *o.SLAFailMultiplier
+	}
+	if o.CarryContext != nil {
+		tc.CarryContext = *o.CarryContext
+	}
+	if o.InstructionSelfImprove != nil {
+		tc.InstructionSelfImprove = *o.InstructionSelfImprove
+	}
+	return applyRerunRawOverrides(tc, o)
+}
+
+// applyRerunRawOverrides applies the two RawMessage overrides (sandbox_limits,
+// run_if). A malformed object is the caller's error, reported as a 400 by
+// rerunOrClone; the validated shape (RunIf command non-empty, limits bounds)
+// is the same validateTaskCreate pass every create goes through.
+func applyRerunRawOverrides(tc *models.TaskCreate, o taskRerunOverrides) error {
+	if present, isNull := rawJSONPresent(o.SandboxLimits); present {
+		if isNull {
+			tc.SandboxLimits = nil
+		} else {
+			var limits models.TaskSandboxLimits
+			if err := json.Unmarshal(o.SandboxLimits, &limits); err != nil {
+				return fmt.Errorf("sandbox_limits: %w", err)
+			}
+			if limits.IsZero() {
+				tc.SandboxLimits = nil // an all-zero override is "global defaults"
+			} else {
+				tc.SandboxLimits = &limits
+			}
+		}
+	}
+	if present, isNull := rawJSONPresent(o.RunIf); present {
+		if isNull {
+			tc.RunIf = nil
+		} else {
+			var gate models.RunIf
+			if err := json.Unmarshal(o.RunIf, &gate); err != nil {
+				return fmt.Errorf("run_if: %w", err)
+			}
+			tc.RunIf = &gate
+		}
+	}
+	return nil
 }
 
 // GetLogs handles GET /logs/{task_id}. Authorization is the shared transcript

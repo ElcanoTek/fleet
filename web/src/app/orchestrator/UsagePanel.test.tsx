@@ -159,31 +159,29 @@ describe("UsagePanel (#601)", () => {
     });
   });
 
-  it("Download CSV navigates to the CSV endpoint with the current filters", async () => {
-    mockReport(report({ buckets: [bucket({ key: "alice@example.com", cost_usd: 1 })] }));
-    // Stub navigation so the click doesn't actually change location.
-    const original = window.location;
-    // Replace location with a minimal writable stub for the navigation assertion.
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      writable: true,
-      value: { href: "" } as unknown as Location,
-    });
-    try {
-      render(<UsagePanel />);
-      const btn = await screen.findByTestId("usage-download-csv");
-      fireEvent.click(btn);
-      expect(window.location.href).toContain("/api/orchestrator/admin/usage?");
-      expect(window.location.href).toContain("format=csv");
-      expect(window.location.href).toContain("group_by=user");
-      expect(window.location.href).toMatch(/from=\d{4}-\d{2}-\d{2}/);
-    } finally {
-      Object.defineProperty(window, "location", {
-        configurable: true,
-        writable: true,
-        value: original,
-      });
-    }
+  it("Download CSV fetches the CSV endpoint with the current filters (no navigation)", async () => {
+    usage.mockResolvedValue(report({ buckets: [] }));
+    budgets.mockResolvedValue({ budgets: [] });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("key,cost\n", { status: 200, headers: { "Content-Type": "text/csv" } }));
+    const before = window.location.href;
+    // jsdom has no object URLs; the helper's save step needs both to exist.
+    const createURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fleet/report");
+    const revokeURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    render(<UsagePanel />);
+    fireEvent.click(await screen.findByTestId("usage-download-csv"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const url = String(fetchSpy.mock.calls[0][0]);
+    expect(url).toContain("/api/orchestrator/admin/usage?");
+    expect(url).toContain("format=csv");
+    expect(url).toContain("group_by=user");
+    expect(url).toMatch(/from=\d{4}-\d{2}-\d{2}/);
+    // Fetch-then-save: the dashboard itself never navigates away.
+    expect(window.location.href).toBe(before);
+    fetchSpy.mockRestore();
+    createURL.mockRestore();
+    revokeURL.mockRestore();
   });
 
   it("renders the budget create form when none are configured", async () => {
@@ -236,5 +234,27 @@ describe("UsagePanel (#601)", () => {
     expect(screen.getByText("alice@example.com")).toBeTruthy();
     fireEvent.click(screen.getByTestId("budget-delete"));
     await waitFor(() => expect(deleteBudget).toHaveBeenCalledWith("budget-1"));
+  });
+});
+
+describe("UsagePanel CSV download", () => {
+  it("shows the failure in place instead of navigating to the error page", async () => {
+    usage.mockResolvedValue(report({ buckets: [] }));
+    budgets.mockResolvedValue({ budgets: [] });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ error: "session expired" }), { status: 401 }));
+    const before = window.location.href;
+    render(<UsagePanel />);
+    fireEvent.click(await screen.findByTestId("usage-download-csv"));
+    await waitFor(() =>
+      expect(screen.getByTestId("usage-download-error")).toHaveTextContent("session expired"),
+    );
+    expect(window.location.href).toBe(before);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining("/api/orchestrator/admin/usage?format=csv"),
+      expect.anything(),
+    );
+    fetchSpy.mockRestore();
   });
 });

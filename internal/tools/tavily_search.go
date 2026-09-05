@@ -124,12 +124,14 @@ func (t *TavilySearchTool) search(ctx context.Context, query string, maxResults 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("search failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Bounded like web_fetch (MaxResponseSize): the decoder would otherwise
+	// read whatever the host sends.
 	var searchResp TavilySearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxResponseSize)).Decode(&searchResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 

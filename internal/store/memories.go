@@ -141,7 +141,7 @@ func normalizeMemoryOrigin(origin string) string {
 func (s *Store) CreateMemory(ctx context.Context, userEmail, content, source, kind string) (*Memory, error) {
 	content = normalizeMemoryContent(content)
 	if content == "" {
-		return nil, errors.New("memory content required")
+		return nil, errInput("memory content required")
 	}
 	source = normalizeMemorySource(source)
 	kind = NormalizeMemoryKind(kind)
@@ -193,12 +193,40 @@ func (s *Store) GetMemory(ctx context.Context, userEmail, id string) (*Memory, e
 	)
 	m, err := scanMemory(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, errors.New("memory not found")
+		return nil, ErrMemoryNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// ErrMemoryNotFound is returned by the memory mutators when no memory with
+// that id is reachable in the caller's scope (personal rows for the personal
+// API, the project's rows for the project API). The HTTP layer maps it to 404.
+var ErrMemoryNotFound = errors.New("memory not found")
+
+// ErrMemoryProposalNotFound is ErrMemoryNotFound for a pending proposal: the
+// id names no proposal of the caller's (already accepted, dismissed, or never
+// theirs). 404 at the HTTP layer.
+var ErrMemoryProposalNotFound = errors.New("memory proposal not found")
+
+// InputError marks a store error caused by the CALLER'S input (an empty patch,
+// blank content, a too-long name) as opposed to a fault of the store itself.
+// Handlers use errors.As to answer 400 for these and 500 for everything else,
+// instead of the old blanket 400 that reported a Postgres outage as "Bad
+// Request" — which the UI then showed the user as their own mistake.
+type InputError struct{ msg string }
+
+func (e *InputError) Error() string { return e.msg }
+
+// errInput builds an InputError.
+func errInput(msg string) error { return &InputError{msg: msg} }
+
+// IsInputError reports whether err (or anything it wraps) is an InputError.
+func IsInputError(err error) bool {
+	var ie *InputError
+	return errors.As(err, &ie)
 }
 
 // MemoryPatch is a partial update: nil fields are untouched. ValidFrom /
@@ -222,13 +250,13 @@ type MemoryPatch struct {
 func (s *Store) UpdateMemory(ctx context.Context, userEmail, id string, patch MemoryPatch) (*Memory, error) {
 	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil &&
 		patch.Retired == nil && patch.ValidFrom == nil && patch.ValidTo == nil {
-		return nil, errors.New("empty memory patch")
+		return nil, errInput("empty memory patch")
 	}
 	var content *string
 	if patch.Content != nil {
 		c := normalizeMemoryContent(*patch.Content)
 		if c == "" {
-			return nil, errors.New("memory content required")
+			return nil, errInput("memory content required")
 		}
 		content = &c
 	}
@@ -272,7 +300,7 @@ func (s *Store) UpdateMemory(ctx context.Context, userEmail, id string, patch Me
 	m, err := scanMemory(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("memory not found")
+			return nil, ErrMemoryNotFound
 		}
 		return nil, err
 	}
@@ -292,7 +320,7 @@ func (s *Store) DeleteMemory(ctx context.Context, userEmail, id string) error {
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("memory not found")
+		return ErrMemoryNotFound
 	}
 	return nil
 }
@@ -327,7 +355,7 @@ func MemoryContentHash(content string) string {
 func (s *Store) CreateMemoryProposal(ctx context.Context, userEmail, conversationID string, p MemoryProposalParams) (*Memory, error) {
 	content := normalizeMemoryContent(p.Content)
 	if content == "" {
-		return nil, errors.New("memory content required")
+		return nil, errInput("memory content required")
 	}
 	kind := NormalizeMemoryKind(p.Kind)
 	origin := normalizeMemoryOrigin(p.Origin)
@@ -390,7 +418,7 @@ func (s *Store) AcceptMemoryProposal(ctx context.Context, userEmail, id string) 
 	m, err := scanMemory(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, SupersedeNone, errors.New("memory proposal not found")
+			return nil, SupersedeNone, ErrMemoryProposalNotFound
 		}
 		return nil, SupersedeNone, err
 	}

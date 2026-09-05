@@ -49,6 +49,11 @@ export type UseDashboardData = {
   tasks: Task[];
   total: number;
   loading: boolean;
+  // Why the LAST task-list load produced nothing usable (null when it
+  // succeeded). The table shows this instead of "No tasks created yet": with
+  // Promise.allSettled swallowing the rejection, a backend outage used to be
+  // indistinguishable from an empty account.
+  error: string | null;
   filters: TaskFilters;
   page: number;
   pageSize: number;
@@ -73,6 +78,7 @@ export function useDashboardData(active: boolean): UseDashboardData {
   // deferred kickoff / interval / imperative call — all off the effect's
   // synchronous phase.
   const [loading, setLoading] = useState(active);
+  const [error, setError] = useState<string | null>(null);
   const [filters, setFiltersState] = useState<TaskFilters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -101,6 +107,10 @@ export function useDashboardData(active: boolean): UseDashboardData {
     if (results[1].status === "fulfilled") {
       setTasks(results[1].value.data ?? []);
       setTotal(results[1].value.total ?? 0);
+      setError(null);
+    } else {
+      const reason = results[1].reason;
+      setError(reason instanceof Error ? reason.message : String(reason));
     }
     setLoading(false);
   }, [filters, page, pageSize]);
@@ -166,6 +176,7 @@ export function useDashboardData(active: boolean): UseDashboardData {
     tasks,
     total,
     loading,
+    error,
     filters,
     page,
     pageSize,

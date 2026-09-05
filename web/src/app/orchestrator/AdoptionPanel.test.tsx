@@ -193,27 +193,38 @@ describe("AdoptionPanel", () => {
     });
   });
 
-  it("Download CSV navigates to the CSV endpoint with the current window", async () => {
+  it("Download CSV fetches the CSV endpoint with the current window (no navigation)", async () => {
     mockReport(report({}));
-    const original = window.location;
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      writable: true,
-      value: { href: "" } as unknown as Location,
-    });
-    try {
-      render(<AdoptionPanel />);
-      const btn = await screen.findByTestId("adoption-download-csv");
-      fireEvent.click(btn);
-      expect(window.location.href).toContain("/api/orchestrator/admin/usage/adoption?");
-      expect(window.location.href).toContain("format=csv");
-      expect(window.location.href).toMatch(/from=\d{4}-\d{2}-\d{2}/);
-    } finally {
-      Object.defineProperty(window, "location", {
-        configurable: true,
-        writable: true,
-        value: original,
-      });
-    }
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("user,cost\n", { status: 200, headers: { "Content-Type": "text/csv" } }));
+    const before = window.location.href;
+    // jsdom has no object URLs; the helper's save step needs both to exist.
+    const createURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fleet/report");
+    const revokeURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    render(<AdoptionPanel />);
+    fireEvent.click(await screen.findByTestId("adoption-download-csv"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const url = String(fetchSpy.mock.calls[0][0]);
+    expect(url).toContain("/api/orchestrator/admin/usage/adoption?");
+    expect(url).toContain("format=csv");
+    expect(url).toMatch(/from=\d{4}-\d{2}-\d{2}/);
+    expect(window.location.href).toBe(before);
+    fetchSpy.mockRestore();
+    createURL.mockRestore();
+    revokeURL.mockRestore();
+  });
+
+  it("shows a failed CSV download in place instead of navigating to the error page", async () => {
+    mockReport(report({}));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }));
+    render(<AdoptionPanel />);
+    fireEvent.click(await screen.findByTestId("adoption-download-csv"));
+    await waitFor(() =>
+      expect(screen.getByTestId("adoption-download-error")).toHaveTextContent("forbidden"),
+    );
+    fetchSpy.mockRestore();
   });
 });

@@ -147,6 +147,20 @@ const EDIT_TERMINAL = new Set(["success", "error", "cancelled", "dead_lettered"]
 // taskToFormValues maps a task (or null for create mode) onto the form's
 // initial state. Pure: the modal remounts per edit target (parent keys the
 // component on the task id), so useState initializers read these once.
+// Pre-run gate timeout bounds (#269): the server accepts 1..300s; a blank or
+// unparseable field falls back to the default rather than to 0.
+const RUN_IF_TIMEOUT_DEFAULT = 30;
+const RUN_IF_TIMEOUT_MIN = 1;
+const RUN_IF_TIMEOUT_MAX = 300;
+
+// normalizeRunIfTimeout turns the raw timeout input into the integer the API
+// gets: blank/NaN → the default, otherwise clamped into the accepted range.
+export function normalizeRunIfTimeout(raw: string): number {
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return RUN_IF_TIMEOUT_DEFAULT;
+  return Math.min(RUN_IF_TIMEOUT_MAX, Math.max(RUN_IF_TIMEOUT_MIN, n));
+}
+
 function taskToFormValues(task: Task | null) {
   const rec = task?.recurrence ?? "";
   const parsed = parseSimpleSchedule(rec);
@@ -201,7 +215,11 @@ function taskToFormValues(task: Task | null) {
     mcpSelection: task?.mcp_selection ?? [],
     runIfCommand: task?.run_if?.command ?? "",
     runIfOnError: (task?.run_if?.on_error ?? "run") as "run" | "skip",
-    runIfTimeout: task?.run_if?.timeout_seconds ?? 30,
+    // Held as the RAW input string (not a number) so the field can be emptied
+    // while retyping: a number-typed state had to drop the NaN a cleared
+    // <input type=number> reports, which made backspacing to blank impossible.
+    // Parsed and clamped by normalizeRunIfTimeout on blur and on submit.
+    runIfTimeout: String(task?.run_if?.timeout_seconds ?? RUN_IF_TIMEOUT_DEFAULT),
     // The form has no exit-code field; carried so an edit echoes the stored
     // gate faithfully (a lossy echo reads as a run_if change server-side and
     // 403s non-admin edits of unrelated fields).
@@ -505,12 +523,17 @@ export function TaskCreateModal({
   // Edit mode compares the live form against the prefilled values (the
   // component remounts per edit target via the parent's key, so `init` is the
   // mount-time truth); create mode keeps its semantic any-field-set check.
+  // Recipients are in the snapshot too: an edit form always starts with none
+  // (the email block lives inside the stored prompt, not as a field), so a
+  // chip added or an address half-typed is a change worth guarding.
   const formSnapshot = JSON.stringify([
     title,
     prompt,
     description,
     tagsInput,
     persona,
+    emails,
+    emailInput,
     scheduleMode,
     scheduledDate,
     scheduledTime,
@@ -541,6 +564,8 @@ export function TaskCreateModal({
     init.description,
     init.tagsInput,
     init.persona,
+    [],
+    "",
     init.scheduleMode,
     init.scheduledDate,
     init.scheduledTime,
@@ -567,7 +592,12 @@ export function TaskCreateModal({
   ]);
   const dirty = editing ? formSnapshot !== initSnapshot || fileCount > 0 : createDirty;
 
+  // Every field createDirty inspects must be reset here: the parent keys the
+  // create instance "create" for its whole life, so anything left behind is
+  // what the next New Task opens with — and it re-raises the discard guard on
+  // an untouched form (title, repeat-end and delegation used to slip through).
   const resetForm = useCallback(() => {
+    setTitle("");
     setPrompt("");
     setDescription("");
     setTagsInput("");
@@ -579,6 +609,9 @@ export function TaskCreateModal({
     setScheduledDate("");
     setScheduledTime("09:00");
     setRecurrence("");
+    setEndMode("never");
+    setEndDate("");
+    setEndCount("");
     setRepeatEditor("simple");
     setSimpleFrequency("weekdays");
     setSimpleTime("09:00");
@@ -591,10 +624,11 @@ export function TaskCreateModal({
     setMaxIterations("");
     setCaptainsLog(false);
     setAllowNetwork(false);
+    setAllowDelegation(true);
     setCarryContext(false);
     setRunIfCommand("");
     setRunIfOnError("run");
-    setRunIfTimeout(30);
+    setRunIfTimeout(String(RUN_IF_TIMEOUT_DEFAULT));
     setExpectedDuration("");
     setThinkingBudget("");
     setSandboxMemory("");
@@ -976,7 +1010,7 @@ export function TaskCreateModal({
       taskData.run_if = {
         command: runIfCommand.trim(),
         on_error: runIfOnError,
-        timeout_seconds: runIfTimeout,
+        timeout_seconds: normalizeRunIfTimeout(runIfTimeout),
       };
       if (init.runIfExitCode !== 0) {
         taskData.run_if.exit_code_is = init.runIfExitCode;
@@ -1132,7 +1166,13 @@ export function TaskCreateModal({
       if (editing && editTask) {
         if (editTerminal || scope === "once") {
           // POST /rerun with overrides: a fresh one-off copy, source untouched.
-          // Only fields the rerun endpoint accepts as overrides are sent.
+          // Every field the form shows editable is echoed — the button says
+          // "Resubmit with changes", so a change to the SLA, sandbox limits,
+          // pre-run gate or the context/self-improve switches must reach the
+          // copy rather than being silently inherited from the source. Where
+          // buildTaskData omits an unset key, the explicit "clear" value goes
+          // instead (0 / null / false — the server's override semantics), the
+          // same way mcp_selection and tags echo their complete visible value.
           const created = await orchestratorApi.rerunTask(editTask.id, {
             prompt: taskData.prompt,
             title: taskData.title ?? "",
@@ -1154,6 +1194,13 @@ export function TaskCreateModal({
             ...(taskData.thinking_budget_tokens != null
               ? { thinking_budget_tokens: taskData.thinking_budget_tokens }
               : { thinking_budget_tokens: -1 }),
+            expected_duration_minutes: taskData.expected_duration_minutes ?? 0,
+            sla_warn_multiplier: taskData.sla_warn_multiplier ?? 0,
+            sla_fail_multiplier: taskData.sla_fail_multiplier ?? 0,
+            sandbox_limits: taskData.sandbox_limits ?? null,
+            run_if: taskData.run_if ?? null,
+            carry_context: Boolean(taskData.carry_context),
+            instruction_self_improve: Boolean(taskData.instruction_self_improve),
           });
           showToast(
             `Resubmitted as task ${created.id.slice(0, 8)}… — running now`,
@@ -2341,11 +2388,11 @@ export function TaskCreateModal({
                         max={300}
                         step={1}
                         value={runIfTimeout}
-                        onChange={(e) => {
-                          const n = Number.parseInt(e.target.value, 10);
-                          if (!Number.isNaN(n)) setRunIfTimeout(n);
-                        }}
-                        onBlur={() => setRunIfTimeout((t) => Math.min(300, Math.max(1, t)))}
+                        onChange={(e) => setRunIfTimeout(e.target.value)}
+                        // Clamp on blur, not per keystroke: the field must be
+                        // clearable while retyping, so the raw string stands
+                        // until focus leaves (and submit normalizes again).
+                        onBlur={() => setRunIfTimeout((t) => String(normalizeRunIfTimeout(t)))}
                         aria-label="Pre-run gate timeout seconds"
                       />
                       <span className="task-gate-option-label">s</span>

@@ -972,6 +972,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	if edit.SetRunIf {
 		task.RunIf = edit.RunIf
 	}
+	priorPriority := task.Priority
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
@@ -1006,6 +1007,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := s.db.SyncEffectivePriorityTx(ctx, tx, task, priorPriority); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1051,6 +1055,7 @@ func (s *Storage) ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, t
 		return nil, fmt.Errorf("%w: conflict=replace only rewrites a pending or scheduled task (status is %q) — a leased, running, or finished row keeps its execution state", ErrTaskNotEditable, task.Status)
 	}
 
+	priorPriority := task.Priority
 	if err := models.OverlayTaskDefinition(task, tc); err != nil {
 		return nil, err
 	}
@@ -1068,6 +1073,9 @@ func (s *Storage) ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, t
 	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := s.db.SyncEffectivePriorityTx(ctx, tx, task, priorPriority); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1371,6 +1379,13 @@ func applySuccessOrErrorTransition(task *models.Task, update *models.StatusUpdat
 	task.PendingAnswer = ""
 	task.LeaseOwner = nil
 	task.LeaseExpiresAt = nil
+	if update.Status == models.TaskStatusSuccess {
+		// A retry that succeeds must not keep the failed attempt's message:
+		// RequeueTaskForRetry records the failure reason in error_message, and
+		// a success row still carrying it read as a failure in every consumer
+		// that renders the field.
+		task.ErrorMessage = nil
+	}
 	if update.Message == nil {
 		return
 	}
@@ -1731,6 +1746,13 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// Carry the originating API key forward so recurring task cost keeps counting
 	// against the key's usage bucket (and any scope=key budget).
 	newTask.CreatedByKeyID = task.CreatedByKeyID
+	// Lineage (migration 068): the successor points at the occurrence that just
+	// completed, so carry_context can read THAT run's transcript. Without it
+	// the handoff looked up the successor's own (still empty) log and every
+	// genuine recurrence started cold — the feature only ever fired on a
+	// retry of the same row.
+	prev := task.ID
+	newTask.PreviousOccurrenceID = &prev
 	// Mirror AddTaskWithContext's stored-contract validation (the pre-#1116 spawn
 	// went through it): the insert below is the tx-scoped db.AddTaskTx, which
 	// does not validate.

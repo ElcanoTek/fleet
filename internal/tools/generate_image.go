@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
@@ -238,6 +239,18 @@ func runGenerateImage(ctx context.Context, sb *sandbox.Sandbox, client *http.Cli
 	if err != nil {
 		return nil, err
 	}
+	// Meter the call into the surrounding run's accounting, exactly as the
+	// git-metadata tools do (#1118): generate_image is model-invocable and
+	// spends the operator's OpenRouter key on every call, yet its cost never
+	// reached agentcore.Run's cost ceiling — a prompt-injected loop could burn
+	// provider budget under a "governed" run. The recorder is the run-context
+	// capability agentcore.Run installs; nil (unit tests, direct invocation)
+	// means there is no run to charge. The provider-returned cost rides in the
+	// same openrouter metadata shape the main loop reads, so a per-model
+	// price override (#297) applies to the model that actually ran.
+	if record := UsageRecorderFromContext(ctx); record != nil {
+		record(model, imageGenUsage(respBytes), imageGenProviderMetadata(cost))
+	}
 
 	// The tool — not the agent — picks the filename and extension. Reasons:
 	// (1) the model decides the output format and there's no API param to
@@ -422,4 +435,48 @@ func truncateImageGenError(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// imageGenUsage lifts the token counts OpenRouter returned for an image
+// generation into fantasy's usage shape so the run's token ceiling sees them.
+// A response without a usage block meters zero tokens (the cost still counts).
+func imageGenUsage(body []byte) fantasy.Usage {
+	var raw struct {
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+			TotalTokens      int64 `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fantasy.Usage{}
+	}
+	return fantasy.Usage{
+		InputTokens:  raw.Usage.PromptTokens,
+		OutputTokens: raw.Usage.CompletionTokens,
+		TotalTokens:  raw.Usage.TotalTokens,
+	}
+}
+
+// imageGenProviderMetadata wraps OpenRouter's returned cost in the provider
+// metadata shape agentcore's cost accounting reads (openrouterCost). A missing
+// or non-numeric cost yields no metadata, so pricing falls back to the
+// per-model table like any other step without a provider figure.
+func imageGenProviderMetadata(cost any) fantasy.ProviderMetadata {
+	var c float64
+	switch v := cost.(type) {
+	case float64:
+		c = v
+	case int:
+		c = float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			c = f
+		}
+	default:
+		return nil
+	}
+	return fantasy.ProviderMetadata{
+		openrouter.Name: &openrouter.ProviderMetadata{Usage: openrouter.UsageAccounting{Cost: c}},
+	}
 }

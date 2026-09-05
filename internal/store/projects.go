@@ -79,16 +79,23 @@ func scanProject(scanner interface{ Scan(...any) error }) (*Project, error) {
 	return &p, nil
 }
 
+// ErrProjectNotOwner is returned by UpdateProject / DeleteProject when the
+// caller does not own the project (or it does not exist — the store cannot
+// tell the two apart, but the HTTP layer can: it has already resolved the
+// project for a member, so by the time this surfaces it means "not the owner"
+// and answers 403).
+var ErrProjectNotOwner = errors.New("project not found (or not the owner)")
+
 // CreateProject persists a project owned by ownerEmail. TeamID must be the
 // OWNER'S resolved team (the handler enforces this — a caller can never share
 // into a team it does not belong to).
 func (s *Store) CreateProject(ctx context.Context, p *Project) (*Project, error) {
 	p.Name = strings.TrimSpace(p.Name)
 	if p.Name == "" || len(p.Name) > maxProjectNameLen {
-		return nil, errors.New("project name required (≤128 chars)")
+		return nil, errInput("project name required (≤128 chars)")
 	}
 	if len(p.Instructions) > maxProjectInstructionsLen {
-		return nil, errors.New("project instructions too long (≤8000 chars)")
+		return nil, errInput("project instructions too long (≤8000 chars)")
 	}
 	if p.MCPServers == nil {
 		p.MCPServers = []string{}
@@ -269,12 +276,12 @@ func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch 
 	if patch.Name != nil {
 		n := strings.TrimSpace(*patch.Name)
 		if n == "" || len(n) > maxProjectNameLen {
-			return nil, errors.New("project name required (≤128 chars)")
+			return nil, errInput("project name required (≤128 chars)")
 		}
 		patch.Name = &n
 	}
 	if patch.Instructions != nil && len(*patch.Instructions) > maxProjectInstructionsLen {
-		return nil, errors.New("project instructions too long (≤8000 chars)")
+		return nil, errInput("project instructions too long (≤8000 chars)")
 	}
 	var mcpsArg any
 	if patch.MCPServers != nil {
@@ -307,7 +314,7 @@ func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch 
 	p, err := scanProject(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("project not found (or not the owner)")
+			return nil, ErrProjectNotOwner
 		}
 		return nil, err
 	}
@@ -353,7 +360,7 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("project not found (or not the owner)")
+		return ErrProjectNotOwner
 	}
 	// Detaching also unshares: a chat that leaves a project has nowhere for a
 	// teammate to find it, so team_visible must not outlive the project
@@ -482,7 +489,7 @@ func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, p
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return tx.Commit()
 }
@@ -495,7 +502,7 @@ func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, p
 func (s *Store) CreateProjectMemory(ctx context.Context, projectID, creatorEmail, content, kind string) (*Memory, error) {
 	content = normalizeMemoryContent(content)
 	if content == "" {
-		return nil, errors.New("memory content required")
+		return nil, errInput("memory content required")
 	}
 	kind = NormalizeMemoryKind(kind)
 	id := uuid.NewString()
@@ -559,14 +566,15 @@ func (s *Store) GetProjectMemory(ctx context.Context, projectID, memoryID string
 // Retirement is the intended "remove" for a team learning: the entry stops
 // being injected but the record — and who wrote it — survives.
 func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID string, patch MemoryPatch) (*Memory, error) {
-	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil && patch.Retired == nil {
-		return nil, errors.New("empty memory patch")
+	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil &&
+		patch.Retired == nil && patch.ValidFrom == nil && patch.ValidTo == nil {
+		return nil, errInput("empty memory patch")
 	}
 	var content *string
 	if patch.Content != nil {
 		c := normalizeMemoryContent(*patch.Content)
 		if c == "" {
-			return nil, errors.New("memory content required")
+			return nil, errInput("memory content required")
 		}
 		content = &c
 	}
@@ -589,15 +597,23 @@ func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID str
 				WHEN $4::boolean IS NULL THEN retired_by
 				WHEN $4::boolean THEN retired_by
 				ELSE NULL END,
+			valid_from = CASE
+				WHEN $6::bigint IS NULL THEN valid_from
+				WHEN $6::bigint = 0 THEN NULL
+				ELSE $6::bigint END,
+			valid_to = CASE
+				WHEN $7::bigint IS NULL THEN valid_to
+				WHEN $7::bigint = 0 THEN NULL
+				ELSE $7::bigint END,
 			updated_at = $5
-		 WHERE id = $6 AND project_id = $7
+		 WHERE id = $8 AND project_id = $9
 		 RETURNING `+memoryColumns,
-		content, kind, patch.Pinned, patch.Retired, now, memoryID, projectID,
+		content, kind, patch.Pinned, patch.Retired, now, patch.ValidFrom, patch.ValidTo, memoryID, projectID,
 	)
 	m, err := scanMemory(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("memory not found")
+			return nil, ErrMemoryNotFound
 		}
 		return nil, err
 	}
@@ -618,7 +634,7 @@ func (s *Store) UpdateProjectMemory(ctx context.Context, projectID, memoryID str
 // actually accepted can be handed to the team.
 func (s *Store) MoveMemoryToProject(ctx context.Context, userEmail, memoryID, projectID string) (*Memory, error) {
 	if projectID == "" {
-		return nil, errors.New("project id required")
+		return nil, errInput("project id required")
 	}
 	row := s.db.QueryRowContext(ctx,
 		`UPDATE memories SET project_id = $1, updated_at = $2
@@ -629,7 +645,7 @@ func (s *Store) MoveMemoryToProject(ctx context.Context, userEmail, memoryID, pr
 	m, err := scanMemory(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("memory not found")
+			return nil, ErrMemoryNotFound
 		}
 		return nil, err
 	}
@@ -649,7 +665,7 @@ func (s *Store) MoveMemoryToProject(ctx context.Context, userEmail, memoryID, pr
 // contradicts stays for the user to retire themselves.
 func (s *Store) AcceptMemoryProposalIntoProject(ctx context.Context, userEmail, memoryID, projectID string) (*Memory, error) {
 	if projectID == "" {
-		return nil, errors.New("project id required")
+		return nil, errInput("project id required")
 	}
 	row := s.db.QueryRowContext(ctx,
 		`UPDATE memories SET source = 'chat', project_id = $1, updated_at = $2
@@ -660,7 +676,7 @@ func (s *Store) AcceptMemoryProposalIntoProject(ctx context.Context, userEmail, 
 	m, err := scanMemory(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("memory proposal not found")
+			return nil, ErrMemoryProposalNotFound
 		}
 		return nil, err
 	}
@@ -677,7 +693,7 @@ func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID str
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("memory not found")
+		return ErrMemoryNotFound
 	}
 	return nil
 }

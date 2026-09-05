@@ -124,6 +124,7 @@ func adminList(argv []string) int {
 	fs := flag.NewFlagSet("admin list", flag.ContinueOnError)
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL)")
+	asJSON := fs.Bool("json", false, "machine-readable output")
 	_, flagArgs := splitPositionalValueFlags(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
@@ -157,6 +158,18 @@ func adminList(argv []string) int {
 		}
 	}
 
+	if *asJSON {
+		type row struct {
+			Email          string `json:"email"`
+			Role           string `json:"role"`
+			OpsCenterAdmin bool   `json:"ops_center_admin"`
+		}
+		rows := make([]row, 0, len(users))
+		for _, u := range users {
+			rows = append(rows, row{Email: u.Email, Role: u.Role, OpsCenterAdmin: opsAdmins[strings.ToLower(u.Email)]})
+		}
+		return printJSON(rows)
+	}
 	if len(users) == 0 {
 		fmt.Println("no chat users yet — add an admin with: fleet admin add <email>")
 		return 0

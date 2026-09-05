@@ -137,11 +137,13 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 // handleConversationDelete serves DELETE /conversations/{id}.
 func (s *Server) handleConversationDelete(w http.ResponseWriter, r *http.Request, user, id string) {
 	if err := s.store.Delete(r.Context(), user, id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
-	// Reclaim the conversation's persistent run_python sandbox (#213), if any.
+	// Reclaim the conversation's persistent run_python sandbox (#213), if any,
+	// and its in-memory session pre-approvals (#300).
 	s.releasePersistentSandbox(id)
+	s.sessionApprovals.Forget(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -168,7 +170,7 @@ func (s *Server) handleConversationTruncate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := s.store.TruncateAfter(r.Context(), user, id, pivot); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -183,7 +185,7 @@ func (s *Server) handleConversationPin(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 	if err := s.store.SetPinned(r.Context(), user, id, req.Pinned); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -201,7 +203,7 @@ func (s *Server) handleConversationArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := s.store.SetArchived(r.Context(), user, id, req.Archived); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -249,13 +251,14 @@ func (s *Server) handleConversationRename(w http.ResponseWriter, r *http.Request
 		http.Error(w, "title required", http.StatusBadRequest)
 		return
 	}
-	if len(title) > 200 {
-		title = title[:200]
-	}
+	// Cap by bytes at a rune boundary (capBytes), never title[:200]: a
+	// byte-slice through a multi-byte character yields invalid UTF-8, which
+	// Postgres rejects — so a long non-ASCII title used to 500 on rename.
+	title = capBytes(title, 200)
 	// A manual rename sets the title AND locks it (#302) so the background
 	// auto-titler never overwrites the user's chosen name.
 	if err := s.store.RenameTitle(r.Context(), user, id, title); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	// If a turn is mid-flight (e.g. the user renames DURING first-turn
@@ -303,7 +306,7 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	if err := s.store.SetModel(r.Context(), user, id, model); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -342,7 +345,7 @@ func (s *Server) handleApprovalTimeoutSet(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if err := s.store.SetApprovalTimeout(r.Context(), user, id, req.ApprovalTimeoutSeconds); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -379,11 +382,7 @@ func (s *Server) handleThinkingConfigPut(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err := s.store.SetThinkingConfig(r.Context(), user, id, &store.ThinkingConfig{Enabled: req.Enabled, BudgetTokens: req.BudgetTokens}); err != nil {
-		if err.Error() == "conversation not found" {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -394,11 +393,7 @@ func (s *Server) handleThinkingConfigPut(w http.ResponseWriter, r *http.Request,
 // Clear the override → inherit the global default (#220).
 func (s *Server) handleThinkingConfigDelete(w http.ResponseWriter, r *http.Request, user, id string) {
 	if err := s.store.SetThinkingConfig(r.Context(), user, id, nil); err != nil {
-		if err.Error() == "conversation not found" {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

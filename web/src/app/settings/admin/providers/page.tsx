@@ -215,6 +215,11 @@ function ProvidersAdmin() {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  // Catch-all confirmation: an enabled provider with no models listed can
+  // hijack every unmatched slug, so Save arms on the first click and fires on
+  // the second — the same inline two-click idiom as InlineConfirmButton,
+  // instead of a native window.confirm dialog. Blur/Escape/Cancel disarm.
+  const [catchAllArmed, setCatchAllArmed] = useState(false);
   // Per-row probe state: "running" while in flight, else the last result.
   const [probes, setProbes] = useState<Record<string, "running" | ProbeResult>>({});
 
@@ -239,6 +244,13 @@ function ProvidersAdmin() {
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load."));
 
+  // Retry after a failed initial load: clear the banner so a second failure
+  // is visibly a fresh one, then re-run the same fetch.
+  const retryLoad = () => {
+    setError(null);
+    void reload();
+  };
+
   const save = () => {
     if (!draft) return;
     const editing = providers?.find((p) => p.id === draft.id);
@@ -248,16 +260,15 @@ function ProvidersAdmin() {
       return;
     }
     // Empty models = catch-all is powerful enough to hijack every unmatched
-    // slug — make the admin say so out loud instead of falling into it.
-    if (
-      draft.enabled &&
-      draft.models.split("\n").every((s) => !s.trim()) &&
-      !window.confirm(
-        "No models listed — this provider becomes a CATCH-ALL and may serve any model not claimed by another provider. Continue?",
-      )
-    ) {
+    // slug — make the admin say so out loud instead of falling into it: the
+    // first Save click only arms the button (with the warning inline), the
+    // second one actually submits.
+    const catchAll = draft.enabled && draft.models.split("\n").every((s) => !s.trim());
+    if (catchAll && !catchAllArmed) {
+      setCatchAllArmed(true);
       return;
     }
+    setCatchAllArmed(false);
     setError(null);
     setBusy(true);
     const body: Record<string, unknown> = {
@@ -384,9 +395,23 @@ function ProvidersAdmin() {
         </ClampInfo>
 
         {error ? (
-          <NoticeBanner tone="danger" className="mb-3">
-            {error}
-          </NoticeBanner>
+          <div className="mb-3 flex items-center gap-3">
+            <NoticeBanner tone="danger" className="flex-1">
+              {error}
+            </NoticeBanner>
+            {providers === null ? (
+              // The list never loaded: give the failure a real Retry instead
+              // of a dead "Loading…" line under the banner.
+              <button
+                type="button"
+                onClick={retryLoad}
+                data-testid="providers-retry"
+                className={btnClass({ sm: true, reveal: true })}
+              >
+                Retry
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
         {draft ? (
@@ -504,6 +529,7 @@ function ProvidersAdmin() {
                   onClick={() => {
                     setDraft(null);
                     setError(null);
+                    setCatchAllArmed(false);
                   }}
                   disabled={busy}
                   className={btnClass({ sm: true, reveal: true })}
@@ -513,18 +539,43 @@ function ProvidersAdmin() {
                 <button
                   type="button"
                   onClick={save}
+                  onBlur={() => setCatchAllArmed(false)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setCatchAllArmed(false);
+                  }}
                   disabled={busy || !draft.name.trim()}
+                  data-testid="provider-save"
                   className={btnClass({ variant: "primary" })}
                 >
-                  {busy ? "Saving…" : draft.id === "" ? "Create provider" : "Save changes"}
+                  {busy
+                    ? "Saving…"
+                    : catchAllArmed
+                      ? "Confirm catch-all"
+                      : draft.id === ""
+                        ? "Create provider"
+                        : "Save changes"}
                 </button>
               </span>
             </div>
+            {catchAllArmed ? (
+              <p
+                className="m-0 text-[0.73rem] text-[var(--color-warning-soft)]"
+                role="alert"
+                data-testid="provider-catch-all-warning"
+              >
+                No models listed — this provider becomes a CATCH-ALL and may serve any model not
+                claimed by another provider. Click again to continue.
+              </p>
+            ) : null}
           </div>
         ) : null}
 
         {providers === null ? (
-          <p className="py-2 text-[0.8rem] text-[var(--color-text-muted)]">Loading…</p>
+          // Still loading — unless the load already failed, in which case the
+          // banner + Retry above is the whole story.
+          error ? null : (
+            <p className="py-2 text-[0.8rem] text-[var(--color-text-muted)]">Loading…</p>
+          )
         ) : providers.length === 0 && !draft ? (
           <ConnEmpty>
             No extra providers configured — the deployment is using its bundle/environment

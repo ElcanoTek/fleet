@@ -1219,6 +1219,13 @@ type Task struct {
 	// server-side by POST /tasks/{id}/rerun|clone. nil for original tasks.
 	// Persisted; not settable by clients.
 	SourceTaskID *uuid.UUID `json:"source_task_id,omitempty"`
+	// PreviousOccurrenceID is the recurring occurrence this row was spawned to
+	// follow (storage.scheduleNextRecurrence stamps it on the successor). It is
+	// what lets carry_context reach the previous occurrence's transcript: each
+	// firing is a fresh row, so the run's own id has no prior log. nil for
+	// non-recurring tasks and for the first occurrence. Persisted; immutable
+	// lineage stamped at spawn, never exported, not settable by clients.
+	PreviousOccurrenceID *uuid.UUID `json:"previous_occurrence_id,omitempty"`
 	// NextRunAtLocal is ScheduledFor rendered in Timezone (RFC3339 with offset),
 	// populated at query time for display so callers need no client-side tz math.
 	// Not persisted; nil when the task has no scheduled_for.

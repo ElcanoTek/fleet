@@ -36,11 +36,16 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 	}
 	// Availability layer (unified connector UX): a connection the user turned
 	// off on the connections page — their own or one shared with them — is
-	// excluded from their runs. Best-effort: a prefs read failure keeps the
-	// default (enabled) rather than failing the run.
+	// excluded from their runs. A prefs read failure fails CLOSED: with the
+	// prefs unreadable we cannot tell which connectors the user disabled, and
+	// the old "keep the default (enabled)" fallback mounted every connected
+	// server — the user's own and every one shared with them — including the
+	// ones they had switched off, during any DB blip. The run proceeds with
+	// no remote connectors this turn and the cause is logged.
 	prefs, perr := s.store.ListConnectorPrefs(ctx, email)
 	if perr != nil {
-		prefs = nil
+		log.Printf("remotemcp: connector prefs unreadable for %s — mounting no remote connectors this run: %v", email, perr)
+		return nil, nil
 	}
 	enabledForMe := func(id string) bool {
 		if p, ok := prefs[store.ConnectorPrefKey(store.ConnectorKindRemote, id)]; ok {

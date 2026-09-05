@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { orchestratorApi, type UpcomingRun } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { describeCronExpression } from "@/app/shared/lib/cron";
+import { plural } from "./plural";
 
 // UpcomingPanel — the Operations Center "Upcoming" tab (Scheduler UX 2.0, #504):
 // a forward-looking timeline of the next scheduled runs, grouped by calendar
@@ -69,8 +70,15 @@ export function UpcomingPanel() {
   // panel only mounts on a post-hydration tab click.
   const [view, setView] = useState<UpcomingView>(() => {
     if (typeof window === "undefined") return "list";
-    const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
-    return saved === "week" ? "week" : "list";
+    // Guarded like the write below: the accessor itself throws where site
+    // data is blocked (Safari private mode, a locked-down browser), and an
+    // initializer that throws unmounts the whole tab.
+    try {
+      const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
+      return saved === "week" ? "week" : "list";
+    } catch {
+      return "list";
+    }
   });
   const changeView = (v: UpcomingView) => {
     setView(v);
@@ -241,7 +249,7 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
       </div>
       <p className="refresh-note">
         {beyond > 0
-          ? `${weekLabel} · ${beyond} more scheduled run(s) after this week`
+          ? `${weekLabel} · ${plural(beyond, "more scheduled run")} after this week`
           : weekLabel}
       </p>
     </div>
@@ -286,7 +294,7 @@ function UpcomingTimeline({ runs }: { runs: UpcomingRun[] }) {
           </ul>
         </div>
       ))}
-      <p className="refresh-note">Next {runs.length} scheduled run(s)</p>
+      <p className="refresh-note">Next {plural(runs.length, "scheduled run")}</p>
     </div>
   );
 }

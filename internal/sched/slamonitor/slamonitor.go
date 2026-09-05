@@ -15,6 +15,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,15 +44,25 @@ type SLAMonitor struct {
 	store SLAStore
 	now   nowFunc
 	stop  chan struct{}
+
+	// warned remembers which running tasks have already had their sla_warn
+	// emitted, so the warning (log line + counter) fires ONCE per run rather
+	// than on every 60s tick for the rest of the run. Pruned each sweep to the
+	// tasks still running, so a finished task's entry (and a retry's — a fresh
+	// attempt has a fresh started_at and deserves a fresh warning) is dropped.
+	// Guarded by mu because Check is also driven directly by tests.
+	mu     sync.Mutex
+	warned map[uuid.UUID]struct{}
 }
 
 // New constructs an SLAMonitor backed by store. The store MUST implement
 // GetRunningTasksWithSLA + MarkSLABreached (storage.Storage does).
 func New(store SLAStore) *SLAMonitor {
 	return &SLAMonitor{
-		store: store,
-		now:   func() time.Time { return time.Now().UTC() },
-		stop:  make(chan struct{}),
+		store:  store,
+		now:    func() time.Time { return time.Now().UTC() },
+		stop:   make(chan struct{}),
+		warned: make(map[uuid.UUID]struct{}),
 	}
 }
 
@@ -104,7 +115,11 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 		return
 	}
 	now := m.now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	running := make(map[uuid.UUID]struct{}, len(tasks))
 	for _, t := range tasks {
+		running[t.ID] = struct{}{}
 		if t.StartedAt == nil || t.ExpectedDurationMinutes == nil {
 			continue
 		}
@@ -114,7 +129,12 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 		failAt := time.Duration(float64(expected) * effectiveFailMul(t.SLAFailMultiplier))
 
 		switch {
-		case elapsed >= failAt && !t.SLABreached:
+		case t.SLABreached:
+			// Already latched: the breach was reported when it happened, and a
+			// breached run has nothing further to warn about. (Before, a latched
+			// task fell through to the warn branch and logged sla-warn every
+			// tick until it finished.)
+		case elapsed >= failAt:
 			log.Printf("sla-breach: task_id=%s task_name=%q elapsed_min=%.1f expected_min=%d",
 				t.ID, TaskName(t), elapsed.Minutes(), *t.ExpectedDurationMinutes)
 			metrics.RecordSLAFail(TaskName(t))
@@ -122,9 +142,18 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 				log.Printf("sla-monitor: mark-breached failed for %s: %v", t.ID, err)
 			}
 		case elapsed >= warnAt:
+			if _, done := m.warned[t.ID]; done {
+				break
+			}
+			m.warned[t.ID] = struct{}{}
 			log.Printf("sla-warn: task_id=%s task_name=%q elapsed_min=%.1f expected_min=%d",
 				t.ID, TaskName(t), elapsed.Minutes(), *t.ExpectedDurationMinutes)
 			metrics.RecordSLAWarn(TaskName(t))
+		}
+	}
+	for id := range m.warned {
+		if _, still := running[id]; !still {
+			delete(m.warned, id)
 		}
 	}
 }

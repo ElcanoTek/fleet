@@ -286,6 +286,7 @@ type chatStore interface {
 	ListSharedFiles(ctx context.Context) ([]store.SharedFile, error)
 	GetSharedFile(ctx context.Context, id string) (store.SharedFile, error)
 	CreateSharedFile(ctx context.Context, f store.SharedFile) (store.SharedFile, error)
+	SharedFilePathAvailable(ctx context.Context, folder, name string) error
 	UpdateSharedFileMeta(ctx context.Context, id, name, folder, description string) (store.SharedFile, error)
 	DeleteSharedFile(ctx context.Context, id string) (store.SharedFile, error)
 	TotalSharedFileBytes(ctx context.Context) (int64, error)

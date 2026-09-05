@@ -557,8 +557,40 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	if task.LoopConfig != nil {
 		return r.runWithLoop(ctx, task, wtPath)
 	}
+	// A single-pass run is metered as iteration 1 of 1. task_iterations is the
+	// ONLY task-side spend ledger the usage read model and the budget enforcer
+	// aggregate (db.TaskUsage → budget.Enforcer.spendFor), and until this row
+	// existed only looped tasks wrote to it — so ordinary scheduled tasks
+	// accrued $0 against every per-principal budget and were invisible in
+	// /admin/usage. Recorded even when the worker returned no session (a
+	// sandbox that never started): the attempt happened and counts as one,
+	// at zero spend.
+	startedAt := time.Now().UTC()
 	session, _, _, err := r.runWorker(ctx, task, "", nil, wtPath)
+	r.recordIteration(ctx, singlePassIteration(task.ID, startedAt, time.Now().UTC(), session, err))
 	return session, err
+}
+
+// singlePassIteration is the telemetry row for a non-looped run: iteration 1,
+// passed on a clean return and failed otherwise, carrying the session's spend.
+func singlePassIteration(taskID uuid.UUID, startedAt, completedAt time.Time, session *models.LogSession, runErr error) *models.TaskIteration {
+	it := &models.TaskIteration{
+		TaskID:          taskID,
+		IterationNumber: 1,
+		StartedAt:       startedAt,
+		CompletedAt:     &completedAt,
+		Status:          models.IterationStatusPassed,
+	}
+	if runErr != nil {
+		it.Status = models.IterationStatusFailed
+	}
+	if session != nil {
+		it.WorkerSessionID = session.ID
+		it.CostUSD = session.Cost
+		it.PromptTokens = int64(session.PromptTokens)
+		it.CompletionTokens = int64(session.CompletionTokens)
+	}
+	return it
 }
 
 // workspaceRoot resolves the host workspace root the same way the agent manager

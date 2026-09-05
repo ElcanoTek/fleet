@@ -288,3 +288,54 @@ func metricValue(t *testing.T, name, taskName string) float64 {
 	}
 	return 0
 }
+
+// TestCheck_WarnFiresOncePerRun: the warning is emitted on the first tick past
+// the warn threshold and NOT again on subsequent ticks (it used to log and
+// count every 60s for the rest of the run), and a run whose breach is already
+// latched does not fall through to the warn branch at all. When the task
+// leaves the running set its entry is forgotten, so a fresh attempt warns anew.
+func TestCheck_WarnFiresOncePerRun(t *testing.T) {
+	now := time.Date(2025, 6, 29, 12, 0, 0, 0, time.UTC)
+	warnTask := uuid.New()
+	breached := uuid.New()
+	store := &fakeStore{
+		tasks: []*models.Task{
+			{
+				ID: warnTask, Prompt: "slow", Status: models.TaskStatusRunning,
+				StartedAt: startAt(now, 31*time.Minute), ExpectedDurationMinutes: minutes(20),
+				SLAWarnMultiplier: 1.5, SLAFailMultiplier: 5.0,
+			},
+			{
+				ID: breached, Prompt: "already breached", Status: models.TaskStatusRunning,
+				StartedAt: startAt(now, 3*time.Hour), ExpectedDurationMinutes: minutes(20),
+				SLAWarnMultiplier: 1.5, SLAFailMultiplier: 2.0, SLABreached: true,
+			},
+		},
+	}
+	m := New(store)
+	m.SetNow(func() time.Time { return now })
+
+	m.Check(context.Background())
+	if _, ok := m.warned[warnTask]; !ok {
+		t.Fatal("first tick past the warn threshold did not record the warning")
+	}
+	if _, ok := m.warned[breached]; ok {
+		t.Fatal("a latched breach must not be warned about")
+	}
+	if len(store.breached) != 0 {
+		t.Fatalf("nothing should latch here, got %v", store.breached)
+	}
+	warnedBefore := len(m.warned)
+	m.SetNow(func() time.Time { return now.Add(time.Minute) })
+	m.Check(context.Background())
+	if len(m.warned) != warnedBefore {
+		t.Fatalf("second tick changed the warned set (%d → %d); the warning must fire once", warnedBefore, len(m.warned))
+	}
+
+	// The run finishes: it drops out of the running set and its entry goes.
+	store.tasks = store.tasks[1:]
+	m.Check(context.Background())
+	if _, ok := m.warned[warnTask]; ok {
+		t.Fatal("finished task's warned entry was not pruned")
+	}
+}

@@ -15,7 +15,7 @@
 // This page renders ONLY what the live registry serves plus the live Rampart
 // actions (detection probe + one-click service install) — no mock-only rows.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { humanizeVarName } from "@/app/shared/lib/taskTemplates";
@@ -262,8 +262,10 @@ function FeaturesAdmin() {
     [],
   );
   const [edits, setEdits] = useState<Record<string, ResolvedSetting>>({});
-  // Per-key UI state: one write at a time, numeric drafts, row-level errors.
-  const [saving, setSaving] = useState(false);
+  // Per-key UI state: in-flight writes keyed by setting (so one slow save
+  // disables only its own row, not the whole panel), numeric drafts,
+  // row-level errors.
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [q, setQ] = useState("");
@@ -271,7 +273,7 @@ function FeaturesAdmin() {
   const settings = loaded ? loaded.map((s) => edits[s.key] ?? s) : null;
 
   const write = async (key: string, init: RequestInit) => {
-    setSaving(true);
+    setSaving((prev) => ({ ...prev, [key]: true }));
     setRowErrors((prev) => ({ ...prev, [key]: "" }));
     try {
       const response = await fetch(`/api/admin/settings/${encodeURIComponent(key)}`, init);
@@ -298,7 +300,11 @@ function FeaturesAdmin() {
         [key]: err instanceof Error ? err.message : "Failed to save.",
       }));
     } finally {
-      setSaving(false);
+      setSaving((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     }
   };
 
@@ -385,7 +391,7 @@ function FeaturesAdmin() {
                   <FeatRow
                     key={s.key}
                     setting={s}
-                    busy={saving}
+                    busy={saving[s.key] === true}
                     rowError={rowErrors[s.key] ?? ""}
                     draft={drafts[s.key]}
                     setDraft={(v) => setDrafts((prev) => ({ ...prev, [s.key]: v }))}
@@ -861,6 +867,17 @@ function GuardrailActions() {
 function PIIInstallLine() {
   const [status, setStatus] = useState<PIIInstallStatus | null | "unavailable">(null);
   const [error, setError] = useState("");
+  // The in-flight poll timer lives in a ref so the mount effect's cleanup can
+  // stop it: an install takes minutes, and an admin who navigates away mid-way
+  // must not leave a 3s fetch loop setting state on an unmounted component.
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimer.current !== null) {
+      clearInterval(pollTimer.current);
+      pollTimer.current = null;
+    }
+  }, []);
 
   const refresh = useCallback(async (): Promise<PIIInstallStatus | null> => {
     const response = await fetch("/api/admin/pii-redaction/install", { cache: "no-store" });
@@ -875,12 +892,17 @@ function PIIInstallLine() {
   }, []);
 
   const poll = useCallback(() => {
-    const timer = setInterval(() => {
-      void refresh().then((st) => {
-        if (st && st.state !== "running") clearInterval(timer);
-      });
+    stopPolling();
+    pollTimer.current = setInterval(() => {
+      // A transient network failure mid-poll is not a terminal state: swallow
+      // it and let the next tick retry rather than reject unhandled.
+      void refresh()
+        .then((st) => {
+          if (st && st.state !== "running") stopPolling();
+        })
+        .catch(() => undefined);
     }, 3000);
-  }, [refresh]);
+  }, [refresh, stopPolling]);
 
   useEffect(() => {
     // Kick off the status fetch on a microtask so no setState runs in the
@@ -888,36 +910,45 @@ function PIIInstallLine() {
     // polling if an install is already running when the panel mounts.
     let cancelled = false;
     const id = setTimeout(() => {
-      void refresh().then((st) => {
-        if (!cancelled && st?.state === "running") poll();
-      });
+      void refresh()
+        .then((st) => {
+          if (!cancelled && st?.state === "running") poll();
+        })
+        .catch(() => undefined);
     }, 0);
     return () => {
       cancelled = true;
       clearTimeout(id);
+      stopPolling();
     };
-  }, [refresh, poll]);
+  }, [refresh, poll, stopPolling]);
+
+  // The two mutations share one shape: a failed HTTP status or a thrown fetch
+  // (network down, JSON parse) both land in the inline error line instead of
+  // an unhandled rejection that leaves the button looking like it did nothing.
+  const mutate = async (method: "POST" | "DELETE", failLabel: string) => {
+    setError("");
+    try {
+      const response = await fetch("/api/admin/pii-redaction/install", { method });
+      if (!response.ok) {
+        setError((await response.text()).trim() || `${failLabel}: ${response.status}`);
+        return null;
+      }
+      const st = (await response.json()) as PIIInstallStatus;
+      setStatus(st);
+      return st;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : failLabel);
+      return null;
+    }
+  };
 
   const install = async () => {
-    setError("");
-    const response = await fetch("/api/admin/pii-redaction/install", { method: "POST" });
-    if (!response.ok) {
-      setError((await response.text()).trim() || `Install failed: ${response.status}`);
-      return;
-    }
-    setStatus((await response.json()) as PIIInstallStatus);
-    poll();
+    const st = await mutate("POST", "Install failed");
+    if (st) poll();
   };
 
-  const uninstall = async () => {
-    setError("");
-    const response = await fetch("/api/admin/pii-redaction/install", { method: "DELETE" });
-    if (!response.ok) {
-      setError((await response.text()).trim() || `Uninstall failed: ${response.status}`);
-      return;
-    }
-    setStatus((await response.json()) as PIIInstallStatus);
-  };
+  const uninstall = () => mutate("DELETE", "Uninstall failed");
 
   if (status === "unavailable" || status === null) return null;
 
@@ -970,7 +1001,11 @@ function PIIInstallLine() {
         </p>
       ) : null}
       {error ? (
-        <p className="m-0 w-full text-[0.74rem] text-[var(--color-danger)]" role="alert">
+        <p
+          className="m-0 w-full text-[0.74rem] text-[var(--color-danger)]"
+          role="alert"
+          data-testid="pii-install-request-error"
+        >
           {error}
         </p>
       ) : null}

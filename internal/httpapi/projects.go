@@ -120,7 +120,7 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 		}
 		created, err := s.store.CreateProject(r.Context(), p)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		writeJSON(w, created)
@@ -232,13 +232,13 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 		}
 		updated, err := s.store.UpdateProject(r.Context(), user, id, patch)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		writeJSON(w, updated)
 	case http.MethodDelete:
 		if err := s.store.DeleteProject(r.Context(), user, id); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -577,14 +577,20 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// The full patch, validity window included: the request type carries
+		// valid_from/valid_to and the personal-memory PATCH honors them, so
+		// dropping them here answered 200 to a team-learning window change
+		// that never happened.
 		memory, err := s.store.UpdateProjectMemory(r.Context(), p.ID, memID, store.MemoryPatch{
-			Content: req.Content,
-			Kind:    req.Kind,
-			Pinned:  req.Pinned,
-			Retired: req.Retired,
+			Content:   req.Content,
+			Kind:      req.Kind,
+			Pinned:    req.Pinned,
+			Retired:   req.Retired,
+			ValidFrom: req.ValidFrom,
+			ValidTo:   req.ValidTo,
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		writeJSON(w, memory)
@@ -593,7 +599,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 			return
 		}
 		if err := s.store.DeleteProjectMemory(r.Context(), p.ID, memID); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -621,7 +627,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		if id := strings.TrimSpace(req.FromMemoryID); id != "" {
 			memory, err := s.store.MoveMemoryToProject(r.Context(), user, id, p.ID)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeMemoryStoreError(w, err)
 				return
 			}
 			writeJSON(w, memory)
@@ -629,7 +635,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		}
 		memory, err := s.store.CreateProjectMemory(r.Context(), p.ID, user, req.Content, req.Kind)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeMemoryStoreError(w, err)
 			return
 		}
 		writeJSON(w, memory)

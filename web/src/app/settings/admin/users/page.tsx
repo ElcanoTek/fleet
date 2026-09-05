@@ -1191,16 +1191,17 @@ export default function AdminUsersPage() {
               </div>
               <div className="h-px bg-[var(--color-border)]" />
               <div className="flex flex-wrap items-center justify-between gap-[0.45rem]">
-                <button
-                  type="button"
-                  onClick={() => {
+                {/* Rotating a password locks the user out of their current
+                    one the moment it lands, so it arms first like Delete
+                    beside it instead of firing off a single click. */}
+                <InlineConfirmButton
+                  label="Reset password"
+                  confirmLabel="Confirm reset"
+                  onConfirm={() => {
                     setMenu(null);
                     void resetPassword(menuAccount);
                   }}
-                  className={btnClass({ sm: true, reveal: true })}
-                >
-                  Reset password
-                </button>
+                />
                 <InlineConfirmButton
                   label="Delete user"
                   disabled={deleting !== null}

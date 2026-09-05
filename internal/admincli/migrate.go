@@ -151,7 +151,12 @@ func printSchedMigrations(r scheddb.MigrationReport) {
 	fmt.Printf("sched database (%s runner, table %s)\n", r.Runner, r.MigrationTable)
 	fmt.Printf("  current version: %s\n", cur)
 	if r.Dirty {
-		fmt.Printf("  DIRTY: a prior migration failed mid-flight — run `migrate force <version>` and restart (see docs/MIGRATIONS.md)\n")
+		// `fleet migrate` has only `status`; the force-set is the golang-migrate
+		// CLI's, so name that command exactly rather than a subcommand that
+		// does not exist.
+		fmt.Printf("  DIRTY: a prior migration failed mid-flight — inspect the DB, then force-set the last good version with the golang-migrate CLI:\n")
+		fmt.Printf("         migrate -path internal/sched/db/migrations -database \"$FLEET_SCHED_DATABASE_URL\" force <version>\n")
+		fmt.Printf("         and restart fleet (see docs/MIGRATIONS.md)\n")
 	}
 	fmt.Printf("  applied: %d   pending: %d\n", len(r.Applied), len(r.Pending))
 	for _, m := range r.Applied {

@@ -52,14 +52,22 @@ func (db *Database) UpdateTasksStatusBatch(ctx context.Context, taskIDs []uuid.U
 // cancelled, claimed, edited, or rescheduled while its gate ran fails the
 // WHERE and the verdict is discarded — the next due tick re-evaluates the
 // task's current definition. Returns the number of rows transitioned (0 or 1).
+//
+// A TERMINAL toStatus (the end-of-recurrence cancel) also stamps completed_at:
+// every other cancel path does, and both retention sweeps (CleanupOldRuns,
+// DeleteOldHistory) select on completed_at IS NOT NULL — so a recurrence
+// ended at its gate used to leave a cancelled row that was never pruned and
+// showed no completion time anywhere.
 func (db *Database) SettleGatedTask(ctx context.Context, taskID uuid.UUID, observedScheduledFor *time.Time, toStatus models.TaskStatus) (int, error) {
 	res, err := db.conn.ExecContext(ctx, `
-		UPDATE tasks SET status = $1
+		UPDATE tasks SET status = $1,
+		    completed_at = CASE WHEN $5 THEN COALESCE(completed_at, NOW()) ELSE completed_at END
 		WHERE id = $2 AND status = $3 AND scheduled_for IS NOT DISTINCT FROM $4`,
 		string(toStatus),
 		taskID,
 		string(models.TaskStatusScheduled),
 		observedScheduledFor,
+		toStatus.IsTerminal(),
 	)
 	if err != nil {
 		return 0, err

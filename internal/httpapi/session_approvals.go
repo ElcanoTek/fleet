@@ -44,6 +44,24 @@ func (r *SessionApprovalRegistry) Register(convID, toolName string, p SessionApp
 	r.entries[k] = append(r.entries[k], p)
 }
 
+// Forget drops every pre-decision recorded for convID. Called when the
+// conversation is deleted: the registry lives for the whole process and, with
+// nothing ever removing entries, every "approve/deny all" click accumulated
+// until restart. Nil-safe.
+func (r *SessionApprovalRegistry) Forget(convID string) {
+	if r == nil {
+		return
+	}
+	prefix := convID + "\x00"
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.entries {
+		if strings.HasPrefix(k, prefix) {
+			delete(r.entries, k)
+		}
+	}
+}
+
 // Match returns the first policy covering (convID, toolName, rawInput), or
 // ok=false when none applies. A "" pattern matches every call; "argName=glob"
 // matches when the call's args[argName] matches glob (filepath.Match). DENY

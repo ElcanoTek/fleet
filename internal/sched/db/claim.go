@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -207,6 +208,40 @@ func (db *Database) PromoteStarvedTasks(ctx context.Context, windowMinutes int) 
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// SyncEffectivePriorityTx brings effective_priority back in line with a task
+// whose submitted priority was just EDITED (UpdateEditableTask /
+// ReplaceTaskDefinition), inside the caller's transaction. effective_priority
+// is deliberately excluded from UpdateTaskTx (#230: only the anti-starvation
+// sweep may lower it after INSERT), which had the side effect that changing a
+// pending task's priority via PUT /tasks/{id} changed nothing about when it
+// ran — the claim path orders by effective_priority alone, and the response
+// even kept echoing the old value.
+//
+// Rule: if the sweep had already promoted the row (effective more urgent than
+// the OLD submitted priority), keep whichever of that promotion and the new
+// priority is more urgent — an operator demoting a task that has waited past
+// the starvation window should not send it back to the end of the line, and
+// the sweep would re-promote it on its next pass anyway. Otherwise the new
+// priority is the effective one. A no-op when the priority did not change.
+func (db *Database) SyncEffectivePriorityTx(ctx context.Context, tx *sql.Tx, task *models.Task, priorPriority int) error {
+	if task.Priority == priorPriority {
+		return nil
+	}
+	row := tx.QueryRowContext(ctx, `
+		UPDATE tasks
+		SET effective_priority = CASE
+			WHEN effective_priority < $2 THEN LEAST(effective_priority, $3)
+			ELSE $3
+		END
+		WHERE id = $1
+		RETURNING effective_priority`,
+		task.ID, priorPriority, task.Priority)
+	if err := row.Scan(&task.EffectivePriority); err != nil {
+		return fmt.Errorf("sync effective_priority for %s: %w", task.ID, err)
+	}
+	return nil
 }
 
 // RecoverExpiredLeases resets tasks with expired leases back to pending. This is

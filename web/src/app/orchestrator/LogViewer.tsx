@@ -20,6 +20,7 @@ import type {
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { useToast } from "@/app/shared/ui/Toast";
 import { createdByLabel, scheduleLabel, taskRunLabel, TaskSlaBadge } from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -718,6 +719,10 @@ function LiveTaskView({
   const [streamError, setStreamError] = useState<string | null>(null);
   const seq = useRef(0);
   const terminalRef = useRef(false);
+  // Escape closes, Tab is trapped, focus returns to the row that opened it —
+  // the overlay was aria-modal in name only.
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  useDialogA11y(true, overlayRef, onClose);
   const lastEventID = useRef<string | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -876,6 +881,7 @@ function LiveTaskView({
   const terminal = runStatus !== "running";
   return (
     <div
+      ref={overlayRef}
       className="modal-overlay is-open"
       role="dialog"
       aria-modal="true"
@@ -1029,6 +1035,9 @@ function LogViewerBody({
   onSelectTask?: (task: Task) => void;
   onDelete?: (task: Task) => void;
 }) {
+  // Same keyboard contract as LiveTaskView (Escape / Tab trap / focus return).
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  useDialogA11y(true, overlayRef, onClose);
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
   // setState-in-effect disable.
@@ -1187,6 +1196,7 @@ function LogViewerBody({
 
   return (
     <div
+      ref={overlayRef}
       className="modal-overlay is-open"
       role="dialog"
       aria-modal="true"
@@ -1374,11 +1384,12 @@ function LogViewerBody({
   );
 }
 
-// TaskRunHistory lists the other runs of this task. Fleet has no first-class
-// lineage for recurring occurrences (each firing is a fresh row with name
-// blanked and no source_task_id — see storage.scheduleNextRecurrence), so
-// runs are grouped the same way the SLA report buckets them: exact prompt
-// equality. The server-side q= search narrows by prompt substring; the exact
+// TaskRunHistory lists the other runs of this task. Each recurring firing is a
+// fresh row with name blanked and no source_task_id (see
+// storage.scheduleNextRecurrence); the server stamps previous_occurrence_id
+// for context-carry, but that is a single back-pointer, not a queryable
+// chain, so runs are grouped the same way the SLA report buckets them: exact
+// prompt equality. The server-side q= search narrows by prompt substring; the exact
 // match is enforced client-side (ILIKE wildcards in a prompt can over-match,
 // never under-match).
 function TaskRunHistory({
