@@ -280,7 +280,7 @@ func TestAdminUserOpsRole(t *testing.T) {
 		t.Fatalf("PATCH role=admin + ops_role=readonly: want ops admin, got %+v", got)
 	}
 	w = do(t, h, http.MethodPost, "/admin/users",
-		map[string]any{"email": "both@x.com", "password": "both-pw-12345", "role": "admin", "ops_role": "readonly"}, "boss@x.com")
+		map[string]any{"email": "both@x.com", "password": "both-planes-pw", "role": "admin", "ops_role": "readonly"}, "boss@x.com")
 	if got = decode(w); w.Code != http.StatusCreated || got.OpsCenterRole != "admin" {
 		t.Fatalf("POST role=admin + ops_role=readonly: status %d, got %+v", w.Code, got)
 	}

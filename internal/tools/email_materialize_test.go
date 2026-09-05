@@ -262,7 +262,7 @@ func TestMaterializeAttachmentPathsLeavesAbsolutePathsAlone(t *testing.T) {
 func TestMaterializeAttachmentPathsRefusesEscapes(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CHAT_WORKSPACE_ROOT", root)
-	t.Setenv("FLEET_TEST_FAKE_SECRET", "sk-or-v1-would-leak")
+	t.Setenv("FLEET_TEST_FAKE_SECRET", "leaked-host-env-value")
 
 	cases := map[string]string{
 		"absolute host file":    "/etc/fleet/fleet.env",
@@ -279,7 +279,7 @@ func TestMaterializeAttachmentPathsRefusesEscapes(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected a containment error for %q, got %s", p, out)
 				}
-				if strings.Contains(err.Error(), "sk-or-v1") {
+				if strings.Contains(err.Error(), "leaked-host-env-value") {
 					t.Fatalf("error leaked a secret: %v", err)
 				}
 			default:
@@ -289,7 +289,7 @@ func TestMaterializeAttachmentPathsRefusesEscapes(t *testing.T) {
 				if err != nil {
 					t.Fatalf("literal path %q should be accepted, got %v", p, err)
 				}
-				if strings.Contains(out, "sk-or-v1-would-leak") {
+				if strings.Contains(out, "leaked-host-env-value") {
 					t.Fatalf("env var value leaked into the args: %s", out)
 				}
 				var got map[string]any
