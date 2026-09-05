@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { orchestratorApi, type AdoptionReport, type AdoptionUser } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
+import { downloadFile } from "./downloadFile";
 
 // AdoptionPanel — the Operations Center's executive Adoption view: who is
 // actually using the agents, how often, and is that growing. Driven by
@@ -90,6 +91,8 @@ function DeltaChip({ cur, prev, what }: { cur: number; prev: number; what: strin
 
 export function AdoptionPanel() {
   const [rangeDays, setRangeDays] = useState<number>(30);
+  // A failed CSV download is shown in place (the button used to navigate).
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const {
     data: report,
@@ -135,7 +138,11 @@ export function AdoptionPanel() {
                 .toISOString()
                 .slice(0, 10);
               const qs = new URLSearchParams({ format: "csv", from });
-              window.location.href = `/api/orchestrator/admin/usage/adoption?${qs.toString()}`;
+              // Fetch-then-save (downloadFile) instead of navigating: a 401/500
+              // used to replace the dashboard with the server's error body.
+              void downloadFile(`/api/orchestrator/admin/usage/adoption?${qs.toString()}`, `adoption-${from}.csv`).catch(
+                (err: unknown) => setDownloadError(err instanceof Error ? err.message : "download failed"),
+              );
             }}
           >
             Download CSV
@@ -143,6 +150,11 @@ export function AdoptionPanel() {
         </div>
       </div>
 
+      {downloadError ? (
+        <div className="table-error" role="alert" data-testid="adoption-download-error">
+          Couldn&apos;t download the CSV: {downloadError}
+        </div>
+      ) : null}
       {error ? (
         <div className="table-error">Failed to load adoption report: {error}</div>
       ) : !report && loading ? (

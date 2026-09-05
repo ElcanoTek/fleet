@@ -8,7 +8,10 @@ import {
   type DatasetRow,
 } from "@/app/shared/lib/orchestratorApi";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { useToast } from "@/app/shared/ui/Toast";
+import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
+import { plural } from "./plural";
 
 // Dataset / table agent (#514): define a typed table + per-row goal, import
 // rows (CSV), run the agent over pending rows, review PROPOSED write-backs
@@ -24,13 +27,22 @@ function emptyColumn(output: boolean): DatasetColumn {
 export function DatasetsPanel() {
   const { showToast } = useToast();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  // null until the first list response: the empty state must not flash "No
+  // datasets yet" while the request is still in flight (or on a failed load).
+  const [listLoaded, setListLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rows, setRows] = useState<DatasetRow[]>([]);
+  const [rowsLoading, setRowsLoading] = useState(false);
   const [rowCounts, setRowCounts] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Monotonic id per rows request (the useDashboardData pattern): a slower
+  // response for a dataset the user has already clicked away from must not
+  // land under the new selection's heading.
+  const rowsRunRef = useRef(0);
 
   const selected = datasets.find((d) => d.id === selectedId) ?? null;
 
@@ -40,20 +52,38 @@ export function DatasetsPanel() {
       setDatasets(res.datasets ?? []);
     } catch (err) {
       showToast(`Failed to load datasets: ${(err as Error).message}`, "error");
+    } finally {
+      setListLoaded(true);
     }
   }, [showToast]);
 
   const reloadRows = useCallback(async () => {
     if (!selectedId) return;
+    const runId = ++rowsRunRef.current;
+    setRowsLoading(true);
     try {
       const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : "";
       const res = await orchestratorApi.datasetRows(selectedId, qs);
+      if (runId !== rowsRunRef.current) return; // superseded by a newer selection
       setRows(res.rows ?? []);
       setRowCounts(res.row_counts ?? {});
     } catch (err) {
+      if (runId !== rowsRunRef.current) return;
       showToast(`Failed to load rows: ${(err as Error).message}`, "error");
+    } finally {
+      if (runId === rowsRunRef.current) setRowsLoading(false);
     }
   }, [selectedId, statusFilter, showToast]);
+
+  // selectDataset swaps the selection and drops the OLD dataset's rows at once,
+  // so they are never shown under the new heading while its fetch runs.
+  const selectDataset = (id: string | null) => {
+    rowsRunRef.current++; // retire any in-flight request for the old selection
+    setSelectedId(id);
+    setRows([]);
+    setRowCounts({});
+    setRowsLoading(id !== null);
+  };
 
   // Deferred kick-offs (the useDashboardData pattern): queueMicrotask keeps
   // the state writes out of the synchronous effect body.
@@ -106,7 +136,7 @@ export function DatasetsPanel() {
     const text = await file.text();
     await act("Import", async () => {
       const res = await orchestratorApi.importDatasetRowsCSV(selectedId, text);
-      showToast(`Imported ${res.imported} row(s)`, "success");
+      showToast(`Imported ${plural(res.imported, "row")}`, "success");
     });
   };
 
@@ -123,7 +153,11 @@ export function DatasetsPanel() {
         </button>
       </div>
 
-      {datasets.length === 0 ? (
+      {!listLoaded ? (
+        <p className="refresh-note" data-testid="datasets-loading">
+          Loading datasets…
+        </p>
+      ) : datasets.length === 0 ? (
         <p className="empty-state">
           No datasets yet. A dataset is a typed table the agent works row by row toward a goal —
           results come back as proposals you review before they land.
@@ -137,7 +171,7 @@ export function DatasetsPanel() {
               role="tab"
               aria-selected={d.id === selectedId}
               className={`tab-btn${d.id === selectedId ? " tab-btn-active" : ""}`}
-              onClick={() => setSelectedId(d.id)}
+              onClick={() => selectDataset(d.id)}
             >
               {d.name}
               <span className={`status-badge status-${d.status}`} style={{ marginLeft: 6 }}>
@@ -172,7 +206,7 @@ export function DatasetsPanel() {
               disabled={busy || (rowCounts["proposed"] ?? 0) === 0}
               onClick={() => void act("Approve", async () => {
                 const res = await orchestratorApi.approveDatasetRows(selected.id);
-                showToast(`Approved ${res.approved} row(s)`, "success");
+                showToast(`Approved ${plural(res.approved, "row")}`, "success");
               })}
             >
               Approve all proposed ({rowCounts["proposed"] ?? 0})
@@ -208,13 +242,7 @@ export function DatasetsPanel() {
               type="button"
               className="btn btn-danger"
               disabled={busy || selected.status === "running"}
-              onClick={() => {
-                if (!window.confirm(`Delete dataset "${selected.name}" and all its rows?`)) return;
-                void act("Delete", async () => {
-                  await orchestratorApi.deleteDataset(selected.id);
-                  setSelectedId(null);
-                });
-              }}
+              onClick={() => setDeleteOpen(true)}
             >
               Delete
             </button>
@@ -297,8 +325,30 @@ export function DatasetsPanel() {
                 ))}
               </tbody>
             </table>
-            {rows.length === 0 ? <p className="empty-state">No rows{statusFilter ? ` with status "${statusFilter}"` : ""} — import a CSV to get started.</p> : null}
+            {rowsLoading ? (
+              <p className="refresh-note" data-testid="dataset-rows-loading">
+                Loading rows…
+              </p>
+            ) : rows.length === 0 ? (
+              <p className="empty-state">No rows{statusFilter ? ` with status "${statusFilter}"` : ""} — import a CSV to get started.</p>
+            ) : null}
           </div>
+          {/* The app's confirm dialog, not window.confirm: same keyboard
+              contract and styling as every other destructive action here. */}
+          <ConfirmDialog
+            open={deleteOpen}
+            title="Delete dataset"
+            message={`Delete dataset "${selected.name}" and all its rows? This cannot be undone.`}
+            confirmLabel={busy ? "Deleting…" : "Delete"}
+            busy={busy}
+            onConfirm={() => {
+              void act("Delete", async () => {
+                await orchestratorApi.deleteDataset(selected.id);
+                selectDataset(null);
+              }).then(() => setDeleteOpen(false));
+            }}
+            onCancel={() => setDeleteOpen(false)}
+          />
         </>
       ) : null}
 
@@ -307,7 +357,7 @@ export function DatasetsPanel() {
           onClose={() => setCreateOpen(false)}
           onCreated={(d) => {
             setCreateOpen(false);
-            setSelectedId(d.id);
+            selectDataset(d.id);
             void reloadList();
           }}
         />
@@ -329,6 +379,11 @@ function DatasetCreateModal({
   const [model, setModel] = useState("");
   const [columns, setColumns] = useState<DatasetColumn[]>([emptyColumn(false), emptyColumn(true)]);
   const [saving, setSaving] = useState(false);
+  // Keyboard contract (Escape closes, Tab is trapped, focus starts in Name and
+  // returns to the opener): the overlay was aria-modal in name only before.
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  useDialogA11y(true, overlayRef, onClose, { initialFocusRef: nameRef });
 
   const setCol = (i: number, patch: Partial<DatasetColumn>) => {
     setColumns((prev) => prev.map((c, j) => (j === i ? { ...c, ...patch } : c)));
@@ -353,7 +408,7 @@ function DatasetCreateModal({
   };
 
   return (
-    <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="New dataset">
+    <div ref={overlayRef} className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="New dataset">
       <div className="modal dataset-modal">
         <div className="modal-header">
           <h3>New dataset</h3>
@@ -362,7 +417,7 @@ function DatasetCreateModal({
         <div className="modal-body" style={{ display: "grid", gap: "0.75rem" }}>
           <label>
             Name
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="prospect-leads" />
+            <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="prospect-leads" />
           </label>
           <label>
             Goal (what the agent does for EACH row)

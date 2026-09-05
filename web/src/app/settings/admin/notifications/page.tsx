@@ -14,7 +14,13 @@ import { useRouter } from "next/navigation";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
-import { ActStatus, btnClass, ConnBadge, SETTINGS_INPUT } from "../../ui/atoms";
+import {
+  ActStatus,
+  btnClass,
+  ConnBadge,
+  InlineConfirmButton,
+  SETTINGS_INPUT,
+} from "../../ui/atoms";
 import {
   ConnField,
   ConnFormActions,
@@ -214,14 +220,9 @@ function NotificationsAdmin() {
     }
   };
 
+  // Confirmed inline on the button itself (InlineConfirmButton arms on the
+  // first click) — no window.confirm.
   const revert = async () => {
-    if (
-      !window.confirm(
-        "Discard the saved notification settings and use the server's env configuration?",
-      )
-    ) {
-      return;
-    }
     setBusy(true);
     setSaveError("");
     try {
@@ -356,6 +357,7 @@ function NotificationsAdmin() {
                 testState={tests.email}
                 onTest={() => void runTest("email")}
                 busy={busy}
+                dirty={edits !== null}
                 testId="email"
                 runningText="Sending test email…"
               >
@@ -424,6 +426,7 @@ function NotificationsAdmin() {
                 testState={tests.webhook}
                 onTest={() => void runTest("webhook")}
                 busy={busy}
+                dirty={edits !== null}
                 testId="webhook"
                 runningText="POSTing a sample event…"
               >
@@ -489,15 +492,13 @@ function NotificationsAdmin() {
 
               <ConnFormActions>
                 {view.source === "admin" ? (
-                  <button
-                    type="button"
-                    onClick={() => void revert()}
+                  <InlineConfirmButton
+                    label="Use env config"
+                    confirmLabel="Confirm: discard saved settings"
                     disabled={busy}
-                    data-testid="notify-revert"
-                    className={btnClass({ sm: true, reveal: true })}
-                  >
-                    Use env config
-                  </button>
+                    onConfirm={() => void revert()}
+                    testId="notify-revert"
+                  />
                 ) : null}
                 <button
                   type="button"
@@ -517,15 +518,22 @@ function NotificationsAdmin() {
   );
 }
 
+// The one sentence about what Send test exercises — the button's tooltip
+// while the form is dirty, and the tail of every result line.
+const TEST_USES_SAVED_CONFIG = "Tests use the saved config; save your changes first.";
+
 // ChannelPanel frames one channel with an honest configured badge (computed
 // from the SAVED effective config, not the unsaved form) and its Send test
-// button (which also exercises the saved config — the result line says so).
+// button (which also exercises the saved config). While the form is dirty
+// the button is disabled and says why, so an admin can't test stale settings
+// and only learn afterwards that the edits weren't included.
 function ChannelPanel({
   title,
   configured,
   testState,
   onTest,
   busy,
+  dirty,
   testId,
   runningText,
   children,
@@ -535,6 +543,7 @@ function ChannelPanel({
   testState: "running" | TestResult | undefined;
   onTest: () => void;
   busy: boolean;
+  dirty: boolean;
   testId: string;
   runningText: string;
   children: ReactNode;
@@ -554,7 +563,8 @@ function ChannelPanel({
           <button
             type="button"
             onClick={onTest}
-            disabled={busy || testState === "running"}
+            disabled={busy || dirty || testState === "running"}
+            title={dirty ? TEST_USES_SAVED_CONFIG : undefined}
             data-testid={`notify-test-${testId}`}
             className={btnClass({ sm: true, reveal: true })}
           >
@@ -570,8 +580,8 @@ function ChannelPanel({
         <p className="m-0 mt-[0.55rem]" data-testid={`notify-test-result-${testId}`}>
           <ActStatus state={testState.ok ? "ok" : "err"}>
             {testState.ok ? "✓" : "✕"} {testState.detail}
-            {testState.latency_ms > 0 ? ` (${testState.latency_ms} ms)` : ""} — tests use the
-            saved config; save your changes first.
+            {testState.latency_ms > 0 ? ` (${testState.latency_ms} ms)` : ""} —{" "}
+            {TEST_USES_SAVED_CONFIG}
           </ActStatus>
         </p>
       ) : null}

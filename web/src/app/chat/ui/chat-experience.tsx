@@ -1564,9 +1564,11 @@ export function ChatExperience({
   }, [catalogModels.length, isLoadingCatalog]);
 
   // Validate the current model slug against /api/model-check whenever it
-  // changes. Debounced because the input calls setSelectedModel on every
-  // keystroke. We only block submission when the backend is certain a slug
-  // is over budget — unknown/new slugs or network failures keep the
+  // changes. Debounced so a burst of commits (a row pick, then a typed slug a
+  // moment later) costs one request; the picker's search text is a draft that
+  // never reaches selectedModel until Enter or a row pick, so this does not
+  // fire per keystroke. We only block submission when the backend is certain
+  // a slug is over budget — unknown/new slugs or network failures keep the
   // previous error cleared so legitimate choices aren't false-positived.
   useEffect(() => {
     const slug = selectedModel.trim();
@@ -2232,9 +2234,29 @@ export function ChatExperience({
     void reattachToConv(conversationId);
   };
 
-  const deleteAllUnpinned = async () => {
-    const response = await fetch("/api/conversations", { method: "DELETE" });
-    if (!response.ok) throw new Error("Unable to delete conversations.");
+  // deleteAllUnpinned / bulkDeleteConversations / deleteConversationById are
+  // the three delete paths. Each surfaces its own failure through the rail
+  // toast and returns false instead of throwing: their callers used to close
+  // the confirm dialog and then `await` a function that threw on a non-2xx or
+  // a dropped connection, so the failure was an unhandled rejection — the
+  // dialog vanished, the chat stayed in the rail, and nothing said why. None
+  // of the three touches local state before the server has answered, so a
+  // failure leaves the rail (and, for bulk delete, the selection) exactly as
+  // it was.
+  const deleteAllUnpinned = async (): Promise<boolean> => {
+    let response: Response;
+    try {
+      response = await fetch("/api/conversations", { method: "DELETE" });
+    } catch (err) {
+      console.error("delete all unpinned error:", err);
+      showRailError("Couldn't delete the chats — network error.");
+      return false;
+    }
+    if (!response.ok) {
+      console.error("delete all unpinned failed:", response.status);
+      showRailError(`Couldn't delete the chats (HTTP ${response.status}).`);
+      return false;
+    }
     // Mirror the server's predicate exactly: pinned rows are kept AND so are
     // project rows (store.DeleteAllUnpinned exempts project_id IS NOT NULL).
     // Dropping everything but the pinned rows here made every project chat
@@ -2253,6 +2275,7 @@ export function ChatExperience({
     // …and then re-read the list, so the server stays the authority if its
     // filter ever gains a clause this file doesn't know about.
     void refreshConversations();
+    return true;
   };
 
   // ── Multi-select bulk operations (#279) ─────────────────────────────────
@@ -2300,16 +2323,30 @@ export function ChatExperience({
   // bulkDeleteConversations issues a targeted DELETE /conversations with the
   // selected IDs. On success it drops them from local state (and the archived
   // list) and clears the selection. The active conversation, if deleted, is
-  // replaced by the first survivor.
-  const bulkDeleteConversations = async () => {
+  // replaced by the first survivor. On failure the selection stays armed so
+  // the user can retry from the bulk bar.
+  const bulkDeleteConversations = async (): Promise<boolean> => {
     const ids = Array.from(selectedIds);
-    if (ids.length === 0) return;
-    const response = await fetch("/api/conversations", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_ids: ids, confirm: true }),
-    });
-    if (!response.ok) throw new Error("Unable to delete conversations.");
+    if (ids.length === 0) return true;
+    let response: Response;
+    try {
+      response = await fetch("/api/conversations", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversation_ids: ids, confirm: true }),
+      });
+    } catch (err) {
+      console.error("bulk delete error:", err);
+      showRailError("Couldn't delete the selected chats — network error.");
+      return false;
+    }
+    if (!response.ok) {
+      console.error("bulk delete failed:", response.status);
+      showRailError(
+        `Couldn't delete the selected chats (HTTP ${response.status}).`,
+      );
+      return false;
+    }
     const removed = new Set(ids);
     const remaining = conversations.filter((c) => !removed.has(c.id));
     setConversations(remaining);
@@ -2326,6 +2363,7 @@ export function ChatExperience({
         await loadConversation(next.id);
       }
     }
+    return true;
   };
 
   // patchConversationIds applies pinned/labels to the given conversation
@@ -2377,11 +2415,24 @@ export function ChatExperience({
     form.submit();
   };
 
-  const deleteConversationById = async (conversationId: string) => {
-    const response = await fetch(`/api/conversations/${conversationId}`, {
-      method: "DELETE",
-    });
-    if (!response.ok) throw new Error("Unable to delete conversation.");
+  const deleteConversationById = async (
+    conversationId: string,
+  ): Promise<boolean> => {
+    let response: Response;
+    try {
+      response = await fetch(`/api/conversations/${conversationId}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      console.error("delete conversation error:", err);
+      showRailError("Couldn't delete the chat — network error.");
+      return false;
+    }
+    if (!response.ok) {
+      console.error("delete conversation failed:", response.status);
+      showRailError(`Couldn't delete the chat (HTTP ${response.status}).`);
+      return false;
+    }
     const remaining = conversations.filter((c) => c.id !== conversationId);
     setConversations(remaining);
     // Also drop it from the archived list (#282): delete is reachable from the
@@ -2391,20 +2442,32 @@ export function ChatExperience({
       current.filter((c) => c.id !== conversationId),
     );
     clearConvSlot(conversationId);
-    if (activeConversationId !== conversationId) return;
+    if (activeConversationId !== conversationId) return true;
     const nextConversation = remaining[0];
     if (!nextConversation) {
       clearConversation();
-      return;
+      return true;
     }
     await loadConversation(nextConversation.id);
+    return true;
   };
 
+  // The "Delete chat?" dialog stays open until the server has actually
+  // deleted the chat: a failure (toasted by deleteConversationById) leaves the
+  // user exactly where they were — same chat, same confirm, Delete re-enabled
+  // to retry — instead of a dialog that closed over a chat that is still
+  // there. isDeletingConversation disables the button meanwhile so a slow
+  // server doesn't collect a second DELETE.
+  const [isDeletingConversation, setIsDeletingConversation] = useState(false);
   const confirmDeleteConversation = async () => {
-    if (!pendingDeleteConversation) return;
+    if (!pendingDeleteConversation || isDeletingConversation) return;
     const id = pendingDeleteConversation.id;
-    setPendingDeleteConversation(null);
-    await deleteConversationById(id);
+    setIsDeletingConversation(true);
+    try {
+      if (await deleteConversationById(id)) setPendingDeleteConversation(null);
+    } finally {
+      setIsDeletingConversation(false);
+    }
   };
 
   // summaryIndex is the position of the (at most one) summary
@@ -3274,12 +3337,17 @@ export function ChatExperience({
 
   // toggleArchive moves a conversation between the active and archived lists
   // (#282). Optimistic: the row hops sections immediately; on a backend error
-  // we re-fetch to restore the truth. Archiving also clears the pin (the
-  // backend enforces this), so the optimistic copy drops it too.
+  // or a dropped connection both lists snap back to the pre-hop snapshot and
+  // the rail toast says why (a network error used to escape as an unhandled
+  // rejection, leaving the row in the wrong section for good). Archiving also
+  // clears the pin (the backend enforces this), so the optimistic copy drops
+  // it too.
   const toggleArchive = async (
     conversation: ConversationSummary,
     archived: boolean,
   ) => {
+    const prev = conversations;
+    const prevArchived = archivedConversations;
     if (archived) {
       setConversations((current) =>
         current.filter((c) => c.id !== conversation.id),
@@ -3305,16 +3373,27 @@ export function ChatExperience({
         }),
       );
     }
-    const response = await fetch(
-      `/api/conversations/${conversation.id}/archive`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ archived }),
-      },
-    );
-    if (!response.ok) {
-      await refreshConversations();
+    const verb = archived ? "archive" : "unarchive";
+    try {
+      const response = await fetch(
+        `/api/conversations/${conversation.id}/archive`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ archived }),
+        },
+      );
+      if (!response.ok) {
+        console.error(`${verb} failed:`, response.status);
+        showRailError(`Couldn't ${verb} the chat (HTTP ${response.status}).`);
+        setConversations(prev);
+        setArchivedConversations(prevArchived);
+      }
+    } catch (err) {
+      console.error(`${verb} error:`, err);
+      showRailError(`Couldn't ${verb} the chat — network error.`);
+      setConversations(prev);
+      setArchivedConversations(prevArchived);
     }
   };
 
@@ -3327,24 +3406,38 @@ export function ChatExperience({
     const before = conversations.find((c) => c.id === conversationId);
     if (!before) return false;
     if (before.title === trimmed) return true;
-    setConversations((current) =>
-      current.map((c) =>
-        c.id === conversationId ? { ...c, title: trimmed } : c,
-      ),
-    );
-    const response = await fetch(
-      `/api/conversations/${conversationId}/rename`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: trimmed }),
-      },
-    );
-    if (!response.ok) {
-      await refreshConversations();
+    // Optimistic; rollback puts the old title back on that one row rather
+    // than restoring a whole-list snapshot, so a conversation that landed in
+    // the rail while the request was out is not lost with it.
+    const setTitle = (title: string) =>
+      setConversations((current) =>
+        current.map((c) => (c.id === conversationId ? { ...c, title } : c)),
+      );
+    setTitle(trimmed);
+    try {
+      const response = await fetch(
+        `/api/conversations/${conversationId}/rename`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: trimmed }),
+        },
+      );
+      if (!response.ok) {
+        console.error("rename conversation failed:", response.status);
+        showRailError(`Couldn't rename the chat (HTTP ${response.status}).`);
+        setTitle(before.title);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      // A thrown fetch used to escape here as an unhandled rejection, and the
+      // header's await never reached its setIsSavingTitle(false).
+      console.error("rename conversation error:", err);
+      showRailError("Couldn't rename the chat — network error.");
+      setTitle(before.title);
       return false;
     }
-    return true;
   };
 
   // The kebab item opens the format chooser; runDownload does the fetch once
@@ -4539,9 +4632,11 @@ export function ChatExperience({
               <button
                 type="button"
                 className="rounded-full bg-[var(--color-danger)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90"
-                onClick={async () => {
+                onClick={() => {
                   setConfirmBulkDelete(false);
-                  await deleteAllUnpinned();
+                  // Reports its own failure via the rail toast (see
+                  // deleteAllUnpinned); nothing to await here.
+                  void deleteAllUnpinned();
                 }}
               >
                 Delete all
@@ -4558,9 +4653,11 @@ export function ChatExperience({
           <BulkDeleteConfirmModal
             count={selectedIds.size}
             onCancel={() => setBulkDeleteConfirm(false)}
-            onConfirm={async () => {
+            onConfirm={() => {
               setBulkDeleteConfirm(false);
-              await bulkDeleteConversations();
+              // Reports its own failure via the rail toast and leaves the
+              // selection armed for a retry (see bulkDeleteConversations).
+              void bulkDeleteConversations();
             }}
           />
         ) : null}
@@ -5125,11 +5222,12 @@ export function ChatExperience({
                 Cancel
               </button>
               <button
-                className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+                className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
                 type="button"
+                disabled={isDeletingConversation}
                 onClick={() => void confirmDeleteConversation()}
               >
-                Delete
+                {isDeletingConversation ? "Deleting…" : "Delete"}
               </button>
             </div>
           </DialogShell>
@@ -5237,9 +5335,14 @@ export function ChatExperience({
                       return;
                     }
                     setIsSavingTitle(true);
-                    await renameConversation(activeConversationId, trimmed);
-                    setIsSavingTitle(false);
-                    setRenamingTitleDraft(null);
+                    try {
+                      await renameConversation(activeConversationId, trimmed);
+                    } finally {
+                      // renameConversation reports its own failure; whatever
+                      // happens, the input must not stay disabled.
+                      setIsSavingTitle(false);
+                      setRenamingTitleDraft(null);
+                    }
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {

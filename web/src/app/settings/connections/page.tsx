@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Icon } from "@/app/shared/ui/Icon";
 import {
@@ -939,7 +939,10 @@ function ConnectionsPageInner() {
   // scroll can land the results just below it instead of underneath it.
   const dirBarRef = useRef<HTMLDivElement | null>(null);
 
-  const apply = (isStale: () => boolean) => {
+  // apply/refresh are memoized so the focus-refresh effect below can list
+  // refresh as its one dependency and subscribe once, instead of tearing down
+  // and re-adding the window listener on every render.
+  const apply = useCallback((isStale: () => boolean) => {
     fetchServers()
       .then((data) => {
         if (isStale() || data === null) return;
@@ -955,13 +958,13 @@ function ConnectionsPageInner() {
         if (isStale()) return;
         setLoading(false);
       });
-  };
+  }, []);
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     setError(null);
     setLoading(true);
     apply(() => false);
-  };
+  }, [apply]);
 
   // refreshCatalog re-reads bundled accounts + third-party entries — called
   // after credential-account changes so new seats appear in the card selects.
@@ -1005,7 +1008,7 @@ function ConnectionsPageInner() {
     return () => {
       stale = true;
     };
-  }, []);
+  }, [apply]);
 
   // Refresh the list when the user comes back from an OAuth sign-in tab.
   useEffect(() => {
@@ -1016,7 +1019,7 @@ function ConnectionsPageInner() {
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  });
+  }, [refresh]);
 
   const addServer = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1936,14 +1939,16 @@ function ConnectionsPageInner() {
                                     Share
                                   </button>
                                   {(shares[s.id] ?? []).includes("*") ? null : (
-                                    <button
-                                      type="button"
-                                      onClick={() => share(s.id, "*")}
+                                    // Opens the connection to every account in
+                                    // the workspace at once — armed first, like
+                                    // Remove, rather than granted on one click.
+                                    <InlineConfirmButton
+                                      label="Share with everyone"
+                                      confirmLabel="Confirm share with everyone"
                                       disabled={busy}
-                                      className={btnClass({ sm: true })}
-                                    >
-                                      Share with everyone
-                                    </button>
+                                      onConfirm={() => share(s.id, "*")}
+                                      testId={`share-everyone-${s.id}`}
+                                    />
                                   )}
                                 </div>
                               </div>

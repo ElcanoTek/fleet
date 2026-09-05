@@ -120,7 +120,7 @@ describe("UpcomingPanel week view", () => {
       expect(days[i].className).toContain("upcoming-week-day--past");
     }
     // outside the week: summarized, not silently dropped
-    expect(board).toHaveTextContent(/1 more scheduled run\(s\) after this week/);
+    expect(board).toHaveTextContent(/1 more scheduled run after this week/);
     expect(screen.queryByText("Way later")).toBeNull();
 
     // back to the list
@@ -180,5 +180,17 @@ describe("UpcomingPanel week navigation", () => {
 
     fireEvent.click(screen.getByTestId("week-prev"));
     expect(screen.getByTestId("week-label")).toHaveTextContent("This week");
+  });
+});
+
+describe("UpcomingPanel view persistence", () => {
+  it("renders when localStorage is blocked instead of throwing during init", async () => {
+    upcomingRuns.mockResolvedValue({ runs: [] });
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("SecurityError: storage is disabled");
+    });
+    render(<UpcomingPanel />);
+    expect(await screen.findByText(/No upcoming runs/)).toBeInTheDocument();
+    getItem.mockRestore();
   });
 });

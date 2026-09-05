@@ -88,6 +88,12 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [logTask, setLogTask] = useState<Task | null>(null);
+  // The viewer gets the dashboard's CURRENT copy of the task, not the snapshot
+  // taken on click: nothing else re-synced logTask, so once a run finished the
+  // modal stayed in Live activity with no way to the transcript short of
+  // closing and reopening. Falls back to the snapshot for a row the current
+  // page no longer lists (a filter change, a deleted row).
+  const liveLogTask = logTask ? (dashboard.tasks.find((t) => t.id === logTask.id) ?? logTask) : null;
   // "Run now" (#1019): the task awaiting the kick-off confirm, and the in-flight
   // guard that keeps a double-click from submitting two runs.
   const [runNowTask, setRunNowTask] = useState<Task | null>(null);
@@ -168,6 +174,12 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   // Top-level dashboard tab (#274): defaults to Recent Tasks (the existing
   // dashboard shape) unless a ?tab= deep link picks another view.
   const [tab, setTab] = useState<DashTab>(initialDashboardTab);
+  // The admin-only tabs (sla/usage/adoption) clamp to Recent Tasks for a
+  // non-admin: a ?tab=usage deep link used to leave the tab row with nothing
+  // selected while the tasks view rendered underneath it. (session.role, not
+  // isAdmin: that alias is declared further down.)
+  const effectiveTab: DashTab =
+    session.role !== "admin" && (tab === "sla" || tab === "usage" || tab === "adoption") ? "tasks" : tab;
   const tabsRef = useRef<HTMLDivElement | null>(null);
   // switchTab pins the tab row to the top of the scroll container when the
   // user had scrolled: the new tab then starts at its beginning instead of
@@ -175,6 +187,16 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   // unmounts — the "jumps to the top" bug on phones.
   const switchTab = (next: typeof tab) => {
     setTab(next);
+    // Mirror the tab into the URL (?tab=), the same key initialDashboardTab
+    // reads, so a reload or a shared link lands on the view the user was on.
+    // replaceState, not a router push: switching tabs is not navigation the
+    // back button should retrace.
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (next === "tasks") url.searchParams.delete("tab");
+      else url.searchParams.set("tab", next);
+      window.history.replaceState(window.history.state, "", url);
+    }
     // Pin after React commits the swapped panel (rAF): pinning against the
     // OLD layout would be undone when the taller outgoing content unmounts
     // and the scroller clamps.
@@ -353,8 +375,8 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={tab === "tasks"}
-                  className={`tab-btn${tab === "tasks" ? " tab-btn-active" : ""}`}
+                  aria-selected={effectiveTab === "tasks"}
+                  className={`tab-btn${effectiveTab === "tasks" ? " tab-btn-active" : ""}`}
                   onClick={() => switchTab("tasks")}
                 >
                   Recent Tasks
@@ -362,8 +384,8 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={tab === "upcoming"}
-                  className={`tab-btn${tab === "upcoming" ? " tab-btn-active" : ""}`}
+                  aria-selected={effectiveTab === "upcoming"}
+                  className={`tab-btn${effectiveTab === "upcoming" ? " tab-btn-active" : ""}`}
                   onClick={() => switchTab("upcoming")}
                 >
                   Upcoming
@@ -374,8 +396,8 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={tab === "datasets"}
-                  className={`tab-btn${tab === "datasets" ? " tab-btn-active" : ""}`}
+                  aria-selected={effectiveTab === "datasets"}
+                  className={`tab-btn${effectiveTab === "datasets" ? " tab-btn-active" : ""}`}
                   onClick={() => switchTab("datasets")}
                 >
                   Datasets
@@ -384,8 +406,8 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={tab === "sla"}
-                    className={`tab-btn${tab === "sla" ? " tab-btn-active" : ""}`}
+                    aria-selected={effectiveTab === "sla"}
+                    className={`tab-btn${effectiveTab === "sla" ? " tab-btn-active" : ""}`}
                     onClick={() => switchTab("sla")}
                   >
                     SLA
@@ -397,8 +419,8 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={tab === "usage"}
-                    className={`tab-btn${tab === "usage" ? " tab-btn-active" : ""}`}
+                    aria-selected={effectiveTab === "usage"}
+                    className={`tab-btn${effectiveTab === "usage" ? " tab-btn-active" : ""}`}
                     onClick={() => switchTab("usage")}
                   >
                     Usage
@@ -410,8 +432,8 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={tab === "adoption"}
-                    className={`tab-btn${tab === "adoption" ? " tab-btn-active" : ""}`}
+                    aria-selected={effectiveTab === "adoption"}
+                    className={`tab-btn${effectiveTab === "adoption" ? " tab-btn-active" : ""}`}
                     onClick={() => switchTab("adoption")}
                   >
                     Adoption
@@ -448,6 +470,9 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   onPage={dashboard.setPage}
                   onPageSize={dashboard.setPageSize}
                   onOpenLogs={setLogTask}
+                  loading={dashboard.loading}
+                  error={dashboard.error}
+                  onRetry={() => void dashboard.reload()}
                   onEdit={setEditTask}
                   onRunNow={setRunNowTask}
                   onStop={setStopTask}
@@ -497,6 +522,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
             : ""
         }
         confirmLabel={runNowBusy ? "Starting…" : "Run now"}
+        busy={runNowBusy}
         onConfirm={() => {
           if (runNowTask) void runNow(runNowTask);
         }}
@@ -518,6 +544,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
             : ""
         }
         confirmLabel={stopBusy ? "Stopping…" : "Stop"}
+        busy={stopBusy}
         onConfirm={() => {
           if (stopTask) void stop(stopTask);
         }}
@@ -538,6 +565,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
             : ""
         }
         confirmLabel={deleteBusy ? "Deleting…" : "Delete"}
+        busy={deleteBusy}
         onConfirm={() => {
           if (deleteTask) void remove(deleteTask);
         }}
@@ -546,7 +574,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
         }}
       />
       <LogViewer
-        task={logTask}
+        task={liveLogTask}
         onClose={() => setLogTask(null)}
         canStop={isAdmin || (!!session.username && logTask?.created_by_username === session.username)}
         onResubmitted={() => void dashboard.reload()}

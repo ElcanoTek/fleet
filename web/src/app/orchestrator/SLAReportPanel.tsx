@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { orchestratorApi, type SLAReport } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
+import { plural } from "./plural";
 
 // SLAReportPanel — the Operations Center SLA tab (#274): a per-task-name table
 // of the actual-duration p50/p95 + breach rate over a window, plus a tiny SVG
@@ -102,7 +103,7 @@ function SLATable({ report }: { report: SLAReport }) {
           })}
         </tbody>
       </table>
-      <p className="refresh-note">Window: {report.period} · {report.tasks.length} task bucket(s)</p>
+      <p className="refresh-note">Window: {report.period} · {plural(report.tasks.length, "task bucket")}</p>
     </div>
   );
 }

@@ -954,3 +954,163 @@ describe("TaskCreateModal — dialog shell a11y", () => {
     expect(figure).toHaveAccessibleDescription(/Estimated prompt/);
   });
 });
+
+// A terminal edit is a RESUBMIT (POST /rerun with overrides), and the button
+// says "Resubmit with changes" — so every field the form shows editable must
+// reach the copy. The SLA, sandbox-limit, pre-run-gate and switch fields used
+// to be dropped from the override payload and silently inherited from the
+// source task; unset fields now send the explicit clear value (0/null/false)
+// so the resubmit reflects the form, the way mcp_selection/tags already did.
+describe("TaskCreateModal — resubmit override payload", () => {
+  it("carries SLA, sandbox limits, gate and switches from the edited form", async () => {
+    rerunTask.mockResolvedValue({ id: "99990000-9999-0000-9999-000000000000" });
+    renderModal({
+      editTask: { ...baseEdit, status: "success" },
+      onUpdated: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText("Expected duration"), { target: { value: "45" } });
+    fireEvent.change(screen.getByLabelText("Sandbox memory"), { target: { value: "512" } });
+    fireEvent.click(screen.getByLabelText(/Captain's Log/));
+    fireEvent.click(screen.getByLabelText("Carry context across runs"));
+    fireEvent.change(screen.getByLabelText("Pre-run shell command"), {
+      target: { value: "test -f /workspace/ready" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
+    expect(rerunTask.mock.calls[0][1]).toMatchObject({
+      expected_duration_minutes: 45,
+      sandbox_limits: { memory_mb: 512 },
+      run_if: { command: "test -f /workspace/ready", on_error: "run", timeout_seconds: 30 },
+      carry_context: true,
+      instruction_self_improve: true,
+    });
+  });
+
+  it("sends the explicit clear value for every unset override field", async () => {
+    rerunTask.mockResolvedValue({ id: "99990000-9999-0000-9999-000000000000" });
+    renderModal({
+      // The source carried an SLA and a gate; the operator clears both.
+      editTask: {
+        ...baseEdit,
+        status: "error",
+        expected_duration_minutes: 20,
+        sla_warn_multiplier: 1.5,
+        run_if: { command: "true", on_error: "run", timeout_seconds: 10 },
+        carry_context: true,
+      },
+      onUpdated: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText("Expected duration"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Pre-run shell command"), { target: { value: "" } });
+    fireEvent.click(screen.getByLabelText("Carry context across runs"));
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
+    const overrides = rerunTask.mock.calls[0][1];
+    expect(overrides.expected_duration_minutes).toBe(0);
+    // Multipliers are not form-editable; the stored one is echoed faithfully.
+    expect(overrides.sla_warn_multiplier).toBe(1.5);
+    expect(overrides.sla_fail_multiplier).toBe(0);
+    expect(overrides.sandbox_limits).toBeNull();
+    expect(overrides.run_if).toBeNull();
+    expect(overrides.carry_context).toBe(false);
+    expect(overrides.instruction_self_improve).toBe(false);
+  });
+});
+
+// The create instance is keyed "create" for its whole life, so what resetForm
+// leaves behind is what the next New Task opens with. Title, the repeat-end
+// fields and the delegation switch were not reset — an untouched reopened form
+// then carried the previous task's title and raised "Discard this task?".
+describe("TaskCreateModal — resetForm covers every dirty-tracked field", () => {
+  it("clears title, repeat end and delegation so a reopened form is clean", () => {
+    const { onClose, rerender } = renderModal();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Pacing summary" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    fireEvent.change(screen.getByLabelText("End repeat"), { target: { value: "count" } });
+    fireEvent.change(screen.getByLabelText("Total runs before the repeat ends"), {
+      target: { value: "4" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.click(screen.getByLabelText("Allow sub-agent delegation"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <TaskCreateModal open={false} servers={SERVERS} onClose={onClose} onCreated={() => {}} />,
+    );
+    rerender(<TaskCreateModal open servers={SERVERS} onClose={onClose} onCreated={() => {}} />);
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+    expect(screen.getByRole("radio", { name: "Run now" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("Allow sub-agent delegation")).toBeChecked();
+    // The proof: closing the untouched reopened form raises no guard.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Discard this task?")).not.toBeInTheDocument();
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Edit mode compares the form against its mount-time snapshot; recipients
+// were missing from it, so adding an address and closing discarded it silently.
+describe("TaskCreateModal — edit-mode dirty check includes recipients", () => {
+  it("guards a close after a recipient chip is added", () => {
+    const { onClose } = renderModal({ editTask: baseEdit, onUpdated: vi.fn() });
+    const input = screen.getByLabelText(/Email results/);
+    fireEvent.change(input, { target: { value: "sam@elcanotek.com" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("guards a close with an address still typed in the field", () => {
+    const { onClose } = renderModal({ editTask: baseEdit, onUpdated: vi.fn() });
+    fireEvent.change(screen.getByLabelText(/Email results/), {
+      target: { value: "sam@elcanotek" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+// The gate timeout is a number input whose state used to be a number: the
+// NaN a cleared field reports was dropped, so backspacing to blank snapped
+// straight back to the old value. The raw string now stands until blur.
+describe("TaskCreateModal — pre-run gate timeout is clearable", () => {
+  it("lets the field go blank while typing and clamps on blur", () => {
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    const timeout = screen.getByLabelText("Pre-run gate timeout seconds") as HTMLInputElement;
+    expect(timeout.value).toBe("30");
+    fireEvent.change(timeout, { target: { value: "" } });
+    expect(timeout.value).toBe("");
+    fireEvent.change(timeout, { target: { value: "7" } });
+    expect(timeout.value).toBe("7");
+    // Blank falls back to the default; out-of-range clamps to the bounds.
+    fireEvent.change(timeout, { target: { value: "" } });
+    fireEvent.blur(timeout);
+    expect(timeout.value).toBe("30");
+    fireEvent.change(timeout, { target: { value: "900" } });
+    fireEvent.blur(timeout);
+    expect(timeout.value).toBe("300");
+  });
+
+  it("submits the normalized integer, never the raw string", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Gate me" } });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText("Pre-run shell command"), { target: { value: "true" } });
+    // Submit straight from a blank field — no blur in between.
+    fireEvent.change(screen.getByLabelText("Pre-run gate timeout seconds"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0].run_if.timeout_seconds).toBe(30);
+  });
+});

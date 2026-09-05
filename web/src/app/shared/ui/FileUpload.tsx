@@ -17,8 +17,10 @@ import { formatFileSize, truncateFilename } from "@/app/shared/lib/format";
 // nothing beyond the cap and says so inline (the old dropzone rejected the
 // whole batch silently).
 
-const MAX_FILE_SIZE = DEFAULT_UPLOAD_MAX_BYTES;
-const MAX_FILES = 10;
+// Defaults for the caps below; the parent overrides `maxFileBytes` with the
+// server-advertised limit (`upload_max_bytes` from /server-config) when it has
+// one, so the hint, the validation, and the server agree.
+const DEFAULT_MAX_FILES = 10;
 
 export type FileEntry = {
   id: string;
@@ -42,6 +44,11 @@ export type FileUploadProps = {
   onEntriesChange?: (entries: FileEntry[]) => void;
   // Imperative handle for the parent (task form) to drive upload at submit.
   registerHandle?: (handle: FileUploadHandle) => void;
+  // Per-file byte cap; defaults to the server's compiled-in default until the
+  // parent learns the configured one. Drives both validation and the hint.
+  maxFileBytes?: number;
+  // Files per task; defaults to 10.
+  maxFiles?: number;
 };
 
 let idCounter = 0;
@@ -49,7 +56,12 @@ function genId(): string {
   return `file-${++idCounter}-${Date.now()}`;
 }
 
-export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps) {
+export function FileUpload({
+  onEntriesChange,
+  registerHandle,
+  maxFileBytes = DEFAULT_UPLOAD_MAX_BYTES,
+  maxFiles = DEFAULT_MAX_FILES,
+}: FileUploadProps) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   // A batch-level problem (too many files) — adjacent to the row, not a toast.
   const [limitError, setLimitError] = useState("");
@@ -86,10 +98,10 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
             e.file.lastModified === file.lastModified,
         );
         if (dup) continue;
-        const v = validateFile(file, { maxSize: MAX_FILE_SIZE });
+        const v = validateFile(file, { maxSize: maxFileBytes });
         // Duplicates and invalid files must not consume room in the batch:
         // a valid file later in the same drop should still fit.
-        if (v.valid && validCount >= MAX_FILES) {
+        if (v.valid && validCount >= maxFiles) {
           overflow++;
           continue;
         }
@@ -104,12 +116,12 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
       }
       setLimitError(
         overflow > 0
-          ? `Up to ${MAX_FILES} files per task — ${overflow} ${overflow === 1 ? "file was" : "files were"} not added.`
+          ? `Up to ${maxFiles} files per task — ${overflow} ${overflow === 1 ? "file was" : "files were"} not added.`
           : "",
       );
       if (added.length > 0) update([...current, ...added]);
     },
-    [update],
+    [update, maxFileBytes, maxFiles],
   );
 
   const removeFile = useCallback(
@@ -194,7 +206,8 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
           Attach files
         </button>
         <span className="file-attach-hint">
-          or drag anywhere onto this dialog — 1 GB per file, up to 10 files
+          or drag anywhere onto this dialog — {formatFileSize(maxFileBytes, 0)} per file, up to{" "}
+          {maxFiles} files
         </span>
         <input
           ref={inputRef}

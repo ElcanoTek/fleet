@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 
+import { InlineConfirmButton } from "../../ui/atoms";
 import { AdminStats, ConnGroup, type AdminStat } from "../../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 
@@ -231,15 +232,16 @@ export function StoragePanel() {
                 <input type="checkbox" checked={sweepFiles} onChange={(e) => setSweepFiles(e.target.checked)} />
                 Sweep aged upload files
               </label>
-              <button
-                type="button"
+              {/* Cleanup deletes chats and files for good, so it takes the
+                  same two-click inline confirmation as every other
+                  irreversible action in Settings — no native dialog. */}
+              <InlineConfirmButton
+                label={cleaning ? "Cleaning…" : "Run cleanup"}
+                confirmLabel="Confirm cleanup"
                 disabled={cleaning || (!deleteChats && !sweepFiles)}
-                onClick={() => void runCleanup()}
-                className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
-                data-testid="storage-cleanup-run"
-              >
-                {cleaning ? "Cleaning…" : "Run cleanup"}
-              </button>
+                onConfirm={() => void runCleanup()}
+                testId="storage-cleanup-run"
+              />
             </div>
             {result ? (
               <p className="m-0 mt-3 text-[0.8rem] text-[var(--color-text-secondary)]" data-testid="storage-cleanup-result" role="status">
