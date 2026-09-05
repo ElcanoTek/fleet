@@ -459,7 +459,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                 <AdoptionPanel />
               ) : (
                 <>
-                  <SleepingTasks onOpen={setLogTask} />
+                  <SleepingTasks onOpen={setLogTask} refreshKey={dashboard.refreshNonce} />
                   <TasksTable
                   tasks={dashboard.tasks}
                   total={dashboard.total}
@@ -467,6 +467,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   pageSize={dashboard.pageSize}
                   filters={dashboard.filters}
                   onFilters={dashboard.setFilters}
+                  onClearFilters={dashboard.clearFilters}
                   onPage={dashboard.setPage}
                   onPageSize={dashboard.setPageSize}
                   onOpenLogs={setLogTask}
@@ -478,13 +479,15 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   onStop={setStopTask}
                   onDelete={setDeleteTask}
                 />
+                {/* Only the task list auto-refreshes (useDashboardData); the
+                    other tabs fetch once and carry their own Refresh button,
+                    so the note is true only here. */}
+                <p className="refresh-note">
+                  Auto-refresh every {dashboard.refreshSeconds} seconds
+                </p>
                 </>
               )}
               </div>
-
-              <p className="refresh-note">
-                Auto-refresh every {dashboard.refreshSeconds} seconds
-              </p>
             </div>
           </div>
         </div>

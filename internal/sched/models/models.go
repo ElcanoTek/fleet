@@ -114,7 +114,8 @@ type RunIf struct {
 	// ExitCodeIs is the exit code that means "run the task". Default 0.
 	ExitCodeIs int `json:"exit_code_is,omitempty"`
 	// TimeoutSeconds is the hard wall-clock timeout for the check, enforced via
-	// exec.CommandContext. Clamped to [1, 300] at validation; default 30.
+	// exec.CommandContext. Omitted/0 means the default 30; a set value must be
+	// in [1, 300] (validation rejects negative and >300).
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 	// OnError governs the check-itself-errored case (timeout, crash, signal):
 	//   "run"  (default) — run the task anyway (safe default)
@@ -132,8 +133,12 @@ func (r *RunIf) Validate() error {
 	if strings.TrimSpace(r.Command) == "" {
 		return fmt.Errorf("run_if.command must be non-empty")
 	}
-	if r.TimeoutSeconds < 1 || r.TimeoutSeconds > 300 {
-		return fmt.Errorf("run_if.timeout_seconds must be between 1 and 300")
+	// 0 is the omitted-field value (`omitempty`) and means "the default 30" —
+	// the same reading EffectiveTimeoutSeconds and Normalized already give it.
+	// Rejecting it here contradicted the schema and forced every client to
+	// spell out the default.
+	if r.TimeoutSeconds < 0 || r.TimeoutSeconds > 300 {
+		return fmt.Errorf("run_if.timeout_seconds must be between 1 and 300 (omit or 0 for the default 30)")
 	}
 	switch r.OnError {
 	case "", RunIfOnErrorRun, RunIfOnErrorSkip:

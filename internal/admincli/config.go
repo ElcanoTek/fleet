@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
@@ -40,26 +41,16 @@ func cmdConfig(argv []string) int {
 	}
 }
 
-// serverEnvFile resolves the BACKEND env file for config writes: --env-file,
-// else FLEET_ENV_FILE, else the systemd deployment's /etc/fleet/fleet.env when
-// it exists, else .env.local. The /etc probe is what makes a bare
-// `fleet config set-openrouter-key` on a provisioned box hit the file the unit
-// actually reads (envFilePath alone would target a stray ./.env.local there).
+// serverEnvFile resolves the BACKEND env file for config reads and writes:
+// --env-file, else FLEET_ENV_FILE, else the systemd deployment's
+// /etc/fleet/fleet.env when /etc/fleet exists, else .env.local. It is a thin
+// wrapper over config.ResolveEnvFile — the ONE resolver the in-binary
+// preflight verbs (validate-config, eval, mcp test) share — so a credential
+// `fleet config set-openrouter-key` writes on a provisioned box is the file
+// `fleet validate-config` then reads. (A CWD-relative .env.local there would
+// scatter credentials outside the deployment; see the resolver's doc.)
 func serverEnvFile(flagVal string) string {
-	if v := strings.TrimSpace(flagVal); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); v != "" {
-		return v
-	}
-	// Probe the DIRECTORY, not the file: on a systemd-provisioned box the
-	// canonical path is right even when the file hasn't been created yet
-	// (SetEnvKey creates it 0600) — falling back to a CWD-relative file there
-	// would scatter credentials outside the deployment.
-	if fi, err := os.Stat("/etc/fleet"); err == nil && fi.IsDir() {
-		return "/etc/fleet/fleet.env"
-	}
-	return ".env.local"
+	return config.ResolveEnvFile(flagVal)
 }
 
 // webEnvFile resolves the WEB-TIER env file (where AUTH_* SSO keys live):
@@ -117,7 +108,7 @@ func configSetOpenRouterKey(argv []string) int {
 		return errf(5, "write %s: %v", path, err)
 	}
 	fmt.Printf("set OPENROUTER_API_KEY in %s\n", path)
-	fmt.Println("apply with: fleet restart   (systemctl restart fleet)")
+	printEnvApplyHint(false)
 	return 0
 }
 
@@ -152,7 +143,7 @@ func configSetBrowserbaseKey(argv []string) int {
 		return errf(5, "write %s: %v", path, err)
 	}
 	fmt.Printf("set BROWSERBASE_API_KEY in %s\n", path)
-	fmt.Println("apply with: fleet restart   (systemctl restart fleet)")
+	printEnvApplyHint(false)
 	fmt.Println("note: this key mints live-view links. Each user ALSO adds Browserbase")
 	fmt.Println("      in Settings -> Connections to drive the browser — use a key from")
 	fmt.Println("      the SAME Browserbase project, or minting fails for live sessions.")
@@ -325,6 +316,9 @@ func configUnsetEnv(argv []string) int {
 	return 0
 }
 
+// printEnvApplyHint is the one apply-instructions footer every env-file writer
+// prints (config set-*, set-env/unset-env, mcp account set/del): preflight,
+// then restart. One function so the writers cannot drift on what "apply" means.
 func printEnvApplyHint(web bool) {
 	if web {
 		fmt.Println("apply with: systemctl restart fleet-web")

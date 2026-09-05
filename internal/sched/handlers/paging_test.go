@@ -235,3 +235,85 @@ func TestListEndpoints_AbsentLimitKeepsDefaults(t *testing.T) {
 		t.Fatalf("expected the one seeded one-shot in the default feed, got %+v", resp.Upcoming)
 	}
 }
+
+// parseBoundedInt is parseLimit's general form for the non-paging knobs
+// (?days=, ?runs=, ?grace_period_hours=) that each used to swallow the strconv
+// error and keep their default: absent → default, in range → the value,
+// anything else → one 400 naming the parameter and its range.
+func TestParseBoundedInt(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		wantN    int
+		wantCode int // 0 = no error written
+	}{
+		{"absent uses default", "", 24, 0},
+		{"empty uses default", "hours=", 24, 0},
+		{"at min", "hours=0", 0, 0},
+		{"in range", "hours=12", 12, 0},
+		{"at max", "hours=168", 168, 0},
+		{"below min rejected", "hours=-1", 0, http.StatusBadRequest},
+		{"above max rejected", "hours=87600", 0, http.StatusBadRequest},
+		{"non-numeric rejected", "hours=abc", 0, http.StatusBadRequest},
+		{"float rejected", "hours=1.5", 0, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/x?"+tc.query, nil)
+			w := httptest.NewRecorder()
+			n, ok := parseBoundedInt(w, r, "hours", 24, 0, 168)
+			if tc.wantCode == 0 {
+				if !ok || n != tc.wantN {
+					t.Fatalf("got (%d, %v), want (%d, true)", n, ok, tc.wantN)
+				}
+				if w.Body.Len() != 0 {
+					t.Fatalf("expected nothing written on success, got %q", w.Body.String())
+				}
+				return
+			}
+			if ok {
+				t.Fatalf("expected rejection, got %d", n)
+			}
+			if w.Code != tc.wantCode || !strings.Contains(w.Body.String(), "hours") || !strings.Contains(w.Body.String(), "0-168") {
+				t.Fatalf("status=%d body=%q, want 400 naming the parameter and range", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// The three call sites: a bad value is a 400 naming the range, not a silent
+// default (or, for ?runs=, a silent clamp).
+func TestBoundedQueryParams_RejectBadValues(t *testing.T) {
+	_, store, cleanup := setupTestHandlerWithStore(t)
+	t.Cleanup(cleanup)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, nil)
+	mux := chi.NewRouter()
+	mux.Group(func(rt chi.Router) {
+		rt.Use(h.AdminAuthMiddleware)
+		rt.Get("/sla/report", h.GetSLAReport)
+		rt.Get("/admin/pipeline-metrics", h.PipelineMetrics)
+	})
+	do := func(target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Header.Set("X-API-Key", "test-admin-key")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w
+	}
+	for _, tc := range []struct{ target, want string }{
+		{"/sla/report?days=abc", "must be 1-90"},
+		{"/sla/report?days=0", "must be 1-90"},
+		{"/sla/report?days=365", "must be 1-90"},
+		{"/admin/pipeline-metrics?runs=abc", "must be 1-500"},
+		{"/admin/pipeline-metrics?runs=501", "must be 1-500"},
+	} {
+		if w := do(tc.target); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), tc.want) {
+			t.Errorf("%s = %d %q, want 400 containing %q", tc.target, w.Code, w.Body.String(), tc.want)
+		}
+	}
+	for _, target := range []string{"/sla/report", "/sla/report?days=30", "/admin/pipeline-metrics", "/admin/pipeline-metrics?runs=5"} {
+		if w := do(target); w.Code != http.StatusOK {
+			t.Errorf("%s = %d, want 200: %s", target, w.Code, w.Body.String())
+		}
+	}
+}

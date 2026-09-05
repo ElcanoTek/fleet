@@ -17,6 +17,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
@@ -56,15 +57,7 @@ func cmdDiagnose(argv []string) int {
 		bundleDir:   strings.TrimSpace(*bundleDir),
 		service:     serviceName(*service),
 		skipSandbox: *skipSandbox,
-		// Seed the scrubber with the canonical patterns PLUS literal redaction of
-		// the values of secret-named env vars (OPENROUTER_API_KEY, connector
-		// credentials, …) so a novel key format is still scrubbed by value — the
-		// same construction agentcore uses for tool output.
-		redactor: func() *redact.Redactor {
-			r := redact.NewRedactor(nil)
-			r.RegisterEnvLiterals(os.Environ())
-			return r
-		}(),
+		redactor:    newDiagnoseRedactor(),
 	}
 
 	outPath := strings.TrimSpace(*out)
@@ -78,6 +71,38 @@ func cmdDiagnose(argv []string) int {
 	fmt.Fprintf(os.Stderr, "wrote support bundle (secret values redacted) → %s\n", outPath)
 	fmt.Println(outPath)
 	return 0
+}
+
+// newDiagnoseRedactor seeds the scrubber with the canonical patterns PLUS
+// literal redaction of the values of secret-named env vars (OPENROUTER_API_KEY,
+// connector credentials, …) so a novel key format is still scrubbed by value —
+// the same construction agentcore uses for tool output. The literals come from
+// the process env AND the deployment env file: the unit does not export the
+// file to login shells, so on a provisioned box the process env is nearly
+// empty and a file-only credential that surfaced in a section (a podman error
+// echoing an env var, a DSN in a ping failure) had no literal to match.
+func newDiagnoseRedactor() *redact.Redactor {
+	r := redact.NewRedactor(nil)
+	r.RegisterEnvLiterals(os.Environ())
+	r.RegisterEnvLiterals(envFileEnviron())
+	return r
+}
+
+// envFileEnviron returns the deployment env file's pairs in os.Environ() form
+// ("NAME=value"). Unreadable/missing file → nil (the caller degrades to the
+// process env). Values leave this function only into the redactor's literal
+// set; nothing here prints them.
+func envFileEnviron() []string {
+	vals, err := creds.ReadEnvValues(serverEnvFile(""))
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(vals))
+	for k, v := range vals {
+		out = append(out, k+"="+v)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // diagnoseCollector holds the resolved inputs and the shared scrubber. One method
@@ -184,18 +209,9 @@ func (dc *diagnoseCollector) collectConfig(_ context.Context) string {
 	sb.WriteString("# fleet config summary (names + non-credential metadata only — no secret values)\n\n")
 
 	sb.WriteString("## environment variable names set (values intentionally omitted)\n")
-	var names []string
-	for _, kv := range os.Environ() {
-		if eq := strings.IndexByte(kv, '='); eq > 0 {
-			name := kv[:eq]
-			if strings.HasPrefix(name, "FLEET_") || strings.HasPrefix(name, "CHAT_") || name == "DATABASE_URL" || name == "OPENROUTER_API_KEY" {
-				names = append(names, name)
-			}
-		}
-	}
-	sort.Strings(names)
+	names := configEnvNames(os.Environ(), envFileEnviron())
 	if len(names) == 0 {
-		sb.WriteString("(none of FLEET_*/CHAT_*/DATABASE_URL/OPENROUTER_API_KEY are set)\n")
+		sb.WriteString("(none of FLEET_*/CHAT_*/DATABASE_URL/OPENROUTER_API_KEY are set in the process env or " + serverEnvFile("") + ")\n")
 	}
 	for _, n := range names {
 		sb.WriteString(n + "\n")
@@ -217,6 +233,38 @@ func (dc *diagnoseCollector) collectConfig(_ context.Context) string {
 		fmt.Fprintf(&sb, "  - %s (%s)\n", s.Name, s.Type)
 	}
 	return sb.String()
+}
+
+// configEnvNames merges the deployment-relevant variable NAMES from the process
+// env and the env file, each tagged with where it is set — "(process env)",
+// "(env file)", or both — so a support bundle from a provisioned box (where the
+// unit reads the file and the shell has none of it) still shows what the
+// deployment is configured with. Names only: the values never enter the
+// returned slice.
+func configEnvNames(processEnv, fileEnv []string) []string {
+	relevant := func(name string) bool {
+		return strings.HasPrefix(name, "FLEET_") || strings.HasPrefix(name, "CHAT_") || name == "DATABASE_URL" || name == "OPENROUTER_API_KEY"
+	}
+	where := map[string][]string{}
+	add := func(environ []string, source string) {
+		for _, kv := range environ {
+			eq := strings.IndexByte(kv, '=')
+			if eq <= 0 {
+				continue
+			}
+			if name := kv[:eq]; relevant(name) {
+				where[name] = append(where[name], source)
+			}
+		}
+	}
+	add(processEnv, "process env")
+	add(fileEnv, "env file")
+	names := make([]string, 0, len(where))
+	for name, sources := range where {
+		names = append(names, name+" ("+strings.Join(sources, " + ")+")")
+	}
+	sort.Strings(names)
+	return names
 }
 
 // collectDB reports the migration version of both databases via READ-ONLY SQL
@@ -280,10 +328,7 @@ func (dc *diagnoseCollector) collectSandbox(ctx context.Context) string {
 	var sb strings.Builder
 	sb.WriteString("# sandbox image info\n\n")
 
-	ref := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_IMAGE"))
-	if ref == "" {
-		ref = strings.TrimSpace(os.Getenv("CHAT_SANDBOX_IMAGE"))
-	}
+	ref := sandboxImageEnv()
 	if ref == "" {
 		if b, err := clientconfig.Load(dc.bundleDir); err == nil {
 			ref = strings.TrimSpace(b.Sandbox().ResolvedImageRef())

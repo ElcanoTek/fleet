@@ -85,18 +85,28 @@ func runEvalCmd(args []string) int {
 	}
 }
 
+// evalTimeLayout renders run timestamps in UTC with an explicit zone marker —
+// the same shape `fleet sched task list` prints — so a history read on a box
+// in another zone (or pasted into an issue) is unambiguous. Local-time output
+// with no zone was the one place in the CLI that varied by machine.
+const evalTimeLayout = "2006-01-02 15:04Z"
+
 // loadEvalEnv loads the bundle + config through the boot loaders (the
 // validate-config pattern) after honoring --bundle-path.
 func loadEvalEnv(bundlePath string) (*clientconfig.Bundle, *config.Config, error) {
 	if strings.TrimSpace(bundlePath) != "" {
 		_ = os.Setenv(clientconfig.EnvDir, bundlePath)
 	}
+	// The deployment env file, resolved like validate-config does (see
+	// preflightEnvFile) — not a bare $FLEET_ENV_FILE, which is unset on a
+	// provisioned box.
+	envFile := preflightEnvFile()
 	bundle, err := clientconfig.Load(clientconfig.Dir())
 	if err != nil {
 		return nil, nil, fmt.Errorf("load bundle: %w", err)
 	}
 	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
-	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
+	cfg, err := config.Load(envFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
@@ -302,7 +312,7 @@ func printEvalReport(w io.Writer, r *evals.RunResult, baseline *models.EvalRun) 
 			note = " (bundle content changed since baseline)"
 		}
 		fmt.Fprintf(w, "baseline %s: %d/%d passed, mean %.2f → delta %+.2f%s\n",
-			baseline.StartedAt.Format("2006-01-02 15:04"), baseline.Passed, baseline.Total, baseline.MeanScore, delta, note)
+			baseline.StartedAt.UTC().Format(evalTimeLayout), baseline.Passed, baseline.Total, baseline.MeanScore, delta, note)
 	}
 	if r.Pass {
 		fmt.Fprintln(w, "RESULT: PASS")
@@ -395,7 +405,7 @@ func evalHistory(args []string) int {
 			mark = "PASS"
 		}
 		fmt.Printf("%s  %-20s %s  %d/%d passed  mean %.2f  thr %.2f  $%.4f  %s\n",
-			r.StartedAt.Format("2006-01-02 15:04"), r.EvalSet, mark, r.Passed, r.Total, r.MeanScore, r.Threshold, r.CostUSD, shortSHA(r.BundleSHA))
+			r.StartedAt.UTC().Format(evalTimeLayout), r.EvalSet, mark, r.Passed, r.Total, r.MeanScore, r.Threshold, r.CostUSD, shortSHA(r.BundleSHA))
 	}
 	return 0
 }

@@ -7,8 +7,11 @@
 FROM docker.io/library/node:24-slim
 
 WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev
+# npm ci, not npm install: the lockfile pins the dependency tree to what CI
+# audited (npm audit runs against package-lock.json), so the one-click install
+# from the embedded build context cannot pull a newer, unaudited resolution.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 COPY server.mjs ./
 

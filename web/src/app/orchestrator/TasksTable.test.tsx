@@ -450,3 +450,42 @@ describe("TasksTable zero-row states", () => {
     expect(screen.getAllByText("No tasks created yet").length).toBeGreaterThan(0);
   });
 });
+
+describe("TasksTable Clear filters", () => {
+  function renderFiltered(filters: TaskFilters, extra: Partial<TasksTableProps> = {}) {
+    return render(
+      <TasksTable
+        tasks={[]}
+        total={0}
+        page={1}
+        pageSize={20}
+        filters={filters}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+        {...extra}
+      />,
+    );
+  }
+
+  it("is hidden while no filter is set", () => {
+    renderFiltered(FILTERS, { onClearFilters: () => {} });
+    expect(screen.queryByTestId("tasks-clear-filters")).toBeNull();
+  });
+
+  it("appears once a filter is set and resets everything through the parent", () => {
+    const onClearFilters = vi.fn();
+    renderFiltered({ ...FILTERS, status: "running" }, { onClearFilters });
+    // The search draft typed inside the debounce window is dropped too.
+    fireEvent.change(screen.getByLabelText("Search tasks"), { target: { value: "half-typ" } });
+    fireEvent.click(screen.getByTestId("tasks-clear-filters"));
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Search tasks")).toHaveValue("");
+  });
+
+  it("is omitted entirely when the parent does not wire it", () => {
+    renderFiltered({ ...FILTERS, createdBy: "me" });
+    expect(screen.queryByTestId("tasks-clear-filters")).toBeNull();
+  });
+});

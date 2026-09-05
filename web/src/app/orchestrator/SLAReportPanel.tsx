@@ -18,6 +18,7 @@ export function SLAReportPanel() {
     data: report,
     loading,
     error,
+    reload,
   } = useCancellableFetch(
     useCallback(() => orchestratorApi.slaReport(days), [days]),
     [days],
@@ -27,6 +28,18 @@ export function SLAReportPanel() {
     <div className="section" role="region" aria-labelledby="slaHeading">
       <div className="section-header">
         <h2 id="slaHeading">SLA Report</h2>
+        {/* No auto-refresh on this tab (only the task list polls), so the
+            report is as fresh as the last click here or a window change. */}
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          aria-label="Refresh SLA report"
+          data-testid="sla-refresh"
+          disabled={loading}
+          onClick={() => void reload()}
+        >
+          Refresh
+        </button>
         <div className="sla-window-select">
           <label htmlFor="slaWindow">Window</label>
           <select

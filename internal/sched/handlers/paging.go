@@ -63,3 +63,23 @@ func parseOffset(w http.ResponseWriter, r *http.Request) (int, bool) {
 	}
 	return n, true
 }
+
+// parseBoundedInt reads an optional integer query parameter with an inclusive
+// [minValue, maxValue] range: absent → defaultValue; anything present must be
+// an integer in range or a 400 naming the parameter and the range is written
+// and ok is false, so the caller just returns. It is the general form of
+// parseLimit for the non-paging knobs (?days=, ?runs=, ?grace_period_hours=)
+// that each used to swallow the strconv error and silently keep their default
+// — or, for the rotation grace window, accept any magnitude at all.
+func parseBoundedInt(w http.ResponseWriter, r *http.Request, name string, defaultValue, minValue, maxValue int) (int, bool) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return defaultValue, true
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < minValue || n > maxValue {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid %s parameter (must be %d-%d)", name, minValue, maxValue))
+		return 0, false
+	}
+	return n, true
+}

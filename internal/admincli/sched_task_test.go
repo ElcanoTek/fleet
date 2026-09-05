@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -280,11 +281,16 @@ func TestListTasks_TableOutput(t *testing.T) {
 		},
 		total: 2,
 	}
-	var buf bytes.Buffer
-	if err := listTasks(st, &buf, "", 50, false); err != nil {
+	var buf, notes bytes.Buffer
+	if err := listTasks(st, &buf, &notes, "", 50, false); err != nil {
 		t.Fatalf("listTasks: %v", err)
 	}
 	out := buf.String()
+	// Both rows fit: no "showing N of M" note anywhere, and nothing but the
+	// table on stdout.
+	if notes.Len() != 0 {
+		t.Errorf("unexpected stderr note: %q", notes.String())
+	}
 	for _, want := range []string{
 		"ID", "NAME/PROMPT", "STATUS", "PRI", "SCHEDULE", "MODEL",
 		"aaaaaaaa", "nightly-report", "scheduled", "0 9 * * *", "z-ai/glm-5.2",
@@ -310,7 +316,7 @@ func TestListTasks_StatusFilterAndJSON(t *testing.T) {
 		total: 1,
 	}
 	var buf bytes.Buffer
-	if err := listTasks(st, &buf, "running", 5, true); err != nil {
+	if err := listTasks(st, &buf, io.Discard, "running", 5, true); err != nil {
 		t.Fatalf("listTasks: %v", err)
 	}
 	if st.gotFilter.Status == nil || *st.gotFilter.Status != "running" || st.gotLimit != 5 {
@@ -322,6 +328,64 @@ func TestListTasks_StatusFilterAndJSON(t *testing.T) {
 	}
 	if len(decoded) != 1 || decoded[0].ID != id {
 		t.Errorf("json output mismatch: %+v", decoded)
+	}
+}
+
+// TestListTasks_NotesGoToErrW — the "no tasks match" / "showing N of M" notes
+// go to the injected errW (stderr in production), never into the table stream,
+// so `fleet sched task list | wc -l` counts rows and a redirected listing has
+// no stray prose. They used to be written straight to os.Stderr, which this
+// test could not observe.
+func TestListTasks_NotesGoToErrW(t *testing.T) {
+	var out, errW bytes.Buffer
+	if err := listTasks(&fakeTaskListStore{}, &out, &errW, "", 50, false); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 || !strings.Contains(errW.String(), "no tasks match") {
+		t.Errorf("empty list: stdout=%q stderr=%q", out.String(), errW.String())
+	}
+
+	out.Reset()
+	errW.Reset()
+	st := &fakeTaskListStore{
+		tasks: []*models.Task{{ID: uuid.New(), Prompt: "p", Status: models.TaskStatusRunning}},
+		total: 7,
+	}
+	if err := listTasks(st, &out, &errW, "", 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errW.String(), "showing 1 of 7 task(s)") {
+		t.Errorf("truncation note missing from errW: %q", errW.String())
+	}
+	if strings.Contains(out.String(), "showing") {
+		t.Errorf("truncation note leaked into stdout: %q", out.String())
+	}
+}
+
+// TestRenderTable pins the shared list renderer: a header row first, one line
+// per row, cells aligned by tabwriter (so a column never runs into the next).
+func TestRenderTable(t *testing.T) {
+	var buf bytes.Buffer
+	err := renderTable(&buf, []string{"A", "BB"}, [][]string{{"x", "1"}, {"longer", "22"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want header + 2 rows, got %d lines:\n%s", len(lines), buf.String())
+	}
+	if !strings.HasPrefix(lines[0], "A") || !strings.Contains(lines[0], "BB") {
+		t.Errorf("header = %q", lines[0])
+	}
+	// Aligned: the second column starts at the same offset on every line.
+	col := strings.Index(lines[0], "BB")
+	for _, l := range lines[1:] {
+		if len(l) <= col || strings.Contains(l[:col], "\t") {
+			t.Errorf("row not aligned/tab-free: %q", l)
+		}
+	}
+	if strings.Index(lines[1], "1") != col || strings.Index(lines[2], "22") != col {
+		t.Errorf("second column misaligned:\n%s", buf.String())
 	}
 }
 

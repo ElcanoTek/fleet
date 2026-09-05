@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -376,5 +378,91 @@ func TestSharedFilesBatchUploadIsAllOrNothing(t *testing.T) {
 	w = uploadShared(t, h, "admin@x", "Q3", "", map[string]string{"dup.csv": "a"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("single upload: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A long non-ASCII filename is stored under a name capped on a rune boundary
+// (200 bytes, extension kept). The byte-slice cap it replaces produced
+// invalid UTF-8 that Postgres refused, so this upload used to 500.
+func TestSharedFilesUploadLongNonASCIINameIsCappedValidUTF8(t *testing.T) {
+	_, h := sharedFilesFixture(t)
+	w := uploadShared(t, h, "admin@x", "", "", map[string]string{strings.Repeat("é", 150) + ".csv": "x"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("upload: status %d body %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Files []store.SharedFile `json:"files"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || len(resp.Files) != 1 {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	got := resp.Files[0].Name
+	if !utf8.ValidString(got) || len(got) > 200 || !strings.HasSuffix(got, ".csv") {
+		t.Fatalf("stored name %q: want valid UTF-8, <= 200 bytes, .csv kept", got)
+	}
+}
+
+// failNthCreateSharedFile is a chatStore whose CreateSharedFile fails with a
+// non-sentinel (server-side) error on the n-th call — the seam for a batch
+// that breaks part-way through the write loop.
+type failNthCreateSharedFile struct {
+	chatStore
+	failAt int
+	calls  int
+}
+
+func (f *failNthCreateSharedFile) CreateSharedFile(ctx context.Context, row store.SharedFile) (store.SharedFile, error) {
+	f.calls++
+	if f.calls == f.failAt {
+		return store.SharedFile{}, errors.New("simulated postgres failure")
+	}
+	return f.chatStore.CreateSharedFile(ctx, row)
+}
+
+// A failure INSIDE the write loop — not just the up-front 409s — leaves nothing
+// behind: the rows the request already created are rolled back (manifest row,
+// staged copy, canonical bytes) before the error is written, and the body
+// says so. Before this, file 1 stayed durably created and unmentioned while
+// the response reported only file 2's failure.
+func TestSharedFilesBatchUploadRollsBackOnMidLoopFailure(t *testing.T) {
+	srv, _ := sharedFilesFixture(t)
+	failing := &failNthCreateSharedFile{chatStore: srv.store, failAt: 2}
+	srv.store = failing
+	h := srv.Routes()
+	lib := srv.sharedFilesLibrary()
+
+	w := uploadShared(t, h, "admin@x", "Q4", "", map[string]string{
+		"a.csv": "first",
+		"b.csv": "second",
+	})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("mid-loop failure: status %d (want 500) body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "nothing from this upload was saved") {
+		t.Fatalf("500 body should say the batch was undone whole: %s", w.Body.String())
+	}
+	if failing.calls != 2 {
+		t.Fatalf("CreateSharedFile calls = %d, want 2 (the failure must be mid-batch)", failing.calls)
+	}
+	files, err := srv.store.ListSharedFiles(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("rows survived the rolled-back batch: %+v", files)
+	}
+	for _, name := range []string{"a.csv", "b.csv"} {
+		if _, err := os.Stat(filepath.Join(lib.StagedRoot, "Q4", name)); !os.IsNotExist(err) {
+			t.Errorf("%s staged copy exists (err=%v) after rollback", name, err)
+		}
+	}
+	if total, err := srv.store.TotalSharedFileBytes(context.Background()); err != nil || total != 0 {
+		t.Errorf("library total = %d (err=%v), want 0 after rollback", total, err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(srv.cfg.DataDir, "shared-files"))
+	for _, e := range entries {
+		if !e.IsDir() {
+			t.Errorf("canonical bytes %q survived the rollback", e.Name())
+		}
 	}
 }

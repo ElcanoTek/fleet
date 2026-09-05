@@ -256,6 +256,11 @@ func (c *Client) WaitForUpdate(ctx context.Context, id wire.TaskID, wait time.Du
 	if wait <= 0 {
 		wait = time.Second
 	}
+	// parent is the CALLER's context. The wait-scoped deadline below is the
+	// stream's budget, not the caller's: the GetTask fallback after the
+	// stream ends must escape the expired wait deadline but still honor the
+	// caller's cancellation (WithoutCancel(ctx) stripped both).
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 
@@ -310,16 +315,33 @@ func (c *Client) WaitForUpdate(ctx context.Context, id wire.TaskID, wait time.Du
 	// After the first artifact/message event the read is bounded by the
 	// settle grace instead of the caller's wait: cancelling the request
 	// context is what unblocks the body read.
-	var settleOnce sync.Once
-	armSettle := func() { settleOnce.Do(func() { time.AfterFunc(streamSettleGrace, cancel) }) }
+	var (
+		settleOnce  sync.Once
+		settleTimer *time.Timer
+	)
+	armSettle := func() { settleOnce.Do(func() { settleTimer = time.AfterFunc(streamSettleGrace, cancel) }) }
 	res, err := readEventStream(ctx, resp.Body, armSettle)
+	if settleTimer != nil {
+		// The read has returned; a still-pending grace timer would only fire
+		// cancel on an already-finished context. Stop it so a tight poll
+		// loop does not accumulate one live timer per call.
+		settleTimer.Stop()
+	}
 	if err != nil {
 		return WaitResult{}, err
 	}
 	if res.Task == nil && res.Message == nil {
 		// The stream ended before a snapshot landed (deadline, or a peer that
-		// closed at once): the outcome is still one GetTask away.
-		t, err := c.GetTask(context.WithoutCancel(ctx), id)
+		// closed at once): the outcome is still one GetTask away. Bound the
+		// fallback by the caller's context plus one more wait budget — never
+		// WithoutCancel, which would keep polling a peer for a caller that
+		// has already gone away.
+		if parent.Err() != nil {
+			return res, nil
+		}
+		fctx, fcancel := context.WithTimeout(parent, wait)
+		defer fcancel()
+		t, err := c.GetTask(fctx, id)
 		if err != nil {
 			return WaitResult{}, err
 		}
@@ -503,7 +525,10 @@ func (c *Client) call(ctx context.Context, method string, params any, extra map[
 	if env.Error != nil {
 		return nil, &RPCError{Code: env.Error.Code, Message: env.Error.Message}
 	}
-	if len(env.Result) == 0 {
+	// A JSON `null` result is "no result" too: decoding it into a wire.Task
+	// yields a zero-valued task (empty id, empty state) that callers would
+	// treat as data. Refuse it here, for every unary method.
+	if trimmed := bytes.TrimSpace(env.Result); len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil, fmt.Errorf("%s: peer answered with neither result nor error", method)
 	}
 	return env.Result, nil

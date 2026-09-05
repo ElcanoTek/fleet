@@ -106,6 +106,12 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("pg_dump %s: %w", redactDSN(dsn), err)
 	}
+	// A dump IS the database — every conversation, every credential row the
+	// schema holds. pg_dump creates it with the process umask (0644 under a
+	// typical root shell), so clamp it to owner-only the way the env file is.
+	if err := os.Chmod(outPath, 0o600); err != nil {
+		return fmt.Errorf("chmod 0600 %s: %w", outPath, err)
+	}
 	return nil
 }
 
@@ -181,16 +187,33 @@ func pruneOldBackups(dir string, retentionDays int) (int, error) {
 	return pruned, nil
 }
 
-// backupDir resolves the output directory: the --out flag, else FLEET_BACKUP_DIR,
-// else ".". Lets an operator set a default location once in the env file.
+// configuredBackupDir is FLEET_BACKUP_DIR as the deployment configures it:
+// the process env, else the server env file. The ONE read both `fleet backup`
+// (backupDir) and `fleet timers install` (resolveBackupDir) go through, so the
+// verb and the timer it installs can never disagree about where dumps land —
+// backupDir used to read the process env only, so a FLEET_BACKUP_DIR set in
+// /etc/fleet/fleet.env steered the timer but not a hand-run `fleet backup`.
+func configuredBackupDir() string {
+	return strings.TrimSpace(envOrFile("FLEET_BACKUP_DIR"))
+}
+
+// backupDir resolves the output directory: the --out flag, else FLEET_BACKUP_DIR
+// (process env or the env file), else ".". Lets an operator set a default
+// location once in the env file.
 func backupDir(flagOut string) string {
 	if v := strings.TrimSpace(flagOut); v != "" {
 		return v
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_BACKUP_DIR")); v != "" {
+	if v := configuredBackupDir(); v != "" {
 		return v
 	}
 	return "."
+}
+
+// ensureBackupDir creates the dump directory owner-only. 0700, not 0750: the
+// dumps inside are 0600 and nothing else on the box needs to list them.
+func ensureBackupDir(dir string) error {
+	return os.MkdirAll(dir, 0o700)
 }
 
 // retentionDays resolves the prune cutoff: FLEET_BACKUP_RETENTION_DAYS, else
@@ -217,7 +240,7 @@ func isTerminal(f *os.File) bool {
 func cmdBackup(argv []string) int {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	db := fs.String("db", "all", "which database to back up: chat|sched|all")
-	out := fs.String("out", "", "output directory for the dump file(s) (else FLEET_BACKUP_DIR, else .)")
+	out := fs.String("out", "", "output directory for the dump file(s) (else FLEET_BACKUP_DIR from the shell or the env file, else .)")
 	prune := fs.Bool("prune", false, "after backing up, delete dumps older than FLEET_BACKUP_RETENTION_DAYS (default 30)")
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
@@ -229,7 +252,7 @@ func cmdBackup(argv []string) int {
 		return errf(1, "%v", err)
 	}
 	outDir := backupDir(*out)
-	if err := os.MkdirAll(outDir, 0o750); err != nil {
+	if err := ensureBackupDir(outDir); err != nil {
 		return errf(1, "create out dir: %v", err)
 	}
 	ctx := context.Background()

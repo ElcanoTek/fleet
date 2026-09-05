@@ -183,6 +183,10 @@ export function ProjectHome({
   // state) renders instantly while this loads, then the previews fill in.
   const [fetchedChats, setFetchedChats] = useState<ProjectChatEntry[] | null>(null);
   const [teamChats, setTeamChats] = useState<TeamChatEntry[] | null>(null);
+  // Like fileError: a failed team-chats read is REPORTED, not rendered as
+  // "Nothing shared by your teammates yet" — the two look identical to a
+  // reader and only one of them is true.
+  const [teamChatsError, setTeamChatsError] = useState<string | null>(null);
   const [filesTruncated, setFilesTruncated] = useState(false);
   // Read at mount AND on every later transition to true. As mount-only state
   // this dialog opened at most once per project: the parent keeps ProjectHome
@@ -321,13 +325,22 @@ export function ProjectHome({
             { cache: "no-store" },
           );
           if (!res.ok) {
-            if (!cancelled) setTeamChats([]);
+            if (!cancelled) {
+              setTeamChats([]);
+              setTeamChatsError(`Couldn’t load your team’s shared chats (HTTP ${res.status}).`);
+            }
             return;
           }
           const data = (await res.json()) as { conversations?: TeamChatEntry[] };
-          if (!cancelled) setTeamChats(data.conversations ?? []);
+          if (!cancelled) {
+            setTeamChats(data.conversations ?? []);
+            setTeamChatsError(null);
+          }
         } catch {
-          if (!cancelled) setTeamChats([]);
+          if (!cancelled) {
+            setTeamChats([]);
+            setTeamChatsError("Couldn’t reach the server to list your team’s shared chats.");
+          }
         }
       })();
     });
@@ -658,11 +671,19 @@ export function ProjectHome({
                   <TeamGlyph className="size-3" />
                   Shared by your team
                 </p>
+                {teamChatsError ? (
+                  <p
+                    role="alert"
+                    className="mx-1 mb-2 rounded-md border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-2 py-1.5 text-[0.72rem] leading-[1.5] text-[var(--color-danger)]"
+                  >
+                    {teamChatsError}
+                  </p>
+                ) : null}
                 {teamChats === null ? (
                   <p className="px-1 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
                     Loading…
                   </p>
-                ) : teamChats.length === 0 ? (
+                ) : teamChatsError ? null : teamChats.length === 0 ? (
                   <p className="px-1 py-2 text-[0.85rem] leading-[1.6] text-[var(--color-text-muted)]">
                     Nothing shared by your teammates yet. Chats you share stay
                     in your list above, marked with the team badge.

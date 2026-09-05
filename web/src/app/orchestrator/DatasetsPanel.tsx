@@ -11,6 +11,7 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
+import { downloadFile } from "./downloadFile";
 import { plural } from "./plural";
 
 // Dataset / table agent (#514): define a typed table + per-row goal, import
@@ -20,8 +21,19 @@ import { plural } from "./plural";
 
 const KIND_OPTIONS = ["text", "number", "boolean"] as const;
 
-function emptyColumn(output: boolean): DatasetColumn {
-  return { name: "", type: "text", output };
+// Rows per page. The server's own default for GET /rows is 200 (max 1000);
+// asking for it explicitly, with an offset, is what lets the table page past
+// the first 200 rows instead of silently ending there.
+export const ROWS_PAGE_SIZE = 200;
+
+// A column draft in the create modal carries a client-side id so a row's key
+// survives removing the row above it — an index key re-associates every
+// following input with the wrong draft the moment one is deleted.
+type ColumnDraft = DatasetColumn & { draftId: number };
+let nextDraftId = 1;
+
+function emptyColumn(output: boolean): ColumnDraft {
+  return { draftId: nextDraftId++, name: "", type: "text", output };
 }
 
 export function DatasetsPanel() {
@@ -34,7 +46,9 @@ export function DatasetsPanel() {
   const [rows, setRows] = useState<DatasetRow[]>([]);
   const [rowsLoading, setRowsLoading] = useState(false);
   const [rowCounts, setRowCounts] = useState<Record<string, number>>({});
-  const [statusFilter, setStatusFilter] = useState("");
+  const [statusFilter, setStatusFilterState] = useState("");
+  // 1-based page into the selected dataset's (filtered) rows.
+  const [rowsPage, setRowsPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -62,8 +76,11 @@ export function DatasetsPanel() {
     const runId = ++rowsRunRef.current;
     setRowsLoading(true);
     try {
-      const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : "";
-      const res = await orchestratorApi.datasetRows(selectedId, qs);
+      const params = new URLSearchParams();
+      params.set("limit", String(ROWS_PAGE_SIZE));
+      params.set("offset", String((rowsPage - 1) * ROWS_PAGE_SIZE));
+      if (statusFilter) params.set("status", statusFilter);
+      const res = await orchestratorApi.datasetRows(selectedId, `?${params.toString()}`);
       if (runId !== rowsRunRef.current) return; // superseded by a newer selection
       setRows(res.rows ?? []);
       setRowCounts(res.row_counts ?? {});
@@ -73,7 +90,7 @@ export function DatasetsPanel() {
     } finally {
       if (runId === rowsRunRef.current) setRowsLoading(false);
     }
-  }, [selectedId, statusFilter, showToast]);
+  }, [selectedId, statusFilter, rowsPage, showToast]);
 
   // selectDataset swaps the selection and drops the OLD dataset's rows at once,
   // so they are never shown under the new heading while its fetch runs.
@@ -82,7 +99,15 @@ export function DatasetsPanel() {
     setSelectedId(id);
     setRows([]);
     setRowCounts({});
+    setRowsPage(1);
     setRowsLoading(id !== null);
+  };
+
+  // A filter change re-buckets the rows, so the page number under the old
+  // filter is meaningless (the useDashboardData rule).
+  const setStatusFilter = (status: string) => {
+    setStatusFilterState(status);
+    setRowsPage(1);
   };
 
   // Deferred kick-offs (the useDashboardData pattern): queueMicrotask keeps
@@ -140,9 +165,27 @@ export function DatasetsPanel() {
     });
   };
 
-  const exportHref = selectedId
-    ? `/api/orchestrator/datasets/${encodeURIComponent(selectedId)}/export`
-    : undefined;
+  // Fetch-then-save (downloadFile) instead of an <a download> navigation, like
+  // the Usage/Adoption CSV buttons: a 401/403/500 on a plain link replaces
+  // the dashboard with the server's error body.
+  const exportCSV = () => {
+    if (!selected) return;
+    void downloadFile(
+      `/api/orchestrator/datasets/${encodeURIComponent(selected.id)}/export`,
+      `${selected.name || "dataset"}.csv`,
+    ).catch((err: unknown) =>
+      showToast(`Export failed: ${err instanceof Error ? err.message : "download failed"}`, "error"),
+    );
+  };
+
+  // How many rows the current filter covers, from the server's per-status
+  // counts — the rows endpoint returns no total of its own.
+  const rowsTotal = statusFilter
+    ? (rowCounts[statusFilter] ?? 0)
+    : Object.values(rowCounts).reduce((sum, n) => sum + n, 0);
+  const rowsPages = Math.max(1, Math.ceil(rowsTotal / ROWS_PAGE_SIZE));
+  const rowsStart = rowsTotal > 0 ? Math.min((rowsPage - 1) * ROWS_PAGE_SIZE + 1, rowsTotal) : 0;
+  const rowsEnd = Math.min((rowsPage - 1) * ROWS_PAGE_SIZE + rows.length, rowsTotal);
 
   return (
     <div className="section" role="region" aria-label="Datasets">
@@ -233,11 +276,9 @@ export function DatasetsPanel() {
                 e.target.value = "";
               }}
             />
-            {exportHref ? (
-              <a className="btn" href={exportHref} download>
-                Export CSV
-              </a>
-            ) : null}
+            <button type="button" className="btn" data-testid="dataset-export-csv" onClick={exportCSV}>
+              Export CSV
+            </button>
             <button
               type="button"
               className="btn btn-danger"
@@ -333,6 +374,42 @@ export function DatasetsPanel() {
               <p className="empty-state">No rows{statusFilter ? ` with status "${statusFilter}"` : ""} — import a CSV to get started.</p>
             ) : null}
           </div>
+          {rowsTotal > 0 ? (
+            <div className="tasks-pagination" role="navigation" aria-label="Dataset rows pagination">
+              <div className="pagination-info">
+                <span data-testid="dataset-rows-showing">
+                  {rowsLoading && rows.length === 0
+                    ? `${rowsTotal} ${statusFilter ? `${statusFilter} ` : ""}${rowsTotal === 1 ? "row" : "rows"}`
+                    : `Showing ${rowsStart}-${rowsEnd} of ${rowsTotal} ${statusFilter ? `${statusFilter} ` : ""}${rowsTotal === 1 ? "row" : "rows"}`}
+                </span>
+              </div>
+              {rowsPages > 1 ? (
+                <div className="pagination-controls">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    aria-label="Previous rows page"
+                    disabled={rowsPage <= 1 || rowsLoading}
+                    onClick={() => setRowsPage((p) => Math.max(1, p - 1))}
+                  >
+                    Prev
+                  </button>
+                  <span className="page-info">
+                    Page {rowsPage} of {rowsPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    aria-label="Next rows page"
+                    disabled={rowsPage >= rowsPages || rowsLoading}
+                    onClick={() => setRowsPage((p) => p + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {/* The app's confirm dialog, not window.confirm: same keyboard
               contract and styling as every other destructive action here. */}
           <ConfirmDialog
@@ -377,7 +454,7 @@ function DatasetCreateModal({
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
   const [model, setModel] = useState("");
-  const [columns, setColumns] = useState<DatasetColumn[]>([emptyColumn(false), emptyColumn(true)]);
+  const [columns, setColumns] = useState<ColumnDraft[]>([emptyColumn(false), emptyColumn(true)]);
   const [saving, setSaving] = useState(false);
   // Keyboard contract (Escape closes, Tab is trapped, focus starts in Name and
   // returns to the opener): the overlay was aria-modal in name only before.
@@ -388,6 +465,11 @@ function DatasetCreateModal({
   const setCol = (i: number, patch: Partial<DatasetColumn>) => {
     setColumns((prev) => prev.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   };
+  // The draft ids are client-side bookkeeping — the API gets plain columns.
+  const columnsForApi = (): DatasetColumn[] =>
+    columns
+      .filter((c) => c.name.trim() !== "")
+      .map(({ draftId: _draftId, ...c }) => c);
 
   const submit = async () => {
     if (saving) return;
@@ -397,7 +479,7 @@ function DatasetCreateModal({
         name: name.trim(),
         goal: goal.trim(),
         model: model.trim(),
-        columns: columns.filter((c) => c.name.trim() !== ""),
+        columns: columnsForApi(),
       });
       onCreated(d);
     } catch (err) {
@@ -435,7 +517,7 @@ function DatasetCreateModal({
           <fieldset>
             <legend>Columns — input columns carry your data; output columns (✎) are what the agent fills</legend>
             {columns.map((c, i) => (
-              <div key={i} className="dataset-column-row">
+              <div key={c.draftId} className="dataset-column-row">
                 <input
                   aria-label={`Column ${i + 1} name`}
                   value={c.name}

@@ -18,6 +18,7 @@ import (
 	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // generate_image lets the agent produce a PNG/JPEG/WebP from a text prompt
@@ -228,10 +229,7 @@ func runGenerateImage(ctx context.Context, sb *sandbox.Sandbox, client *http.Cli
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		preview := string(respBytes)
-		if len(preview) > 1024 {
-			preview = preview[:1024] + "…"
-		}
+		preview := truncate.Clamp(string(respBytes), 1024, "…")
 		return nil, fmt.Errorf("openrouter HTTP %d: %s", resp.StatusCode, preview)
 	}
 

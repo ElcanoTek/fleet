@@ -30,6 +30,7 @@ import {
   SetSection,
 } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
+import { AdminGateFallback } from "../../AdminGateFallback";
 
 type NotifySettings = {
   notify_on: string;
@@ -125,7 +126,7 @@ export default function NotificationsAdminPage() {
   useEffect(() => {
     if (admin === "member") router.replace("/settings");
   }, [admin, router]);
-  if (admin !== "admin") return null;
+  if (admin !== "admin") return <AdminGateFallback state={admin} />;
   return <NotificationsAdmin />;
 }
 

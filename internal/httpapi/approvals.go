@@ -472,13 +472,15 @@ func (m *memoryProposer) propose(p store.MemoryProposalParams, supersededContent
 	return memory.ID, nil
 }
 
-// excerpt clamps display text for a card payload.
+// excerpt clamps display text for a card payload. Counts RUNES, not bytes
+// (like displayArgValue), so a multibyte excerpt is never cut mid-character
+// into a replacement glyph on the card.
 func excerpt(s string, maxChars int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= maxChars {
-		return s
+	if r := []rune(s); len(r) > maxChars {
+		return string(r[:maxChars]) + "…"
 	}
-	return s[:maxChars] + "…"
+	return s
 }
 
 // StageSuggestion stages a suggest_advanced_model approval if the
@@ -977,9 +979,11 @@ func summarizeBashInput(toolName, rawInput string) map[string]any {
 		TimeoutSeconds int    `json:"timeout_seconds"`
 	}
 	_ = json.Unmarshal([]byte(rawInput), &args)
+	// Truncate by RUNES, not bytes, so a multibyte command (a non-ASCII
+	// path, an emoji in an echo) isn't cut mid-rune into a replacement char.
 	preview := args.Command
-	if len(preview) > 600 {
-		preview = preview[:600] + "…[truncated]"
+	if r := []rune(preview); len(r) > 600 {
+		preview = string(r[:600]) + "…[truncated]"
 	}
 	return map[string]any{
 		"tool":            toolName,
@@ -1022,14 +1026,17 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 	if convID != "" {
 		full = expandCidImagesToDataURLs(full, args, convID)
 	}
+	// Rune-counted like the other previews so a non-ASCII email body isn't
+	// cut mid-character; the 1 MiB content cap is a BYTE budget, so it is
+	// cut with capBytes (a byte slice snapped back to a rune boundary).
 	preview := full
-	if preview != "" && len(preview) > 600 {
-		preview = preview[:600] + "…[truncated]"
+	if r := []rune(preview); len(r) > 600 {
+		preview = string(r[:600]) + "…[truncated]"
 	}
 	const maxContentBytes = 1 << 20 // 1 MiB
 	contentOverflow := false
 	if len(full) > maxContentBytes {
-		full = full[:maxContentBytes]
+		full = capBytes(full, maxContentBytes)
 		contentOverflow = true
 	}
 	contentType := firstString(args, "content_type")

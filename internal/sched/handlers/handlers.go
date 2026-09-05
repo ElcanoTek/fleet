@@ -580,11 +580,37 @@ func (e *createRefusalError) Error() string { return e.detail }
 // CreatedByKeyID is readable by nobody except fleet-wide grant holders
 // (ADR-0043), so every caller must pass the real creator.
 func (h *Handlers) createTaskGoverned(ctx context.Context, creator taskCreator, tc models.TaskCreate) (*models.Task, error) {
+	return h.createTaskGovernedFrom(ctx, creator, tc, nil)
+}
+
+// rerunLineage is the source a rerun/clone copies (#270): the id recorded on
+// the copy, and the source's run_if gate, which the copy may inherit without
+// admin permission because it was admin-authorized when the source was made.
+type rerunLineage struct {
+	sourceID    uuid.UUID
+	sourceRunIf *models.RunIf
+}
+
+// createTaskGovernedFrom is createTaskGoverned with an optional rerun lineage.
+// It is the same pipeline in the same order — rerun/clone used to run
+// validateTaskCreate and then insert directly, skipping the run_if admin gate
+// (so any create_task principal could attach a host-side command as a rerun
+// "override"), the per-principal budget gate and the per-key priority ceiling.
+//
+// With a lineage the run_if gate is edit-shaped, exactly UpdateTask's rule: a
+// non-admin may keep the source's gate (normalized comparison, so a lossy
+// client echo is not a change) but may not add, change, or remove one; an
+// admin's override is authoritative.
+func (h *Handlers) createTaskGovernedFrom(ctx context.Context, creator taskCreator, tc models.TaskCreate, lineage *rerunLineage) (*models.Task, error) {
 	if err := h.validateTaskCreate(&tc); err != nil {
 		return nil, &createRefusalError{status: http.StatusBadRequest, detail: err.Error()}
 	}
-	if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
-		return nil, &createRefusalError{status: http.StatusForbidden, detail: msg}
+	if lineage == nil {
+		if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
+			return nil, &createRefusalError{status: http.StatusForbidden, detail: msg}
+		}
+	} else if !creator.hasAdminPermission && !reflect.DeepEqual(tc.RunIf.Normalized(), lineage.sourceRunIf.Normalized()) {
+		return nil, &createRefusalError{status: http.StatusForbidden, detail: "run_if: a host-side pre-run gate can only be changed by an admin"}
 	}
 
 	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
@@ -595,8 +621,11 @@ func (h *Handlers) createTaskGoverned(ctx context.Context, creator taskCreator, 
 	}
 
 	task := models.NewTask(tc)
-	task.CreatedBy = creator.creatorID
-	task.CreatedByKeyID = creator.creatorKey
+	creator.attribute(task)
+	if lineage != nil {
+		sourceID := lineage.sourceID
+		task.SourceTaskID = &sourceID
+	}
 
 	// Per-key priority ceiling (#230): a scoped key capped at max_priority may not
 	// submit a task MORE urgent (lower integer) than that. task.Priority is the
@@ -606,7 +635,7 @@ func (h *Handlers) createTaskGoverned(ctx context.Context, creator taskCreator, 
 		return nil, &createRefusalError{status: http.StatusForbidden, detail: err.Error()}
 	}
 
-	if _, err := h.storage.AddTask(task); err != nil {
+	if _, err := h.storage.AddTaskWithContext(ctx, task); err != nil {
 		return nil, &createRefusalError{status: http.StatusInternalServerError, detail: "Failed to create task"}
 	}
 	// A create that lands claimable (pending, not scheduled-for-later or
@@ -1976,16 +2005,20 @@ func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
 // from the dashboard for every user. The report is GLOBAL (all tasks) while a
 // member may be scoped, so exposing it to a scoped non-admin would leak the
 // existence/volume/latency of work outside their scope — hence admin-only.
+// maxSLAReportDays is GET /sla/report's documented ?days= ceiling.
+const maxSLAReportDays = 90
+
 func (h *Handlers) GetSLAReport(w http.ResponseWriter, r *http.Request) {
 	if !h.principalFromRequest(r).hasPermission(models.PermissionAdmin) {
 		writeError(w, http.StatusForbidden, "Admin access required")
 		return
 	}
-	days := 7
-	if raw := r.URL.Query().Get("days"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			days = n
-		}
+	// ?days= is the documented [1, 90] window (openapi.yaml). A bad value used
+	// to fall back to the default silently, like the paging parameters before
+	// parseLimit; it is a 400 naming the range now, for the same reason.
+	days, ok := parseBoundedInt(w, r, "days", 7, 1, maxSLAReportDays)
+	if !ok {
+		return
 	}
 	report, err := h.storage.GetSLAReport(r.Context(), days)
 	if err != nil {
@@ -2168,17 +2201,20 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 		return
 	}
 
-	if err := h.validateTaskCreate(&tc); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	newTask := models.NewTask(tc)
-	newTask.SourceTaskID = &source.ID
-	newTask.CreatedBy = p.ownerID()
-
-	if _, err := h.storage.AddTaskWithContext(r.Context(), newTask); err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to create task")
+	// The copy is a create like any other, so it goes through the ONE governed
+	// pipeline (run_if privilege boundary, budget gate, priority ceiling,
+	// attribution) rather than a validate-and-insert of its own — the overrides
+	// expose run_if and priority, so a private path here was a weaker route
+	// around every gate POST /tasks enforces.
+	newTask, err := h.createTaskGovernedFrom(r.Context(), creatorFromPrincipal(p), tc,
+		&rerunLineage{sourceID: source.ID, sourceRunIf: source.RunIf})
+	if err != nil {
+		var refusal *createRefusalError
+		if errors.As(err, &refusal) {
+			writeError(w, refusal.status, refusal.detail)
+			return
+		}
+		writeBudgetRefusal(w, err)
 		return
 	}
 	verb := "re-run"
@@ -2598,14 +2634,22 @@ func (h *Handlers) GetAPIKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, key.ToResponse())
 }
 
+// maxRotateGraceHours bounds POST /keys/{id}/rotate's ?grace_period_hours=:
+// one week is ample for any client cut-over, and past that a "rotation" that
+// leaves the old key valid is indistinguishable from not rotating.
+const maxRotateGraceHours = 168
+
 // RotateAPIKey handles POST /keys/{key_id}/rotate
 func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "key_id")
-	gracePeriodHours := 24
-	if g := r.URL.Query().Get("grace_period_hours"); g != "" {
-		if parsed, err := strconv.Atoi(g); err == nil {
-			gracePeriodHours = parsed
-		}
+	// The grace window keeps the OLD key valid after rotation, so an unbounded
+	// (or silently ignored) value defeats the rotation: ?grace_period_hours=87600
+	// used to keep a retired key alive for ten years, and a typo fell back to
+	// the default without a word. Bounded like GetAuditLog's ?hours=: 0 = revoke
+	// immediately, at most one week of overlap.
+	gracePeriodHours, ok := parseBoundedInt(w, r, "grace_period_hours", 24, 0, maxRotateGraceHours)
+	if !ok {
+		return
 	}
 
 	key, rawKey, err := h.apiKeys.RotateKey(keyID, gracePeriodHours)
@@ -2864,14 +2908,12 @@ func (h *Handlers) populateCreatedByUsernames(ctx context.Context, tasks []*mode
 // its own — this clamp keeps the reported limit honest, it is not the only guard.
 // Admin-gated by the route group.
 func (h *Handlers) PipelineMetrics(w http.ResponseWriter, r *http.Request) {
-	limit := 100
-	if v := r.URL.Query().Get("runs"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if limit > models.MaxRecentRuns {
-		limit = models.MaxRecentRuns
+	// ?runs= is the documented [1, models.MaxRecentRuns] cap. A value above the
+	// ceiling used to be clamped silently and a non-integer fell back to the
+	// default; both are a 400 naming the range now, like the paging parameters.
+	limit, ok := parseBoundedInt(w, r, "runs", 100, 1, models.MaxRecentRuns)
+	if !ok {
+		return
 	}
 	acc := models.NewPipelineMetricsAccumulator()
 	recent := models.NewRecentRuns(limit)

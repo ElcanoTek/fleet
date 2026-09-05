@@ -41,6 +41,7 @@ import {
   SetSection,
 } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
+import { AdminGateFallback } from "../../AdminGateFallback";
 
 type ResolvedSetting = {
   key: string;
@@ -249,7 +250,7 @@ export default function FeaturesAdminPage() {
   useEffect(() => {
     if (admin === "member") router.replace("/settings");
   }, [admin, router]);
-  if (admin !== "admin") return null;
+  if (admin !== "admin") return <AdminGateFallback state={admin} />;
   return <FeaturesAdmin />;
 }
 
@@ -271,6 +272,17 @@ function FeaturesAdmin() {
   const [q, setQ] = useState("");
 
   const settings = loaded ? loaded.map((s) => edits[s.key] ?? s) : null;
+
+  // A refetch makes the server list authoritative again: `edits` are the
+  // per-row PUT/DELETE echoes layered over the LAST list, and left in place
+  // they would mask whatever the new list says (another admin's change, or a
+  // Retry after an error). Drop them, then reload.
+  const reloadAll = () => {
+    setEdits({});
+    setDrafts({});
+    setRowErrors({});
+    return reload();
+  };
 
   const write = async (key: string, init: RequestInit) => {
     setSaving((prev) => ({ ...prev, [key]: true }));
@@ -366,7 +378,7 @@ function FeaturesAdmin() {
             </NoticeBanner>
             <button
               type="button"
-              onClick={() => void reload()}
+              onClick={() => void reloadAll()}
               className={btnClass({ sm: true, reveal: true })}
             >
               Retry

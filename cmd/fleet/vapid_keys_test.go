@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -12,8 +13,8 @@ import (
 // pair on every invocation. The public key must be a 65-byte uncompressed
 // P-256 point (what pushManager.subscribe expects as applicationServerKey).
 func TestRunGenerateVAPIDKeys(t *testing.T) {
-	var out bytes.Buffer
-	if code := runGenerateVAPIDKeys(&out); code != 0 {
+	var out, errOut bytes.Buffer
+	if code := runGenerateVAPIDKeys(&out, &errOut); code != 0 {
 		t.Fatalf("exit code %d, want 0\noutput: %s", code, out.String())
 	}
 
@@ -47,11 +48,32 @@ func TestRunGenerateVAPIDKeys(t *testing.T) {
 	}
 
 	// A second run yields a different pair — never a fixed key.
-	var out2 bytes.Buffer
-	if code := runGenerateVAPIDKeys(&out2); code != 0 {
+	var out2, errOut2 bytes.Buffer
+	if code := runGenerateVAPIDKeys(&out2, &errOut2); code != 0 {
 		t.Fatalf("second run exit code %d", code)
 	}
 	if out.String() == out2.String() {
 		t.Error("two runs produced identical keys")
+	}
+}
+
+// TestGenerateVAPIDKeysErrorGoesToStderr pins the split that makes the
+// documented `fleet generate-vapid-keys >> fleet.env` safe: on a generation
+// failure stdout must stay EMPTY, because anything written there lands in the
+// operator's env file. The message used to go to stdout, so a failed run
+// appended "generate VAPID keys: ..." to the env file as a garbage line.
+func TestGenerateVAPIDKeysErrorGoesToStderr(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := generateVAPIDKeysWith(func() (string, string, error) {
+		return "", "", errors.New("no entropy")
+	}, &out, &errOut)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout must stay empty on failure, got %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "no entropy") {
+		t.Errorf("stderr = %q, want the generation error", errOut.String())
 	}
 }

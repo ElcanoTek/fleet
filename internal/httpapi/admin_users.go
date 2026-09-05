@@ -268,7 +268,14 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 	}
 	usersN, projectsN, err := s.store.RenameTeam(r.Context(), body.From, body.To)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// Only the store's typed input failures (blank/equal names, an
+		// unknown team) are the caller's fault; a failed transaction is the
+		// server's and must not be reported as the admin's own mistake.
+		if store.IsInputError(err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	log.Printf("admin teams: renamed %q -> %q (%d users, %d projects) by %q",

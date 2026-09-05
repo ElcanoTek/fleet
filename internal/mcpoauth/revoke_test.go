@@ -12,10 +12,10 @@ import (
 
 func TestRevokeToken(t *testing.T) {
 	t.Run("early return", func(t *testing.T) {
-		if err := RevokeToken(context.Background(), http.DefaultClient, "", "client_id", "client_secret", "token"); err != nil {
+		if err := RevokeToken(context.Background(), http.DefaultClient, "", "client_id", "client_secret", "token", nil); err != nil {
 			t.Errorf("expected nil error, got %v", err)
 		}
-		if err := RevokeToken(context.Background(), http.DefaultClient, "https://example.com/revoke", "client_id", "client_secret", ""); err != nil {
+		if err := RevokeToken(context.Background(), http.DefaultClient, "https://example.com/revoke", "client_id", "client_secret", "", nil); err != nil {
 			t.Errorf("expected nil error, got %v", err)
 		}
 	})
@@ -53,7 +53,7 @@ func TestRevokeToken(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token"); err != nil {
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token", nil); err != nil {
 			t.Errorf("expected nil error, got %v", err)
 		}
 	})
@@ -88,7 +88,59 @@ func TestRevokeToken(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "", "test_token"); err != nil {
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "", "test_token", nil); err != nil {
+			t.Errorf("expected nil error, got %v", err)
+		}
+	})
+
+	// The regression this signature exists for: an AS that advertises ONLY
+	// client_secret_post must be authenticated in the body, not with Basic.
+	// Hard-coded Basic made the revocation 401 while the local record was
+	// deleted anyway, so a user who clicked Disconnect kept a live refresh
+	// token at the authorization server.
+	t.Run("client_secret_post-only AS is authenticated in the body", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, _, ok := r.BasicAuth(); ok {
+				t.Error("Basic auth sent to a client_secret_post-only AS")
+			}
+			body, _ := io.ReadAll(r.Body)
+			values, err := url.ParseQuery(string(body))
+			if err != nil {
+				t.Fatalf("parse body: %v", err)
+			}
+			if values.Get("client_id") != "client_id" {
+				t.Errorf("client_id in body = %q, want %q", values.Get("client_id"), "client_id")
+			}
+			if values.Get("client_secret") != "client_secret" {
+				t.Errorf("client_secret in body = %q, want %q", values.Get("client_secret"), "client_secret")
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer ts.Close()
+
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token",
+			[]string{"client_secret_post"}); err != nil {
+			t.Errorf("expected nil error, got %v", err)
+		}
+	})
+
+	// An AS that advertises both keeps Basic — the same choice the token
+	// endpoint makes, so exchange/refresh/revoke never disagree.
+	t.Run("an AS advertising client_secret_basic keeps Basic", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, pass, ok := r.BasicAuth()
+			if !ok {
+				t.Fatal("expected Basic auth")
+			}
+			if user != "client_id" || pass != "client_secret" {
+				t.Errorf("basic auth = %s/%s, want client_id/client_secret", user, pass)
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer ts.Close()
+
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token",
+			[]string{"client_secret_post", "client_secret_basic"}); err != nil {
 			t.Errorf("expected nil error, got %v", err)
 		}
 	})
@@ -103,7 +155,7 @@ func TestRevokeToken(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token")
+		err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "client_secret", "test_token", nil)
 		if err == nil {
 			t.Fatal("expected an error for a 401 revocation response, got nil")
 		}
@@ -127,14 +179,14 @@ func TestRevokeToken(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "", "stale_token"); err != nil {
+		if err := RevokeToken(context.Background(), ts.Client(), ts.URL, "client_id", "", "stale_token", nil); err != nil {
 			t.Errorf("expected nil error, got %v", err)
 		}
 	})
 
 	t.Run("http error", func(t *testing.T) {
 		// Use an invalid URL to force an error from http.NewRequestWithContext or httpClient.Do
-		err := RevokeToken(context.Background(), http.DefaultClient, "://invalid-url", "client_id", "", "test_token")
+		err := RevokeToken(context.Background(), http.DefaultClient, "://invalid-url", "client_id", "", "test_token", nil)
 		if err == nil {
 			t.Errorf("expected error, got nil")
 		}
@@ -142,7 +194,7 @@ func TestRevokeToken(t *testing.T) {
 		// Use a closed test server to force an error from httpClient.Do
 		ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 		ts.Close()
-		err = RevokeToken(context.Background(), http.DefaultClient, ts.URL, "client_id", "", "test_token")
+		err = RevokeToken(context.Background(), http.DefaultClient, ts.URL, "client_id", "", "test_token", nil)
 		if err == nil {
 			t.Errorf("expected error, got nil")
 		}

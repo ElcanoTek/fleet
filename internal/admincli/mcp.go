@@ -19,6 +19,14 @@ import (
 // account store over the 0600 env file. Values are read from stdin (never argv);
 // list never prints values.
 //
+// The file is the SERVER env file (serverEnvFile: --env-file, FLEET_ENV_FILE,
+// /etc/fleet/fleet.env on a provisioned box, else .env.local) — the same one
+// every other credential writer (`fleet config set-*`, `fleet env edit`)
+// targets and the unit reads. These verbs used to default to a CWD-relative
+// .env.local unconditionally, so `sudo fleet mcp account set` on a provisioned
+// box wrote /root/.env.local: the command reported success and the broker
+// never saw the seat.
+//
 // Account secrets are stored as suffixed env keys: <VAR>_<UPPER(account)>. The
 // account name is canonicalized first (creds.CanonicalAccount: hyphen/space
 // folded to underscore), so `client-a` and `client_a` write the SAME key and
@@ -71,12 +79,9 @@ func mcpReload(argv []string) int {
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
-	key := strings.TrimSpace(*adminKey)
+	key := resolveAdminKey(*adminKey)
 	if key == "" {
-		key = strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
-	}
-	if key == "" {
-		return errf(1, "admin key required: pass --admin-key or set ADMIN_API_KEY")
+		return errf(1, "admin key required: pass --admin-key or set ADMIN_API_KEY (in the shell or in %s)", serverEnvFile(""))
 	}
 	url := resolveOrchestratorURL(*addr) + "/admin/mcp-servers/reload"
 
@@ -118,6 +123,17 @@ func mcpReload(argv []string) int {
 	return 0
 }
 
+// resolveAdminKey is --admin-key, else ADMIN_API_KEY from the process env or
+// the deployment env file. The unit does not export the file to login shells,
+// so a bare os.Getenv here made `fleet mcp reload` demand --admin-key on a box
+// whose /etc/fleet/fleet.env carried the key all along.
+func resolveAdminKey(flagVal string) string {
+	if v := strings.TrimSpace(flagVal); v != "" {
+		return v
+	}
+	return strings.TrimSpace(envOrFile("ADMIN_API_KEY"))
+}
+
 func printReloadList(label string, names []string) {
 	for _, n := range names {
 		fmt.Printf("  %s: %s\n", label, n)
@@ -126,11 +142,13 @@ func printReloadList(label string, names []string) {
 
 // resolveOrchestratorURL turns a flag/env address into a base URL. Accepts a full
 // URL, a host:port, or a bare ":port" (localhost assumed). Defaults to the
-// orchestrator's 127.0.0.1:8000.
+// orchestrator's 127.0.0.1:8000. FLEET_ORCHESTRATOR_ADDR is read through
+// envOrFile so a listener moved in the env file is found without re-exporting
+// it in the shell.
 func resolveOrchestratorURL(flagAddr string) string {
 	addr := strings.TrimSpace(flagAddr)
 	if addr == "" {
-		addr = strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_ADDR"))
+		addr = strings.TrimSpace(envOrFile("FLEET_ORCHESTRATOR_ADDR"))
 	}
 	if addr == "" {
 		addr = "127.0.0.1:8000"
@@ -144,12 +162,16 @@ func resolveOrchestratorURL(flagAddr string) string {
 	return "http://" + addr
 }
 
+// mcpAccountEnvFileHelp is the shared --env-file help for the account verbs —
+// one string so the three cannot drift from serverEnvFile's real order.
+const mcpAccountEnvFileHelp = "server env file (default FLEET_ENV_FILE, /etc/fleet/fleet.env when present, else .env.local)"
+
 // mcpAccountSet writes <VAR>_<UPPER(account)>=<stdin> into the env file, with
 // the account name canonicalized (separators folded to underscore). The
 // --secret flag carries KEY=- where "-" means "read the value from stdin".
 func mcpAccountSet(argv []string) int {
 	fs := flag.NewFlagSet("mcp account set", flag.ContinueOnError)
-	envFile := fs.String("env-file", "", "credential env file (default .env.local / FLEET_ENV_FILE)")
+	envFile := fs.String("env-file", "", mcpAccountEnvFileHelp)
 	secret := fs.String("secret", "", "KEY=- (value read from stdin) or KEY=value")
 	pos, flagArgs := splitTwoPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -179,12 +201,16 @@ func mcpAccountSet(argv []string) int {
 		return errf(1, "empty secret value")
 	}
 	suffixed := key + "_" + strings.ToUpper(creds.CanonicalAccount(account))
-	path := envFilePath(*envFile)
+	path := serverEnvFile(*envFile)
 	if err := creds.SetEnvKey(path, suffixed, val); err != nil {
 		return errf(5, "write %s: %v", path, err)
 	}
 	// server is recorded only in the message; the key naming carries the seat.
 	fmt.Printf("set %s for server %q account %q in %s\n", suffixed, server, account, path)
+	// The broker reads connector credentials once at boot (credential env
+	// changes deliberately require a restart — see clientconfig.applyBootEnvFile),
+	// so say how to apply, the way the config set-* siblings do.
+	printEnvApplyHint(false)
 	return 0
 }
 
@@ -195,7 +221,7 @@ func mcpAccountSet(argv []string) int {
 // view of which seats are provisioned.
 func mcpAccountList(argv []string) int {
 	fs := flag.NewFlagSet("mcp account list", flag.ContinueOnError)
-	envFile := fs.String("env-file", "", "credential env file (default .env.local / FLEET_ENV_FILE)")
+	envFile := fs.String("env-file", "", mcpAccountEnvFileHelp)
 	asJSON := fs.Bool("json", false, "machine-readable output (the seat variable NAMES; never values)")
 	server, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -204,7 +230,7 @@ func mcpAccountList(argv []string) int {
 	if strings.TrimSpace(server) == "" {
 		return errf(1, "usage: fleet mcp account list <server>")
 	}
-	path := envFilePath(*envFile)
+	path := serverEnvFile(*envFile)
 	keys, err := creds.ListEnvKeys(path)
 	if err != nil {
 		return errf(5, "read %s: %v", path, err)
@@ -246,7 +272,7 @@ func mcpAccountList(argv []string) int {
 // pass --key <VAR> to target one exactly.
 func mcpAccountDel(argv []string) int {
 	fs := flag.NewFlagSet("mcp account del", flag.ContinueOnError)
-	envFile := fs.String("env-file", "", "credential env file (default .env.local / FLEET_ENV_FILE)")
+	envFile := fs.String("env-file", "", mcpAccountEnvFileHelp)
 	keyVar := fs.String("key", "", "exact base VAR to target (skips server-name matching; use when del reports ambiguity)")
 	pos, flagArgs := splitTwoPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -256,7 +282,7 @@ func mcpAccountDel(argv []string) int {
 		return errf(1, "usage: fleet mcp account del [--key VAR] <server> <account>")
 	}
 	server, account := pos[0], pos[1]
-	path := envFilePath(*envFile)
+	path := serverEnvFile(*envFile)
 	keys, err := creds.ListEnvKeys(path)
 	if err != nil {
 		return errf(5, "read %s: %v", path, err)
@@ -313,6 +339,7 @@ func mcpAccountDel(argv []string) int {
 		}
 	}
 	fmt.Printf("removed %d key(s) for server %q account %q from %s\n", removed, server, account, path)
+	printEnvApplyHint(false)
 	return 0
 }
 

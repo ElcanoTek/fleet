@@ -109,7 +109,12 @@ func schedDSN(dbURL string) (string, error) {
 // "✗ OPENROUTER_API_KEY unset / DSN unresolved" and every DB-backed verb
 // demanded --database-url — the same fallback keystore.go already applies for
 // FLEET_DATA_DIR. The process env always wins so an operator override still
-// works; the file is read once per process.
+// works; the file is read once per process (tests re-arm the read with
+// resetEnvFileCache). Every deployment-owned knob the CLI consults —
+// FLEET_CLIENT_CONFIG_DIR, the sandbox image, FLEET_BACKUP_DIR, the admin key
+// and orchestrator address for `mcp reload` — goes through here rather than a
+// bare os.Getenv, so no verb can contradict `fleet status` about what the
+// deployment is configured with.
 func envOrFile(key string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -127,16 +132,11 @@ var (
 	envFileValues map[string]string
 )
 
-// envFilePath resolves the credential env file: --env-file, else
-// FLEET_ENV_FILE, else .env.local.
-func envFilePath(flag string) string {
-	if v := strings.TrimSpace(flag); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); v != "" {
-		return v
-	}
-	return ".env.local"
+// resetEnvFileCache re-arms envOrFile's once-per-process env-file read so
+// tests can point FLEET_ENV_FILE at a fresh fixture.
+func resetEnvFileCache() {
+	envFileOnce = sync.Once{}
+	envFileValues = nil
 }
 
 // errf prints to stderr and returns the given exit code.

@@ -127,3 +127,77 @@ describe("SkillsPage workspace pack", () => {
     expect(within(beta).getByText("BETA BODY")).toBeInTheDocument();
   });
 });
+
+describe("SkillsPage failure states", () => {
+  it("says the personal-skills read failed, with Retry, instead of loading forever", async () => {
+    let userSkillsStatus = 500;
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.startsWith("/api/user-skills")) {
+        return userSkillsStatus === 200
+          ? { ok: true, status: 200, json: async () => ({ skills: [{ id: "u1", name: "mine", description: "", body: "", status: "active" }] }) }
+          : { ok: false, status: userSkillsStatus, json: async () => ({}), text: async () => "" };
+      }
+      return { ok: true, status: 200, json: async () => ({ skills: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SkillsPage />);
+    const failure = await screen.findByTestId("skills-mine-error");
+    expect(failure).toHaveTextContent("Failed to load your skills: 500");
+    // Neither "Loading…" nor the "No skills yet" empty state: the rows are
+    // unknown, not absent.
+    const yourSkills = screen.getByText("Your skills").closest("section, div") as HTMLElement;
+    expect(within(yourSkills).queryByText(/No skills yet/)).toBeNull();
+
+    userSkillsStatus = 200;
+    fireEvent.click(within(failure).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("skill-row-mine")).toBeInTheDocument();
+    expect(screen.queryByTestId("skills-mine-error")).toBeNull();
+  });
+
+  it("reports a failed SKILL.md read in the row instead of spinning", async () => {
+    let detailStatus = 502;
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url === "/api/skills/alpha") {
+        return detailStatus === 200
+          ? { ok: true, status: 200, json: async () => ({ name: "alpha", description: "", source: "builtin", content: "ALPHA BODY" }) }
+          : { ok: false, status: detailStatus, json: async () => ({}) };
+      }
+      if (url.startsWith("/api/skills")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ skills: [{ name: "alpha", description: "First.", source: "builtin" }] }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ skills: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SkillsPage />);
+    const alpha = await screen.findByTestId("skill-row-alpha");
+    fireEvent.click(within(alpha).getByRole("button", { name: "View" }));
+    const rowError = await within(alpha).findByRole("alert");
+    expect(rowError).toHaveTextContent("Failed to load skill: 502");
+    expect(within(alpha).queryByText("Loading…")).toBeNull();
+
+    detailStatus = 200;
+    fireEvent.click(within(rowError).getByRole("button", { name: "Retry" }));
+    expect(await within(alpha).findByText("ALPHA BODY")).toBeInTheDocument();
+  });
+
+  it("matches the search against names and sources case-insensitively", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch([
+        { name: "PDF-Extract", description: "Pull text out.", source: "Bundle" },
+        { name: "deploy", description: "Ship it.", source: "builtin" },
+      ]),
+    );
+    render(<SkillsPage />);
+    await screen.findByText("PDF-Extract");
+    fireEvent.change(screen.getByLabelText("Search workspace skills"), { target: { value: "pdf" } });
+    expect(screen.getByText("PDF-Extract")).toBeInTheDocument();
+    expect(screen.queryByText("deploy")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Search workspace skills"), { target: { value: "bundle" } });
+    expect(screen.getByText("PDF-Extract")).toBeInTheDocument();
+  });
+});

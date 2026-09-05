@@ -30,9 +30,11 @@ import {
 } from "../../ui/atoms";
 import { ConnField, ConnForm, ConnPanel, SetSection } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
+import { AdminGateFallback } from "../../AdminGateFallback";
 import { DeleteRefusal, parseOwnedSharedProjects } from "./DeleteRefusal";
 import type { OwnedSharedProject } from "./DeleteRefusal";
 import { Icon } from "@/app/shared/ui/Icon";
+import { CopyButton } from "@/app/chat/ui/ChatChips";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 
 export type AdminUser = {
@@ -762,9 +764,17 @@ export default function AdminUsersPage() {
           await readErrorText(res, `Rename failed (${res.status}).`),
         );
       }
-      const out = (await res.json()) as { users_updated?: number };
+      // The server relabels team-shared PROJECTS as well as members and
+      // reports both counts; saying only the member count hid the half of the
+      // rename with the wider blast radius.
+      const out = (await res.json()) as {
+        users_updated?: number;
+        projects_updated?: number;
+      };
+      const members = out.users_updated ?? 0;
+      const projects = out.projects_updated ?? 0;
       setRenameStatus(
-        `Renamed "${from}" to "${to.trim()}" (${out.users_updated ?? 0} member${(out.users_updated ?? 0) === 1 ? "" : "s"}).`,
+        `Renamed "${from}" to "${to.trim()}" (${members} member${members === 1 ? "" : "s"}, ${projects} shared project${projects === 1 ? "" : "s"}).`,
       );
       setRenameDraft(null);
       setFilterTeam(to.trim());
@@ -778,7 +788,7 @@ export default function AdminUsersPage() {
   const addDisabled =
     addStatus === "saving" || newEmail.trim() === "" || newPassword.length < 8;
 
-  if (admin !== "admin") return null;
+  if (admin !== "admin") return <AdminGateFallback state={admin} />;
 
   const allRows = joinRows(users, stats);
   const teams = Array.from(
@@ -1053,13 +1063,40 @@ export default function AdminUsersPage() {
                               : ""}
                           </span>
                           {resetShown[row.email] ? (
+                            /* Shown ONCE, so it needs both halves of that
+                               contract: a way to take the value (16 random
+                               characters are not retyped from a table cell by
+                               hand) and a way to put it away again, since an
+                               admin screen is often shared. Without a dismiss
+                               the credential simply sat here for the rest of
+                               the session. */
                             <span
-                              className={`mt-[0.18rem] text-[0.7rem] text-[var(--color-text-muted)] ${TD_TEXT_WRAP}`}
+                              className={`mt-[0.18rem] flex flex-wrap items-center gap-[0.3rem] text-[0.7rem] text-[var(--color-text-muted)] ${TD_TEXT_WRAP}`}
                             >
                               New password (shown once):{" "}
                               <code className="font-[family-name:var(--font-code)] text-[var(--color-text-secondary)]">
                                 {resetShown[row.email]}
                               </code>
+                              <CopyButton
+                                text={resetShown[row.email]}
+                                title="Copy the new password"
+                                variant="compact"
+                              />
+                              <button
+                                type="button"
+                                className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                                aria-label={`Hide the new password for ${row.email}`}
+                                title="Hide"
+                                onClick={() =>
+                                  setResetShown((prev) => {
+                                    const next = { ...prev };
+                                    delete next[row.email];
+                                    return next;
+                                  })
+                                }
+                              >
+                                ×
+                              </button>
                             </span>
                           ) : null}
                           {/* Row status = the mutations that finish AFTER the

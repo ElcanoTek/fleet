@@ -536,3 +536,28 @@ describe("FeaturesAdminPage", () => {
     expect(await screen.findByText(/not on the admin allowlist/)).toBeInTheDocument();
   });
 });
+
+describe("FeaturesAdminPage reload", () => {
+  it("Retry after a failed load renders the fresh server list", async () => {
+    let fail = true;
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes("/pii-redaction/install")) {
+        return { ok: false, status: 501, json: async () => ({}), text: async () => "" };
+      }
+      if (!init || init.method === undefined || init.method === "GET") {
+        if (fail) return { ok: false, status: 502, json: async () => ({}), text: async () => "" };
+        return { ok: true, status: 200, json: async () => ({ settings: [SUBAGENTS] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    fail = false;
+    fireEvent.click(retry);
+    // The refetched list is what renders — nothing local layered over it.
+    const toggle = await screen.findByTestId("toggle-subagents_enabled");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Server default")).toBeInTheDocument();
+  });
+});

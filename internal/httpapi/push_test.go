@@ -43,6 +43,32 @@ func TestPushEndpointsDisabledReturn501(t *testing.T) {
 	}
 }
 
+// A wrong verb is the client's mistake whether or not push is configured:
+// the method check runs BEFORE the readiness check, so an unconfigured box
+// answers 405 (not the 501 that misreported a routing bug as a missing
+// feature). DB-independent like the 501 test above.
+func TestPushEndpointsWrongMethodIs405EvenWhenDisabled(t *testing.T) {
+	s := &Server{} // push nil → feature disabled
+
+	cases := []struct {
+		name, method, path string
+		handler            http.HandlerFunc
+	}{
+		{"subscribe", http.MethodGet, "/push/subscribe", s.pushSubscribe},
+		{"unsubscribe", http.MethodGet, "/push/unsubscribe", s.pushUnsubscribe},
+		{"vapid-key", http.MethodPost, "/push/vapid-public-key", s.pushVAPIDPublicKey},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
+		w := httptest.NewRecorder()
+		tc.handler(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s: status %d, want 405", tc.name, w.Code)
+		}
+	}
+}
+
 // pushFixture wires a DB-backed Server with an ENABLED (placeholder-keyed)
 // push service — enough for the subscription CRUD endpoints, which never
 // contact a relay. The key values are obvious non-secrets.

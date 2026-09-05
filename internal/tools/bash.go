@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -87,10 +88,35 @@ var sensitivePathFragments = []string{
 	"~/.config/gcloud",
 	".env.local",
 	".env.production",
+	// fleet's own service environment: every connector credential the host
+	// holds, in one file. The systemd unit reads it; nothing in a sandbox
+	// should ever name it.
+	"/etc/fleet/",
+	"fleet.env",
 	"id_rsa",
 	"id_ed25519",
 	"id_ecdsa",
 	"credentials.json",
+}
+
+// sensitivePathPatterns are the secret-path shapes a plain substring cannot
+// express without over-matching, applied to the same quote-stripped command as
+// sensitivePathFragments:
+//
+//   - /proc/<pid>/environ (self, a number, thread-self) is the live environment
+//     of a process — in a sandbox that shares one, the host's connector
+//     credentials. A bare "/environ" fragment would also catch
+//     "src/environment/", so the pid component is spelled out.
+//   - a bare ".env" as a whole path component: preceded by the start, a space,
+//     a "/" or an "=" and followed by the end or a shell delimiter. The
+//     component check is what keeps ".env.example", ".envrc" and
+//     ".environment" allowed while "cat .env", "source ./.env" and
+//     "cat /srv/app/.env" are blocked — the description has promised ".env
+//     files" are blocked since the tool shipped, and only the .local /
+//     .production suffixes were actually in the list.
+var sensitivePathPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`/proc/(?:self|thread-self|\d+)/environ`),
+	regexp.MustCompile(`(?:^|[\s/=])\.env(?:$|[\s;|&<>)])`),
 }
 
 // destructivePatterns are literal substrings that match commands so
@@ -390,6 +416,11 @@ func checkCommandSafety(command string) error {
 	for _, frag := range sensitivePathFragments {
 		if strings.Contains(unquoted, frag) {
 			return fmt.Errorf("access to sensitive path %q is blocked", frag)
+		}
+	}
+	for _, re := range sensitivePathPatterns {
+		if m := re.FindString(unquoted); m != "" {
+			return fmt.Errorf("access to sensitive path %q is blocked", strings.TrimSpace(m))
 		}
 	}
 

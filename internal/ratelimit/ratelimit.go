@@ -13,6 +13,7 @@ package ratelimit
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,8 +31,9 @@ type Limiter struct {
 	keys map[string]*bucket
 
 	// lastSweep gates the idle-bucket janitor so the map can't grow without
-	// bound over a long-lived process.
-	lastSweep int64
+	// bound over a long-lived process. Atomic so the once-per-6h check on the
+	// hot path is a plain load, not a write-lock acquisition on every AllowN.
+	lastSweep atomic.Int64
 }
 
 // sweepInterval is how often Allow prunes buckets whose newest sample has aged
@@ -43,6 +45,11 @@ type bucket struct {
 	mu               sync.Mutex
 	minuteTimestamps []int64 // unix seconds of recent requests (rolling window)
 	dayTimestamps    []int64
+	// evicted is set (under mu) by the sweep the moment it deletes this bucket
+	// from the map. An AllowN that fetched the pointer before the delete sees
+	// it on lock and re-fetches instead of appending to an orphan — the lost
+	// update that would otherwise let one request through uncounted.
+	evicted bool
 }
 
 // New returns a Limiter enforcing perMinute requests/minute and perDay
@@ -100,23 +107,21 @@ func (l *Limiter) AllowN(key string, perMinute, perDay int) (bool, time.Duration
 		return true, 0
 	}
 
-	l.mu.RLock()
-	b, ok := l.keys[key]
-	l.mu.RUnlock()
-
-	if !ok {
-		l.mu.Lock()
-		b, ok = l.keys[key]
-		if !ok {
-			b = &bucket{}
-			l.keys[key] = b
-		}
-		l.mu.Unlock()
-	}
-
+	// Sweep BEFORE fetching the bucket so this call's own sweep can never
+	// delete the bucket it is about to count into. A concurrent caller's sweep
+	// still can; the evicted flag below closes that window.
 	l.maybeSweep()
 
+	b := l.bucketFor(key)
 	b.mu.Lock()
+	for b.evicted {
+		// The sweep won the race between our fetch and our lock: this bucket
+		// is no longer in the map. Counting into it would be a lost update, so
+		// take (or create) the live one instead.
+		b.mu.Unlock()
+		b = l.bucketFor(key)
+		b.mu.Lock()
+	}
 	defer b.mu.Unlock()
 
 	now := time.Now().Unix()
@@ -148,17 +153,48 @@ func (l *Limiter) AllowN(key string, perMinute, perDay int) (bool, time.Duration
 	return true, 0
 }
 
+// bucketFor returns key's live bucket, creating it under the write lock when
+// absent (double-checked so the common path is a read lock).
+func (l *Limiter) bucketFor(key string) *bucket {
+	l.mu.RLock()
+	b, ok := l.keys[key]
+	l.mu.RUnlock()
+	if ok {
+		return b
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok = l.keys[key]; !ok {
+		b = &bucket{}
+		l.keys[key] = b
+	}
+	return b
+}
+
 // Snapshot reports the per-minute limit, the remaining allowance, and the unix
 // time the minute window resets for key — WITHOUT recording a request. Used to
 // emit advisory X-RateLimit-* headers on a response. remaining is relative to
 // the configured per-minute bound; reset is now+60 when the window is empty,
-// else (oldest sample + 60).
+// else (oldest sample + 60). A caller that admitted the request through AllowN
+// with a per-key bound must use SnapshotN with that same bound, or the headers
+// advertise the instance default rather than the cap actually enforced.
 func (l *Limiter) Snapshot(key string) (limit, remaining int, reset int64) {
+	if l == nil {
+		return 0, 0, time.Now().Unix() + 60
+	}
+	return l.SnapshotN(key, l.perMinute)
+}
+
+// SnapshotN is Snapshot against a caller-supplied per-minute bound — the
+// read-side twin of AllowN, so a key with its own rate_limit gets headers that
+// match the ceiling it was admitted under. A non-positive bound reports the
+// window as disabled (0, 0, now+60).
+func (l *Limiter) SnapshotN(key string, perMinute int) (limit, remaining int, reset int64) {
 	now := time.Now().Unix()
-	if l == nil || l.perMinute <= 0 {
+	if l == nil || perMinute <= 0 {
 		return 0, 0, now + 60
 	}
-	limit = l.perMinute
+	limit = perMinute
 	reset = now + 60
 
 	l.mu.RLock()
@@ -278,16 +314,18 @@ func (c *ConcurrencyLimiter) Limit() int32 {
 }
 
 // maybeSweep prunes buckets whose newest sample is older than the day window, at
-// most once per sweepInterval. Runs under the map write lock; with a small key
-// population this is microseconds.
+// most once per sweepInterval. The interval check is an atomic load so the
+// hot path (every AllowN) never takes the map write lock just to learn that no
+// sweep is due; only the one caller that wins the CAS pays for the sweep, under
+// the write lock — with a small key population that is microseconds.
 func (l *Limiter) maybeSweep() {
 	now := time.Now().Unix()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if now-l.lastSweep < sweepInterval {
+	last := l.lastSweep.Load()
+	if now-last < sweepInterval || !l.lastSweep.CompareAndSwap(last, now) {
 		return
 	}
-	l.lastSweep = now
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	cutoff := now - 86400
 	for key, b := range l.keys {
 		b.mu.Lock()
@@ -296,18 +334,23 @@ func (l *Limiter) maybeSweep() {
 		// creation and its first append in Allow; deleting it here would orphan
 		// the caller's pointer and skip its count.
 		idle := n > 0 && b.dayTimestamps[n-1] < cutoff
-		b.mu.Unlock()
 		if idle {
+			// Flag under b.mu so an AllowN holding a pre-delete pointer sees
+			// the eviction when it locks, and re-fetches instead of counting
+			// into an orphan.
+			b.evicted = true
 			delete(l.keys, key)
 		}
+		b.mu.Unlock()
 	}
 }
 
 // dropBefore returns ts trimmed of all values < cutoff. The slice is already
 // sorted by insertion order, so a linear scan works. The trim is performed IN
-// PLACE on ts's backing array — safe here because the only caller is Allow under
-// b.mu, which is the sole owner of the slice header. Skipping the per-call
-// allocation keeps the hot path allocation-free on a full backing array.
+// PLACE on ts's backing array — safe because every caller (AllowN and
+// SnapshotN) holds b.mu, which is the sole owner of the slice header. Skipping
+// the per-call allocation keeps the hot path allocation-free on a full backing
+// array.
 func dropBefore(ts []int64, cutoff int64) []int64 {
 	i := 0
 	for i < len(ts) && ts[i] < cutoff {

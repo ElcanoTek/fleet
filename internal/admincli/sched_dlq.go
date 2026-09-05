@@ -2,10 +2,10 @@ package admincli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -48,11 +48,23 @@ func schedDLQList(argv []string) int {
 	fs := flag.NewFlagSet("sched dlq list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
 	tag := fs.String("tag", "", "only show dead-lettered tasks carrying this tag")
-	limit := fs.Int("limit", 50, "max rows to return (<=0 = all)")
+	limit := fs.Int("limit", 50, "max rows to return (>= 1; page with --offset)")
 	offset := fs.Int("offset", 0, "rows to skip (pagination)")
 	asJSON := fs.Bool("json", false, "emit the tasks as a JSON array")
 	if err := fs.Parse(argv); err != nil {
 		return 1
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "sched dlq list takes no arguments (got %q)", fs.Args())
+	}
+	// Same rule as `sched task list`: a positive page size, paged with
+	// --offset. The old "<=0 = all" special case was the one list verb with a
+	// different --limit contract.
+	if *limit < 1 {
+		return errf(1, "--limit must be positive")
+	}
+	if *offset < 0 {
+		return errf(1, "--offset must be >= 0")
 	}
 
 	st, code := openSchedStorage(*dbURL)
@@ -70,18 +82,27 @@ func schedDLQList(argv []string) int {
 	}
 
 	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(tasks); err != nil {
-			return errf(5, "encode tasks: %v", err)
+		if tasks == nil {
+			tasks = []*models.Task{}
 		}
-		return 0
+		return printJSON(tasks)
 	}
 
 	if len(tasks) == 0 {
 		fmt.Fprintln(os.Stderr, "dead-letter queue is empty")
 		return 0
 	}
+	if err := renderDLQTable(os.Stdout, tasks); err != nil {
+		return errf(5, "render: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "%d dead-lettered task(s)\n", len(tasks))
+	return 0
+}
+
+// renderDLQTable is the text listing: one row per dead-lettered task through
+// the shared renderTable. Split out so the columns are unit-testable.
+func renderDLQTable(w io.Writer, tasks []*models.Task) error {
+	rows := make([][]string, 0, len(tasks))
 	for _, t := range tasks {
 		when := "?"
 		if t.DeadLetteredAt != nil {
@@ -95,10 +116,9 @@ func schedDLQList(argv []string) int {
 		if len(t.Tags) > 0 {
 			tags = strings.Join(t.Tags, ",")
 		}
-		fmt.Printf("%s\t%s\tattempts=%d\ttags=%s\t%s\n", t.ID, when, t.DeadLetterAttempts, tags, reason)
+		rows = append(rows, []string{t.ID.String(), when, fmt.Sprint(t.DeadLetterAttempts), tags, reason})
 	}
-	fmt.Fprintf(os.Stderr, "%d dead-lettered task(s)\n", len(tasks))
-	return 0
+	return renderTable(w, []string{"ID", "DEAD_LETTERED_AT", "ATTEMPTS", "TAGS", "REASON"}, rows)
 }
 
 // schedDLQReplay re-enqueues one dead-lettered task: it resets the row to a fresh

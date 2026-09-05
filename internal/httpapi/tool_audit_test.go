@@ -118,6 +118,26 @@ func TestConversationAuditEndpoint(t *testing.T) {
 		t.Fatalf("intruder audit: expected 404, got %d body=%s", w.Code, w.Body.String())
 	}
 
+	// Malformed paging / filter params are 400s (mirroring /events), never a
+	// silently unfiltered or default-sized page.
+	for _, q := range []string{"?limit=abc", "?limit=0", "?limit=-5", "?limit=12abc", "?from=yesterday", "?from=2024-13-45"} {
+		w = do(t, h, http.MethodGet, "/conversations/"+conv.ID+"/audit"+q, nil, "owner@x.com")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("audit%s: expected 400, got %d body=%s", q, w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "must be") {
+			t.Errorf("audit%s: 400 body should name the accepted shape, got %q", q, w.Body.String())
+		}
+	}
+	// Well-formed values (both `from` shapes, an in-range limit, an over-cap
+	// limit that clamps) still answer 200.
+	for _, q := range []string{"?limit=1", "?limit=999", "?from=2000-01-01", "?from=2000-01-01T00:00:00Z"} {
+		w = do(t, h, http.MethodGet, "/conversations/"+conv.ID+"/audit"+q, nil, "owner@x.com")
+		if w.Code != http.StatusOK {
+			t.Errorf("audit%s: expected 200, got %d body=%s", q, w.Code, w.Body.String())
+		}
+	}
+
 	// Tool filter.
 	w = do(t, h, http.MethodGet, "/conversations/"+conv.ID+"/audit?tool=bash", nil, "owner@x.com")
 	if w.Code != http.StatusOK {

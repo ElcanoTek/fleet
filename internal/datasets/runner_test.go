@@ -329,3 +329,60 @@ func TestRunner_DoubleStartRejected(t *testing.T) {
 	}
 	r.Pause(store.dataset.ID)
 }
+
+// TestRunner_RowPanicIsContained: a panic in one row's turn is that row's
+// failure — recovered (the worker runs on a detached goroutine, so an
+// unrecovered panic would kill the process), recorded as failed rather than
+// stranded 'running', and the run still drains the remaining rows and parks
+// idle.
+func TestRunner_RowPanicIsContained(t *testing.T) {
+	store, _, r := newFixture(4, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "co-1") {
+			panic("turn exploded")
+		}
+		return `{"summary":"ok"}`, nil
+	})
+	if err := r.Start(context.Background(), store.dataset.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.status == models.DatasetStatusIdle
+	})
+	got := store.rowStatuses()
+	if got[models.DatasetRowProposed] != 3 || got[models.DatasetRowFailed] != 1 || got[models.DatasetRowRunning] != 0 {
+		t.Fatalf("row statuses = %v", got)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, row := range store.rows {
+		if row.Status == models.DatasetRowFailed && !strings.Contains(row.Error, "panicked") {
+			t.Fatalf("failed row error = %q", row.Error)
+		}
+	}
+}
+
+// TestRunner_NilTurnFailsRow: a (nil, nil) from the turn runner is a contract
+// violation recorded as a row failure, not a nil dereference.
+func TestRunner_NilTurnFailsRow(t *testing.T) {
+	store, _, _ := newFixture(1, nil)
+	r := New(store, nilTurns{})
+	if err := r.Start(context.Background(), store.dataset.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.status == models.DatasetStatusIdle
+	})
+	if got := store.rowStatuses(); got[models.DatasetRowFailed] != 1 {
+		t.Fatalf("row statuses = %v", got)
+	}
+}
+
+type nilTurns struct{}
+
+func (nilTurns) RunTurn(context.Context, agent.TurnInput, agent.EventSink) (*agent.TurnResult, error) {
+	return nil, nil
+}

@@ -494,3 +494,70 @@ func TestRenderEmailMessage(t *testing.T) {
 		t.Error("event without Message must not render a Message line")
 	}
 }
+
+// TestRenderWebhookBody_DefaultEscapesFreeText pins the default payload as
+// valid JSON for ANY prompt. Name is the first ~60 runes of a free-form prompt
+// interpolated by text/template — a quote, backslash or newline used to
+// produce an invalid body the receiver rejected.
+func TestRenderWebhookBody_DefaultEscapesFreeText(t *testing.T) {
+	ev := sampleEvent()
+	ev.Name = `he said "ship it" \ then` + "\n" + `left</script>`
+	ev.LogURL = `https://fleet.example/orchestrator/tasks/x?q="a"&b=\`
+	body, err := RenderWebhookBody("", ev)
+	if err != nil {
+		t.Fatalf("RenderWebhookBody: %v", err)
+	}
+	if !json.Valid(body) {
+		t.Fatalf("default body with a quoted name is not valid JSON:\n%s", body)
+	}
+	var got struct {
+		Name   string `json:"name"`
+		LogURL string `json:"log_url"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Name != ev.Name || got.LogURL != ev.LogURL {
+		t.Errorf("free-text fields did not round-trip: name=%q log_url=%q", got.Name, got.LogURL)
+	}
+}
+
+// TestRenderWebhookBody_DefaultProgressEvent pins the progress (#510) shape: a
+// progress event carries no cost, and the default template used to render
+// `"cost_usd":,` for it — every progress webhook was invalid JSON.
+func TestRenderWebhookBody_DefaultProgressEvent(t *testing.T) {
+	ev := Event{TaskID: "task-1", Name: "nightly report", Status: StatusProgress, Message: "halfway"}
+	body, err := RenderWebhookBody("", ev)
+	if err != nil {
+		t.Fatalf("RenderWebhookBody: %v", err)
+	}
+	if !json.Valid(body) {
+		t.Fatalf("progress body is not valid JSON:\n%s", body)
+	}
+	var got struct {
+		Status  string  `json:"status"`
+		CostUSD float64 `json:"cost_usd"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Status != "progress" || got.CostUSD != 0 {
+		t.Errorf("progress body = status %q cost %v, want progress / 0", got.Status, got.CostUSD)
+	}
+}
+
+// TestRenderWebhookBody_JSONHelperInCustomTemplate checks the json helper is
+// available to operator-authored templates, so they can interpolate free text
+// safely too.
+func TestRenderWebhookBody_JSONHelperInCustomTemplate(t *testing.T) {
+	ev := sampleEvent()
+	ev.Name = `a "quoted" name`
+	body, err := RenderWebhookBody(`{"text":{{json .Name}},"n":{{number .CostUSD}}}`, ev)
+	if err != nil {
+		t.Fatalf("RenderWebhookBody: %v", err)
+	}
+	want := `{"text":"a \"quoted\" name","n":0.1234}`
+	if string(body) != want {
+		t.Errorf("rendered = %s, want %s", body, want)
+	}
+}

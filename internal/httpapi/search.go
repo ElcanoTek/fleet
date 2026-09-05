@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,9 +15,23 @@ type searchResponse struct {
 	Total   int                  `json:"total"`
 }
 
+// searchDefaultLimit / searchMaxLimit bound the search page: an absent limit
+// is the default, anything present must be an integer in [1, searchMaxLimit].
+const (
+	searchDefaultLimit = 20
+	searchMaxLimit     = 100
+)
+
 // search handles GET /search?q=…&type=conversations&limit=20&offset=0 — ranked
 // full-text matches across the authenticated user's conversation titles and
 // message content. Returns 404 when FLEET_SEARCH_ENABLED=false.
+//
+// Paging follows the scheduler's contract (sched/handlers/paging.go): absent
+// limit/offset take their defaults; a present value that is not an integer,
+// a limit outside [1, searchMaxLimit], or a negative offset is a 400 naming the
+// accepted range. The old clamp-and-continue answered `?limit=abc` with the
+// default page and `?limit=999` with 100 rows — a client with a typo got a
+// page it never asked for and no signal that its parameter was ignored.
 //
 // Search is conversations-only: `type` accepts "conversations" (the default
 // when absent) and nothing else. Any other value — including the retired
@@ -43,8 +58,16 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := clampSearchInt(r.URL.Query().Get("limit"), 20, 1, 100)
-	offset := clampSearchInt(r.URL.Query().Get("offset"), 0, 0, 1_000_000)
+	limit, err := parseSearchLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	offset, err := parseSearchOffset(r.URL.Query().Get("offset"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	results, total, err := s.store.SearchConversations(r.Context(), user, q, limit, offset)
 	if err != nil {
@@ -57,20 +80,32 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, searchResponse{Results: results, Total: total})
 }
 
-// clampSearchInt parses a query-param int, falling back to def and clamping to
-// [lo, hi] so a hostile/garbage value can't request an unbounded page.
-func clampSearchInt(raw string, def, lo, hi int) int {
-	v := def
-	if raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			v = n
-		}
+// parseSearchLimit reads the optional ?limit= parameter: absent →
+// searchDefaultLimit; otherwise an integer in [1, searchMaxLimit], else an
+// error naming that range. The upper bound is a rejection, not a clamp, so a
+// hostile or garbage value can neither request an unbounded page nor be
+// silently answered with a different page size than it asked for.
+func parseSearchLimit(raw string) (int, error) {
+	if raw == "" {
+		return searchDefaultLimit, nil
 	}
-	if v < lo {
-		v = lo
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > searchMaxLimit {
+		return 0, fmt.Errorf("limit must be an integer between 1 and %d", searchMaxLimit)
 	}
-	if v > hi {
-		v = hi
+	return n, nil
+}
+
+// parseSearchOffset reads the optional ?offset= parameter: absent → 0;
+// otherwise a non-negative integer. A negative offset is rejected here rather
+// than handed to Postgres, which refuses it as an opaque 500.
+func parseSearchOffset(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
 	}
-	return v
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("offset must be a non-negative integer")
+	}
+	return n, nil
 }

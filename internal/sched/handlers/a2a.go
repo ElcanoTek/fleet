@@ -249,22 +249,6 @@ func (h *Handlers) a2aPrincipal(r *http.Request) (principal, bool) {
 	return principal{}, false
 }
 
-// a2aCreatorFromPrincipal projects an authenticated A2A principal onto the
-// create pipeline's taskCreator, preserving spend attribution and the per-key
-// priority ceiling exactly as authorizeTaskCreator would.
-func a2aCreatorFromPrincipal(p principal) taskCreator {
-	creator := taskCreator{hasAdminPermission: p.hasPermission(models.PermissionAdmin)}
-	if p.apiKey != nil {
-		keyID := p.apiKey.KeyID
-		creator.creatorKey = &keyID
-		if p.apiKey.MaxPriority != nil {
-			capVal := *p.apiKey.MaxPriority
-			creator.creatorKeyMaxPriority = &capVal
-		}
-	}
-	return creator
-}
-
 // a2aVisibleTask loads a task and applies ADR-0043 row visibility. Spec
 // §3.3.2: not-found and not-authorized MUST NOT be distinguishable, so both
 // (and a malformed id, which by construction names no task) come back as the
@@ -446,7 +430,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		model := h.a2a.Model
 		tc.Model = &model
 	}
-	task, err := h.createTaskGoverned(r.Context(), a2aCreatorFromPrincipal(p), tc)
+	task, err := h.createTaskGoverned(r.Context(), creatorFromPrincipal(p), tc)
 	if err != nil {
 		a2aWrite(w, a2aCreateError(req.ID, err))
 		return

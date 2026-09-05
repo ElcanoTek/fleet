@@ -10,6 +10,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -198,6 +199,9 @@ func TestConversationSubroute404Bodies(t *testing.T) {
 		{name: "thinking_config DELETE", method: http.MethodDelete, sub: "thinking_config", wantBody: "conversation not found\n"},
 		{name: "truncate POST", method: http.MethodPost, sub: "truncate",
 			body: map[string]any{"after_message_id": 1}, wantBody: "conversation not found\n"},
+		{name: "project POST", method: http.MethodPost, sub: "project",
+			body: map[string]string{"project_id": ""}, wantBody: "conversation not found\n"},
+		{name: "subagents GET", method: http.MethodGet, sub: "subagents/" + agentSubagentProbeID, wantBody: "conversation not found\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -309,5 +313,32 @@ func TestOptionalBodyMalformedIs400(t *testing.T) {
 	w := do(t, h, http.MethodPost, "/conversations/"+id+"/share", nil, user)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("share with empty body: got %d want 201 body=%q", w.Code, w.Body.String())
+	}
+}
+
+// agentSubagentProbeID is a well-formed sub-agent session id (the shape
+// agent.IsSubagentSessionID accepts) that no run ever produced, so the
+// subagents route reaches its ownership check and nothing past it.
+const agentSubagentProbeID = "subagent-00000000-0000-4000-8000-000000000000"
+
+// failingGetStore is a chatStore whose Get always fails — the seam for
+// proving a handler tells a store failure apart from a missing row.
+type failingGetStore struct{ chatStore }
+
+func (failingGetStore) Get(context.Context, string, string) (*store.Conversation, error) {
+	return nil, errors.New("simulated postgres outage")
+}
+
+// TestSubagentLogStoreErrorIs500 pins the subagents route's error split: a
+// failing store is a 500, not the 404 it used to collapse into (which read
+// a Postgres blip as "this transcript is gone").
+func TestSubagentLogStoreErrorIs500(t *testing.T) {
+	s := &Server{store: failingGetStore{}}
+	req := httptest.NewRequest(http.MethodGet, "/conversations/"+uuid.NewString()+"/subagents/"+agentSubagentProbeID, nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "router@x.com"))
+	w := httptest.NewRecorder()
+	s.conversationByID(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("store failure: got %d body=%q, want 500", w.Code, w.Body.String())
 	}
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
-import { UpcomingPanel } from "./UpcomingPanel";
+import { HORIZON_DAYS, UpcomingPanel } from "./UpcomingPanel";
 import type { UpcomingRun } from "@/app/shared/lib/orchestratorApi";
 
 // UpcomingPanel renders the GET /tasks/upcoming projection (Scheduler UX 2.0,
@@ -180,6 +180,46 @@ describe("UpcomingPanel week navigation", () => {
 
     fireEvent.click(screen.getByTestId("week-prev"));
     expect(screen.getByTestId("week-label")).toHaveTextContent("This week");
+  });
+});
+
+describe("UpcomingPanel week horizon", () => {
+  afterEach(() => window.localStorage.clear());
+
+  it("stops the Next-week arrow at the projection window and says why", async () => {
+    window.localStorage.clear();
+    mockRuns([{ task_id: "t1", prompt: "This week run", next_run: inDays(0, 23), recurring: false }]);
+    render(<UpcomingPanel />);
+    await screen.findByTestId("upcoming-timeline");
+    fireEvent.click(screen.getByTestId("upcoming-view-week"));
+    await screen.findByTestId("upcoming-week");
+
+    // The horizon is HORIZON_DAYS from today: at most three boards (this week,
+    // next, and one more when today is early in the week) — never forever.
+    let clicks = 0;
+    while (!(screen.getByTestId("week-next") as HTMLButtonElement).disabled) {
+      fireEvent.click(screen.getByTestId("week-next"));
+      clicks++;
+      expect(clicks).toBeLessThanOrEqual(3);
+    }
+    expect(clicks).toBeGreaterThanOrEqual(1);
+    expect(screen.getByTestId("week-next")).toHaveAttribute(
+      "title",
+      `Runs are projected ${HORIZON_DAYS} days ahead — the next week is past that window.`,
+    );
+    // Backwards is still open.
+    expect(screen.getByTestId("week-prev")).not.toBeDisabled();
+  });
+});
+
+describe("UpcomingPanel refresh", () => {
+  it("re-requests the projection from its own Refresh button", async () => {
+    mockRuns([]);
+    render(<UpcomingPanel />);
+    await screen.findByText(/No upcoming runs/);
+    expect(upcomingRuns).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("upcoming-refresh"));
+    await waitFor(() => expect(upcomingRuns).toHaveBeenCalledTimes(2));
   });
 });
 

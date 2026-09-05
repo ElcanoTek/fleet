@@ -141,8 +141,19 @@ func Run(argv []string) int {
 	}
 }
 
+// Usage prints the top-level help to stderr.
 func Usage() {
-	fmt.Fprint(os.Stderr, `fleet — unified operator CLI  (run "fleet serve" to start the server)
+	fmt.Fprint(os.Stderr, usageText)
+}
+
+// UsageText returns the top-level help verbatim. Exported so the cmd/fleet
+// tests can check the usage lines of the in-binary verbs (validate-config,
+// eval, mcp test) against the FlagSets that actually parse them — this text
+// once advertised --client-config and --check-model-api for validate-config,
+// two flags that never existed.
+func UsageText() string { return usageText }
+
+const usageText = `fleet — unified operator CLI  (run "fleet serve" to start the server)
 
 Chat with the agent (TUI, #457):
   fleet chat                                          (interactive Bubble Tea chat with the fleet agent)
@@ -150,9 +161,10 @@ Chat with the agent (TUI, #457):
   fleet chat [--conversation <id>] [--model <slug>] [--email …] [--server …] [--token-file <path>]
 
 Preflight & diagnostics (in-binary; no server needed):
-  fleet validate-config [--client-config <dir>] [--check-model-api] [--json]
+  fleet validate-config [--bundle-path <dir>] [--skip-network-checks] [--json]
                                                       (dry-run the boot: every env knob, the bundle manifest, MCP catalog,
-                                                       personas; exit 0 = would boot, 1 = refused, 2 = usage)
+                                                       personas; --skip-network-checks omits the DB/MCP/model-API probes;
+                                                       exit 0 = would boot, 1 = refused, 2 = usage)
   fleet mcp test [--all | <server> ...] [--deep] [--bundle-path <dir>] [--timeout 30s] [--json]
                                                       (per-server smoke: spawn it host-side like the broker, handshake,
                                                        tools/list; --deep also calls its auth-status/probe tool — docs/MCP-TESTING.md)
@@ -245,7 +257,7 @@ Users, credentials, notes:
   fleet task memories list|clear|delete <task_id> [key]   (inspect/reset a task's Captain's Log memory; #198)
   fleet task export [--ids uuid1,uuid2] [--format json|yaml] [--recurrence-only]   (definition-only export → stdout; #238)
   fleet task import [--from tasks.yaml] [--format json|yaml] [--dry-run] [--conflict error|skip|replace]   (definition-only import; #238)
-  fleet mcp account set <server> <account> --secret KEY=-   (value via stdin)
+  fleet mcp account set <server> <account> --secret KEY=-   (value via stdin; writes the SERVER env file, like config set-*)
   fleet mcp account list <server>
   fleet mcp account del <server> <account>
   fleet mcp reload [--server <addr>] [--admin-key <key>] [--json]
@@ -280,7 +292,8 @@ Legacy migration (one-time; docs/LEGACY-IMPORT.md):
 Connection:
   Chat DB:  --database-url or FLEET_CHAT_DATABASE_URL / DATABASE_URL
   Sched DB: --database-url or FLEET_SCHED_DATABASE_URL / DATABASE_URL
-  Env file: --env-file or FLEET_ENV_FILE (default .env.local) for mcp account
+  Env file: --env-file, else FLEET_ENV_FILE, else /etc/fleet/fleet.env when /etc/fleet exists, else .env.local
+            (one resolution for config set-*, env, mcp account, and the validate-config/eval/mcp test preflights)
 
 bootstrap + update wrap scripts/bootstrap.sh + scripts/update.sh (found via
 FLEET_ROOT, ./scripts, or the binary's dir). status runs read-only checks
@@ -291,8 +304,10 @@ Passwords are read from stdin with --password - (never on argv).
 
   fleet version                                       (print build version + VCS revision; a.k.a. --version)
 
-Exit codes (every verb): 0 ok · 1 usage error or refused preflight · 2 usage error on the
-  in-binary verbs (validate-config, eval, mcp test) and cleanup/timers · 5 operational failure
-  (DB, filesystem, service) · 6 fleet status found the box unhealthy.
-`)
-}
+Exit codes: 0 ok · 1 usage error, refused preflight, or a refused write (ambiguous
+  delete, status collision) · 2 not found (user, key, task, trigger, note, memory)
+  — and usage error on the in-binary verbs (validate-config, eval, mcp test) and
+  cleanup/timers · 3 already exists (sched user, note slug) · 4 wrong state (task
+  not editable / not dead-lettered) · 5 operational failure (DB, filesystem,
+  service, a cleanup where every prune failed) · 6 fleet status found the box unhealthy.
+`

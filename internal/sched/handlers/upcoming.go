@@ -123,9 +123,22 @@ func projectRuns(t *models.Task, now time.Time, horizon time.Time) []UpcomingRun
 		}
 		loc := taskLocation(t.Timezone)
 		next := now.In(loc)
+		// The row's scheduled_for is the authoritative next fire — the scheduler
+		// promotes on it, not on a fresh cron walk from now — so a recurring
+		// task postponed by an edit, a run_if skip backoff, or a reconcile must
+		// project THAT instant first, then walk the cron from it. Seeding from
+		// now instead showed the timeline a run the scheduler would never make.
+		// A past scheduled_for (a due row the next tick will promote) falls
+		// back to walking from now, as the one-shot branch below already does.
+		seedFromRow := t.ScheduledFor != nil && t.ScheduledFor.After(now)
+		if seedFromRow {
+			next = t.ScheduledFor.In(loc)
+		}
 		out := make([]UpcomingRun, 0, min(maxOcc, upcomingPerTaskMax))
 		for i := 0; i < maxOcc; i++ {
-			next = schedule.Next(next)
+			if i > 0 || !seedFromRow {
+				next = schedule.Next(next)
+			}
 			if next.IsZero() {
 				break
 			}

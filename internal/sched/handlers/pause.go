@@ -5,9 +5,11 @@ package handlers
 // pause transition live in the runner; here are the human-facing controls.
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -16,16 +18,37 @@ type resumeRequest struct {
 	Answer string `json:"answer"`
 }
 
+// maxResumeAnswerChars bounds the human answer injected into a resumed run.
+// The answer lands in the model context verbatim, so it is capped like the
+// other free-text task fields (the description cap) rather than left unbounded.
+const maxResumeAnswerChars = maxTaskDescriptionChars
+
+// taskResumableByPrincipal is the per-task gate for resume/wake: the same
+// permission-OR-owns shape CancelTask uses (an operator with cancel_task, or
+// the creating user), narrowed by row visibility for the permission holder.
+// Both answers are model input for the run — a resume answer verbatim, a wake
+// note as the event payload — so a cancel_task holder must not be able to
+// steer a task it cannot even see; the creating user may always answer their
+// own task's question, as they may stop it. taskFromPath is lookup only (see
+// its doc), so this decision is the handler's, like every sibling mutation.
+func taskResumableByPrincipal(p principal, task *models.Task) bool {
+	if p.hasPermission(models.PermissionCancelTask) && taskVisibleToPrincipal(p, task) {
+		return true
+	}
+	return p.ownsTask(task)
+}
+
 // ResumeTask handles POST /tasks/{task_id}/resume — answer a paused task's
-// question and re-queue it. Mutating operator action → cancel permission.
+// question and re-queue it. Mutating operator action → cancel permission or
+// ownership (taskResumableByPrincipal).
 func (h *Handlers) ResumeTask(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
-	if !p.hasPermission(models.PermissionCancelTask) {
-		writeError(w, http.StatusForbidden, "Resuming a paused task requires operator permission")
-		return
-	}
 	task, ok := h.taskFromPath(w, r)
 	if !ok {
+		return
+	}
+	if !taskResumableByPrincipal(p, task) {
+		writeError(w, http.StatusForbidden, "Resuming a paused task requires operator permission or ownership of the task")
 		return
 	}
 	if task.Status != models.TaskStatusPausedAwaitingInput {
@@ -39,6 +62,10 @@ func (h *Handlers) ResumeTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Answer) == "" {
 		writeError(w, http.StatusBadRequest, "answer is required")
+		return
+	}
+	if utf8.RuneCountInString(req.Answer) > maxResumeAnswerChars {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("answer cannot exceed %d characters", maxResumeAnswerChars))
 		return
 	}
 	ok2, err := h.storage.ResumeTask(r.Context(), task.ID, req.Answer)
@@ -64,16 +91,16 @@ type wakeRequest struct {
 // parked by wake_on_event (self-wake, docs/SELF-WAKE.md), re-queueing it
 // early. The event key must match the one the task is waiting for, so a
 // caller can never wake an arbitrary sleeping task (and a timer-only sleep
-// has no key to match). Mutating operator action → cancel permission,
-// mirroring ResumeTask.
+// has no key to match). Mutating operator action → cancel permission or
+// ownership, mirroring ResumeTask (taskResumableByPrincipal).
 func (h *Handlers) WakeTask(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
-	if !p.hasPermission(models.PermissionCancelTask) {
-		writeError(w, http.StatusForbidden, "Waking a task requires operator permission")
-		return
-	}
 	task, ok := h.taskFromPath(w, r)
 	if !ok {
+		return
+	}
+	if !taskResumableByPrincipal(p, task) {
+		writeError(w, http.StatusForbidden, "Waking a task requires operator permission or ownership of the task")
 		return
 	}
 	if task.Status != models.TaskStatusPausedAwaitingWake {

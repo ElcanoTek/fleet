@@ -5,6 +5,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -26,7 +27,10 @@ const (
 // authorization path.
 //
 // Query params (all optional): tool (filter to one tool name), from (RFC3339 or
-// YYYY-MM-DD lower bound on started_at), limit (default 50, max 200). The
+// YYYY-MM-DD lower bound on started_at), limit (default 50, max 200). A
+// malformed `from` or a non-integer / non-positive `limit` is a 400, the same
+// contract the sibling /events page keeps — silently degrading either to "no
+// filter" handed a client with a typo the wrong rows and no signal. The
 // response shape mirrors the stored row, with redacted args/result summaries —
 // raw secret values never reach this endpoint (see deriveToolCallEntries).
 func (s *Server) handleConversationAudit(w http.ResponseWriter, r *http.Request, convID string) {
@@ -42,14 +46,23 @@ func (s *Server) handleConversationAudit(w http.ResponseWriter, r *http.Request,
 	}
 
 	toolFilter := r.URL.Query().Get("tool")
-	fromUnix := parseAuditFrom(r.URL.Query().Get("from"))
+	fromUnix, err := parseAuditFrom(r.URL.Query().Get("from"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	limit := auditDefaultLimit
 	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			http.Error(w, fmt.Sprintf("limit must be a positive integer (max %d)", auditMaxLimit), http.StatusBadRequest)
+			return
 		}
+		limit = n
 	}
+	// An over-cap limit is clamped, not rejected: the documented contract is
+	// "max 200", and a client asking for more gets the biggest page there is.
 	if limit > auditMaxLimit {
 		limit = auditMaxLimit
 	}
@@ -83,17 +96,19 @@ func (s *Server) handleConversationAudit(w http.ResponseWriter, r *http.Request,
 
 // parseAuditFrom parses the `from` audit query param, accepting either a full
 // RFC3339 timestamp or a bare YYYY-MM-DD date. Returns the unix-second lower
-// bound, or 0 (no floor) when the value is empty or unparseable — a malformed
-// filter degrades to "no lower bound" rather than erroring the request.
-func parseAuditFrom(raw string) int64 {
+// bound — 0 (no floor) when the value is absent — or an error naming the two
+// accepted shapes when it is present but unparseable. It used to degrade a
+// malformed value to "no lower bound", which answered a typo with the whole
+// unfiltered log and no hint that the filter was ignored.
+func parseAuditFrom(raw string) (int64, error) {
 	if raw == "" {
-		return 0
+		return 0, nil
 	}
 	if t, err := time.Parse(time.RFC3339, raw); err == nil {
-		return t.Unix()
+		return t.Unix(), nil
 	}
 	if t, err := time.Parse("2006-01-02", raw); err == nil {
-		return t.Unix()
+		return t.Unix(), nil
 	}
-	return 0
+	return 0, fmt.Errorf("from must be an RFC3339 timestamp or a YYYY-MM-DD date")
 }

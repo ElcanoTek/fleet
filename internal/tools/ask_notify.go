@@ -94,9 +94,15 @@ func NewNotifyTool() fantasy.AgentTool {
 			if msg == "" {
 				return fantasy.NewTextErrorResponse("notify: message is required"), nil
 			}
-			if h := notifyHandlerFromContext(ctx); h != nil {
-				h(msg)
+			h := notifyHandlerFromContext(ctx)
+			if h == nil {
+				// Mirror ask: the driver registers notify only when a handler
+				// is installed, so this is defense in depth — but a "sent"
+				// confirmation for a message nobody received would let the
+				// model believe a human was told something they were not.
+				return fantasy.NewTextErrorResponse("NOTIFY_UNAVAILABLE: progress updates are not delivered on this transport; nothing was sent. Continue the task and report in your final answer instead."), nil
 			}
+			h(msg)
 			return fantasy.NewTextResponse("Progress update sent. Continue the task."), nil
 		})
 }
