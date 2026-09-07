@@ -281,15 +281,21 @@ type RemoteMCPOverlay struct {
 //   - cut to a bounded prefix BEFORE anything else touches it — a JSON-RPC
 //     error near the transport's 64 MiB cap must not be tokenised, joined and
 //     scanned whole for a 240-byte log line;
+//   - redacted by BOTH process-wide redactors, on the text AS SENT — before
+//     any whitespace is touched, because a registered literal is matched
+//     byte-for-byte and an API key may legitimately contain runs of spaces
+//     (validateAPIKeyAuth admits any printable ASCII); collapsing first would
+//     turn the echoed key into a string the redactor no longer recognises.
+//     This code runs in the main process (agentcore's redactor holds its
+//     literals) and, in production, in the credential-owning broker, where the
+//     bearer that rode the failed request was registered with mcpbroker's
+//     redactor when it was acquired (#1274, cmd/fleet/mcp_broker.go) —
+//     agentcore's set in that process never sees it. Each redactor also
+//     matches the canonical token shapes;
 //   - stripped of control characters, so an ANSI sequence in the body cannot
 //     repaint the terminal or forge a line;
-//   - whitespace-collapsed;
-//   - redacted by BOTH process-wide redactors. This code runs in the main
-//     process (agentcore's redactor holds its literals) and, in production, in
-//     the credential-owning broker, where the bearer that rode the failed
-//     request was registered with mcpbroker's redactor when it was acquired
-//     (#1274, cmd/fleet/mcp_broker.go) — agentcore's set in that process
-//     never sees it. Each redactor also matches the canonical token shapes;
+//   - whitespace-collapsed, then redacted once more, so a canonical token
+//     shape that only lines up after the normalisation is caught too;
 //   - bounded on a rune boundary, so the line names the failure class without
 //     becoming a transcript of the vendor's response body.
 //
@@ -305,18 +311,25 @@ func connectFailureReason(err error) string {
 		maxReason = 240     // bytes of the rendered reason
 	)
 	raw := truncateAtRune(err.Error(), maxInput)
+	raw = redactBoth(raw) // on the bytes as sent: literals match verbatim only
 	raw = strings.Map(func(r rune) rune {
 		if unicode.IsPrint(r) {
 			return r
 		}
 		return ' ' // controls, escapes and invalid bytes become separators
 	}, raw)
-	s := strings.Join(strings.Fields(raw), " ")
-	s = mcpbroker.RedactSecrets(agentcore.RedactSecrets(s))
+	s := redactBoth(strings.Join(strings.Fields(raw), " "))
 	if len(s) > maxReason {
 		s = truncateAtRune(s, maxReason) + "…"
 	}
 	return s
+}
+
+// redactBoth runs text through the main process's redactor and the broker's;
+// whichever process this runs in, the one holding the acquired credential's
+// literal is among them.
+func redactBoth(text string) string {
+	return mcpbroker.RedactSecrets(agentcore.RedactSecrets(text))
 }
 
 // truncateAtRune cuts s to at most n bytes without splitting a multibyte rune.

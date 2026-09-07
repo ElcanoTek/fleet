@@ -429,4 +429,20 @@ func TestConnectFailureReason(t *testing.T) {
 	if got := connectFailureReason(errors.New("initialize: HTTP 401: token " + bearer + " rejected")); strings.Contains(got, bearer) {
 		t.Errorf("broker-registered literal reached the log line: %q", got)
 	}
+
+	// A literal is matched byte-for-byte, and an API key may carry runs of
+	// spaces (validateAPIKeyAuth admits any printable ASCII). Redaction must
+	// therefore see the text as sent, before the whitespace collapse turns
+	// "abcd  efgh" into "abcd efgh" and the registered value stops matching.
+	const spacedKey = "spaced-literal-1a2b3c  4d5e6f  7a8b9c"
+	mcpbroker.RegisterSecretLiteral(spacedKey)
+	got = connectFailureReason(errors.New("initialize: HTTP 401: key " + spacedKey + " rejected"))
+	if strings.Contains(got, spacedKey) || strings.Contains(got, strings.Join(strings.Fields(spacedKey), " ")) {
+		t.Errorf("space-bearing literal reached the log line: %q", got)
+	}
+	agentcore.RegisterSecretLiteral("main-literal-9z8y7x  6w5v4u")
+	got = connectFailureReason(errors.New("initialize: main-literal-9z8y7x  6w5v4u leaked"))
+	if strings.Contains(got, "main-literal-9z8y7x 6w5v4u") {
+		t.Errorf("space-bearing agentcore literal reached the log line: %q", got)
+	}
 }
