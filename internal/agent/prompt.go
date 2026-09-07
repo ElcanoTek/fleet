@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -392,7 +393,7 @@ type UserSkillPromptEntry struct {
 	Path        string // workspace-relative, e.g. "user-skills/<name>/SKILL.md"
 }
 
-func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string, userSkills []UserSkillPromptEntry) (string, error) {
+func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string, userSkills []UserSkillPromptEntry, hosted hostedMCPRoster) (string, error) {
 	var sb strings.Builder
 
 	fastIOOn := m.fastIOEnabledForTurn(enabledOptionalMCPServers)
@@ -507,8 +508,21 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	//    email subprocess failed to start (or the operator never set the
 	//    AWS creds). Empty list = explicit "no MCP tools available" so the
 	//    model doesn't hallucinate one.
+	//
+	//    Two sources, because two catalogs exist: the frozen startup roster
+	//    covers bundle servers (filtered by the conversation's opt-ins), and
+	//    `hosted` carries the per-user remote overlay (#443) RunTurn opened
+	//    for this turn — which is why RunTurn composes the prompt AFTER that
+	//    overlay is up. Before that ordering, a hosted-only deployment denied
+	//    its own tools here (#1006). The merge is copied, never appended onto
+	//    the shared roster slice, and sorted so the prompt-cache prefix stays
+	//    byte-stable across turns (docs/PROMPT-CACHE-CONTRACT.md).
 	sb.WriteString("## MCP Tools (live registry)\n\n")
-	mcpNames := m.activeMCPToolNames(enabledOptionalMCPServers)
+	bundled := m.activeMCPToolNames(enabledOptionalMCPServers)
+	// slices.Concat allocates the merged copy itself; spelling the capacity as
+	// len(a)+len(b) is what CodeQL flags as go/allocation-size-overflow.
+	mcpNames := slices.Concat(bundled, hosted.tools)
+	sort.Strings(mcpNames)
 	if len(mcpNames) == 0 {
 		sb.WriteString("No MCP tools are currently connected. Do not attempt to call any `mcp_*` tool — none will resolve.\n\n")
 	} else {
@@ -517,6 +531,21 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 			fmt.Fprintf(&sb, "- `%s`\n", n)
 		}
 		sb.WriteString("\n")
+	}
+	if len(hosted.skipped) > 0 {
+		// A connector the user set up but that could not be mounted is the
+		// one case where "no such tool" is the wrong answer: name it, so the
+		// model sends the user to reconnect it rather than improvising a
+		// workaround (the scheduled runner prepends the same notice,
+		// scheduledrun.withSkippedRemoteNotice).
+		sb.WriteString("Hosted connector(s) the user has set up that could NOT be mounted this turn — the login needs re-authorization or the server did not respond: ")
+		for i, n := range hosted.skipped {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(&sb, "`%s`", n)
+		}
+		sb.WriteString(". Their `mcp_*` tools are unavailable; if the user asks for them, say the connection needs reconnecting under Settings → Connections instead of working around it.\n\n")
 	}
 
 	// 5. protocol listing — skip fastio-mcp.md when fast.io is off

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -68,8 +69,16 @@ func newFakeLLMManager(t *testing.T, fake *fakellm.Server) *Manager {
 }
 
 func newFakeLLMManagerWithOptions(t *testing.T, fake *fakellm.Server, apply func(*ManagerOptions)) *Manager {
+	return newFakeLLMManagerWithHandler(t, fake.Handler(), apply)
+}
+
+// newFakeLLMManagerWithHandler is the same seam with the provider handler
+// exposed, for tests that need to observe the request fleet sends the model
+// (wrap fake.Handler() in a recorder). The resolver caches its provider at
+// construction, so the recorder must be in place before New.
+func newFakeLLMManagerWithHandler(t *testing.T, h http.Handler, apply func(*ManagerOptions)) *Manager {
 	t.Helper()
-	ts := httptest.NewServer(fake.Handler())
+	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	t.Setenv("OPENROUTER_BASE_URL", ts.URL+"/api/v1")
