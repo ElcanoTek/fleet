@@ -525,7 +525,10 @@ func TestConnectFailureReasonMasksTheRequestCredential(t *testing.T) {
 	if len(got) > 240+len("…") || strings.Contains(got, "a") {
 		t.Errorf("one-byte key over a huge error: len=%d %q", len(got), got[:min(len(got), 80)])
 	}
-	if allocs := testing.AllocsPerRun(1, func() { connectFailureReason("a", errors.New(huge)) }); allocs > 200 {
+	// The bound is "window, not the 32 MiB body". The race detector inflates
+	// AllocsPerRun (300–400 here); a full-text ReplaceAll of a one-byte key
+	// over 32 MiB would be orders of magnitude above this.
+	if allocs := testing.AllocsPerRun(5, func() { connectFailureReason("a", errors.New(huge)) }); allocs > 2000 {
 		t.Errorf("masking a one-byte key over a 32 MiB error made %v allocations; expected work bounded by the window", allocs)
 	}
 
