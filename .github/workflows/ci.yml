@@ -135,7 +135,7 @@ jobs:
             # doubt, leave a path OFF it and run the full suite.
             case "$f" in
               docs/*.md|LICENSE) : ;;
-              README.md|CHANGELOG.md|CONTRIBUTING.md|SECURITY.md) : ;;
+              README.md|CONTRIBUTING.md|SECURITY.md) : ;;
               CODE_OF_CONDUCT.md|AGENTS.md|CLAUDE.md|ONBOARDING.md) : ;;
               *) docs_only=false ;;
             esac
