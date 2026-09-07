@@ -151,6 +151,21 @@ than by a major-version bump.
 
 ### Fixed
 
+- **A hosted connector whose token the vendor revoked now shows "Reconnect
+  needed" at once.** When a hosted (OAuth or API-key) MCP server answered the
+  per-turn mount with HTTP 401, fleet skipped the server for that turn but left
+  the connection row `connected` until the token's natural expiry made a
+  refresh fail — for GitHub after "Revoke all user tokens", eight hours in
+  which Settings → Connections showed nothing wrong while every turn ran
+  without the tools (#1006). The mount path now marks the connection
+  `needs_reauth` with the status in its detail, on the owner's row for a
+  shared connection, and only on a 401: a 5xx, a timeout or a TLS failure says
+  nothing about the credential and does not mark. Alongside, the MCP HTTP
+  transport reports a non-2xx answer as the status plus the body's first line
+  (`mcp.HTTPStatusError`) instead of decoding the body as JSON-RPC and
+  failing with "invalid character 'u' looking for beginning of value" — a
+  JSON-RPC error object carried on a 4xx keeps its existing parse. No
+  operator action.
 - **The weekly claim benchmark no longer trips PostgreSQL's bind-parameter
   limit.** `BenchmarkClaimNextPendingTask` seeded its pending tasks in
   hard-coded chunks of 1000 rows per multi-row INSERT — right at ~57 insert

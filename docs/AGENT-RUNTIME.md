@@ -529,6 +529,15 @@ How the invariants hold:
   row lock with a post-lock expiry re-check, persisting any rotated (single-use)
   refresh token in the same transaction. A dead refresh token marks the
   connection `needs_reauth` and the server is skipped — the run still completes.
+- **A refused mount is recorded, not just skipped.** When the vendor's server
+  answers the per-turn connect with HTTP 401 — a revoked grant, GitHub's
+  "Revoke all user tokens", a key rotated on the vendor side — the connection
+  is marked `needs_reauth` with the status in its detail, so Settings →
+  Connections shows "Reconnect needed" immediately instead of after the
+  token's natural expiry (eight hours, measured for #1006). Only a 401 marks:
+  a 5xx, a timeout or a TLS failure says nothing about the credential. The
+  transport reports such answers as the status plus the body's first line
+  (`mcp.HTTPStatusError`) rather than a JSON decode error.
 - **Refresh failures are classified, not lumped together.** The split decides
   whether the user is asked to do something, so it errs toward *not* bothering
   them (`mcpoauth.IsTerminalRefreshError`):

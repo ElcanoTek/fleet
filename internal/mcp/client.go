@@ -135,6 +135,73 @@ type RPCError struct {
 	Raw     string `json:"-"` // Original JSON for debugging
 }
 
+// HTTPStatusError is what the HTTP transport returns when a server answers a
+// JSON-RPC call with a non-2xx status and a body that is not a JSON-RPC
+// response. Vendors put the actionable reason there as plain text — GitHub's
+// remote MCP server answers a dead bearer with
+// `401 unauthorized: AuthenticateToken authentication failed` — and before
+// this type existed the transport tried to decode that body as JSON-RPC and
+// reported "invalid character 'u' looking for beginning of value" instead,
+// which left the GitHub verification in #1006 blind to a plain credential
+// rejection. Body is the first line of the response, bounded, so the error
+// names the reason without becoming a transcript.
+type HTTPStatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e.Body == "" {
+		return fmt.Sprintf("MCP http: HTTP %d %s", e.StatusCode, http.StatusText(e.StatusCode))
+	}
+	return fmt.Sprintf("MCP http: HTTP %d %s: %s", e.StatusCode, http.StatusText(e.StatusCode), e.Body)
+}
+
+// Unauthorized reports whether the server refused the request's credential.
+// A caller holding a STORED credential (the per-user remote-MCP overlay) uses
+// it to record that the connection needs re-authorization instead of
+// retrying the same dead token every turn.
+func (e *HTTPStatusError) Unauthorized() bool { return e.StatusCode == http.StatusUnauthorized }
+
+// httpStatusBodyCap bounds how much of a non-2xx body is read for the error:
+// enough for the vendor's one-line reason, never a page.
+const httpStatusBodyCap = 4 * 1024
+
+// httpStatusResponse handles a non-2xx answer to a JSON-RPC call. Servers do
+// sometimes carry a JSON-RPC error object on a 4xx/5xx, and callers inspect
+// those (method-not-found, invalid params), so a body that IS a JSON-RPC
+// response keeps its existing parse; anything else becomes an HTTPStatusError
+// carrying the status and the body's first line.
+func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (json.RawMessage, error) {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, httpStatusBodyCap))
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		var probe struct {
+			JSONRPC string          `json:"jsonrpc"`
+			Error   json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(trimmed, &probe) == nil && (probe.JSONRPC != "" || len(probe.Error) > 0) {
+			return t.parseJSONResponse(bytes.NewReader(trimmed), wantID)
+		}
+	}
+	return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Body: firstLine(trimmed)}
+}
+
+// firstLine returns the first line of b, whitespace-collapsed and bounded, for
+// an error message.
+func firstLine(b []byte) string {
+	line := string(b)
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	line = strings.Join(strings.Fields(line), " ")
+	const maxLine = 200
+	if len(line) > maxLine {
+		line = line[:maxLine] + "…"
+	}
+	return line
+}
+
 // UnmarshalJSON implements custom unmarshaling to handle both string and object error formats.
 func (e *RPCError) UnmarshalJSON(data []byte) error {
 	// Store raw JSON for debugging
@@ -1224,6 +1291,13 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 
 	// Capture MCP session ID from response (try multiple header name variants)
 	t.captureSessionID(resp.Header)
+
+	// A non-2xx status is the server's verdict on the request itself — a
+	// refused credential, a missing route, an outage — and must be reported
+	// as such, not fed to the JSON-RPC decoder as if it were a result.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return t.httpStatusResponse(resp, id)
+	}
 
 	// Handle SSE (Server-Sent Events) responses
 	contentType := resp.Header.Get("Content-Type")

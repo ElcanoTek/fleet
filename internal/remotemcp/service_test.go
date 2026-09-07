@@ -151,6 +151,15 @@ func (f *fakeStore) RenameRemoteMCPAccount(_ context.Context, email, id, label s
 	return nil
 }
 
+func (f *fakeStore) SetRemoteMCPStatus(_ context.Context, email, id, status, detail string) error {
+	srv, ok := f.servers[id]
+	if !ok || srv.UserEmail != strings.ToLower(email) {
+		return store.ErrRemoteMCPNotFound
+	}
+	srv.Status, srv.StatusDetail = status, detail
+	return nil
+}
+
 func (f *fakeStore) SetRemoteMCPAPIKey(_ context.Context, email, id, apiKey string) error {
 	s, ok := f.servers[id]
 	if !ok || !strings.EqualFold(s.UserEmail, email) {

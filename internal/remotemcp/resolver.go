@@ -123,6 +123,16 @@ func (s *Service) AcquireTokenByID(ctx context.Context, email, serverID string) 
 	return s.AcquireToken(ctx, server)
 }
 
+// MarkRemoteMCPUnauthorized records that a server refused the stored
+// credential at mount time (HTTP 401): the OWNER's row goes to needs_reauth
+// with the detail, so Settings → Connections shows "Reconnect needed" now
+// rather than after the token's natural expiry (#1006). Implements
+// agent.RemoteMCPStatusMarker. Runs in the credential-owning child like the
+// rest of the resolver; nothing about the credential crosses the wire.
+func (s *Service) MarkRemoteMCPUnauthorized(ctx context.Context, ownerEmail, serverID, detail string) error {
+	return s.store.SetRemoteMCPStatus(ctx, ownerEmail, serverID, store.RemoteMCPStatusNeedsReauth, detail)
+}
+
 // SafeHTTPClient exposes the SSRF-safe client used to dial user-supplied servers
 // (also reused as the data-plane transport for the overlay MCP client).
 func (s *Service) SafeHTTPClient() *http.Client { return s.httpClient }

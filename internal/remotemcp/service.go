@@ -60,6 +60,7 @@ type tokenStore interface {
 	LoadServerSecrets(ctx context.Context, server *store.RemoteMCPServer) (clientSecret, registrationToken string, err error)
 	GetRemoteMCPAPIKey(ctx context.Context, server *store.RemoteMCPServer) (string, error)
 	SetRemoteMCPAPIKey(ctx context.Context, userEmail, id, apiKey string) error
+	SetRemoteMCPStatus(ctx context.Context, userEmail, id, status, detail string) error
 	// Seats (#988).
 	SetRemoteMCPDefaultSeat(ctx context.Context, userEmail, id string) error
 	RenameRemoteMCPAccount(ctx context.Context, userEmail, id, label string) error

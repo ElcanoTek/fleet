@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -43,6 +44,7 @@ type fakeResolver struct {
 	tokenErr map[string]error
 	listed   int
 	asked    []string // server IDs AcquireTokenByID was called for
+	marked   []string // MarkRemoteMCPUnauthorized calls, "owner|id|detail"
 }
 
 func (f *fakeResolver) ConnectedServersForUser(_ context.Context, _ string) ([]RemoteMCPConn, error) {
@@ -59,6 +61,13 @@ func (f *fakeResolver) AcquireTokenByID(_ context.Context, _, id string) (string
 	return f.tokens[id], nil
 }
 func (f *fakeResolver) SafeHTTPClient() *http.Client { return http.DefaultClient }
+
+// MarkRemoteMCPUnauthorized records the call as "owner|serverID|detail" so
+// tests can assert who was marked and why.
+func (f *fakeResolver) MarkRemoteMCPUnauthorized(_ context.Context, owner, id, detail string) error {
+	f.marked = append(f.marked, owner+"|"+id+"|"+detail)
+	return nil
+}
 
 func TestBuildRemoteMCPOverlayGuards(t *testing.T) {
 	ctx := context.Background()
@@ -393,5 +402,62 @@ func TestConnectFailureReason(t *testing.T) {
 	long := connectFailureReason(errors.New(strings.Repeat("x", 1000)))
 	if len(long) > 240+len("…") || !strings.HasSuffix(long, "…") {
 		t.Errorf("reason not bounded: len=%d suffix=%q", len(long), long[len(long)-3:])
+	}
+}
+
+// TestBuildRemoteMCPOverlayRecordsRefusedMount: a server that answers the
+// mount with HTTP 401 has refused the stored token, so the connection is
+// marked needs_reauth right away — on the OWNER's row for a shared connection
+// — instead of reading `connected` until the token expires (#1006, GitHub
+// "Revoke all user tokens"). Any other failure is skipped WITHOUT marking:
+// a 500 says nothing about the credential.
+func TestBuildRemoteMCPOverlayRecordsRefusedMount(t *testing.T) {
+	status := map[string]int{"/own": http.StatusUnauthorized, "/shared": http.StatusUnauthorized, "/down": http.StatusInternalServerError}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(status[r.URL.Path])
+		_, _ = w.Write([]byte("unauthorized: AuthenticateToken authentication failed"))
+	}))
+	defer srv.Close()
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	r := &fakeResolver{
+		conns: []RemoteMCPConn{
+			{ID: "own-1", Name: "github", URL: srv.URL + "/own"},
+			{ID: "sh-2", Name: "notion", URL: srv.URL + "/shared", Owner: "owner@x.com"},
+			{ID: "dn-3", Name: "linear", URL: srv.URL + "/down"},
+		},
+		tokens: map[string]string{"own-1": "tok-a", "sh-2": "tok-b", "dn-3": "tok-c"},
+	}
+	ov, err := BuildRemoteMCPOverlay(context.Background(), r, "u@x.com", nil, RemoteMCPAllConnected)
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov.Close()
+	if ov.Active() {
+		t.Error("overlay should be inactive: every mount failed")
+	}
+	if len(ov.Skipped) != 3 {
+		t.Errorf("Skipped = %v, want all three", ov.Skipped)
+	}
+	if len(r.marked) != 2 {
+		t.Fatalf("marked = %v, want exactly the two 401s (the 500 must NOT be marked)", r.marked)
+	}
+	for _, m := range r.marked {
+		if !strings.Contains(m, "HTTP 401") {
+			t.Errorf("mark %q lacks the status in its detail", m)
+		}
+	}
+	if !strings.HasPrefix(r.marked[0], "u@x.com|own-1|") {
+		t.Errorf("own connection marked as %q, want the running user's row", r.marked[0])
+	}
+	if !strings.HasPrefix(r.marked[1], "owner@x.com|sh-2|") {
+		t.Errorf("shared connection marked as %q, want the OWNER's row", r.marked[1])
+	}
+	if !strings.Contains(logs.String(), "HTTP 401") || strings.Contains(logs.String(), "invalid character") {
+		t.Errorf("skip log should name the 401, not a JSON decode error:\n%s", logs.String())
 	}
 }
