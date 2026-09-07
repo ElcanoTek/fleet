@@ -51,6 +51,11 @@ Two properties worth knowing:
   than a gap.
 - **Re-runs are idempotent.** If the commit already carries a release tag, the
   workflow says so and exits. It cannot open a second ordinal for one tree.
+- **Only the newest release is listed.** After publishing, the workflow deletes
+  every older release *object*, so the Releases page always shows exactly the
+  current release. **Tags are never deleted** — they are what builds and
+  `fleet update` derive identity from. An older release's notes are its
+  commit message: `git log -1 v2026.09.04.2`.
 
 ## Reading a build's identity
 

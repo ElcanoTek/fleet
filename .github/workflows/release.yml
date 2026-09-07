@@ -9,7 +9,8 @@
 # 1) — several a day is the normal case. scripts/version.sh owns the format and
 # derives N from the tags already on the repo; builds derive their own identity
 # from `git describe` against these tags, which is what makes the tag the only
-# artifact a release needs.
+# artifact a release needs. The GitHub release OBJECT is a view of the newest
+# tag, and only the newest is kept; tags are permanent.
 #
 # WHY `workflow_run` RATHER THAN A JOB IN ci.yml: a release job would have to
 # `needs: [ci-gate]`, and scripts/check_gate_needs_test.go requires every job in
@@ -211,3 +212,30 @@ jobs:
             --generate-notes \
             --latest \
             --verify-tag
+
+          # Keep only the newest release OBJECT. A rolling train tags several
+          # times a day, and a Releases page that lists every one of them is a
+          # feed nobody reads; the current release is the only entry that
+          # answers "what is fleet right now". Nothing is lost: the notes ARE
+          # the tagged commit's message (above), so `git log -1 <tag>` reads an
+          # older release verbatim, and the generated compare links resolve
+          # tags, not releases.
+          #
+          # TAGS ARE NEVER DELETED — `gh release delete` runs WITHOUT its
+          # tag-deleting flag, ever (the contract test forbids it). Builds stamp
+          # their identity from tags (`git describe`), `fleet update` fetches
+          # them, and the ordinal and the idempotence check above read them; a
+          # box on an older release must keep resolving its own tag. The
+          # newest by version sort is kept even when it is not the one this
+          # run created (two green pushes tagging concurrently), so a slower
+          # run can never delete a faster run's release. Housekeeping only:
+          # a failure here warns, it does not un-publish anything.
+          if ! gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
+               | grep -E '^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$' \
+               | sort -V | head -n -1 \
+               | while IFS= read -r old; do
+                   echo "pruning superseded release ${old} (its tag stays)"
+                   gh release delete "${old}" --yes
+                 done; then
+            echo "::warning::could not prune older releases; ${TAG} is published, the Releases page just lists more than one entry."
+          fi

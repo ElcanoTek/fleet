@@ -73,11 +73,19 @@ func TestReleaseWorkflowTagsEveryGreenPushToMain(t *testing.T) {
 		{"scripts/version.sh released-at", "the idempotence check that stops a re-run opening a second ordinal — and it must be the STRICT one, since a v2026.09.04.1oops tag matching the glob would otherwise read as \"already released\""},
 		{"gh release view", "publication must be idempotent: a re-run after a failed `gh release create` is how a tag without its release is recovered"},
 		{"gh release create", "the tag is published as a release so its notes are generated"},
+		{"gh release delete", "only the newest release object is kept; without the prune the Releases page grows by several entries a day"},
 		{"group: release-${{ github.event.workflow_run.head_sha }}", "the concurrency group must key on the COMMIT: a single `release` group displaces the PENDING run when a third queues, dropping a green commit's tag entirely"},
 	} {
 		if !strings.Contains(wf, want.needle) {
 			t.Errorf(".github/workflows/release.yml no longer contains %q — %s", want.needle, want.why)
 		}
+	}
+
+	// Pruning deletes release OBJECTS only. Tags are what builds, `fleet
+	// update`, the ordinal and the idempotence check all read; `--cleanup-tag`
+	// would delete the tag with the release and un-version every box on it.
+	if strings.Contains(wf, "--cleanup-tag") {
+		t.Errorf("release.yml passes --cleanup-tag to `gh release delete`; release tags are permanent (docs/VERSIONING.md \"Tags are load-bearing for builds\")")
 	}
 
 	// The tag must land on the exact SHA CI certified, not on whatever `main`

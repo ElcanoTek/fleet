@@ -75,6 +75,11 @@ In practice it cost more than it gave:
   review attention belongs. A promotion merged with a bare title ships a
   release whose only prose is that title and the generated list; the
   workflow never blocks on it.
+- Only the newest release object is kept (`release.yml` prunes the rest after
+  publishing; tags stay). This is what makes "the commit message is the
+  notes" load-bearing rather than cosmetic: `git log` between two tags is the
+  complete history, and the Releases page is a view of the current release,
+  not an archive.
 
 ## Enforcement
 
