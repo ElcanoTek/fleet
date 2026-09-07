@@ -75,6 +75,7 @@ func TestReleaseWorkflowTagsEveryGreenPushToMain(t *testing.T) {
 		{"gh release create", "the tag is published as a release so its notes are generated"},
 		{"gh release delete", "only the newest release object is kept; without the prune the Releases page grows by several entries a day"},
 		{"scripts/version.sh filter", "the prune must decide what is a release tag through the one validator in version.sh, not a regex copied into the workflow"},
+		{"--latest=false", "publication must clear its own Latest mark when a concurrent run published a newer tag between the newest-tag check and `gh release create --latest`; otherwise /releases/latest points at the older tag until the next release"},
 		{"group: release-${{ github.event.workflow_run.head_sha }}", "the concurrency group must key on the COMMIT: a single `release` group displaces the PENDING run when a third queues, dropping a green commit's tag entirely"},
 	} {
 		if !strings.Contains(wf, want.needle) {

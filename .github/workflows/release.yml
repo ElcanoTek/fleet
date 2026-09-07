@@ -228,6 +228,22 @@ jobs:
               --generate-notes \
               --latest \
               --verify-tag
+
+            # The newest-tag check above and this create are two steps, and
+            # a concurrent run for the next commit can tag AND publish .N+1
+            # between them; the `--latest` just passed would then have moved
+            # Latest back onto this older tag. Every tag is pushed before its
+            # release is created, so a fetch AFTER the create sees any
+            # release that beat this one, and clearing this one's mark is
+            # enough: the newer release asked for Latest itself. (The prune
+            # below removes this object anyway; this is for when it cannot.)
+            git fetch --quiet --tags origin
+            newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
+            if [ "${TAG}" != "${newest}" ]; then
+              echo "::notice::${TAG} was superseded by ${newest} while publishing; clearing its Latest mark."
+              gh release edit "${TAG}" --latest=false \
+                || echo "::warning::could not clear the Latest mark on ${TAG}; /releases/latest may name it until the next release."
+            fi
           fi
 
           # Keep only the newest release OBJECT. A rolling train tags several
