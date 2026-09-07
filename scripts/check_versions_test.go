@@ -368,7 +368,7 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 // it) and then RESTATED in prose in two docs that tell a contributor which
 // version to install. Those copies are invisible to every other check, and they
 // drift exactly the way you would expect: the v2.12.2 -> v2.13.1 bump that Go
-// 1.27 forced updated ONBOARDING.md and missed docs/TESTING.md, which went on
+// 1.27 forced updated docs/ONBOARDING.md and missed docs/TESTING.md, which went on
 // telling contributors to install the version that cannot lint the tree.
 //
 // Asserting them is the same rule this file already applies to the node major
@@ -386,7 +386,7 @@ func TestGolangciLintPinAgreesWithDocs(t *testing.T) {
 
 	// Each doc names the version in prose. Match any golangci-lint-adjacent
 	// vN.N.N so a stale copy is caught rather than skipped for not matching.
-	for _, rel := range []string{"ONBOARDING.md", "docs/TESTING.md"} {
+	for _, rel := range []string{"docs/ONBOARDING.md", "docs/TESTING.md"} {
 		body := readFile(t, root, rel)
 		found := regexp.MustCompile(`golangci-lint\D{0,40}?(v\d+\.\d+\.\d+)`).FindAllStringSubmatch(body, -1)
 		if len(found) == 0 {

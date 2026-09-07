@@ -69,3 +69,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0058](0058-per-conversation-attachment-scoping.md) | Attachments are scoped per conversation; the uploads tree is mounted into no sandbox | Accepted |
 | [0059](0059-date-based-rolling-releases.md) | Date-based rolling releases; every green push to `main` is tagged automatically | Accepted; re-anchors ADR-0012 |
 | [0060](0060-remove-the-fleet-admin-shim.md) | Remove the `fleet-admin` shim, and evict it from the boxes that have it | Accepted; completes ADR-0012 |
+| [0061](0061-retire-the-changelog.md) | Retire `CHANGELOG.md`; the PR is the record and the release notes are generated | Accepted; extends ADR-0059 |

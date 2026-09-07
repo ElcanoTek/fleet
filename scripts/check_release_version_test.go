@@ -156,8 +156,8 @@ func TestNoHandAuthoredReleaseNumbers(t *testing.T) {
 // after YYYY-MM-DD" — so this refuses the numbered form's return.
 //
 // The list is the operator-facing surfaces, named explicitly rather than walked:
-// a walk would also sweep up docs/adr/** and CHANGELOG.md, which QUOTE the old
-// phrase as history and must keep doing so. History is not drift.
+// a walk would also sweep up docs/adr/**, which QUOTES the old phrase as
+// history and must keep doing so. History is not drift.
 func TestDeprecationWindowsAreNotKeyedToAReleaseNumber(t *testing.T) {
 	root := repoRoot(t)
 
@@ -170,7 +170,7 @@ func TestDeprecationWindowsAreNotKeyedToAReleaseNumber(t *testing.T) {
 		"README.md",
 		"AGENTS.md",
 		"CONTRIBUTING.md",
-		"ONBOARDING.md",
+		"docs/ONBOARDING.md",
 		"SECURITY.md",
 		"docs/DEPLOYMENT.md",
 		"docs/OPERATORS.md",

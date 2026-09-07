@@ -26,7 +26,8 @@ sentence, not a wasted one.
 
 ---
 
-- [ ] `CHANGELOG.md` updated, if this is a user-visible change
+- [ ] The title and "What changed, and why" are written for the release notes
+      they become (there is no changelog file — ADR-0061)
 - [ ] A design note (`docs/<FEATURE>.md`) added, if this ships a feature
 - [ ] An ADR added or superseded in `docs/adr/`, if this adds, weakens or
       reverses an invariant — required in the *same* PR

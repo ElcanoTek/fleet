@@ -185,8 +185,8 @@ jobs:
           fi
           # --generate-notes writes the notes from the commits/PRs since the
           # previous tag, which is exactly the changelog for a rolling train —
-          # the reason CHANGELOG.md no longer carries a hand-curated release
-          # section (docs/VERSIONING.md).
+          # the reason there is no hand-curated changelog file at all
+          # (docs/VERSIONING.md, ADR-0061).
           gh release create "${TAG}" \
             --title "fleet ${TAG#v}" \
             --generate-notes \
