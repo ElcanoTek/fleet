@@ -173,6 +173,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           # Idempotent by construction: this step also runs on a re-run for a
@@ -183,12 +184,30 @@ jobs:
             echo "::notice::release ${TAG} is already published; nothing to do."
             exit 0
           fi
-          # --generate-notes writes the notes from the commits/PRs since the
-          # previous tag, which is exactly the changelog for a rolling train —
-          # the reason CHANGELOG.md no longer carries a hand-curated release
-          # section (docs/VERSIONING.md).
+
+          # The release notes are the released commit's message, then GitHub's
+          # generated list — the two-part shape openai/codex ships with (its
+          # release body is `git log -1 --format=%B` of the tagged commit).
+          #
+          # Every commit on main is a promotion squash, and its message is the
+          # text the promoter approved in the merge dialog: GitHub prefills it
+          # from the PR title and body, and whatever is in that box is exactly
+          # what ships here, verbatim. That is the whole contract — no PR
+          # lookup, no parsing, nothing to know about any tool's footer. Want
+          # something out of the release notes? Leave it out of the commit
+          # message when you merge. CONTRIBUTING.md "Promotions" says how.
+          #
+          # `--generate-notes` with a body PRE-PENDS that body to GitHub's
+          # generated notes (the merged-PR list, contributors, compare link);
+          # the generated list sees only the promotion PR, since dev PRs never
+          # touch main's history. The certified SHA is present as an object
+          # (fetch-depth 0) and the tag step proved it is on main.
+          notes="$(mktemp)"
+          git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
+
           gh release create "${TAG}" \
             --title "fleet ${TAG#v}" \
+            --notes-file "${notes}" \
             --generate-notes \
             --latest \
             --verify-tag
