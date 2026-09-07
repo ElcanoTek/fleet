@@ -189,8 +189,12 @@ jobs:
           # not publish either: its release object was pruned on purpose, and
           # re-creating it — with `--latest` — would point /releases/latest at
           # an old tag until the next successful run. The newest release tag
-          # in the checkout (fetch-depth 0, fetch-tags) decides; on a normal
-          # run that is the tag this workflow just pushed.
+          # ON THE REMOTE decides — fetched right here, because two per-SHA
+          # jobs can tag concurrently: the one that won the push never
+          # refetched, so its checkout would still name its own tag as newest
+          # after the loser retried and pushed .N+1. On a normal run the
+          # newest is the tag this workflow just pushed.
+          git fetch --quiet --tags origin
           newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
           if [ "${TAG}" != "${newest}" ]; then
             echo "::notice::${TAG} is superseded by ${newest}; not publishing a release for it."
