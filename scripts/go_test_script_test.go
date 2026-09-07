@@ -170,3 +170,17 @@ func TestGoTestScriptIsWhatCIRuns(t *testing.T) {
 		}
 	}
 }
+
+// TestGoTestScriptSurfacesGoListFailure: mapfile from a process substitution
+// keeps a partial package list and discards go list's nonzero status, so the
+// suite could pass over an incomplete graph. The script must capture the exit
+// code.
+func TestGoTestScriptSurfacesGoListFailure(t *testing.T) {
+	body := readFile(t, repoRoot(t), "scripts/go-test.sh")
+	if strings.Contains(body, "mapfile -t ALL < <(go list") {
+		t.Error("go list is in a process substitution; its exit status is discarded")
+	}
+	if !strings.Contains(body, `if ! go list`) {
+		t.Error("go-test.sh does not check go list's exit status")
+	}
+}

@@ -75,7 +75,18 @@ classify() {
   esac
 }
 
-mapfile -t ALL < <(go list "${TAGS[@]}" ./...)
+# Capture go list's status ourselves. A process substitution (`< <(go list)`)
+# would keep a partial package list and discard a nonzero exit, so `make test`
+# could go green over an incomplete graph.
+list_file="$(mktemp)"
+if ! go list "${TAGS[@]}" ./... >"$list_file"; then
+  echo "go list failed" >&2
+  cat "$list_file" >&2
+  rm -f "$list_file"
+  exit 2
+fi
+mapfile -t ALL < "$list_file"
+rm -f "$list_file"
 if (( ${#ALL[@]} == 0 )); then
   echo "go list returned no packages" >&2
   exit 2
