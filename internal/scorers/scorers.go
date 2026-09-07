@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -86,6 +88,13 @@ func Shell(ctx context.Context, sb BashRunner, cmd string, timeout time.Duration
 	if res.TimedOut {
 		return false, "shell:timeout"
 	}
+	// RunBash reports a caller-side cancel as (res, nil) with res.Cancelled
+	// set and ExitCode UNDEFINED — often 0. Without this branch a cancelled
+	// check would score as "shell:passed", so an exit condition could be
+	// satisfied by the very Stop that interrupted it.
+	if res.Cancelled || ctx.Err() != nil {
+		return false, "shell:cancelled"
+	}
 	if res.ExitCode == 0 {
 		return true, "shell:passed"
 	}
@@ -97,7 +106,17 @@ func Shell(ctx context.Context, sb BashRunner, cmd string, timeout time.Duration
 // character) — the deterministic half of a YES/NO verifier call.
 func FirstWordIsYes(s string) bool {
 	s = strings.TrimLeft(strings.TrimSpace(s), "*_`\"'> ")
-	return strings.HasPrefix(strings.ToUpper(s), "YES")
+	if !strings.HasPrefix(strings.ToUpper(s), "YES") {
+		return false
+	}
+	// Word boundary: "Yesterday's run failed" must not read as YES. The
+	// character after YES, if any, may not be a letter or digit.
+	rest := s[len("YES"):]
+	if rest == "" {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(rest)
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 }
 
 // LastAssistantMessage returns the text of a session's final assistant

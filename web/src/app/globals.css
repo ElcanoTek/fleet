@@ -2064,6 +2064,10 @@ tr.clickable:hover td {
   font-size: 0.75rem;
   color: var(--color-text-muted);
 }
+.sleeping-tasks-note {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
 .sleeping-tasks-list {
   list-style: none;
   margin: 0;

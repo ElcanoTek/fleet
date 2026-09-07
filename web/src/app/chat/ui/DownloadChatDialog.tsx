@@ -193,7 +193,13 @@ export function DownloadChatDialog({
           )}
 
           {error ? (
-            <p className="mt-3 mb-0 text-sm text-[var(--color-status-error-fg)]">
+            /* role="alert" so a failed download is ANNOUNCED, matching the
+               sibling dialogs (ShareDialog, shared-files): without it a screen
+               reader user gets no signal at all that the export failed. */
+            <p
+              role="alert"
+              className="mt-3 mb-0 text-sm text-[var(--color-status-error-fg)]"
+            >
               {error}
             </p>
           ) : null}

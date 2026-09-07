@@ -73,6 +73,22 @@ type taskListStore interface {
 
 var _ taskListStore = (*storage.Storage)(nil)
 
+// renderTable writes one header row plus rows through a tabwriter — the ONE
+// renderer for the list family (sched task/dlq/user list, notes list, chat user
+// list, admin list), so every listing has the same shape: a header naming the
+// columns, aligned cells, no trailing summary on stdout. The headerless
+// tab-joined lines the smaller lists used to print were greppable but
+// unlabeled — a `notes list` row read "slug v3 published Title" with nothing
+// saying which field was which.
+func renderTable(w io.Writer, header []string, rows [][]string) error {
+	tw := tabwriter.NewWriter(w, 2, 8, 2, ' ', 0)
+	fmt.Fprintln(tw, strings.Join(header, "\t"))
+	for _, r := range rows {
+		fmt.Fprintln(tw, strings.Join(r, "\t"))
+	}
+	return tw.Flush()
+}
+
 // schedTaskList implements `fleet sched task list` (#722) — the daily-driver
 // read the v1 operator tooling had and fleet lacked (the workaround was
 // `task export | jq` or the web UI):
@@ -102,15 +118,18 @@ func schedTaskList(argv []string) int {
 	}
 	defer st.Close()
 
-	if err := listTasks(st, os.Stdout, strings.TrimSpace(*status), *limit, *asJSON); err != nil {
+	if err := listTasks(st, os.Stdout, os.Stderr, strings.TrimSpace(*status), *limit, *asJSON); err != nil {
 		return errf(5, "list tasks: %v", err)
 	}
 	return 0
 }
 
 // listTasks fetches + renders the task list. Split from schedTaskList so the
-// output shape is unit-testable against a fake store.
-func listTasks(st taskListStore, w io.Writer, status string, limit int, asJSON bool) error {
+// output shape is unit-testable against a fake store: the table goes to w, the
+// "no tasks match" / "showing N of M" notes to errW (stderr in production, so a
+// piped `task list | wc -l` counts rows only) — injected rather than os.Stderr
+// so the tests can assert the notes land on the right stream.
+func listTasks(st taskListStore, w, errW io.Writer, status string, limit int, asJSON bool) error {
 	filter := db.TaskFilter{}
 	if status != "" {
 		filter.Status = &status
@@ -127,20 +146,18 @@ func listTasks(st taskListStore, w io.Writer, status string, limit int, asJSON b
 	}
 
 	if len(tasks) == 0 {
-		fmt.Fprintln(os.Stderr, "no tasks match")
+		fmt.Fprintln(errW, "no tasks match")
 		return nil
 	}
-	tw := tabwriter.NewWriter(w, 2, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME/PROMPT\tSTATUS\tPRI\tSCHEDULE\tMODEL")
+	rows := make([][]string, 0, len(tasks))
 	for _, t := range tasks {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n",
-			shortID(t.ID), taskLabel(t), t.Status, t.Priority, taskSchedule(t), taskModel(t))
+		rows = append(rows, []string{shortID(t.ID), taskLabel(t), string(t.Status), fmt.Sprint(t.Priority), taskSchedule(t), taskModel(t)})
 	}
-	if err := tw.Flush(); err != nil {
+	if err := renderTable(w, []string{"ID", "NAME/PROMPT", "STATUS", "PRI", "SCHEDULE", "MODEL"}, rows); err != nil {
 		return err
 	}
 	if total > len(tasks) {
-		fmt.Fprintf(os.Stderr, "showing %d of %d task(s); raise --limit or add --status to narrow\n", len(tasks), total)
+		fmt.Fprintf(errW, "showing %d of %d task(s); raise --limit or add --status to narrow\n", len(tasks), total)
 	}
 	return nil
 }

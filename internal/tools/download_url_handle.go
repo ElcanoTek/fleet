@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"log"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -34,17 +36,53 @@ var downloadURLHandles = struct {
 
 var httpURLInLine = regexp.MustCompile(`https?://[^\s<>"']+`)
 
+// urlTrailingPunctuation is the set trimmed from the end of a URL found in
+// prose. Every one of these is legal INSIDE a URL, which is why the trim is
+// applied only to a trailing run: "?token=abc." almost certainly ends a
+// sentence, while "?a=(b)" mid-string is left alone because nothing follows it.
+const urlTrailingPunctuation = `.,;:!?)]}'"`
+
+// splitTrailingPunctuation divides a matched URL into the address and the
+// sentence/markdown punctuation that follows it, so the address can be vaulted
+// without the tail and the tail can stay in the surrounding text.
+func splitTrailingPunctuation(raw string) (url, tail string) {
+	cut := len(raw)
+	for cut > 0 && strings.ContainsRune(urlTrailingPunctuation, rune(raw[cut-1])) {
+		cut--
+	}
+	// A match that is nothing but punctuation is not a URL; leave it whole
+	// rather than returning an empty address.
+	if cut == 0 {
+		return raw, ""
+	}
+	return raw[:cut], raw[cut:]
+}
+
+// downloadURLDriftOnce rate-limits the format-drift warning to once per
+// process: the condition is a property of the upstream response shape, not of
+// one call, and the message is the same every time.
+var downloadURLDriftOnce sync.Once
+
 // ProtectFastIODownloadURLs replaces bearer URLs in the download_url/zip_url
 // sections of a successful Fast.io MCP response with process-local opaque
 // handles. Call this before secret redaction and before the response is logged,
 // streamed, or returned to the model.
 //
-// The function intentionally keys off the response section rather than a host
-// allowlist: Fast.io may return its own API host, a CDN, or object storage. The
-// caller already establishes provenance by invoking this only for the trusted
+// The function keys off the response section rather than a host allowlist:
+// Fast.io may return its own API host, a CDN, or object storage. The caller
+// already establishes provenance by invoking this only for the trusted
 // mcp_fast_io_download tool.
+//
+// The section headings are an UPSTREAM contract fleet does not control, so
+// this must not fail open when they drift (a renamed heading, a dropped "# ",
+// a URL folded into prose): a URL carrying a credential-looking query parameter
+// (see hasCredentialQuery) is vaulted wherever it appears, and the drift is
+// logged once so the heading list gets fixed. The cost of a false positive is a
+// handle the model has to pass to download_url instead of a clickable link; the
+// cost of a false negative is a bearer in the model context, the SSE stream and
+// the turn log — so the fallback errs toward vaulting.
 func ProtectFastIODownloadURLs(text string) string {
-	if text == "" || !strings.Contains(text, "# ") {
+	if text == "" {
 		return text
 	}
 
@@ -52,6 +90,17 @@ func ProtectFastIODownloadURLs(text string) string {
 	protectSection := false
 	protected := make(map[string]string)
 	changed := false
+	drift := false
+
+	vault := func(raw string) string {
+		if handle, ok := protected[raw]; ok {
+			return handle
+		}
+		handle := registerDownloadURLHandle(raw)
+		protected[raw] = handle
+		changed = true
+		return handle
+	}
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -60,25 +109,74 @@ func ProtectFastIODownloadURLs(text string) string {
 			protectSection = section == "download_url" || section == "zip_url"
 			continue
 		}
-		if !protectSection {
+		if protectSection {
+			lines[i] = httpURLInLine.ReplaceAllStringFunc(line, vault)
 			continue
 		}
-
+		// Outside a protected section: vault anyway when the URL itself says it
+		// is a bearer (fail loud, not open). Here the URL is embedded in PROSE,
+		// so unlike the section case it routinely ends a sentence or sits in a
+		// markdown link — and httpURLInLine, which stops only at whitespace and
+		// angle/quote characters, swallows that punctuation. Vaulting the
+		// swallowed form would key the handle to a URL with a trailing "." or
+		// ")", so resolving it later would fetch a different, invalid address.
+		// Split the tail off, vault the URL, and put the tail back in the text.
 		lines[i] = httpURLInLine.ReplaceAllStringFunc(line, func(raw string) string {
-			if handle, ok := protected[raw]; ok {
-				return handle
+			url, tail := splitTrailingPunctuation(raw)
+			if !hasCredentialQuery(url) {
+				return raw
 			}
-			handle := registerDownloadURLHandle(raw)
-			protected[raw] = handle
-			changed = true
-			return handle
+			drift = true
+			return vault(url) + tail
 		})
 	}
 
+	if drift {
+		downloadURLDriftOnce.Do(func() {
+			// No URL, no handle: the message is about the shape, and the bearer
+			// is exactly what must not reach a log line.
+			log.Printf("download_url: a Fast.io response carried a credential-bearing URL outside a download_url/zip_url section; vaulted it anyway — the upstream response format may have changed, check the section headings ProtectFastIODownloadURLs expects")
+		})
+	}
 	if !changed {
 		return text
 	}
 	return strings.Join(lines, "\n")
+}
+
+// credentialQueryParams are the query-parameter names (lower-cased) that mark
+// a URL as a bearer in its own right: the generic token/signature spellings,
+// plus the SigV4 (X-Amz-*) and GCS (X-Goog-*) presigned-URL families, matched
+// by prefix. A URL that carries one is a credential wherever it appears.
+var credentialQueryParams = map[string]bool{
+	"token":        true,
+	"access_token": true,
+	"signature":    true,
+	"sig":          true,
+}
+
+var credentialQueryPrefixes = []string{"x-amz-", "x-goog-"}
+
+// hasCredentialQuery reports whether raw is an http(s) URL whose query string
+// names a credential-looking parameter. Unparseable URLs are not credentials
+// (they would not fetch either).
+func hasCredentialQuery(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.RawQuery == "" {
+		return false
+	}
+	for key := range u.Query() {
+		k := strings.ToLower(key)
+		if credentialQueryParams[k] {
+			return true
+		}
+		for _, prefix := range credentialQueryPrefixes {
+			if strings.HasPrefix(k, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func registerDownloadURLHandle(rawURL string) string {

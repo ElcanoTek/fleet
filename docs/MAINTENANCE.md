@@ -39,7 +39,7 @@ iteration.
 
 | Step | Reclaims | Bound |
 | --- | --- | --- |
-| `SweepExpired` | Conversations past `FLEET_CONVERSATION_TTL_DAYS`, plus per-user cap eviction | TTL / cap |
+| `SweepExpired` | Conversations past `CONVERSATION_TTL_DAYS` (default 14; no `FLEET_` prefix — it predates the alias chain), plus per-user cap eviction | TTL / cap |
 | `PurgeTerminalInputs` | Terminal input-queue rows | `FLEET_INPUT_QUEUE_RETENTION_DAYS` (30) |
 | `SweepTurnEvents` | Finished turns' durable SSE ledgers | `FLEET_TURN_EVENT_RETENTION_DAYS` (14) |
 | `SweepAttachments` | Attachment files past the conversation TTL | conversation TTL |
@@ -179,7 +179,7 @@ A task can stop making progress in several ways. Each has a bound:
 | `running`, lease stolen | `errTaskLeaseLost` cancels the stale run | immediate |
 | `paused_awaiting_input` | `ExpirePausedTasks` fails it terminally | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` (off by default) |
 | `paused_awaiting_wake`, unreachable | `ExpireStrandedWakeTasks` fails it terminally | 24h past the deadline |
-| Interactive turn hung | Per-turn context deadline | `CHAT_TURN_TIMEOUT_SECONDS` |
+| Interactive turn hung | Per-turn context deadline | `FLEET_TURN_TIMEOUT_SECONDS` (default 1800; legacy alias `CHAT_TURN_TIMEOUT_SECONDS`) |
 
 `paused_awaiting_wake` was the gap. `WakeDueTasks` filters on
 `wake_at IS NOT NULL`, so a row without one can never wake — and
@@ -255,10 +255,17 @@ What this does **not** do:
   runtime guard does not watch it.
 - **`fleet_disk_shedding` is not exported per mount.** One fleet process, one
   data directory, one series.
-- **The worktree sweep is age-based only.** It cannot tell a crashed run's
-  worktree from a running task's, which is why the default (24h) is longer than
-  the default wall-clock ceiling (4h). Lower it only on a box whose tasks are
-  known to be short.
+- **The worktree sweep is age-based, with two guards.** Age alone cannot tell
+  a crashed run's worktree from a running task's, which is why the default
+  (24h) is longer than the default wall-clock ceiling (4h). The age is
+  **floored at 4h** (`worktree.MinPruneAge`, the default ceiling) whatever
+  `--older-than` / `FLEET_WORKTREE_PRUNE_AGE` says — a smaller value is raised
+  with a warning, never honoured. Aged candidates are then cross-checked
+  against `git worktree list --porcelain`: a worktree git reports as
+  **locked** is kept, one git knows is removed through git, and only a
+  directory git does not list is deleted directly. A box whose wall-clock
+  ceiling is raised above 4h must raise the prune age to match; the floor
+  cannot see the override.
 - **The persistent-session cap stays soft.** See above; a busy session is never
   evicted, so the live count can exceed the limit transiently.
 - **No automatic `--deep` prune.** Named-image removal stays a human decision.

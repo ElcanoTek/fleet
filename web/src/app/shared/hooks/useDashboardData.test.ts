@@ -134,3 +134,44 @@ describe("useDashboardData adaptive refresh", () => {
     expect(statsMock.mock.calls.length).toBeGreaterThan(before);
   });
 });
+
+describe("useDashboardData paging", () => {
+  it("snaps back to page 1 when the page size changes", async () => {
+    tasksMock.mockResolvedValue({ data: [], total: 100 });
+    statsMock.mockResolvedValue({});
+    const { result } = renderHook(() => useDashboardData(true));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      result.current.setPage(5);
+    });
+    expect(result.current.page).toBe(5);
+
+    // Page 5 of a 20-per-page list is past the end of a 50-per-page one
+    // ("Page 5 of 2", empty table) — a size change re-buckets from the top.
+    await act(async () => {
+      result.current.setPageSize(50);
+    });
+    expect(result.current.pageSize).toBe(50);
+    expect(result.current.page).toBe(1);
+    await waitFor(() =>
+      expect(tasksMock).toHaveBeenLastCalledWith(expect.stringContaining("limit=50&offset=0")),
+    );
+  });
+
+  it("bumps refreshNonce once per completed reload", async () => {
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+    statsMock.mockResolvedValue({});
+    const { result } = renderHook(() => useDashboardData(true));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.refreshNonce).toBe(1));
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.refreshNonce).toBe(2);
+  });
+});

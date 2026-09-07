@@ -133,8 +133,40 @@ describe("ShareDialog", () => {
     expect(props.onCopyLink).toHaveBeenCalledWith(
       "https://fleet.example/shared/tok",
     );
+    // Revoking asks first — the URL dies for everyone holding it.
     fireEvent.click(screen.getByRole("button", { name: "Stop sharing the link" }));
+    expect(props.onStopLink).not.toHaveBeenCalled();
+    expect(screen.getByText(/Anyone holding the link loses access/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop sharing" }));
     expect(props.onStopLink).toHaveBeenCalled();
+  });
+
+  it("lets the reader keep the link after arming the revoke", () => {
+    const props = renderDialog({
+      conversation: conversation({ share_token: "tok" }),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop sharing the link" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep the link" }));
+    expect(props.onStopLink).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Stop sharing the link" })).toBeInTheDocument();
+  });
+
+  it("disables Create and Stop while a share request is in flight", () => {
+    const create = renderDialog({ busy: true });
+    const createBtn = screen.getByRole("button", { name: "Creating…" });
+    expect(createBtn).toBeDisabled();
+    fireEvent.click(createBtn);
+    expect(create.onCreateLink).not.toHaveBeenCalled();
+    cleanup();
+
+    const stop = renderDialog({
+      busy: true,
+      conversation: conversation({ share_token: "tok" }),
+    });
+    const stopBtn = screen.getByRole("button", { name: "Stop sharing the link" });
+    expect(stopBtn).toBeDisabled();
+    fireEvent.click(stopBtn);
+    expect(stop.onStopLink).not.toHaveBeenCalled();
   });
 
   it("says so rather than acting on nothing when the chat is gone", () => {

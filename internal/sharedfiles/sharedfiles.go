@@ -30,6 +30,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Library locates the two trees. Both paths are absolute after New.
@@ -99,7 +100,11 @@ func SanitizeName(name string) (string, error) {
 		if len(ext) > 20 {
 			ext = ""
 		}
-		out = out[:maxNameLen-len(ext)] + ext
+		// Cut on a rune boundary (truncate.Clamp), never out[:n]: a byte
+		// slice through a multi-byte character yields invalid UTF-8, which
+		// Postgres rejects for a TEXT column — so a long non-ASCII filename
+		// used to 500 the upload instead of landing under a shortened name.
+		out = truncate.Clamp(out, maxNameLen-len(ext), "") + ext
 	}
 	if !filepath.IsLocal(out) {
 		return "", fmt.Errorf("invalid filename %q", name)

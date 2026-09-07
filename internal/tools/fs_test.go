@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
@@ -502,5 +503,73 @@ func TestFileToolsSupportingDocsReadOnlyUnderForcedWorkingDir(t *testing.T) {
 	}
 	if out, err := runViewFile(ctx, sb, ViewFileParams{Path: "../escape.txt"}); err == nil {
 		t.Fatalf("dot-dot escape out of the forced root succeeded: %q", out)
+	}
+}
+
+// TestViewFileTool_LimitInsideMultibyteRune pins the rune-safe page boundary:
+// a byte limit that lands inside a multi-byte rune must not hand the model (or
+// Postgres, when the turn is persisted) a split rune. The trailing partial rune
+// is given back to the next page and the "read more" note names the exact
+// offset to continue from, so paging with it walks the file on rune boundaries.
+func TestViewFileTool_LimitInsideMultibyteRune(t *testing.T) {
+	sb := fsTestSandbox(t)
+	testFile := filepath.Join(t.TempDir(), "utf8.txt")
+	// "héllo": 'h' (1 byte) + 'é' (2 bytes) + "llo" (3 bytes) = 6 bytes.
+	const content = "héllo"
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Limit 2 cuts 'é' in half: the window is trimmed back to "h".
+	res, err := runViewFile(context.Background(), sb, ViewFileParams{Path: testFile, Limit: 2})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !utf8.ValidString(res) {
+		t.Fatalf("view_file returned invalid UTF-8: %q", res)
+	}
+	if !strings.HasPrefix(res, "h\n...") {
+		t.Errorf("limit 2 should return only the complete rune(s): %q", res)
+	}
+	if !strings.Contains(res, "Use offset=1 to read more") {
+		t.Errorf("read-more note should name the rune boundary offset 1: %q", res)
+	}
+
+	// Continuing from the advertised offset yields the rest, starting ON the rune.
+	res, err = runViewFile(context.Background(), sb, ViewFileParams{Path: testFile, Offset: 1, Limit: 3})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !utf8.ValidString(res) || !strings.HasPrefix(res, "él\n...") {
+		t.Errorf("offset 1 limit 3: got %q", res)
+	}
+
+	// A limit that lands exactly on a boundary is untouched, and a read to
+	// EOF never trims (the file's own final bytes are not "partial").
+	res, err = runViewFile(context.Background(), sb, ViewFileParams{Path: testFile, Limit: 3})
+	if err != nil || !strings.HasPrefix(res, "hé\n...") || !strings.Contains(res, "Use offset=3 to read more") {
+		t.Errorf("limit 3: got %q err=%v", res, err)
+	}
+	res, err = runViewFile(context.Background(), sb, ViewFileParams{Path: testFile, Offset: 1})
+	if err != nil || !strings.HasPrefix(res, "éllo") {
+		t.Errorf("offset 1 to EOF: got %q err=%v", res, err)
+	}
+}
+
+func TestTrimTrailingPartialRune(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"h\xc3", "h"},               // split 2-byte rune
+		{"h\xe2\x82", "h"},           // split 3-byte rune (2 of 3 bytes)
+		{"h\xf0\x9f\x98", "h"},       // split 4-byte rune (3 of 4 bytes)
+		{"hé", "hé"},                 // complete rune: untouched
+		{"plain", "plain"},           // ASCII: untouched
+		{"\xc3", "\xc3"},             // would become empty: untouched (progress over purity)
+		{"\xff\xfe", "\xff\xfe"},     // binary that was never UTF-8: untouched
+		{"ok\x80\x80", "ok\x80\x80"}, // stray continuation bytes with no start: untouched
+	}
+	for _, c := range cases {
+		if got := string(trimTrailingPartialRune([]byte(c.in))); got != c.want {
+			t.Errorf("trimTrailingPartialRune(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

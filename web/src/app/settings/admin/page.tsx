@@ -19,6 +19,7 @@ import { fetchStats, formatAgo, formatUSD, type UserStat } from "./lib";
 import { ConnBadge } from "../ui/atoms";
 import { AdminStats, ConnGroup, ConnGroupHead, SetSection, type AdminStat } from "../ui/panels";
 import { useIsAdmin } from "../useIsAdmin";
+import { AdminGateFallback } from "../AdminGateFallback";
 import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 
@@ -178,7 +179,7 @@ export default function AdminOverviewPage() {
     };
   }, [admin]);
 
-  if (admin !== "admin") return null;
+  if (admin !== "admin") return <AdminGateFallback state={admin} />;
 
   // Manual refresh: refetches BOTH health and usage stats (setState in an
   // event handler is fine; results land via the apply* promise callbacks).

@@ -15,6 +15,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -112,7 +113,11 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 
 		n, err := s.store.CountUsers(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			// Pre-login endpoint: the caller has not authenticated, so a raw
+			// store error (Postgres text names tables, columns, sometimes
+			// values) is logged here and never echoed to the login form.
+			log.Printf("auth/verify: count users: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		if n == 0 {
@@ -133,7 +138,8 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, verifyResponse{OK: false, Error: "invalid credentials"})
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("auth/verify: verify user: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, verifyResponse{OK: true})

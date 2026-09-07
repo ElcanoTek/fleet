@@ -267,3 +267,39 @@ func TestPromptCachingStep_CompactionSummaryBreakpoint(t *testing.T) {
 		t.Errorf("want 4 markers (system + summary + last two non-system), got %d", count)
 	}
 }
+
+// TestPromptCachingStep_SkipsBudgetWindDownNotice pins that the request-local
+// wind-down notice (appended by budgetWindDownStep, different bytes every
+// step) does not consume a rolling recency breakpoint: both rolling slots land
+// on the stable history messages before it.
+func TestPromptCachingStep_SkipsBudgetWindDownNotice(t *testing.T) {
+	orch := newOrchestrationState(nil, 0)
+	orch.setCeilings(10.0, 0)
+	orch.CostUSD = 9.0
+	notice := fantasy.NewUserMessage(orch.checkBudgetWindDown(0.5).windDownNotice())
+	if !isBudgetWindDownNotice(notice) {
+		t.Fatal("notice not recognised by its prefix matcher")
+	}
+	msgs := []fantasy.Message{
+		fantasy.NewSystemMessage("sys"),
+		fantasy.NewUserMessage("u1"),
+		newAssistantMessage("a1"),
+		fantasy.NewUserMessage("u2"),
+		notice,
+	}
+	step := promptCachingStep("anthropic/claude-sonnet-4.6")
+	_, res, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.Messages
+	if hasCacheMarker(out[4]) {
+		t.Error("wind-down notice carries a breakpoint; its bytes change every step so it can never hit")
+	}
+	if !hasCacheMarker(out[3]) || !hasCacheMarker(out[2]) {
+		t.Errorf("rolling breakpoints should land on the two history messages before the notice: u2=%v a1=%v", hasCacheMarker(out[3]), hasCacheMarker(out[2]))
+	}
+	if !hasCacheMarker(out[0]) || hasCacheMarker(out[1]) {
+		t.Errorf("system=%v u1=%v; want system marked, u1 unmarked", hasCacheMarker(out[0]), hasCacheMarker(out[1]))
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -124,9 +125,14 @@ func adminList(argv []string) int {
 	fs := flag.NewFlagSet("admin list", flag.ContinueOnError)
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL)")
-	_, flagArgs := splitPositionalValueFlags(argv)
-	if err := fs.Parse(flagArgs); err != nil {
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	// No positional: a stray argument is an error, not silently discarded (the
+	// same rule as `sched apikey list`).
+	if err := fs.Parse(argv); err != nil {
 		return 1
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "admin list takes no arguments (got %q)", fs.Args())
 	}
 	chatDsn, err := chatDSN(*chatURL)
 	if err != nil {
@@ -157,17 +163,32 @@ func adminList(argv []string) int {
 		}
 	}
 
+	if *asJSON {
+		type row struct {
+			Email          string `json:"email"`
+			Role           string `json:"role"`
+			OpsCenterAdmin bool   `json:"ops_center_admin"`
+		}
+		rows := make([]row, 0, len(users))
+		for _, u := range users {
+			rows = append(rows, row{Email: u.Email, Role: u.Role, OpsCenterAdmin: opsAdmins[strings.ToLower(u.Email)]})
+		}
+		return printJSON(rows)
+	}
 	if len(users) == 0 {
 		fmt.Println("no chat users yet — add an admin with: fleet admin add <email>")
 		return 0
 	}
-	// email  chat-role  ops-center — tab-separated so it stays column-able.
+	rows := make([][]string, 0, len(users))
 	for _, u := range users {
 		ops := "-"
 		if opsAdmins[strings.ToLower(u.Email)] {
 			ops = "ops-center-admin"
 		}
-		fmt.Printf("%s\t%s\t%s\n", u.Email, u.Role, ops)
+		rows = append(rows, []string{u.Email, u.Role, ops})
+	}
+	if err := renderTable(os.Stdout, []string{"EMAIL", "CHAT_ROLE", "OPS_CENTER"}, rows); err != nil {
+		return errf(5, "render: %v", err)
 	}
 	return 0
 }

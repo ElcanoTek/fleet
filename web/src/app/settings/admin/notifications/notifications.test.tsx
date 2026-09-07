@@ -144,18 +144,49 @@ describe("NotificationsAdminPage", () => {
     expect(JSON.parse(String(put?.[1]?.body)).smtp_password).toBe("");
   });
 
-  it("reverting to env config DELETEs after confirmation", async () => {
+  it("reverting to env config DELETEs only after the inline confirm's second click", async () => {
     const adminView: View = { ...ENV_VIEW, source: "admin" };
     const fetchMock = mockFetch(adminView, (url, init) => {
       if (init.method === "DELETE") return { status: 200, body: ENV_VIEW };
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    // No native dialog: a window.confirm call would be a regression.
+    const confirmSpy = vi.fn().mockReturnValue(true);
+    vi.stubGlobal("confirm", confirmSpy);
     render(<NotificationsAdminPage />);
-    fireEvent.click(await screen.findByTestId("notify-revert", undefined, { timeout: 5000 }));
+    const revert = await screen.findByTestId("notify-revert", undefined, { timeout: 5000 });
+    const deletes = () => fetchMock.mock.calls.filter(([, i]) => i?.method === "DELETE");
+    fireEvent.click(revert); // arms
+    expect(revert).toHaveTextContent("Confirm: discard saved settings");
+    expect(deletes()).toHaveLength(0);
+    fireEvent.click(revert); // fires
     await waitFor(() => expect(screen.getByText("Env config")).toBeInTheDocument());
-    expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(true);
+    expect(deletes()).toHaveLength(1);
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it("disables Send test while the form is dirty and says why, re-enabling after save", async () => {
+    const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
+      if (init.method === "PUT") return { status: 200, body: { ...ENV_VIEW, source: "admin" } };
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsAdminPage />);
+    const testBtn = await screen.findByTestId("notify-test-email", undefined, { timeout: 5000 });
+    expect(testBtn).toBeEnabled();
+    expect(testBtn).not.toHaveAttribute("title");
+    fireEvent.change(screen.getByTestId("notify-webhook-url"), {
+      target: { value: "https://hooks.example.com/x" },
+    });
+    // Dirty: a test now would silently exercise the OLD saved config.
+    expect(testBtn).toBeDisabled();
+    expect(testBtn).toHaveAttribute("title", "Tests use the saved config; save your changes first.");
+    expect(screen.getByTestId("notify-test-webhook")).toBeDisabled();
+    fireEvent.click(testBtn);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/test"))).toBe(false);
+    fireEvent.click(screen.getByTestId("notify-save"));
+    await waitFor(() => expect(screen.getByTestId("notify-test-email")).toBeEnabled());
   });
 
   it("the notify-on chips parse and rewrite the CSV, preserving unknown tokens", async () => {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strings"
@@ -1301,5 +1302,102 @@ func TestServer_UnknownMethod(t *testing.T) {
 	}
 	if resp.ID != 7 || resp.Err == "" {
 		t.Fatalf("resp = %+v, want ID 7 with a non-empty Err for the unknown method", resp)
+	}
+}
+
+// oneShotConn is an io.ReadWriteCloser that hands Serve exactly one request
+// frame and then EOF, records every frame Serve writes, and flags a write that
+// lands AFTER Serve has returned. It stands in for the socket so the test can
+// observe the drain ordering directly, without a real peer racing it.
+type oneShotConn struct {
+	reader io.Reader
+
+	mu            sync.Mutex
+	out           bytes.Buffer
+	serveReturned bool
+	lateWrite     bool
+}
+
+func (c *oneShotConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
+func (c *oneShotConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.serveReturned {
+		c.lateWrite = true
+	}
+	return c.out.Write(p)
+}
+
+func (c *oneShotConn) Close() error { return nil }
+
+func (c *oneShotConn) markReturned() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.serveReturned = true
+}
+
+// TestServe_PanicResponseIsWrittenBeforeDrainReturns pins the defer ORDER in
+// every request goroutine: wg.Done must be registered first (so it runs last),
+// because recoverBackendPanic is what writes the incident response. With the
+// order reversed, wg.Done ran before the recovery write, Serve's drain saw the
+// group empty and returned, and the parent could close the conn while the
+// panic response was still unwritten — the client then hung until its own
+// deadline instead of receiving the correlated error. Every request kind that
+// contains a panic is driven through the same one-frame-then-EOF conn.
+func TestServe_PanicResponseIsWrittenBeforeDrainReturns(t *testing.T) {
+	const secret = "backend-secret-must-stay-in-the-broker"
+	cases := []struct {
+		name    string
+		backend Backend
+		req     request
+	}{
+		{"call", &fakeBroker{panicCall: secret}, request{ID: 7, Method: methodCall, Server: "s", Tool: "t"}},
+		{"list_tools", &fakeBroker{panicListTools: secret}, request{ID: 8, Method: methodListTools}},
+		{"list_accounts", &fakeBroker{panicListAccounts: secret}, request{ID: 9, Method: methodListAccounts, Server: "s"}},
+		{"scope_open", &fakeScopedBroker{fakeBroker: &fakeBroker{}, panicOpen: secret}, request{ID: 10, Method: methodOpenScope}},
+		{"scope_call", &fakeScopedBroker{fakeBroker: &fakeBroker{}, panicScopeCall: secret}, request{ID: 11, Method: methodCall, Scope: "scope-1", Server: "s", Tool: "t"}},
+		{"scope_close", &fakeScopedBroker{fakeBroker: &fakeBroker{}, panicClose: secret}, request{ID: 12, Method: methodCloseScope, Scope: "scope-1"}},
+		{"reload", &fakeScopedBroker{fakeBroker: &fakeBroker{}, panicReload: secret}, request{ID: 13, Method: methodReload}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frame, err := json.Marshal(tc.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn := &oneShotConn{reader: bytes.NewReader(append(frame, '\n'))}
+			// Repeat to give a wrong ordering many chances to lose the race.
+			for i := 0; i < 50; i++ {
+				conn.mu.Lock()
+				conn.out.Reset()
+				conn.serveReturned = false
+				conn.mu.Unlock()
+				conn.reader = bytes.NewReader(append(frame, '\n'))
+
+				if err := NewServer(tc.backend).Serve(context.Background(), conn); err != nil {
+					t.Fatalf("Serve: %v", err)
+				}
+				conn.markReturned()
+
+				conn.mu.Lock()
+				written := conn.out.String()
+				late := conn.lateWrite
+				conn.mu.Unlock()
+				if late {
+					t.Fatalf("iteration %d: the panic response was written AFTER Serve returned", i)
+				}
+				var resp response
+				if err := json.Unmarshal([]byte(strings.TrimSpace(written)), &resp); err != nil {
+					t.Fatalf("iteration %d: Serve returned with no complete response written (%q): %v", i, written, err)
+				}
+				if resp.ID != tc.req.ID || !strings.HasPrefix(resp.Err, "mcpbroker backend panic (incident inc_") {
+					t.Fatalf("iteration %d: response = %+v, want the correlated panic error for id %d", i, resp, tc.req.ID)
+				}
+				if strings.Contains(written, secret) {
+					t.Fatalf("iteration %d: panic value crossed the pipe: %s", i, written)
+				}
+			}
+		})
 	}
 }

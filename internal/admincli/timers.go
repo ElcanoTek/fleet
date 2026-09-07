@@ -340,36 +340,15 @@ func findDeployDir(flagSrc string) string {
 
 // resolveBackupDir mirrors the unit's own resolution: FLEET_BACKUP_DIR from
 // the process env, else from the server env file (which the unit reads via
-// EnvironmentFile=), else the in-unit default /var/backups/fleet. A relative
+// EnvironmentFile=) — the same envOrFile read `fleet backup` uses for its
+// default --out — else the in-unit default /var/backups/fleet. A relative
 // value is ignored — the unit runs with "/" as cwd, so a relative dir is a
 // misconfiguration bootstrap refuses; here we just fall back to the default
 // rather than creating a directory literally named "backups" under /.
 func resolveBackupDir() string {
-	dir := strings.TrimSpace(os.Getenv("FLEET_BACKUP_DIR"))
-	if dir == "" {
-		dir = envFileGet(serverEnvFile(""), "FLEET_BACKUP_DIR")
-	}
+	dir := configuredBackupDir()
 	if filepath.IsAbs(dir) {
 		return dir
 	}
 	return "/var/backups/fleet"
-}
-
-// envFileGet reads one KEY from an env file WITHOUT sourcing it (the file
-// holds secrets; sourcing would execute arbitrary content on a tampered box).
-// Last assignment wins, surrounding quotes stripped — the same contract as
-// doctor.sh/bootstrap.sh's env_get. Unreadable file (including not-root on the
-// 0600 file) reads as unset.
-func envFileGet(file, key string) string {
-	body, err := os.ReadFile(file) //nolint:gosec // G304: operator-config path (FLEET_ENV_FILE / the fixed /etc/fleet default), never request input.
-	if err != nil {
-		return ""
-	}
-	val := ""
-	for _, line := range strings.Split(string(body), "\n") {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), key+"="); ok {
-			val = strings.Trim(rest, `"'`)
-		}
-	}
-	return val
 }

@@ -410,3 +410,82 @@ describe("TasksTable titles", () => {
     expect(document.querySelector(".task-title-line")).toBeNull();
   });
 });
+
+describe("TasksTable zero-row states", () => {
+  function renderEmpty(extra: Partial<TasksTableProps>) {
+    return render(
+      <TasksTable
+        tasks={[]}
+        total={0}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+        {...extra}
+      />,
+    );
+  }
+
+  it("shows a loading line during the first fetch, not the empty message", () => {
+    renderEmpty({ loading: true });
+    expect(screen.getAllByTestId("tasks-loading").length).toBeGreaterThan(0);
+    expect(screen.queryByText("No tasks created yet")).toBeNull();
+  });
+
+  it("shows the load error with a working Retry instead of 'No tasks created yet'", () => {
+    const onRetry = vi.fn();
+    renderEmpty({ error: "HTTP 503", onRetry });
+    const alerts = screen.getAllByTestId("tasks-load-error");
+    expect(alerts[0]).toHaveTextContent("Couldn't load tasks: HTTP 503");
+    expect(screen.queryByText("No tasks created yet")).toBeNull();
+    fireEvent.click(within(alerts[0]).getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the genuine empty message when loaded with no error", () => {
+    renderEmpty({});
+    expect(screen.getAllByText("No tasks created yet").length).toBeGreaterThan(0);
+  });
+});
+
+describe("TasksTable Clear filters", () => {
+  function renderFiltered(filters: TaskFilters, extra: Partial<TasksTableProps> = {}) {
+    return render(
+      <TasksTable
+        tasks={[]}
+        total={0}
+        page={1}
+        pageSize={20}
+        filters={filters}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+        {...extra}
+      />,
+    );
+  }
+
+  it("is hidden while no filter is set", () => {
+    renderFiltered(FILTERS, { onClearFilters: () => {} });
+    expect(screen.queryByTestId("tasks-clear-filters")).toBeNull();
+  });
+
+  it("appears once a filter is set and resets everything through the parent", () => {
+    const onClearFilters = vi.fn();
+    renderFiltered({ ...FILTERS, status: "running" }, { onClearFilters });
+    // The search draft typed inside the debounce window is dropped too.
+    fireEvent.change(screen.getByLabelText("Search tasks"), { target: { value: "half-typ" } });
+    fireEvent.click(screen.getByTestId("tasks-clear-filters"));
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Search tasks")).toHaveValue("");
+  });
+
+  it("is omitted entirely when the parent does not wire it", () => {
+    renderFiltered({ ...FILTERS, createdBy: "me" });
+    expect(screen.queryByTestId("tasks-clear-filters")).toBeNull();
+  });
+});

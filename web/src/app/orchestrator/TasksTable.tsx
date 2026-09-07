@@ -60,9 +60,19 @@ export type TasksTableProps = {
   pageSize: number;
   filters: TaskFilters;
   onFilters: (next: Partial<TaskFilters>) => void;
+  // Reset every filter at once (useDashboardData.clearFilters). The button
+  // only renders while some filter is set, and only when the parent wires it.
+  onClearFilters?: () => void;
   onPage: (page: number) => void;
   onPageSize: (size: number) => void;
   onOpenLogs: (task: Task) => void;
+  // First-load and failure state (from useDashboardData). With neither, an
+  // empty list rendered "No tasks created yet" during the first fetch AND on a
+  // backend outage — an outage looked like an empty account. Both only matter
+  // when there are no rows to show; a refresh of a populated list is silent.
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
   onEdit?: (task: Task) => void;
   // Kick this task off now. The parent owns the confirm + API call so the
   // table stays presentational (same contract as onEdit/onOpenLogs).
@@ -95,9 +105,13 @@ export function TasksTable({
   pageSize,
   filters,
   onFilters,
+  onClearFilters,
   onPage,
   onPageSize,
   onOpenLogs,
+  loading = false,
+  error = null,
+  onRetry,
   onEdit,
   onRunNow,
   onStop,
@@ -130,6 +144,13 @@ export function TasksTable({
       setQueryDraft(filters.query);
     }
   }, [filters.query]);
+
+  const anyFilter =
+    filters.status !== "" ||
+    filters.query !== "" ||
+    filters.scheduledOnly ||
+    filters.completedToday ||
+    filters.createdBy !== "";
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const start = total > 0 ? Math.min((page - 1) * pageSize + 1, total) : 0;
@@ -202,6 +223,23 @@ export function TasksTable({
             onChange={(e) => setQueryDraft(e.target.value)}
           />
         </div>
+        {onClearFilters && anyFilter ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-small"
+            data-testid="tasks-clear-filters"
+            onClick={() => {
+              // Drop the search draft too: text typed inside the debounce
+              // window has not reached filters.query yet, and the re-seed
+              // effect below only fires when THAT changes.
+              lastPropagated.current = "";
+              setQueryDraft("");
+              onClearFilters();
+            }}
+          >
+            Clear filters
+          </button>
+        ) : null}
       </div>
 
       <div className="table-wrapper tasks-table-wrapper">
@@ -222,7 +260,7 @@ export function TasksTable({
             {tasks.length === 0 ? (
               <tr>
                 <td colSpan={8} className="table-empty">
-                  No tasks created yet
+                  <TasksEmptyState loading={loading} error={error} onRetry={onRetry} />
                 </td>
               </tr>
             ) : (
@@ -359,7 +397,9 @@ export function TasksTable({
           identifies the task at a glance. */}
       <ul className="task-cards" data-testid="task-cards">
         {tasks.length === 0 ? (
-          <li className="table-empty">No tasks created yet</li>
+          <li className="table-empty">
+            <TasksEmptyState loading={loading} error={error} onRetry={onRetry} />
+          </li>
         ) : (
           tasks.map((task) => {
             const hasLogs = !!task.agent_session_id;
@@ -550,3 +590,37 @@ export function TasksTable({
 }
 
 export default TasksTable;
+
+// TasksEmptyState is the zero-row body of both the table and the phone cards:
+// a load in flight, a failed load (with Retry when the parent offers one), or
+// the genuine empty account — in that order, so an outage never reads as
+// "nothing here".
+function TasksEmptyState({
+  loading,
+  error,
+  onRetry,
+}: {
+  loading: boolean;
+  error: string | null;
+  onRetry?: () => void;
+}) {
+  if (error) {
+    return (
+      <span role="alert" data-testid="tasks-load-error">
+        Couldn&apos;t load tasks: {error}
+        {onRetry ? (
+          <>
+            {" "}
+            <button type="button" className="btn btn-small" onClick={onRetry}>
+              Retry
+            </button>
+          </>
+        ) : null}
+      </span>
+    );
+  }
+  if (loading) {
+    return <span data-testid="tasks-loading">Loading tasks…</span>;
+  }
+  return <>No tasks created yet</>;
+}

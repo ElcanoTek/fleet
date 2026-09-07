@@ -180,7 +180,12 @@ real values when someone actually packages the chart.
 CalVer cannot warn you that an upgrade is breaking, and fleet does not pretend
 otherwise. A breaking change is announced in prose:
 
-- a `CHANGELOG.md` entry saying plainly what breaks and what an operator must do;
+- the **promotion PR's body**, which `release.yml` copies into the published
+  release notes ahead of GitHub's generated PR list — the generated list sees
+  only the squash-merged promotion, never the `dev` PRs behind it — so the
+  promoter states there what breaks and what an operator must do, and the
+  `dev` PR's own "What changed, and why" carries the detail one click away
+  ([ADR-0061](adr/0061-retire-the-changelog.md));
 - an **ADR** in [`adr/`](adr/) when it adds, weakens, or reverses an invariant
   (required by [`../AGENTS.md`](../AGENTS.md));
 - for the HTTP API specifically, the `Deprecation` / `Sunset` / `Link` contract
@@ -219,7 +224,9 @@ For the record, so nobody reintroduces it:
 - a `fleet-admin` removal trigger keyed to a 1.0.0 that was never coming,
   restated across eight files and unreachable in all of them.
 
-`CHANGELOG.md` is still maintained, and is still where a user-visible change gets
-explained (the PR template asks for it). What it no longer does is pretend to be
-a semver release history: it is a running log, and the per-release notes are
-generated from the commits between tags.
+`CHANGELOG.md` itself was retired on 2026-09-07
+([ADR-0061](adr/0061-retire-the-changelog.md)): a single file every PR
+prepended to was the repository's hottest merge conflict, and the *why* it
+carried already lives in each PR's "What changed, and why". The per-release
+notes are generated from the commits and PR titles between tags; the file's
+history is in git.

@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { orchestratorApi, type SLAReport } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
+import { plural } from "./plural";
 
 // SLAReportPanel — the Operations Center SLA tab (#274): a per-task-name table
 // of the actual-duration p50/p95 + breach rate over a window, plus a tiny SVG
@@ -17,6 +18,7 @@ export function SLAReportPanel() {
     data: report,
     loading,
     error,
+    reload,
   } = useCancellableFetch(
     useCallback(() => orchestratorApi.slaReport(days), [days]),
     [days],
@@ -26,6 +28,18 @@ export function SLAReportPanel() {
     <div className="section" role="region" aria-labelledby="slaHeading">
       <div className="section-header">
         <h2 id="slaHeading">SLA Report</h2>
+        {/* No auto-refresh on this tab (only the task list polls), so the
+            report is as fresh as the last click here or a window change. */}
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          aria-label="Refresh SLA report"
+          data-testid="sla-refresh"
+          disabled={loading}
+          onClick={() => void reload()}
+        >
+          Refresh
+        </button>
         <div className="sla-window-select">
           <label htmlFor="slaWindow">Window</label>
           <select
@@ -102,7 +116,7 @@ function SLATable({ report }: { report: SLAReport }) {
           })}
         </tbody>
       </table>
-      <p className="refresh-note">Window: {report.period} · {report.tasks.length} task bucket(s)</p>
+      <p className="refresh-note">Window: {report.period} · {plural(report.tasks.length, "task bucket")}</p>
     </div>
   );
 }

@@ -114,7 +114,8 @@ type RunIf struct {
 	// ExitCodeIs is the exit code that means "run the task". Default 0.
 	ExitCodeIs int `json:"exit_code_is,omitempty"`
 	// TimeoutSeconds is the hard wall-clock timeout for the check, enforced via
-	// exec.CommandContext. Clamped to [1, 300] at validation; default 30.
+	// exec.CommandContext. Omitted/0 means the default 30; a set value must be
+	// in [1, 300] (validation rejects negative and >300).
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 	// OnError governs the check-itself-errored case (timeout, crash, signal):
 	//   "run"  (default) — run the task anyway (safe default)
@@ -132,8 +133,12 @@ func (r *RunIf) Validate() error {
 	if strings.TrimSpace(r.Command) == "" {
 		return fmt.Errorf("run_if.command must be non-empty")
 	}
-	if r.TimeoutSeconds < 1 || r.TimeoutSeconds > 300 {
-		return fmt.Errorf("run_if.timeout_seconds must be between 1 and 300")
+	// 0 is the omitted-field value (`omitempty`) and means "the default 30" —
+	// the same reading EffectiveTimeoutSeconds and Normalized already give it.
+	// Rejecting it here contradicted the schema and forced every client to
+	// spell out the default.
+	if r.TimeoutSeconds < 0 || r.TimeoutSeconds > 300 {
+		return fmt.Errorf("run_if.timeout_seconds must be between 1 and 300 (omit or 0 for the default 30)")
 	}
 	switch r.OnError {
 	case "", RunIfOnErrorRun, RunIfOnErrorSkip:
@@ -1219,6 +1224,13 @@ type Task struct {
 	// server-side by POST /tasks/{id}/rerun|clone. nil for original tasks.
 	// Persisted; not settable by clients.
 	SourceTaskID *uuid.UUID `json:"source_task_id,omitempty"`
+	// PreviousOccurrenceID is the recurring occurrence this row was spawned to
+	// follow (storage.scheduleNextRecurrence stamps it on the successor). It is
+	// what lets carry_context reach the previous occurrence's transcript: each
+	// firing is a fresh row, so the run's own id has no prior log. nil for
+	// non-recurring tasks and for the first occurrence. Persisted; immutable
+	// lineage stamped at spawn, never exported, not settable by clients.
+	PreviousOccurrenceID *uuid.UUID `json:"previous_occurrence_id,omitempty"`
 	// NextRunAtLocal is ScheduledFor rendered in Timezone (RFC3339 with offset),
 	// populated at query time for display so callers need no client-side tz math.
 	// Not persisted; nil when the task has no scheduled_for.

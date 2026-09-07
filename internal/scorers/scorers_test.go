@@ -73,6 +73,9 @@ func TestShell(t *testing.T) {
 		{"non-zero exit fails with code", fakeBash{res: sandbox.BashResult{ExitCode: 3}}, false, "shell:exit_3"},
 		{"timeout fails", fakeBash{res: sandbox.BashResult{TimedOut: true}}, false, "shell:timeout"},
 		{"runner error fails", fakeBash{err: errors.New("boom")}, false, "shell:error"},
+		// RunBash reports a caller cancel as (res, nil) with ExitCode undefined
+		// (here the zero value): it must never score as passed.
+		{"cancelled fails", fakeBash{res: sandbox.BashResult{Cancelled: true, ExitCode: 0}}, false, "shell:cancelled"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,11 +85,18 @@ func TestShell(t *testing.T) {
 			}
 		})
 	}
+	// A context already cancelled by the caller is a cancel even when the
+	// runner double did not flag it.
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if pass, label := Shell(cctx, fakeBash{res: sandbox.BashResult{ExitCode: 0}}, "true", time.Second); pass || label != "shell:cancelled" {
+		t.Fatalf("cancelled ctx: got (%v, %q)", pass, label)
+	}
 }
 
 func TestFirstWordIsYes(t *testing.T) {
-	yes := []string{"YES", "yes, it did", " **Yes** — complete", "> yes"}
-	no := []string{"NO", "not yet", "The answer is yes", ""}
+	yes := []string{"YES", "yes, it did", " **Yes** — complete", "> yes", "Yes.", "YES\nDetails follow", "yes—done"}
+	no := []string{"NO", "not yet", "The answer is yes", "", "Yesterday the build failed", "yes2", "YESNO"}
 	for _, s := range yes {
 		if !FirstWordIsYes(s) {
 			t.Errorf("FirstWordIsYes(%q) = false; want true", s)

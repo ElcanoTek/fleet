@@ -499,3 +499,89 @@ func TestEgressProxyProductionGuards(t *testing.T) {
 		}
 	})
 }
+
+// TestEgressProxyTunnelDrainDeadlineIsIdleNotAbsolute pins that the drain
+// bound is an IDLE bound: after the client half-closes (arming the drain), an
+// upstream that keeps streaming for longer than the whole drain window must not
+// be cut off. The pre-fix absolute deadline truncated any allowlisted download
+// that outlived the window — silently, since the io.Copy error was discarded.
+func TestEgressProxyTunnelDrainDeadlineIsIdleNotAbsolute(t *testing.T) {
+	const chunks, chunkEvery = 12, 40 * time.Millisecond // ~480ms total, drain window 150ms
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("upstream listen: %v", err)
+	}
+	defer upstream.Close()
+	go func() {
+		conn, aerr := upstream.Accept()
+		if aerr != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 4)
+		_, _ = io.ReadFull(conn, buf) // "ping"
+		for i := 0; i < chunks; i++ {
+			time.Sleep(chunkEvery)
+			if _, werr := fmt.Fprintf(conn, "chunk-%02d\n", i); werr != nil {
+				return
+			}
+		}
+	}()
+	upstreamPort := upstream.Addr().(*net.TCPAddr).Port
+
+	p := NewEgressProxy()
+	p.requirePort = ""
+	p.dial = func(ctx context.Context, host, port string) (net.Conn, error) {
+		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	}
+	p.drainTimeout = 150 * time.Millisecond // shorter than the transfer, longer than one chunk gap
+	if err := p.Start(); err != nil {
+		t.Fatalf("start proxy: %v", err)
+	}
+	defer func() { _ = p.Shutdown(context.Background()) }()
+	tok, release, err := p.Register([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", p.Port()))
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	auth := base64.StdEncoding.EncodeToString([]byte(tok + ":"))
+	fmt.Fprintf(conn, "CONNECT 127.0.0.1:%d HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nProxy-Authorization: Basic %s\r\n\r\n", upstreamPort, upstreamPort, auth)
+	br := bufio.NewReader(conn)
+	status, err := br.ReadString('\n')
+	if err != nil || !strings.Contains(status, "200") {
+		t.Fatalf("CONNECT status = %q, err = %v; want 200", status, err)
+	}
+	for {
+		line, herr := br.ReadString('\n')
+		if herr != nil {
+			t.Fatalf("read CONNECT headers: %v", herr)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	// Half-close arms the drain deadline on the surviving (upstream→client)
+	// direction while the upstream is still streaming.
+	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatalf("half-close: %v", err)
+	}
+	body, err := io.ReadAll(br)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	got := strings.Count(string(body), "chunk-")
+	if got != chunks {
+		t.Fatalf("received %d of %d chunks — the drain deadline truncated a progressing transfer:\n%s", got, chunks, body)
+	}
+}

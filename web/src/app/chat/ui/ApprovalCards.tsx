@@ -192,6 +192,44 @@ function ApprovalCountdown({
   );
 }
 
+// ApprovalSubmitError renders the reason the last Approve/Deny click did not
+// reach the server — a non-2xx or a dropped connection. The card stays pending
+// and its buttons re-enable, because the server still holds the approval open:
+// marking the card "failed" locally (which this used to do) removed the only
+// way to answer it while the agent kept waiting, and the countdown eventually
+// auto-denied an action the user had already tried to approve. Only a
+// server-reported terminal status moves the card out of pending.
+// describeSubmitFailure turns a non-2xx approval POST into the one line the
+// card shows. The status is always there; the body is included when it is a
+// short plain sentence (the API's error strings), skipped when it is empty or
+// a page of HTML from a proxy.
+async function describeSubmitFailure(response: Response): Promise<string> {
+  let body = "";
+  try {
+    body = (await response.text()).trim();
+  } catch {
+    // Body unreadable — the status alone still says what happened.
+  }
+  const short = body.length > 0 && body.length <= 200 && !body.startsWith("<");
+  return short
+    ? `Couldn't submit your decision (HTTP ${response.status}): ${body}`
+    : `Couldn't submit your decision (HTTP ${response.status}).`;
+}
+
+function ApprovalSubmitError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <p
+      role="alert"
+      data-testid="approval-submit-error"
+      className="text-[0.72rem] leading-[1.45]"
+      style={{ color: "var(--color-danger)" }}
+    >
+      {message} Try again.
+    </p>
+  );
+}
+
 // ApprovalResult renders the text a resolved approval came back with.
 //
 // This existed four times in this file with three different treatments. Only the
@@ -259,6 +297,9 @@ export function ApprovalCard({
   onAskAgain?: (approval: Approval) => void;
 }) {
   const [submitting, setSubmitting] = useState<"send" | "cancel" | null>(null);
+  // Why the last resolve attempt did not reach the server, shown inline under
+  // the buttons; cleared on the next attempt. See ApprovalSubmitError.
+  const [submitError, setSubmitError] = useState<string | null>(null);
   // Both card kinds auto-expand: preview because seeing the render IS
   // the feature, send because users were missing the Send button when
   // the card landed below an already-expanded preview iframe and the
@@ -285,6 +326,7 @@ export function ApprovalCard({
   ) => {
     if (submitting || approval.status !== "pending" || !conversationId) return;
     setSubmitting(approved ? "send" : "cancel");
+    setSubmitError(null);
     try {
       const response = await fetch(
         `/api/conversations/${conversationId}/approvals/${approval.id}`,
@@ -299,7 +341,11 @@ export function ApprovalCard({
         },
       );
       if (!response.ok) {
-        onResolved({ ...approval, status: "failed", resultText: await response.text() });
+        // The server did not record a decision, so the approval is still
+        // pending there — keep the card pending here too and let the user
+        // retry, rather than stamping a terminal "failed" the server never
+        // reported.
+        setSubmitError(await describeSubmitFailure(response));
         return;
       }
       const data = (await response.json()) as {
@@ -313,11 +359,10 @@ export function ApprovalCard({
         resultText: data.result_text,
       });
     } catch (err) {
-      onResolved({
-        ...approval,
-        status: "failed",
-        resultText: err instanceof Error ? err.message : "Request failed.",
-      });
+      // Network failure: nothing reached the server, same posture as a non-2xx.
+      setSubmitError(
+        `Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`,
+      );
     } finally {
       setSubmitting(null);
     }
@@ -328,6 +373,7 @@ export function ApprovalCard({
       <BashApprovalCard
         approval={approval}
         submitting={submitting}
+        submitError={submitError}
         onResolve={resolve}
         onAskAgain={onAskAgain}
       />
@@ -351,6 +397,7 @@ export function ApprovalCard({
       <ScheduleTaskCard
         approval={approval}
         submitting={submitting}
+        submitError={submitError}
         onResolve={resolve}
         onAskAgain={onAskAgain}
       />
@@ -362,6 +409,7 @@ export function ApprovalCard({
       <ManageTasksCard
         approval={approval}
         submitting={submitting}
+        submitError={submitError}
         onResolve={resolve}
         onAskAgain={onAskAgain}
       />
@@ -378,6 +426,7 @@ export function ApprovalCard({
       <GenericActionCard
         approval={approval}
         submitting={submitting}
+        submitError={submitError}
         onResolve={resolve}
         applyAll={applyAll}
         onApplyAllChange={setApplyAll}
@@ -522,6 +571,7 @@ export function ApprovalCard({
             >
               {submitting === "send" ? "Dismissing…" : "Dismiss"}
             </button>
+            <ApprovalSubmitError message={submitError} />
           </div>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
@@ -545,6 +595,7 @@ export function ApprovalCard({
             </div>
             <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} />
             <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+            <ApprovalSubmitError message={submitError} />
             {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
             {/* Batch approval (#300): pre-approve/deny the rest of this tool's
                 calls for the conversation so the agent isn't gated per call. */}
@@ -592,6 +643,7 @@ export function ApprovalCard({
 function GenericActionCard({
   approval,
   submitting,
+  submitError,
   onResolve,
   applyAll,
   onApplyAllChange,
@@ -599,6 +651,7 @@ function GenericActionCard({
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
+  submitError: string | null;
   onResolve: (approved: boolean) => void;
   applyAll: boolean;
   onApplyAllChange: (v: boolean) => void;
@@ -698,6 +751,7 @@ function GenericActionCard({
           </div>
           <ApprovalSeatBadge server={approval.mcpServer} account={approval.mcpAccount} verb="Runs as" />
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+          <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
           {/* Batch approval (#300), same contract as the email card. */}
           <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
@@ -725,11 +779,13 @@ function GenericActionCard({
 function BashApprovalCard({
   approval,
   submitting,
+  submitError,
   onResolve,
   onAskAgain,
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
+  submitError: string | null;
   onResolve: (approved: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
 }) {
@@ -797,6 +853,7 @@ function BashApprovalCard({
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+          <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
       ) : (
@@ -820,11 +877,13 @@ function BashApprovalCard({
 function ScheduleTaskCard({
   approval,
   submitting,
+  submitError,
   onResolve,
   onAskAgain,
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
+  submitError: string | null;
   onResolve: (approved: boolean, edits?: { name?: string; prompt?: string; cron?: string }) => void;
   onAskAgain?: (approval: Approval) => void;
 }) {
@@ -1003,6 +1062,7 @@ function ScheduleTaskCard({
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+          <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
       ) : (
@@ -1034,11 +1094,13 @@ function ScheduleTaskCard({
 function ManageTasksCard({
   approval,
   submitting,
+  submitError,
   onResolve,
   onAskAgain,
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
+  submitError: string | null;
   onResolve: (approved: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
 }) {
@@ -1152,6 +1214,7 @@ function ManageTasksCard({
             </button>
           </div>
           <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+          <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
       ) : (
@@ -1205,6 +1268,9 @@ function SuggestAdvancedModelCard({
   onSwitchAndRetry?: () => void | Promise<void>;
 }) {
   const [pending, setPending] = useState<SuggestAction | null>(null);
+  // Same contract as ApprovalCard.resolve: a failed POST leaves the nudge
+  // pending (the server never recorded a choice) and says why, inline.
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const reason = approval.summary.reason ?? "Advanced mode would handle this better.";
   const recommendedSlug = approval.summary.recommend_model ?? currentAdvancedModel();
@@ -1213,6 +1279,7 @@ function SuggestAdvancedModelCard({
   const submit = async (action: SuggestAction) => {
     if (pending || approval.status !== "pending" || !conversationId) return;
     setPending(action);
+    setSubmitError(null);
     try {
       const response = await fetch(
         `/api/conversations/${conversationId}/approvals/${approval.id}`,
@@ -1226,7 +1293,7 @@ function SuggestAdvancedModelCard({
         },
       );
       if (!response.ok) {
-        onResolved({ ...approval, status: "failed", resultText: await response.text() });
+        setSubmitError(await describeSubmitFailure(response));
         return;
       }
       const data = (await response.json()) as {
@@ -1247,11 +1314,9 @@ function SuggestAdvancedModelCard({
         }
       }
     } catch (err) {
-      onResolved({
-        ...approval,
-        status: "failed",
-        resultText: err instanceof Error ? err.message : "Request failed.",
-      });
+      setSubmitError(
+        `Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`,
+      );
     } finally {
       setPending(null);
     }
@@ -1314,6 +1379,7 @@ function SuggestAdvancedModelCard({
           >
             {pending === "dismiss" ? "Dismissing…" : "Dismiss"}
           </button>
+          <ApprovalSubmitError message={submitError} />
         </div>
       ) : approval.resultText ? (
         <ApprovalResult text={approval.resultText} />

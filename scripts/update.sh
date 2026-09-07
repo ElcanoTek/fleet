@@ -74,7 +74,8 @@
 #                          — it reports whether the plan is BLOCKED (e.g. the
 #                          node floor is unmet) in the plan itself, the same
 #                          contract bootstrap/doctor/fleet-upgrade follow. Use
-#                          --check when you want that answer as an exit code.
+#                          `fleet update --check` (a Go verb — this script has
+#                          no --check) when you want that answer as an exit code.
 #   -h | --help            this help
 #
 # Re-run safe (idempotent): when nothing changed it exits early; the web/binary

@@ -128,3 +128,57 @@ func TestDrainWaitsForNaturalCompletionWithinGrace(t *testing.T) {
 		t.Errorf("task finishing within grace was recorded as error (%d); want success", len(failed))
 	}
 }
+
+// TestLeaseRenewalContinuesThroughDrain: after Run's ctx is cancelled the pool
+// stops CLAIMING but in-flight tasks keep running for up to DrainGrace — and
+// their leases must keep being renewed for that whole time. Renewal used to
+// stop at cancel, so a grace longer than the lease let a draining task's lease
+// expire mid-run and a replacement process re-queue it while this one was
+// still finishing.
+func TestLeaseRenewalContinuesThroughDrain(t *testing.T) {
+	store := newTestStore(t)
+	task := seedPending(t, store, 1)[0]
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	runner := TaskRunnerFunc(func(_ context.Context, _ *models.Task) (*models.LogSession, error) {
+		close(started)
+		<-release // finishes only when the test says so — well inside the grace
+		return &models.LogSession{ID: "s"}, nil
+	})
+	pool := NewPool(store, runner, Config{
+		MaxConcurrentAgents: 1,
+		PollInterval:        20 * time.Millisecond,
+		LeaseRenewInterval:  15 * time.Millisecond,
+		DrainGrace:          10 * time.Second,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { pool.Run(ctx); close(done) }()
+
+	<-started
+	cancel() // begin the drain; the task is still running
+
+	leaseAt := func() time.Time {
+		t.Helper()
+		got, err := store.GetTask(task.ID)
+		if err != nil || got.LeaseExpiresAt == nil {
+			t.Fatalf("task lease: task=%v err=%v", got, err)
+		}
+		return *got.LeaseExpiresAt
+	}
+	before := leaseAt()
+	// Several renew intervals later the lease must have moved forward — proof
+	// the renewer is still running during the drain.
+	waitFor(t, 2*time.Second, func() bool {
+		got, err := store.GetTask(task.ID)
+		return err == nil && got.LeaseExpiresAt != nil && got.LeaseExpiresAt.After(before)
+	})
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pool did not finish draining after the task returned")
+	}
+}

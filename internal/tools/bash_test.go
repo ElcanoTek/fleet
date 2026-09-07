@@ -331,12 +331,51 @@ func TestBashToolBlockedSensitivePaths(t *testing.T) {
 		"ls /root/.claude",
 		"cat /root/.gnupg/pubring.kbx",
 		"cat .env.production",
+		// fleet's own service env and the live process environment: the two
+		// places every host-held connector credential actually sits.
+		"cat /etc/fleet/fleet.env",
+		"grep KEY fleet.env",
+		"cat /proc/self/environ",
+		"tr '\\0' '\\n' < /proc/1/environ",
+		"cat /proc/thread-self/environ",
+		// A bare .env file, in the forms an agent actually types.
+		"cat .env",
+		"source ./.env",
+		"cat /srv/app/.env",
+		"set -a; . .env; set +a",
+		"FILE=.env cat $FILE",
+		"cat .env | grep TOKEN",
+		"cat .env;echo done",
 	}
 	for _, cmd := range blocked {
 		t.Run(cmd, func(t *testing.T) {
 			_, err := runBash(context.Background(), BashParams{Command: cmd})
 			if err == nil || !strings.Contains(err.Error(), "blocked") {
 				t.Errorf("expected %q to be blocked, got err=%v", cmd, err)
+			}
+		})
+	}
+}
+
+// TestBashToolEnvLookalikesAllowed pins the component-aware side of the bare
+// ".env" rule: templates and near-namesakes are not secrets and must keep
+// working, or the rule would break every project that ships a .env.example.
+// checkCommandSafety is called directly so the assertion is about the policy,
+// not about whether the file exists.
+func TestBashToolEnvLookalikesAllowed(t *testing.T) {
+	for _, cmd := range []string{
+		"cat .env.example",
+		"cp .env.example .env.sample",
+		"cat .envrc",
+		"ls src/environment/",
+		"echo $NODE_ENV",
+		"python -m venv .venv && ls .venv",
+		"cat docs/environments.md",
+		"grep -r environ src/",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			if err := checkCommandSafety(cmd); err != nil {
+				t.Errorf("%q should not be blocked, got %v", cmd, err)
 			}
 		})
 	}

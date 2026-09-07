@@ -154,3 +154,16 @@ func TestNotifyTaskNameRuneSafe(t *testing.T) {
 		t.Errorf("short prompt altered: %q", short)
 	}
 }
+
+// notifyTaskName lands in an email Subject header and the webhook body, so a
+// multi-line prompt must become one line: a CR/LF in the label is a header
+// injection in the subject and a broken payload for a naive receiver.
+func TestNotifyTaskNameStripsLineBreaks(t *testing.T) {
+	name := notifyTaskName("first line\r\nBcc: victim@example.com\n\tthird")
+	if strings.ContainsAny(name, "\r\n\t") {
+		t.Fatalf("notifyTaskName kept a line break / tab: %q", name)
+	}
+	if name != "first line Bcc: victim@example.com third" {
+		t.Errorf("notifyTaskName = %q, want the lines joined by single spaces", name)
+	}
+}

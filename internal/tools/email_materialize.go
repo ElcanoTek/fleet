@@ -115,15 +115,18 @@ func MaterializeContentFile(convID, rawInput string) (string, error) {
 // attachment file not found." Doing this at staging time means the staged args
 // row carries absolute paths, and the replay after approval works.
 //
-// Near-symmetric with MaterializeContentFile: same convID, same workspace
-// anchoring for relative paths (plus the historical `~/` and `$VAR` expansion) —
-// but unlike content_file (whose bytes this process reads and inlines, so it is
-// containment-gated per #573), attachment paths are only REWRITTEN here; the
-// sendgrid MCP subprocess is what opens them at send time, and files need not
-// exist at staging time. Skips entries that are already absolute,
-// unparseable args, missing arrays, or non-string path fields. Files don't need
-// to exist at staging time — preview_email stages before the file is necessarily
-// on disk in some flows; the real MCP call is the one that needs the file.
+// Symmetric with MaterializeContentFile on the two rules that matter: the same
+// convID workspace anchoring for relative paths, NO `~/` or `$VAR` expansion
+// (the path is model-authored, and os.ExpandEnv used to substitute host env
+// values — connector secrets — into persisted approval args), and the same
+// containment gate — every path, absolute ones included, must resolve under the
+// workspace root (attachmentPathContained), because the connector opens it
+// HOST-side at send time and an absolute path here is a request to email a host
+// file. Unlike content_file, whose bytes this process reads and inlines, the
+// path is only REWRITTEN here; the sendgrid MCP subprocess is what opens it, so
+// the file need not exist at staging time (preview_email stages before the file
+// is necessarily on disk in some flows). Skips unparseable args, missing
+// arrays, and non-string path fields.
 func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
@@ -138,10 +141,10 @@ func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 		return rawInput, nil
 	}
 	changed := false
-	rewriteList := func(key string) {
+	rewriteList := func(key string) error {
 		raw, ok := args[key].([]any)
 		if !ok {
-			return
+			return nil
 		}
 		for i, item := range raw {
 			obj, ok := item.(map[string]any)
@@ -156,14 +159,18 @@ func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 			if file == "" {
 				continue
 			}
-			path := os.ExpandEnv(file)
-			if strings.HasPrefix(path, "~/") {
-				if home, err := os.UserHomeDir(); err == nil {
-					path = filepath.Join(home, path[2:])
-				}
-			}
+			// No $VAR / ~ expansion (the same rule content_file adopted in
+			// #573): the path is model-authored, and os.ExpandEnv substituted
+			// the VALUE of any fleet env var — every connector secret the
+			// host holds — into a string that was then persisted verbatim in
+			// approvals.args_json, shown on the approval card, and replayed
+			// to the connector.
+			path := filepath.Clean(file)
 			if !filepath.IsAbs(path) {
 				path = filepath.Join(WorkspaceDirForConversation(convID), path)
+			}
+			if cerr := attachmentPathContained(path); cerr != nil {
+				return cerr
 			}
 			if path != obj["path"] {
 				obj["path"] = path
@@ -172,9 +179,13 @@ func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 			}
 		}
 		args[key] = raw
+		return nil
 	}
-	rewriteList("attachments")
-	rewriteList("inline_attachments")
+	for _, key := range []string{"attachments", "inline_attachments"} {
+		if err := rewriteList(key); err != nil {
+			return "", err
+		}
+	}
 	if !changed {
 		return rawInput, nil
 	}
@@ -183,4 +194,39 @@ func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 		return rawInput, err
 	}
 	return string(out), nil
+}
+
+// attachmentPathContained refuses an attachment path that resolves outside
+// the workspace root. The connector opens the file host-side at send time, so
+// an absolute path here is a request to email a HOST file; the only files an
+// agent can legitimately attach are the ones it (or an upload / the shared
+// library) put under the workspace root. A prompt-injected
+// `/etc/fleet/fleet.env` used to sail through to the approval card, one
+// inattentive click from exfiltration. Lexical check (Clean + Rel), since the
+// file need not exist at staging time.
+func attachmentPathContained(path string) error {
+	root, err := filepath.Abs(workspaceRootForContainment())
+	if err != nil {
+		return fmt.Errorf("resolve workspace root for attachment %q: %w", path, err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve attachment path %q: %w", path, err)
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("attachment path %q is outside the workspace root %s — attach files the agent wrote to its workspace (or shared files) instead", path, root)
+	}
+	return nil
+}
+
+// workspaceRootForContainment is the root every attachment must live under:
+// $FLEET_WORKSPACE_ROOT / $CHAT_WORKSPACE_ROOT, else ./workspace — the same
+// resolution WorkspaceDirForConversation applies before appending the id, so
+// shared-library files staged directly under the root qualify too.
+func workspaceRootForContainment() string {
+	if root := fleetEnv("WORKSPACE_ROOT"); root != "" {
+		return root
+	}
+	return "workspace"
 }

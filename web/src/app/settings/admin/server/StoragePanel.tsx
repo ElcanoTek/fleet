@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 
+import { InlineConfirmButton } from "../../ui/atoms";
 import { AdminStats, ConnGroup, type AdminStat } from "../../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 
@@ -70,6 +71,11 @@ export function StoragePanel() {
   const [sweepFiles, setSweepFiles] = useState(true);
   const [cleaning, setCleaning] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  // A failed cleanup is reported next to the button that ran it. It used to
+  // land in `error`, the LOAD failure state, which unmounts the whole panel
+  // and reads "Storage statistics unavailable: cleanup failed" — the stats
+  // were fine; the cleanup was not.
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
 
   const load = (isStale: () => boolean) =>
     fetch("/api/admin/storage", { cache: "no-store" })
@@ -104,6 +110,7 @@ export function StoragePanel() {
   const runCleanup = async () => {
     setCleaning(true);
     setResult(null);
+    setCleanupError(null);
     try {
       const res = await fetch("/api/admin/storage/cleanup", {
         method: "POST",
@@ -127,11 +134,17 @@ export function StoragePanel() {
       );
       void load(() => false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "cleanup failed");
+      setCleanupError(err instanceof Error ? err.message : "cleanup failed");
     } finally {
       setCleaning(false);
     }
   };
+
+  // The server computes reclaimable_conversations at ITS default cutoff
+  // (default_days), not at whatever number is in the box — so the count is
+  // only quoted while the two agree. Quoting it under a different cutoff was
+  // a confident wrong number.
+  const previewAtDefault = data !== null && days === data.default_days;
 
   const chatDataBytes = data
     ? data.uploads.bytes + data.temp_uploads.bytes + data.workspaces.bytes
@@ -207,9 +220,23 @@ export function StoragePanel() {
             <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">Clean up now</h4>
             <p className="m-0 mb-3 text-[0.8rem] text-[var(--color-text-muted)]">
               Reclaims disk from chats and files idle longer than the cutoff. Pinned, archived, shared, and project
-              chats are never touched. A cleanup at {days} days would remove{" "}
-              <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
-              conversation{data.reclaimable_conversations === 1 ? "" : "s"}.
+              chats are never touched.{" "}
+              <span data-testid="storage-cleanup-preview">
+                {previewAtDefault ? (
+                  <>
+                    A cleanup at {days} days would remove{" "}
+                    <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
+                    conversation{data.reclaimable_conversations === 1 ? "" : "s"}.
+                  </>
+                ) : (
+                  <>
+                    At the default {data.default_days}-day cutoff a cleanup would remove{" "}
+                    <span className="font-medium text-[var(--color-text-primary)]">{data.reclaimable_conversations}</span>{" "}
+                    conversation{data.reclaimable_conversations === 1 ? "" : "s"}; the count at {days} days isn&apos;t
+                    known until it runs.
+                  </>
+                )}
+              </span>
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]">
@@ -231,20 +258,26 @@ export function StoragePanel() {
                 <input type="checkbox" checked={sweepFiles} onChange={(e) => setSweepFiles(e.target.checked)} />
                 Sweep aged upload files
               </label>
-              <button
-                type="button"
+              {/* Cleanup deletes chats and files for good, so it takes the
+                  same two-click inline confirmation as every other
+                  irreversible action in Settings — no native dialog. */}
+              <InlineConfirmButton
+                label={cleaning ? "Cleaning…" : "Run cleanup"}
+                confirmLabel="Confirm cleanup"
                 disabled={cleaning || (!deleteChats && !sweepFiles)}
-                onClick={() => void runCleanup()}
-                className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50"
-                data-testid="storage-cleanup-run"
-              >
-                {cleaning ? "Cleaning…" : "Run cleanup"}
-              </button>
+                onConfirm={() => void runCleanup()}
+                testId="storage-cleanup-run"
+              />
             </div>
             {result ? (
               <p className="m-0 mt-3 text-[0.8rem] text-[var(--color-text-secondary)]" data-testid="storage-cleanup-result" role="status">
                 {result}
               </p>
+            ) : null}
+            {cleanupError ? (
+              <NoticeBanner tone="danger" className="mt-3" data-testid="storage-cleanup-error" role="alert">
+                Cleanup failed: {cleanupError}
+              </NoticeBanner>
             ) : null}
           </div>
         </div>

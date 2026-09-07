@@ -443,6 +443,83 @@ describe("FeaturesAdminPage", () => {
     await waitFor(() => expect(screen.getByTestId("pii-install-run")).toBeInTheDocument());
   });
 
+  it("stops the install poll loop when the panel unmounts mid-install", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchMock = mockFetch([PII], (url) => {
+        if (!url.includes("/pii-redaction/install")) return undefined;
+        // GET status: an install already in flight, never finishing.
+        return { status: 200, body: { state: "running", log: ["building…"], container_running: false } };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { unmount } = render(<FeaturesAdminPage />);
+      await screen.findByTestId("pii-install", undefined, { timeout: 5000 });
+      // Let the poll tick at least once so the interval is really armed.
+      await vi.advanceTimersByTimeAsync(3100);
+      const polls = () =>
+        fetchMock.mock.calls.filter(([u]) => String(u).includes("/pii-redaction/install")).length;
+      expect(polls()).toBeGreaterThanOrEqual(2);
+      unmount();
+      const after = polls();
+      await vi.advanceTimersByTimeAsync(10000);
+      // No further status fetches once the component is gone.
+      expect(polls()).toBe(after);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces a thrown install request as an inline error instead of hanging", async () => {
+    const fetchMock = mockFetch([PII], (url, init) => {
+      if (!url.includes("/pii-redaction/install")) return undefined;
+      if (init.method === "POST") throw new TypeError("Failed to fetch");
+      return { status: 200, body: { state: "idle", log: [], container_running: false } };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+    fireEvent.click(await screen.findByTestId("pii-install-run", undefined, { timeout: 5000 }));
+    expect(await screen.findByTestId("pii-install-request-error")).toHaveTextContent(
+      "Failed to fetch",
+    );
+    // The button is still usable for a retry.
+    expect(screen.getByTestId("pii-install-run")).not.toBeDisabled();
+  });
+
+  it("disables only the saving row while its write is in flight", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes("/pii-redaction/install")) {
+        return { ok: false, status: 501, json: async () => ({}), text: async () => "" };
+      }
+      if (!init || init.method === undefined || init.method === "GET") {
+        return { ok: true, status: 200, json: async () => ({ settings: [SUBAGENTS, PII] }) };
+      }
+      // Hold the PUT open so the in-flight state is observable.
+      await gate;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ...SUBAGENTS, value: "true", source: "admin" }),
+        text: async () => "{}",
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+    const toggle = await screen.findByTestId("toggle-subagents_enabled");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(screen.getByTestId("toggle-subagents_enabled")).toBeDisabled());
+    // The sibling row is untouched by the pending write.
+    const pii = screen.getByTestId("setting-pii_redaction_mode");
+    for (const b of within(pii).getAllByRole("button")) expect(b).not.toBeDisabled();
+    release?.();
+    await waitFor(() =>
+      expect(screen.getByTestId("toggle-subagents_enabled")).not.toBeDisabled(),
+    );
+  });
+
   it("hides the install affordance when the installer is not wired (501)", async () => {
     vi.stubGlobal("fetch", mockFetch([PII])); // default install stub = 501
     render(<FeaturesAdminPage />);
@@ -457,5 +534,30 @@ describe("FeaturesAdminPage", () => {
     );
     render(<FeaturesAdminPage />);
     expect(await screen.findByText(/not on the admin allowlist/)).toBeInTheDocument();
+  });
+});
+
+describe("FeaturesAdminPage reload", () => {
+  it("Retry after a failed load renders the fresh server list", async () => {
+    let fail = true;
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes("/pii-redaction/install")) {
+        return { ok: false, status: 501, json: async () => ({}), text: async () => "" };
+      }
+      if (!init || init.method === undefined || init.method === "GET") {
+        if (fail) return { ok: false, status: 502, json: async () => ({}), text: async () => "" };
+        return { ok: true, status: 200, json: async () => ({ settings: [SUBAGENTS] }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    fail = false;
+    fireEvent.click(retry);
+    // The refetched list is what renders — nothing local layered over it.
+    const toggle = await screen.findByTestId("toggle-subagents_enabled");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Server default")).toBeInTheDocument();
   });
 });

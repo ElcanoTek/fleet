@@ -465,3 +465,59 @@ func TestClientSSRFGuardBlocksLoopback(t *testing.T) {
 		t.Fatalf("the streaming client must carry the same guard, got %v", err)
 	}
 }
+
+// TestClientNullResultRefused: a JSON `null` result is neither a result nor an
+// error. Decoded into wire.Task it would be a zero-valued task (empty id and
+// state) the caller treats as data; the client must refuse it instead.
+func TestClientNullResultRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req Request
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":null}`, req.ID)
+	}))
+	t.Cleanup(srv.Close)
+	client := NewClient(srv.URL+"/a2a", nil, ClientOptions{AllowPrivate: true})
+	task, err := client.GetTask(context.Background(), "remote-1")
+	if err == nil || !strings.Contains(err.Error(), "neither result nor error") {
+		t.Fatalf("want null result refused, got task=%+v err=%v", task, err)
+	}
+}
+
+// TestClientWaitForUpdateHonorsCallerCancel: the GetTask fallback after an
+// empty stream must run under the CALLER's context, not a WithoutCancel copy —
+// once the caller is gone, no further request goes to the peer and the
+// partial result comes back at once.
+func TestClientWaitForUpdateHonorsCallerCancel(t *testing.T) {
+	peer := &fakePeer{state: wire.TaskStateWorking}
+	peer.subscribe = func(w http.ResponseWriter, r *http.Request, _ json.RawMessage) {
+		// Open the stream but send no snapshot; hold it until the client hangs up.
+		fl := sseStart(w)
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+				fmt.Fprint(w, ": keepalive\n\n")
+				fl.Flush()
+			}
+		}
+	}
+	client := newTestPeer(t, peer)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	res, err := client.WaitForUpdate(ctx, "remote-1", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("wait outlived the caller's cancel: %s", elapsed)
+	}
+	if res.Task != nil || !res.TimedOut {
+		t.Fatalf("want the partial (snapshot-less) result, got %+v", res)
+	}
+	if peer.last().method == MethodGetTask {
+		t.Fatal("GetTask fallback was issued for a caller that had already cancelled")
+	}
+}

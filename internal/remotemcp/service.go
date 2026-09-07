@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -626,6 +627,9 @@ func (s *Service) SharedWithMe(ctx context.Context, email string) ([]store.Remot
 // Disconnect best-effort revokes the refresh token at the authorization server,
 // then deletes the server (cascading its tokens + any in-flight flow).
 func (s *Service) Disconnect(ctx context.Context, email, serverID string) error {
+	if !s.Enabled() {
+		return ErrDisabled
+	}
 	server, err := s.store.GetRemoteMCPServer(ctx, email, serverID)
 	if err != nil {
 		return err
@@ -747,7 +751,34 @@ func (s *Service) tryRevoke(ctx context.Context, server *store.RemoteMCPServer) 
 	// revocation request and could be echoed by its failure text. A join, not a
 	// rotation — revocation mints nothing.
 	s.noteScopedSecrets(secretScope(server.ID), clientSecret, tokens.RefreshToken)
-	_ = mcpoauth.RevokeToken(rctx, s.httpClient, server.RevocationEndpoint, server.ClientID, clientSecret, tokens.RefreshToken)
+	// Authenticate the way the token endpoint told us to (basic vs. post):
+	// the AS's advertised methods are the same list flowConfig hands the
+	// exchange and refresh, so a client_secret_post-only AS no longer 401s
+	// the revocation while the local record is deleted underneath it.
+	err = mcpoauth.RevokeToken(rctx, s.httpClient, server.RevocationEndpoint, server.ClientID, clientSecret, tokens.RefreshToken, splitFields(server.AuthMethods))
+	if err != nil {
+		// Still best-effort — the local delete/clear goes ahead — but a
+		// discarded error left an operator with no way to learn that a token
+		// they believe revoked is live at the AS. Log it, with both secrets
+		// that rode the request masked in case an AS or transport error text
+		// echoes them (an *OAuthError never does; a *url.Error can carry the
+		// request URL, which never holds them either — belt and braces).
+		log.Printf("remotemcp: token revocation for server %s failed (local record still removed; the refresh token may remain live at the authorization server): %s",
+			server.ID, maskSecrets(err.Error(), clientSecret, tokens.RefreshToken))
+	}
+}
+
+// maskSecrets replaces every occurrence of each non-empty secret in text with
+// a placeholder, for log lines that quote an error produced while a request
+// carrying those secrets was in flight.
+func maskSecrets(text string, secrets ...string) string {
+	for _, sec := range secrets {
+		if sec == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, sec, "[REDACTED]")
+	}
+	return text
 }
 
 func (s *Service) flowConfig(server *store.RemoteMCPServer, clientSecret string) mcpoauth.FlowConfig {

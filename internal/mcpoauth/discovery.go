@@ -156,32 +156,108 @@ func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canoni
 	return []string{root}, nil
 }
 
-// parseResourceMetadataURL pulls the resource_metadata="..." parameter out of a
-// WWW-Authenticate: Bearer ... header. Returns "" when absent.
+// parseResourceMetadataURL pulls the resource_metadata parameter (RFC 9728
+// §5.1) out of a WWW-Authenticate header. Returns "" when absent.
+//
+// The header is walked as the auth-params grammar of RFC 9110 §11.2 — scheme
+// tokens, then comma-separated name=value pairs whose value is a token or a
+// quoted-string with backslash escapes — rather than searched as a substring.
+// The value this yields is a URL fleet will FETCH (a remote-derived URL, see
+// the SSRF note on fetchJSON), so a substring match was two bugs at once: a
+// param whose NAME merely ends in the key (x_resource_metadata=…) matched, and
+// so did the text "resource_metadata=" sitting INSIDE another param's quoted
+// value (error_description="… resource_metadata=https://attacker …"), where a
+// quoted comma or escaped quote then also cut the value in the wrong place.
 func parseResourceMetadataURL(header string) string {
-	header = strings.TrimSpace(header)
-	if header == "" {
-		return ""
-	}
-	const key = "resource_metadata"
-	idx := strings.Index(strings.ToLower(header), key+"=")
-	if idx < 0 {
-		return ""
-	}
-	v := header[idx+len(key)+1:]
-	v = strings.TrimSpace(v)
-	if strings.HasPrefix(v, `"`) {
-		v = v[1:]
-		if end := strings.IndexByte(v, '"'); end >= 0 {
-			v = v[:end]
-		}
-	} else {
-		// Unquoted: ends at the next comma or whitespace.
-		if end := strings.IndexAny(v, ", "); end >= 0 {
-			v = v[:end]
+	for _, p := range parseAuthParams(header) {
+		if strings.EqualFold(p.name, "resource_metadata") {
+			return strings.TrimSpace(p.value)
 		}
 	}
-	return strings.TrimSpace(v)
+	return ""
+}
+
+// authParam is one name=value pair from a WWW-Authenticate header.
+type authParam struct{ name, value string }
+
+// parseAuthParams tokenizes a WWW-Authenticate header into its auth-params in
+// order of appearance, across every challenge it carries. Scheme names and
+// bare token68 values (a token not followed by "=") are skipped. It is lenient
+// where leniency is harmless — an unquoted value runs to the next comma or
+// whitespace even if it holds characters the token grammar forbids, since real
+// servers emit resource_metadata=https://… unquoted — and strict where it
+// matters: a quoted-string is one value however many commas, spaces or escaped
+// quotes it holds, and a name matches only as a whole name.
+func parseAuthParams(header string) []authParam {
+	var params []authParam
+	s := header
+	for {
+		s = strings.TrimLeft(s, " \t,")
+		if s == "" {
+			return params
+		}
+		// A name (or scheme) is a run of token characters.
+		n := 0
+		for n < len(s) && isTokenChar(s[n]) {
+			n++
+		}
+		if n == 0 {
+			// Not a token start (a stray quote or other punctuation): skip it.
+			s = s[1:]
+			continue
+		}
+		name := s[:n]
+		rest := strings.TrimLeft(s[n:], " \t")
+		if rest == "" || rest[0] != '=' {
+			// A scheme ("Bearer") or a token68 credential: no value follows.
+			s = rest
+			continue
+		}
+		rest = strings.TrimLeft(rest[1:], " \t")
+		var value string
+		if strings.HasPrefix(rest, `"`) {
+			value, rest = readQuotedString(rest[1:])
+		} else {
+			end := strings.IndexAny(rest, ", \t")
+			if end < 0 {
+				end = len(rest)
+			}
+			value, rest = rest[:end], rest[end:]
+		}
+		params = append(params, authParam{name: name, value: value})
+		s = rest
+	}
+}
+
+// readQuotedString consumes the body of a quoted-string (the opening quote
+// already removed) up to its closing quote, resolving backslash escapes, and
+// returns the value plus the unconsumed remainder. An unterminated string runs
+// to the end of the header.
+func readQuotedString(s string) (value, rest string) {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\':
+			if i+1 < len(s) {
+				i++
+				b.WriteByte(s[i])
+			}
+		case '"':
+			return b.String(), s[i+1:]
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), ""
+}
+
+// isTokenChar reports whether c may appear in an RFC 9110 token.
+func isTokenChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
 }
 
 // fetchAuthServerMetadata tries the RFC 8414 well-known path and the OIDC

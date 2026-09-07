@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { useIsAdmin } from "../../useIsAdmin";
+import { AdminGateFallback } from "../../AdminGateFallback";
 import { ConnGroup, SetSection } from "../../ui/panels";
 import { ConnBadge } from "../../ui/atoms";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
@@ -34,6 +35,14 @@ type DoctorReport = {
   summary: { ok: number; warn: number; fail: number; skip: number };
   checks: DoctorCheck[];
 };
+
+// formatGeneratedAt renders the report's timestamp in the operator's locale so
+// a report kept on screen after a failed re-run is visibly the OLD one.
+function formatGeneratedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
 
 const STATUS_META: Record<DoctorStatus, { icon: string; className: string; label: string }> = {
   ok: { icon: "check", className: "text-[var(--color-success)]", label: "ok" },
@@ -93,7 +102,7 @@ export default function AdminDoctorPage() {
     };
   }, [admin, runFetch]);
 
-  if (admin !== "admin") return null;
+  if (admin !== "admin") return <AdminGateFallback state={admin} />;
 
   const attention = report ? report.checks.filter((c) => c.status === "fail" || c.status === "warn") : [];
 
@@ -113,6 +122,14 @@ export default function AdminDoctorPage() {
           {report ? (
             <span className="text-xs text-[var(--color-text-muted)]">
               {report.deep ? "deep run" : "quick run"} · {(report.duration_ms / 1000).toFixed(1)}s
+              {report.generated_at ? (
+                <>
+                  {" · "}
+                  <time dateTime={report.generated_at} data-testid="doctor-generated-at">
+                    {formatGeneratedAt(report.generated_at)}
+                  </time>
+                </>
+              ) : null}
             </span>
           ) : null}
           <div className="ml-auto flex items-center gap-2">
@@ -140,10 +157,19 @@ export default function AdminDoctorPage() {
           </div>
         </div>
 
+        {/* A failed re-run keeps the last report on screen under the banner
+            (its generated_at timestamp says how old it is) instead of
+            replacing the whole panel with the banner. */}
         {error ? (
-          <NoticeBanner tone="danger" data-testid="doctor-error">Doctor report unavailable: {error}</NoticeBanner>
-        ) : !report ? (
-          <p className="text-sm text-[var(--color-text-muted)]" data-testid="doctor-loading">Running box checks…</p>
+          <NoticeBanner tone="danger" data-testid="doctor-error" className={report ? "mb-3" : undefined}>
+            Doctor report unavailable: {error}
+            {report ? " — showing the last completed report." : ""}
+          </NoticeBanner>
+        ) : null}
+        {!report ? (
+          error ? null : (
+            <p className="text-sm text-[var(--color-text-muted)]" data-testid="doctor-loading">Running box checks…</p>
+          )
         ) : (
           <div data-testid="doctor-panel">
             {attention.length > 0 ? (

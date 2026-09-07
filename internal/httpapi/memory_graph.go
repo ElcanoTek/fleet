@@ -208,7 +208,7 @@ func (s *Server) handleMemoryExtractGraph(w http.ResponseWriter, r *http.Request
 	}
 	m, err := s.store.GetMemory(r.Context(), user, id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeMemoryStoreError(w, err)
 		return
 	}
 	if m.Source == "proposed" {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Icon } from "@/app/shared/ui/Icon";
 import {
@@ -901,8 +901,26 @@ function ConnectionsPageInner() {
     entry: CatalogThirdParty;
     overrides?: AddOverrides;
   } | null>(null);
-  const [error, setError] = useState<string | null>(initialBanner.error);
-  const [notice, setNotice] = useState<string | null>(initialBanner.notice);
+  // A banner is delivered as a one-shot TOAST, so it must fire again when the
+  // same message repeats. Keyed on the message VALUE, a retry that failed
+  // identically ("Connection refused" twice) changed no state, so no second
+  // toast appeared and the retry read as success. Carry a monotonic sequence
+  // beside the text and key the effects on the whole record, so every call to
+  // setError/setNotice is one user-visible event regardless of its wording.
+  const [errorBanner, setErrorBanner] = useState<{
+    text: string | null;
+    seq: number;
+  }>(() => ({ text: initialBanner.error, seq: 0 }));
+  const [noticeBanner, setNoticeBanner] = useState<{
+    text: string | null;
+    seq: number;
+  }>(() => ({ text: initialBanner.notice, seq: 0 }));
+  const setError = useCallback((text: string | null) => {
+    setErrorBanner((prev) => ({ text, seq: prev.seq + 1 }));
+  }, []);
+  const setNotice = useCallback((text: string | null) => {
+    setNoticeBanner((prev) => ({ text, seq: prev.seq + 1 }));
+  }, []);
   const { showToast } = useToast();
   // Post-add "sign in now?" prompt for OAuth servers (id + display name).
   const [connectPromptFor, setConnectPromptFor] = useState<{
@@ -916,11 +934,11 @@ function ConnectionsPageInner() {
   // ?connected / ?error result) surfaces as a toast — visible from anywhere
   // on this long page; there is no inline banner copy.
   useEffect(() => {
-    if (error) showToast(error, "error", 6000);
-  }, [error, showToast]);
+    if (errorBanner.text) showToast(errorBanner.text, "error", 6000);
+  }, [errorBanner, showToast]);
   useEffect(() => {
-    if (notice) showToast(notice, "success");
-  }, [notice, showToast]);
+    if (noticeBanner.text) showToast(noticeBanner.text, "success");
+  }, [noticeBanner, showToast]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
@@ -939,7 +957,10 @@ function ConnectionsPageInner() {
   // scroll can land the results just below it instead of underneath it.
   const dirBarRef = useRef<HTMLDivElement | null>(null);
 
-  const apply = (isStale: () => boolean) => {
+  // apply/refresh are memoized so the focus-refresh effect below can list
+  // refresh as its one dependency and subscribe once, instead of tearing down
+  // and re-adding the window listener on every render.
+  const apply = useCallback((isStale: () => boolean) => {
     fetchServers()
       .then((data) => {
         if (isStale() || data === null) return;
@@ -955,13 +976,13 @@ function ConnectionsPageInner() {
         if (isStale()) return;
         setLoading(false);
       });
-  };
+  }, [setError]);
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     setError(null);
     setLoading(true);
     apply(() => false);
-  };
+  }, [apply, setError]);
 
   // refreshCatalog re-reads bundled accounts + third-party entries — called
   // after credential-account changes so new seats appear in the card selects.
@@ -1005,7 +1026,7 @@ function ConnectionsPageInner() {
     return () => {
       stale = true;
     };
-  }, []);
+  }, [apply]);
 
   // Refresh the list when the user comes back from an OAuth sign-in tab.
   useEffect(() => {
@@ -1016,7 +1037,7 @@ function ConnectionsPageInner() {
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  });
+  }, [refresh]);
 
   const addServer = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1936,14 +1957,16 @@ function ConnectionsPageInner() {
                                     Share
                                   </button>
                                   {(shares[s.id] ?? []).includes("*") ? null : (
-                                    <button
-                                      type="button"
-                                      onClick={() => share(s.id, "*")}
+                                    // Opens the connection to every account in
+                                    // the workspace at once — armed first, like
+                                    // Remove, rather than granted on one click.
+                                    <InlineConfirmButton
+                                      label="Share with everyone"
+                                      confirmLabel="Confirm share with everyone"
                                       disabled={busy}
-                                      className={btnClass({ sm: true })}
-                                    >
-                                      Share with everyone
-                                    </button>
+                                      onConfirm={() => share(s.id, "*")}
+                                      testId={`share-everyone-${s.id}`}
+                                    />
                                   )}
                                 </div>
                               </div>

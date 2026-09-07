@@ -248,3 +248,37 @@ func TestRunLoop_CancelledBeforeStart(t *testing.T) {
 		t.Errorf("worker should not run on a cancelled context, got %d calls", w.calls)
 	}
 }
+
+// TestSinglePassIteration pins the telemetry row a NON-looped run records
+// (Runner.Run, the common task shape): iteration 1, passed/failed by the
+// worker's error, the session's spend carried, and a nil session (a sandbox
+// that never started) still counted at zero spend. task_iterations is the only
+// task-side ledger the usage read model and budget enforcer aggregate, so a
+// plain task that wrote no row accrued $0 against every budget.
+func TestSinglePassIteration(t *testing.T) {
+	taskID := uuid.New()
+	start := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	end := start.Add(90 * time.Second)
+	sess := &models.LogSession{ID: "s-1", Cost: 0.42, PromptTokens: 1200, CompletionTokens: 300}
+
+	ok := singlePassIteration(taskID, start, end, sess, nil)
+	if ok.TaskID != taskID || ok.IterationNumber != 1 || ok.Status != models.IterationStatusPassed {
+		t.Fatalf("passed row = %+v", ok)
+	}
+	if ok.WorkerSessionID != "s-1" || ok.CostUSD != 0.42 || ok.PromptTokens != 1200 || ok.CompletionTokens != 300 {
+		t.Fatalf("spend not carried: %+v", ok)
+	}
+	if !ok.StartedAt.Equal(start) || ok.CompletedAt == nil || !ok.CompletedAt.Equal(end) {
+		t.Fatalf("timestamps: started=%v completed=%v", ok.StartedAt, ok.CompletedAt)
+	}
+
+	failed := singlePassIteration(taskID, start, end, sess, errors.New("boom"))
+	if failed.Status != models.IterationStatusFailed || failed.CostUSD != 0.42 {
+		t.Fatalf("failed row = %+v (spend must still count — it was spent)", failed)
+	}
+
+	none := singlePassIteration(taskID, start, end, nil, errors.New("sandbox never started"))
+	if none.Status != models.IterationStatusFailed || none.CostUSD != 0 || none.WorkerSessionID != "" {
+		t.Fatalf("nil-session row = %+v", none)
+	}
+}

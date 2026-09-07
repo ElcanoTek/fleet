@@ -15,6 +15,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,15 +44,29 @@ type SLAMonitor struct {
 	store SLAStore
 	now   nowFunc
 	stop  chan struct{}
+
+	// warned remembers, per running task, the started_at of the ATTEMPT whose
+	// sla_warn has already been emitted, so the warning (log line + counter)
+	// fires ONCE per attempt rather than on every 60s tick for the rest of the
+	// run. The value is the attempt identity: a retry keeps the task id but
+	// starts a new attempt with a new started_at, and it deserves a fresh
+	// warning — which a plain id-keyed set suppressed whenever the failure and
+	// the retry both happened between two sweeps (the id never left the
+	// running set, so the entry was never pruned). Pruned each sweep to the
+	// tasks still running. Guarded by mu because Check is also driven directly
+	// by tests.
+	mu     sync.Mutex
+	warned map[uuid.UUID]time.Time
 }
 
 // New constructs an SLAMonitor backed by store. The store MUST implement
 // GetRunningTasksWithSLA + MarkSLABreached (storage.Storage does).
 func New(store SLAStore) *SLAMonitor {
 	return &SLAMonitor{
-		store: store,
-		now:   func() time.Time { return time.Now().UTC() },
-		stop:  make(chan struct{}),
+		store:  store,
+		now:    func() time.Time { return time.Now().UTC() },
+		stop:   make(chan struct{}),
+		warned: make(map[uuid.UUID]time.Time),
 	}
 }
 
@@ -104,7 +119,11 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 		return
 	}
 	now := m.now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	running := make(map[uuid.UUID]struct{}, len(tasks))
 	for _, t := range tasks {
+		running[t.ID] = struct{}{}
 		if t.StartedAt == nil || t.ExpectedDurationMinutes == nil {
 			continue
 		}
@@ -114,7 +133,12 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 		failAt := time.Duration(float64(expected) * effectiveFailMul(t.SLAFailMultiplier))
 
 		switch {
-		case elapsed >= failAt && !t.SLABreached:
+		case t.SLABreached:
+			// Already latched: the breach was reported when it happened, and a
+			// breached run has nothing further to warn about. (Before, a latched
+			// task fell through to the warn branch and logged sla-warn every
+			// tick until it finished.)
+		case elapsed >= failAt:
 			log.Printf("sla-breach: task_id=%s task_name=%q elapsed_min=%.1f expected_min=%d",
 				t.ID, TaskName(t), elapsed.Minutes(), *t.ExpectedDurationMinutes)
 			metrics.RecordSLAFail(TaskName(t))
@@ -122,9 +146,20 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 				log.Printf("sla-monitor: mark-breached failed for %s: %v", t.ID, err)
 			}
 		case elapsed >= warnAt:
+			// Latched for THIS attempt (same started_at) → already warned. A
+			// different started_at under the same id is a retry: warn again.
+			if at, done := m.warned[t.ID]; done && at.Equal(*t.StartedAt) {
+				break
+			}
+			m.warned[t.ID] = *t.StartedAt
 			log.Printf("sla-warn: task_id=%s task_name=%q elapsed_min=%.1f expected_min=%d",
 				t.ID, TaskName(t), elapsed.Minutes(), *t.ExpectedDurationMinutes)
 			metrics.RecordSLAWarn(TaskName(t))
+		}
+	}
+	for id := range m.warned {
+		if _, still := running[id]; !still {
+			delete(m.warned, id)
 		}
 	}
 }

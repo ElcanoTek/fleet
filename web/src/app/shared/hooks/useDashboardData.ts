@@ -49,6 +49,11 @@ export type UseDashboardData = {
   tasks: Task[];
   total: number;
   loading: boolean;
+  // Why the LAST task-list load produced nothing usable (null when it
+  // succeeded). The table shows this instead of "No tasks created yet": with
+  // Promise.allSettled swallowing the rejection, a backend outage used to be
+  // indistinguishable from an empty account.
+  error: string | null;
   filters: TaskFilters;
   page: number;
   pageSize: number;
@@ -60,6 +65,10 @@ export type UseDashboardData = {
   // Current auto-refresh cadence in seconds (5 while work is in flight, 30
   // when idle) so the UI can say what it actually does.
   refreshSeconds: number;
+  // Increments once per completed reload (mount, interval, focus, manual).
+  // Pass it as a dep to anything that fetches its own view of the task list
+  // so it refreshes in step with the table.
+  refreshNonce: number;
 };
 
 export function useDashboardData(active: boolean): UseDashboardData {
@@ -73,9 +82,14 @@ export function useDashboardData(active: boolean): UseDashboardData {
   // deferred kickoff / interval / imperative call — all off the effect's
   // synchronous phase.
   const [loading, setLoading] = useState(active);
+  const [error, setError] = useState<string | null>(null);
   const [filters, setFiltersState] = useState<TaskFilters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSizeState] = useState(20);
+  // Bumped once per completed reload so siblings that fetch their own slice
+  // of the task list (SleepingTasks) can refetch on the dashboard's cadence
+  // instead of once at mount.
+  const [refreshNonce, setRefreshNonce] = useState(0);
   // Monotonic id stamped on each reload so a superseded (slower, older) reload
   // cannot overwrite newer state — see reload().
   const runIdRef = useRef(0);
@@ -101,8 +115,13 @@ export function useDashboardData(active: boolean): UseDashboardData {
     if (results[1].status === "fulfilled") {
       setTasks(results[1].value.data ?? []);
       setTotal(results[1].value.total ?? 0);
+      setError(null);
+    } else {
+      const reason = results[1].reason;
+      setError(reason instanceof Error ? reason.message : String(reason));
     }
     setLoading(false);
+    setRefreshNonce((n) => n + 1);
   }, [filters, page, pageSize]);
 
   // Fetch on mount/filters/page change and whenever reload's identity changes.
@@ -161,11 +180,21 @@ export function useDashboardData(active: boolean): UseDashboardData {
     setPage(1);
   }, []);
 
+  // A new page size re-buckets the whole list, so the current page number is
+  // meaningless under it: page 5 of a 20-per-page list is past the end at 50
+  // per page ("Page 5 of 2", an empty table). Snap back to the first page, the
+  // same way a filter change does.
+  const setPageSize = useCallback((size: number) => {
+    setPageSizeState(size);
+    setPage(1);
+  }, []);
+
   return {
     stats,
     tasks,
     total,
     loading,
+    error,
     filters,
     page,
     pageSize,
@@ -175,5 +204,6 @@ export function useDashboardData(active: boolean): UseDashboardData {
     setPageSize,
     reload,
     refreshSeconds,
+    refreshNonce,
   };
 }

@@ -304,6 +304,78 @@ func TestFileOp_BoundRootIdentityRejectsDirectoryExchange(t *testing.T) {
 	}
 }
 
+// A sub-agent's file tools scope every request to <bound root>/subagents/<id>
+// (#1043) — a root BENEATH the one bound for the turn, not equal to it. Such a
+// request must inherit the bound root's capability and identity guard: the
+// container backends refuse an unbound writable root outright, and the host
+// executor must not treat the sub-tree as an unguarded root either. Exchanging
+// the bound directory after binding proves the guard travels with the
+// re-anchored request — before the fix the sub-root read returned the victim's
+// bytes because rootBound was only ever set on an exact match.
+func TestFileOp_SubTreeRootInheritsBoundRootIdentity(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	base := t.TempDir()
+	bound := filepath.Join(base, "conv-parent")
+	victim := filepath.Join(base, "conv-victim")
+	for _, dir := range []string{bound, victim} {
+		if err := os.MkdirAll(filepath.Join(dir, "subagents", "child-1"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	childRoot := filepath.Join(bound, "subagents", "child-1")
+	if err := os.WriteFile(filepath.Join(childRoot, "notes.txt"), []byte("parent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "subagents", "child-1", "notes.txt"), []byte("victim"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sb.BindFileOpRoot(context.Background(), bound); err != nil {
+		t.Fatal(err)
+	}
+
+	// The happy path: a sub-root read/write works and lands in the sub-tree.
+	res, err := sb.RunFileOp(context.Background(), FileOpRequest{
+		Op: FileOpRead, Path: filepath.Join(childRoot, "notes.txt"), Root: childRoot,
+	})
+	if err != nil {
+		t.Fatalf("sub-root read: %v", err)
+	}
+	if string(res.Data) != "parent" {
+		t.Fatalf("sub-root read = %q, want %q", res.Data, "parent")
+	}
+	if _, err := sb.RunFileOp(context.Background(), FileOpRequest{
+		Op: FileOpWrite, Path: filepath.Join(childRoot, "out.txt"), Root: childRoot, Data: []byte("child wrote"),
+	}); err != nil {
+		t.Fatalf("sub-root write: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(childRoot, "out.txt")); err != nil || string(got) != "child wrote" {
+		t.Fatalf("sub-root write landed as (%q, %v)", got, err)
+	}
+
+	// A path that escapes the sub-root is still refused by the scope check even
+	// though it is inside the bound root: the narrower scope is honoured.
+	if _, err := sb.RunFileOp(context.Background(), FileOpRequest{
+		Op: FileOpRead, Path: filepath.Join(bound, "sibling.txt"), Root: childRoot,
+	}); !errors.Is(err, ErrFileOpUnsafePath) {
+		t.Fatalf("escape from sub-root = %v, want ErrFileOpUnsafePath", err)
+	}
+
+	// Exchange the bound directory: the identity guard must fire for the
+	// sub-root request exactly as it does for a request at the bound root.
+	held := filepath.Join(base, "conv-parent-held")
+	if err := os.Rename(bound, held); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(victim, bound); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sb.RunFileOp(context.Background(), FileOpRequest{
+		Op: FileOpRead, Path: filepath.Join(childRoot, "notes.txt"), Root: childRoot,
+	}); !errors.Is(err, ErrFileOpUnsafePath) {
+		t.Fatalf("exchanged bound root via sub-root read = %v, want ErrFileOpUnsafePath", err)
+	}
+}
+
 type fileOpOutcome struct {
 	result FileOpResult
 	err    error

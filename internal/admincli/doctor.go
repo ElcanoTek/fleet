@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
@@ -33,7 +34,25 @@ func cmdDoctor(argv []string) int {
 	script := findScript("doctor.sh")
 	if script == "" {
 		fmt.Fprintln(os.Stderr, "fleet doctor: scripts/doctor.sh not found (no checkout — set FLEET_ROOT or run from the repo); falling back to the read-only `fleet status` checks.")
-		return cmdStatus(nil)
+		// The fallback cannot honor doctor's flags, so say which ones it is
+		// dropping instead of silently running a different pass — and keep
+		// --dry-run's "touch nothing" promise: status's sandbox probe launches
+		// a container, so it is skipped for a dry run.
+		var statusArgs, dropped []string
+		for _, a := range argv {
+			switch a {
+			case "--dry-run":
+				statusArgs = append(statusArgs, "--no-sandbox")
+			case "--check":
+				// status is already read-only; nothing to translate.
+			default:
+				dropped = append(dropped, a)
+			}
+		}
+		if len(dropped) > 0 {
+			fmt.Fprintf(os.Stderr, "fleet doctor: the status fallback ignores %s (they need scripts/doctor.sh).\n", strings.Join(dropped, " "))
+		}
+		return cmdStatus(statusArgs)
 	}
 	args := append([]string{script}, argv...)
 	// Run under a signal-cancelled context so Ctrl-C / SIGTERM tears the doctor

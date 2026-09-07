@@ -61,7 +61,12 @@ Focused Go benchmarks for the two highest-leverage throughput paths:
 
 - **`BenchmarkClaimNextPendingTask`** (`internal/sched/db`) — the scheduler's
   `FOR UPDATE SKIP LOCKED` claim transaction each worker runs. Needs a sched test
-  DB (`DATABASE_URL`).
+  DB (`DATABASE_URL`). It seeds `b.N` pending tasks before the timer starts, in
+  chunks of `db.MaxTaskBatchRows()` — the registry-derived cap on rows per
+  multi-row INSERT under PostgreSQL's 65535-bind-parameter limit — so a task
+  column added to `taskColumnRegistry` shrinks the chunk rather than breaking
+  the seed (a hard-coded 1000 did exactly that once the registry grew past 65
+  columns).
 - **`BenchmarkSSEFanOut`** (`internal/httpapi`) — the turn buffer's per-event
   fan-out to N concurrent SSE subscribers (the chat-concurrency hot path).
   In-process, no DB.

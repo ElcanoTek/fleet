@@ -68,19 +68,26 @@ type expandedHandle struct {
 // errors: the turn proceeds regardless.
 func expandContextHandles(ctx context.Context, message, workspaceRoot string) (blocks []string, notices []string) {
 	type handleMatch struct {
-		kind string // "url" | "file"
-		arg  string
+		kind  string // "url" | "file"
+		arg   string
+		start int // byte offset of the handle in message
 	}
+	// Collect BOTH kinds with their offsets and order them by position in the
+	// message, so the blocks (and the cap below) follow the order the user
+	// wrote. Appending all URL matches before all file matches — the previous
+	// shape — put every @file after every @url regardless of the text, and
+	// a message with maxContextHandles URLs then dropped its files entirely.
 	var matches []handleMatch
-	for _, m := range urlHandleRe.FindAllStringSubmatch(message, -1) {
-		matches = append(matches, handleMatch{kind: "url", arg: m[1]})
+	for _, m := range urlHandleRe.FindAllStringSubmatchIndex(message, -1) {
+		matches = append(matches, handleMatch{kind: "url", arg: message[m[2]:m[3]], start: m[0]})
 	}
-	for _, m := range fileHandleRe.FindAllStringSubmatch(message, -1) {
-		matches = append(matches, handleMatch{kind: "file", arg: m[1]})
+	for _, m := range fileHandleRe.FindAllStringSubmatchIndex(message, -1) {
+		matches = append(matches, handleMatch{kind: "file", arg: message[m[2]:m[3]], start: m[0]})
 	}
 	if len(matches) == 0 {
 		return nil, nil
 	}
+	sort.SliceStable(matches, func(a, b int) bool { return matches[a].start < matches[b].start })
 	dropped := 0
 	if len(matches) > maxContextHandles {
 		dropped = len(matches) - maxContextHandles

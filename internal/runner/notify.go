@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,10 +90,14 @@ const notifyFanoutBudget = 90 * time.Second
 // prompt) shared by terminal and progress (#510) notifications.
 func notifyTaskName(prompt string) string {
 	const maxName = 60
+	// The name lands in an email Subject header and the webhook body: a
+	// multi-line prompt must become one line first, or the subject carries a
+	// header injection and the label wraps mid-word.
+	name := strings.Join(strings.Fields(prompt), " ")
 	// Rune-boundary clamp (#595): a byte slice can cut a multi-byte rune in
 	// half, sending invalid UTF-8 into email subjects and the webhook JSON
 	// template.
-	return truncate.Clamp(prompt, maxName, "…")
+	return truncate.Clamp(name, maxName, "…")
 }
 
 func (p *Pool) buildEvent(task *models.Task, status notify.Status, session *models.LogSession, dur time.Duration) notify.Event {

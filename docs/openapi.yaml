@@ -1279,6 +1279,27 @@ paths:
                     thinking_budget_tokens: { type: integer, description: "Negative clears to the global default; omitted inherits the source." }
                     persona: { type: string }
                     mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
+                    expected_duration_minutes: { type: integer, description: "SLA expectation for the copy; 0 clears it, omitted inherits the source." }
+                    sla_warn_multiplier: { type: number, description: "0 = the default (1.5); omitted inherits." }
+                    sla_fail_multiplier: { type: number, description: "0 = the default (2.0); omitted inherits." }
+                    sandbox_limits:
+                      type: object
+                      nullable: true
+                      description: "Per-run sandbox cgroup override; an explicit null (or an all-zero object) clears to the global defaults, omitted inherits."
+                      properties:
+                        memory_mb: { type: integer }
+                        cpus: { type: number }
+                        pids: { type: integer }
+                    run_if:
+                      type: object
+                      nullable: true
+                      description: "Pre-run shell gate for the copy (POSIX sh); an explicit null clears it, omitted inherits."
+                      properties:
+                        command: { type: string }
+                        exit_code_is: { type: integer }
+                        timeout_seconds: { type: integer }
+                    carry_context: { type: boolean }
+                    instruction_self_improve: { type: boolean }
       responses:
         "201":
           description: Created
@@ -1551,7 +1572,10 @@ paths:
         schema: { type: string, format: uuid }
     get:
       summary: List a dataset's rows (#514).
-      description: Ordered by row_index; filter with ?status= and page with ?limit=&offset= (default limit 200).
+      description: >-
+        Ordered by row_index; filter with ?status= and page with ?limit=&offset=
+        (default limit 200). A limit outside 1-1000, a negative offset, or a
+        non-integer value for either is a 400.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       parameters:
         - name: status
@@ -1559,13 +1583,15 @@ paths:
           schema: { type: string, enum: [pending, running, proposed, approved, failed] }
         - name: limit
           in: query
-          schema: { type: integer }
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
         - name: offset
           in: query
-          schema: { type: integer }
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         "200":
           description: The rows plus the dataset's per-status counts.
+        "400":
+          description: limit or offset is not an integer in range.
           content:
             application/json:
               schema:
@@ -1831,15 +1857,20 @@ paths:
   /tasks/paused:
     get:
       summary: List tasks paused awaiting a human answer (#510).
-      description: The "needs a human answer" queue — tasks whose agent called `ask` and parked in paused_awaiting_input (holding no sandbox/lease).
+      description: >-
+        The "needs a human answer" queue — tasks whose agent called `ask` and
+        parked in paused_awaiting_input (holding no sandbox/lease). Newest
+        first; ?limit= outside 1-1000 (or non-integer) is a 400.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       parameters:
         - name: limit
           in: query
-          schema: { type: integer }
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
       responses:
         "200":
           description: The paused tasks.
+        "400":
+          description: limit is not an integer in range.
           content:
             application/json:
               schema:
@@ -1928,15 +1959,25 @@ paths:
         Projects future executions from the existing scheduler data: up to a few
         cron occurrences per recurring task (in the task's timezone) plus each
         one-shot's scheduled_for, sorted by time. A computed view (no run-records
-        table).
+        table). ?limit= outside 1-1000 (or non-integer) is a 400, as is an
+        ?until= that is not an RFC3339 timestamp.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       parameters:
         - name: limit
           in: query
-          schema: { type: integer }
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 50 }
+        - name: until
+          in: query
+          description: >-
+            Horizon-based projection: every occurrence of every recurring task
+            up to this RFC3339 instant (capped by limit), instead of the
+            count-based projection of a few occurrences per task.
+          schema: { type: string, format: date-time }
       responses:
         "200":
           description: Upcoming runs, soonest first.
+        "400":
+          description: limit is not an integer in range, or until is not RFC3339.
           content:
             application/json:
               schema:

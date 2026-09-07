@@ -254,6 +254,10 @@ func TestResolveBackupDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("FLEET_ENV_FILE", envFile)
+	// resolveBackupDir now reads the file through envOrFile (shared with
+	// `fleet backup`), which caches once per process.
+	resetEnvFileCache()
+	t.Cleanup(resetEnvFileCache)
 
 	t.Setenv("FLEET_BACKUP_DIR", "/mnt/from-env")
 	if got := resolveBackupDir(); got != "/mnt/from-env" {

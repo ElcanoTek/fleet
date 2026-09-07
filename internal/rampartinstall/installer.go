@@ -30,7 +30,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	rampartservice "github.com/ElcanoTek/fleet/scripts/rampart-service"
 )
 
@@ -139,13 +141,25 @@ func (i *Installer) Start(updatedBy string) error {
 	}
 	i.state = StateRunning
 	i.log = nil
-	go i.install(updatedBy)
+	// Detached goroutine → safe.Go (internal/safe): an unrecovered panic
+	// here would kill the process. install's own Recover resets the job
+	// state first; this outer guard is the backstop.
+	safe.Go("rampartinstall.install", func() { i.install(updatedBy) })
 	return nil
 }
 
 // install is the job body. Detached from any request context: the admin can
 // close the tab and the install finishes; the panel re-polls status.
 func (i *Installer) install(updatedBy string) {
+	// A panic must not leave state == StateRunning forever — Start would
+	// reject every retry until the process restarts. Mark the job failed so
+	// the admin sees it and can click Install again.
+	defer safe.Recover("rampartinstall.install", func(v any) {
+		i.mu.Lock()
+		defer i.mu.Unlock()
+		i.state = StateFailed
+		i.log = append(i.log, "FAILED: install panicked ("+safe.PanicClass(v)+")")
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	err := i.doInstall(ctx, updatedBy)
@@ -264,7 +278,11 @@ func (i *Installer) waitHealthy(ctx context.Context, budget time.Duration) error
 }
 
 // writeBuildContext materializes the embedded service files into a temp dir
-// for podman build.
+// for podman build. Relative paths are preserved (not flattened to their base
+// name) so the build context is byte-for-byte the embedded tree — including
+// package-lock.json, which the Containerfile's `npm ci` needs to pin the
+// dependency set to what CI audited rather than whatever `npm install` would
+// resolve at install time.
 func (i *Installer) writeBuildContext() (string, error) {
 	dir, err := os.MkdirTemp("", "fleet-rampart-build-")
 	if err != nil {
@@ -278,7 +296,11 @@ func (i *Installer) writeBuildContext() (string, error) {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(filepath.Join(dir, filepath.Base(path)), b, 0o600)
+		dst := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o600)
 	})
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -296,12 +318,22 @@ func (i *Installer) appendLog(line string) {
 	}
 }
 
-// tail clamps command output for an error message (never logs remain key-free
-// by construction: the build context and podman args contain no secrets).
+// tail clamps command output to its last n bytes for an error message (logs
+// remain key-free by construction: the build context and podman args contain
+// no secrets). The cut is advanced to a rune boundary — podman/npm output is
+// UTF-8 (box-drawing progress bars, "…") and a raw byte slice could start
+// mid-rune, emitting invalid UTF-8 into the status log and JSON (#595).
 func tail(s string, n int) string {
 	s = strings.TrimSpace(s)
+	if n < 0 {
+		n = 0
+	}
 	if len(s) <= n {
 		return s
 	}
-	return "…" + s[len(s)-n:]
+	start := len(s) - n
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return "…" + s[start:]
 }

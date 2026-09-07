@@ -84,6 +84,27 @@ describe("FileUpload", () => {
     );
   });
 
+  it("phrases the attach hint from the default caps", () => {
+    render(<Harness />);
+    expect(screen.getByText(/1 GB per file, up to 10 files/)).toBeInTheDocument();
+  });
+
+  it("phrases the hint from the configured caps and enforces them", async () => {
+    const { container } = render(<FileUpload maxFileBytes={50 * 1024 * 1024} maxFiles={3} />);
+    expect(screen.getByText(/50 MB per file, up to 3 files/)).toBeInTheDocument();
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    // The hint and the validation agree: 60 MB is over the configured cap.
+    fireEvent.change(input, { target: { files: [makeFile("big.bin", 60 * 1024 * 1024)] } });
+    await waitFor(() => expect(screen.getByText("big.bin")).toBeInTheDocument());
+    expect(screen.getByText(/too large|exceeds|over/i)).toBeInTheDocument();
+    // And so does the per-task file count.
+    const four = Array.from({ length: 4 }, (_, i) => makeFile(`s${i}.txt`, 10));
+    fireEvent.change(input, { target: { files: four } });
+    await waitFor(() =>
+      expect(screen.getByText("Up to 3 files per task — 1 file was not added.")).toBeInTheDocument(),
+    );
+  });
+
   it("handle.addFiles() accepts files forwarded from the dialog's drop target", async () => {
     let handle: FileUploadHandle | null = null;
     render(<Harness onHandle={(h) => (handle = h)} />);

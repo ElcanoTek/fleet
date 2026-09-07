@@ -10,7 +10,6 @@ package httpapi
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -60,8 +59,10 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		BranchPointMessageID int64  `json:"branch_point_message_id"`
 		Title                string `json:"title"`
 	}
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+	// Refuse a malformed body outright rather than letting it decode to the
+	// zero value and surface as the misleading "must be a positive message id".
+	if !decodeOptionalJSONBody(w, r, &body) {
+		return
 	}
 	if body.BranchPointMessageID <= 0 {
 		http.Error(w, "branch_point_message_id must be a positive message id", http.StatusBadRequest)

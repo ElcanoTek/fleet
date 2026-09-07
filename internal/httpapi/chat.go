@@ -368,7 +368,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Wire incremental persistence so a crash mid-turn leaves a
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
 	// flaky, live streaming still works; crash recovery just won't.
-	persistCtx, persistCancelAttach := context.WithTimeout(reqCtx, 5*time.Second)
+	// Rooted in Background, not the request: the turn is designed to outlive
+	// the POST (that is what the ledger is FOR), so a client that drops the
+	// socket in the window between registerTurn and CreateTurn must not
+	// leave the whole turn running with no ledger to replay on reconnect.
+	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
 		log.Printf("attachPersister (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 	}
@@ -424,7 +428,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Connector auto-recommendation (#512, opt-in): if the message is relevant to
 	// an Optional connector the user hasn't enabled, note it so the agent can
 	// suggest connecting it via /settings/connections (never auto-connecting).
-	injected = s.applyConnectorRecommendations(injected, req.Message, req.EnabledOptional)
+	// "Enabled" is judged against the conversation's PERSISTED opt-in list —
+	// the set the turn runs with — not only the creation-time request seed,
+	// which later turns never carry.
+	injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The

@@ -112,8 +112,11 @@ func TestConversationProjectRefileForeignConversation(t *testing.T) {
 		t.Fatalf("CreateConversation: %v", err)
 	}
 
-	if w := postProject(t, srv, attacker, conv.ID, `{"project_id":"`+proj.ID+`"}`); w.Code == 204 {
-		t.Fatalf("foreign conversation re-file succeeded; want an error status")
+	// The store reports "not yours" as ErrConversationNotFound; the handler
+	// must answer the 404 every sibling mutation does — it used to be a 500,
+	// telling the attacker (and a stale owner tab) the server was broken.
+	if w := postProject(t, srv, attacker, conv.ID, `{"project_id":"`+proj.ID+`"}`); w.Code != 404 {
+		t.Fatalf("foreign conversation re-file: status %d body=%q, want 404", w.Code, w.Body.String())
 	}
 	got, err := st.Get(ctx, victim, conv.ID)
 	if err != nil || got == nil {

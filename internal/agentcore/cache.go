@@ -177,13 +177,15 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 
 		// Breakpoints 3 & 4: the last two non-system messages, skipping the
 		// summary index so we don't waste the rolling budget on a message that
-		// already carries a breakpoint.
+		// already carries a breakpoint, and skipping the request-local budget
+		// wind-down notice, whose live spend figures change every step — a
+		// breakpoint there can never hit (see isBudgetWindDownNotice).
 		marked := 0
 		for i := len(msgs) - 1; i >= 0 && marked < 2; i-- {
 			if msgs[i].Role == fantasy.MessageRoleSystem {
 				continue
 			}
-			if i == summaryIdx {
+			if i == summaryIdx || isBudgetWindDownNotice(msgs[i]) {
 				continue
 			}
 			msgs[i].ProviderOptions = cc

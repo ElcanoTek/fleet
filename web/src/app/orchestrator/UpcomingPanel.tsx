@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { orchestratorApi, type UpcomingRun } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { describeCronExpression } from "@/app/shared/lib/cron";
+import { plural } from "./plural";
 
 // UpcomingPanel — the Operations Center "Upcoming" tab (Scheduler UX 2.0, #504):
 // a forward-looking timeline of the next scheduled runs, grouped by calendar
@@ -36,6 +37,11 @@ function timeLabel(d: Date): string {
 
 type UpcomingView = "list" | "week";
 
+// How far ahead the panel asks the server to project. The week board's
+// Next-week arrow stops at this edge: a week past it is not "empty", it is
+// simply not projected, and paging into it forever suggested otherwise.
+export const HORIZON_DAYS = 14;
+
 const VIEW_STORAGE_KEY = "fleet-upcoming-view";
 
 const VIEWS: Array<{ id: UpcomingView; label: string }> = [
@@ -48,6 +54,7 @@ export function UpcomingPanel() {
     data,
     loading,
     error,
+    reload,
   } = useCancellableFetch(
     // Horizon-based projection: ask for everything in the next two weeks so
     // the week board is truthful for the whole visible range (the server used
@@ -57,7 +64,7 @@ export function UpcomingPanel() {
       () =>
         orchestratorApi.upcomingRuns(
           500,
-          new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+          new Date(Date.now() + HORIZON_DAYS * 24 * 60 * 60 * 1000).toISOString(),
         ),
       [],
     ),
@@ -69,8 +76,15 @@ export function UpcomingPanel() {
   // panel only mounts on a post-hydration tab click.
   const [view, setView] = useState<UpcomingView>(() => {
     if (typeof window === "undefined") return "list";
-    const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
-    return saved === "week" ? "week" : "list";
+    // Guarded like the write below: the accessor itself throws where site
+    // data is blocked (Safari private mode, a locked-down browser), and an
+    // initializer that throws unmounts the whole tab.
+    try {
+      const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
+      return saved === "week" ? "week" : "list";
+    } catch {
+      return "list";
+    }
   });
   const changeView = (v: UpcomingView) => {
     setView(v);
@@ -87,6 +101,18 @@ export function UpcomingPanel() {
     <div className="section" role="region" aria-labelledby="upcomingHeading">
       <div className="section-header">
         <h2 id="upcomingHeading">Upcoming Runs</h2>
+        {/* This tab does not auto-refresh (only the task list does), so the
+            projection is as old as the last click here. */}
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          aria-label="Refresh upcoming runs"
+          data-testid="upcoming-refresh"
+          disabled={loading}
+          onClick={() => void reload()}
+        >
+          Refresh
+        </button>
         <div className="task-segment" role="radiogroup" aria-label="Upcoming view">
           {VIEWS.map((v) => (
             <button
@@ -159,6 +185,12 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
     sunday.getMonth(),
     sunday.getDate() + 7,
   );
+  // The following week starts at saturdayEnd. Once that is past the projection
+  // horizon there is nothing the feed could show there, so the arrow stops —
+  // an empty board past the edge reads as "nothing scheduled", which is not
+  // what it means.
+  const horizon = new Date(today.getTime() + HORIZON_DAYS * 24 * 60 * 60 * 1000);
+  const nextWeekBeyondHorizon = saturdayEnd > horizon;
   const weekLabel =
     weekOffset === 0
       ? "This week"
@@ -187,8 +219,14 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
           type="button"
           className="btn btn-secondary btn-small"
           aria-label="Next week"
-          data-tip-top="Next week"
+          data-tip-top={nextWeekBeyondHorizon ? undefined : "Next week"}
           data-testid="week-next"
+          disabled={nextWeekBeyondHorizon}
+          title={
+            nextWeekBeyondHorizon
+              ? `Runs are projected ${HORIZON_DAYS} days ahead — the next week is past that window.`
+              : undefined
+          }
           onClick={() => setWeekOffset((w) => w + 1)}
         >
           ›
@@ -241,7 +279,7 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
       </div>
       <p className="refresh-note">
         {beyond > 0
-          ? `${weekLabel} · ${beyond} more scheduled run(s) after this week`
+          ? `${weekLabel} · ${plural(beyond, "more scheduled run")} after this week`
           : weekLabel}
       </p>
     </div>
@@ -286,7 +324,7 @@ function UpcomingTimeline({ runs }: { runs: UpcomingRun[] }) {
           </ul>
         </div>
       ))}
-      <p className="refresh-note">Next {runs.length} scheduled run(s)</p>
+      <p className="refresh-note">Next {plural(runs.length, "scheduled run")}</p>
     </div>
   );
 }

@@ -131,6 +131,21 @@ out-of-loader, blocking and advisory — before starting the service; config
 hot-reload applies the same rules to the knobs it can reload (see
 [CONFIG-RELOAD.md](CONFIG-RELOAD.md)).
 
+**Less-travelled knobs** the loader reads that have no page of their own
+(every one is optional; the default is what an unset value means):
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `FLEET_TURN_TIMEOUT_SECONDS` | `1800` | Hard deadline on one interactive chat turn (legacy alias `CHAT_TURN_TIMEOUT_SECONDS`). |
+| `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | `0` (off) | Auto-archive a conversation this many days after its last activity; `0` leaves archiving to the user. |
+| `CONVERSATION_TTL_DAYS` | `14` | Retention of unpinned conversations before the maintenance sweep deletes them (no `FLEET_` prefix). |
+| `FLEET_CHAT_DB_MAX_CONNS` / `_MIN_CONNS` / `_MAX_CONN_IDLE_TIME` / `_MAX_CONN_LIFETIME` | pgx defaults | Chat-store connection-pool sizing; the `FLEET_SCHED_DB_*` quartet is the same for the scheduler DB. Durations take Go syntax. |
+| `FLEET_TLS_HTTP_ADDR` | `:80` | The HTTP→HTTPS redirect + ACME challenge listener when fleet terminates TLS itself. |
+| `FLEET_LOCKDOWN_ALLOWED_MODELS` | (empty) | Comma-separated model slugs a lockdown-mode conversation may switch to. |
+| `FLEET_KEEP_RUNS_PER_TASK` | `10` | Superseded run logs kept per scheduled task before the retention sweep prunes the oldest. |
+| `FLEET_TASK_FALLBACK_MODEL` | (empty) | Model the scheduler falls back to when a task's own model is unavailable. |
+| `FLEET_SENTRY_DSN` | (empty) | Optional Sentry-protocol endpoint for error reporting; unset disables it. |
+
 ## The client-config checkout
 
 fleet ships **no** client content; it loads a **client config bundle** from
@@ -427,6 +442,7 @@ Day-2 conveniences over the host systemd unit, so you never drop to raw
 `systemctl`/`journalctl`:
 
 ```
+fleet start                   # systemctl start the fleet unit
 fleet restart                 # systemctl restart the fleet unit
 fleet stop                    # systemctl stop the fleet unit
 fleet logs                    # tail the last 50 journal lines (a.k.a. `tail`)
@@ -440,6 +456,42 @@ The unit is resolved from `--service`, else `$FLEET_SERVICE_NAME`, else `fleet`.
 they need root/sudo; systemctl's own permission error surfaces via the exit code.
 `logs` reads the journal (usually permitted unprivileged) and exits non-zero if
 the unit isn't installed.
+
+## notes — the shared wiki, and the proposal queue
+
+Notes are the workspace's shared reference pages: an agent reads them by slug,
+and an operator curates them from here. They live in the **sched** database, so
+these verbs take `--database-url` (else `DATABASE_URL`, else the env file).
+
+```
+fleet notes set <slug> --title "..."   # body on stdin; bumps the version
+fleet notes get <slug>                 # print one note
+fleet notes list [--all] [--json]      # slug · version · status · title
+fleet notes rm <slug>                  # archive (also: del/delete/archive)
+```
+
+`list` shows live notes; `--all` includes archived ones. `rm` archives rather
+than destroys, so a slug can be brought back.
+
+**The proposal queue is the part with an approval semantic.** An agent that
+wants to change a note does not write it: it files a *proposal*, which stays
+pending until an operator decides. That decision is this pair of verbs, and
+there is no third outcome — a proposal is either published or rejected with a
+stated reason:
+
+```
+fleet notes proposal publish <id> [--note "..."]     # apply it; the note's version bumps
+fleet notes proposal reject  <id> --reason "..."     # refuse it; --reason is REQUIRED
+```
+
+Both take `--by` to record who decided (default `admin`). Publishing prints the
+resulting slug and version. An unknown or already-decided id exits **2** (the
+not-found code the other admin verbs use), so a script can tell "no such
+proposal" from an operational failure (5).
+
+There is **no** `notes proposal list` verb today — the CLI covers the decision,
+not the browsing. To find the ids awaiting a decision, read the orchestrator's
+`GET /notes/proposals?status=pending`.
 
 ## process logs — stderr by default, optional rotating file
 

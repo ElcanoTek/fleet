@@ -30,6 +30,11 @@ Aggregation happens strictly over rows the governed core already writes:
   closed `group_by` set, so caller input never reaches SQL.
 - Failed/cancelled iterations and cancelled chat turns **count** — the cost was
   still spent.
+- **Every scheduled run writes an iteration row**, not just looped tasks: a
+  plain single-pass task is recorded as iteration 1 of 1 (`singlePassIteration`
+  in `internal/scheduledrun`). Before that, only `loop_config` tasks wrote to
+  `task_iterations`, so ordinary tasks accrued $0 against every per-principal
+  budget and were missing from this report.
 - Chat usage survives conversation deletion. `turn_metrics` intentionally has
   no cascading conversation foreign key (chat migration 038): deleting or
   expiring transcript content must not erase already-incurred accounting.

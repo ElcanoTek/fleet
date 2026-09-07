@@ -108,6 +108,46 @@ func TestExpandContextHandles_Cap(t *testing.T) {
 	}
 }
 
+// Handles expand in MESSAGE order across both kinds, and the cap keeps the
+// first maxContextHandles the user wrote. Collecting per kind (all URLs, then
+// all files) put every @file last and — with 8+ URLs — dropped every file.
+func TestExpandContextHandles_MessageOrderAcrossKinds(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"first.txt", "last.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name+" body"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One file, then more URLs than the cap, then another file. The URLs use a
+	// loopback address so the SSRF guard fails them fast, no network involved.
+	var msg strings.Builder
+	msg.WriteString(`@file:"first.txt"`)
+	for i := 0; i < maxContextHandles; i++ {
+		fmt.Fprintf(&msg, " @url:http://127.0.0.1/%d", i)
+	}
+	msg.WriteString(` @file:"last.txt"`)
+
+	blocks, notices := expandContextHandles(context.Background(), msg.String(), dir)
+	if len(blocks) != 1 || !strings.Contains(blocks[0], "first.txt body") {
+		t.Fatalf("the first-written @file must survive the cap, got blocks=%v notices=%v", blocks, notices)
+	}
+	for _, n := range notices {
+		if strings.Contains(n, "last.txt") {
+			t.Errorf("last.txt is past the cap and should be dropped silently, not attempted: %v", notices)
+		}
+	}
+	// 1 file + maxContextHandles urls + 1 file = two over the cap: the last
+	// url and last.txt are dropped, first.txt (written first) is kept.
+	joined := strings.Join(notices, "\n")
+	if !strings.Contains(joined, "2 additional context handle(s) ignored") {
+		t.Errorf("expected exactly two dropped handles, got %v", notices)
+	}
+	// The url notices keep message order: /0 before /1.
+	if i0, i1 := strings.Index(joined, "127.0.0.1/0"), strings.Index(joined, "127.0.0.1/1"); i0 < 0 || i1 < 0 || i0 > i1 {
+		t.Errorf("url handles out of message order: %v", notices)
+	}
+}
+
 func TestAppendContextHandleBlocks(t *testing.T) {
 	// No-op when nothing to append.
 	if got := appendContextHandleBlocks("hi", nil, nil); got != "hi" {

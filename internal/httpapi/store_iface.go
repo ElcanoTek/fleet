@@ -182,6 +182,11 @@ type chatStore interface {
 	CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64, seat store.ApprovalSeat) (*store.Approval, error)
 	GetApproval(ctx context.Context, userEmail, approvalID string) (*store.Approval, error)
 	ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
+	// ClaimApprovalAndSetModel is the suggest_advanced_model resolution: the
+	// approved claim and the conversation's model pin in one transaction, so a
+	// failed pin leaves the approval pending (retryable) rather than resolved
+	// with a result_text that lies.
+	ClaimApprovalAndSetModel(ctx context.Context, userEmail, approvalID, resultText, convID, model string) (bool, error)
 	// ClaimExpiredApproval is the sweep-only counterpart: it claims a
 	// pending row whose expires_at has already passed. User-facing
 	// ClaimApproval refuses those rows so default-deny is authoritative
@@ -286,6 +291,7 @@ type chatStore interface {
 	ListSharedFiles(ctx context.Context) ([]store.SharedFile, error)
 	GetSharedFile(ctx context.Context, id string) (store.SharedFile, error)
 	CreateSharedFile(ctx context.Context, f store.SharedFile) (store.SharedFile, error)
+	SharedFilePathAvailable(ctx context.Context, folder, name string) error
 	UpdateSharedFileMeta(ctx context.Context, id, name, folder, description string) (store.SharedFile, error)
 	DeleteSharedFile(ctx context.Context, id string) (store.SharedFile, error)
 	TotalSharedFileBytes(ctx context.Context) (int64, error)

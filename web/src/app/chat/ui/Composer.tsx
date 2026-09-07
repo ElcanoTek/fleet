@@ -846,11 +846,15 @@ export function Composer({
                           className="w-full rounded-[0.5rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.6rem] py-[0.32rem] text-[0.82rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-border-strong)]"
                           value={modelSearchQuery}
                           onChange={(event) => {
-                            // Typing both filters the catalog and — as with
-                            // the old inline input — keeps free slug entry
-                            // working: the raw text is the selected model
-                            // until a row is picked.
-                            setSelectedModel(event.target.value);
+                            // Typing only filters the catalog. The text is a
+                            // draft, NOT the selected model: it used to be
+                            // written straight into selectedModel on every
+                            // keystroke, so typing "cla" and then pressing
+                            // Escape (or clicking away — both only close the
+                            // popover) left "cla" as the model and the next
+                            // send failed. selectedModel changes only on a
+                            // commit (Enter or a row pick, below); a dismiss
+                            // leaves whatever was selected before untouched.
                             setModelSearchQuery(event.target.value);
                             setModelHighlight(0);
                           }}
@@ -864,8 +868,15 @@ export function Composer({
                               setModelHighlight((h) => (Math.min(h, count - 1) - 1 + count) % count);
                             } else if (event.key === "Enter") {
                               event.preventDefault();
+                              // Commit: the highlighted row when there is one;
+                              // otherwise the typed text itself, which keeps
+                              // free slug entry working (a slug the catalog
+                              // doesn't list has no row to pick). Empty text
+                              // commits nothing and just closes.
                               const pick = filteredRankedModels[Math.min(modelHighlight, count - 1)];
+                              const typed = modelSearchQuery.trim();
                               if (pick) setSelectedModel(pick.slug);
+                              else if (typed) setSelectedModel(typed);
                               closeModelPicker(true);
                             }
                           }}
@@ -1313,20 +1324,26 @@ export function Composer({
                   <button
                     aria-label="Send message"
                     className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
-                      prompt.trim() && !isStreaming && !isUploadingAttachments
+                      prompt.trim() && !isStreaming && !isUploadingAttachments && !modelError
                         ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary)] hover:-translate-y-px"
                         : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
                     }`}
                     type="submit"
-                    disabled={!prompt.trim() || isUploadingAttachments}
+                    // modelError: submitPrompt refuses to send while the
+                    // model is rejected, so an enabled button here was a
+                    // click that did nothing. Disable it and put the reason
+                    // in the title, the same text the model chip shows.
+                    disabled={!prompt.trim() || isUploadingAttachments || modelError !== null}
                     title={
-                      isUploadingAttachments
-                        ? "Uploading attachments…"
-                        : !prompt.trim() && pendingAttachments.length > 0
-                          ? "Type a message to send your attachments"
-                          : isStreaming
-                            ? "Queue message (runs after the current turn)"
-                            : "Send message"
+                      modelError
+                        ? modelError.message
+                        : isUploadingAttachments
+                          ? "Uploading attachments…"
+                          : !prompt.trim() && pendingAttachments.length > 0
+                            ? "Type a message to send your attachments"
+                            : isStreaming
+                              ? "Queue message (runs after the current turn)"
+                              : "Send message"
                     }
                   >
                     {isUploadingAttachments ? (

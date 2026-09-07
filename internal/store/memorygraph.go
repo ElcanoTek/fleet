@@ -239,7 +239,7 @@ func (s *Store) ReplaceRelationsForMemory(ctx context.Context, userEmail, memory
 		memoryID, userEmail,
 	).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, errors.New("memory not found")
+		return 0, ErrMemoryNotFound
 	}
 	if err != nil {
 		return 0, err

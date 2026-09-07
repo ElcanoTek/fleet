@@ -6,7 +6,17 @@
 //
 // All exported Record*/Observe helpers are safe for concurrent use. Gauges that
 // reflect live state (active agents, sandbox pool depth) are registered as
-// callbacks and evaluated at scrape time via Render.
+// callbacks and evaluated at scrape time via Render — OUTSIDE the registry
+// lock, so a slow or re-entrant callback (one that records a metric itself)
+// can neither stall every recorder for the duration of a scrape nor deadlock.
+//
+// Every counter/gauge family is capped at maxSeriesPerFamily distinct label
+// sets. Most labels are bounded by construction (model slug, tool class,
+// reason enum), but a few carry operator-authored free text (task name,
+// webhook slug), and a misconfigured or hostile source of those must not grow
+// the process heap without bound. A new label set past the cap is dropped and
+// counted in fleet_metrics_series_dropped_total{family=...} so the loss is
+// visible on the dashboard rather than silent.
 package metrics
 
 import (
@@ -40,8 +50,34 @@ type counterVec struct {
 	values map[string]float64 // serialized-labelset → value
 }
 
+// maxSeriesPerFamily bounds the distinct label sets one counter or gauge
+// family may hold (see the package comment). Generous for every bounded label
+// in the codebase; only a runaway free-text label can reach it.
+const maxSeriesPerFamily = 1000
+
+// nameSeriesDropped counts label sets refused by the per-family cap. It is
+// itself bounded by the number of families, so it can never need the cap.
+const nameSeriesDropped = "fleet_metrics_series_dropped_total"
+
+// admitSeries reports whether a NEW label set may join a family whose current
+// values are `values`; an existing key is always admitted. A refusal is
+// counted under nameSeriesDropped. Caller holds reg.mu.
+func admitSeries(family, key string, values map[string]float64) bool {
+	if _, exists := values[key]; exists || len(values) < maxSeriesPerFamily {
+		return true
+	}
+	d := reg.counters[nameSeriesDropped]
+	if d == nil {
+		d = &counterVec{help: "Total metric label sets dropped because their family exceeded the per-family series cap.", labels: []string{"family"}, values: map[string]float64{}}
+		reg.counters[nameSeriesDropped] = d
+	}
+	d.values[seriesKey([]string{"family"}, []string{family})]++
+	return false
+}
+
 // incCounter adds `by` to the counter `name` for the given label values (which
-// must align with labelNames). Registers the family on first use.
+// must align with labelNames). Registers the family on first use. A label set
+// that would push the family past maxSeriesPerFamily is dropped (and counted).
 func incCounter(name, help string, labelNames []string, labelVals []string, by float64) {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
@@ -50,7 +86,11 @@ func incCounter(name, help string, labelNames []string, labelVals []string, by f
 		c = &counterVec{help: help, labels: labelNames, values: map[string]float64{}}
 		reg.counters[name] = c
 	}
-	c.values[seriesKey(labelNames, labelVals)] += by
+	key := seriesKey(labelNames, labelVals)
+	if !admitSeries(name, key, c.values) {
+		return
+	}
+	c.values[key] += by
 }
 
 // ── gauges (imperatively set) ────────────────────────────────────────────────
@@ -75,7 +115,11 @@ func setGauge(name, help string, labelNames, labelVals []string, v float64) {
 		g = &gaugeVec{help: help, labels: labelNames, values: map[string]float64{}}
 		reg.gauges[name] = g
 	}
-	g.values[seriesKey(labelNames, labelVals)] = v
+	key := seriesKey(labelNames, labelVals)
+	if !admitSeries(name, key, g.values) {
+		return
+	}
+	g.values[key] = v
 }
 
 // ── histograms ───────────────────────────────────────────────────────────────
@@ -156,10 +200,14 @@ func RegisterCounterFunc(name, help string, labelNames []string, fn func() []Gau
 // ── render ───────────────────────────────────────────────────────────────────
 
 // Render returns the full metrics snapshot in Prometheus text exposition format.
+//
+// The stored families are rendered under the registry lock; the pull-at-scrape
+// callbacks are copied out under it and INVOKED AFTER it is released. A
+// callback is arbitrary caller code (it may take its own locks, hit a DB stats
+// call, or record a metric of its own) — running it under reg.mu would block
+// every Record*/Observe for the scrape's duration and deadlock on re-entry.
 func Render() string {
 	reg.mu.Lock()
-	defer reg.mu.Unlock()
-
 	var b strings.Builder
 	names := make([]string, 0, len(reg.counters))
 	for n := range reg.counters {
@@ -213,14 +261,18 @@ func Render() string {
 		}
 	}
 
-	for _, g := range reg.counterFuncs {
+	counterFuncs := append([]gaugeFunc(nil), reg.counterFuncs...)
+	gaugeFuncs := append([]gaugeFunc(nil), reg.gaugeFuncs...)
+	reg.mu.Unlock()
+
+	for _, g := range counterFuncs {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s counter\n", g.name, g.help, g.name)
 		for _, s := range g.fn() {
 			fmt.Fprintf(&b, "%s%s %s\n", g.name, seriesKey(g.labels, s.Labels), formatFloat(s.Value))
 		}
 	}
 
-	for _, g := range reg.gaugeFuncs {
+	for _, g := range gaugeFuncs {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s gauge\n", g.name, g.help, g.name)
 		for _, s := range g.fn() {
 			fmt.Fprintf(&b, "%s%s %s\n", g.name, seriesKey(g.labels, s.Labels), formatFloat(s.Value))

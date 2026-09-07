@@ -1,8 +1,10 @@
 package metrics
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRender_CountersAndLabels(t *testing.T) {
@@ -154,5 +156,61 @@ func TestToolOutputMetricUsesBoundedToolClasses(t *testing.T) {
 	}
 	if strings.Contains(out, "tenant_supplied") || strings.Contains(out, "another_catalog") {
 		t.Fatalf("untrusted catalog name leaked into metric labels:\n%s", out)
+	}
+}
+
+// TestRender_CallbacksRunOutsideRegistryLock: a gauge callback that records a
+// metric of its own (re-entrant) must not deadlock the scrape, and a slow
+// callback must not block recorders. Both are the same property — callbacks
+// are invoked after reg.mu is released.
+func TestRender_CallbacksRunOutsideRegistryLock(t *testing.T) {
+	RegisterGauge("fleet_test_reentrant_gauge", "test", nil, func() []GaugeSample {
+		// Re-entrant: recording under the registry lock would self-deadlock.
+		incCounter("fleet_test_reentrant_side_effect_total", "test", nil, nil, 1)
+		return []GaugeSample{{Value: 1}}
+	})
+	done := make(chan string, 1)
+	go func() { done <- Render() }()
+	select {
+	case out := <-done:
+		if !strings.Contains(out, "fleet_test_reentrant_gauge 1") {
+			t.Fatalf("re-entrant gauge missing:\n%s", out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Render deadlocked on a re-entrant gauge callback")
+	}
+	// The side effect landed (visible on the next scrape).
+	if !strings.Contains(Render(), "fleet_test_reentrant_side_effect_total") {
+		t.Fatal("re-entrant record was lost")
+	}
+}
+
+// TestSeriesCapDropsAndCounts pins the per-family series bound for free-text
+// labels: past maxSeriesPerFamily new label sets are dropped, existing ones
+// keep accumulating, and each drop is counted under
+// fleet_metrics_series_dropped_total{family=...}.
+func TestSeriesCapDropsAndCounts(t *testing.T) {
+	const family = "fleet_test_capped_total"
+	for i := 0; i < maxSeriesPerFamily+25; i++ {
+		incCounter(family, "test", []string{"task"}, []string{fmt.Sprintf("task-%d", i)}, 1)
+	}
+	// An existing series is still writable at the cap.
+	incCounter(family, "test", []string{"task"}, []string{"task-0"}, 1)
+
+	reg.mu.Lock()
+	n := len(reg.counters[family].values)
+	reg.mu.Unlock()
+	if n != maxSeriesPerFamily {
+		t.Fatalf("family holds %d series, want the cap %d", n, maxSeriesPerFamily)
+	}
+	out := Render()
+	if !strings.Contains(out, family+`{task="task-0"} 2`) {
+		t.Errorf("existing series stopped accumulating at the cap:\n%s", out)
+	}
+	if strings.Contains(out, fmt.Sprintf(`{task="task-%d"}`, maxSeriesPerFamily+10)) {
+		t.Error("a series past the cap was admitted")
+	}
+	if !strings.Contains(out, nameSeriesDropped+`{family="`+family+`"} 25`) {
+		t.Errorf("dropped series not counted:\n%s", out)
 	}
 }

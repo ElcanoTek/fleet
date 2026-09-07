@@ -219,12 +219,23 @@ func (f FlowConfig) tokenRequest(ctx context.Context, httpClient *http.Client, f
 	return tok, nil
 }
 
-func (f FlowConfig) allowsBasicAuth() bool {
-	if len(f.AuthMethods) == 0 {
+func (f FlowConfig) allowsBasicAuth() bool { return basicAuthAllowed(f.AuthMethods) }
+
+// basicAuthAllowed is the ONE decision for how a confidential client
+// authenticates at an AS endpoint, shared by the token endpoint (exchange and
+// refresh) and the revocation endpoint: HTTP Basic when the AS's advertised
+// token_endpoint_auth_methods_supported includes client_secret_basic — or
+// advertises nothing, which RFC 8414 §2 defines to mean exactly that — and the
+// form-body client_secret_post otherwise. Revocation used to hard-code Basic,
+// so against a client_secret_post-only AS the token endpoint worked and the
+// revocation request 401'd; because revocation is best-effort, the refresh
+// token then stayed live at the AS after a Disconnect that reported success.
+func basicAuthAllowed(methods []string) bool {
+	if len(methods) == 0 {
 		return true // default to Basic when the AS doesn't specify
 	}
-	for _, m := range f.AuthMethods {
-		if strings.EqualFold(m, "client_secret_basic") {
+	for _, m := range methods {
+		if strings.EqualFold(strings.TrimSpace(m), "client_secret_basic") {
 			return true
 		}
 	}

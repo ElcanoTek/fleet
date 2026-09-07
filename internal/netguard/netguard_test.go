@@ -37,6 +37,12 @@ func TestIsBlockedIP(t *testing.T) {
 		"::ffff:127.0.0.1",       // IPv4-mapped loopback (must not slip through)
 		"::ffff:169.254.169.254", // IPv4-mapped metadata
 		"::ffff:100.100.100.200", // IPv4-mapped CGNAT metadata
+		"0.0.0.1",                // RFC 1122 "this network" (only 0.0.0.0 is IsUnspecified)
+		"64:ff9b::7f00:1",        // NAT64 (RFC 6052) form of 127.0.0.1
+		"64:ff9b::a9fe:a9fe",     // NAT64 form of 169.254.169.254
+		"64:ff9b:1::7f00:1",      // local-use NAT64 (RFC 8215)
+		"::7f00:1",               // IPv4-compatible IPv6 form of 127.0.0.1
+		"::a9fe:a9fe",            // IPv4-compatible form of the metadata endpoint
 	}
 	for _, s := range blocked {
 		ip := net.ParseIP(s)

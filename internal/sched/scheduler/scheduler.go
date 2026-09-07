@@ -733,11 +733,21 @@ func (s *Scheduler) evalRunIf(task *models.Task) (shouldRun bool, reason string,
 	}
 	want := task.RunIf.ExitCodeIs
 	if runErr != nil {
-		exitCode := -1
+		// Only a check that actually ran to an exit status yields a verdict. A
+		// check that never started (sh missing, fork failure) or that was
+		// killed by a signal (OOM, an operator's kill) has no exit code — it
+		// errored, exactly like a timeout — so it goes back as err for the
+		// task's on_error policy. Before this, both fell through to the
+		// exit-code comparison as -1 and were recorded as a clean skip, which
+		// defeated on_error=run for the very failures it exists for.
 		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
+		if !errors.As(runErr, &exitErr) {
+			return false, "check failed to run", fmt.Errorf("run_if: check failed to run: %w", runErr)
 		}
+		if exitErr.ProcessState == nil || exitErr.ExitCode() == -1 {
+			return false, "check killed by signal", fmt.Errorf("run_if: check killed by signal: %w", runErr)
+		}
+		exitCode := exitErr.ExitCode()
 		if exitCode == want {
 			return true, "", nil
 		}

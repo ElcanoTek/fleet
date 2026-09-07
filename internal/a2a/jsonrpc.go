@@ -11,9 +11,11 @@ package a2a
 // bytes.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
 	wire "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/errordetails"
@@ -45,12 +47,33 @@ type Request struct {
 
 // Response is an outgoing JSON-RPC 2.0 response envelope. Exactly one of
 // Result / Error is set; ID mirrors the request id (JSON null when the
-// request's id was absent or unparseable).
+// request's id was absent or unparseable). MarshalJSON enforces the
+// exactly-one rule on the wire: an error envelope carries no result member,
+// and a success envelope ALWAYS carries result — an `omitempty` on Result
+// used to drop it for a nil pointer or empty RawMessage, emitting a response
+// with neither member, which JSON-RPC forbids and this package's own client
+// rejects ("peer answered with neither result nor error").
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
-	Result  any             `json:"result,omitempty"`
+	Result  any             `json:"result"`
 	Error   *ErrorObject    `json:"error,omitempty"`
+}
+
+// MarshalJSON emits exactly one of result / error (see Response).
+func (r Response) MarshalJSON() ([]byte, error) {
+	if r.Error != nil {
+		return json.Marshal(struct {
+			JSONRPC string          `json:"jsonrpc"`
+			ID      json.RawMessage `json:"id"`
+			Error   *ErrorObject    `json:"error"`
+		}{r.JSONRPC, normalizeID(r.ID), r.Error})
+	}
+	return json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Result  any             `json:"result"`
+	}{r.JSONRPC, normalizeID(r.ID), r.Result})
 }
 
 // ErrorObject is the JSON-RPC error member. Data is the spec's array of
@@ -62,9 +85,33 @@ type ErrorObject struct {
 	Data    []*errordetails.Typed `json:"data,omitempty"`
 }
 
-// NewResponse builds a success envelope.
+// NewResponse builds a success envelope. A nil result (untyped nil, a nil
+// pointer/map/slice, or an empty / `null` RawMessage) is a handler bug, not a
+// success: rather than put a `"result": null` on the wire — which peers decode
+// as a zero-valued task — it is answered as -32603 InternalError so the
+// failure is visible at the caller instead of silently shaped as data.
 func NewResponse(id json.RawMessage, result any) Response {
+	if isNilResult(result) {
+		return NewErrorResponse(id, wire.ErrInternalError, "handler produced no result", nil)
+	}
 	return Response{JSONRPC: "2.0", ID: normalizeID(id), Result: result}
+}
+
+// isNilResult reports whether result would encode as JSON null or nothing.
+func isNilResult(result any) bool {
+	if result == nil {
+		return true
+	}
+	if raw, ok := result.(json.RawMessage); ok {
+		trimmed := bytes.TrimSpace(raw)
+		return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+	}
+	switch v := reflect.ValueOf(result); v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // NewErrorResponse builds an error envelope for one of the wire error

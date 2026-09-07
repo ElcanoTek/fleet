@@ -427,12 +427,22 @@ func (p *Pool) Run(ctx context.Context) {
 		log.Printf("runner: per-task wall-clock timeout OFF (FLEET_TASK_WALL_TIMEOUT=0)")
 	}
 
+	// Lease renewal runs until the in-flight tasks have DRAINED, not until ctx
+	// is cancelled: cancellation only stops claiming, and draining tasks keep
+	// running for up to drainGrace. With renewal stopping at cancel, a grace
+	// longer than the lease let a draining task's lease expire mid-run, and a
+	// freshly started replacement process's RecoverExpiredLeases re-queued it
+	// while the old process was still finishing — the duplicate-side-effect
+	// window #1116 exists to close. renewStop is closed once Run has waited
+	// on taskWG, so a renewal can never outlive the pool.
 	renewTicker := time.NewTicker(p.leaseRenewInterval)
 	defer renewTicker.Stop()
+	renewStop := make(chan struct{})
+	defer close(renewStop)
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
+			case <-renewStop:
 				return
 			case <-renewTicker.C:
 				p.renewActiveLeases()
@@ -1695,7 +1705,7 @@ func (p *Pool) withPriorRunContext(ctx context.Context, task *models.Task) conte
 	if !task.CarryContext || strings.TrimSpace(task.Recurrence) == "" {
 		return ctx
 	}
-	prior := p.priorRunHandoff(task.ID)
+	prior := p.priorRunHandoff(task)
 	if prior == "" {
 		return ctx
 	}
@@ -1706,8 +1716,18 @@ func (p *Pool) withPriorRunContext(ctx context.Context, task *models.Task) conte
 // assistant message clamped to carryContextMaxChars — for recurring
 // context-carry (#504). Empty when there is no prior run or no answer.
 // Deterministic + cheap: it reads the already-persisted last session, no LLM.
-func (p *Pool) priorRunHandoff(taskID uuid.UUID) string {
-	session, err := p.store.GetLog(taskID)
+//
+// "Prior run" is the most recent run before this one: for a retry of the same
+// row that is the row's own persisted log (the failed attempt); for a fresh
+// occurrence — a NEW row, whose own log does not exist yet — it is the
+// previous occurrence's log, reached through PreviousOccurrenceID (migration
+// 068). Before that pointer existed only the first lookup ran, so a genuine
+// recurrence never carried anything.
+func (p *Pool) priorRunHandoff(task *models.Task) string {
+	session, err := p.store.GetLog(task.ID)
+	if (err != nil || session == nil) && task.PreviousOccurrenceID != nil {
+		session, err = p.store.GetLog(*task.PreviousOccurrenceID)
+	}
 	if err != nil || session == nil {
 		return ""
 	}

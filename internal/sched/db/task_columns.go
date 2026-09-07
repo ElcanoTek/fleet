@@ -126,6 +126,7 @@ type taskScanBuf struct {
 	wakeCycles             int
 	pausedAt               sql.NullTime
 	a2aDelegationDepth     int
+	previousOccurrenceID   sql.NullString
 }
 
 // taskColumn is one row of the task-column registry: one tasks-table column,
@@ -1002,6 +1003,27 @@ var taskColumnRegistry = []taskColumn{
 		value:      func(t *models.Task) any { return t.A2ADelegationDepth },
 		dest:       func(b *taskScanBuf) any { return &b.a2aDelegationDepth },
 		assign:     func(b *taskScanBuf, t *models.Task) { t.A2ADelegationDepth = b.a2aDelegationDepth },
+	},
+	{
+		name: "previous_occurrence_id",
+		read: true, insert: true,
+		// Recurrence lineage (migration 068): the occurrence this row was
+		// spawned to follow. Read back so priorRunHandoff can find the
+		// previous occurrence's transcript for carry_context.
+		noUpsert:   "spawn lineage (migration 068): stamped by scheduleNextRecurrence's insert and immutable afterwards — a status write must never re-point or clear which occurrence this one follows",
+		noTxUpdate: "spawn lineage (migration 068): immutable after the creating insert, like source_task_id's reason for being lineage rather than definition",
+		noExport:   "per-copy lineage (migration 068): a re-imported definition has no predecessor occurrence on the import target",
+		value:      func(t *models.Task) any { return sourceTaskIDValue(t.PreviousOccurrenceID) },
+		dest:       func(b *taskScanBuf) any { return &b.previousOccurrenceID },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.previousOccurrenceID.Valid && b.previousOccurrenceID.String != "" {
+				if pid, perr := uuid.Parse(b.previousOccurrenceID.String); perr == nil {
+					t.PreviousOccurrenceID = &pid
+				} else {
+					log.Printf("Warning: invalid previous_occurrence_id %q: %v", b.previousOccurrenceID.String, perr)
+				}
+			}
+		},
 	},
 }
 

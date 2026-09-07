@@ -118,6 +118,38 @@ func TestHTTPToolsValidation(t *testing.T) {
 			name: "input_schema not object",
 			body: "branding: {}\nhttp_tools:\n  - name: t\n    method: GET\n    url: http://x\n    input_schema:\n      type: array\n",
 		},
+		// URL shape (same rules as a2a_peers.rpc_url): a network scheme with a
+		// fixed host. A {param} in the scheme or host would let model-supplied
+		// arguments pick the destination of a credential-bearing host-side
+		// request.
+		{
+			name: "url not http(s)",
+			body: "branding: {}\nhttp_tools:\n  - name: t\n    method: GET\n    url: file:///etc/passwd\n",
+		},
+		{
+			name: "url without host",
+			body: "branding: {}\nhttp_tools:\n  - name: t\n    method: GET\n    url: \"http://\"\n",
+		},
+		{
+			name: "url with userinfo",
+			body: "branding: {}\nhttp_tools:\n  - name: t\n    method: GET\n    url: \"https://user:secret@api.example.com/x\"\n",
+		},
+		{
+			name: "url with param token in host",
+			body: "branding: {}\nhttp_tools:\n  - name: t\n    method: GET\n    url: \"https://{tenant}.example.com/x\"\n",
+		},
+		{
+			name: "url with param token as host",
+			body: "branding: {}\nhttp_tools:\n  - name: t\n    method: GET\n    url: \"https://{host}/x\"\n",
+		},
+		{
+			name: "url with param token in scheme",
+			body: "branding: {}\nhttp_tools:\n  - name: t\n    method: GET\n    url: \"{scheme}://api.example.com/x\"\n",
+		},
+		{
+			name: "url does not parse",
+			body: "branding: {}\nhttp_tools:\n  - name: t\n    method: GET\n    url: \"http://[::1\"\n",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,5 +205,30 @@ func TestDefaultBundleHasNoHTTPTools(t *testing.T) {
 	}
 	if b.HTTPToolConfigs() != nil {
 		t.Errorf("default bundle HTTPToolConfigs should be nil")
+	}
+}
+
+// TestHTTPToolsURLTokensInPathAndQueryLoad pins the other side of the URL
+// check: {param} tokens in the path and query are the feature and must keep
+// loading — only the scheme and host are required to be fixed.
+func TestHTTPToolsURLTokensInPathAndQueryLoad(t *testing.T) {
+	body := `branding: {}
+http_tools:
+  - name: get_thing
+    method: GET
+    url: "https://api.example.com/v1/things/{id}?expand={fields}&page={page}"
+    input_schema:
+      type: object
+      properties:
+        id: { type: string }
+        fields: { type: string }
+        page: { type: integer }
+`
+	b, err := Load(writeManifest(t, body))
+	if err != nil {
+		t.Fatalf("Load rejected {param} tokens in the path/query: %v", err)
+	}
+	if len(b.HTTPTools) != 1 || b.HTTPTools[0].URL != "https://api.example.com/v1/things/{id}?expand={fields}&page={page}" {
+		t.Fatalf("HTTPTools = %+v", b.HTTPTools)
 	}
 }

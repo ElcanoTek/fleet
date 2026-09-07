@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -187,8 +188,22 @@ func parseLastEventID(r *http.Request) uint64 {
 	if raw == "" {
 		return 0
 	}
-	var id uint64
-	if _, err := fmt.Sscanf(raw, "%d", &id); err != nil {
+	// strconv, not Sscanf("%d"): Sscanf accepted trailing garbage ("12abc" →
+	// 12) and so resumed a client from an id it never really sent. Anything
+	// but a clean unsigned integer falls back to 0 — a full replay, which is
+	// always safe (the buffer dedups nothing the client already has, it just
+	// re-sends) — rather than a guessed resume point.
+	//
+	// Width 63, not 64, and that is load-bearing rather than fussy: this value
+	// is client-supplied and reaches store.LoadTurnEvents, which passes it to
+	// Postgres as int64(afterEventID). At 64 bits an id above MaxInt64 wraps
+	// NEGATIVE there, and `WHERE event_id > -1` matches every row — a client
+	// could turn a resume into a full replay by sending one large number.
+	// Refusing it here keeps the conversion provably in range for every value
+	// that gets past this point, and an id that large is nonsense anyway:
+	// event ids are small monotonic per-turn counters.
+	id, err := strconv.ParseUint(raw, 10, 63)
+	if err != nil {
 		return 0
 	}
 	return id

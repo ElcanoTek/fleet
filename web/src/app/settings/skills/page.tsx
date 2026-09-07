@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   btnClass,
@@ -88,8 +88,19 @@ export default function SkillsPage() {
   const [query, setQuery] = useState("");
   const [openSkill, setOpenSkill] = useState<string | null>(null);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
+  // Monotonic ticket for view(): each click takes a new number and a response
+  // only lands if its ticket is still current, so clicking A then B can never
+  // paint A's body under B's header when A's fetch finishes last.
+  const viewSeq = useRef(0);
   const [error, setError] = useState<string | null>(null);
+  // Which pack skill's SKILL.md read failed, and why — rendered in that row
+  // where "Loading…" would otherwise spin forever. Keyed by name so a failure
+  // for a skill that has since been closed (or superseded) renders nowhere.
+  const [viewError, setViewError] = useState<{ name: string; message: string } | null>(null);
   const [mine, setMine] = useState<UserSkill[] | null>(null);
+  // Why the personal-skills read failed (null = it didn't). The panel used to
+  // swallow the failure and stay on "Loading…" for good.
+  const [mineError, setMineError] = useState<string | null>(null);
   // Which personal skill is expanded (by id — a personal skill may share a
   // name with a pack skill, so the two panels track expansion independently).
   const [openMine, setOpenMine] = useState<string | null>(null);
@@ -111,11 +122,22 @@ export default function SkillsPage() {
         if (!stale) setError(e instanceof Error ? e.message : "Failed to load skills.");
       });
     fetch("/api/user-skills", { cache: "no-store" })
-      .then(async (res) => (res.ok ? ((await res.json()) as { skills: UserSkill[] }) : null))
-      .then((data) => {
-        if (!stale && data) setMine(data.skills ?? []);
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Failed to load your skills: ${res.status}`);
+        return (await res.json()) as { skills: UserSkill[] };
       })
-      .catch(() => {});
+      .then((data) => {
+        if (stale) return;
+        setMine(data.skills ?? []);
+        setMineError(null);
+      })
+      .catch((e: unknown) => {
+        if (stale) return;
+        // An empty list under an error line: the rows are unknown, not absent,
+        // and the panel must leave "Loading…" so Retry has somewhere to live.
+        setMine([]);
+        setMineError(e instanceof Error ? e.message : "Failed to load your skills.");
+      });
     return () => {
       stale = true;
     };
@@ -123,11 +145,18 @@ export default function SkillsPage() {
 
   const reloadMine = () =>
     fetch("/api/user-skills", { cache: "no-store" })
-      .then(async (res) => (res.ok ? ((await res.json()) as { skills: UserSkill[] }) : null))
-      .then((data) => {
-        if (data) setMine(data.skills ?? []);
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Failed to load your skills: ${res.status}`);
+        return (await res.json()) as { skills: UserSkill[] };
       })
-      .catch(() => {});
+      .then((data) => {
+        setMine(data.skills ?? []);
+        setMineError(null);
+      })
+      .catch((e: unknown) => {
+        setMine((prev) => prev ?? []);
+        setMineError(e instanceof Error ? e.message : "Failed to load your skills.");
+      });
 
   const saveDraft = () => {
     if (!draft) return;
@@ -214,27 +243,48 @@ export default function SkillsPage() {
       .finally(() => setBusy(false));
   };
 
-  const view = (name: string) => {
-    if (openSkill === name) {
-      setOpenSkill(null);
-      setDetail(null);
-      return;
-    }
-    setOpenSkill(name);
+  // loadDetail fetches one pack skill's SKILL.md into the open row. Split from
+  // view() so the row's Retry can re-run the fetch without re-toggling.
+  const loadDetail = (name: string) => {
+    const seq = ++viewSeq.current;
+    setViewError(null);
     setDetail(null);
     fetch(`/api/skills/${encodeURIComponent(name)}`, { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`Failed to load skill: ${res.status}`);
         return (await res.json()) as SkillDetail;
       })
-      .then(setDetail)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load skill."));
+      .then((d) => {
+        if (seq === viewSeq.current) setDetail(d);
+      })
+      .catch((e: unknown) => {
+        // A superseded request's failure is about a skill no longer open.
+        if (seq !== viewSeq.current) return;
+        setViewError({ name, message: e instanceof Error ? e.message : "Failed to load skill." });
+      });
+  };
+
+  const view = (name: string) => {
+    if (openSkill === name) {
+      viewSeq.current++; // retire the open row's in-flight read
+      setOpenSkill(null);
+      setDetail(null);
+      setViewError(null);
+      return;
+    }
+    setOpenSkill(name);
+    loadDetail(name);
   };
 
   const q = query.trim().toLowerCase();
+  // Every field is lowercased against the lowercased query: a skill named
+  // "PDF-Extract" or sourced "Bundle" used to be unfindable by "pdf".
   const filtered = (skills ?? []).filter(
     (s) =>
-      !q || s.name.includes(q) || s.description.toLowerCase().includes(q) || s.source.includes(q),
+      !q ||
+      s.name.toLowerCase().includes(q) ||
+      s.description.toLowerCase().includes(q) ||
+      s.source.toLowerCase().includes(q),
   );
 
   return (
@@ -316,9 +366,26 @@ export default function SkillsPage() {
           </div>
         ) : null}
 
+        {mineError ? (
+          <p
+            role="alert"
+            data-testid="skills-mine-error"
+            className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[0.78rem] text-[var(--color-danger)]"
+          >
+            <span>{mineError}</span>
+            <button
+              type="button"
+              className={btnClass({ sm: true, reveal: true })}
+              disabled={busy}
+              onClick={() => void reloadMine()}
+            >
+              Retry
+            </button>
+          </p>
+        ) : null}
         {mine === null ? (
           <p className={LOADING}>Loading…</p>
-        ) : mine.length === 0 && !draft ? (
+        ) : mine.length === 0 && mineError ? null : mine.length === 0 && !draft ? (
           <ConnEmpty>
             No skills yet — capture a workflow you repeat and the agent will pick it up whenever it
             fits.
@@ -419,7 +486,11 @@ export default function SkillsPage() {
         {skills === null ? (
           <p className={LOADING}>Loading…</p>
         ) : filtered.length === 0 ? (
-          <ConnEmpty>No skills match “{query}”.</ConnEmpty>
+          q ? (
+            <ConnEmpty>No skills match “{query}”.</ConnEmpty>
+          ) : (
+            <ConnEmpty>No skills are installed on this deployment.</ConnEmpty>
+          )
         ) : (
           <ConnRows>
             {filtered.map((s) => (
@@ -453,8 +524,21 @@ export default function SkillsPage() {
                   </p>
                 ) : null}
                 {openSkill === s.name ? (
-                  detail ? (
+                  // The name check is a second guard on top of view()'s ticket:
+                  // a body only ever renders under its own header.
+                  detail && detail.name === s.name ? (
                     <pre className={SKILL_MD}>{detail.content}</pre>
+                  ) : viewError && viewError.name === s.name ? (
+                    <p role="alert" className="m-0 text-[0.74rem] text-[var(--color-danger)]">
+                      {viewError.message}{" "}
+                      <button
+                        type="button"
+                        className={btnClass({ sm: true, reveal: true })}
+                        onClick={() => loadDetail(s.name)}
+                      >
+                        Retry
+                      </button>
+                    </p>
                   ) : (
                     <p className="m-0 text-[0.74rem] text-[var(--color-text-muted)]">Loading…</p>
                   )

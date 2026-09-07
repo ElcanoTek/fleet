@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestNewConcurrencyLimiter_ClampsRange(t *testing.T) {
@@ -264,5 +266,105 @@ func TestLimiter_KeysCountsBuckets(t *testing.T) {
 	var nilL *Limiter
 	if got := nilL.Keys(); got != 0 {
 		t.Errorf("nil limiter Keys = %d, want 0", got)
+	}
+}
+
+// TestLimiter_SweepDoesNotLoseAnInFlightCount pins the lost-update fix: an
+// AllowN that fetched a bucket the sweep then evicts must not count into the
+// orphan. The race is simulated by holding a pre-sweep pointer, forcing the
+// sweep, then counting through the public path and checking the count landed
+// in the LIVE bucket.
+func TestLimiter_SweepDoesNotLoseAnInFlightCount(t *testing.T) {
+	l := New(5, 0)
+	// A stale bucket: its newest sample is older than the day window.
+	stale := &bucket{dayTimestamps: []int64{time.Now().Unix() - 2*86400}}
+	l.keys["k"] = stale
+	l.lastSweep.Store(0) // sweep is due
+
+	// The sweep evicts the stale bucket and flags it.
+	l.maybeSweep()
+	if _, ok := l.keys["k"]; ok {
+		t.Fatal("stale bucket survived the sweep")
+	}
+	stale.mu.Lock()
+	evicted := stale.evicted
+	stale.mu.Unlock()
+	if !evicted {
+		t.Fatal("evicted bucket not flagged; a holder of the old pointer would count into an orphan")
+	}
+
+	// A request after the eviction is counted in the live bucket, not lost.
+	if ok, _ := l.AllowN("k", 5, 0); !ok {
+		t.Fatal("first request after sweep refused")
+	}
+	if _, remaining, _ := l.Snapshot("k"); remaining != 4 {
+		t.Fatalf("remaining = %d, want 4: the post-sweep request was not counted", remaining)
+	}
+	if l.Keys() != 1 {
+		t.Fatalf("keys = %d, want 1", l.Keys())
+	}
+}
+
+// TestLimiter_SweepIsCheapOnTheHotPath: a due sweep runs exactly once per
+// interval, and the not-due check is lock-free (asserted indirectly: a burst of
+// AllowN with a fresh lastSweep never resets it).
+func TestLimiter_SweepIsCheapOnTheHotPath(t *testing.T) {
+	l := New(1000, 0)
+	now := time.Now().Unix()
+	l.lastSweep.Store(now)
+	for i := 0; i < 100; i++ {
+		l.Allow("k")
+	}
+	if got := l.lastSweep.Load(); got != now {
+		t.Fatalf("lastSweep moved to %d during a not-due window", got)
+	}
+	l.lastSweep.Store(0)
+	l.Allow("k")
+	if got := l.lastSweep.Load(); got < now {
+		t.Fatal("a due sweep did not stamp lastSweep")
+	}
+}
+
+// TestLimiter_ConcurrentAllowWithSweeps runs AllowN across many keys while
+// sweeps are repeatedly forced, under -race, and checks the admitted count
+// per key is exact — no lost update, no double count.
+func TestLimiter_ConcurrentAllowWithSweeps(t *testing.T) {
+	const keys, perKey = 8, 50
+	l := New(perKey, 0)
+	var wg sync.WaitGroup
+	var admitted atomic.Int64
+	for k := 0; k < keys; k++ {
+		key := fmt.Sprintf("k%d", k)
+		for i := 0; i < perKey+10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				l.lastSweep.Store(0) // force a sweep attempt on nearly every call
+				if ok, _ := l.AllowN(key, perKey, 0); ok {
+					admitted.Add(1)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	if got := admitted.Load(); got != keys*perKey {
+		t.Fatalf("admitted %d, want exactly %d", got, keys*perKey)
+	}
+}
+
+// TestLimiter_SnapshotNUsesPerCallBound: headers for a key admitted under a
+// per-key cap must reflect that cap, not the instance default.
+func TestLimiter_SnapshotNUsesPerCallBound(t *testing.T) {
+	l := New(100, 0)
+	l.AllowN("k", 3, 0)
+	limit, remaining, _ := l.SnapshotN("k", 3)
+	if limit != 3 || remaining != 2 {
+		t.Fatalf("SnapshotN = (%d, %d), want (3, 2)", limit, remaining)
+	}
+	if limit, _, _ := l.Snapshot("k"); limit != 100 {
+		t.Fatalf("Snapshot limit = %d, want the instance default 100", limit)
+	}
+	if limit, remaining, _ := l.SnapshotN("k", 0); limit != 0 || remaining != 0 {
+		t.Fatalf("SnapshotN(0) = (%d, %d), want disabled (0, 0)", limit, remaining)
 	}
 }

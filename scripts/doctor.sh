@@ -873,10 +873,17 @@ else
     chown root:root "$ENV_FILE"; chmod 0600 "$ENV_FILE"
     fixed "$ENV_FILE chowned root:root, mode 0600"
   fi
-  mock="$(env_get FLEET_MOCK_MODE)${CHAT_MOCK_MODE:-}$(env_get CHAT_MOCK_MODE)"
+  # Truthiness, not non-emptiness: an explicit FLEET_MOCK_MODE=false/0/no in
+  # the env file used to read as "mock mode is on" and downgrade a missing
+  # model key from ✗ to an advisory on a production box. Same token set the
+  # Go side accepts (config truthy()).
+  mock_on=0
+  for _mv in "$(env_get FLEET_MOCK_MODE)" "${CHAT_MOCK_MODE:-}" "$(env_get CHAT_MOCK_MODE)"; do
+    case "${_mv,,}" in 1|true|yes|on) mock_on=1 ;; esac
+  done
   if [[ -n "$(env_get OPENROUTER_API_KEY)" ]]; then
     pass "OPENROUTER_API_KEY set"
-  elif [[ -n "$mock" ]]; then
+  elif [[ "$mock_on" == "1" ]]; then
     advise "OPENROUTER_API_KEY unset but mock mode is on"
   else
     fail "OPENROUTER_API_KEY unset — run: sudo fleet config set-openrouter-key"
@@ -992,9 +999,15 @@ else
   done
 
   if [[ "$restart_needed" == "1" && "$CHECK_ONLY" == "0" && "$NO_RESTART" == "0" ]]; then
-    systemctl restart "${SERVICE_NAME}.service" 2>/dev/null || true
-    systemctl try-restart fleet-web.service 2>/dev/null || true
-    fixed "services restarted to pick up fixes"
+    # Branch on the restart's own result: reporting "restarted" (and counting
+    # a fix) when the restart failed let a box end "✓ repaired" while the OLD
+    # process was still the one answering /healthz.
+    if systemctl restart "${SERVICE_NAME}.service" 2>/dev/null; then
+      systemctl try-restart fleet-web.service 2>/dev/null || advise "fleet-web.service did not restart — journalctl -u fleet-web -n 50"
+      fixed "services restarted to pick up fixes"
+    else
+      fail "${SERVICE_NAME}.service failed to restart after fixes — journalctl -u ${SERVICE_NAME} -n 50"
+    fi
   elif [[ "$restart_needed" == "1" && "$NO_RESTART" == "1" ]]; then
     advise "fixes applied that want a restart — run: sudo fleet restart"
   fi
@@ -1200,23 +1213,45 @@ if [[ "${podman_recheck:-0}" == "1" ]]; then
   fi
 fi
 
-# Resolve the image ref the daemon would use: env file wins, else the client
-# bundle's sandbox.tag (same precedence as the process — see admincli
-# checkSandbox / clientconfig ResolvedImageRef). The image is built ON-BOX into
-# the fleet user's rootless store (bootstrap/update), never pulled here.
+# Resolve the image ref the daemon would use, with the SAME precedence as the
+# process (clientconfig ResolvedImageRef), bootstrap and update: env file wins,
+# else the bundle's sandbox.image (a prebuilt/registry ref — the Kubernetes and
+# registry-publish path), else its sandbox.tag (build-on-box), else the
+# default tag. Reading only sandbox.tag here made every registry-image bundle
+# fail this check forever: doctor said "build it: sudo fleet update", and
+# update correctly skipped the build because the manifest names an image.
 sandbox_img="$(env_get FLEET_SANDBOX_IMAGE)"
 [[ -z "$sandbox_img" ]] && sandbox_img="$(env_get CHAT_SANDBOX_IMAGE)"
+sandbox_img_prebuilt=0
 if [[ -z "$sandbox_img" ]]; then
   bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
   [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
   [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
-  # Same minimal manifest read as bootstrap's sandbox_manifest_tag.
-  sandbox_img="$(awk '
-    /^sandbox:[[:space:]]*$/ { b=1; next }
-    /^[^[:space:]]/          { b=0 }
-    b && /^[[:space:]]+tag:/ { sub("^[[:space:]]+tag:[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
-  ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
-  sandbox_img="${sandbox_img:-localhost/fleet-sandbox:latest}"
+  # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
+  # bare ${VAR} / ${VAR:-default} interpolated against the process env (the
+  # only shapes the default bundle uses; mirrors bootstrap's
+  # resolve_sandbox_image — keep them in sync).
+  manifest_sandbox_scalar() {
+    local key="$1" raw
+    raw="$(awk -v key="$key" '
+      /^sandbox:[[:space:]]*$/ { b=1; next }
+      /^[^[:space:]]/          { b=0 }
+      b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
+    ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
+    if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
+      local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
+      printf '%s' "${!var:-$def}"
+    else
+      printf '%s' "$raw"
+    fi
+  }
+  sandbox_img="$(manifest_sandbox_scalar image)"
+  if [[ -n "$sandbox_img" ]]; then
+    sandbox_img_prebuilt=1
+  else
+    sandbox_img="$(manifest_sandbox_scalar tag)"
+    sandbox_img="${sandbox_img:-localhost/fleet-sandbox:latest}"
+  fi
 fi
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1 || ! command -v podman >/dev/null 2>&1; then
@@ -1229,6 +1264,8 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   else
     fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
   fi
+elif [[ "$sandbox_img_prebuilt" == "1" ]]; then
+  fail "sandbox image $sandbox_img (the bundle's sandbox.image) is not in fleet's rootless store — pull it as $SERVICE_USER: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman pull $sandbox_img"
 else
   fail "sandbox image $sandbox_img missing from ${SERVICE_USER}'s rootless store — build it: sudo fleet update (or sudo FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh; a root run builds into ${SERVICE_USER}'s store)"
 fi

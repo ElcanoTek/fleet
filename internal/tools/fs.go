@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"unicode/utf8"
 
 	"charm.land/fantasy"
 
@@ -249,9 +250,21 @@ func runViewFile(ctx context.Context, sb *sandbox.Sandbox, params ViewFileParams
 		}
 		return "", fmt.Errorf("offset %d is beyond file size %d", params.Offset, totalSize)
 	}
-	content := string(res.Data)
-	if params.Offset+int64(len(res.Data)) < totalSize {
-		content += fmt.Sprintf("\n... (reading limit of %d bytes reached. Total size: %d bytes. Use offset/limit to read more)", limit, totalSize)
+	data := res.Data
+	truncated := params.Offset+int64(len(data)) < totalSize
+	if truncated {
+		// The seam reads a raw BYTE window, so a limit that lands inside a
+		// multi-byte rune hands back a split rune: invalid UTF-8 that corrupts
+		// the model context and that Postgres rejects when the turn is
+		// persisted. Give the trailing partial rune back to the next page
+		// instead, and tell the model the exact offset to continue from so
+		// its next read starts ON the boundary rather than at offset+limit,
+		// which would now begin with the rune's continuation bytes.
+		data = trimTrailingPartialRune(data)
+	}
+	content := string(data)
+	if truncated {
+		content += fmt.Sprintf("\n... (reading limit of %d bytes reached. Total size: %d bytes. Use offset=%d to read more)", limit, totalSize, params.Offset+int64(len(data)))
 	}
 	// Content-version trailer (#787): the full-file SHA-256 the model can pass
 	// back as edit_file's expected_hash to guard against a stale edit.
@@ -259,6 +272,27 @@ func runViewFile(ctx context.Context, sb *sandbox.Sandbox, params ViewFileParams
 		content += fmt.Sprintf("\n\n(file metadata: sha256=%s size=%d bytes — pass sha256 as expected_hash to edit_file to guard against concurrent changes)", res.SHA256, totalSize)
 	}
 	return content, nil
+}
+
+// trimTrailingPartialRune drops an incomplete multi-byte rune from the end of a
+// byte window cut on an arbitrary byte boundary. It looks back at most
+// utf8.UTFMax-1 bytes for the last rune start and cuts there only when the run
+// from it is NOT a full rune, so a window that happens to end on a boundary —
+// or holds binary that was never UTF-8 — is returned unchanged. A window that
+// would become empty is also returned unchanged: the caller asked for a 1-3
+// byte page of a multi-byte file, and returning nothing with an unmoved offset
+// would loop forever, whereas the split bytes at least make progress.
+func trimTrailingPartialRune(data []byte) []byte {
+	for i := len(data) - 1; i >= 0 && i >= len(data)-utf8.UTFMax; i-- {
+		if !utf8.RuneStart(data[i]) {
+			continue
+		}
+		if i > 0 && !utf8.FullRune(data[i:]) {
+			return data[:i]
+		}
+		break
+	}
+	return data
 }
 
 // fileOpRoot turns host policy into the narrow capability the in-container

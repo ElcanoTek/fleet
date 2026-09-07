@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
 import { SLAReportPanel } from "./SLAReportPanel";
 import type { SLAReport } from "@/app/shared/lib/orchestratorApi";
 
@@ -73,5 +73,16 @@ describe("SLAReportPanel (#274)", () => {
     await screen.findByTestId("sla-report-row");
     const badge = screen.getByText("75.0%");
     expect(badge.className).toContain("sla-badge-fail");
+  });
+});
+
+describe("SLAReportPanel refresh", () => {
+  it("re-requests the report from its own Refresh button", async () => {
+    mockReport({ period: "last_7_days", window_days: 7, tasks: [] });
+    render(<SLAReportPanel />);
+    await screen.findByText(/No SLA-tracked task runs in this window/);
+    expect(slaReport).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("sla-refresh"));
+    await waitFor(() => expect(slaReport).toHaveBeenCalledTimes(2));
   });
 });

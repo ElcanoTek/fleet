@@ -49,6 +49,42 @@ type taskCreator struct {
 	creatorKeyMaxPriority *int
 }
 
+// attribute stamps the creator onto a freshly minted task — BOTH the creating
+// user and the authorizing key. It is the one place attribution is written so
+// every create path (single, batch, rerun/clone, import, A2A) records the same
+// pair: a task with neither CreatedBy nor CreatedByKeyID is readable by nobody
+// except fleet-wide grant holders (ADR-0043), and a path that set only the
+// user id left every API-key-created task invisible to the key that made it.
+func (c taskCreator) attribute(t *models.Task) {
+	t.CreatedBy = c.creatorID
+	t.CreatedByKeyID = c.creatorKey
+}
+
+// creatorFromPrincipal projects a middleware-resolved principal (the admin
+// key, a scoped key, or a session user) onto the create pipeline's taskCreator,
+// preserving spend attribution, the budget gate's user-scope key and the
+// per-key priority ceiling exactly as authorizeTaskCreator would for the same
+// credential. Used by the create surfaces that sit inside the
+// AdminOrUserAuthMiddleware group (rerun/clone, import, A2A) where the
+// principal is already resolved and authorizeTaskCreator's inline auth would
+// be redundant.
+func creatorFromPrincipal(p principal) taskCreator {
+	creator := taskCreator{hasAdminPermission: p.hasPermission(models.PermissionAdmin)}
+	switch {
+	case p.user != nil:
+		creator.creatorID = &p.user.ID
+		creator.creatorUsername = p.user.Username
+	case p.apiKey != nil:
+		keyID := p.apiKey.KeyID
+		creator.creatorKey = &keyID
+		if p.apiKey.MaxPriority != nil {
+			capVal := *p.apiKey.MaxPriority
+			creator.creatorKeyMaxPriority = &capVal
+		}
+	}
+	return creator
+}
+
 // priorityCapError returns a non-nil error when a task's (post-default) priority
 // is MORE urgent (lower integer) than the authorizing key's ceiling (#230); nil
 // cap = no limit. Shared by the single-task and batch create paths so the two
@@ -246,8 +282,7 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 			validationFailed = true
 			continue
 		}
-		t.CreatedBy = creator.creatorID
-		t.CreatedByKeyID = creator.creatorKey
+		creator.attribute(t)
 		toInsert = append(toInsert, t)
 		createdList = append(createdList, models.BatchCreated{ID: t.ID, Index: i})
 	}

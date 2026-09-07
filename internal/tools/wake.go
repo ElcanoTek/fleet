@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // self-wake (docs/SELF-WAKE.md): two suspend-and-resume tools for SCHEDULED
@@ -109,9 +111,9 @@ func validateWakeNote(note string) (string, string) {
 	if note == "" {
 		return "", "note is required: write a message to your future self (where you left off, what to do on waking)"
 	}
-	if len(note) > wakeNoteMaxLen {
-		note = note[:wakeNoteMaxLen]
-	}
+	// Rune-safe: the note is persisted to Postgres, which rejects a TEXT value
+	// holding a rune split on the byte boundary.
+	note = truncate.Clamp(note, wakeNoteMaxLen, "")
 	return note, ""
 }
 

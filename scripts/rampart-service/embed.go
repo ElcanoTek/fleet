@@ -9,7 +9,10 @@ package rampartservice
 
 import "embed"
 
-// Files holds the container build context for the reference service.
+// Files holds the container build context for the reference service. The
+// lockfile is part of it: the Containerfile runs `npm ci`, so the image is
+// built from the exact dependency set CI audits (npm audit runs against this
+// lockfile), not from a fresh `npm install` resolution at install time.
 //
-//go:embed server.mjs package.json Containerfile
+//go:embed server.mjs package.json package-lock.json Containerfile
 var Files embed.FS

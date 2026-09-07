@@ -66,7 +66,15 @@ func cmdStatus(argv []string) int {
 
 // ── check helpers ──────────────────────────────────────────────────────────
 
+// checkBundle loads the bundle from --client-config, else FLEET_CLIENT_CONFIG_DIR
+// — read through envOrFile, like checkEnv reads it, so the two lines of the same
+// report cannot contradict each other (an env-file-only value used to print
+// "✓ env FLEET_CLIENT_CONFIG_DIR set" one line below a bundle loaded from
+// config/default). An empty dir still means clientconfig's own default.
 func checkBundle(r *report, dir string) *clientconfig.Bundle {
+	if dir == "" {
+		dir = strings.TrimSpace(envOrFile(clientconfig.EnvDir))
+	}
 	b, err := clientconfig.Load(dir)
 	if err != nil {
 		r.fail("client bundle", fmt.Sprintf("load failed: %v", err))
@@ -81,7 +89,7 @@ func checkBundle(r *report, dir string) *clientconfig.Bundle {
 // flag the credentials the env file must carry. OPENROUTER_API_KEY is treated as
 // required unless mock mode is on (matching config.Validate).
 func checkEnv(r *report) {
-	mock := truthy(os.Getenv("FLEET_MOCK_MODE")) || truthy(os.Getenv("CHAT_MOCK_MODE"))
+	mock := truthy(envOrFile("FLEET_MOCK_MODE")) || truthy(envOrFile("CHAT_MOCK_MODE"))
 	type envCheck struct {
 		name     string
 		required bool
@@ -91,7 +99,7 @@ func checkEnv(r *report) {
 		{"FLEET_CLIENT_CONFIG_DIR", false}, // optional: defaults to config/default
 	}
 	for _, c := range checks {
-		val := strings.TrimSpace(os.Getenv(c.name))
+		val := strings.TrimSpace(envOrFile(c.name))
 		switch {
 		case val != "":
 			r.pass("env "+c.name, "set")
@@ -105,6 +113,12 @@ func checkEnv(r *report) {
 	// detail, so here we only note the env file the deployment reads.
 	if ef := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); ef != "" {
 		r.pass("env FLEET_ENV_FILE", ef)
+	} else if f := serverEnvFile(""); f != ".env.local" {
+		// The shipped unit deliberately UnsetEnvironment=FLEET_ENV_FILE and
+		// reads /etc/fleet/fleet.env directly, so on a provisioned box the var
+		// is legitimately absent from every shell — report the file the
+		// deployment reads instead of a warning nobody can act on.
+		r.pass("env file", f+" (deployment env file; FLEET_ENV_FILE not needed in the shell)")
 	} else {
 		r.warnLine("env FLEET_ENV_FILE", "unset (config.Load reads .env.local by default)")
 	}
@@ -144,10 +158,7 @@ func checkDB(r *report, label, flagURL string, resolve func(string) (string, err
 // ResolvedImageRef) and runs a throwaway `podman run --rm <ref> true` to confirm
 // the image is present + the runtime can launch it.
 func checkSandbox(r *report, bundle *clientconfig.Bundle) {
-	ref := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_IMAGE"))
-	if ref == "" {
-		ref = strings.TrimSpace(os.Getenv("CHAT_SANDBOX_IMAGE"))
-	}
+	ref := sandboxImageEnv()
 	if ref == "" && bundle != nil {
 		ref = strings.TrimSpace(bundle.Sandbox().ResolvedImageRef())
 	}
@@ -186,6 +197,17 @@ func checkSandbox(r *report, bundle *clientconfig.Bundle) {
 		return
 	}
 	r.pass("sandbox image", ref+" present + runnable"+storeNote)
+}
+
+// sandboxImageEnv is the operator's sandbox image override — FLEET_SANDBOX_IMAGE,
+// else the legacy CHAT_SANDBOX_IMAGE — read from the process env or the env
+// file (envOrFile), which is where doctor.sh reads it too. status and diagnose
+// share it so neither can probe a different image than the unit runs.
+func sandboxImageEnv() string {
+	if ref := strings.TrimSpace(envOrFile("FLEET_SANDBOX_IMAGE")); ref != "" {
+		return ref
+	}
+	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE"))
 }
 
 // sandboxProbeArgv builds the `podman run --rm <ref> true` probe. As root with
@@ -276,9 +298,13 @@ func (r *report) head() {
 	fmt.Fprintln(r.summary, "fleet status — deployment health")
 }
 
-func (r *report) pass(label, detail string)     { fmt.Fprintf(r.out, "✓ %-22s %s\n", label, detail) }
-func (r *report) skip(label, detail string)     { fmt.Fprintf(r.out, "– %-22s %s\n", label, detail) }
-func (r *report) warnLine(label, detail string) { fmt.Fprintf(r.out, "✓ %-22s %s\n", label, detail) }
+func (r *report) pass(label, detail string) { fmt.Fprintf(r.out, "✓ %-22s %s\n", label, detail) }
+func (r *report) skip(label, detail string) { fmt.Fprintf(r.out, "– %-22s %s\n", label, detail) }
+
+// warnLine is "not a failure, but not a clean pass either" — its own glyph, so
+// "unset (using default)" is distinguishable from a real ✓ in the report and in
+// diagnose bundles (it used to print ✓).
+func (r *report) warnLine(label, detail string) { fmt.Fprintf(r.out, "! %-22s %s\n", label, detail) }
 func (r *report) fail(label, detail string) {
 	r.failed++
 	fmt.Fprintf(r.out, "✗ %-22s %s\n", label, detail)

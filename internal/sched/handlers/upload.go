@@ -171,24 +171,12 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dst, err := os.Create(path) //nolint:gosec // G304: filename is sanitized (sanitizeFilename allowlist) AND the resolved path is asserted within tempDir via withinDir/filepath.Rel.
+	size, checksum, err := writeUploadFile(path, file)
 	if err != nil {
+		log.Printf("Failed to save upload %s: %v", logSafe(filename), err)
 		writeError(w, http.StatusInternalServerError, "Failed to save file")
 		return
 	}
-	defer dst.Close()
-
-	// Calculate checksum while writing
-	hasher := sha256.New()
-	writer := io.MultiWriter(dst, hasher)
-
-	size, err := io.Copy(writer, file)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to write file")
-		return
-	}
-
-	checksum := hex.EncodeToString(hasher.Sum(nil))
 
 	// Save checksum to sidecar file in the dedicated checksums directory
 	checksumPath := filepath.Join(tempDir, ".checksums", filename+".sha256")
@@ -205,6 +193,30 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		"checksum":      checksum,
 		"size":          size,
 	})
+}
+
+// writeUploadFile streams src to path, returning the byte count and the
+// SHA-256 of what was written. The file is closed — and the close error
+// checked — BEFORE success is reported: a deferred Close cannot fail the
+// response, and on a disk-full or quota error the close is where the write
+// actually fails, so the client used to be told its file was staged while the
+// bytes never landed. On any failure the partial file is removed, so a
+// half-written upload cannot linger under the name a task would attach.
+func writeUploadFile(path string, src io.Reader) (size int64, checksum string, err error) {
+	dst, err := os.Create(path) //nolint:gosec // G304: the caller sanitized the filename (sanitizeFilename allowlist) AND asserted the resolved path is within the uploads dir via withinDir/filepath.Rel.
+	if err != nil {
+		return 0, "", err
+	}
+	hasher := sha256.New()
+	size, err = io.Copy(io.MultiWriter(dst, hasher), src)
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return 0, "", err
+	}
+	return size, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // HandleDownload serves an uploaded task-input file. With the worker-node

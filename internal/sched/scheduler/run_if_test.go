@@ -785,3 +785,32 @@ func TestStopDoesNotRaceRunLoopGateDispatch(t *testing.T) {
 		t.Errorf("status after Stop = %s, want pending (drain semantics must survive the loop-exit wait)", got.Status)
 	}
 }
+
+// TestEvalRunIfSignalKilledIsAnError pins the contract in models.RunIf: only a
+// check that ran to an exit status yields a verdict. A check killed by a
+// signal (OOM, an operator's kill) has no exit code; it used to fall through
+// the exit-code comparison as -1 and be recorded as a clean skip, which
+// defeated on_error=run for exactly the failures it exists for. It is now the
+// check-itself-errored case, like a timeout.
+func TestEvalRunIfSignalKilledIsAnError(t *testing.T) {
+	s, _ := newTestScheduler(t)
+
+	task := &models.Task{RunIf: &models.RunIf{Command: "kill -9 $$", ExitCodeIs: 0, TimeoutSeconds: 5}}
+	ok, reason, err := s.evalRunIf(task)
+	if err == nil {
+		t.Fatalf("a signal-killed check must be reported as an error, got ok=%v reason=%q", ok, reason)
+	}
+	if ok {
+		t.Error("a signal-killed check must never read as 'run'")
+	}
+	if !strings.Contains(reason, "signal") || !strings.Contains(err.Error(), "signal") {
+		t.Errorf("reason/err should name the signal: reason=%q err=%v", reason, err)
+	}
+
+	// The inverted gate (ExitCodeIs=1) must not turn the -1 of a killed check
+	// into a skip either — it is still an error.
+	task = &models.Task{RunIf: &models.RunIf{Command: "kill -9 $$", ExitCodeIs: 1, TimeoutSeconds: 5}}
+	if _, _, err := s.evalRunIf(task); err == nil {
+		t.Fatal("signal-killed check with ExitCodeIs=1 must still be an error")
+	}
+}

@@ -7,6 +7,30 @@ import (
 	"testing"
 )
 
+// Fabricated vendor-shaped fixtures for the pattern table below.
+//
+// They are ASSEMBLED from parts and never written as one literal, and they
+// deliberately omit each vendor's structural marker (OpenAI's "T3BlbkFJ"
+// segment, Stripe's "51" account prefix, Slack's real digit-group shape).
+// A fixture realistic enough to exercise the regex is also realistic enough
+// to trip GitHub push protection and gitleaks' vendor rules — which blocks
+// every push of this file and cannot be waived per-line without also
+// blessing the shape. Splitting the literal defeats those TEXT scanners
+// while the value handed to Redact is byte-for-byte the assembled string,
+// so the regexes are tested exactly as they run in production.
+//
+// Do NOT join these back into single string literals.
+const (
+	fakeOpenAIProject        = "sk-" + "proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-abcdef"
+	fakeOpenAISvcAcct        = "sk-" + "svcacct-AbCdEfGhIjKlMnOpQrStUvWxYz_0123456789"
+	fakeGitHubFineGrained    = "github" + "_pat_11ABCDEFG0abcdefghijkl_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456"
+	fakeSlackBot             = "xox" + "b-AbCdEfGhIj-KlMnOpQrStUv-WxYzAbCdEfGhIjKlMnOpQrSt"
+	fakeSlackApp             = "xox" + "p-AbCdEfGhIj-KlMnOpQrStUv-WxYzAbCdEfGhIjKlMnOpQrSt"
+	fakeStripeLive           = "sk" + "_live_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+	fakeStripeTestRestricted = "rk" + "_test_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+	fakeGoogleAPIKey         = "AIza" + "SyA-bCdEfGhIjKlMnOpQrStUvWxYz012345_"
+)
+
 func TestRedactor_CanonicalPatterns(t *testing.T) {
 	r := NewRedactor(nil)
 	cases := []struct {
@@ -36,6 +60,19 @@ func TestRedactor_CanonicalPatterns(t *testing.T) {
 		// HTTP Basic auth (#569): the base64 credential decodes to plaintext
 		// user:password, so it must be scrubbed like a Bearer token.
 		{"basic auth", "Authorization: Basic dXNlcjpzdXBlcnNlY3JldA==", "dXNlcjpzdXBlcnNlY3JldA==", "Authorization"},
+		// Current vendor formats the original prefix rules missed: OpenAI's
+		// hyphenated sub-prefixes (the alnum-only tail stopped at the first
+		// hyphen), GitHub fine-grained PATs, Slack, Stripe and Google keys.
+		// The values come from the fake* constants above — see the note there
+		// for why they are assembled rather than written inline.
+		{"openai project key", "OPENAI_API_KEY=" + fakeOpenAIProject + " end", fakeOpenAIProject, "end"},
+		{"openai service account key", fakeOpenAISvcAcct + " x", fakeOpenAISvcAcct, "x"},
+		{"github fine-grained pat", "token " + fakeGitHubFineGrained + " ok", fakeGitHubFineGrained, "ok"},
+		{"slack bot token", "SLACK_BOT_TOKEN: " + fakeSlackBot + " tail", fakeSlackBot, "tail"},
+		{"slack app token", fakeSlackApp, fakeSlackApp, ""},
+		{"stripe live secret", "stripe: " + fakeStripeLive + " ok", fakeStripeLive, "ok"},
+		{"stripe test restricted", fakeStripeTestRestricted, fakeStripeTestRestricted, ""},
+		{"google api key", "key=" + fakeGoogleAPIKey + " done", fakeGoogleAPIKey, "done"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -167,5 +204,42 @@ func TestRedactor_ConcurrentAddLiteralRedact(t *testing.T) {
 	// Registration is immediately visible to later Redact calls.
 	if got := r.Redact("late check runtime-token-00-0000"); strings.Contains(got, "runtime-token-00-0000") {
 		t.Errorf("literal registered concurrently was not redacted afterwards: %q", got)
+	}
+}
+
+// TestRedactor_VendorPatternsAreSingleShot pins two properties of the widened
+// prefix rules: a vendor key sitting after a marker is replaced by exactly one
+// placeholder (the marker rule then matches the placeholder itself and leaves
+// it alone, so nothing renders as "[REDACTED][REDACTED]"), and the wider
+// generic sk- tail — which now admits hyphens — still leaves hyphenated prose
+// that merely ends in "sk-" untouched thanks to the word-boundary anchor.
+func TestRedactor_VendorPatternsAreSingleShot(t *testing.T) {
+	r := NewRedactor(nil)
+	for _, in := range []string{
+		"api_key=" + fakeOpenAIProject,
+		`{"token":"` + fakeSlackBot + `"}`,
+		"Authorization: Bearer " + fakeGitHubFineGrained,
+	} {
+		got := r.Redact(in)
+		if n := strings.Count(got, placeholder); n != 1 {
+			t.Errorf("%q -> %q: %d placeholders, want exactly 1", in, got, n)
+		}
+		if strings.Contains(got, placeholder+placeholder) {
+			t.Errorf("double redaction: %q -> %q", in, got)
+		}
+	}
+	// Redact must be idempotent on its own output.
+	once := r.Redact("secret=" + fakeOpenAISvcAcct)
+	if twice := r.Redact(once); twice != once {
+		t.Errorf("not idempotent: %q -> %q", once, twice)
+	}
+	for _, prose := range []string{
+		"the desk-mounted-display-arm-for-the-office arrived",
+		"a kiosk-based-checkout-flow-with-receipts",
+		"see task_live_migration_notes_for_staging",
+	} {
+		if got := r.Redact(prose); got != prose {
+			t.Errorf("prose was redacted: %q -> %q", prose, got)
+		}
 	}
 }

@@ -17,7 +17,6 @@ package httpapi
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -62,9 +61,12 @@ func (s *Server) handleConversationShare(w http.ResponseWriter, r *http.Request,
 	var body struct {
 		ExpiresAt *int64 `json:"expires_at"`
 	}
-	// Body is optional; an empty body decodes to the zero value.
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+	// Body is optional; an empty body decodes to the zero value. A MALFORMED
+	// body is refused, not ignored: swallowing the error used to mint a
+	// non-expiring link for a client that asked for an expiring one — the
+	// opposite of the caller's intent, on a security-relevant default.
+	if !decodeOptionalJSONBody(w, r, &body) {
+		return
 	}
 	if body.ExpiresAt != nil && *body.ExpiresAt <= time.Now().Unix() {
 		http.Error(w, "expires_at must be a unix timestamp in the future", http.StatusBadRequest)
@@ -124,8 +126,10 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	var body struct {
 		Visible bool `json:"visible"`
 	}
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+	// A malformed body must not fall through to visible=false and silently
+	// UN-share the chat the caller was trying to share.
+	if !decodeOptionalJSONBody(w, r, &body) {
+		return
 	}
 	stored, err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
 	if err != nil {
@@ -136,9 +140,9 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		// The store returns a plain "conversation not found" when the caller
-		// doesn't own a conversation with this id → 404, matching the share path.
-		if strings.Contains(err.Error(), "not found") {
+		// No conversation with this id belongs to the caller → 404, matching
+		// the share path.
+		if errors.Is(err, store.ErrConversationNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}

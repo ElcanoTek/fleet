@@ -20,6 +20,22 @@ vi.mock("../useIsAdmin", () => ({
   useIsAdmin: () => "member",
 }));
 
+// The page reports every action outcome as a toast, so capturing them is the
+// only way to assert what the user was actually told.
+const toasts: string[] = [];
+// The real useToast returns a STABLE showToast (useCallback), and the page's
+// toast effects list it as a dependency — so the mock must be stable too. A
+// fresh function per render would re-fire those effects on every render and
+// mask exactly the repeat-delivery behaviour these tests check.
+const stableShowToast = (message: string) => {
+  toasts.push(message);
+};
+const stableToastValue = { showToast: stableShowToast };
+vi.mock("@/app/shared/ui/Toast", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/shared/ui/Toast")>()),
+  useToast: () => stableToastValue,
+}));
+
 const BROWSERBASE = {
   name: "browserbase",
   display_name: "Browserbase",
@@ -425,6 +441,30 @@ describe("ConnectionsPage multi-login seats", () => {
     await waitFor(() => expect(listGets()).toBeGreaterThan(before));
   });
 
+  it("toasts every Set default, even when the message repeats", async () => {
+    // setDefaultSeat clears the ERROR banner but not the NOTICE one, and both
+    // successes say "Default account updated." Keyed on the message value, the
+    // second success changed no state and produced no toast — so switching the
+    // default a second time looked like it had done nothing.
+    toasts.length = 0;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, {
+        ...EMPTY_LIST,
+        servers: [GAMMA_PRIMARY, GAMMA_WORK],
+      }),
+    );
+    visit("");
+
+    const group = await screen.findByTestId("remote-group-gamma");
+    fireEvent.click(within(group).getByRole("button", { name: "Set default" }));
+    await waitFor(() => expect(toasts.length).toBe(1));
+
+    fireEvent.click(within(group).getByRole("button", { name: "Set default" }));
+    await waitFor(() => expect(toasts.length).toBe(2));
+    expect(toasts[0]).toBe(toasts[1]);
+  });
+
   it("Rename PUTs the new label to /{id}/account", async () => {
     const calls = recording(undefined, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY, GAMMA_WORK] });
     visit("");
@@ -554,6 +594,42 @@ describe("ConnectionsPage multi-login seats", () => {
       api_key: "bb_third_key",
       api_key_query: "browserbaseApiKey",
     });
+  });
+
+  it("Share with everyone arms first and POSTs the wildcard grantee on the second click", async () => {
+    const fetchMock = mockFetch(undefined, CATALOG, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY] });
+    vi.stubGlobal("fetch", fetchMock);
+    visit("");
+    fireEvent.click(await screen.findByRole("button", { name: "Share" }));
+    const everyone = await screen.findByTestId("share-everyone-g1");
+    const sharePosts = () =>
+      fetchMock.mock.calls.filter(
+        ([u, i]) => String(u) === "/api/remote-mcp-servers/g1/shares" && i?.method === "POST",
+      );
+    // First click only arms — granting the whole workspace is not one click.
+    fireEvent.click(everyone);
+    expect(everyone).toHaveTextContent("Confirm share with everyone");
+    expect(sharePosts()).toHaveLength(0);
+    fireEvent.click(everyone);
+    await waitFor(() => expect(sharePosts()).toHaveLength(1));
+    expect(JSON.parse(String(sharePosts()[0][1]?.body))).toEqual({ grantee: "*" });
+  });
+
+  it("subscribes the OAuth-return focus refresh once, not on every render", async () => {
+    vi.stubGlobal("fetch", mockFetch(undefined, CATALOG, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY] }));
+    const addSpy = vi.spyOn(window, "addEventListener");
+    visit("");
+    const share = await screen.findByRole("button", { name: "Share" });
+    const focusAdds = () => addSpy.mock.calls.filter(([type]) => type === "focus").length;
+    const before = focusAdds();
+    expect(before).toBeGreaterThan(0);
+    // Any state change re-renders the page; the listener must not be torn
+    // down and re-added for it.
+    fireEvent.click(share);
+    await screen.findByTestId("share-everyone-g1");
+    fireEvent.click(share);
+    await waitFor(() => expect(screen.queryByTestId("share-everyone-g1")).toBeNull());
+    expect(focusAdds()).toBe(before);
   });
 
   it("shows the owner's account label on shared rows, without Set default", async () => {

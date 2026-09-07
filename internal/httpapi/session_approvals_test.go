@@ -70,3 +70,26 @@ func TestMaybeRegisterSessionPolicy(t *testing.T) {
 		t.Error("pattern policy should not match a non-conforming call")
 	}
 }
+
+// TestSessionApprovalRegistry_Forget: deleting a conversation drops its
+// pre-decisions (and only its own), so the process-lifetime registry stops
+// growing with every "approve all" click on chats that no longer exist.
+func TestSessionApprovalRegistry_Forget(t *testing.T) {
+	r := NewSessionApprovalRegistry()
+	r.Register("conv-a", "send_email", SessionApprovalPolicy{Mode: "approve"})
+	r.Register("conv-a", "run_python", SessionApprovalPolicy{Mode: "deny"})
+	r.Register("conv-b", "send_email", SessionApprovalPolicy{Mode: "approve"})
+
+	r.Forget("conv-a")
+	if _, ok := r.Match("conv-a", "send_email", "{}"); ok {
+		t.Fatal("conv-a's send_email policy survived Forget")
+	}
+	if _, ok := r.Match("conv-a", "run_python", "{}"); ok {
+		t.Fatal("conv-a's run_python policy survived Forget")
+	}
+	if _, ok := r.Match("conv-b", "send_email", "{}"); !ok {
+		t.Fatal("Forget(conv-a) removed conv-b's policy")
+	}
+	var nilReg *SessionApprovalRegistry
+	nilReg.Forget("conv-a") // nil-safe like the other methods
+}

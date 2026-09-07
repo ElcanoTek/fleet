@@ -105,10 +105,15 @@ func (b *turnBuffer) attachPersister(ctx context.Context, p eventSinkPersister) 
 	if p == nil {
 		return nil
 	}
-	b.persister = p
 	if err := p.CreateTurn(ctx, b.turnID, b.convID, time.Now().Unix()); err != nil {
 		return fmt.Errorf("CreateTurn: %w", err)
 	}
+	// Wire the persister only once the turn row exists. Assigning it before
+	// CreateTurn succeeded left a failed attach with a live persister, and
+	// Finish then called FinishTurn (and the backfill) against a turn row that
+	// was never inserted — a spurious error for a turn the caller had already
+	// abandoned at the CreateTurn failure.
+	b.persister = p
 	// Buffered channel so Emit never blocks on DB latency. If the
 	// goroutine falls far enough behind that Emit drops events here,
 	// the in-memory buffer still has them and Finish backfills the full

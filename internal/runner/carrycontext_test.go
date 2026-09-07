@@ -153,3 +153,48 @@ func TestCarryContext_FirstRunNoPriorLog(t *testing.T) {
 		t.Fatalf("expected no prior-run context on first run, got %q", got)
 	}
 }
+
+// TestCarryContext_FollowsRecurrenceLineage: a genuine recurrence is a NEW
+// row (storage.scheduleNextRecurrence clones under a fresh id), so the run's
+// own id has no log yet. The handoff must follow previous_occurrence_id to
+// the occurrence that just completed — before that pointer existed every real
+// recurrence started cold and the feature only fired on a retry of one row.
+func TestCarryContext_FollowsRecurrenceLineage(t *testing.T) {
+	store := newTestStore(t)
+
+	// Occurrence #1: terminal, with its transcript persisted under ITS id.
+	prevID := uuid.New()
+	done := time.Now().UTC()
+	prev := &models.Task{
+		ID: prevID, Prompt: "recurring analysis", Status: models.TaskStatusSuccess, Priority: 1,
+		Recurrence: "0 9 * * *", CarryContext: true, CreatedAt: time.Now().UTC().Add(-time.Hour), CompletedAt: &done,
+	}
+	if _, err := store.AddTask(prev); err != nil {
+		t.Fatalf("AddTask(prev): %v", err)
+	}
+	if _, err := store.AddLog(prevID, &models.LogSession{
+		ID: "prior-" + prevID.String(),
+		Messages: []models.LogMessage{
+			{ID: "u1", Role: "user", Content: "do the analysis"},
+			{ID: "a1", Role: "assistant", Content: "Churn fell to 2.1% last week."},
+		},
+	}); err != nil {
+		t.Fatalf("AddLog(prev): %v", err)
+	}
+
+	// Occurrence #2: the spawned successor — fresh id, no log, lineage set.
+	next := &models.Task{
+		ID: uuid.New(), Prompt: "recurring analysis", Status: models.TaskStatusPending, Priority: 1,
+		Recurrence: "0 9 * * *", CarryContext: true, CreatedAt: time.Now().UTC(), PreviousOccurrenceID: &prevID,
+	}
+	if _, err := store.AddTask(next); err != nil {
+		t.Fatalf("AddTask(next): %v", err)
+	}
+
+	runner, get := captureRunner()
+	runPoolOnce(t, store, runner, func() bool { _, s := get(); return s })
+
+	if got, _ := get(); got != "Churn fell to 2.1% last week." {
+		t.Fatalf("expected the previous occurrence's answer carried into the successor, got %q", got)
+	}
+}

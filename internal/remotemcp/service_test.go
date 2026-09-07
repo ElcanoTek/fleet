@@ -30,6 +30,8 @@ type fakeStore struct {
 	shares map[string][]string
 	// prefs: email -> connector-pref map, mirroring user_connector_prefs.
 	prefs map[string]map[string]store.ConnectorPref
+	// prefsErr, when set, makes ListConnectorPrefs fail (a DB blip).
+	prefsErr error
 	// clientSecret is what LoadServerSecrets unseals ("" = public client,
 	// the default for every test that doesn't care).
 	clientSecret string
@@ -303,6 +305,9 @@ func (f *fakeStore) GetRemoteMCPServerForUse(_ context.Context, email, id string
 }
 
 func (f *fakeStore) ListConnectorPrefs(_ context.Context, email string) (map[string]store.ConnectorPref, error) {
+	if f.prefsErr != nil {
+		return nil, f.prefsErr
+	}
 	return f.prefs[strings.ToLower(email)], nil
 }
 
@@ -741,6 +746,42 @@ func TestResolverIncludesSharedServers(t *testing.T) {
 	conns, _ = svc.ConnectedServersForUser(ctx, "mate@x.com")
 	if len(conns) != 1 || conns[0].ID != mates.ID || conns[0].Owner != "" {
 		t.Fatalf("own server must win the name collision, got %+v", conns)
+	}
+}
+
+// TestResolverFailsClosedWhenPrefsUnreadable: with the connector prefs
+// unreadable the resolver cannot know which servers the user switched OFF, so
+// it mounts none this run (and does not fail the run). The old fallback kept
+// the default — enabled — and mounted every connected server through a DB blip.
+func TestResolverFailsClosedWhenPrefsUnreadable(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "rotate")
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	owned, _, _ := svc.AddServer(ctx, AddServerInput{Email: "owner@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	if _, err := svc.Authorize(ctx, "owner@x.com", owned.ID); err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	var state string
+	for k := range fs.flows {
+		state = k
+	}
+	if _, err := svc.Complete(ctx, "owner@x.com", state, "c"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	conns, err := svc.ConnectedServersForUser(ctx, "owner@x.com")
+	if err != nil || len(conns) != 1 {
+		t.Fatalf("baseline: conns=%+v err=%v", conns, err)
+	}
+
+	fs.prefsErr = errors.New("connection reset by peer")
+	conns, err = svc.ConnectedServersForUser(ctx, "owner@x.com")
+	if err != nil {
+		t.Fatalf("a prefs read failure must not fail the run: %v", err)
+	}
+	if len(conns) != 0 {
+		t.Fatalf("prefs unreadable: want no remote connectors mounted, got %+v", conns)
 	}
 }
 

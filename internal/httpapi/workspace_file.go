@@ -7,7 +7,6 @@ import (
 	"errors"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 
@@ -45,15 +44,12 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		http.Error(w, "file path required", http.StatusBadRequest)
 		return
 	}
-	// The path arrives as a URL segment — decode percent-encoded chars
-	// (spaces, parens etc. that pandas/matplotlib filenames sometimes
-	// carry) before further validation.
-	decoded, err := url.PathUnescape(relPath)
-	if err != nil {
-		http.Error(w, "bad path encoding", http.StatusBadRequest)
-		return
-	}
-	relPath = decoded
+	// relPath comes from r.URL.Path, which net/http has ALREADY
+	// percent-decoded once (spaces, parens, unicode in pandas/matplotlib
+	// filenames arrive as themselves). It must not be decoded a second time:
+	// that turned a literal `%` in an agent-written filename into a "bad
+	// path encoding" 400 (`100%.png`) or a lookup of the wrong name
+	// (`rate%20final.csv` → `rate final.csv` → 404).
 
 	// Resolve the requested file against the conversation workspace root,
 	// enforcing the shared path-traversal guard (tools.SafeWorkspaceJoin):

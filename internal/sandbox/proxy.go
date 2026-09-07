@@ -11,8 +11,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/netguard"
@@ -277,27 +279,108 @@ func (p *EgressProxy) handle(w http.ResponseWriter, r *http.Request) {
 	// upstream) still unblocks both copies: each ends when its source errors or
 	// its destination refuses the write.
 	//
-	// The surviving direction is BOUNDED: when one direction finishes, a drain
-	// deadline is armed on both conns (read+write — the survivor may be parked
-	// in either; only the survivor is affected, the finisher is done). Without
-	// it, a peer that ignores the propagated FIN and never responds/closes
+	// The surviving direction is BOUNDED BY IDLENESS: when one direction
+	// finishes, a drain deadline is armed on both conns (read+write — the
+	// survivor may be parked in either; only the survivor is affected, the
+	// finisher is done) and REFRESHED on every byte the survivor moves. Without
+	// a bound, a peer that ignores the propagated FIN and never responds/closes
 	// (e.g. an LB-held keep-alive) would park the remaining Read forever,
 	// pinning this handler's goroutines and both FDs for the process lifetime
 	// — container teardown closes only the CLIENT side, which ends the
 	// client-read direction but not an upstream-read parked against a silent
-	// upstream. Cooperating peers are unaffected (they finish well inside the
-	// window); a silent one is reaped when the deadline fires and its blocked
-	// Read/Write returns.
-	armDrainDeadline := func() {
-		dl := time.Now().Add(p.tunnelDrainTimeout())
-		_ = client.SetDeadline(dl)
-		_ = upstream.SetDeadline(dl)
-	}
+	// upstream. The deadline is idle-based rather than absolute on purpose: the
+	// common shape of a long allowlisted download is "client sends the request
+	// and half-closes, upstream streams for minutes", and an absolute cap
+	// armed at the half-close truncated any such transfer longer than the
+	// window — silently, because the io.Copy error was discarded. Cooperating
+	// peers are unaffected (they keep making progress); a silent one is reaped
+	// when the idle window elapses and its blocked Read/Write returns, which
+	// is logged so a reap is never mistaken for a clean close.
+	drain := &tunnelDrain{client: client, upstream: upstream, timeout: p.tunnelDrainTimeout()}
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); _, _ = io.Copy(upstream, client); closeWrite(upstream); armDrainDeadline() }()
-	go func() { defer wg.Done(); _, _ = io.Copy(client, upstream); closeWrite(client); armDrainDeadline() }()
+	go func() {
+		defer wg.Done()
+		_, err := io.Copy(upstream, drain.reader(client))
+		closeWrite(upstream)
+		drain.arm()
+		drain.logReap("client→upstream", host, port, err)
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := io.Copy(client, drain.reader(upstream))
+		closeWrite(client)
+		drain.arm()
+		drain.logReap("upstream→client", host, port, err)
+	}()
 	wg.Wait()
+}
+
+// tunnelDrain is the idle-deadline state one CONNECT tunnel's two copy
+// directions share. Until arm() (the first direction finishing) it is inert;
+// after it, every read the surviving direction completes pushes the deadline
+// on both conns out by timeout, so a transfer that keeps moving is never cut
+// while one that stalls for timeout is reaped.
+type tunnelDrain struct {
+	client, upstream net.Conn
+	timeout          time.Duration
+	armed            atomic.Bool
+}
+
+// arm starts the idle bound (idempotent; the second finisher's call is a no-op
+// on an already-finished tunnel).
+func (d *tunnelDrain) arm() {
+	d.armed.Store(true)
+	d.refresh()
+}
+
+// refresh pushes the idle deadline out from now on both conns when armed.
+// net.Conn deadline setters are safe to call concurrently with a blocked
+// Read/Write and from either copy goroutine.
+func (d *tunnelDrain) refresh() {
+	if !d.armed.Load() {
+		return
+	}
+	dl := time.Now().Add(d.timeout)
+	_ = d.client.SetDeadline(dl)
+	_ = d.upstream.SetDeadline(dl)
+}
+
+// reader wraps a copy source so each successful read refreshes the idle
+// deadline. The wrapper hides *net.TCPConn from io.Copy's ReadFrom/WriteTo
+// fast paths (splice), which is an acceptable trade for a proxy whose
+// bottleneck is the allowlisted upstream, not the userspace copy.
+func (d *tunnelDrain) reader(src io.Reader) io.Reader {
+	return &drainProgressReader{r: src, d: d}
+}
+
+type drainProgressReader struct {
+	r io.Reader
+	d *tunnelDrain
+}
+
+func (r *drainProgressReader) Read(b []byte) (int, error) {
+	n, err := r.r.Read(b)
+	if n > 0 {
+		r.d.refresh()
+	}
+	return n, err
+}
+
+// logReap records a copy direction that ended because the idle drain deadline
+// fired — the one outcome that means bytes may have been dropped (a silent
+// peer, or a transfer that stalled) rather than a clean close, and the one the
+// old code discarded. Every other copy error is the ordinary teardown shape
+// (peer reset, closed conn) and stays quiet.
+func (d *tunnelDrain) logReap(direction, host, port string, err error) {
+	if err != nil && errors.Is(err, os.ErrDeadlineExceeded) {
+		//nolint:gosec // G706 false positive: host reached here only by matching
+		// domainAllowed against this turn's allowlist (domain patterns, no CR/LF),
+		// port is the fixed requirePort when one is set, and net/http rejects
+		// CR/LF in the request line before either is parsed. direction is one of
+		// two package literals.
+		log.Printf("sandbox: egress tunnel to %s reaped: %s idle for %s during drain", net.JoinHostPort(host, port), direction, d.timeout)
+	}
 }
 
 // closeWrite half-closes conn's write side when the concrete type supports it —

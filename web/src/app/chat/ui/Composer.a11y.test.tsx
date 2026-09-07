@@ -101,7 +101,14 @@ function Host({
     abortControllersRef,
     isPendingKey: () => false,
   } as unknown as Parameters<typeof Composer>[0];
-  return <Composer {...props} {...overrides} />;
+  return (
+    <>
+      <Composer {...props} {...overrides} />
+      {/* Mirrors the host's selectedModel so a test can assert what the
+          picker committed (or, on a dismiss, left alone). */}
+      <span data-testid="host-selected-model">{selectedModel}</span>
+    </>
+  );
 }
 
 afterEach(() => {
@@ -240,5 +247,70 @@ describe("Composer — always-on connector status", () => {
     expect(broken.querySelector('[data-state="off"]')).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Inbound reports/ })).not.toBeInTheDocument();
     expect(toggleMcpServer).not.toHaveBeenCalled();
+  });
+});
+
+// The search field's text is a draft, not the selection. It used to be written
+// into selectedModel on every keystroke, so typing "cla" and then pressing
+// Escape or clicking away — both of which only close the popover — left "cla"
+// as the model and the next send failed. selectedModel changes only on a
+// commit (Enter or a row pick); a dismiss leaves the prior selection untouched.
+describe("Composer — model search text is a draft until committed", () => {
+  const selectedModel = () => screen.getByTestId("host-selected-model").textContent;
+
+  it("does not change the selected model while typing, and Escape leaves it alone", async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole("button", { name: /Model One/ }));
+    const search = await screen.findByRole("combobox", { name: "Model" });
+    fireEvent.change(search, { target: { value: "cla" } });
+    expect(search).toHaveValue("cla");
+    expect(selectedModel()).toBe("vendor/one");
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("combobox", { name: "Model" })).not.toBeInTheDocument(),
+    );
+    expect(selectedModel()).toBe("vendor/one");
+  });
+
+  it("commits the highlighted row on Enter", async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole("button", { name: /Model One/ }));
+    const search = await screen.findByRole("combobox", { name: "Model" });
+    fireEvent.change(search, { target: { value: "two" } });
+    // The host hands in a fixed roster, so ArrowDown moves the highlight to
+    // the second row and Enter takes it.
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(selectedModel()).toBe("vendor/two"));
+  });
+
+  it("commits the typed text as a free slug on Enter when no row matches", async () => {
+    render(<Host overrides={{ filteredRankedModels: [] }} />);
+    fireEvent.click(screen.getByRole("button", { name: /Model One/ }));
+    const search = await screen.findByRole("combobox", { name: "Model" });
+    fireEvent.change(search, { target: { value: "  custom/slug " } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(selectedModel()).toBe("custom/slug"));
+  });
+});
+
+// submitPrompt refuses to send while modelError is set, so an enabled Send
+// button was a click that did nothing. It must be disabled, and say why.
+describe("Composer — Send while the model is rejected", () => {
+  it("disables Send and puts the rejection in its title", () => {
+    const modelError = {
+      message: "This model's completion price exceeds the workspace cap.",
+      modelsUrl: "https://openrouter.ai/models",
+    };
+    render(<Host overrides={{ prompt: "hello", modelError }} />);
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toBeDisabled();
+    expect(send).toHaveAttribute("title", modelError.message);
+  });
+
+  it("keeps Send enabled for the same prompt once the error clears", () => {
+    render(<Host overrides={{ prompt: "hello", modelError: null }} />);
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
   });
 });

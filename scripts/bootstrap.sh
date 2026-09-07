@@ -985,7 +985,10 @@ fi
 step "Checking client config bundle (FLEET_CLIENT_CONFIG_DIR=${CLIENT_CONFIG_DIR})"
 if [[ -f "${CLIENT_CONFIG_DIR}/manifest.yaml" ]]; then
   ok "client bundle manifest found at ${CLIENT_CONFIG_DIR}/manifest.yaml"
-  if [[ "${CLIENT_CONFIG_DIR}" == "config/default" ]]; then
+  # CLIENT_CONFIG_DIR was absolutized above, so compare against the absolute
+  # in-repo default (the relative form never matched, and this notice never
+  # printed).
+  if [[ "${CLIENT_CONFIG_DIR}" == "${REPO_ROOT}/config/default" ]]; then
     info "using the GENERIC default bundle (neutral branding, no MCP connectors)."
     info "for a branded deploy, check out a client repo and set FLEET_CLIENT_CONFIG_DIR to it."
   fi

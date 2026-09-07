@@ -224,13 +224,16 @@ func sanitizeFilename(name string) string {
 	if out == "" {
 		out = fmt.Sprintf("upload-%d", time.Now().UnixNano())
 	}
-	// Keep filenames short enough for most filesystems.
+	// Keep filenames short enough for most filesystems. Cap by bytes at a
+	// rune boundary (capBytes), never out[:n]: a byte slice through a
+	// multi-byte character yields invalid UTF-8, which Postgres rejects when
+	// the path is persisted — so a long non-ASCII upload name used to 500.
 	if len(out) > 200 {
 		ext := filepath.Ext(out)
 		if len(ext) > 20 {
 			ext = ""
 		}
-		out = out[:200-len(ext)] + ext
+		out = capBytes(out, 200-len(ext)) + ext
 	}
 	return out
 }

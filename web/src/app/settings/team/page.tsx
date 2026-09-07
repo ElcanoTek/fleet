@@ -101,6 +101,13 @@ export default function TeamSettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ team_id: teamID }),
       });
+      if (res.status === 401) {
+        // The session lapsed between the read and the write: the load path
+        // redirects, so this one does too rather than rendering "Save failed
+        // (401)" over a form that can no longer save anything.
+        window.location.href = "/login";
+        return;
+      }
       if (res.status === 409) {
         // The server refuses a name that is already in use — by another
         // member OR by a team-shared project whose team has no members left
@@ -119,6 +126,10 @@ export default function TeamSettingsPage() {
           ? `You’re in “${updated.team_id}”. Teammates get added by an admin in Settings → Admin → Users.`
           : "You left your team. Team-shared projects are no longer visible to you, and the chats you shared into them are no longer shared.",
       );
+      // The PUT echoes the account row only — no shared_projects/shared_chats.
+      // Re-read GET /api/me/team so the Leave confirm keeps quoting real
+      // counts instead of degrading to "we couldn't work out the numbers".
+      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save your team.");
     } finally {

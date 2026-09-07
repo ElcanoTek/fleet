@@ -141,9 +141,15 @@ func notesList(argv []string) int {
 	fs := flag.NewFlagSet("notes list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
 	all := fs.Bool("all", false, "include archived notes")
-	_, flagArgs := splitPositional(argv)
-	if err := fs.Parse(flagArgs); err != nil {
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	// Parse argv in full (this verb takes no positional) so a stray argument is
+	// an error rather than silently dropped — `notes list my-slug` used to print
+	// every note and exit 0, as if the slug had filtered something.
+	if err := fs.Parse(argv); err != nil {
 		return 1
+	}
+	if fs.NArg() > 0 {
+		return errf(1, "notes list takes no arguments (got %q)", fs.Args())
 	}
 	st, closeStore, code := openNotesStore(*dbURL)
 	if st == nil {
@@ -154,12 +160,29 @@ func notesList(argv []string) int {
 	if err != nil {
 		return errf(5, "%v", err)
 	}
+	if *asJSON {
+		type row struct {
+			Slug    string `json:"slug"`
+			Version int    `json:"version"`
+			Status  string `json:"status"`
+			Title   string `json:"title"`
+		}
+		rows := make([]row, 0, len(notes))
+		for _, n := range notes {
+			rows = append(rows, row{Slug: n.Slug, Version: n.Version, Status: n.Status, Title: n.Title})
+		}
+		return printJSON(rows)
+	}
 	if len(notes) == 0 {
 		fmt.Fprintln(os.Stderr, "(no notes)")
 		return 0
 	}
+	rows := make([][]string, 0, len(notes))
 	for _, n := range notes {
-		fmt.Printf("%s\tv%d\t%s\t%s\n", n.Slug, n.Version, n.Status, n.Title)
+		rows = append(rows, []string{n.Slug, fmt.Sprintf("v%d", n.Version), n.Status, n.Title})
+	}
+	if err := renderTable(os.Stdout, []string{"SLUG", "VERSION", "STATUS", "TITLE"}, rows); err != nil {
+		return errf(5, "render: %v", err)
 	}
 	return 0
 }

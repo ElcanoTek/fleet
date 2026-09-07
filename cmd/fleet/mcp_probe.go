@@ -113,20 +113,24 @@ func runMCPTest(args []string) int {
 		_ = os.Setenv(clientconfig.EnvDir, opts.bundlePath)
 	}
 
+	// The deployment env file, resolved like validate-config does (see
+	// preflightEnvFile): $FLEET_ENV_FILE, else /etc/fleet/fleet.env on a
+	// provisioned box, else .env.local.
+	envFile := preflightEnvFile()
 	bundle, err := clientconfig.Load(clientconfig.Dir())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load bundle: %v\n", err)
 		return 1
 	}
-	// Read the env file (FLEET_ENV_FILE) with the bundle's connector env-var
-	// names registered first — the SAME ordering a real boot (and
-	// validate-config) uses. Without this, .env-only credentials are invisible
-	// here: credential-gated servers get reported as "enable gate is off" or
-	// probed with empty creds — the exact failure class this verb diagnoses.
-	// (clientconfig.Load already folded the file in for its manifest
-	// interpolation, #1123; this re-read admits the literal-named keys too.)
+	// Read the env file with the bundle's connector env-var names registered
+	// first — the SAME ordering a real boot (and validate-config) uses. Without
+	// this, .env-only credentials are invisible here: credential-gated servers
+	// get reported as "enable gate is off" or probed with empty creds — the
+	// exact failure class this verb diagnoses. (clientconfig.Load already
+	// folded the file in for its manifest interpolation, #1123; this re-read
+	// admits the literal-named keys too.)
 	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
-	if _, err := config.Load(os.Getenv("FLEET_ENV_FILE")); err != nil {
+	if _, err := config.Load(envFile); err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		return 1
 	}

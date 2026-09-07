@@ -373,11 +373,11 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	}
 	sort.Strings(clean)
 	if err := s.store.SetOptionalMCPServers(r.Context(), user, id, clean); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	if err := s.store.SetConversationMCPAccounts(r.Context(), user, id, accounts); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeConversationMutationError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"enabled_optional": clean, "accounts": accounts})

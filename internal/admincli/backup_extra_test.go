@@ -77,6 +77,51 @@ func TestBackupDir(t *testing.T) {
 	}
 }
 
+// TestBackupDirReadsEnvFile — `fleet backup` must honor a FLEET_BACKUP_DIR set
+// only in the deployment env file, exactly as the timer unit (and
+// resolveBackupDir) does; it used to read the process env only, so a hand-run
+// backup on a provisioned box dumped into the cwd while the timer used the
+// configured directory.
+func TestBackupDirReadsEnvFile(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_BACKUP_DIR=/mnt/from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_ENV_FILE", envFile)
+	t.Setenv("FLEET_BACKUP_DIR", "")
+	resetEnvFileCache()
+	t.Cleanup(resetEnvFileCache)
+	if got := backupDir(""); got != "/mnt/from-file" {
+		t.Errorf("env-file fallback: got %q, want /mnt/from-file", got)
+	}
+	if got := resolveBackupDir(); got != "/mnt/from-file" {
+		t.Errorf("timer resolution must agree: got %q", got)
+	}
+	if got := backupDir("/flag"); got != "/flag" {
+		t.Errorf("flag should still win: got %q", got)
+	}
+}
+
+// TestEnsureBackupDirOwnerOnly — dumps are the whole database, so the
+// directory that holds them is created 0700 (it used to be 0750).
+func TestEnsureBackupDirOwnerOnly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", "backups")
+	if err := ensureBackupDir(dir); err != nil {
+		t.Fatalf("ensureBackupDir: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o700 {
+		t.Errorf("backup dir mode = %v, want 0700", perm)
+	}
+	// Idempotent on an existing dir.
+	if err := ensureBackupDir(dir); err != nil {
+		t.Errorf("second ensureBackupDir: %v", err)
+	}
+}
+
 func TestRetentionDays(t *testing.T) {
 	t.Setenv("FLEET_BACKUP_RETENTION_DAYS", "7")
 	got, err := retentionDays()

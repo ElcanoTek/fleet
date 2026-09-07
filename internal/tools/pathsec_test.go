@@ -436,3 +436,26 @@ func TestValidatePathExploitDeepSubdir(t *testing.T) {
 		t.Errorf("ValidatePath() expected error containing 'parent directory symlink points outside allowed directories', got %q", err.Error())
 	}
 }
+
+// TestValidateDirectoryEmptyPathIsConfined pins the fix for the one-token
+// bypass: "" means the process cwd, and the cwd is VALIDATED like any other
+// path. Under a managed deployment the cwd (the StateDirectory) is not in the
+// allowlist once a workspace root is registered, so "" must be refused there
+// rather than handed back unchecked.
+func TestValidateDirectoryEmptyPathIsConfined(t *testing.T) {
+	root := t.TempDir()
+	prev := managedWorkspaceRoot
+	managedWorkspaceRoot = root
+	t.Cleanup(func() { managedWorkspaceRoot = prev })
+
+	if _, err := ValidateDirectory(""); err == nil {
+		t.Fatal("ValidateDirectory(\"\") returned the cwd unchecked while a workspace root outside it is registered")
+	} else if !strings.Contains(err.Error(), "outside allowed directories") {
+		t.Fatalf("want an allowlist violation, got %v", err)
+	}
+	// The registered root itself is still fine, so the refusal above is the
+	// allowlist and not a broken helper.
+	if got, err := ValidateDirectory(root); err != nil || got == "" {
+		t.Fatalf("ValidateDirectory(root) = %q, %v", got, err)
+	}
+}

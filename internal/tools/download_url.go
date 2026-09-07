@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -18,6 +19,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // downloadURLDialContext is the dial function download_url's HTTP client
@@ -164,6 +166,10 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 			return nil
 		},
 	}
+	// A fresh Transport per call keeps pooled keep-alive connections (and
+	// their read/write goroutines) alive until the REMOTE closes them; release
+	// them with the call, as browserbase_live_view does.
+	defer client.CloseIdleConnections()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
@@ -178,7 +184,7 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 	resp, err := client.Do(req)
 	if err != nil {
 		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("fetch %s: %v", displayURL, err)
+		res.Error = fmt.Sprintf("fetch %s: %v", displayURL, transportErrForDisplay(err, protected))
 		if len(chain) > 0 && !protected {
 			res.RedirectChain = chain
 		}
@@ -228,10 +234,7 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 		// Preserve a snippet of the error body so the model can react
 		// to e.g. "Token expired" without an extra fetch.
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		preview := strings.TrimSpace(string(errBody))
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
+		preview := truncate.Clamp(strings.TrimSpace(string(errBody)), 200, "...")
 		res.Status = downloadStatusError
 		res.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, preview)
 		return res
@@ -563,4 +566,30 @@ func extensionFromContentType(ct string) string {
 		return exts[0]
 	}
 	return ".bin"
+}
+
+// transportErrForDisplay renders a client.Do failure for the tool result. A
+// *url.Error prints the FULL request URL — and for a protected
+// fleet-download:// handle that is the vaulted bearer-carrying URL the handle
+// exists to keep out of the model context (download_url_handle.go). The
+// success path already suppresses FinalURL/RedirectChain when protected; the
+// failure path used to hand the same URL straight back through the error
+// string on any dial/TLS/timeout/redirect failure, including the SSRF guard's
+// own refusal. When protected, report only the operation and the inner cause.
+func transportErrForDisplay(err error, protected bool) string {
+	if !protected {
+		return err.Error()
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		op := ue.Op
+		if op == "" {
+			op = "request"
+		}
+		if ue.Err != nil {
+			return fmt.Sprintf("%s (protected URL): %v", op, ue.Err)
+		}
+		return op + " (protected URL) failed"
+	}
+	return err.Error()
 }

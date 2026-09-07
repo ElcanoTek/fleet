@@ -195,6 +195,12 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	if err := runPgDump(ctx, srcDSN, dumpPath); err != nil {
 		t.Fatalf("runPgDump: %v", err)
 	}
+	// The dump IS the database: owner-only, whatever umask pg_dump ran under.
+	if fi, err := os.Stat(dumpPath); err != nil {
+		t.Fatalf("stat dump: %v", err)
+	} else if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("dump mode = %v, want 0600", perm)
+	}
 	data, err := os.ReadFile(dumpPath)
 	if err != nil {
 		t.Fatalf("read dump: %v", err)

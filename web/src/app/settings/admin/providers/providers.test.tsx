@@ -140,10 +140,11 @@ describe("ProvidersAdminPage", () => {
     expect(result.textContent).toContain("245ms");
   });
 
-  it("requires explicit confirmation for an enabled catch-all (empty models)", async () => {
+  it("requires an inline second click for an enabled catch-all (empty models)", async () => {
     const fetchMock = mockFetch([]);
     vi.stubGlobal("fetch", fetchMock);
-    const confirmSpy = vi.fn().mockReturnValue(false);
+    // No native dialog is involved: a window.confirm call would be a regression.
+    const confirmSpy = vi.fn().mockReturnValue(true);
     vi.stubGlobal("confirm", confirmSpy);
     render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
@@ -153,10 +154,42 @@ describe("ProvidersAdminPage", () => {
     fireEvent.change(screen.getByPlaceholderText("sk-…"), {
       target: { value: "sk-or-x" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
-    expect(confirmSpy).toHaveBeenCalledOnce();
-    // Declined → no POST fired.
-    expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST")).toHaveLength(0);
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    const save = screen.getByTestId("provider-save");
+    // First click arms: the warning shows inline, nothing is sent.
+    fireEvent.click(save);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(save).toHaveTextContent("Confirm catch-all");
+    expect(screen.getByTestId("provider-catch-all-warning")).toHaveTextContent(/CATCH-ALL/);
+    expect(posts()).toHaveLength(0);
+    // Escape disarms without submitting.
+    fireEvent.keyDown(save, { key: "Escape" });
+    expect(save).toHaveTextContent("Create provider");
+    expect(posts()).toHaveLength(0);
+    // Arm again and confirm → the POST fires.
+    fireEvent.click(save);
+    fireEvent.click(save);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it("replaces the loading line with the error and a working Retry when the load fails", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError("Failed to fetch");
+      return { ok: true, status: 200, json: async () => ({ providers: [ROW] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
+    // The list never arrived, so "Loading…" would be a lie under the banner.
+    expect(screen.queryByText("Loading…")).toBeNull();
+    fireEvent.click(screen.getByTestId("providers-retry"));
+    expect(await screen.findByText("anthropic-direct")).toBeInTheDocument();
+    expect(screen.queryByText("Failed to fetch")).toBeNull();
+    expect(screen.queryByTestId("providers-retry")).toBeNull();
   });
 
   it("removes a provider only after the inline confirm's second click", async () => {

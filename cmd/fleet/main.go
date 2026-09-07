@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -43,6 +44,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
 	"github.com/ElcanoTek/fleet/internal/admincli"
@@ -149,8 +151,9 @@ func main() {
 		os.Exit(runEvalCmd(argv[1:]))
 	case invokeGenerateVAPIDKeys:
 		// Browser Web Push setup (#292): print a fresh VAPID key pair as env
-		// lines for the operator's env-file. Boots nothing.
-		os.Exit(runGenerateVAPIDKeys(os.Stdout))
+		// lines for the operator's env-file. Boots nothing. Errors go to
+		// stderr so `>> fleet.env` never captures one as an env line.
+		os.Exit(runGenerateVAPIDKeys(os.Stdout, os.Stderr))
 	case invokeTaskRun:
 		// Local one-shot harness: run a single task YAML to completion through
 		// the governed scheduled runtime (no server, no DB). The old cutlass
@@ -158,7 +161,13 @@ func main() {
 		os.Exit(taskrun.Run(argv[2:], "fleet task run"))
 	case invokeServe:
 		// Daemon: bare `fleet` (legacy) or `fleet serve`. The server is env/config
-		// driven, so any args after `serve` are ignored (no flag parsing here).
+		// driven — there are no serve flags — so `-h`/`--help` prints that and
+		// exits 0, and anything else after `serve` is refused rather than
+		// silently ignored (a typo'd `fleet serve --config x` used to boot the
+		// daemon with the operator none the wiser).
+		if code, done := serveArgsExit(serveArgs(argv), os.Stdout, os.Stderr); done {
+			os.Exit(code)
+		}
 		if err := run(); err != nil {
 			log.Fatalf("fleet: %v", err)
 		}
@@ -223,6 +232,45 @@ func classifyInvocation(argv []string) invocation {
 		return invokeAdmin
 	default:
 		return invokeAdmin
+	}
+}
+
+// serveArgs returns the tokens after the `serve` verb (none for bare `fleet`).
+func serveArgs(argv []string) []string {
+	if len(argv) > 0 && argv[0] == "serve" {
+		return argv[1:]
+	}
+	return nil
+}
+
+// serveUsage is what `fleet serve --help` prints. The daemon takes no flags:
+// everything is env/config driven (docs/OPERATORS.md), so the usage says where
+// the configuration actually lives instead of listing options that don't exist.
+const serveUsage = `usage: fleet serve
+
+Run the fleet daemon in the foreground (chat + scheduler, one process). It
+takes no flags: configuration is the process environment plus the env file
+($FLEET_ENV_FILE) and the client bundle ($FLEET_CLIENT_CONFIG_DIR).
+Preflight with: fleet validate-config    Manage the unit with: fleet start|restart|stop|logs
+Bare "fleet" (no verb) also serves — legacy ExecStart compatibility (ADR-0012).
+`
+
+// serveArgsExit decides whether `serve`'s trailing args short-circuit the boot:
+// -h/--help prints serveUsage on out and exits 0; any other arg is a usage
+// error on errW and exits 1 — the daemon must never start on a command line the
+// operator got wrong. Empty args (the normal case) return done=false. Split
+// from main so route_test can pin it without booting anything.
+func serveArgsExit(args []string, out, errW io.Writer) (code int, done bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+	switch args[0] {
+	case "-h", "--help", "help":
+		fmt.Fprint(out, serveUsage)
+		return 0, true
+	default:
+		fmt.Fprintf(errW, "fleet serve: unexpected argument %q — serve takes no flags (see fleet serve --help)\n", args[0])
+		return 1, true
 	}
 }
 
@@ -1561,15 +1609,18 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// {task_id} wildcard (#238).
 		r.Get("/tasks/tags", h.GetTagCatalogue)
 		r.Get("/tasks/export", h.HandleTaskExport)
-		r.Post("/tasks/import", h.HandleTaskImport)
+		// Import is a bulk create (the batch path's sibling), so it carries the
+		// same task-create rate limiter as /tasks, /tasks/batch and /upload.
+		r.With(h.SchedRateLimitMiddleware).Post("/tasks/import", h.HandleTaskImport)
 		r.Get("/tasks/{task_id}", h.GetTask)
 		r.Get("/tasks/{task_id}/output", h.GetTaskOutput)
 		r.Get("/tasks/{task_id}/error-analysis", h.GetTaskErrorAnalysis)
 		r.Get("/tasks/{task_id}/artifacts", h.GetTaskArtifacts)
 		r.Put("/tasks/{task_id}", h.UpdateTask)
 		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
-		r.Post("/tasks/{task_id}/rerun", h.RerunTask)
-		r.Post("/tasks/{task_id}/clone", h.CloneTask)
+		// Rerun/clone mint a new task each, so they are metered like POST /tasks.
+		r.With(h.SchedRateLimitMiddleware).Post("/tasks/{task_id}/rerun", h.RerunTask)
+		r.With(h.SchedRateLimitMiddleware).Post("/tasks/{task_id}/clone", h.CloneTask)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
 		// Permanently remove a task. Deliberately NOT the same route as the
 		// cancel above: cancel stops a job and keeps the record, this destroys
@@ -2633,28 +2684,58 @@ func resolveManagedTasks(schedStorage *storage.Storage, req httpapi.TaskMutation
 
 // applyTaskMutation writes one task's field changes and returns a short
 // description of what actually changed, for the chat-visible report.
+//
+// The definition changes are overlaid on storage.TaskEditFromTask and written
+// through UpdateEditableTask — the same row-locked, still-editable-checked,
+// dispatch-state-recomputing path PUT /tasks/{id} uses — never through the
+// unlocked full-row UpdateTask upsert. That upsert wrote the status, lease and
+// result columns of the read above back over whatever the scheduler and runner
+// had done since (a running task rewound to pending and executed twice; a
+// finished one flipped back to non-terminal, its result erased — the #1104
+// shape). A task that was claimed or finished in the meantime is now refused
+// with a plain reason instead.
 func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *schedmodels.Task, req httpapi.TaskMutationRequest) (string, error) {
 	var changed []string
+	edit := storage.TaskEditFromTask(t)
 	if req.Prompt != "" && req.Prompt != t.Prompt {
-		t.Prompt = req.Prompt
+		edit.Prompt = req.Prompt
 		changed = append(changed, "prompt")
 	}
 	if req.Cron != "" && req.Cron != t.Recurrence {
-		t.Recurrence = req.Cron
+		// The API edit path validates the expression and refreshes the next
+		// fire from it (in the task's zone); an unparseable cron stored as-is
+		// would leave the row wedged as scheduled with a schedule the
+		// scheduler cannot evaluate.
+		schedule, err := cron.ParseStandard(req.Cron)
+		if err != nil {
+			return "", fmt.Errorf("%q is not a standard 5-field cron expression", req.Cron)
+		}
+		loc := schedStorage.Location()
+		if t.Timezone != "" {
+			if tzLoc, lerr := time.LoadLocation(t.Timezone); lerr == nil {
+				loc = tzLoc
+			}
+		}
+		next := schedule.Next(time.Now().In(loc)).UTC()
+		edit.Recurrence = req.Cron
+		edit.ScheduledFor = &next
 		changed = append(changed, "schedule "+req.Cron)
 	}
 	if req.Model != "" && (t.Model == nil || *t.Model != req.Model) {
 		m := req.Model
-		t.Model = &m
+		edit.Model = &m
 		changed = append(changed, "model "+req.Model)
 	}
 	if req.MaxIterations > 0 && (t.MaxIterations == nil || *t.MaxIterations != req.MaxIterations) {
 		n := req.MaxIterations
-		t.MaxIterations = &n
+		edit.MaxIterations = &n
 		changed = append(changed, fmt.Sprintf("max_iterations %d", n))
 	}
 	if len(changed) > 0 {
-		if _, err := schedStorage.UpdateTask(t); err != nil {
+		if _, err := schedStorage.UpdateEditableTask(ctx, t.ID, edit); err != nil {
+			if errors.Is(err, storage.ErrTaskNotEditable) {
+				return "", fmt.Errorf("task is %s and can no longer be edited", t.Status)
+			}
 			return "", err
 		}
 	}

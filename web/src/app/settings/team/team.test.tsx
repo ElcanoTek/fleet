@@ -51,12 +51,16 @@ afterEach(() => {
 describe("Settings → Team", () => {
   it("creates a team from the empty state", async () => {
     const puts: string[] = [];
+    // Stateful: the GET reflects the last PUT, as the server's would — the
+    // page re-reads after a write, so a fixed GET would undo the create.
+    let team = "";
     mockFetch((url, init) => {
       if (url === "/api/me/team" && init?.method === "PUT") {
         puts.push(String(init.body));
-        return me("platform");
+        team = (JSON.parse(String(init.body)) as { team_id: string }).team_id;
+        return me(team);
       }
-      return me("");
+      return me(team);
     });
 
     render(<TeamSettingsPage />);
@@ -106,12 +110,16 @@ describe("Settings → Team", () => {
 
   it("confirms before leaving, stating what it costs", async () => {
     const puts: string[] = [];
+    let team = "platform";
     mockFetch((url, init) => {
       if (url === "/api/me/team" && init?.method === "PUT") {
         puts.push(String(init.body));
+        team = "";
         return me("");
       }
-      return me("platform", false, { shared_projects: 3, shared_chats: 2 });
+      return team
+        ? me("platform", false, { shared_projects: 3, shared_chats: 2 })
+        : me("");
     });
 
     render(<TeamSettingsPage />);
@@ -135,6 +143,35 @@ describe("Settings → Team", () => {
     await waitFor(() => expect(puts.length).toBe(1));
     expect(JSON.parse(puts[0])).toEqual({ team_id: "" });
     expect(await screen.findByText(/You left your team/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("team-current")).toBeNull());
+  });
+
+  it("re-reads the team after a write so the Leave confirm still has its counts", async () => {
+    let team = "";
+    mockFetch((url, init) => {
+      if (url === "/api/me/team" && init?.method === "PUT") {
+        team = (JSON.parse(String(init.body)) as { team_id: string }).team_id;
+        // The PUT echoes the account row WITHOUT the LeaveTeamImpact fields.
+        return me(team);
+      }
+      // …the GET is what carries them.
+      return team ? me(team, false, { shared_projects: 0, shared_chats: 0 }) : me("");
+    });
+
+    render(<TeamSettingsPage />);
+    await screen.findByText(/not in a team yet/i);
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "platform" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create team" }));
+    await screen.findByTestId("team-current");
+
+    fireEvent.click(screen.getByRole("button", { name: "Leave team" }));
+    const dialog = await screen.findByRole("dialog", { name: "Leave platform?" });
+    // Counts from the re-read, not "we couldn't work out the numbers" from
+    // the PUT's echo.
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent("any project shared with it (there are none right now)"),
+    );
+    expect(dialog).not.toHaveTextContent(/couldn’t work out the exact numbers/);
   });
 
   it("cancelling the leave confirm writes nothing", async () => {

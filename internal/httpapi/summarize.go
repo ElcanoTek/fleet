@@ -88,12 +88,11 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		return
 	}
 
+	// Not gated on ContentLength > 0: a chunked body reports -1 and used to
+	// be skipped entirely, silently ignoring the caller's model override.
 	var req summarizeRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
-			return
-		}
+	if !decodeOptionalJSONBody(w, r, &req) {
+		return
 	}
 	model := strings.TrimSpace(req.Model)
 	if model == "" {

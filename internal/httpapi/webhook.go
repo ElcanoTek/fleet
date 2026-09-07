@@ -205,7 +205,10 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	persistCtx, persistCancel := context.WithTimeout(r.Context(), 5*time.Second)
+	// Background-rooted for the same reason as startTurn: the turn outlives
+	// the webhook POST, and its ledger must exist whether or not the sender
+	// waits for the response.
+	persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
 		log.Printf("attachPersister (webhook user=%s conv=%s): %v", user, conv.ID, err)
 	}

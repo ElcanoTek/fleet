@@ -288,3 +288,100 @@ func metricValue(t *testing.T, name, taskName string) float64 {
 	}
 	return 0
 }
+
+// TestCheck_WarnFiresOncePerRun: the warning is emitted on the first tick past
+// the warn threshold and NOT again on subsequent ticks (it used to log and
+// count every 60s for the rest of the run), and a run whose breach is already
+// latched does not fall through to the warn branch at all. When the task
+// leaves the running set its entry is forgotten, so a fresh attempt warns anew.
+func TestCheck_WarnFiresOncePerRun(t *testing.T) {
+	now := time.Date(2025, 6, 29, 12, 0, 0, 0, time.UTC)
+	warnTask := uuid.New()
+	breached := uuid.New()
+	store := &fakeStore{
+		tasks: []*models.Task{
+			{
+				ID: warnTask, Prompt: "slow", Status: models.TaskStatusRunning,
+				StartedAt: startAt(now, 31*time.Minute), ExpectedDurationMinutes: minutes(20),
+				SLAWarnMultiplier: 1.5, SLAFailMultiplier: 5.0,
+			},
+			{
+				ID: breached, Prompt: "already breached", Status: models.TaskStatusRunning,
+				StartedAt: startAt(now, 3*time.Hour), ExpectedDurationMinutes: minutes(20),
+				SLAWarnMultiplier: 1.5, SLAFailMultiplier: 2.0, SLABreached: true,
+			},
+		},
+	}
+	m := New(store)
+	m.SetNow(func() time.Time { return now })
+
+	m.Check(context.Background())
+	if _, ok := m.warned[warnTask]; !ok {
+		t.Fatal("first tick past the warn threshold did not record the warning")
+	}
+	if _, ok := m.warned[breached]; ok {
+		t.Fatal("a latched breach must not be warned about")
+	}
+	if len(store.breached) != 0 {
+		t.Fatalf("nothing should latch here, got %v", store.breached)
+	}
+	warnedBefore := len(m.warned)
+	m.SetNow(func() time.Time { return now.Add(time.Minute) })
+	m.Check(context.Background())
+	if len(m.warned) != warnedBefore {
+		t.Fatalf("second tick changed the warned set (%d → %d); the warning must fire once", warnedBefore, len(m.warned))
+	}
+
+	// The run finishes: it drops out of the running set and its entry goes.
+	store.tasks = store.tasks[1:]
+	m.Check(context.Background())
+	if _, ok := m.warned[warnTask]; ok {
+		t.Fatal("finished task's warned entry was not pruned")
+	}
+}
+
+// TestCheck_RetryWarnsAgain covers the gap the id-keyed latch had: a warned
+// task fails and its retry starts between two sweeps, so the id never leaves
+// the running set and the entry was never pruned — the new attempt's warning
+// was swallowed. The latch is keyed by attempt (started_at): the same attempt
+// warns once, a new started_at under the same id warns again.
+func TestCheck_RetryWarnsAgain(t *testing.T) {
+	now := time.Date(2025, 6, 29, 12, 0, 0, 0, time.UTC)
+	id := uuid.New()
+	firstStart := startAt(now, 31*time.Minute) // warn@30 (20*1.5), fail@100
+	store := &fakeStore{
+		tasks: []*models.Task{{
+			ID: id, Prompt: "retried", Status: models.TaskStatusRunning,
+			StartedAt: firstStart, ExpectedDurationMinutes: minutes(20),
+			SLAWarnMultiplier: 1.5, SLAFailMultiplier: 5.0,
+		}},
+	}
+	m := New(store)
+	m.SetNow(func() time.Time { return now })
+
+	m.Check(context.Background())
+	if at, ok := m.warned[id]; !ok || !at.Equal(*firstStart) {
+		t.Fatalf("first attempt not latched by its started_at: %v %v", at, ok)
+	}
+
+	// Same attempt, next sweep: still latched, nothing changes.
+	m.SetNow(func() time.Time { return now.Add(time.Minute) })
+	m.Check(context.Background())
+	if at := m.warned[id]; !at.Equal(*firstStart) {
+		t.Fatalf("second sweep re-latched the same attempt: %v", at)
+	}
+
+	// The task failed and retried between sweeps: same id, new started_at, and
+	// the retry has itself already run past the warn threshold.
+	later := now.Add(2 * time.Hour)
+	retryStart := startAt(later, 31*time.Minute)
+	store.tasks[0].StartedAt = retryStart
+	m.SetNow(func() time.Time { return later })
+	m.Check(context.Background())
+	if at, ok := m.warned[id]; !ok || !at.Equal(*retryStart) {
+		t.Fatalf("retry was not warned about: latch = %v (ok=%v), want %v", at, ok, *retryStart)
+	}
+	if len(store.breached) != 0 {
+		t.Fatalf("nothing should breach here, got %v", store.breached)
+	}
+}

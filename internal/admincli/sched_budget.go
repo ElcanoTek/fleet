@@ -32,6 +32,7 @@ func cmdSchedBudget(argv []string) int {
 func schedBudgetList(argv []string) int {
 	fs := flag.NewFlagSet("sched budget list", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	asJSON := fs.Bool("json", false, "machine-readable output")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -43,6 +44,9 @@ func schedBudgetList(argv []string) int {
 	budgets, err := st.ListBudgets(context.Background())
 	if err != nil {
 		return errf(5, "list budgets: %v", err)
+	}
+	if *asJSON {
+		return printJSON(budgets)
 	}
 	if len(budgets) == 0 {
 		fmt.Fprintln(os.Stderr, "no budgets configured — add one with: fleet sched budget create --scope user --principal <email> --window month --hard-usd 50")

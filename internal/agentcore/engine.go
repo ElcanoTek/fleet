@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -748,14 +747,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	// is disarmed and the original context remains authoritative.
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
-	var first sync.Once
-	var firstTimedOut atomic.Bool
-	timer := time.AfterFunc(providerFirstChunkTimeout, func() {
-		firstTimedOut.Store(true)
-		cancelStream()
-	})
-	defer timer.Stop()
-	markFirst := func() { first.Do(func() { timer.Stop() }) }
+	watchdog := newFirstChunkWatchdog(providerFirstChunkTimeout, cancelStream)
+	defer watchdog.stop()
+	markFirst := watchdog.markFirst
 	// Sentry breadcrumb (#193): the LLM request trail so a captured exception's
 	// event shows which model the agent was driving immediately before the
 	// crash. The prompt itself is NEVER attached — only the model slug. No-op
@@ -853,8 +847,51 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			),
 		)),
 	})
-	if err != nil && firstTimedOut.Load() && ctx.Err() == nil {
+	if err != nil && watchdog.timedOut() && ctx.Err() == nil {
 		return nil, fmt.Errorf("%w after %s: %w", ErrFirstChunkTimeout, providerFirstChunkTimeout, err)
 	}
 	return result, err
 }
+
+// firstChunkWatchdog cancels a stream whose provider accepted the request but
+// produced no semantic event within the timeout. The first event and the
+// timer race for ONE atomic decision (settled): whichever wins owns the
+// outcome. Before this, markFirst only called timer.Stop, which returns false
+// when the callback has already started — so a timer firing in the same
+// instant as the first delta would cancel a stream that had, in fact, started
+// producing, and misreport it as a first-chunk timeout.
+type firstChunkWatchdog struct {
+	settled  atomic.Bool // true once either the first chunk or the timer claimed the decision
+	fired    atomic.Bool // true only when the TIMER won
+	timer    *time.Timer
+	onExpire func()
+}
+
+func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWatchdog {
+	w := &firstChunkWatchdog{onExpire: onExpire}
+	w.timer = time.AfterFunc(timeout, w.expire)
+	return w
+}
+
+// expire is the timer callback: it cancels only if no chunk has settled the
+// decision first.
+func (w *firstChunkWatchdog) expire() {
+	if !w.settled.CompareAndSwap(false, true) {
+		return
+	}
+	w.fired.Store(true)
+	w.onExpire()
+}
+
+// markFirst records that the first semantic event arrived. Idempotent; a call
+// after the timer has already won is a no-op (the cancel stands).
+func (w *firstChunkWatchdog) markFirst() {
+	if w.settled.CompareAndSwap(false, true) {
+		w.timer.Stop()
+	}
+}
+
+// timedOut reports whether the timer won the decision.
+func (w *firstChunkWatchdog) timedOut() bool { return w.fired.Load() }
+
+func (w *firstChunkWatchdog) stop() { w.timer.Stop() }

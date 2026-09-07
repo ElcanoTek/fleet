@@ -90,6 +90,125 @@ describe("AdminServerPage", () => {
     expect(screen.getByTestId("storage-cleanup-run")).toBeEnabled();
   });
 
+  it("runs cleanup only after the inline confirm's second click", async () => {
+    const CLEANED = {
+      deleted_conversations: 7,
+      removed_workspaces: 3,
+      removed_upload_files: 1,
+      removed_temp_files: 0,
+      bytes_freed: 1024 ** 3,
+    };
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = url.includes("/storage/cleanup") && init?.method === "POST"
+        ? CLEANED
+        : url.includes("/api/admin/storage")
+          ? STORAGE
+          : STATS;
+      return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AdminServerPage />);
+    const run = await screen.findByTestId("storage-cleanup-run");
+    const posts = () =>
+      fetchMock.mock.calls.filter(([u, i]) => String(u).includes("/storage/cleanup") && i?.method === "POST");
+    // First click arms; nothing is deleted yet.
+    fireEvent.click(run);
+    expect(run).toHaveTextContent("Confirm cleanup");
+    expect(posts()).toHaveLength(0);
+    // Second click fires the POST and the result line reports what went.
+    fireEvent.click(run);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(await screen.findByTestId("storage-cleanup-result")).toHaveTextContent(
+      "Removed 7 conversations, 3 workspace dirs, 1 file",
+    );
+  });
+
+  it("keeps the last good host sample on screen when a poll fails", async () => {
+    let fail = false;
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/admin/storage")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => STORAGE, text: async () => "" });
+      }
+      if (fail) return Promise.resolve({ ok: false, status: 502, json: async () => ({}), text: async () => "" });
+      return Promise.resolve({ ok: true, status: 200, json: async () => STATS, text: async () => "" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AdminServerPage />);
+    await screen.findByTestId("server-stats-panel");
+
+    fail = true;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh server stats" }));
+    const banner = await screen.findByTestId("server-stats-error");
+    expect(banner).toHaveTextContent("502");
+    expect(banner).toHaveTextContent("showing the last successful sample");
+    // The panel — with its numbers — is still there under the banner.
+    expect(screen.getByTestId("server-stats-panel")).toHaveTextContent("8 logical cores");
+
+    // The next good poll clears the banner.
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh server stats" }));
+    await waitFor(() => expect(screen.queryByTestId("server-stats-error")).toBeNull());
+  });
+
+  it("shows only the banner when the very first sample fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).includes("/api/admin/storage")
+            ? { ok: true, status: 200, json: async () => STORAGE, text: async () => "" }
+            : { ok: false, status: 500, json: async () => ({}), text: async () => "" },
+        ),
+      ),
+    );
+    render(<AdminServerPage />);
+    expect(await screen.findByTestId("server-stats-error")).toHaveTextContent("500");
+    expect(screen.queryByTestId("server-stats-panel")).toBeNull();
+    expect(screen.queryByTestId("server-stats-loading")).toBeNull();
+  });
+
+  it("reports a failed cleanup beside the button and keeps the statistics up", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/storage/cleanup") && init?.method === "POST") {
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({}), text: async () => "sweep refused" });
+      }
+      const body = url.includes("/api/admin/storage") ? STORAGE : STATS;
+      return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AdminServerPage />);
+    const run = await screen.findByTestId("storage-cleanup-run");
+    fireEvent.click(run);
+    fireEvent.click(run);
+    const failure = await screen.findByTestId("storage-cleanup-error");
+    expect(failure).toHaveTextContent("Cleanup failed: sweep refused");
+    // The failure used to land in the load-error state, which unmounted the
+    // whole panel as "Storage statistics unavailable: …".
+    expect(screen.getByTestId("storage-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("storage-error")).toBeNull();
+    expect(screen.getByTestId("storage-cleanup-run")).toBeEnabled();
+  });
+
+  it("only quotes the reclaimable count while the cutoff matches the server default", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    render(<AdminServerPage />);
+    const preview = await screen.findByTestId("storage-cleanup-preview");
+    expect(preview).toHaveTextContent("A cleanup at 30 days would remove 7 conversations");
+
+    // The server counted at ITS default (30 days); a different cutoff must not
+    // borrow that number.
+    fireEvent.change(screen.getByLabelText(/Idle more than/), { target: { value: "7" } });
+    expect(preview).toHaveTextContent("At the default 30-day cutoff a cleanup would remove 7 conversations");
+    expect(preview).toHaveTextContent("the count at 7 days isn't known until it runs");
+    expect(preview).not.toHaveTextContent("A cleanup at 7 days would remove");
+
+    fireEvent.change(screen.getByLabelText(/Idle more than/), { target: { value: "30" } });
+    expect(preview).toHaveTextContent("A cleanup at 30 days would remove 7 conversations");
+  });
+
   it("degrades to an error banner when the storage endpoint is missing", async () => {
     // Older server: /api/admin/storage returns a non-storage payload.
     vi.stubGlobal("fetch", routedFetch(STATS, { error: "not found" }));

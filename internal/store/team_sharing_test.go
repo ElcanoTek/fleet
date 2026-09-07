@@ -419,6 +419,25 @@ func TestProjectMemoryManagement(t *testing.T) {
 		t.Errorf("retired = %v, author = %q", retired.Retired(), retired.UserEmail)
 	}
 
+	// The validity window is patchable on a team learning too (it was silently
+	// dropped before), and 0 clears a bound the same way the personal API does.
+	from, to := int64(1_700_000_000), int64(1_800_000_000)
+	windowed, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, MemoryPatch{ValidFrom: &from, ValidTo: &to})
+	if err != nil {
+		t.Fatalf("UpdateProjectMemory(window): %v", err)
+	}
+	if windowed.ValidFrom == nil || *windowed.ValidFrom != from || windowed.ValidTo == nil || *windowed.ValidTo != to {
+		t.Errorf("validity window not applied: from=%v to=%v", windowed.ValidFrom, windowed.ValidTo)
+	}
+	zero := int64(0)
+	cleared, err := f.s.UpdateProjectMemory(f.ctx, f.project.ID, m.ID, MemoryPatch{ValidTo: &zero})
+	if err != nil {
+		t.Fatalf("UpdateProjectMemory(clear valid_to): %v", err)
+	}
+	if cleared.ValidTo != nil || cleared.ValidFrom == nil || *cleared.ValidFrom != from {
+		t.Errorf("clear valid_to: from=%v to=%v", cleared.ValidFrom, cleared.ValidTo)
+	}
+
 	// Scope isolation both ways: the personal API cannot touch a project row.
 	if _, err := f.s.UpdateMemory(f.ctx, "bob@x.com", m.ID, MemoryPatch{Retired: &yes}); err == nil {
 		t.Error("the personal memory API must not reach a project row")

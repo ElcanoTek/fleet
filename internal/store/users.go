@@ -636,11 +636,14 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, projectsUpdated int64, err error) {
 	from = strings.TrimSpace(from)
 	to = strings.TrimSpace(to)
+	// Caller-input failures are InputErrors so the handler can answer them
+	// 400 and keep everything else — a Postgres outage included — a 500;
+	// they all used to surface as "Bad Request" with the raw driver text.
 	if from == "" || to == "" {
-		return 0, 0, fmt.Errorf("both team names are required")
+		return 0, 0, errInput("both team names are required")
 	}
 	if from == to {
-		return 0, 0, fmt.Errorf("new team name equals the current name")
+		return 0, 0, errInput("new team name equals the current name")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -665,7 +668,7 @@ func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, 
 	}
 	projectsUpdated, _ = res.RowsAffected()
 	if usersUpdated == 0 && projectsUpdated == 0 {
-		err = fmt.Errorf("no team named %q", from)
+		err = errInput(fmt.Sprintf("no team named %q", from))
 		return 0, 0, err
 	}
 	err = tx.Commit()

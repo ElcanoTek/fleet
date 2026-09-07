@@ -29,9 +29,10 @@ func TestNotifyTool(t *testing.T) {
 	if resp.IsError {
 		t.Fatalf("notify should succeed: %+v", resp)
 	}
-	// No handler → no-op success (the run continues).
-	if r := runToolCtx(context.Background(), t, NewNotifyTool(), `{"message":"x"}`); r.IsError {
-		t.Fatalf("notify without handler must not error: %+v", r)
+	// No handler → a clear NOTIFY_UNAVAILABLE error (mirrors ask), never a
+	// "sent" confirmation for a message nobody received.
+	if r := runToolCtx(context.Background(), t, NewNotifyTool(), `{"message":"x"}`); !r.IsError || !strings.Contains(r.Content, "NOTIFY_UNAVAILABLE") {
+		t.Fatalf("notify without handler must error clearly: %+v", r)
 	}
 	// Empty message errors.
 	if r := runToolCtx(ctx, t, NewNotifyTool(), `{"message":""}`); !r.IsError {

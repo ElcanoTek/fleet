@@ -383,7 +383,13 @@ func (s *Storage) GetUsersByIDsWithContext(ctx context.Context, userIDs []uuid.U
 	return s.db.GetUsersByIDs(ctx, userIDs)
 }
 
-// UpdateTask updates an existing task.
+// UpdateTask writes the whole task row back, unlocked and unconditionally —
+// status, lease and result columns included. It is a fixture/replay seam (the
+// test suites use it to place rows in arbitrary states), NOT an edit path: a
+// production write that changes definition fields must go through
+// UpdateEditableTask (or ReplaceTaskDefinition), which lock the row and refuse
+// a task that has since been claimed or finished. Fed a stale read, this
+// upsert rewinds a live run (#1104). No production code calls it.
 func (s *Storage) UpdateTask(task *models.Task) (*models.Task, error) {
 	if err := validateStoredOutputContract(task); err != nil {
 		return nil, err
@@ -923,6 +929,62 @@ type TaskEdit struct {
 	SLAFailMultiplier float64
 }
 
+// TaskEditFromTask projects a task's current definition onto a TaskEdit, so a
+// caller that changes a FEW fields (the chat manage_tasks adapter: prompt,
+// cron, model, max_iterations) can overlay them and go through
+// UpdateEditableTask — the row-locked, editability-checked, dispatch-state-
+// recomputing write — instead of UpdateTask's unlocked full-row upsert. That
+// upsert, fed a task read moments earlier, wrote the stale status, lease and
+// result columns back over whatever the scheduler and runner had done since:
+// the #1104 double-execution shape ReplaceTaskDefinition was written to close.
+//
+// Every Set* flag is true: the edit carries the task's own current value for
+// each optional block, so "unchanged" is expressed as "replaced with itself"
+// rather than left to the flag's default.
+func TaskEditFromTask(t *models.Task) TaskEdit {
+	return TaskEdit{
+		Prompt:                  t.Prompt,
+		Title:                   t.Title,
+		Description:             t.Description,
+		Model:                   t.Model,
+		FallbackModel:           t.FallbackModel,
+		MaxIterations:           t.MaxIterations,
+		MCPSelection:            t.MCPSelection,
+		SetMCPSelection:         true,
+		CredentialAllowlist:     t.CredentialAllowlist,
+		SetCredentialAllowlist:  true,
+		LoopConfig:              t.LoopConfig,
+		SetLoopConfig:           true,
+		WorktreeConfig:          t.WorktreeConfig,
+		SetWorktreeConfig:       true,
+		RetryPolicy:             t.RetryPolicy,
+		SetRetryPolicy:          true,
+		RunIf:                   t.RunIf,
+		SetRunIf:                true,
+		Priority:                t.Priority,
+		InstructionSelfImprove:  t.InstructionSelfImprove,
+		AllowNetwork:            t.AllowNetwork,
+		CarryContext:            t.CarryContext,
+		AllowDelegation:         t.AllowDelegation,
+		ThinkingBudgetTokens:    t.ThinkingBudgetTokens,
+		Persona:                 t.Persona,
+		ScheduledFor:            t.ScheduledFor,
+		Recurrence:              t.Recurrence,
+		Timezone:                t.Timezone,
+		RecurrenceUntil:         t.RecurrenceUntil,
+		RecurrenceRemaining:     t.RecurrenceRemaining,
+		Files:                   t.Files,
+		FileNames:               t.FileNames,
+		SetFiles:                true,
+		Tags:                    t.Tags,
+		SetTags:                 true,
+		SandboxLimits:           t.SandboxLimits,
+		ExpectedDurationMinutes: t.ExpectedDurationMinutes,
+		SLAWarnMultiplier:       t.SLAWarnMultiplier,
+		SLAFailMultiplier:       t.SLAFailMultiplier,
+	}
+}
+
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
 // the row and re-checking it is still editable. Status and ScheduledFor are
 // recomputed with models.DeriveDispatchState — the same rule NewTask applies —
@@ -972,6 +1034,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	if edit.SetRunIf {
 		task.RunIf = edit.RunIf
 	}
+	priorPriority := task.Priority
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
@@ -1006,6 +1069,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := s.db.SyncEffectivePriorityTx(ctx, tx, task, priorPriority); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1051,6 +1117,7 @@ func (s *Storage) ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, t
 		return nil, fmt.Errorf("%w: conflict=replace only rewrites a pending or scheduled task (status is %q) — a leased, running, or finished row keeps its execution state", ErrTaskNotEditable, task.Status)
 	}
 
+	priorPriority := task.Priority
 	if err := models.OverlayTaskDefinition(task, tc); err != nil {
 		return nil, err
 	}
@@ -1068,6 +1135,9 @@ func (s *Storage) ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, t
 	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := s.db.SyncEffectivePriorityTx(ctx, tx, task, priorPriority); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1371,6 +1441,13 @@ func applySuccessOrErrorTransition(task *models.Task, update *models.StatusUpdat
 	task.PendingAnswer = ""
 	task.LeaseOwner = nil
 	task.LeaseExpiresAt = nil
+	if update.Status == models.TaskStatusSuccess {
+		// A retry that succeeds must not keep the failed attempt's message:
+		// RequeueTaskForRetry records the failure reason in error_message, and
+		// a success row still carrying it read as a failure in every consumer
+		// that renders the field.
+		task.ErrorMessage = nil
+	}
 	if update.Message == nil {
 		return
 	}
@@ -1731,6 +1808,13 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// Carry the originating API key forward so recurring task cost keeps counting
 	// against the key's usage bucket (and any scope=key budget).
 	newTask.CreatedByKeyID = task.CreatedByKeyID
+	// Lineage (migration 068): the successor points at the occurrence that just
+	// completed, so carry_context can read THAT run's transcript. Without it
+	// the handoff looked up the successor's own (still empty) log and every
+	// genuine recurrence started cold — the feature only ever fired on a
+	// retry of the same row.
+	prev := task.ID
+	newTask.PreviousOccurrenceID = &prev
 	// Mirror AddTaskWithContext's stored-contract validation (the pre-#1116 spawn
 	// went through it): the insert below is the tx-scoped db.AddTaskTx, which
 	// does not validate.

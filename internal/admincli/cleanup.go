@@ -3,6 +3,7 @@ package admincli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -30,67 +31,114 @@ import (
 // It never touches databases, conversation workspaces, the client-config
 // checkout, or node_modules — data loss is out of scope for a cache sweep.
 func cmdCleanup(argv []string) int {
-	var dryRun, deep bool
+	var opts cleanupOpts
 	for _, a := range argv {
 		switch a {
 		case "--dry-run", "-n":
-			dryRun = true
+			opts.dryRun = true
 		case "--deep":
-			deep = true
+			opts.deep = true
 		case "-h", "--help":
 			fmt.Fprintln(os.Stderr, "usage: fleet cleanup [--dry-run] [--deep]")
 			fmt.Fprintln(os.Stderr, "  reclaim build/deploy cruft: dangling podman layers + Go build caches")
 			fmt.Fprintln(os.Stderr, "  --deep also prunes unused named images / stopped containers / networks")
+			fmt.Fprintln(os.Stderr, "  exit 0 when at least one prune step ran (or none applied), 5 when every step that ran failed")
 			return 0
 		default:
 			return errf(2, "cleanup: unknown flag %q (want --dry-run and/or --deep)", a)
 		}
 	}
+	return runCleanup(opts, defaultCleanupHost())
+}
 
-	fmt.Println(diskLine("before"))
+type cleanupOpts struct {
+	dryRun, deep bool
+}
 
-	if _, err := exec.LookPath("podman"); err != nil {
-		fmt.Println("podman not found — skipping image cleanup.")
+// cleanupHost is the seam between the sweep and the box (the podman/go
+// binaries, stdout), so the exit-code contract is testable without pruning
+// anything. lookPath answers "is this tool installed"; run executes one step
+// with its output passed through and returns its error.
+type cleanupHost struct {
+	lookPath func(string) (string, error)
+	run      func(name string, args ...string) error
+	out      io.Writer
+}
+
+func defaultCleanupHost() cleanupHost {
+	return cleanupHost{lookPath: exec.LookPath, run: runLoud, out: os.Stdout}
+}
+
+// runCleanup is the whole verb behind the cleanupHost seam. Exit code: 0 when
+// no prune step applied to this box (no podman, no Go toolchain, or --dry-run)
+// or at least one prune step succeeded; 5 when EVERY step that ran failed.
+// It used to return 0 unconditionally, so the maintenance timer's unit could
+// never observe a sweep that reclaimed nothing — `systemctl status
+// fleet-maintenance` said "success" over a podman store it could not open. A
+// partial failure stays 0 (the failing step is reported "(continuing)"): each
+// step is independent, and a box without a Go cache to clean must not page
+// anyone because `go clean` had nothing to do.
+func runCleanup(opts cleanupOpts, h cleanupHost) int {
+	if line := diskLine("before"); line != "" {
+		fmt.Fprintln(h.out, line)
+	}
+
+	attempted, failed := 0, 0
+	step := func(name string, args ...string) {
+		attempted++
+		if err := h.run(name, args...); err != nil {
+			failed++
+		}
+	}
+
+	if _, err := h.lookPath("podman"); err != nil {
+		fmt.Fprintln(h.out, "podman not found — skipping image cleanup.")
+	} else if opts.dryRun {
+		// Informational only: `podman system df` failing is not a prune failure.
+		_ = h.run("podman", "system", "df")
+		fmt.Fprintln(h.out, "[dry-run] would run: podman image prune -f")
+		if opts.deep {
+			fmt.Fprintln(h.out, "[dry-run] would run: podman system prune -f")
+		}
 	} else {
-		if dryRun {
-			runLoud("podman", "system", "df")
-			fmt.Println("[dry-run] would run: podman image prune -f")
-			if deep {
-				fmt.Println("[dry-run] would run: podman system prune -f")
-			}
-		} else {
-			fmt.Println("Pruning dangling podman image layers…")
-			runLoud("podman", "image", "prune", "-f")
-			if deep {
-				fmt.Println("Pruning unused podman images/containers/networks (--deep)…")
-				runLoud("podman", "system", "prune", "-f")
-			}
+		fmt.Fprintln(h.out, "Pruning dangling podman image layers…")
+		step("podman", "image", "prune", "-f")
+		if opts.deep {
+			fmt.Fprintln(h.out, "Pruning unused podman images/containers/networks (--deep)…")
+			step("podman", "system", "prune", "-f")
 		}
 	}
 
-	if _, err := exec.LookPath("go"); err == nil {
-		if dryRun {
-			fmt.Println("[dry-run] would run: go clean -cache -testcache")
+	if _, err := h.lookPath("go"); err == nil {
+		if opts.dryRun {
+			fmt.Fprintln(h.out, "[dry-run] would run: go clean -cache -testcache")
 		} else {
-			fmt.Println("Cleaning the Go build/test caches…")
-			runLoud("go", "clean", "-cache", "-testcache")
+			fmt.Fprintln(h.out, "Cleaning the Go build/test caches…")
+			step("go", "clean", "-cache", "-testcache")
 		}
 	}
 
-	if !dryRun {
-		fmt.Println(diskLine("after"))
+	if !opts.dryRun {
+		if line := diskLine("after"); line != "" {
+			fmt.Fprintln(h.out, line)
+		}
 	}
 	// The bundle checkout is the one tree this sweep cannot reclaim — see
 	// bundle_residue.go for why it fills and why removal stays a human command.
 	// Reported on a dry run too: --dry-run is what an operator uses to ask what
 	// is worth reclaiming.
-	reportBundleResidue(os.Stdout)
+	reportBundleResidue(h.out)
+
+	if attempted > 0 && failed == attempted {
+		return errf(5, "cleanup: every prune step failed (%d of %d) — nothing was reclaimed", failed, attempted)
+	}
 	return 0
 }
 
 // runLoud runs a cleanup step with output passed through; a step failing is
-// reported but never aborts the sweep (each step is independent).
-func runLoud(name string, args ...string) {
+// reported and returned but never aborts the sweep (each step is independent —
+// runCleanup decides what the failures add up to).
+func runLoud(name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	//nolint:gosec // G204: name is always a fixed literal ("podman"/"go") from the call sites above; args are fixed flags — no operator or model input reaches argv.
@@ -99,7 +147,9 @@ func runLoud(name string, args ...string) {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "cleanup: %s %s: %v (continuing)\n", name, strings.Join(args, " "), err)
+		return err
 	}
+	return nil
 }
 
 // diskLine returns a one-line root-filesystem usage report, or "" when df is

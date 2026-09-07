@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // downloadCtx returns a context carrying a per-conversation workspace
@@ -560,4 +561,29 @@ func TestDownloadURL_ForcedWorkingDirAnchorsOutputDir(t *testing.T) {
 			t.Fatal("resolveDownloadDir accepted '../../etc' under a forced dir")
 		}
 	})
+}
+
+// TestDownloadURL_HTTPErrorPreviewIsRuneSafe: the 200-byte preview of an
+// upstream error body is cut on a rune boundary, so a multi-byte body (a
+// localized error page) cannot put invalid UTF-8 into the tool result.
+func TestDownloadURL_HTTPErrorPreviewIsRuneSafe(t *testing.T) {
+	// 199 ASCII bytes then a 2-byte rune straddling the 200-byte cut.
+	body := strings.Repeat("x", 199) + "é" + strings.Repeat("y", 50)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL})
+	if res.Status != "error" || res.HTTPStatus != http.StatusForbidden {
+		t.Fatalf("want 403 error status, got %+v", res)
+	}
+	if !utf8.ValidString(res.Error) {
+		t.Fatalf("error preview is invalid UTF-8: %q", res.Error)
+	}
+	if !strings.HasSuffix(res.Error, strings.Repeat("x", 199)+"...") {
+		t.Fatalf("preview should stop before the straddling rune, got %q", res.Error)
+	}
 }

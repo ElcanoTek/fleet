@@ -184,6 +184,15 @@ type ThinkingConfig struct {
 	BudgetTokens int  `json:"budget_tokens,omitempty"`
 }
 
+// ErrConversationNotFound is returned by the per-conversation mutators
+// (Delete, SetPinned, SetArchived, RenameTitle, SetModel, …) when no
+// conversation with that id belongs to the caller — either it never existed,
+// it was deleted, or it is someone else's. The three cases are deliberately
+// indistinguishable (the store answers "not yours" the same way for all of
+// them), and the HTTP layer maps the sentinel to 404 so a client can tell
+// "gone" from "the server broke" — which a raw 500 never let it do.
+var ErrConversationNotFound = errors.New("conversation not found")
+
 // ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
 // more of the supplied IDs do not belong to the caller (or do not exist). The
 // HTTP layer surfaces it as 403 and the whole operation is a no-op.
@@ -850,7 +859,7 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -879,7 +888,7 @@ func (s *Store) SetThinkingConfig(ctx context.Context, userEmail, convID string,
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -954,7 +963,7 @@ func (s *Store) SetConversationMCPAccounts(ctx context.Context, userEmail, convI
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -973,7 +982,7 @@ func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) e
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -1013,7 +1022,7 @@ func (s *Store) RenameTitle(ctx context.Context, userEmail, convID, title string
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -1030,7 +1039,7 @@ func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned 
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -1056,7 +1065,7 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -1093,7 +1102,7 @@ func (s *Store) SetApprovalTimeout(ctx context.Context, userEmail, convID string
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -1129,7 +1138,7 @@ func (s *Store) SetShareToken(ctx context.Context, ownerEmail, convID, token str
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -1242,7 +1251,7 @@ func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return errors.New("conversation not found")
+			return ErrConversationNotFound
 		}
 		return nil
 	}
@@ -1255,7 +1264,7 @@ func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	return nil
 }
@@ -1665,7 +1674,7 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 			return false, err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			return false, errors.New("conversation not found")
+			return false, ErrConversationNotFound
 		}
 		return false, nil
 	}
@@ -1681,7 +1690,7 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 		WHERE c.id = $1 AND c.user_email = $2 AND c.deleted_at IS NULL`,
 		convID, ownerEmail).Scan(&homeTeam); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, errors.New("conversation not found")
+			return false, ErrConversationNotFound
 		}
 		return false, err
 	}
@@ -1874,7 +1883,7 @@ func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, en
 		return err
 	}
 	if owned == nil {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1919,7 +1928,7 @@ func (s *Store) TruncateAfter(ctx context.Context, userEmail, convID string, aft
 		return err
 	}
 	if owned == nil {
-		return errors.New("conversation not found")
+		return ErrConversationNotFound
 	}
 	_, err = s.db.ExecContext(ctx,
 		`DELETE FROM messages WHERE conversation_id = $1 AND id > $2`,
@@ -2222,6 +2231,53 @@ func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newSta
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// ClaimApprovalAndSetModel resolves a pending approval as "approved" AND pins
+// its conversation to model in ONE transaction. It exists for the
+// suggest_advanced_model card, whose resolution IS the model flip: doing the
+// two writes separately (claim, then SetModel) left a window where a transient
+// failure on the second write recorded the approval as approved — with a
+// result_text claiming the conversation was pinned — while the conversation
+// stayed on the old model, and a retry then saw a resolved row and never
+// re-attempted the pin. Here either both rows change or neither does: a lost
+// claim returns (false, nil) with nothing written; a conversation that is
+// missing, soft-deleted or not the user's returns ErrConversationNotFound and
+// the claim is rolled back, so the approval stays pending and the caller can
+// retry. Same claim predicate as ClaimApproval (pending + not expired).
+func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approvalID, resultText, convID, model string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().Unix()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2
+		 WHERE id = $3 AND user_email = $4 AND status = 'pending'
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)`,
+		resultText, now, approvalID, userEmail, now,
+	)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	res, err = tx.ExecContext(ctx,
+		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		model, now, convID, userEmail,
+	)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, ErrConversationNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ClaimExpiredApproval atomically rejects (or otherwise resolves) a

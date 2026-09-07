@@ -66,6 +66,12 @@ handoff from its previous run injected into the next run's system prompt.
 - **Scope:** recurring tasks only. `carry_context` on a one-shot task is inert
   (there is no "next run" to carry into). The first run of a recurring task has
   no prior log and so carries nothing.
+- **How the previous run is found:** each occurrence is a fresh `tasks` row,
+  so the successor is stamped with `previous_occurrence_id` (sched migration
+  068) at spawn and the handoff reads that occurrence's persisted log. A retry
+  of the same row reads the row's own log (the failed attempt) first. Before
+  the pointer existed the lookup only ever tried the run's own id, so a genuine
+  recurrence never carried anything.
 
 `carry_context` is a nullable-defaulted boolean column (sched migration 050,
 `DEFAULT FALSE`), threaded through the task model / storage / handlers / import

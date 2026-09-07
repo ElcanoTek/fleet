@@ -423,6 +423,25 @@ describe("ProjectHome — failure states don't lie", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 
+  it("does not report an empty Team section when the shared-chats lookup failed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith("/team-conversations")) {
+          return new Response("boom", { status: 500 });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+    renderHome();
+    expect(
+      await screen.findByText(/Couldn’t load your team’s shared chats \(HTTP 500\)/),
+    ).toBeInTheDocument();
+    // "Nothing shared yet" is a statement about the team's work; a failed read
+    // cannot make it.
+    expect(screen.queryByText(/Nothing shared by your teammates yet/)).toBeNull();
+  });
+
   it("does not report an empty project when the learnings lookup failed", async () => {
     vi.stubGlobal(
       "fetch",

@@ -210,13 +210,26 @@ func (h *Handlers) BodySizeLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only limit POST, PUT, PATCH requests
 		if r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" {
-			// Skip for file uploads (they have their own limit in HandleUpload)
-			if !strings.HasPrefix(r.URL.Path, "/upload") {
+			// Skip for file uploads and dataset row imports: each has its own,
+			// larger limit in its handler (HandleUpload; ImportDatasetRows'
+			// maxImportBytes), and this 1 MiB cap wrapped first would govern
+			// instead — the import's cap was dead code and a 2 MiB CSV failed
+			// with the JSON-body message.
+			if !strings.HasPrefix(r.URL.Path, "/upload") && !isDatasetImportPath(r.URL.Path) {
 				r.Body = http.MaxBytesReader(w, r.Body, MaxJSONBodySize)
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isDatasetImportPath reports whether path is POST /datasets/{id}/rows — the
+// one dataset route carrying a bulk body. Matched structurally (exactly four
+// segments, "datasets" and "rows" in place) rather than by prefix so no other
+// /datasets route slips out from under the global body cap.
+func isDatasetImportPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 3 && parts[0] == "datasets" && parts[2] == "rows"
 }
 
 // SecurityHeadersMiddleware adds security headers including CSP

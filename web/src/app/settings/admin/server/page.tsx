@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { useIsAdmin } from "../../useIsAdmin";
+import { AdminGateFallback } from "../../AdminGateFallback";
 import { AdminStats, ConnGroup, SetSection, type AdminStat } from "../../ui/panels";
 import { StoragePanel } from "./StoragePanel";
 import { ConnBadge } from "../../ui/atoms";
@@ -136,7 +137,7 @@ export default function AdminServerPage() {
     };
   }, [admin]);
 
-  if (admin !== "admin") return null;
+  if (admin !== "admin") return <AdminGateFallback state={admin} />;
 
   const refresh = () => {
     setRefreshing(true);
@@ -204,10 +205,19 @@ export default function AdminServerPage() {
           </button>
         </div>
 
+        {/* A failed poll keeps the last good sample on screen under the
+            banner. Replacing the panel with the banner made every transient
+            10s-poll failure flicker the whole page out and back. */}
         {error ? (
-          <NoticeBanner tone="danger" data-testid="server-stats-error">Server statistics unavailable: {error}</NoticeBanner>
-        ) : !stats ? (
-          <p className="text-sm text-[var(--color-text-muted)]" data-testid="server-stats-loading">Loading server statistics…</p>
+          <NoticeBanner tone="danger" data-testid="server-stats-error" className={stats ? "mb-3" : undefined}>
+            Server statistics unavailable: {error}
+            {stats ? " — showing the last successful sample." : ""}
+          </NoticeBanner>
+        ) : null}
+        {!stats ? (
+          error ? null : (
+            <p className="text-sm text-[var(--color-text-muted)]" data-testid="server-stats-loading">Loading server statistics…</p>
+          )
         ) : (
           <div data-testid="server-stats-panel">
             <AdminStats items={cpuItems} />
