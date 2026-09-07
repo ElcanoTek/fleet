@@ -86,7 +86,10 @@ Re-request the reviewer after pushing for a changes-requested review.
 
 - **Makefile targets carry the build tag.** `-tags fleet_host_executor` fences
   the host executor (#159); a bare `go test ./...` builds a tree without it
-  and vets a different set of files than CI.
+  and vets a different set of files than CI. `make test` runs
+  `scripts/go-test.sh`, which serializes only the packages that share a
+  Postgres DSN — a global `-p 1 ./...` is the slow path this script exists to
+  avoid.
 - **Integration tests skip silently.** The scheduler packages
   (`internal/sched/...`) call `t.Skip` when `DATABASE_URL` is unset or
   unreachable; the chat store (`internal/store`, and the HTTP API tests on it)

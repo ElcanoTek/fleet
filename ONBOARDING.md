@@ -130,16 +130,16 @@ bare without any external config.
 ## 5. Test
 
 ```sh
-make test       # go test -p 1 -tags fleet_host_executor ./...
+make test       # scripts/go-test.sh (tagged; DSN-aware parallelism)
 ```
 
 Run tests in the **foreground** — do not background `go test`. `make test` sets
-`-p 1` (the suite expects it) and the `fleet_host_executor` build tag (so the
-host-mode fixtures and `MockMode` tests compile; the shipped binary from
-`make build` is built **without** that tag, so the unsandboxed host executor
-never ships). The podman-gated `internal/sandbox` integration tests self-skip
-when podman is masked; the store/HTTP/scheduler suites need the two databases
-from step 4.
+the `fleet_host_executor` build tag (so the host-mode fixtures and `MockMode`
+tests compile; the shipped binary from `make build` is built **without** that
+tag, so the unsandboxed host executor never ships) and serializes only the
+packages that share a Postgres DSN (`scripts/go-test.sh`). The podman-gated
+`internal/sandbox` integration tests self-skip when podman is masked; the
+store/HTTP/scheduler suites need the two databases from step 4.
 
 At this point you have reached a passing `make test` — the first acceptance
 milestone.
@@ -270,7 +270,7 @@ no secrets in the repo, honest docs, client content stays external).
 ```sh
 make build                              # ./fleet (compile-check too)
 make lint                               # golangci-lint (must pass clean)
-make test                               # go test -p 1 -tags fleet_host_executor ./...
+make test                               # scripts/go-test.sh (tagged; DSN-aware parallelism)
 make test-race                          # same, with the race detector
 scripts/build-sandbox-image.sh          # build the sandbox image
 gitleaks dir . --redact --exit-code 1   # secret scan (CI gate)

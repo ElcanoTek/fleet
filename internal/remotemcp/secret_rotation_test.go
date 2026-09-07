@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 )
 
 // secretCall is one observer invocation, recorded for assertion.
@@ -81,7 +80,7 @@ func TestServiceSecretObserverScopesTokenRotations(t *testing.T) {
 	if _, err := svc.Complete(ctx, "u@x.com", state, code); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	time.Sleep(1100 * time.Millisecond) // let the 1s access token go stale
+	expireStoredAccessToken(t, fs, server.ID)
 	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
 	if bearer, err := svc.AcquireToken(ctx, server); err != nil || bearer != "at-refreshed" {
 		t.Fatalf("AcquireToken = %q, %v; want at-refreshed", bearer, err)

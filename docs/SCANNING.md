@@ -403,9 +403,9 @@ Every lane in the table reaches the one aggregate gate:
 - `ci-gate` (the single required status check on `main`, the only long-lived
   branch) `needs` **every other job in `ci.yml`** — the docs-only classifier,
   gitleaks, the actionlint/shellcheck workflow+shell lint, the migration DDL
-  lint, the Helm chart lint, Go, ruff, CodeQL, Semgrep, web, both Playwright
-  lanes and Grype. Because it is required, a red lane is a closed gate, not a
-  red X beside a mergeable PR.
+  lint, the Helm chart lint, Go, Go race, ruff, CodeQL, Semgrep, web, both
+  Playwright lanes and Grype. Because it is required, a red lane is a closed
+  gate, not a red X beside a mergeable PR.
 
 **That "every other job" is a test, not a habit — and it is the strongest
 anti-rot control here, so it should not stay invisible the way it did until
