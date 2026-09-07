@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -149,14 +150,14 @@ func EmitPanicWithMetadata(meta PanicMetadata, v any, _ []byte) PanicEvent {
 	class := PanicClass(v)
 	event := PanicEvent{PanicMetadata: meta, Class: class}
 	panicLogger.Error("panic recovered",
-		"incident_id", meta.IncidentID,
-		"goroutine", meta.Location,
-		"boundary", meta.Boundary,
-		"tool_name", meta.ToolName,
-		"tool_call_id", meta.ToolCallID,
-		"run_mode", meta.RunMode,
-		"task_id", meta.TaskID,
-		"conversation_id", meta.ConversationID,
+		"incident_id", logSafe(meta.IncidentID),
+		"goroutine", logSafe(meta.Location),
+		"boundary", logSafe(meta.Boundary),
+		"tool_name", logSafe(meta.ToolName),
+		"tool_call_id", logSafe(meta.ToolCallID),
+		"run_mode", logSafe(meta.RunMode),
+		"task_id", logSafe(meta.TaskID),
+		"conversation_id", logSafe(meta.ConversationID),
 		"panic_class", class,
 	)
 
@@ -249,4 +250,11 @@ func goWithDone(name string, fn func()) <-chan struct{} {
 		fn()
 	}()
 	return done
+}
+
+// logSafe strips CR/LF from a value before it is interpolated into a log
+// line. strings.ReplaceAll is the spelling CodeQL's go/log-injection query
+// models as a sanitizer.
+func logSafe(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }

@@ -326,7 +326,7 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 			// Out-of-bounds env default: keep it verbatim. It is what the runtime
 			// actually does and what a reset must revert to; only NEW admin writes
 			// are held to the registry bounds.
-			log.Printf("workspace settings: env default for %s is outside the admin-settable bounds (%v); keeping it as the default", spec.Key, err)
+			log.Printf("workspace settings: env default for %s is outside the admin-settable bounds (%s); keeping it as the default", logSafe(spec.Key), logSafe(err.Error()))
 			nd = strings.TrimSpace(d)
 		}
 		s.defaults[spec.Key] = nd
@@ -410,7 +410,7 @@ func (s *Service) Set(ctx context.Context, key, value, updatedBy string) (Resolv
 	delete(s.applyErrs, key)
 	// Audit line: key and value are registry-validated constants (never raw
 	// input); updatedBy is the authenticated admin identity.
-	log.Printf("workspace settings: %s = %s (set by %s)", key, v, updatedBy)
+	log.Printf("workspace settings: %s = %s (set by %s)", logSafe(key), logSafe(v), logSafe(updatedBy))
 	s.retryFailedLocked(ctx)
 	return Resolved{
 		Spec: spec, Value: v, Source: SourceAdmin, Default: s.defaults[key],
@@ -438,7 +438,7 @@ func (s *Service) retryFailedLocked(ctx context.Context) {
 		r := s.resolve(key, overrides)
 		if err := s.apply(key, r.Value, r.Source == SourceAdmin); err == nil {
 			delete(s.applyErrs, key)
-			log.Printf("workspace settings: %s recovered and is now in effect", key)
+			log.Printf("workspace settings: %s recovered and is now in effect", logSafe(key))
 		}
 	}
 }
@@ -472,7 +472,7 @@ func (s *Service) Reset(ctx context.Context, key, updatedBy string) (Resolved, e
 		return Resolved{}, err
 	}
 	delete(s.applyErrs, key)
-	log.Printf("workspace settings: %s reset to default %s (by %s)", key, s.defaults[key], updatedBy)
+	log.Printf("workspace settings: %s reset to default %s (by %s)", logSafe(key), logSafe(s.defaults[key]), logSafe(updatedBy))
 	s.retryFailedLocked(ctx)
 	return Resolved{Spec: spec, Value: s.defaults[key], Source: SourceDefault, Default: s.defaults[key]}, nil
 }
@@ -516,4 +516,11 @@ func (s *Service) apply(key, value string, override bool) error {
 		return fmt.Errorf("apply %s: %w", key, err)
 	}
 	return nil
+}
+
+// logSafe strips CR/LF from a value before it is interpolated into a log
+// line. strings.ReplaceAll is the spelling CodeQL's go/log-injection query
+// models as a sanitizer.
+func logSafe(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }

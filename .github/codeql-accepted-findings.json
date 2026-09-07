@@ -77,11 +77,6 @@
       "reason": "Logs an internal run error, and agentcore's boundary errors are deliberately opaque — containedBoundaryError surfaces only the incident ID, never the recovered value or a stack. The string is additionally passed through agentcore.RedactSecrets before both this log and the persisted transcript."
     },
     {
-      "rule": "js/remote-property-injection",
-      "file": "web/src/app/chat/ui/useTurnStream.ts",
-      "reason": "Two independent reasons, either sufficient. (1) Every flagged sink is keyed by a conversation slot id (ctx.target or convId) and by nothing else; no model-authored payload field ever reaches a key position. That id space is server-minted uuid.NewString() from store.CreateConversation — a client-supplied conversation_id is never inserted, it must resolve to an existing row owned by the caller or the request 404s — so neither a client nor the model can choose the key. (2) The sink shapes cannot reach Object.prototype anyway: an object-literal computed key performs CreateDataPropertyOrThrow, producing an OWN \"__proto__\" property and leaving the prototype untouched, and bracket assignment rebinds at most the one local record object. Worst achievable impact, given an operator-imported hostile id via the admin-CLI import path, is self-inflicted state confusion in one browser tab."
-    },
-    {
       "rule": "js/insecure-temporary-file",
       "file": "web/e2e/test-auth-key.ts",
       "reason": "Test-only, and the reported defect is fixed as far as it can be without changing the cross-process rendezvous contract: the write is now O_EXCL (flag \"wx\") at mode 0600 with crypto random bytes in the sibling name, so it cannot follow or clobber a pre-planted symlink and does not leave the private half world-readable. The query recognizes only mkdtemp as safe, but the fixed path is a deliberate rendezvous — playwright.config.ts is loaded in the main process AND re-imported in every worker, which must all read the same throwaway keypair. The key is generated per run, protects nothing real, and is never committed."

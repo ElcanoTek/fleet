@@ -386,21 +386,21 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 			// echoed chatAttachment field and is never sanitized —
 			// sanitizeFilename runs at upload time, but /chat re-accepts the
 			// client's own JSON and re-validates only Path. %q escapes CR/LF.
-			log.Printf("loadImageAttachments: skipping %q (over %d cap)", a.Name, maxImages)
+			log.Printf("loadImageAttachments: skipping %q (over %d cap)", logSafeAgent(a.Name), maxImages)
 			continue
 		}
 		info, err := os.Stat(a.Path)
 		if err != nil {
-			log.Printf("loadImageAttachments: stat %s: %v", a.Path, err)
+			log.Printf("loadImageAttachments: stat %s: %s", logSafeAgent(a.Path), logSafeAgent(err.Error()))
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			log.Printf("loadImageAttachments: %s is %d bytes (> %d cap)", a.Path, info.Size(), maxBytesPerFile)
+			log.Printf("loadImageAttachments: %s is %d bytes (> %d cap)", logSafeAgent(a.Path), info.Size(), maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(a.Path) // path was re-validated against uploads root
 		if err != nil {
-			log.Printf("loadImageAttachments: read %s: %v", a.Path, err)
+			log.Printf("loadImageAttachments: read %s: %s", logSafeAgent(a.Path), logSafeAgent(err.Error()))
 			continue
 		}
 		mt := strings.TrimSpace(a.MediaType)

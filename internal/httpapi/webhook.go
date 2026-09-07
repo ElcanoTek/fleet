@@ -312,9 +312,17 @@ func renderWebhookPrompt(tmpl string, payload map[string]any, raw []byte) (strin
 	return sb.String(), nil
 }
 
+// logSafe strips CR/LF from a value before it is interpolated into a log
+// line (log-injection guard). strings.ReplaceAll is the spelling CodeQL's
+// go/log-injection query models as a sanitizer — a NewReplacer version
+// kept the same alerts open as false positives.
+func logSafe(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
+}
+
 // logSafeSlug strips CR/LF from a slug before it is interpolated into a log line
 // (log-injection guard). Configured slugs are already shape-constrained, but the
 // guard keeps the call site safe regardless.
 func logSafeSlug(slug string) string {
-	return strings.NewReplacer("\r", "", "\n", "").Replace(slug)
+	return logSafe(slug)
 }

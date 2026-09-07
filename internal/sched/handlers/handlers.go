@@ -445,14 +445,16 @@ func writeError(w http.ResponseWriter, status int, detail string) {
 	writeJSON(w, status, models.ErrorResponse{Detail: detail})
 }
 
-// logSafe strips CR/LF (and stray carriage returns) from a value before it is
-// interpolated into a log line, so attacker-controlled strings (e.g. a key_id
-// taken straight from the URL path, or an uploaded filename) cannot forge or
-// split log entries. gosec flags these as G706 (log injection via taint
-// analysis); this is the real mitigation for the ones that carry untrusted
-// text.
+// logSafe strips CR/LF from a value before it is interpolated into a log
+// line, so attacker-controlled strings (e.g. a key_id taken straight from
+// the URL path, or an uploaded filename) cannot forge or split log entries.
+// gosec flags these as G706 (log injection via taint analysis); this is the
+// real mitigation for the ones that carry untrusted text. strings.ReplaceAll
+// is the spelling CodeQL's go/log-injection query models as a sanitizer.
 func logSafe(s string) string {
-	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+	// strings.ReplaceAll is the spelling CodeQL's go/log-injection query
+	// models as a sanitizer; NewReplacer kept the same alerts open.
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
 
 func readJSON(r *http.Request, v interface{}) error {
@@ -1635,7 +1637,7 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 			fbLog = *fallback
 		}
 	}
-	log.Printf("Bulk re-assigned model=%q fallback=%s from=%q on %d scheduled task(s)", req.Model, fbLog, req.FromModel, updated)
+	log.Printf("Bulk re-assigned model=%q fallback=%s from=%q on %d scheduled task(s)", logSafe(req.Model), logSafe(fbLog), logSafe(req.FromModel), updated)
 	writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
 }
 

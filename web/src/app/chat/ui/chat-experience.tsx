@@ -21,6 +21,7 @@ import {
 } from "@/app/lib/modelAliases";
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { parseSseChunk } from "@/app/lib/sse";
+import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import {
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -1234,13 +1235,13 @@ export function ChatExperience({
 
   useEffect(() => {
     // Capture refs into locals so the cleanup doesn't read a "stale" ref
-    // by lint rules. The Record/array is mutated in place across the
+    // by lint rules. The Map/array is mutated in place across the
     // component's lifetime — `controllers` and `fades` both point at the
     // same live container we just want to drain on unmount.
     const controllers = abortControllersRef.current;
     const fades = fadeTimeoutsRef.current;
     return () => {
-      for (const controller of Object.values(controllers)) {
+      for (const controller of controllers.values()) {
         controller.abort();
       }
       fades.forEach((t) => window.clearTimeout(t));
@@ -2045,7 +2046,9 @@ export function ChatExperience({
     // fresh server copy underneath the rendered messages.
     if (!options.background) setIsLoadingHistory(true);
     try {
-      const response = await fetch(`/api/conversations/${conversationId}`, {
+      const url = conversationApiUrl(conversationId);
+      if (!url) throw new Error("Unable to load conversation.");
+      const response = await fetch(url, {
         cache: "no-store",
       });
       if (!response.ok) throw new Error("Unable to load conversation.");
@@ -3570,8 +3573,8 @@ export function ChatExperience({
     // navigate back later to see the result.
     const key = activeConversationIdRef.current;
     if (key !== null && !streamingConvsRef.current.has(key)) {
-      abortControllersRef.current[key]?.abort();
-      delete abortControllersRef.current[key];
+      abortControllersRef.current.get(key)?.abort();
+      abortControllersRef.current.delete(key);
       markConvIdle(key);
       clearConvSlot(key);
     }

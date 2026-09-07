@@ -35,13 +35,13 @@ export type TurnStreamState = {
   // Abort controllers keyed by the conv slot whose POST /chat we're
   // streaming. Multiple chats can be in flight at once; the Stop button only
   // aborts the controller for the conv the user is currently looking at.
-  abortControllersRef: RefObject<Record<string, AbortController>>;
+  abortControllersRef: RefObject<Map<string, AbortController>>;
   // Conv ids this client currently has an SSE socket attached to.
   attachedConvIdsRef: RefObject<Set<string>>;
   // Per-conv last applied SSE event id + current turn id — the persistent
   // state behind the stepStreamDedup reducer (replay/idempotency on reattach).
-  lastEventIdByConvRef: RefObject<Record<string, number>>;
-  currentTurnIdByConvRef: RefObject<Record<string, string>>;
+  lastEventIdByConvRef: RefObject<Map<string, number>>;
+  currentTurnIdByConvRef: RefObject<Map<string, string>>;
   // Guard against concurrent reattach attempts for the same conv.
   reattachInFlightRef: RefObject<Set<string>>;
   // Per-conv liveness pulse for the attached SSE socket: `at` is the wall
@@ -50,7 +50,7 @@ export type TurnStreamState = {
   // socket is told apart from a QUIET one: silence gates the liveness probe,
   // and the counter proves whether the socket produced anything while the
   // probe was in flight. See checkStreamLiveness.
-  streamPulseRef: RefObject<Record<string, StreamPulse>>;
+  streamPulseRef: RefObject<Map<string, StreamPulse>>;
   // The keepalive cadence the server advertises on an attached stream
   // (X-Fleet-Heartbeat-Interval-Ms), in ms; 0 = keepalives disabled. Server-
   // global rather than per-conversation, so the last stream to attach sets it.
@@ -116,7 +116,7 @@ export function useTurnStreamState(currentConvKey: string): TurnStreamState {
   // (and clearConversation) only aborts the controller for the conv the
   // user is currently looking at. A pending key is used until the
   // server promotes the slot to a real id.
-  const abortControllersRef = useRef<Record<string, AbortController>>({});
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   // Conv ids this client currently has an SSE socket attached to. A pending
   // key = attached to a new chat whose server-side id we haven't heard back
   // yet; otherwise a real conversation id. Multiple entries means we're
@@ -128,15 +128,15 @@ export function useTurnStreamState(currentConvKey: string): TurnStreamState {
   // without duplicating already-applied state. Event IDs are monotonic
   // WITHIN A TURN but reset between turns, so we also track the current turn
   // id per conv to reset lastEventId when a new turn begins.
-  const lastEventIdByConvRef = useRef<Record<string, number>>({});
-  const currentTurnIdByConvRef = useRef<Record<string, string>>({});
+  const lastEventIdByConvRef = useRef<Map<string, number>>(new Map());
+  const currentTurnIdByConvRef = useRef<Map<string, string>>(new Map());
   // Guard for concurrent reattach attempts per conv. Without it, two rapid
   // visibilitychange events (unlock + focus) would open two /stream sockets
   // and render every event twice.
   const reattachInFlightRef = useRef<Set<string>>(new Set());
   // Liveness bookkeeping for the attached socket (see the type above). Updated
   // by the stream pump on every chunk; read by checkStreamLiveness.
-  const streamPulseRef = useRef<Record<string, StreamPulse>>({});
+  const streamPulseRef = useRef<Map<string, StreamPulse>>(new Map());
   // 0 until a stream reports otherwise: assume no promised cadence rather than
   // a cadence that may never arrive, so silence only becomes evidence once the
   // server has actually claimed it keepalives.
@@ -155,15 +155,15 @@ export function useTurnStreamState(currentConvKey: string): TurnStreamState {
       attachedConvIdsRef.current.delete(oldKey);
       attachedConvIdsRef.current.add(newKey);
     }
-    const pendingController = abortControllersRef.current[oldKey];
+    const pendingController = abortControllersRef.current.get(oldKey);
     if (pendingController) {
-      delete abortControllersRef.current[oldKey];
-      abortControllersRef.current[newKey] = pendingController;
+      abortControllersRef.current.delete(oldKey);
+      abortControllersRef.current.set(newKey, pendingController);
     }
-    const pendingPulse = streamPulseRef.current[oldKey];
+    const pendingPulse = streamPulseRef.current.get(oldKey);
     if (pendingPulse) {
-      delete streamPulseRef.current[oldKey];
-      streamPulseRef.current[newKey] = pendingPulse;
+      streamPulseRef.current.delete(oldKey);
+      streamPulseRef.current.set(newKey, pendingPulse);
     }
     renameStreamingKey(oldKey, newKey);
   };

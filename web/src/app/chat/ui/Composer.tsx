@@ -251,7 +251,7 @@ export type ComposerProps = {
 
   // Stop control
   activeConversationIdRef: RefObject<string | null>;
-  abortControllersRef: RefObject<Record<string, AbortController>>;
+  abortControllersRef: RefObject<Map<string, AbortController>>;
   isPendingKey: (key: string | null) => boolean;
 };
 
@@ -1289,7 +1289,7 @@ export function Composer({
                             /* non-fatal — server will time out the turn anyway */
                           });
                         }
-                        abortControllersRef.current[convKey]?.abort();
+                        abortControllersRef.current.get(convKey)?.abort();
                       }}
                     >
                       <Icon name="stop" className="size-[1.125rem]" />
