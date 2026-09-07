@@ -9,9 +9,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -271,21 +274,60 @@ type RemoteMCPOverlay struct {
 }
 
 // connectFailureReason renders a hosted-server connect error for the skip
-// log line: whitespace-collapsed, run through the process-wide secret
-// redactor (the bearer that rode the failed request is registered as a
-// redaction literal when it is acquired, #1274, and RedactSecrets also
-// matches the canonical token shapes), and bounded so the line names the failure
-// class without becoming a transcript of the vendor's response body.
+// log line. The error can quote a user-supplied server's response, which is
+// untrusted input into an operator's terminal and into this process's memory,
+// so in order it is:
+//
+//   - cut to a bounded prefix BEFORE anything else touches it — a JSON-RPC
+//     error near the transport's 64 MiB cap must not be tokenised, joined and
+//     scanned whole for a 240-byte log line;
+//   - stripped of control characters, so an ANSI sequence in the body cannot
+//     repaint the terminal or forge a line;
+//   - whitespace-collapsed;
+//   - redacted by BOTH process-wide redactors. This code runs in the main
+//     process (agentcore's redactor holds its literals) and, in production, in
+//     the credential-owning broker, where the bearer that rode the failed
+//     request was registered with mcpbroker's redactor when it was acquired
+//     (#1274, cmd/fleet/mcp_broker.go) — agentcore's set in that process
+//     never sees it. Each redactor also matches the canonical token shapes;
+//   - bounded on a rune boundary, so the line names the failure class without
+//     becoming a transcript of the vendor's response body.
+//
+// The input bound is applied before redaction, so a credential could survive
+// only if it began inside the first 240 bytes and ran past the 8 KiB cut —
+// no real token is that long.
 func connectFailureReason(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := agentcore.RedactSecrets(strings.Join(strings.Fields(err.Error()), " "))
-	const maxReason = 240
+	const (
+		maxInput  = 8 << 10 // bytes of the raw error considered at all
+		maxReason = 240     // bytes of the rendered reason
+	)
+	raw := truncateAtRune(err.Error(), maxInput)
+	raw = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return ' ' // controls, escapes and invalid bytes become separators
+	}, raw)
+	s := strings.Join(strings.Fields(raw), " ")
+	s = mcpbroker.RedactSecrets(agentcore.RedactSecrets(s))
 	if len(s) > maxReason {
-		s = s[:maxReason] + "…"
+		s = truncateAtRune(s, maxReason) + "…"
 	}
 	return s
+}
+
+// truncateAtRune cuts s to at most n bytes without splitting a multibyte rune.
+func truncateAtRune(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // skippedNames is a nil-safe read of Skipped for error text.

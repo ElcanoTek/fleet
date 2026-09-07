@@ -56,6 +56,16 @@ func RegisterSecretLiteral(value string) {
 	brokerRedactor().AddLiteral(value)
 }
 
+// RedactSecrets scrubs text with the broker's process-wide redactor — the one
+// that holds the connector credentials this process acquires (#1274) — for
+// host-side log lines composed outside this package, such as the hosted-MCP
+// mount-failure reason in internal/agent. In the main process the same call is
+// harmless: that redactor knows only env literals, and the caller applies
+// agentcore's alongside it.
+func RedactSecrets(text string) string {
+	return brokerRedactor().Redact(text)
+}
+
 // RegisterSecretLiterals is the scope-aware form the remote-MCP secret observer
 // is wired to (#1274). scope names a ROTATING credential set — one hosted-MCP
 // server row — and rotated says these values REPLACE that scope's previous

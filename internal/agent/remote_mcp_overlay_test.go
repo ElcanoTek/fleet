@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 )
 
 type recordingBroker struct{ label string }
@@ -393,5 +395,38 @@ func TestConnectFailureReason(t *testing.T) {
 	long := connectFailureReason(errors.New(strings.Repeat("x", 1000)))
 	if len(long) > 240+len("…") || !strings.HasSuffix(long, "…") {
 		t.Errorf("reason not bounded: len=%d suffix=%q", len(long), long[len(long)-3:])
+	}
+
+	// The cut lands on a rune boundary: 300 three-byte runes must not leave
+	// a split rune in front of the ellipsis.
+	wide := connectFailureReason(errors.New(strings.Repeat("€", 300)))
+	if !utf8.ValidString(wide) || !strings.HasSuffix(wide, "…") || len(wide) > 240+len("…") {
+		t.Errorf("multibyte reason is not valid, bounded UTF-8: len=%d valid=%v", len(wide), utf8.ValidString(wide))
+	}
+
+	// Control characters from the vendor's body are separators, never bytes
+	// that reach the terminal.
+	ctl := connectFailureReason(errors.New("\x1b[2Jwiped\x07 the \x1b]8;;http://x\x07screen\x1b]8;;\x07"))
+	if strings.ContainsAny(ctl, "\x1b\x07\r\n") {
+		t.Errorf("control bytes survived: %q", ctl)
+	}
+	if !strings.Contains(ctl, "wiped") || !strings.Contains(ctl, "screen") {
+		t.Errorf("text around the controls was lost: %q", ctl)
+	}
+
+	// A response the size of the transport cap is bounded BEFORE it is
+	// processed; the result is still one short line.
+	huge := connectFailureReason(errors.New("initialize: " + strings.Repeat("A ", 32<<20)))
+	if len(huge) > 240+len("…") {
+		t.Errorf("huge reason not bounded: len=%d", len(huge))
+	}
+
+	// The broker's redactor is applied too: in production this line is
+	// written by the credential-owning broker, whose acquired bearers are
+	// registered there, not in agentcore's set.
+	const bearer = "brk-literal-9f8e7d6c5b4a3210"
+	mcpbroker.RegisterSecretLiteral(bearer)
+	if got := connectFailureReason(errors.New("initialize: HTTP 401: token " + bearer + " rejected")); strings.Contains(got, bearer) {
+		t.Errorf("broker-registered literal reached the log line: %q", got)
 	}
 }
