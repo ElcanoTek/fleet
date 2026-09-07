@@ -2,6 +2,7 @@ package fakellm_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -148,8 +149,11 @@ func TestFakeLLM_ToolLoop(t *testing.T) {
 }
 
 func TestFakeLLM_InjectedError(t *testing.T) {
+	// 4xx, not 5xx: the OpenRouter client retries server errors, and a 500
+	// here used to spend the full 30s deadline in backoff before failing.
+	// The assertion is "the fake can inject an error", not "500s are retried".
 	srv := fakellm.New().Scenario("boom", fakellm.Scenario{Steps: []fakellm.Step{
-		fakellm.StatusStep(500),
+		fakellm.StatusStep(http.StatusBadRequest),
 	}})
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -160,14 +164,17 @@ func TestFakeLLM_InjectedError(t *testing.T) {
 		t.Fatalf("language model: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	agent := fantasy.NewAgent(model)
 	_, err = agent.Generate(ctx, fantasy.AgentCall{
 		Prompt: "trigger error [[scenario:boom]]",
 	})
 	if err == nil {
-		t.Fatalf("injected 500: expected an error, got nil")
+		t.Fatalf("injected 400: expected an error, got nil")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("injected 400: client retried until the deadline instead of failing on the status: %v", err)
 	}
 }
 

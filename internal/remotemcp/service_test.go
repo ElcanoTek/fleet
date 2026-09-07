@@ -647,20 +647,7 @@ func TestServiceAcquireTokenRefreshes(t *testing.T) {
 	svc := newTestService(t, fs, srv)
 	ctx := context.Background()
 
-	server, _, _ := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
-	// Store a near-expiry token (expires_in:1 from the exchange).
-	authURL, _ := svc.Authorize(ctx, "u@x.com", server.ID)
-	_ = authURL
-	var state string
-	for k := range fs.flows {
-		state = k
-	}
-	if _, err := svc.Complete(ctx, "u@x.com", state, "c"); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	time.Sleep(1100 * time.Millisecond) // let the 1s access token go stale
-
-	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
+	server := connectAndStale(t, svc, fs, srv)
 	bearer, err := svc.AcquireToken(ctx, server)
 	if err != nil {
 		t.Fatalf("AcquireToken: %v", err)
@@ -676,17 +663,7 @@ func TestServiceAcquireTokenNeedsReauth(t *testing.T) {
 	svc := newTestService(t, fs, srv)
 	ctx := context.Background()
 
-	server, _, _ := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
-	authURL, _ := svc.Authorize(ctx, "u@x.com", server.ID)
-	_ = authURL
-	var state string
-	for k := range fs.flows {
-		state = k
-	}
-	_, _ = svc.Complete(ctx, "u@x.com", state, "c")
-	time.Sleep(1100 * time.Millisecond)
-
-	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
+	server := connectAndStale(t, svc, fs, srv)
 	_, err := svc.AcquireToken(ctx, server)
 	if err == nil {
 		t.Fatal("expected needs-reauth error")
@@ -1028,8 +1005,23 @@ func TestAddServerAPIKeyQueryParam(t *testing.T) {
 	}
 }
 
+// expireStoredAccessToken marks the server's access token already expired so
+// the next AcquireToken must refresh. Prefer this over sleeping out expires_in:
+// the default RefreshMargin is 5m, so a 1s token is already inside the window,
+// but mutating ExpiresAt makes the test's intent (stale token) independent of
+// that default and of wall-clock time.
+func expireStoredAccessToken(t *testing.T, fs *fakeStore, serverID string) {
+	t.Helper()
+	tok, ok := fs.tokens[serverID]
+	if !ok {
+		t.Fatalf("no tokens stored for %s", serverID)
+	}
+	tok.ExpiresAt = 1
+	fs.tokens[serverID] = tok
+}
+
 // connectAndStale drives Add → Authorize → Complete against the fake AS and
-// waits out the 1s access token, leaving the server one AcquireToken away from a
+// expires the access token, leaving the server one AcquireToken away from a
 // refresh. Returns the reloaded server row.
 func connectAndStale(t *testing.T, svc *Service, fs *fakeStore, srv *httptest.Server) *store.RemoteMCPServer {
 	t.Helper()
@@ -1048,7 +1040,7 @@ func connectAndStale(t *testing.T, svc *Service, fs *fakeStore, srv *httptest.Se
 	if _, err := svc.Complete(ctx, "u@x.com", state, "c"); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	time.Sleep(1100 * time.Millisecond) // let the 1s access token go stale
+	expireStoredAccessToken(t, fs, server.ID)
 	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
 	return server
 }

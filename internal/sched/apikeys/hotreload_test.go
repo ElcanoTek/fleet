@@ -1,6 +1,7 @@
 package apikeys
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,11 +31,15 @@ func TestCLIMintedKeyVisibleWithoutRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// mtime granularity can be 1s on some filesystems; make the write land
-	// strictly after the server's load time.
-	time.Sleep(1100 * time.Millisecond)
 	_, raw, err := cli.CreateTypedKey("ci-bot", KeyTypeTask, nil, 0, nil, "")
 	if err != nil {
+		t.Fatal(err)
+	}
+	// mtime granularity can be 1s on some filesystems. Push the file's mtime
+	// strictly past what the server loaded so the CLI write is visible without
+	// waiting out that tick.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
 		t.Fatal(err)
 	}
 

@@ -42,7 +42,7 @@ fix this doc (and the `make` targets) to match.
 | Python lint | `python` | `ruff check` **and** `ruff format --check` over the 13 Python files | `make lint-python` |
 | Go test | `go` | Unit + integration suites + coverage profile (needs Postgres) | `make test` |
 | Go coverage | `go` | Coverage profile summarised in the log + job summary (advisory, no threshold) | `make test-cover` |
-| Go test -race | `go` | Race detector on the same suites | `make test-race` |
+| Go test -race | `go-race` | Race detector on the same suites (sibling job, overlaps `go`) | `make test-race` |
 | govulncheck | `go` | Dependency CVEs reachable from fleet | `make govulncheck` |
 | Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL or HIGH **Fedora RPM**) | see below |
 | CodeQL | `codeql` (called workflow) | `security-extended` taint analysis over go / python / javascript-typescript / actions; fails on an unwaived **High-band** finding | not wrapped (see [`CODEQL.md`](CODEQL.md)) |
@@ -116,7 +116,7 @@ They delegate to the real commands — they do not reimplement them:
 
 ```sh
 make govulncheck     # the 'go' job's govulncheck step, verbatim
-make ci-go           # the full 'go' job: build → vet → lint → test → test-race → govulncheck
+make ci-go           # the Go jobs locally: build → vet → lint → test → test-race → govulncheck
 make ci-web          # the 'web' job: npm ci → lint → vitest → build (in web/)
 make ci-e2e-mocked   # the 'playwright' job: the mocked Playwright project (in web/)
 make ci-local        # the fast PR gates: ci-go + ci-web (no browser/sandbox e2e)
@@ -244,7 +244,8 @@ the command.
 ## Go build / vet / lint / test — CI job `go`
 
 This is the largest lane. It runs against a `postgres:18` service container with
-two test databases. The full job, in CI's order, is wrapped by **`make ci-go`**.
+two test databases. Locally the full sequence is wrapped by **`make ci-go`**.
+CI splits the race suite into a sibling `go-race` job so it overlaps this one.
 
 ### The two Postgres DSNs (required)
 
@@ -318,24 +319,31 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    ```
 
 4. **go test** — tagged, so the host-mode fixtures and MockMode tests compile.
-   `-p 1` is required (the suite expects serial package execution); CI also adds
-   `-count=1` to defeat the test cache. CI instruments this step with
-   `-coverprofile=coverage.out -covermode=atomic` (issue #249); the race step
-   below is intentionally NOT instrumented — the non-race profile is enough for
-   trend tracking, and `-coverprofile` under `-race` would double its run.
+   Both CI and `make test` call `scripts/go-test.sh`, which keeps `-p 1` only
+   for packages that share a Postgres DSN (chat TRUNCATE vs sched advisory
+   lock) and runs everything else at Go's default package parallelism. The
+   chat-serial and sched-serial groups overlap: they point at different
+   databases (ADR-0005). CI also adds `-count=1` to defeat the test cache and
+   instruments this step with `-coverprofile=coverage.out -covermode=atomic`
+   (issue #249); the sibling `go-race` job is intentionally NOT instrumented —
+   the non-race profile is enough for trend tracking, and `-coverprofile`
+   under `-race` would double its run.
 
    ```sh
-   go test -p 1 -tags fleet_host_executor ./... -count=1   # `make test` runs this without -count=1
+   scripts/go-test.sh --count=1   # `make test` runs this without -count=1
    # with coverage (matches CI's 'go test' step):
    make test-cover   # writes coverage.out, prints the project total
    ```
 
 5. **go test -race** — the race detector is the gate for fleet's in-process
    coordination (worker pool, SSE fan-out, single-owner DB leases, the admission
-   semaphore). Same DSNs and tag:
+   semaphore). Same DSNs and tag, but a **sibling CI job** (`go-race`) so the
+   race suite overlaps the `go` job instead of running after it on the same
+   runner. Locally `make ci-go` still runs them sequentially: they share the
+   same two databases.
 
    ```sh
-   go test -race -p 1 -tags fleet_host_executor ./... -count=1   # or: make test-race
+   scripts/go-test.sh --race --count=1   # or: make test-race
    ```
 
 6. **govulncheck** — call-graph-aware scan of the dependency tree for known CVEs

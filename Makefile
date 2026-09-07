@@ -47,7 +47,7 @@ help:
 	@echo ""
 	@echo "CI-mirroring convenience targets (run the SAME commands CI runs — see docs/TESTING.md):"
 	@echo "  make govulncheck   dependency-CVE scan (CI 'go' job)"
-	@echo "  make ci-go         the full Go CI job: build + vet + lint + test + test-race + govulncheck"
+	@echo "  make ci-go         Go CI jobs locally: build + vet + lint + test + test-race + govulncheck"
 	@echo "  make ci-web        the Web CI job: npm ci + lint + vitest + build (in web/)"
 	@echo "  make ci-e2e-mocked the mocked Playwright CI job (in web/)"
 	@echo "  make ci-local      the fast PR gates locally: ci-go + ci-web (no e2e)"
@@ -131,11 +131,17 @@ install: bins
 # Tests run WITH the fleet_host_executor tag so the host-mode fixtures + MockMode
 # tests compile. The release binary (`make build`/`bins`) is built WITHOUT it, so
 # the unsandboxed host executor never ships (#159).
+#
+# scripts/go-test.sh is what CI runs: it keeps -p 1 only for packages that share
+# a Postgres DSN (chat TRUNCATE vs sched advisory lock) and runs the rest at
+# default package parallelism. Chat-serial and sched-serial overlap — they use
+# different databases (ADR-0005). Do not replace this with a bare
+# `go test -p 1 ./...`; that serializes all ~68 packages for no reason.
 test:
-	go test -p 1 -tags fleet_host_executor ./...
+	scripts/go-test.sh
 
 test-race:
-	go test -race -p 1 -tags fleet_host_executor ./...
+	scripts/go-test.sh --race
 
 # test-cover mirrors the CI 'go test' step's coverage instrumentation (issue
 # #249): -coverprofile=coverage.out -covermode=atomic on the SAME tagged test
@@ -143,7 +149,7 @@ test-race:
 # repeated runs reuse the cache. Run `go tool cover -func=coverage.out` for a
 # per-package table or `go tool cover -html=coverage.out` for a browsable view.
 test-cover:
-	go test -coverprofile=coverage.out -covermode=atomic -p 1 -tags fleet_host_executor ./...
+	scripts/go-test.sh --coverprofile=coverage.out
 	@go tool cover -func=coverage.out | tail -1
 
 lint: lint-go lint-python lint-migrations lint-actions
@@ -258,11 +264,12 @@ GOVULN_TOOLCHAIN := $(if $(filter file,$(origin GOTOOLCHAIN)),$(GO_PINNED),$(GOT
 govulncheck:
 	GOTOOLCHAIN=$(GOVULN_TOOLCHAIN) go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
-# The full Go CI job, in CI's order: build (release config, host executor NOT
-# compiled in) → vet (tagged) → lint → test → test-race → govulncheck. Each step
-# below reuses an existing target that already carries the exact CI flags
-# (-p 1 -tags fleet_host_executor, etc.). `compile` is `go build ./...`, the same
-# release-config compile-check CI runs as its "go build" step.
+# The Go CI jobs, locally and sequentially: build (release config, host executor
+# NOT compiled in) → vet (tagged) → lint → test → test-race → govulncheck.
+# CI splits `test` and `test-race` into sibling jobs so they overlap on
+# separate runners (they cannot overlap here: they share the same two DSNs).
+# `compile` is `go build ./...`, the same release-config compile-check CI runs
+# as its "go build" step.
 ci-go: compile
 	go vet -tags fleet_host_executor ./...
 	$(MAKE) lint
