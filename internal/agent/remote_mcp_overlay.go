@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -10,9 +12,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -311,21 +316,181 @@ func recordRefusedMount(ctx context.Context, resolver RemoteMCPResolver, email, 
 }
 
 // connectFailureReason renders a hosted-server connect error for the skip
-// log line: whitespace-collapsed, run through the process-wide secret
-// redactor (the bearer that rode the failed request is registered as a
-// redaction literal when it is acquired, #1274, and RedactSecrets also
-// matches the canonical token shapes), and bounded so the line names the failure
-// class without becoming a transcript of the vendor's response body.
-func connectFailureReason(err error) string {
+// log line. credential is the value that rode the failed request (the bearer,
+// the api_key header value or the query-parameter key — the same string in
+// every case; empty when the server took none). The error can quote a
+// user-supplied server's response, which is untrusted input into an
+// operator's terminal and into this process's memory, so in order it is:
+//
+//   - cut to a bounded window — a JSON-RPC error near the transport's 64 MiB
+//     cap must not be tokenised, joined, scanned or REWRITTEN whole for a
+//     240-byte log line (a one-byte key replaced by a ten-byte placeholder
+//     across 64 MiB would be a 600 MiB allocation per mount attempt). The
+//     window is the input bound plus the longest wire form of the credential,
+//     so an occurrence that begins inside the bound is always inside the
+//     window whole; see maskCredential for how the window's ragged end is
+//     kept from leaking a prefix;
+//   - stripped of the request's own credential FIRST, in every form a
+//     transport or a vendor's encoder can have given it (maskCredential lists
+//     them). This is a plain ReplaceAll per form — no patterns — and it is
+//     what the two redactor passes below cannot be relied on for: the
+//     redactors' literal floor (internal/redact minLiteralLen) ignores a key
+//     under 8 bytes that validateAPIKeyAuth accepts, and they know only the
+//     raw value, not its URL, JSON or header-trimmed spellings. Nothing else
+//     secret is in this request for the vendor to echo;
+//   - redacted by BOTH process-wide redactors, on the text AS SENT — before
+//     any whitespace is touched, because a registered literal is matched
+//     byte-for-byte and an API key may legitimately contain runs of spaces
+//     (validateAPIKeyAuth admits any printable ASCII); collapsing first would
+//     turn the echoed key into a string the redactor no longer recognises.
+//     This code runs in the main process (agentcore's redactor holds its
+//     literals) and, in production, in the credential-owning broker, where the
+//     bearer that rode the failed request was registered with mcpbroker's
+//     redactor when it was acquired (#1274, cmd/fleet/mcp_broker.go) —
+//     agentcore's set in that process never sees it. Each redactor also
+//     matches the canonical token shapes;
+//   - stripped of control characters, so an ANSI sequence in the body cannot
+//     repaint the terminal or forge a line;
+//   - whitespace-collapsed, then redacted once more, so a canonical token
+//     shape that only lines up after the normalisation is caught too;
+//   - bounded on a rune boundary, so the line names the failure class without
+//     becoming a transcript of the vendor's response body.
+//
+// The input bound is applied before the redactor passes, so a REGISTERED
+// literal other than this request's credential could survive only if it began
+// inside the first 240 bytes and ran past the 8 KiB cut — and no such literal
+// is in this request for the vendor to echo in the first place.
+func connectFailureReason(credential string, err error) string {
 	if err == nil {
 		return ""
 	}
-	s := agentcore.RedactSecrets(strings.Join(strings.Fields(err.Error()), " "))
-	const maxReason = 240
+	const (
+		maxInput  = 8 << 10 // bytes of the raw error considered at all
+		maxReason = 240     // bytes of the rendered reason
+	)
+	raw := maskCredential(err.Error(), credential, maxInput)
+	raw = redactBoth(raw) // on the bytes as sent: literals match verbatim only
+	raw = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return ' ' // controls, escapes and invalid bytes become separators
+	}, raw)
+	s := redactBoth(strings.Join(strings.Fields(raw), " "))
 	if len(s) > maxReason {
-		s = s[:maxReason] + "…"
+		s = truncateAtRune(s, maxReason) + "…"
 	}
 	return s
+}
+
+// maskCredential returns at most bound bytes of text with every occurrence
+// of the credential that rode the failed request replaced, whatever its
+// length, in each form the wire can have given it:
+//
+//   - as sent (Authorization / api_key header value; query parameter value);
+//   - header-trimmed: Go's HTTP transport strips leading and trailing
+//     whitespace from a header value when it writes it, and
+//     validateAPIKeyAuth admits a key with either, so the vendor saw and
+//     echoes the trimmed spelling;
+//   - url.QueryEscape'd (mcp.WithQueryParam builds the query with
+//     url.Values.Encode, so a space becomes `+`), the `%20` spelling of that,
+//     and url.PathEscape'd — how a vendor that echoes its request URI shows
+//     the key;
+//   - JSON-string-escaped, with and without HTML escaping: the transport's
+//     parseJSONResponse embeds the vendor's raw error object in the error
+//     text, where a key containing `"` or `\` appears as `\"` / `\\`.
+//
+// The credential is masked before the input is bounded, but on a WINDOW, not
+// the whole text: bound plus the longest form, so an occurrence that begins
+// inside the bound lies inside the window whole and is replaced, while a
+// 64 MiB response is never rewritten end to end (a one-byte key would
+// otherwise turn into 600 MiB of placeholders). What the window's far edge
+// can cut is an occurrence that begins beyond the bound; its surviving part
+// is a proper prefix of one form sitting at the very end of the text, so
+// after the window is cut back to bound any trailing proper prefix of a form
+// is dropped. That is at most a few bytes off the end of an 8 KiB window that
+// renders as 240, and it is what makes "no partial credential" hold without
+// scanning the whole response.
+func maskCredential(text, credential string, bound int) string {
+	if credential == "" {
+		return truncateAtRune(text, bound)
+	}
+	forms := credentialWireForms(credential)
+	longest := 0
+	for _, f := range forms {
+		longest = max(longest, len(f))
+	}
+	window := truncateAtRune(text, bound+longest)
+	for _, form := range forms {
+		window = strings.ReplaceAll(window, form, "[REDACTED]")
+	}
+	window = truncateAtRune(window, bound)
+	// Drop a trailing proper prefix of any form (see above). Longest first,
+	// so "abc" is removed as one piece rather than leaving "ab".
+	for _, form := range forms {
+		for k := min(len(form)-1, len(window)); k > 0; k-- {
+			if strings.HasSuffix(window, form[:k]) {
+				window = window[:len(window)-k]
+				break
+			}
+		}
+	}
+	return window
+}
+
+// credentialWireForms lists the distinct spellings of credential that a
+// transport or a vendor's encoder can put into an error message, longest
+// first so a longer form is never left half-masked by a shorter one.
+func credentialWireForms(credential string) []string {
+	var forms []string
+	seen := map[string]bool{}
+	add := func(f string) {
+		if f != "" && !seen[f] {
+			seen[f] = true
+			forms = append(forms, f)
+		}
+	}
+	for _, base := range []string{credential, strings.TrimSpace(credential)} {
+		if base == "" {
+			continue
+		}
+		add(base)
+		query := url.QueryEscape(base)
+		add(query)
+		add(strings.ReplaceAll(query, "+", "%20"))
+		add(url.PathEscape(base))
+		if b, err := json.Marshal(base); err == nil && len(b) >= 2 {
+			add(string(b[1 : len(b)-1]))
+		}
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(base); err == nil {
+			if q := strings.TrimSuffix(buf.String(), "\n"); len(q) >= 2 {
+				add(q[1 : len(q)-1])
+			}
+		}
+	}
+	sort.SliceStable(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
+	return forms
+}
+
+// redactBoth runs text through the main process's redactor and the broker's;
+// whichever process this runs in, the one holding the acquired credential's
+// literal is among them.
+func redactBoth(text string) string {
+	return mcpbroker.RedactSecrets(agentcore.RedactSecrets(text))
+}
+
+// truncateAtRune cuts s to at most n bytes without splitting a multibyte rune.
+func truncateAtRune(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // skippedNames is a nil-safe read of Skipped for error text.
@@ -339,6 +504,79 @@ func (o *RemoteMCPOverlay) skippedNames() []string {
 // Active reports whether the overlay actually registered any servers.
 func (o *RemoteMCPOverlay) Active() bool {
 	return o != nil && (o.Broker != nil || o.Client != nil) && len(o.Servers) > 0
+}
+
+// hostedMCPRoster is what the system prompt's live-registry section needs to
+// know about this turn's per-user hosted (remote) MCP overlay: the model-facing
+// names of every tool the overlay mounted, and the registration names of the
+// selected connections whose token could not be acquired or that failed to
+// connect (Skipped — a connection dropped by maxOverlayServers is logged, not
+// listed). The frozen startup roster the section
+// otherwise draws on knows only bundle servers (ADR-0006), so without this a
+// deployment whose only connectors are hosted OAuth ones told the model "No MCP
+// tools are currently connected. Do not attempt to call any `mcp_*` tool" while
+// 44 `mcp_github_*` tools sat in its tool list — and the model, reasonably,
+// obeyed the prompt (found verifying GitHub for #1006, 2026-09-07).
+type hostedMCPRoster struct {
+	// tools are `mcp_<registration>_<tool>` names, sorted — the same formula
+	// agentcore registers the overlay's tools under (mcpTool.Info), so the
+	// prompt advertises exactly what is callable.
+	tools []string
+	// skipped are the registration names of selected connections that could
+	// not be mounted (token unavailable, connect failure), sorted, so the model
+	// can tell the user to reconnect instead of improvising around the gap.
+	skipped []string
+}
+
+// hostedRosterFromOverlay derives the prompt roster from an opened overlay.
+// Nil-safe; an inactive overlay with nothing skipped yields the zero value.
+// No allowlist is applied: hosted seats do not participate in the bundle's
+// per-task credential allowlist (docs/REMOTE-MCP-MULTI-LOGIN.md) — the
+// credential-owning child already narrowed the catalog it handed back.
+//
+// Every name is passed through promptSafeName. A hosted connection's name is
+// user-authored (the add path trims it and requires it non-empty, nothing
+// more) and a connection can be shared to other users, so a name is a channel
+// by which one user could place text into another user's SYSTEM prompt. The
+// tool-name grammar the model APIs enforce is the natural bound: a legitimate
+// name is unchanged, anything else is reduced to that grammar.
+func hostedRosterFromOverlay(o *RemoteMCPOverlay) hostedMCPRoster {
+	if o == nil {
+		return hostedMCPRoster{}
+	}
+	var r hostedMCPRoster
+	if o.Active() {
+		for _, name := range computeMCPToolRosterFromCatalog(o.Catalog, nil) {
+			r.tools = append(r.tools, promptSafeName(name))
+		}
+	}
+	for _, name := range o.Skipped {
+		r.skipped = append(r.skipped, promptSafeName(name))
+	}
+	sort.Strings(r.skipped)
+	return r
+}
+
+// promptSafeName reduces a hosted registration or tool name to the identifier
+// grammar model APIs accept for tool names — ASCII letters, digits, `_`, `-`
+// and `.`, at most 64 bytes — replacing anything else with `_`. A name that
+// already fits comes back unchanged; one that does not could never have been
+// a callable tool anyway, and must not reach the system prompt as written.
+func promptSafeName(name string) string {
+	const maxLen = 64
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= maxLen {
+			break
+		}
+	}
+	return b.String()
 }
 
 // Validate checks the ownership contract an injected opener must satisfy. A
@@ -461,7 +699,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// "failed to connect" left the GitHub verification in #1006 blind
 			// to which one it was. The wire to the parent still carries only the
 			// public name — this stays a host-side log line.
-			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(aerr))
+			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(bearer, aerr))
 			overlay.Skipped = append(overlay.Skipped, regName)
 			recordRefusedMount(ctx, resolver, email, regName, conn, aerr)
 			continue

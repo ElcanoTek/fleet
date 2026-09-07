@@ -1559,8 +1559,11 @@ func (m *Manager) admitInteractiveTurn(ctx context.Context) (func(), error) {
 
 // composeTurnSystemPrompt builds the per-turn system prompt, first fetching the
 // admin-curated knowledge base (best-effort: a notes failure runs the turn
-// without the section rather than failing it).
-func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, persona string) (string, error) {
+// without the section rather than failing it). `hosted` is the per-user remote
+// overlay's roster for this turn: RunTurn opens that overlay first and
+// composes the prompt second, so the prompt's live-registry section can name
+// the hosted tools the model is about to be offered (#1006).
+func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, persona string, hosted hostedMCPRoster) (string, error) {
 	var notes []agentcore.Note
 	if m.notesProvider != nil {
 		if got, err := m.notesProvider.PublishedNotes(ctx); err != nil {
@@ -1569,7 +1572,7 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 			notes = got
 		}
 	}
-	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills)
+	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills, hosted)
 	if err != nil {
 		return "", fmt.Errorf("compose system prompt: %w", err)
 	}
@@ -1665,11 +1668,6 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	defer release()
 
-	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona)
-	if err != nil {
-		return nil, err
-	}
-
 	sb, sbCleanup, err := m.takeTurnSandbox(ctx, in.Lockdown, in.ConversationID)
 	if err != nil {
 		return nil, err
@@ -1714,6 +1712,38 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	modelSlug := model.Model()
 
+	// Open the per-user hosted (remote) MCP overlay BEFORE composing the system
+	// prompt: the prompt's live-registry section lists the `mcp_*` tools this
+	// turn can call, and the hosted tools only exist once the overlay is up.
+	// With the prompt composed first (the order until #1006's GitHub
+	// verification), a hosted-only deployment handed the model a prompt that
+	// denied the very tools in its tool list. Composition still precedes the
+	// user-message commit below, so a persona/prompt failure keeps failing with
+	// no side effects (#798).
+	overlay := m.openTurnRemoteOverlay(ctx, in, turnCatalog)
+	if overlay != nil {
+		defer overlay.Close()
+	}
+	// Rebind the stager once the hosted overlay is up (#988): a remote tool
+	// must resolve against the composite the loop dispatches on, and its
+	// staged card must record the {connection, account} seat that was
+	// actually mounted — the seat approval execution reopens verbatim.
+	if overlay.Active() {
+		if binder, ok := in.ApprovalStager.(MCPScopeBinder); ok && binder != nil {
+			broker, catalog := overlay.ComposeWith(turnBroker, turnCatalog)
+			binder.BindTurnMCPScope(TurnMCPScope{
+				Broker:    broker,
+				Catalog:   catalog,
+				Selection: append(append(agentcore.MCPSelection(nil), turnSelection...), overlay.SeatSelection()...),
+			})
+		}
+	}
+
+	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona, hostedRosterFromOverlay(overlay))
+	if err != nil {
+		return nil, err
+	}
+
 	messages, userEntry, err := assembleTurnMessages(in)
 	if err != nil {
 		return nil, err
@@ -1737,25 +1767,6 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 
 	selection := interactiveRunSelection(in.OptionalMCPServersEnabled, in.MCPAccountDefaults)
-
-	overlay := m.openTurnRemoteOverlay(ctx, in, turnCatalog)
-	if overlay != nil {
-		defer overlay.Close()
-	}
-	// Rebind the stager once the hosted overlay is up (#988): a remote tool
-	// must resolve against the composite the loop dispatches on, and its
-	// staged card must record the {connection, account} seat that was
-	// actually mounted — the seat approval execution reopens verbatim.
-	if overlay.Active() {
-		if binder, ok := in.ApprovalStager.(MCPScopeBinder); ok && binder != nil {
-			broker, catalog := overlay.ComposeWith(turnBroker, turnCatalog)
-			binder.BindTurnMCPScope(TurnMCPScope{
-				Broker:    broker,
-				Catalog:   catalog,
-				Selection: append(append(agentcore.MCPSelection(nil), turnSelection...), overlay.SeatSelection()...),
-			})
-		}
-	}
 
 	tc := TurnConfig{
 		SystemPrompt:    systemPrompt,

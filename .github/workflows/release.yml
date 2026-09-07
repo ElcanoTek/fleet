@@ -9,7 +9,8 @@
 # 1) — several a day is the normal case. scripts/version.sh owns the format and
 # derives N from the tags already on the repo; builds derive their own identity
 # from `git describe` against these tags, which is what makes the tag the only
-# artifact a release needs.
+# artifact a release needs. The GitHub release OBJECT is a view of the newest
+# tag, and only the newest is kept; tags are permanent.
 #
 # WHY `workflow_run` RATHER THAN A JOB IN ci.yml: a release job would have to
 # `needs: [ci-gate]`, and scripts/check_gate_needs_test.go requires every job in
@@ -179,35 +180,118 @@ jobs:
           # Idempotent by construction: this step also runs on a re-run for a
           # commit that was already tagged (see the step above), which is what
           # recovers a tag whose publication failed the first time. `gh release
-          # create` errors on an existing release, so ask first.
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "::notice::release ${TAG} is already published; nothing to do."
-            exit 0
+          # create` errors on an existing release, so ask first — and skip only
+          # the CREATION: the prune below still runs, so a re-run after a
+          # cancelled or failed prune also restores the "one release listed"
+          # property instead of leaving it to the next release.
+          #
+          # A re-run for a tag that a NEWER release has since superseded must
+          # not publish either: its release object was pruned on purpose, and
+          # re-creating it — with `--latest` — would point /releases/latest at
+          # an old tag until the next successful run. The newest release tag
+          # ON THE REMOTE decides — fetched right here, because two per-SHA
+          # jobs can tag concurrently: the one that won the push never
+          # refetched, so its checkout would still name its own tag as newest
+          # after the loser retried and pushed .N+1. On a normal run the
+          # newest is the tag this workflow just pushed.
+          git fetch --quiet --tags origin
+          newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
+          if [ "${TAG}" != "${newest}" ]; then
+            echo "::notice::${TAG} is superseded by ${newest}; not publishing a release for it."
+          elif gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::notice::release ${TAG} is already published; skipping creation."
+          else
+            # The release notes are the released commit's message, then
+            # GitHub's generated list — the two-part shape openai/codex ships
+            # with (its release body is `git log -1 --format=%B` of the tagged
+            # commit).
+            #
+            # Every commit on main is a squash-merged PR, and its message is
+            # the text approved in the merge dialog: GitHub prefills it from
+            # the PR title and body, and whatever is in that box is exactly
+            # what ships here, verbatim. That is the whole contract — no PR
+            # lookup, no parsing, nothing to know about any tool's footer.
+            # Want something out of the release notes? Leave it out of the
+            # commit message when you merge. CONTRIBUTING.md "Releases" says
+            # how.
+            #
+            # `--generate-notes` with a body PRE-PENDS that body to GitHub's
+            # generated notes (the merged-PR list since the previous tag,
+            # contributors, compare link). The certified SHA is present as an
+            # object (fetch-depth 0) and the tag step proved it is on main.
+            notes="$(mktemp)"
+            git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
+
+            gh release create "${TAG}" \
+              --title "fleet ${TAG#v}" \
+              --notes-file "${notes}" \
+              --generate-notes \
+              --latest \
+              --verify-tag
+
+            # The newest-tag check above and this create are two steps, and
+            # a concurrent run for the next commit can tag AND publish .N+1
+            # between them; the `--latest` just passed would then have moved
+            # Latest back onto this older tag. Every tag is pushed before its
+            # release is created, so a fetch AFTER the create sees any
+            # release that beat this one, and clearing this one's mark is
+            # enough: the newer release asked for Latest itself. (The prune
+            # below removes this object anyway; this is for when it cannot.)
+            git fetch --quiet --tags origin
+            newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
+            if [ "${TAG}" != "${newest}" ]; then
+              echo "::notice::${TAG} was superseded by ${newest} while publishing; clearing its Latest mark."
+              gh release edit "${TAG}" --latest=false \
+                || echo "::warning::could not clear the Latest mark on ${TAG}; /releases/latest may name it until the next release."
+            fi
           fi
 
-          # The release notes are the released commit's message, then GitHub's
-          # generated list — the two-part shape openai/codex ships with (its
-          # release body is `git log -1 --format=%B` of the tagged commit).
+          # Keep only the newest release OBJECT. A rolling train tags several
+          # times a day, and a Releases page that lists every one of them is a
+          # feed nobody reads; the current release is the only entry that
+          # answers "what is fleet right now". What is lost is bounded and
+          # reconstructible: an older release's prose is its commit message
+          # (`git log -1 <tag>`), and the generated half — the merged-PR list
+          # and compare link — is `git log <prev>..<tag>` and
+          # /compare/<prev>...<tag>, so the tags are all an audit needs.
           #
-          # Every commit on main is a promotion squash, and its message is the
-          # text the promoter approved in the merge dialog: GitHub prefills it
-          # from the PR title and body, and whatever is in that box is exactly
-          # what ships here, verbatim. That is the whole contract — no PR
-          # lookup, no parsing, nothing to know about any tool's footer. Want
-          # something out of the release notes? Leave it out of the commit
-          # message when you merge. CONTRIBUTING.md "Promotions" says how.
+          # TAGS ARE NEVER DELETED — `gh release delete` runs WITHOUT its
+          # tag-deleting flag, ever (the contract test forbids it). Builds
+          # stamp their identity from tags (`git describe`), `fleet update`
+          # fetches them, and the ordinal and the idempotence check above read
+          # them; a box on an older release must keep resolving its own tag.
           #
-          # `--generate-notes` with a body PRE-PENDS that body to GitHub's
-          # generated notes (the merged-PR list, contributors, compare link);
-          # the generated list sees only the promotion PR, since dev PRs never
-          # touch main's history. The certified SHA is present as an object
-          # (fetch-depth 0) and the tag step proved it is on main.
-          notes="$(mktemp)"
-          git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
-
-          gh release create "${TAG}" \
-            --title "fleet ${TAG#v}" \
-            --notes-file "${notes}" \
-            --generate-notes \
-            --latest \
-            --verify-tag
+          # Which names count as release tags is scripts/version.sh's call
+          # (`filter`), not a regex copied here, so a format change there
+          # cannot leave this prune silently skipping the new shape. The
+          # newest by that ordering is kept even when it is not the one this
+          # run created (two green pushes tagging concurrently), so a slower
+          # run can never delete a faster run's release. Housekeeping only:
+          # any failure here warns, it does not un-publish anything — and
+          # every deletion's status is kept, so one that failed among several
+          # cannot hide behind a later one that succeeded. Listing is paged
+          # (`--limit`), so list-and-delete repeats until a listing shows one
+          # release or nothing more can be deleted; a backlog larger than one
+          # page (a long run of failed prunes) is cleared in one run rather
+          # than one page per release.
+          prune_failed=0
+          for _pass in 1 2 3 4 5; do
+            if ! superseded="$(gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
+                                | scripts/version.sh filter | head -n -1)"; then
+              echo "::warning::could not list releases to prune; ${TAG} is published, the Releases page just lists more than one entry."
+              prune_failed=1
+              break
+            fi
+            [ -n "${superseded}" ] || break
+            deleted=0
+            for old in ${superseded}; do
+              echo "pruning superseded release ${old} (its tag stays)"
+              if gh release delete "${old}" --yes; then deleted=1; else prune_failed=1; fi
+            done
+            # Nothing deleted this pass means every remaining candidate
+            # failed; another pass would only repeat the same failures.
+            [ "${deleted}" -eq 1 ] || break
+          done
+          if [ "${prune_failed}" -ne 0 ]; then
+            echo "::warning::could not prune every older release; ${TAG} is published, the Releases page just lists more than one entry."
+          fi

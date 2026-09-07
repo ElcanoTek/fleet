@@ -39,6 +39,11 @@
 #             leading zero: Helm chart versions and npm package versions. It is
 #             a rendering, never a second source of truth, and it sorts in the
 #             same order as the tags it comes from.
+#   filter    read names on stdin, print the release tags among them, oldest
+#             first (numeric per field, so .10 sorts after .9). Used by
+#             release.yml to decide which superseded release objects to prune,
+#             so that decision goes through this file's validator and not a
+#             copy of it.
 #
 # Kept in POSIX-ish bash with no dependency beyond git so bootstrap.sh,
 # update.sh, the Makefile and CI can all call it.
@@ -256,6 +261,22 @@ cmd_semver() {
 	printf '%d.%d.%d\n' "$((10#$year))" "$((10#$month * 100 + 10#$day))" "$((10#$ordinal))"
 }
 
+# filter: stdin names -> the release tags among them, ascending. Sorted per
+# field numerically (v2026.09.07.10 after v2026.09.07.9); `sort -V` would do it
+# too but is not POSIX, and this script promises nothing beyond git and POSIX
+# tools.
+cmd_filter() {
+	local name
+	while IFS= read -r name; do
+		# An if, not `&&`: the loop's status is its last body's status, and
+		# under this script's pipefail a trailing non-release name would
+		# otherwise turn a correct answer into exit 1.
+		if is_release_tag "$name"; then
+			printf '%s\n' "$name"
+		fi
+	done | sort -t. -k1.2,1n -k2,2n -k3,3n -k4,4n
+}
+
 main() {
 	local cmd="${1:-describe}"
 	shift || true
@@ -265,10 +286,11 @@ main() {
 	next) cmd_next "$@" ;;
 	semver) cmd_semver "$@" ;;
 	released-at) cmd_released_at "$@" ;;
+	filter) cmd_filter "$@" ;;
 	-h | --help | help)
-		sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'
 		;;
-	*) die "unknown subcommand '$cmd' (want: current | describe | next | semver | released-at)" ;;
+	*) die "unknown subcommand '$cmd' (want: current | describe | next | semver | released-at | filter)" ;;
 	esac
 }
 
