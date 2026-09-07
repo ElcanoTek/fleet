@@ -72,18 +72,16 @@
 #      nothing or a hundred alerts, so a red check could only ever mean "the
 #      scanner broke".
 #   2. Does a red check BLOCK a merge? YES, through the EXISTING required check.
-#      This is a REUSABLE workflow (`on: workflow_call`): ci.yml and dev-ci.yml
-#      each call it as a job, and a job that calls a reusable workflow can sit in
-#      a gate job's `needs` like any other job — which routes a CodeQL failure
-#      into `CI gate` / `Dev gate` with no branch-protection change at all. The
-#      earlier design note saying this required a repo-settings click was wrong:
-#      `needs` cannot cross workflow FILES, but a workflow_call brings the jobs
-#      into the caller's file.
+#      This is a REUSABLE workflow (`on: workflow_call`): ci.yml calls it as a
+#      job, and a job that calls a reusable workflow can sit in a gate job's
+#      `needs` like any other job — which routes a CodeQL failure into `CI gate`
+#      with no branch-protection change at all. The earlier design note saying
+#      this required a repo-settings click was wrong: `needs` cannot cross
+#      workflow FILES, but a workflow_call brings the jobs into the caller's file.
 #
-#      CAVEAT, and it is load-bearing: that routing only blocks a merge where the
-#      aggregate gate is a REQUIRED status check. On `main` it is (`CI gate`).
-#      On `dev` the ruleset requires no status checks at all, so `Dev gate` is
-#      red-but-not-required there — see docs/SCANNING.md ("Known gaps").
+#      That routing blocks the merge because `CI gate` is a REQUIRED status
+#      check on `main`, the only long-lived branch
+#      (docs/adr/0062-trunk-based-development.md).
 #
 # The per-language `analyze` legs cannot be named directly in `CI gate`'s
 # `needs` — a job's `needs` cannot reach across workflow files — but the CALLING
@@ -96,10 +94,8 @@ name: CodeQL
 
 on:
   # No push/pull_request triggers of its own: per-change runs come from ci.yml
-  # (push/PR on main) and dev-ci.yml (push/PR on dev) calling this workflow, so
-  # every branch event is covered exactly once and the result feeds the gates.
-  # Scanning dev PRs at all is the one place this exceeds old default setup,
-  # which never ran on them (verified: zero CodeQL runs recorded on dev PRs).
+  # (every PR into main and every push to main) calling this workflow, so each
+  # branch event is covered exactly once and the result feeds `CI gate`.
   workflow_call:
   workflow_dispatch:  # manual re-run (e.g. after dismissing an alert)
   schedule:
@@ -195,7 +191,7 @@ jobs:
         if: matrix.build-mode == 'autobuild'
         uses: github/codeql-action/autobuild@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         env:
-          # Same build tag ci.yml and dev-ci.yml pass to `go vet` and `go test`,
+          # Same build tag ci.yml passes to `go vet` and `go test`,
           # and for the same reason: internal/sandbox/host.go — the UNSANDBOXED
           # host executor — is fenced behind `//go:build fleet_host_executor`, so
           # without the tag it is not in the default build and the extractor never

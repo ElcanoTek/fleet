@@ -22,20 +22,17 @@ version: 2
 
 # ── Two things that decide whether you actually SEE an update ────────────────
 #
-# 1. THIS FILE IS READ FROM THE DEFAULT BRANCH (main), not from the branch it
-#    lives on. Edits here do nothing until they are promoted to main — so a
-#    change to coverage or cadence lands only after the usual dev → main PR.
+# 1. THIS FILE IS READ FROM THE DEFAULT BRANCH (main). Since ADR-0062 main is
+#    the only branch, so an edit here takes effect as soon as its PR merges.
 #
-# 2. `target-branch: dev` on every entry has a consequence GitHub documents but
-#    that is easy to miss: options defined for an ecosystem "no longer apply to
-#    security updates", because security updates always target the DEFAULT
-#    branch. So Dependabot SECURITY PRs land on main ignoring everything below
-#    — ungrouped, unprefixed, and not subject to the `ignore` rules (an eslint
-#    or typescript CVE can therefore still propose a major we know is
-#    unmergeable). The flip side: no VERSION update ever targets main directly,
-#    so if the dev → main promotion stalls, main quietly stops receiving them.
-#    Both are accepted trade-offs of soaking version bumps on dev — but they are
-#    trade-offs, not free.
+# 2. Every entry targets main (the default; there is no `target-branch`), so
+#    version updates and SECURITY updates go through the same full `CI gate`
+#    on the same branch. The old split — version bumps soaking on a `dev`
+#    integration branch while security updates went straight to main, un-
+#    grouped and outside the `ignore` rules — is gone with `dev`. Note the
+#    documented GitHub rule still holds: security updates ignore per-ecosystem
+#    options (grouping, prefixes, `ignore`), so a CVE bump can still propose a
+#    major that the version-update rules below would have held back.
 #
 # Cadence: `interval: daily` with the cooldown below. Cooldown, not the polling
 # interval, is what protects against a compromised fresh release; polling weekly
@@ -109,11 +106,6 @@ updates:
     directory: "/"
     schedule:
       interval: daily
-    # Version updates land on the dev integration branch (fast-lane CI; they
-    # soak there and ride the dev→main PR through the full gate). Dependabot
-    # SECURITY updates ignore target-branch and still go straight to main, so
-    # CVE fixes are never delayed behind dev.
-    target-branch: dev
     open-pull-requests-limit: 10
     # Wait before proposing freshly published releases (see header).
     cooldown:
@@ -146,11 +138,6 @@ updates:
     directory: "/web"
     schedule:
       interval: daily
-    # Version updates land on the dev integration branch (fast-lane CI; they
-    # soak there and ride the dev→main PR through the full gate). Dependabot
-    # SECURITY updates ignore target-branch and still go straight to main, so
-    # CVE fixes are never delayed behind dev.
-    target-branch: dev
     open-pull-requests-limit: 10
     # Same supply-chain cooldown as gomod (see header).
     cooldown:
@@ -182,7 +169,6 @@ updates:
     directory: "/scripts/rampart-service"
     schedule:
       interval: daily
-    target-branch: dev
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
@@ -227,7 +213,6 @@ updates:
       - "/scripts/rampart-service"
     schedule:
       interval: daily
-    target-branch: dev
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
@@ -239,11 +224,6 @@ updates:
     directory: "/"
     schedule:
       interval: daily
-    # Version updates land on the dev integration branch (fast-lane CI; they
-    # soak there and ride the dev→main PR through the full gate). Dependabot
-    # SECURITY updates ignore target-branch and still go straight to main, so
-    # CVE fixes are never delayed behind dev.
-    target-branch: dev
     open-pull-requests-limit: 10
     commit-message:
       prefix: "deps(actions)"

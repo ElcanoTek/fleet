@@ -12,8 +12,8 @@ import (
 	"testing"
 )
 
-// ci.yml and dev-ci.yml each end in an aggregate gate job (`CI gate` /
-// `Dev gate`) whose `needs` is the list branch protection is pointed at. A job
+// ci.yml ends in an aggregate gate job (`CI gate`) whose `needs` is the list
+// branch protection is pointed at. A job
 // that runs but is NOT in that list is red-but-not-required — it can fail
 // forever behind a green gate, which is exactly how the CodeQL Go extraction
 // break sat unnoticed for weeks and the reason #1246 was written.
@@ -38,7 +38,6 @@ func TestAggregateGateNeedsEveryJob(t *testing.T) {
 	root := repoRoot(t)
 	for _, tc := range []struct{ file, gate string }{
 		{"ci.yml", "ci-gate"},
-		{"dev-ci.yml", "dev-gate"},
 	} {
 		raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", tc.file))
 		if err != nil {

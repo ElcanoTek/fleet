@@ -150,18 +150,20 @@ reusable workflow:
 
 ```yaml
 on:
-  workflow_call:      # ci.yml (main) and dev-ci.yml (dev) each call it as a job
+  workflow_call:      # ci.yml calls it as a job on every PR into main and push to main
   workflow_dispatch:  # manual re-run
   schedule:
     - cron: '0 10 * * 1'   # Monday 10:00 UTC
 ```
 
 Per-change runs therefore arrive through `workflow_call`: `ci.yml` fires on
-push/PR against `main`, `dev-ci.yml` on push/PR against `dev`, and each calls
+every PR into `main` and every push to `main` — the only long-lived branch since
+`dev` was retired ([ADR-0062](adr/0062-trunk-based-development.md)) — and calls
 this workflow as a job. Every branch event is covered exactly once, and — because
 a called workflow's jobs land in the *caller's* graph — the result feeds
-`CI gate` / `Dev gate` directly. Scanning `dev` PRs at all is the one place this
-exceeds old default setup, which never ran on them.
+`CI gate` directly. (While `dev` existed, `dev-ci.yml` called this workflow the
+same way; scanning `dev` PRs at all was one place this exceeded old default
+setup, which never ran on them.)
 
 **An earlier revision of this section was wrong in a way worth preserving,
 because the error is instructive.** It described a `push: [main]` /
@@ -180,9 +182,10 @@ interchangeable is how an any-finding gate got armed on a zero that had never
 seen the tree. See [ADR-0048](adr/0048-codeql-severity-gating.md), and "The
 threshold, and the measurement that was misread" below.
 
-The current shape has no such hole: `dev-ci.yml` calls this workflow on **pushes
-to `dev` as well as PRs into it**, so `dev` gets a full-tree verdict on every
-merge, and any direct push that bypassed a PR is covered too.
+The current shape has no such hole: `ci.yml` calls this workflow on **pushes to
+`main` as well as PRs into it**, so `main` gets a full-tree verdict on every
+squash merge, and any direct push that bypassed a PR is covered too. (The same
+held for `dev` through `dev-ci.yml` until that branch was retired.)
 
 The weekly cron exists because a CodeQL verdict is a function of the query pack
 as well as the commit — new queries ship continuously, and without a schedule the
@@ -192,8 +195,10 @@ that some unrelated PR turns red. That is the argument
 is offset from the 07:00 canary, the 08:00 daily govulncheck and the Monday 09:00
 Grype scan, following the same don't-contend-for-runners note those files carry.
 
-`dev-ci.yml`'s header used to list CodeQL among the checks deferred to the
-dev→main gate. That is no longer true, so it now says where CodeQL runs instead.
+`dev-ci.yml`'s header once listed CodeQL among the checks deferred to the
+dev→main gate; that was corrected when this workflow began running on `dev`, and
+the file itself is gone now that `dev` has been retired (ADR-0062) — `ci.yml` is
+the only caller.
 
 ## Two defects in the first cut, both green
 
@@ -245,11 +250,10 @@ internal/sandbox/host.go
 
 `internal/sandbox/host.go` is the **unsandboxed host executor** — bash and python
 run directly on the host — fenced behind `//go:build fleet_host_executor` and so
-absent from the default build. It is a CODEOWNERS-protected path, and both
-`ci.yml` and `dev-ci.yml` deliberately pass that tag to `go vet` and `go test`
-("Same tag as ci.yml so host.go [...] is vetted too") precisely so it is not
-left unchecked. Leaving it as the single gap in Go coverage is not a defensible
-default.
+absent from the default build. It is a CODEOWNERS-protected path, and
+`ci.yml` deliberately passes that tag to `go vet` and `go test` ("Tagged so
+host.go [...] is vetted too") precisely so it is not left unchecked. Leaving
+it as the single gap in Go coverage is not a defensible default.
 
 `GOFLAGS: -tags=fleet_host_executor` on the autobuild step fixes it, matching the
 lanes that already vet it.
@@ -381,8 +385,9 @@ with go1.25.1 and cannot lint the tree.
 ## What was NOT verified, and what is deliberately out of scope
 
 - **No push-on-`main` or scheduled run had executed when this section was first
-  written.** That is no longer true of the push path: `dev-ci.yml` calls this
-  workflow on pushes to `dev`, and the first such run (Dev CI run 527) is the
+  written.** That is no longer true of the push path: `dev-ci.yml` called this
+  workflow on pushes to `dev` (as `ci.yml` does on pushes to `main`; `dev` has
+  since been retired, ADR-0062), and the first such run (Dev CI run 527) is the
   full-tree measurement described below — it is also what proved the section
   above wrong. The **weekly cron** is still the one trigger whose own first proof
   is up to a week away; the `schedule` path shares every step with the others, so
@@ -403,8 +408,9 @@ with go1.25.1 and cannot lint the tree.
   file-coverage detail ("To speed up pull request analysis, file coverage
   information is only enabled when analyzing the default branch and protected
   branches"). So it never established a tree-wide baseline for `dev`, let alone
-  for `main`. The `dev` tree-wide numbers now exist (run 527, below); the
-  default-branch alert set is established when a promote lands on `main`.
+  for `main`. The `dev` tree-wide numbers exist (run 527, below); the
+  default-branch alert set is established and refreshed by the push run on each
+  merge into `main`.
 - **`build-mode: manual` was not built.** `autobuild` works, so the more
   complex option was not needed. If `autobuild` regresses, manual mode plus the
   repo's own `go build ./...` is the fallback — and it is also the route to
@@ -596,22 +602,22 @@ is exactly how the toolchain break hid for weeks.
 
 **A red check reaches the aggregate gate**, through the *existing* check rather
 than a new one: `codeql.yml` is a reusable workflow (`on: workflow_call`) that
-`ci.yml` and `dev-ci.yml` call as a job, and that calling job sits in
-`ci-gate`'s / `Dev gate`'s `needs`. A correction worth keeping: an earlier
-revision claimed this half needed a repo-settings click, reasoning from "`needs`
-cannot cross workflow files" — true of a job's `needs`, but a `workflow_call`
-brings the called jobs *into* the caller's file, which is the standard mechanism
-and what ships. (An even earlier revision of this section then went on to repeat
-the original error two paragraphs later. Both are corrected here.)
+`ci.yml` calls as a job, and that calling job sits in `ci-gate`'s `needs`. A
+correction worth keeping: an earlier revision claimed this half needed a
+repo-settings click, reasoning from "`needs` cannot cross workflow files" — true
+of a job's `needs`, but a `workflow_call` brings the called jobs *into* the
+caller's file, which is the standard mechanism and what ships. (An even earlier
+revision of this section then went on to repeat the original error two
+paragraphs later. Both are corrected here.)
 
-**Whether a red check blocks a merge is a separate, branch-dependent fact, and on
-`dev` the answer is no.** `CI gate` is a required status check on `main`, so
-there the routing closes. The `dev` ruleset requires **no status checks at all** —
-its only rules are `deletion` and `non_fast_forward` — so `Dev gate` is
-red-but-not-required, and a CodeQL failure on `dev` is a red X beside a mergeable
-PR. Adding `Dev gate` to the `dev` ruleset is a repo-settings action that no pull
-request can perform; it is tracked as an open item in
-[`SCANNING.md`](SCANNING.md) ("Known gaps").
+**Whether a red check blocks a merge is a separate fact about the target
+branch's ruleset, and on `main` the answer is yes.** `CI gate` is a required
+status check on `main` — the only long-lived branch — so the routing closes and a
+CodeQL failure blocks the merge. (While `dev` existed, its ruleset required no
+status checks at all — its only rules were `deletion` and `non_fast_forward` — so
+`Dev gate` was red-but-not-required there, and a CodeQL failure on `dev` was a
+red X beside a mergeable PR. That gap closed with the retirement of `dev`,
+[ADR-0062](adr/0062-trunk-based-development.md).)
 
 `codeql.yml` also carries its own aggregate **`CodeQL gate`** job. In the
 `workflow_call` path it is redundant — the caller's `needs: codeql` already rolls
@@ -694,13 +700,14 @@ Security tab rather than a broken one:
 
 - **The Security tab's alert list is the DEFAULT BRANCH's.** This workflow has no
   `push` trigger of its own at all; push-event runs reach it through `ci.yml`
-  (on `main`) and `dev-ci.yml` (on `dev`). So the default-branch list refreshes
-  when a promote merge lands on `main` — not when a PR is scanned, and not when
-  `dev` moves.
+  on pushes to `main`. So the default-branch list refreshes on every squash
+  merge into `main` — not when a PR is scanned.
 - **PR runs report on the PR**, not into the default-branch alert list, and
   CodeQL additionally suppresses file-coverage detail there: *"To speed up pull
   request analysis, file coverage information is only enabled when analyzing the
   default branch and protected branches."*
 
-So after this merges to `dev`, expect findings on subsequent PRs; expect the
-Security tab's `main` list to repopulate at the next dev→main promotion.
+So expect findings to surface on the PR that introduces them, and the Security
+tab's `main` list to refresh with every merge into `main`. (When this first
+shipped, the list repopulated only at the next dev→main promotion; `dev` has
+since been retired, ADR-0062.)

@@ -2,8 +2,8 @@
 # scripts/version.sh — fleet's build identity, derived from git. The ONE place
 # that knows how a fleet release number is shaped.
 #
-# fleet ships from a rolling release train: `dev` integrates, every promotion
-# squash-merges into `main`, and every push to `main` that passes the full CI
+# fleet ships from a rolling release train: every PR squash-merges into `main`
+# (the only branch, ADR-0062), and every push to `main` that passes the full CI
 # gate is a release. There is no VERSION file, no semver bump to argue about,
 # and NOBODY EVER TYPES A VERSION NUMBER — the release workflow
 # (.github/workflows/release.yml) derives the next date-based tag from the clock

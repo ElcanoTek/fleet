@@ -449,8 +449,8 @@ standards. Our thanks to the teams and communities behind them:
   runtime — one audited supply chain, not a thousand PyPI tarballs. fleet
   deliberately tracks the rolling tag so every on-box rebuild picks up the
   current patches, and Grype scans keep the claim honest — on every main-targeting
-  PR that is not docs-only, plus a weekly scheduled re-scan of the existing image
-  (PRs into `dev` get no image scan; it runs at the dev→main promotion).
+  PR that is not docs-only, on every push to `main`, plus a weekly scheduled
+  re-scan of the existing image.
 - **[Model Context Protocol](https://modelcontextprotocol.io)** and its SDKs —
   the open standard fleet speaks (stdio + HTTP) to reach tools and data through a
   credential-brokered MCP catalog.

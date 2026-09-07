@@ -1,7 +1,7 @@
 # Automatic date-based release tagging (ADR-0059, docs/VERSIONING.md).
 #
-# fleet ships from a rolling release train: `dev` integrates, every promotion
-# squash-merges into `main`, and every commit on `main` is a shippable release.
+# fleet ships from a rolling release train: every PR squash-merges into `main`
+# (the only branch, ADR-0062), and every commit on `main` is a shippable release.
 # There is no release ceremony, no VERSION file to bump, no semver argument, and
 # NOBODY EVER TYPES A VERSION NUMBER — this workflow stamps the tag.
 #
@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Only a GREEN CI run on a real push to main. `workflow_dispatch` runs of
-    # ci.yml (which exist to re-produce the required check on a promotion PR
+    # ci.yml (which exist to re-produce the required check on a PR
     # whose webhook was dropped) carry a PR head ref and must not release.
     if: >-
       ${{ github.event.workflow_run.conclusion == 'success'

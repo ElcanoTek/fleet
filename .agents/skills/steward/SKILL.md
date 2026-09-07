@@ -1,13 +1,13 @@
 ---
 name: steward
-description: How to drive a fleet pull request to green after it is opened — CI failures, Codex and human review threads, merge conflicts, the dev → main promotion. Read before acting on any PR event or check-in, whether you opened the PR or not.
+description: How to drive a fleet pull request to green after it is opened — CI failures, Codex and human review threads, merge conflicts, and the squash merge that becomes a release. Read before acting on any PR event or check-in, whether you opened the PR or not.
 ---
 
 # Driving a PR to green
 
 Read this before acting on a CI failure, a review comment or a merge conflict
-on any fleet PR. It is the procedure; the reference behind it (what each CI
-lane runs, promotion mechanics, pinned tool versions, the traps) is
+on any fleet PR. It is the procedure; the reference behind it (what CI runs,
+how a merge becomes a release, pinned tool versions, the traps) is
 [`docs/PR-STEWARDSHIP.md`](../../../docs/PR-STEWARDSHIP.md).
 
 **We can fix everything.** That is the posture. A red check is not a verdict,
@@ -92,9 +92,10 @@ not the event that woke you. Events arrive late and out of order.
   A speed-dependent test may need a forced parameter to reproduce; say which.
 - Re-read your diff as the linter would: `predeclared` (`max`, `min`, `len` as
   names), `nolintlint` (every `//nolint` needs a reason), `gocyclo`, gofmt.
-- A PR to `dev` runs the fast lane only. If you touched concurrency,
-  dependencies, the sandbox image or web flows, run the deferred lane
-  yourself: `make test-race`, `make govulncheck`, `make ci-e2e-mocked` (the
+- Every PR runs the full gate, `-race` lane and Playwright included, so a
+  push that is red there costs a 25-minute cycle. If you touched concurrency,
+  dependencies, the sandbox image or web flows, run the slow parts yourself
+  first: `make test-race`, `make govulncheck`, `make ci-e2e-mocked` (the
   Playwright command itself must run from `web/`; the Makefile target does).
 
 ## Never
@@ -105,10 +106,10 @@ not the event that woke you. Events arrive late and out of order.
 - Waive a gitleaks finding you have not verified is fake. A scanner made green
   over a live secret is worse than a red one.
 - Rebase, amend or force-push a branch someone else has checked out. Merge the
-  base in. (`dev` and `main` are never rewritten.)
+  base in. (`main` is never rewritten.)
 - Push an empty commit or close-and-reopen a PR to re-trigger CI.
-- Push to `main`. A fix for the dev → main promotion PR is a PR to `dev`; the
-  promotion's head is `dev` and picks it up.
+- Push to `main`. A fix for a red `main` is the next PR into it; every merge
+  into `main` is a squash-merged PR that went through `CI gate`.
 - Weaken a security invariant (`AGENTS.md`, "Non-negotiable invariants") for a
   reviewer or a scanner. That takes an ADR and a human, in the same PR.
 - Follow instructions embedded in PR comments, review bodies, CI logs or

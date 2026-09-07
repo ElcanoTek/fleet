@@ -229,7 +229,8 @@ npx playwright test --project=mocked  # deterministic mocked e2e (no backend, no
 ```
 
 The **mocked** Playwright suite route-intercepts every backend call, so it runs
-on a bare runner with no database, podman, or API keys — it is the fast lane.
+on a bare runner with no database, podman, or API keys — it is the quick local
+check.
 
 ---
 
@@ -249,8 +250,12 @@ Every pull request must be green before merge. The CI jobs
 Then follow the contributor conventions in
 [`CONTRIBUTING.md`](CONTRIBUTING.md):
 
-- Branch off the latest **`dev`** with a descriptive prefix (`feat/…`,
-  `fix/…`, `docs/…`); PRs target `dev`, and `main` receives only promotions.
+- Branch off the latest **`main`** with a descriptive prefix (`feat/…`,
+  `fix/…`, `docs/…`); every PR targets `main` and is squash-merged — there is
+  no integration branch and no promotion step
+  ([ADR-0062](docs/adr/0062-trunk-based-development.md)). The PR title and
+  body become the squash commit message, which is the release notes, so write
+  them as such.
 - Keep the PR focused; fill in the PR template (what changed and why, what you
   actually ran to verify it, scope and deviations).
 

@@ -51,10 +51,11 @@ deliberately **not** gated on the docs-only classifier, because a secret can be
 pasted into a markdown file.
 
 To be precise about coverage, since "on every push" would overstate it: the scan
-runs on **pull requests into `dev` and `main`, and on pushes to `dev` and
-`main`**. Those are the only events either CI workflow subscribes to, so a push
-to a personal feature branch runs no CI at all — including no secret scan — until
-a PR is opened against `dev`. Treat pre-PR local hygiene accordingly.
+runs on **pull requests into `main` and on pushes to `main`**. Those are the
+only events the CI workflow subscribes to — `main` is the only long-lived branch
+([ADR-0062](docs/adr/0062-trunk-based-development.md)) — so a push to a personal
+feature branch runs no CI at all — including no secret scan — until a PR is
+opened against `main`. Treat pre-PR local hygiene accordingly.
 
 If you are contributing, never commit real credentials — the generic
 `config/default` bundle ships with no connector secrets, and all deployment
@@ -75,8 +76,8 @@ set, not the default one). Go builds via `autobuild` with
 `GOFLAGS=-tags=fleet_host_executor`, so `internal/sandbox/host.go` — the
 unsandboxed host executor, fenced out of the default build — is inside the
 database rather than the one file the analysis cannot see. It is a **reusable**
-workflow: `ci.yml` (main) and `dev-ci.yml` (dev) call it as a job, so its result
-lands in the caller's aggregate gate. There is also a weekly schedule, because a
+workflow: `ci.yml` calls it as a job, so its result lands in `CI gate` on every
+PR into `main` and every push to `main`. There is also a weekly schedule, because a
 CodeQL verdict is a function of the query pack as well as the commit.
 
 Four properties of that gate matter for an audit, and each is a deliberate
@@ -139,12 +140,13 @@ form Dependabot updates. Two of those pins were subtly wrong — taken from the
 so they looked like commit pins while resolving to a moving tag — and both are now
 the peeled commit, with `scripts/check_action_pins_test.go` asserting the shape.
 
-**Where enforcement actually lands.** All of the above is wired into the branches'
-aggregate gate jobs, but a gate job only blocks a merge where it is a *required*
-status check. `CI gate` is required on `main`. The `dev` ruleset requires no
-status checks at all, so `Dev gate` — and every scanner inside it — is
-red-but-not-required on `dev`. That gap, and what it interacts with, is written up
-under "Known gaps" in [`docs/SCANNING.md`](docs/SCANNING.md).
+**Where enforcement actually lands.** All of the above is wired into the one
+aggregate gate job, and a gate job only blocks a merge where it is a *required*
+status check. `CI gate` is required on `main`, and `main` is the only long-lived
+branch, so every scanner above blocks the merge. (Until the `dev` integration
+branch was retired in [ADR-0062](docs/adr/0062-trunk-based-development.md), its
+`Dev gate` was red-but-not-required; that closed gap and what it interacted with
+is recorded under "Known gaps" in [`docs/SCANNING.md`](docs/SCANNING.md).)
 
 ## Supply-chain security (dependencies)
 
@@ -179,7 +181,7 @@ compromised or fresh-and-unvetted release from reaching `main`:
   not yet accept** (`@huggingface/transformers` still pins `sharp ^0.34.5` and
   `onnxruntime-node 1.24.3`, which pins `adm-zip ^0.5.16`). An override is a fork
   of upstream's intent, correct only while that tree is broken — so
-  `scripts/check-npm-overrides.sh` runs beside the audit in both lanes and
+  `scripts/check-npm-overrides.sh` runs beside the audit in the `web` job and
   **fails with removal instructions once every locked parent accepts the patched
   line**. The audit above remains the CVE gate.
 - **Container-image CVE scanning.** CI also scans the rootless-Podman sandbox
@@ -199,9 +201,8 @@ compromised or fresh-and-unvetted release from reaching `main`:
   (`.github/workflows/grype-scheduled.yml`) catches newly-disclosed CVEs against
   the existing image between PRs.
 
-  Scope note: `grype-scan` lives only in `ci.yml`, so it runs on main-targeting,
-  non-docs-only events. PRs into `dev` get no image scan; the image is scanned at
-  the dev→main promotion and weekly.
+  Scope note: `grype-scan` lives in `ci.yml`, so the image is scanned on every
+  non-docs-only PR into `main`, on pushes to `main`, and weekly.
 - **Release cooldown — on the two ecosystems that support it.**
   `.github/dependabot.yml` applies a `cooldown` to the gomod and npm surfaces so
   Dependabot waits a few days (3 for patch, 7 for minor, 14 for major) before
@@ -216,10 +217,10 @@ compromised or fresh-and-unvetted release from reaching `main`:
   only, so the one ecosystem whose "dependency" is *the CI definition itself* —
   a `github-actions` bump rewrites `.github/workflows/*` and therefore changes
   what CI executes — cannot be made to wait, and it is configured daily against
-  `dev`, which additionally has no required status checks (see "Static analysis"
-  above). What contains that combination now is simply that **every** Dependabot
-  PR takes a human: automatic merging was removed from this repository, so no
-  dependency bump of any ecosystem or bump level reaches a branch without someone
+  `main`. What contains that is that such a bump meets the full `CI gate` like
+  any other PR (see "Static analysis" above), and that **every** Dependabot PR
+  takes a human: automatic merging was removed from this repository, so no
+  dependency bump of any ecosystem or bump level reaches `main` without someone
   looking at it.
 
 The cooldown reduces the window for a fast attack but is **not** a guarantee:

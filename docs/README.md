@@ -25,7 +25,9 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   on every green push to `main`; there is no `VERSION` file, no semver, and no
   release ceremony — do not add a hand-authored version number anywhere):
   [`docs/VERSIONING.md`](VERSIONING.md) +
-  [ADR-0059](adr/0059-date-based-rolling-releases.md)
+  [ADR-0059](adr/0059-date-based-rolling-releases.md); `main` is the only
+  branch and every PR squash-merges into it —
+  [ADR-0062](adr/0062-trunk-based-development.md)
 - **Per-feature design notes** (shipped design, deviations from the issue, honest
   scope — one bullet per feature): [`docs/FEATURE-NOTES.md`](FEATURE-NOTES.md).
   Newer features each have a dedicated page in [`docs/`](./), and invariant

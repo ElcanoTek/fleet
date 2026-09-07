@@ -163,8 +163,8 @@ privileged node" packaging track as a stepping stone.
 - A second execution substrate must be kept honest: the backend seam
   (`sandbox.Backend`-shaped `impl`) is now a contract two production backends
   implement, and behavior-affecting changes must land in both or say why not.
-- The chart is linted and template-rendered in CI (`helm` job in ci.yml /
-  dev-ci.yml) but not exercised against a live cluster there; the kind
+- The chart is linted and template-rendered in CI (`helm` job in ci.yml) but
+  not exercised against a live cluster there; the kind
   walkthrough in `docs/DEPLOYMENT-KUBERNETES.md` is the verified end-to-end
   path.
 

@@ -68,39 +68,33 @@ audits both (`npm audit --audit-level=low`, lockfile-only) plus
 eight steps; the hand-rolled line above skips the audits and the canary, which is
 how a clean local run turns into a red PR.
 
-CI mirrors all of this across **two lanes**, and which one you get depends on the
-branch you target:
+CI mirrors all of this in **one workflow on one branch**. fleet is trunk-based
+([ADR-0062](docs/adr/0062-trunk-based-development.md)): `main` is the only
+long-lived branch, every PR targets it and is **squash-merged**, and `CI`
+(`ci.yml`) runs the full gate on every PR into `main` and every push to it —
+Go build/vet/lint/test (including a `-race` lane) plus a `govulncheck`
+dependency-CVE scan, a Grype container-image CVE scan (fail on a fixable
+CRITICAL/HIGH) of the sandbox image, a Python lint (ruff), a workflow + shell
+lint (actionlint & shellcheck), web lint (oxlint) / typecheck (TS 7) / test /
+build, Playwright (mocked **and** live, against a real backend + sandbox), a
+Helm chart lint, a migration DDL lint, and a gitleaks secret scan. `CI gate` is
+the **single required status check**: it `needs` every other job and always
+reports, so a docs-only PR (heavy jobs skipped by the `changes` classifier)
+still merges, while a code PR cannot go green over a skip. There is no
+integration branch, no "fast lane", and no promotion step: the PR *is* the
+first and last time CI sees the change, and every green push to `main` is a
+release (`release.yml`, ADR-0059).
 
-- **`CI` (`ci.yml`) — `main` only** (pushes to `main` and PRs targeting it). The
-  full gate: Go build/vet/lint/test (including a `-race` lane) plus a
-  `govulncheck` dependency-CVE scan, a Grype container-image CVE scan (fail on a
-  fixable CRITICAL/HIGH) of the sandbox image, a Python lint (ruff), a workflow +
-  shell lint (actionlint & shellcheck), web lint (oxlint) / typecheck (TS 7) /
-  test / build, Playwright (mocked **and** live, against a real backend +
-  sandbox), a Helm chart lint, a migration DDL lint, and a gitleaks secret scan.
-  `CI gate` is the **single required status check** on `main`: it `needs` every
-  other job and always reports, so a docs-only PR (heavy jobs skipped by the
-  `changes` classifier) still merges, while a code PR cannot go green over a skip.
-- **`Dev CI (fast lane)` (`dev-ci.yml`) — `dev` only** (pushes to `dev` and PRs
-  targeting it). Compile/vet/lint/test against a Postgres service, ruff, the web
-  lane, the migration DDL lint, gitleaks, actionlint/shellcheck, the Helm lint,
-  CodeQL and Semgrep. Deliberately deferred to the promotion PR: the `-race`
-  lane, govulncheck, the Grype image scan, and both Playwright suites. There is
-  no docs-only classifier here — the fast lane runs on every change.
-
-`ci.yml` does not fire on `dev` at all, so **the dev→main promotion PR is the
-first time the full gate ever sees that code**; expect it to surface things dev
-never told you about. **Every job must be green before merge**, and nothing
-merges itself — auto-merge was removed, so every PR, dependency bumps included,
-waits for a human. Tests are deterministic without a live model: use the fake-LLM
-seam (`internal/fakellm` via `OPENROUTER_BASE_URL`), never a real key.
+**Every job must be green before merge**, and nothing merges itself —
+auto-merge was removed, so every PR, dependency bumps included, waits for a
+human. Tests are deterministic without a live model: use the fake-LLM seam
+(`internal/fakellm` via `OPENROUTER_BASE_URL`), never a real key.
 
 CodeQL (security queries, `security-extended`) and Semgrep (Go/JS/Python SAST +
-Actions supply chain) run per PR in **both** lanes: `codeql.yml` and `semgrep.yml`
-are reusable workflows that ci.yml/dev-ci.yml call as jobs, so their results roll
-up into `CI gate` / `Dev gate` like any other job. `npm audit` (both npm trees,
-lockfile-only, any severity) and ruff (`check` **and** `format --check`) gate the
-same way.
+Actions supply chain) run on every PR: `codeql.yml` and `semgrep.yml` are
+reusable workflows that ci.yml calls as jobs, so their results roll up into
+`CI gate` like any other job. `npm audit` (both npm trees, lockfile-only, any
+severity) and ruff (`check` **and** `format --check`) gate the same way.
 
 Their thresholds differ, and the difference is load-bearing:
 
@@ -113,12 +107,11 @@ Their thresholds differ, and the difference is load-bearing:
   Security tab, not blocking. So "CodeQL is green" means "no unwaived High-band
   finding", not "no findings". The reasoning is [ADR-0048](docs/adr/0048-codeql-severity-gating.md).
 
-Two facts an agent must not get wrong here. **A `pull_request` CodeQL run is
+One fact an agent must not get wrong here. **A `pull_request` CodeQL run is
 diff-informed** — it evaluates every query over the full database, then reports
 only results inside the PR's diff — so it certifies a *diff*, never a tree; only
-push and scheduled runs give a tree-wide verdict. And **`Dev gate` is not a
-required check on `dev`**, so on that branch a scanner failure is a red X beside a
-mergeable PR. See [`docs/SCANNING.md`](docs/SCANNING.md) ("Known gaps").
+the push run on `main` and the scheduled runs give a tree-wide verdict. See
+[`docs/SCANNING.md`](docs/SCANNING.md).
 
 ## Repository map
 
@@ -253,7 +246,7 @@ note, runbook and ADR, by question. The entry points an agent needs most:
 - **Why the invariants are the way they are:** [`docs/adr/`](docs/adr/).
 - **Agent runtime mechanics** (per-turn sandbox seal, cost/token ceilings,
   compaction, the MCP credential allowlist): [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md).
-- **Contributor workflow, promotions, releases:** [`CONTRIBUTING.md`](CONTRIBUTING.md),
+- **Contributor workflow and releases:** [`CONTRIBUTING.md`](CONTRIBUTING.md),
   [`docs/VERSIONING.md`](docs/VERSIONING.md).
 - **Testing strategy and the scanning stack:** [`docs/TESTING.md`](docs/TESTING.md),
   [`docs/SCANNING.md`](docs/SCANNING.md).

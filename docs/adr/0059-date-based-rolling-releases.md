@@ -3,6 +3,11 @@
 - **Status:** Accepted
 - **Date:** 2026-09-04
 - **Deciders:** fleet maintainers
+- **Amended by:** [ADR-0062](0062-trunk-based-development.md) (the `dev`
+  integration branch and the dev → main promotions described in the Context
+  below were retired on 2026-09-07; every PR now squash-merges into `main`
+  directly. The decision itself is unchanged: every green push to `main` is
+  still tagged `vYYYY.MM.DD.N` by `release.yml`, exactly as decided here)
 
 ## Context
 
