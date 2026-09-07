@@ -8,7 +8,8 @@ dedicated page in `docs/` and an ADR in `docs/adr/`; for the ones that don't,
 this file is the canonical design note.
 
 When you ship a feature: put the design note in a dedicated `docs/<FEATURE>.md`
-(plus an ADR when it adds or changes an invariant) and a `CHANGELOG.md` entry.
+(plus an ADR when it adds or changes an invariant); the PR body carries the
+what/why that becomes the release notes (there is no changelog file, ADR-0061).
 Only add a bullet here if the feature is too small for its own page — and never
 add feature notes back into `AGENTS.md`.
 
