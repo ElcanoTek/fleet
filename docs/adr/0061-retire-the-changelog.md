@@ -37,15 +37,22 @@ In practice it cost more than it gave:
 - **The PR is the record.** A change's *what* and *why* are written once, in
   the PR body's "What changed, and why". A feature's design still gets its
   `docs/<FEATURE>.md`; an invariant change still gets its ADR.
-- **The promotion PR's body is the release notes.** Promotions squash-merge
-  `dev` into `main`, so GitHub's generated notes see exactly one PR per
-  release — the promotion — and none of the `dev` PRs. `release.yml` therefore
-  composes each release's notes as the promotion PR body first, then GitHub's
-  generated list (via the `releases/generate-notes` API, the same text
-  `--generate-notes` produces). The promoter writes that body for the operator
-  who reads it: one bullet per `dev` PR with its *why*, and every breaking
-  change or operator action stated plainly. The `dev` PR bodies stay one click
-  away behind the numbers.
+- **The promotion's squash commit message is the release notes.** Promotions
+  squash-merge `dev` into `main`, so GitHub's generated notes see exactly one
+  PR per release — the promotion — and none of the `dev` PRs. `release.yml`
+  therefore publishes the released commit's message (`git log -1 --format=%B`)
+  prepended to GitHub's generated list (`gh release create --generate-notes`
+  with a body does exactly that prepend). This is the shape openai/codex
+  ships with, and it is deliberately the simplest one: the message is the
+  text the promoter approved in the merge dialog, prefilled from the PR title
+  and body, so there is no PR lookup and no parsing — what is in the box when
+  the merge button is clicked is what ships. (A first cut copied the PR body
+  through the API and then tried to filter coding-agent footers out of it;
+  three review rounds of edge cases in an afternoon showed that parsing was
+  the wrong layer.) The promoter writes that text for the operator who reads
+  it: one bullet per `dev` PR with its *why*, and every breaking change or
+  operator action stated plainly. The `dev` PR bodies stay one click away
+  behind the numbers.
 - **Breaking changes** are announced in the promotion body (and the `dev` PR
   that introduced them) and, where they touch an invariant, in the ADR.
   `docs/VERSIONING.md` says so in place of the changelog bullet.
@@ -62,11 +69,12 @@ In practice it cost more than it gave:
   at the repository history. ADRs that quote the old file as history are left
   as written; history is not drift.
 - The CI docs-only classifier drops `CHANGELOG.md` from its list.
-- Release notes are the promotion body plus the generated list
-  (`release.yml`). Their quality is now a function of the promotion body and
-  the `dev` PR titles, which is where review attention belongs. A promotion
-  PR with an empty body ships a release whose only prose is the generated
-  list; the workflow warns rather than blocks.
+- Release notes are the promotion's squash commit message plus the generated
+  list (`release.yml`). Their quality is now a function of what the promoter
+  leaves in the merge dialog and of the `dev` PR titles, which is where
+  review attention belongs. A promotion merged with a bare title ships a
+  release whose only prose is that title and the generated list; the
+  workflow never blocks on it.
 
 ## Enforcement
 
