@@ -550,7 +550,7 @@ func run() error {
 			Class:          event.Class,
 		}
 		if err := chatStore.RecordPanicEvent(ctx, record); err != nil {
-			log.Printf("panic event persist failed (location=%s incident=%s): %v", event.Location, event.IncidentID, err)
+			log.Printf("panic event persist failed (location=%s incident=%s): %v", logSafe(event.Location), logSafe(event.IncidentID), err)
 		}
 	}
 
@@ -3495,4 +3495,11 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	} else if purged > 0 {
 		log.Printf("input-queue startup purge: removed %d terminal row(s)", purged) //nolint:gosec // G706: purged is an integer database row count, never request-authored text.
 	}
+}
+
+// logSafe strips CR/LF from a value before it is interpolated into a log
+// line. strings.ReplaceAll is the spelling CodeQL's go/log-injection query
+// models as a sanitizer.
+func logSafe(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }

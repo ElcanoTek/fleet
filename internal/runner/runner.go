@@ -1269,7 +1269,9 @@ func (p *Pool) failWallTimeout(task *models.Task, session *models.LogSession, le
 // logSafeRunner strips CR/LF from operator-supplied text before it lands in a
 // log line (the handlers' logSafe pattern).
 func logSafeRunner(s string) string {
-	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+	// strings.ReplaceAll is the spelling CodeQL's go/log-injection query
+	// models as a sanitizer; NewReplacer kept the same alerts open.
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
 
 // transientAgentFailure reports whether err carries one of agentcore's

@@ -703,7 +703,7 @@ func (s *Server) runTurnAsync(
 		SteerSource:    steerSourceOrNil(steer),
 	}, buf)
 	if err != nil {
-		log.Printf("RunTurn error (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
+		log.Printf("RunTurn error (user=%s conv=%s): %v", logSafe(user), logSafe(conv.ID), err) //nolint:gosec // G706: logSafe strips CR/LF from the authenticated email and server-generated conv id.
 		// The resilience layer inside RunTurn emits `turn.model_required`
 		// itself on any non-cancellation failure (see agent/resilience.go).
 		// Avoid emitting a redundant — and misleading — `turn.error` in

@@ -21,6 +21,7 @@ import {
 } from "@/app/lib/modelAliases";
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { parseSseChunk } from "@/app/lib/sse";
+import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import {
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -2045,7 +2046,9 @@ export function ChatExperience({
     // fresh server copy underneath the rendered messages.
     if (!options.background) setIsLoadingHistory(true);
     try {
-      const response = await fetch(`/api/conversations/${conversationId}`, {
+      const url = conversationApiUrl(conversationId);
+      if (!url) throw new Error("Unable to load conversation.");
+      const response = await fetch(url, {
         cache: "no-store",
       });
       if (!response.ok) throw new Error("Unable to load conversation.");
