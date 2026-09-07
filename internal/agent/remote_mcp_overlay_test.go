@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -485,5 +486,47 @@ func TestConnectFailureReasonMasksTheRequestCredential(t *testing.T) {
 	// No credential: nothing is masked, the message is intact.
 	if got := connectFailureReason("", errors.New("dial tcp: i/o timeout")); got != "dial tcp: i/o timeout" {
 		t.Errorf("empty credential altered the reason: %q", got)
+	}
+
+	// A key with a quote and a backslash passes validateAPIKeyAuth; the
+	// transport embeds the vendor's raw error JSON in the error text, where
+	// the key appears JSON-escaped.
+	const quoted = `k"ey\v<1>`
+	escaped, _ := json.Marshal(quoted)
+	got = connectFailureReason(quoted, errors.New(`initialize: rpc error {"message":"bad key `+string(escaped[1:len(escaped)-1])+`"} and k\"ey\\v<1>`))
+	for _, needle := range []string{quoted, string(escaped[1 : len(escaped)-1]), `k\"ey\\v<1>`} {
+		if strings.Contains(got, needle) {
+			t.Errorf("JSON-escaped credential %q reached the log line: %q", needle, got)
+		}
+	}
+
+	// Go's HTTP transport trims header whitespace on the wire, so the vendor
+	// echoes the trimmed key even though the stored value carries spaces.
+	got = connectFailureReason("  padded-key-77  ", errors.New("initialize: HTTP 401: padded-key-77 rejected"))
+	if strings.Contains(got, "padded-key-77") {
+		t.Errorf("header-trimmed credential reached the log line: %q", got)
+	}
+
+	// A one-byte key echoed throughout a near-cap response must not turn
+	// into a placeholder per byte over the whole text: the mask works on a
+	// bounded window, so the rendered line stays short and the work stays
+	// proportional to the window, not the response.
+	huge := "initialize: " + strings.Repeat("a", 32<<20)
+	got = connectFailureReason("a", errors.New(huge))
+	if len(got) > 240+len("…") || strings.Contains(got, "a") {
+		t.Errorf("one-byte key over a huge error: len=%d %q", len(got), got[:min(len(got), 80)])
+	}
+	if allocs := testing.AllocsPerRun(1, func() { connectFailureReason("a", errors.New(huge)) }); allocs > 200 {
+		t.Errorf("masking a one-byte key over a 32 MiB error made %v allocations; expected work bounded by the window", allocs)
+	}
+
+	// A credential whose occurrence begins beyond the input bound and runs
+	// past the window's edge leaves only a proper prefix at the end of the
+	// text; that prefix is dropped rather than logged.
+	const edge = "edge-credential-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	beyond := strings.Repeat("x", (8<<10)+len(edge)-10) + edge
+	got = connectFailureReason(edge, errors.New(beyond))
+	if strings.Contains(got, edge[:8]) {
+		t.Errorf("prefix of a credential cut at the window edge reached the log line: %q", got[max(0, len(got)-60):])
 	}
 }

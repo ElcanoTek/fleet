@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -280,20 +282,22 @@ type RemoteMCPOverlay struct {
 // user-supplied server's response, which is untrusted input into an
 // operator's terminal and into this process's memory, so in order it is:
 //
-//   - stripped of the request's own credential FIRST, over the WHOLE text and
-//     in every form a transport puts it on the wire (as sent, and its
-//     url.QueryEscape / url.PathEscape encodings, which is how
-//     mcp.WithQueryParam sends a query-authenticated key). This is a plain
-//     ReplaceAll per form — one linear pass, no patterns — and it is what
-//     the two redactor passes below cannot be relied on for: the redactors'
-//     literal floor (internal/redact minLiteralLen) ignores a key under 8
-//     bytes that validateAPIKeyAuth accepts, they know only the raw value and
-//     not its URL encoding, and a run of padding before an echoed credential
-//     could straddle the input cut so that neither pass ever sees it whole.
-//     Nothing else secret is in this request for the vendor to echo;
-//   - cut to a bounded prefix before anything else touches it — a JSON-RPC
-//     error near the transport's 64 MiB cap must not be tokenised, joined and
-//     scanned whole for a 240-byte log line;
+//   - cut to a bounded window — a JSON-RPC error near the transport's 64 MiB
+//     cap must not be tokenised, joined, scanned or REWRITTEN whole for a
+//     240-byte log line (a one-byte key replaced by a ten-byte placeholder
+//     across 64 MiB would be a 600 MiB allocation per mount attempt). The
+//     window is the input bound plus the longest wire form of the credential,
+//     so an occurrence that begins inside the bound is always inside the
+//     window whole; see maskCredential for how the window's ragged end is
+//     kept from leaking a prefix;
+//   - stripped of the request's own credential FIRST, in every form a
+//     transport or a vendor's encoder can have given it (maskCredential lists
+//     them). This is a plain ReplaceAll per form — no patterns — and it is
+//     what the two redactor passes below cannot be relied on for: the
+//     redactors' literal floor (internal/redact minLiteralLen) ignores a key
+//     under 8 bytes that validateAPIKeyAuth accepts, and they know only the
+//     raw value, not its URL, JSON or header-trimmed spellings. Nothing else
+//     secret is in this request for the vendor to echo;
 //   - redacted by BOTH process-wide redactors, on the text AS SENT — before
 //     any whitespace is touched, because a registered literal is matched
 //     byte-for-byte and an API key may legitimately contain runs of spaces
@@ -324,8 +328,7 @@ func connectFailureReason(credential string, err error) string {
 		maxInput  = 8 << 10 // bytes of the raw error considered at all
 		maxReason = 240     // bytes of the rendered reason
 	)
-	raw := maskCredential(err.Error(), credential)
-	raw = truncateAtRune(raw, maxInput)
+	raw := maskCredential(err.Error(), credential, maxInput)
 	raw = redactBoth(raw) // on the bytes as sent: literals match verbatim only
 	raw = strings.Map(func(r rune) rune {
 		if unicode.IsPrint(r) {
@@ -340,35 +343,96 @@ func connectFailureReason(credential string, err error) string {
 	return s
 }
 
-// maskCredential replaces every occurrence of the credential that rode the
-// failed request, whatever its length, in each form a transport can have put
-// it on the wire: as sent (Authorization / api_key header), url.QueryEscape'd
-// (mcp.WithQueryParam builds the query with url.Values.Encode, so a space
-// becomes `+`), the `%20` spelling of that, and url.PathEscape'd. A vendor
-// that echoes its request URI or headers into an error body echoes one of
-// these. It works on the whole text, not a bounded prefix, so padding cannot
-// push the credential across the cut; each form is one strings.ReplaceAll,
-// which is a single scan even over the transport's 64 MiB body cap.
-func maskCredential(text, credential string) string {
+// maskCredential returns at most bound bytes of text with every occurrence
+// of the credential that rode the failed request replaced, whatever its
+// length, in each form the wire can have given it:
+//
+//   - as sent (Authorization / api_key header value; query parameter value);
+//   - header-trimmed: Go's HTTP transport strips leading and trailing
+//     whitespace from a header value when it writes it, and
+//     validateAPIKeyAuth admits a key with either, so the vendor saw and
+//     echoes the trimmed spelling;
+//   - url.QueryEscape'd (mcp.WithQueryParam builds the query with
+//     url.Values.Encode, so a space becomes `+`), the `%20` spelling of that,
+//     and url.PathEscape'd — how a vendor that echoes its request URI shows
+//     the key;
+//   - JSON-string-escaped, with and without HTML escaping: the transport's
+//     parseJSONResponse embeds the vendor's raw error object in the error
+//     text, where a key containing `"` or `\` appears as `\"` / `\\`.
+//
+// The credential is masked before the input is bounded, but on a WINDOW, not
+// the whole text: bound plus the longest form, so an occurrence that begins
+// inside the bound lies inside the window whole and is replaced, while a
+// 64 MiB response is never rewritten end to end (a one-byte key would
+// otherwise turn into 600 MiB of placeholders). What the window's far edge
+// can cut is an occurrence that begins beyond the bound; its surviving part
+// is a proper prefix of one form sitting at the very end of the text, so
+// after the window is cut back to bound any trailing proper prefix of a form
+// is dropped. That is at most a few bytes off the end of an 8 KiB window that
+// renders as 240, and it is what makes "no partial credential" hold without
+// scanning the whole response.
+func maskCredential(text, credential string, bound int) string {
 	if credential == "" {
-		return text
+		return truncateAtRune(text, bound)
 	}
-	query := url.QueryEscape(credential)
-	forms := []string{
-		credential,
-		query,
-		strings.ReplaceAll(query, "+", "%20"),
-		url.PathEscape(credential),
+	forms := credentialWireForms(credential)
+	longest := 0
+	for _, f := range forms {
+		longest = max(longest, len(f))
 	}
-	seen := make(map[string]bool, len(forms))
+	window := truncateAtRune(text, bound+longest)
 	for _, form := range forms {
-		if form == "" || seen[form] {
+		window = strings.ReplaceAll(window, form, "[REDACTED]")
+	}
+	window = truncateAtRune(window, bound)
+	// Drop a trailing proper prefix of any form (see above). Longest first,
+	// so "abc" is removed as one piece rather than leaving "ab".
+	for _, form := range forms {
+		for k := min(len(form)-1, len(window)); k > 0; k-- {
+			if strings.HasSuffix(window, form[:k]) {
+				window = window[:len(window)-k]
+				break
+			}
+		}
+	}
+	return window
+}
+
+// credentialWireForms lists the distinct spellings of credential that a
+// transport or a vendor's encoder can put into an error message, longest
+// first so a longer form is never left half-masked by a shorter one.
+func credentialWireForms(credential string) []string {
+	var forms []string
+	seen := map[string]bool{}
+	add := func(f string) {
+		if f != "" && !seen[f] {
+			seen[f] = true
+			forms = append(forms, f)
+		}
+	}
+	for _, base := range []string{credential, strings.TrimSpace(credential)} {
+		if base == "" {
 			continue
 		}
-		seen[form] = true
-		text = strings.ReplaceAll(text, form, "[REDACTED]")
+		add(base)
+		query := url.QueryEscape(base)
+		add(query)
+		add(strings.ReplaceAll(query, "+", "%20"))
+		add(url.PathEscape(base))
+		if b, err := json.Marshal(base); err == nil && len(b) >= 2 {
+			add(string(b[1 : len(b)-1]))
+		}
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(base); err == nil {
+			if q := strings.TrimSuffix(buf.String(), "\n"); len(q) >= 2 {
+				add(q[1 : len(q)-1])
+			}
+		}
 	}
-	return text
+	sort.SliceStable(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
+	return forms
 }
 
 // redactBoth runs text through the main process's redactor and the broker's;
