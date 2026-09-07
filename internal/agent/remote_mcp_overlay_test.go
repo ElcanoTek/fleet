@@ -378,3 +378,20 @@ func TestBrowserbaseKeyFuncMatchesURLWithExplicitPort(t *testing.T) {
 		t.Error("an explicit :443 must not defeat the vendor-host match")
 	}
 }
+
+// TestConnectFailureReason: the hosted-connect skip line must say WHY (the
+// GitHub verification in #1006 sat blind behind a value-free "failed to
+// connect"), while staying one bounded, whitespace-flat line.
+func TestConnectFailureReason(t *testing.T) {
+	if got := connectFailureReason(nil); got != "" {
+		t.Fatalf("nil error → %q, want empty", got)
+	}
+	got := connectFailureReason(errors.New("initialize:\n  HTTP 401 Unauthorized\t{\"error\":\"invalid_token\"}"))
+	if want := `initialize: HTTP 401 Unauthorized {"error":"invalid_token"}`; got != want {
+		t.Errorf("reason = %q, want %q (whitespace collapsed, content kept)", got, want)
+	}
+	long := connectFailureReason(errors.New(strings.Repeat("x", 1000)))
+	if len(long) > 240+len("…") || !strings.HasSuffix(long, "…") {
+		t.Errorf("reason not bounded: len=%d suffix=%q", len(long), long[len(long)-3:])
+	}
+}

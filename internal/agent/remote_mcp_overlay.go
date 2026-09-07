@@ -270,6 +270,24 @@ type RemoteMCPOverlay struct {
 	Skipped []string
 }
 
+// connectFailureReason renders a hosted-server connect error for the skip
+// log line: whitespace-collapsed, run through the process-wide secret
+// redactor (the bearer that rode the failed request is registered as a
+// redaction literal when it is acquired, #1274, and RedactSecrets also
+// matches the canonical token shapes), and bounded so the line names the failure
+// class without becoming a transcript of the vendor's response body.
+func connectFailureReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := agentcore.RedactSecrets(strings.Join(strings.Fields(err.Error()), " "))
+	const maxReason = 240
+	if len(s) > maxReason {
+		s = s[:maxReason] + "…"
+	}
+	return s
+}
+
 // skippedNames is a nil-safe read of Skipped for error text.
 func (o *RemoteMCPOverlay) skippedNames() []string {
 	if o == nil {
@@ -397,7 +415,13 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			}
 		}
 		if aerr := client.AddHTTPServerWithOptions(ctx, regName, conn.URL, opts); aerr != nil {
-			log.Printf("remote-mcp: skipping server %q for %s — failed to connect", regName, email)
+			// The reason matters: a 401 from the vendor (dead token, revoked
+			// grant, org approval pending), a TLS or DNS failure and a handshake
+			// timeout each want a different operator action, and a value-free
+			// "failed to connect" left the GitHub verification in #1006 blind
+			// to which one it was. The wire to the parent still carries only the
+			// public name — this stays a host-side log line.
+			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(aerr))
 			overlay.Skipped = append(overlay.Skipped, regName)
 			continue
 		}
