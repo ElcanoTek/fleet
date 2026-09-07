@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
-import { TaskCreateModal } from "./TaskCreateModal";
+import { TaskCreateModal, normalizeRunIfTimeout } from "./TaskCreateModal";
 import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 
 // Component tests for the redesigned New Task modal: schedule mode segment,
@@ -1099,6 +1099,27 @@ describe("TaskCreateModal — pre-run gate timeout is clearable", () => {
     fireEvent.change(timeout, { target: { value: "900" } });
     fireEvent.blur(timeout);
     expect(timeout.value).toBe("300");
+  });
+
+  it("treats a stored zero timeout as the default, not as one second", async () => {
+    // The API spells "use the default 30" as timeout_seconds 0 (omitempty), so
+    // a task created without one arrives as 0. Clamping that to the minimum
+    // turned a 30s gate into a 1s gate on any unrelated edit.
+    expect(normalizeRunIfTimeout("0")).toBe(30);
+    expect(normalizeRunIfTimeout("-5")).toBe(30);
+
+    updateTask.mockResolvedValue({ ...baseEdit });
+    renderModal({
+      editTask: { ...baseEdit, run_if: { command: "true", timeout_seconds: 0 } },
+      onUpdated: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    const timeout = screen.getByLabelText("Pre-run gate timeout seconds") as HTMLInputElement;
+    expect(timeout.value).toBe("30");
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Weekly latency report v2" } });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    expect(updateTask.mock.calls[0][1].run_if.timeout_seconds).toBe(30);
   });
 
   it("submits the normalized integer, never the raw string", async () => {

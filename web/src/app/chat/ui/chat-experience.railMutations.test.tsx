@@ -154,6 +154,30 @@ describe("deleting a chat against a failing backend", () => {
   });
 });
 
+describe("deleting the active chat when the next one fails to load", () => {
+  it("still closes the confirm and drops the row, and says the load failed rather than the delete", async () => {
+    // mockBackend answers GET /api/conversations/conv-a only, so once the
+    // active Alpha chat is deleted the fallback load of Beta 404s and
+    // loadConversation throws. The DELETE itself succeeded.
+    mockBackend(() => new Response(JSON.stringify({}), { status: 200 }));
+    await mountChat();
+
+    await pickRowAction("Alpha chat", "Delete");
+    await screen.findByRole("dialog", { name: "Delete chat?" });
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Delete chat?" })).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Conversation options for Alpha chat" }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Deleted the chat, but couldn't open the next one.",
+    );
+  });
+});
+
 describe("renaming the active chat from the header against a failing backend", () => {
   it("re-enables the input, restores the title, and says why", async () => {
     mockBackend(() => new TypeError("Failed to fetch"));
