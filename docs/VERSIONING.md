@@ -51,16 +51,22 @@ Two properties worth knowing:
   than a gap.
 - **Re-runs are idempotent.** If the commit already carries a release tag, the
   workflow says so and exits. It cannot open a second ordinal for one tree.
-- **Only the newest release is listed.** After publishing, the workflow deletes
-  every older release *object*, so the Releases page always shows exactly the
-  current release. **Tags are never deleted** — they are what builds and
-  `fleet update` derive identity from. An older release's prose is its commit
-  message, `git log -1 v2026.09.04.2`; the generated half of its notes (the
-  merged-PR list and compare link) is not archived, and is reconstructed from
-  the tags: `git log --oneline v2026.09.04.1..v2026.09.04.2` and
-  `https://github.com/ElcanoTek/fleet/compare/v2026.09.04.1...v2026.09.04.2`.
-  That is the one deliberately lossy part: the published page for an old
-  release is gone, its content is not.
+- **Only the newest release is listed — best-effort.** After publishing, the
+  workflow deletes every older release *object*. The prune is housekeeping:
+  a failure to list or delete warns in the job log instead of failing the
+  release, and the next run (a re-run of the same one included) retries, so
+  the Releases page shows exactly the current release except in the window
+  between a failed prune and the next run. **Tags are never deleted** — they
+  are what builds and `fleet update` derive identity from.
+
+  What an older release said is recovered from git, with one caveat. From
+  `v2026.09.07.3` on, its prose is its commit message, `git log -1 <tag>`;
+  releases before that took their prose from the promotion PR's body, which
+  the commit message only summarises — the PR number in the commit subject
+  (`(#1440)`) is the record for those. The generated half of any release's
+  notes (the merged-PR list and compare link) is not archived and is
+  reconstructed from the tags: `git log --oneline <prev>..<tag>` and
+  `https://github.com/ElcanoTek/fleet/compare/<prev>...<tag>`.
 
 ## Reading a build's identity
 

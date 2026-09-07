@@ -79,9 +79,12 @@ In practice it cost more than it gave:
   publishing; tags stay). This is what makes "the commit message is the
   notes" load-bearing rather than cosmetic: `git log` between two tags is the
   complete history, and the Releases page is a view of the current release,
-  not an archive. Deliberately lossy in one respect: the generated half of an
-  old release's notes (merged-PR list, compare link) is not archived, only
-  reconstructible from the tags.
+  not an archive. Best-effort (a failed prune warns and the next run
+  retries) and deliberately lossy in two respects: the generated half of an
+  old release's notes (merged-PR list, compare link) is only reconstructible
+  from the tags, and the releases published before this mechanism landed
+  (`v2026.09.07.2` and earlier) took their prose from the promotion PR body,
+  for which the PR itself is the record.
 
 ## Enforcement
 
