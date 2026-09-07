@@ -328,7 +328,7 @@ func TestContainedPanicResult_PersistsAndReplaysPaired(t *testing.T) {
 		t.Fatalf("persisted panic pair: calls=%d results=%d result=%+v", calls, results, persistedResult)
 	}
 
-	replayed, err := replayHistory(stored)
+	replayed, err := replayHistory(stored, "")
 	if err != nil {
 		t.Fatalf("replay persisted panic history: %v", err)
 	}

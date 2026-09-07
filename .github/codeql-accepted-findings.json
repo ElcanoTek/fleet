@@ -41,11 +41,7 @@
       "file": "internal/mcpoauth/discovery.go",
       "reason": "These two URLs are an operator-typed MCP server URL and the remote-derived pointers reached from it (a WWW-Authenticate resource_metadata= parameter, a PRM-declared issuer). Every request uses mcpoauth.SafeHTTPClient (wired at remotemcp/service.go), whose safeDialContext resolves, rejects blocked IPs, then dials the exact validated IP — closing the resolve-to-connect TOCTOU — and whose CheckRedirect hard-fails so a 30x can never relay a bearer to a new origin. CanonicalResourceURI rejects a non-http(s) scheme, embedded userinfo, or a hostless URL before this point, fetchJSON now refuses a non-http(s) scheme by name, and maxMetadataBytes caps the body at 1 MiB. Mix-up defenses are downstream: verifyAuthServer rejects a missing or mismatched issuer and refuses a non-S256 PKCE downgrade, and Discover adopts a PRM-declared resource only when sameOrigin."
     },
-    {
-      "rule": "go/path-injection",
-      "file": "internal/agent/session.go",
-      "reason": "The value is sanitized one frame up and CodeQL loses the sanitizer across a struct-field and package boundary (chatAttachment -> agent.ImageAttachment -> TurnInput). httpapi/chat.go calls validateAttachments, which filepath.Abs+Clean's the client path, takes filepath.Rel(root, abs), rejects it unless filepath.IsLocal(rel), and then REBUILDS the path as filepath.Join(root, rel), storing only that. attachments.go is the only construction site of agent.ImageAttachment in the tree, so no unvalidated path can reach these os.Stat/os.ReadFile calls. The caller contract is documented at loadImageAttachments because the guard lives in the producer, not here."
-    },
+
     {
       "rule": "go/weak-sensitive-data-hashing",
       "file": "internal/sched/apikeys/apikeys.go",

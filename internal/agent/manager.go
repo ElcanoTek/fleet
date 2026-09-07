@@ -57,6 +57,13 @@ type TurnInput struct {
 
 	// ImageAttachments are user-attached image files for THIS turn only.
 	ImageAttachments []ImageAttachment
+	// UploadsRoot is the host directory image paths must stay inside
+	// (the authenticated user's uploads subtree). loadImageAttachments
+	// rebuilds each path with Rel+IsLocal+Join against this root so a
+	// client-supplied Path cannot read arbitrary host files. Empty means
+	// image files are not read (fail closed). Callers that handle images
+	// MUST pass the scoped root; RunTurn does not invent one.
+	UploadsRoot string
 
 	// ConversationID scopes per-turn filesystem state to this chat.
 	ConversationID string
@@ -169,6 +176,9 @@ type SummarizeInput struct {
 	// OnTextDelta, if non-nil, is invoked for each chunk of summary text the
 	// model produces (wired to the SSE stream). Optional.
 	OnTextDelta func(text string)
+	// UploadsRoot confines history-image replay the same way TurnInput does.
+	// Empty means those files are not read (fail closed).
+	UploadsRoot string
 }
 
 // SummarizeResult is what the summarize endpoint returns.
@@ -1585,11 +1595,11 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 // are persisted as the first entry of the turn; the run loop's accumulated
 // entries follow.
 func assembleTurnMessages(in TurnInput) ([]fantasy.Message, HistoryEntry, error) {
-	history, err := replayHistory(in.History)
+	history, err := replayHistory(in.History, in.UploadsRoot)
 	if err != nil {
 		return nil, HistoryEntry{}, fmt.Errorf("replay history: %w", err)
 	}
-	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments)
+	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments, in.UploadsRoot)
 	messages := make([]fantasy.Message, 0, len(history)+1)
 	messages = append(messages, history...)
 	// The model gets both halves, joined here and nowhere else; the persisted

@@ -139,9 +139,10 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 	}
 
 	result, sumErr := s.agent.Summarize(r.Context(), SummarizeInput{
-		History:  history,
-		Model:    model,
-		Lockdown: conv.Lockdown,
+		History:     history,
+		Model:       model,
+		Lockdown:    conv.Lockdown,
+		UploadsRoot: userUploadsRoot(s.cfg.EmailAttachmentDir, user),
 		OnTextDelta: func(text string) {
 			emit("summary.delta", map[string]any{"text": text})
 		},

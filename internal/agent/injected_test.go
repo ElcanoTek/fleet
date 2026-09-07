@@ -69,7 +69,7 @@ func TestReplayHistoryRecomposesInjectedContext(t *testing.T) {
 	}
 	msgs, err := replayHistory([]HistoryEntry{
 		{Role: "user", Type: "text", Content: raw, InjectedContext: injectedAttachmentBlock},
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}

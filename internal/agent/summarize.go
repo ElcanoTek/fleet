@@ -62,7 +62,7 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 	}
 	modelSlug := model.Model()
 
-	messages, err := replayHistory(in.History)
+	messages, err := replayHistory(in.History, in.UploadsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("replay history for summarize: %w", err)
 	}
