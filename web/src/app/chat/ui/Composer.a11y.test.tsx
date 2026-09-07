@@ -38,7 +38,7 @@ function Host({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragCounterRef = useRef(0);
   const activeConversationIdRef = useRef<string | null>(null);
-  const abortControllersRef = useRef<Record<string, AbortController>>({});
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const noop = () => {};
   const props = {
     prompt,

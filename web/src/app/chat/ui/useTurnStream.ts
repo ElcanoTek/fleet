@@ -22,7 +22,6 @@ import {
 } from "./history";
 import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
-import { deleteOwn, isSafeObjectKey, setOwn } from "@/app/lib/safeObjectKey";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
@@ -941,10 +940,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           );
           return { ...msg, approvals: touched };
         });
-        if (!isSafeObjectKey(ctx.target)) return prev;
-        const copy = { ...prev };
-        setOwn(copy, ctx.target, next);
-        return copy;
+        const nextByConv = new Map(Object.entries(prev));
+        nextByConv.set(ctx.target, next);
+        return Object.fromEntries(nextByConv);
       });
       return;
     }
@@ -1136,8 +1134,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // Seeded at attach so silence is measured from when this stream started,
     // not from the epoch.
     const beat = () => {
-      const prev = streamPulseRef.current[ctx.target];
-      setOwn(streamPulseRef.current, ctx.target, {
+      const prev = streamPulseRef.current.get(ctx.target);
+      streamPulseRef.current.set(ctx.target, {
         at: nowMs(),
         seq: (prev?.seq ?? 0) + 1,
       });
@@ -1214,14 +1212,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // overlap). This is the pure stepStreamDedup reducer (tested in
         // sse.test.ts); the two ref maps persist its per-conv state.
         const prev = {
-          lastEventId: lastEventIdByConvRef.current[ctx.target] ?? 0,
-          currentTurnId: currentTurnIdByConvRef.current[ctx.target],
+          lastEventId: lastEventIdByConvRef.current.get(ctx.target) ?? 0,
+          currentTurnId: currentTurnIdByConvRef.current.get(ctx.target),
         };
         const { state, drop } = stepStreamDedup(prev, event, payload);
         if (state.currentTurnId !== undefined) {
-          setOwn(currentTurnIdByConvRef.current, ctx.target, state.currentTurnId);
+          currentTurnIdByConvRef.current.set(ctx.target, state.currentTurnId);
         }
-        setOwn(lastEventIdByConvRef.current, ctx.target, state.lastEventId);
+        lastEventIdByConvRef.current.set(ctx.target, state.lastEventId);
         if (drop) continue;
 
         await applyStreamEvent(event, payload, ctx);
@@ -1289,8 +1287,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       //     rather than a reliable one.
       if (info.turn_id) {
         const alreadyStreamedThisTurn =
-          currentTurnIdByConvRef.current[convId] === info.turn_id &&
-          (lastEventIdByConvRef.current[convId] ?? 0) > 0;
+          currentTurnIdByConvRef.current.get(convId) === info.turn_id &&
+          (lastEventIdByConvRef.current.get(convId) ?? 0) > 0;
         if (!info.inflight || alreadyStreamedThisTurn) {
           const existing = messagesByConvRef.current[convId] ?? [];
           const last = existing[existing.length - 1];
@@ -1304,9 +1302,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // post-restart reissue) — reset lastEventId so id=1 isn't
       // dropped. If the turn_id matches what we already tracked, keep
       // the counter so the replay picks up exactly where we left off.
-      if (info.turn_id && currentTurnIdByConvRef.current[convId] !== info.turn_id) {
-        setOwn(currentTurnIdByConvRef.current, convId, info.turn_id);
-        setOwn(lastEventIdByConvRef.current, convId, 0);
+      if (info.turn_id && currentTurnIdByConvRef.current.get(convId) !== info.turn_id) {
+        currentTurnIdByConvRef.current.set(convId, info.turn_id);
+        lastEventIdByConvRef.current.set(convId, 0);
       }
 
       // Find or create the assistant slot for this turn.
@@ -1335,20 +1333,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       attachedConvIdsRef.current.add(convId);
       markConvStreaming(convId);
 
-      const lastSeen = lastEventIdByConvRef.current[convId] ?? 0;
+      const lastSeen = lastEventIdByConvRef.current.get(convId) ?? 0;
       const qs = info.turn_id ? `?turn_id=${encodeURIComponent(info.turn_id)}` : "";
       // Registered like a live turn's controller so unmount cleanup closes
       // this socket too — without it every /chat visit during a long turn
       // opened another reader that outlived the tree it patched.
       abortController = new AbortController();
-      setOwn(abortControllersRef.current, convId, abortController);
+      abortControllersRef.current.set(convId, abortController);
       const ourController = abortController;
       let response: Response;
       const streamUrl = conversationApiUrl(convId, `/stream${qs}`);
       if (!streamUrl) {
         attachedConvIdsRef.current.delete(convId);
         markConvIdle(convId);
-        deleteOwn(abortControllersRef.current, convId);
+        abortControllersRef.current.delete(convId);
         return false;
       }
       try {
@@ -1365,13 +1363,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // against a turn that no longer exists, until a full reload.
           attachedConvIdsRef.current.delete(convId);
           markConvIdle(convId);
-          deleteOwn(abortControllersRef.current, convId);
+          abortControllersRef.current.delete(convId);
           return false;
         }
       } catch (err) {
         attachedConvIdsRef.current.delete(convId);
         markConvIdle(convId);
-        deleteOwn(abortControllersRef.current, convId);
+        abortControllersRef.current.delete(convId);
         throw err;
       }
 
@@ -1404,8 +1402,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // force the slot to done or mark the conversation idle — it isn't.
           // Detach and reattach with Last-Event-ID to resume the stream.
           attachedConvIdsRef.current.delete(convId);
-          if (abortControllersRef.current[convId] === ourController) {
-            deleteOwn(abortControllersRef.current, convId);
+          if (abortControllersRef.current.get(convId) === ourController) {
+            abortControllersRef.current.delete(convId);
           }
         } else if (supersededStreamsRef.current.has(ourController)) {
           // We aborted this socket ourselves because it was dead and a
@@ -1413,8 +1411,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // Touch nothing: the attach/streaming handles and the assistant slot
           // belong to the newer stream, and settling here would tear down a
           // turn that is very much still running.
-          if (abortControllersRef.current[convId] === ourController) {
-            deleteOwn(abortControllersRef.current, convId);
+          if (abortControllersRef.current.get(convId) === ourController) {
+            abortControllersRef.current.delete(convId);
           }
         } else {
           // Release our handles BEFORE settling: settleStreamedSlot may pull
@@ -1424,8 +1422,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             attachedConvIdsRef.current.delete(convId);
             markConvIdle(convId);
           }
-          if (abortControllersRef.current[convId] === ourController) {
-            deleteOwn(abortControllersRef.current, convId);
+          if (abortControllersRef.current.get(convId) === ourController) {
+            abortControllersRef.current.delete(convId);
           }
           // The replay ended — cleanly, or because the socket died under a
           // locked phone. Either way the canonical record is in Postgres.
@@ -1575,9 +1573,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // Reports whether it actually retired anything.
   const retireStream = (convId: string, doomed: AbortController | null): boolean => {
     if (!doomed) return false;
-    if (abortControllersRef.current[convId] !== doomed) return false;
+    if (abortControllersRef.current.get(convId) !== doomed) return false;
     supersededStreamsRef.current.add(doomed);
-    deleteOwn(abortControllersRef.current, convId);
+    abortControllersRef.current.delete(convId);
     doomed.abort();
     return true;
   };
@@ -1627,7 +1625,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (last.state !== "thinking" && last.state !== "streaming") return "idle";
 
     const heartbeatMs = serverHeartbeatMsRef.current;
-    const pulseBefore = streamPulseRef.current[convId];
+    const pulseBefore = streamPulseRef.current.get(convId);
     const silentMs = nowMs() - (pulseBefore?.at ?? 0);
     // Bytes arrived recently — the socket is demonstrably alive, so there is
     // nothing to probe. The watchdog uses the wide gate (this is its common
@@ -1641,7 +1639,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
     // Captured before the first await: every retire below checks that this is
     // still the conversation's registered controller.
-    const doomed = abortControllersRef.current[convId] ?? null;
+    const doomed = abortControllersRef.current.get(convId) ?? null;
     livenessInFlightRef.current.add(convId);
     try {
       let inflight = false;
@@ -1673,7 +1671,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // over and the composer should be free. Note this is about a
         // DIFFERENT controller having appeared, not about `doomed` existing:
         // an attach handle with no registered controller still needs idling.
-        const current = abortControllersRef.current[convId];
+        const current = abortControllersRef.current.get(convId);
         const claimedByOther = Boolean(current) && current !== doomed;
         retireStream(convId, doomed);
         if (!claimedByOther) markConvIdle(convId);
@@ -1697,7 +1695,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Neither alone is conclusive — hence the grace window below — but
       // without the second, a socket that dies during a quiet stretch is
       // invisible until the turn resumes emitting.
-      const applied = lastEventIdByConvRef.current[convId] ?? 0;
+      const applied = lastEventIdByConvRef.current.get(convId) ?? 0;
       const serverAhead = serverLastEventId > applied;
       const missedKeepalives = silentMs >= streamDeadSilenceMs(heartbeatMs);
       if (!serverAhead && !missedKeepalives) return "healthy";
@@ -1705,7 +1703,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Give the socket its chance: a frozen-but-alive connection flushes as
       // soon as the page thaws.
       await delay(streamLivenessGraceMs);
-      const pulseAfter = streamPulseRef.current[convId];
+      const pulseAfter = streamPulseRef.current.get(convId);
       if ((pulseAfter?.seq ?? 0) !== (pulseBefore?.seq ?? 0)) return "healthy";
       // Re-check the preconditions: the grace window is long enough for the
       // turn to have ended, or for another path to have settled the slot.
@@ -1818,7 +1816,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // "≤ the previous turn's final id". The turn_id arrives a frame
     // later (in turn.started) and the boundary-detection logic in
     // pumpStreamResponse keeps currentTurnIdByConvRef in sync.
-    setOwn(lastEventIdByConvRef.current, target, 0);
+    lastEventIdByConvRef.current.set(target, 0);
 
     // Thread mutable per-turn state through the shared pump. The
     // "conversation" SSE event may rename target from PENDING_CONV_KEY
@@ -2096,7 +2094,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
 
     const abortController = new AbortController();
-    setOwn(abortControllersRef.current, initialTarget, abortController);
+    abortControllersRef.current.set(initialTarget, abortController);
     markConvStreaming(initialTarget);
 
     const trimmedModel = selectedModel.trim();
@@ -2136,7 +2134,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // scan is how the catch/finally below relocates "our" slot after
     // that swap. Falls back to initialTarget when no swap happened.
     const resolveTarget = (): string => {
-      for (const [k, v] of Object.entries(abortControllersRef.current)) {
+      for (const [k, v] of abortControllersRef.current) {
         if (v === abortController) return k;
       }
       return initialTarget;
@@ -2268,8 +2266,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       await refreshConversations();
     } finally {
       const finalTarget = resolveTarget();
-      if (abortControllersRef.current[finalTarget] === abortController) {
-        deleteOwn(abortControllersRef.current, finalTarget);
+      if (abortControllersRef.current.get(finalTarget) === abortController) {
+        abortControllersRef.current.delete(finalTarget);
       }
       // Superseded: a replacement stream owns this conversation's handles and
       // its assistant slot. Releasing them here would idle a composer for a

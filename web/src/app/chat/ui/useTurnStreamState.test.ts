@@ -46,7 +46,7 @@ describe("useTurnStreamState", () => {
 
     const controller = new AbortController();
     act(() => {
-      result.current.abortControllersRef.current["__pending__:1"] = controller;
+      result.current.abortControllersRef.current.set("__pending__:1", controller);
       result.current.attachedConvIdsRef.current.add("__pending__:1");
       result.current.markConvStreaming("__pending__:1");
     });
@@ -54,8 +54,8 @@ describe("useTurnStreamState", () => {
     act(() => result.current.promoteStreamKey("__pending__:1", "real-id"));
 
     // Abort-controller IDENTITY is preserved under the new key.
-    expect(result.current.abortControllersRef.current["real-id"]).toBe(controller);
-    expect("__pending__:1" in result.current.abortControllersRef.current).toBe(false);
+    expect(result.current.abortControllersRef.current.get("real-id")).toBe(controller);
+    expect(result.current.abortControllersRef.current.has("__pending__:1")).toBe(false);
 
     // Attached set follows.
     expect(result.current.attachedConvIdsRef.current.has("real-id")).toBe(true);
@@ -72,7 +72,7 @@ describe("useTurnStreamState", () => {
     const { result } = renderHook(() => useTurnStreamState("a"));
     // Nothing registered under the old key → nothing should appear under new.
     act(() => result.current.promoteStreamKey("__pending__:7", "real"));
-    expect("real" in result.current.abortControllersRef.current).toBe(false);
+    expect(result.current.abortControllersRef.current.has("real")).toBe(false);
     expect(result.current.attachedConvIdsRef.current.has("real")).toBe(false);
     expect(result.current.streamingConvsRef.current.has("real")).toBe(false);
   });
@@ -84,8 +84,8 @@ describe("useTurnStreamState", () => {
     const reattachRef = result.current.reattachInFlightRef;
 
     act(() => {
-      result.current.lastEventIdByConvRef.current["a"] = 5;
-      result.current.currentTurnIdByConvRef.current["a"] = "t1";
+      result.current.lastEventIdByConvRef.current.set("a", 5);
+      result.current.currentTurnIdByConvRef.current.set("a", "t1");
       result.current.reattachInFlightRef.current.add("a");
     });
 
@@ -94,8 +94,8 @@ describe("useTurnStreamState", () => {
     expect(result.current.lastEventIdByConvRef).toBe(lastEventIdRef);
     expect(result.current.currentTurnIdByConvRef).toBe(turnIdRef);
     expect(result.current.reattachInFlightRef).toBe(reattachRef);
-    expect(result.current.lastEventIdByConvRef.current["a"]).toBe(5);
-    expect(result.current.currentTurnIdByConvRef.current["a"]).toBe("t1");
+    expect(result.current.lastEventIdByConvRef.current.get("a")).toBe(5);
+    expect(result.current.currentTurnIdByConvRef.current.get("a")).toBe("t1");
     expect(result.current.reattachInFlightRef.current.has("a")).toBe(true);
   });
 });

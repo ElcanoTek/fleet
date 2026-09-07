@@ -253,12 +253,12 @@ const makeHarness = (opts: {
     modelError: null,
     markConvStreaming: (k: string) => streaming.add(k),
     markConvIdle: (k: string) => streaming.delete(k),
-    abortControllersRef: { current: {} },
+    abortControllersRef: { current: new Map() },
     attachedConvIdsRef: { current: new Set<string>() },
-    lastEventIdByConvRef: { current: {} },
-    currentTurnIdByConvRef: { current: {} },
+    lastEventIdByConvRef: { current: new Map() },
+    currentTurnIdByConvRef: { current: new Map() },
     reattachInFlightRef: { current: new Set<string>() },
-    streamPulseRef: { current: {} },
+    streamPulseRef: { current: new Map() },
     serverHeartbeatMsRef: { current: 0 },
     supersededStreamsRef: { current: new WeakSet<AbortController>() },
     livenessInFlightRef: { current: new Set<string>() },
@@ -451,13 +451,13 @@ describe("checkStreamLiveness — the turn already finished", () => {
       inflight: [{ inflight: false }],
       onLoaded: () => {
         // A newer stream takes the conversation mid-reconcile.
-        h.deps.abortControllersRef.current[CONV] = replacement;
+        h.deps.abortControllersRef.current.set(CONV, replacement);
         h.deps.attachedConvIdsRef.current.add(CONV);
         h.streaming.add(CONV);
       },
     });
     const doomed = new AbortController();
-    h.deps.abortControllersRef.current[CONV] = doomed;
+    h.deps.abortControllersRef.current.set(CONV, doomed);
     h.deps.attachedConvIdsRef.current.add(CONV);
     h.streaming.add(CONV);
 
@@ -467,7 +467,7 @@ describe("checkStreamLiveness — the turn already finished", () => {
     );
 
     expect(replacementAborted).toBe(false);
-    expect(h.deps.abortControllersRef.current[CONV]).toBe(replacement);
+    expect(h.deps.abortControllersRef.current.get(CONV)).toBe(replacement);
     // The newer stream owns the streaming flag now; we must not clear it.
     expect(h.streaming.has(CONV)).toBe(true);
   });
@@ -607,7 +607,7 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     expect(h.deps.attachedConvIdsRef.current.has(CONV)).toBe(true);
 
     // Clean up the still-open stream so the test does not leak it.
-    h.deps.abortControllersRef.current[CONV]?.abort();
+    h.deps.abortControllersRef.current.get(CONV)?.abort();
     await live.catch(() => {});
   }, 20000);
 
@@ -633,7 +633,7 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     await expect(check).resolves.toBe("healthy");
     expect(h.attachCount()).toBe(1);
 
-    h.deps.abortControllersRef.current[CONV]?.abort();
+    h.deps.abortControllersRef.current.get(CONV)?.abort();
     await live.catch(() => {});
   }, 20000);
 
@@ -655,7 +655,7 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     await expect(result.current.checkStreamLiveness(CONV)).resolves.toBe("healthy");
     expect(h.inflightProbes).toBe(probesAfterAttach);
 
-    h.deps.abortControllersRef.current[CONV]?.abort();
+    h.deps.abortControllersRef.current.get(CONV)?.abort();
     await live.catch(() => {});
   }, 20000);
 });
@@ -758,7 +758,7 @@ describe("checkStreamLiveness — silence during a quiet stretch", () => {
     const { result } = renderHook(() => useTurnStream(h.deps));
     const zombie = result.current.reattachToConv(CONV);
     await vi.advanceTimersByTimeAsync(10);
-    expect(h.deps.lastEventIdByConvRef.current[CONV]).toBe(2);
+    expect(h.deps.lastEventIdByConvRef.current.get(CONV)).toBe(2);
 
     // Four keepalives' worth of silence with nothing to fall behind on.
     await vi.advanceTimersByTimeAsync(4 * HEARTBEAT + 1000);
@@ -798,7 +798,7 @@ describe("checkStreamLiveness — silence during a quiet stretch", () => {
     await expect(check).resolves.toBe("healthy");
     expect(h.attachCount()).toBe(1);
 
-    h.deps.abortControllersRef.current[CONV]?.abort();
+    h.deps.abortControllersRef.current.get(CONV)?.abort();
     await live.catch(() => {});
   }, 30000);
 
@@ -830,7 +830,7 @@ describe("checkStreamLiveness — silence during a quiet stretch", () => {
     await expect(check).resolves.toBe("healthy");
     expect(h.attachCount()).toBe(1);
 
-    h.deps.abortControllersRef.current[CONV]?.abort();
+    h.deps.abortControllersRef.current.get(CONV)?.abort();
     await live.catch(() => {});
   }, 30000);
 });
