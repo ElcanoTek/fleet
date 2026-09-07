@@ -255,11 +255,14 @@ same PR.
 - **Why the invariants are the way they are:** [`docs/adr/`](docs/adr/)
   (Architecture Decision Records)
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- **Driving a PR to green after it is opened** (the follow-up loop for any
-  coding agent or human: what never bends, which CI lane you are in and what
-  red means there, promotion-PR mechanics, Codex and human review threads,
-  the local-reproduction traps — silent DB skips, pinned tool versions — and
-  the check-in cadence; agent-specific hook files only point here):
+- **Driving a PR to green after it is opened** — the follow-up loop for any
+  coding agent or human. Posture: *we can fix everything*; if you are driving
+  the PR, every red check and every open thread on it is yours, whoever wrote
+  the code. The procedure is the skill
+  [`.agents/skills/steward/SKILL.md`](.agents/skills/steward/SKILL.md)
+  (`.claude/skills/steward` is a symlink to it); the reference behind it —
+  the two CI lanes, promotion mechanics, reviewers, pinned tool versions, the
+  local-reproduction traps — is
   [`docs/PR-STEWARDSHIP.md`](docs/PR-STEWARDSHIP.md)
 - **Testing strategy** (unit / fake-LLM / mocked + live Playwright / canary):
   [`docs/TESTING.md`](docs/TESTING.md)

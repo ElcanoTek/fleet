@@ -166,7 +166,9 @@ yours to clear while the PR is open: bump the dependency, add the reviewed
 waiver with its written reason, or port a fix another PR already carries — and
 say in the PR what you did and why. Only when no fix exists yet should the PR
 stop at a comment naming the check and the cause. The full procedure for
-driving a PR to green is [`docs/PR-STEWARDSHIP.md`](docs/PR-STEWARDSHIP.md).
+driving a PR to green is the skill
+[`.agents/skills/steward/SKILL.md`](.agents/skills/steward/SKILL.md), with the
+reference behind it in [`docs/PR-STEWARDSHIP.md`](docs/PR-STEWARDSHIP.md).
 
 Two other things that surprise first-time contributors, neither of them a problem
 with your change: a first PR waits for a maintainer to approve the workflow run
