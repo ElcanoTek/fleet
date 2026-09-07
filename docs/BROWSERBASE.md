@@ -190,12 +190,13 @@ registered, and the key value is read per call, so rotation never needs one.
   scheduled runs are arguably the better fit, since `ask` genuinely parks a run until a
   human answers — so the tool's own description carries the protocol rather than relying
   on the skill being discoverable there.
-- **The live-registry prompt section is blind to hosted connectors.** `buildSystemPrompt`
-  runs before the per-user overlay opens, and its roster comes from the bundled catalog,
-  so the `## MCP Tools (live registry)` section can claim nothing is connected while the
-  connector's tools are in the model's tool list. That is pre-existing and affects every
-  hosted connector, not just Browserbase; this feature works around it in the skill and
-  the tool description, and the underlying bug is tracked separately.
+- **The live-registry prompt section used to be blind to hosted connectors.** Until the
+  #1006 follow-up, `buildSystemPrompt` ran before the per-user overlay opened and its
+  roster came from the bundled catalog, so the `## MCP Tools (live registry)` section
+  could claim nothing was connected while the connector's tools were in the model's tool
+  list. `RunTurn` now opens the overlay first and the section lists hosted tools by their
+  registered names (and names any connection it could not mount). The skill and the tool
+  description keep their own guidance; they no longer have to work around the prompt.
 - **Redaction can collide with the URL.** Tool output passes through the shared secret
   redactor, which replaces 8+ characters after markers like `token=` or `api_key=`. A
   viewer URL carrying such a parameter would reach the model as `[REDACTED]`, and

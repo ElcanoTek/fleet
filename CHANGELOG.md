@@ -151,6 +151,21 @@ than by a major-version bump.
 
 ### Fixed
 
+- **The system prompt no longer denies a user's hosted connectors.** The
+  prompt's "MCP Tools (live registry)" section drew on the roster frozen at
+  startup — bundle servers only — and `RunTurn` composed it before the per-user
+  hosted (OAuth) overlay opened. A deployment whose only connectors are hosted
+  ones, the default bundle included, therefore told the model "No MCP tools are
+  currently connected. Do not attempt to call any `mcp_*` tool" while dozens of
+  `mcp_github_*` tools sat in its tool list; whether the model believed the
+  prompt or the tool list was down to the model (surfaced verifying GitHub for
+  #1006: the same connection worked on 2026-09-03 and was refused on
+  2026-09-07). The overlay now opens before the prompt is composed, the section
+  lists the hosted tools by their registered names in one sorted list with the
+  bundled ones, and it names any connection the overlay could not mount so the
+  model sends the user to reconnect instead of improvising. Prompt composition
+  still precedes the user-message commit, so a persona failure keeps failing
+  with no side effects. No operator action.
 - **The weekly claim benchmark no longer trips PostgreSQL's bind-parameter
   limit.** `BenchmarkClaimNextPendingTask` seeded its pending tasks in
   hard-coded chunks of 1000 rows per multi-row INSERT — right at ~57 insert

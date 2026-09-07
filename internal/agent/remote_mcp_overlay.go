@@ -283,6 +283,46 @@ func (o *RemoteMCPOverlay) Active() bool {
 	return o != nil && (o.Broker != nil || o.Client != nil) && len(o.Servers) > 0
 }
 
+// hostedMCPRoster is what the system prompt's live-registry section needs to
+// know about this turn's per-user hosted (remote) MCP overlay: the model-facing
+// names of every tool the overlay mounted, and the registration names of the
+// connections it could not mount. The frozen startup roster the section
+// otherwise draws on knows only bundle servers (ADR-0006), so without this a
+// deployment whose only connectors are hosted OAuth ones told the model "No MCP
+// tools are currently connected. Do not attempt to call any `mcp_*` tool" while
+// 44 `mcp_github_*` tools sat in its tool list — and the model, reasonably,
+// obeyed the prompt (found verifying GitHub for #1006, 2026-09-07).
+type hostedMCPRoster struct {
+	// tools are `mcp_<registration>_<tool>` names, sorted — the same formula
+	// agentcore registers the overlay's tools under (mcpTool.Info), so the
+	// prompt advertises exactly what is callable.
+	tools []string
+	// skipped are the registration names of selected connections that could
+	// not be mounted (token unavailable, connect failure), sorted, so the model
+	// can tell the user to reconnect instead of improvising around the gap.
+	skipped []string
+}
+
+// hostedRosterFromOverlay derives the prompt roster from an opened overlay.
+// Nil-safe; an inactive overlay with nothing skipped yields the zero value.
+// No allowlist is applied: hosted seats do not participate in the bundle's
+// per-task credential allowlist (docs/REMOTE-MCP-MULTI-LOGIN.md) — the
+// credential-owning child already narrowed the catalog it handed back.
+func hostedRosterFromOverlay(o *RemoteMCPOverlay) hostedMCPRoster {
+	if o == nil {
+		return hostedMCPRoster{}
+	}
+	var r hostedMCPRoster
+	if o.Active() {
+		r.tools = computeMCPToolRosterFromCatalog(o.Catalog, nil)
+	}
+	if len(o.Skipped) > 0 {
+		r.skipped = append([]string(nil), o.Skipped...)
+		sort.Strings(r.skipped)
+	}
+	return r
+}
+
 // Validate checks the ownership contract an injected opener must satisfy. A
 // broker-backed overlay always represents a per-run scope and therefore needs
 // an explicit release function; selected routing names need a call target.

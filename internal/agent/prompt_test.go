@@ -3,12 +3,14 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // TestBuildSystemPrompt_AgentNotesInjection verifies the admin-curated notes
@@ -22,7 +24,7 @@ func TestBuildSystemPrompt_AgentNotesInjection(t *testing.T) {
 		{Slug: "xandr-limits", Title: "Xandr Limits", Body: "Max 5 deals/min."},
 	}
 
-	withBoth, err := m.buildSystemPrompt("victoria", "c", []string{"Prefers concise answers."}, "", notes, nil, nil)
+	withBoth, err := m.buildSystemPrompt("victoria", "c", []string{"Prefers concise answers."}, "", notes, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -43,7 +45,7 @@ func TestBuildSystemPrompt_AgentNotesInjection(t *testing.T) {
 		}
 	}
 
-	notesOnly, err := m.buildSystemPrompt("victoria", "c", nil, "", notes, nil, nil)
+	notesOnly, err := m.buildSystemPrompt("victoria", "c", nil, "", notes, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt notes-only: %v", err)
 	}
@@ -54,7 +56,7 @@ func TestBuildSystemPrompt_AgentNotesInjection(t *testing.T) {
 		t.Error("notes-only prompt must contain the Agent Notes section")
 	}
 
-	none, err := m.buildSystemPrompt("victoria", "c", nil, "", nil, nil, nil)
+	none, err := m.buildSystemPrompt("victoria", "c", nil, "", nil, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt none: %v", err)
 	}
@@ -109,7 +111,7 @@ func TestBuildSystemPrompt_SkillsRoster(t *testing.T) {
 	m := fixtureManager(t)
 
 	// No skills yet → no Skills section.
-	none, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil)
+	none, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt (no skills): %v", err)
 	}
@@ -125,7 +127,7 @@ func TestBuildSystemPrompt_SkillsRoster(t *testing.T) {
 		t.Fatalf("mkdir broken-skill: %v", err)
 	}
 
-	with, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil)
+	with, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt (with skills): %v", err)
 	}
@@ -166,7 +168,7 @@ func TestListPersonas_AlphaSorted(t *testing.T) {
 func TestBuildSystemPrompt_Layering(t *testing.T) {
 	m := fixtureManager(t)
 
-	prompt, err := m.buildSystemPrompt("victoria", "test-conv", []string{"User prefers concise answers."}, "", nil, nil, nil)
+	prompt, err := m.buildSystemPrompt("victoria", "test-conv", []string{"User prefers concise answers."}, "", nil, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -210,7 +212,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	writeFile(t, filepath.Join(m.protocolsDir, "fastio-mcp.md"), "# Fast.io Protocol\n")
 
 	// Fast.io OFF — empty tool roster, no fast.io entries.
-	off, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil)
+	off, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt off: %v", err)
 	}
@@ -221,7 +223,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	// Fast.io ON — pretend the fast_io MCP server is wired up by
 	// inserting a fast-io-prefixed tool into the frozen roster.
 	m.mcpToolRoster = []string{"mcp_fast_io_storage", "mcp_fast_io_workspace"}
-	on, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil)
+	on, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt on: %v", err)
 	}
@@ -248,7 +250,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 func TestBuildSystemPrompt_UnknownPersona(t *testing.T) {
 	m := fixtureManager(t)
 
-	_, err := m.buildSystemPrompt("nope-does-not-exist", "test-conv", nil, "", nil, nil, nil)
+	_, err := m.buildSystemPrompt("nope-does-not-exist", "test-conv", nil, "", nil, nil, nil, hostedMCPRoster{})
 	if err == nil {
 		t.Fatal("expected error for unknown persona")
 	}
@@ -260,7 +262,7 @@ func TestBuildSystemPrompt_PathTraversalRejected(t *testing.T) {
 	// Load code uses filepath.Base to strip any traversal, so feeding
 	// "../../../etc/passwd" should attempt to read ".persona.yaml"
 	// (base=etc, ext=passwd) which doesn't exist → error, not a breach.
-	_, err := m.buildSystemPrompt("../../../etc/passwd", "test-conv", nil, "", nil, nil, nil)
+	_, err := m.buildSystemPrompt("../../../etc/passwd", "test-conv", nil, "", nil, nil, nil, hostedMCPRoster{})
 	if err == nil {
 		t.Fatal("expected error (file not found after path-sanitize)")
 	}
@@ -324,7 +326,7 @@ func TestRuntimeDateContextStableWithinUTCDay(t *testing.T) {
 // nothing.
 func TestBuildSystemPrompt_ProjectInstructions(t *testing.T) {
 	m := fixtureManager(t)
-	with, err := m.buildSystemPrompt("victoria", "c", []string{"personal fact"}, "Always cite sources.", nil, nil, nil)
+	with, err := m.buildSystemPrompt("victoria", "c", []string{"personal fact"}, "Always cite sources.", nil, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,11 +338,113 @@ func TestBuildSystemPrompt_ProjectInstructions(t *testing.T) {
 	if mem < 0 || pi > mem {
 		t.Fatal("project instructions must precede user memories")
 	}
-	without, err := m.buildSystemPrompt("victoria", "c", nil, "", nil, nil, nil)
+	without, err := m.buildSystemPrompt("victoria", "c", nil, "", nil, nil, nil, hostedMCPRoster{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(without, "## Project Instructions") {
 		t.Fatal("no project → no section")
+	}
+}
+
+// TestBuildSystemPrompt_HostedMCPRoster pins the fix for the prompt denying a
+// user's hosted connectors (#1006). The live-registry section used to draw on
+// the frozen startup roster alone (bundle servers), so a deployment whose only
+// connectors are hosted OAuth ones — the default bundle included — told the
+// model "No MCP tools are currently connected. Do not attempt to call any
+// `mcp_*` tool" while `mcp_github_*` tools sat in its tool list, and the model
+// obeyed the prompt. The section now merges the overlay's tools, names the
+// connections the overlay could not mount, and stays byte-stable.
+func TestBuildSystemPrompt_HostedMCPRoster(t *testing.T) {
+	m := fixtureManager(t)
+	const denial = "No MCP tools are currently connected"
+	build := func(hosted hostedMCPRoster) string {
+		t.Helper()
+		p, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil, hosted)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt: %v", err)
+		}
+		return p
+	}
+
+	// Nothing bundled, nothing hosted: the explicit denial is still right.
+	if none := build(hostedMCPRoster{}); !strings.Contains(none, denial) {
+		t.Errorf("empty roster should still carry the explicit no-tools sentence\n--- prompt ---\n%s", none)
+	}
+
+	// Hosted tools only (the default bundle + one GitHub seat): the denial
+	// must go and the registered names must be advertised.
+	hosted := hostedMCPRoster{tools: []string{"mcp_github_work_get_me", "mcp_github_work_search_repositories"}}
+	with := build(hosted)
+	if strings.Contains(with, denial) {
+		t.Errorf("prompt denies MCP tools while the hosted overlay mounted some\n--- prompt ---\n%s", with)
+	}
+	for _, want := range []string{"These are the only `mcp_*` tools registered for this turn", "- `mcp_github_work_get_me`\n", "- `mcp_github_work_search_repositories`\n"} {
+		if !strings.Contains(with, want) {
+			t.Errorf("prompt missing %q\n--- prompt ---\n%s", want, with)
+		}
+	}
+	if again := build(hosted); again != with {
+		t.Error("prompt is not byte-stable across two builds with the same hosted roster (prompt-cache contract)")
+	}
+
+	// Bundle + hosted merge into ONE sorted list, and the merge must not write
+	// into the shared frozen roster's spare capacity (it is returned by
+	// reference when no Optional servers exist).
+	roster := make([]string, 1, 4)
+	roster[0] = "mcp_zeta_tool"
+	m.mcpToolRoster = roster
+	merged := build(hosted)
+	gh, zeta := strings.Index(merged, "`mcp_github_work_get_me`"), strings.Index(merged, "`mcp_zeta_tool`")
+	if gh < 0 || zeta < 0 || gh > zeta {
+		t.Errorf("merged roster should list bundled and hosted names in one sorted list (github@%d zeta@%d)\n--- prompt ---\n%s", gh, zeta, merged)
+	}
+	if spare := roster[:cap(roster)]; spare[1] != "" || len(m.mcpToolRoster) != 1 {
+		t.Errorf("building the prompt mutated the shared frozen roster: %q", spare)
+	}
+	m.mcpToolRoster = nil
+
+	// A connector that could not be mounted is named, so the model can send
+	// the user to reconnect it rather than improvising.
+	skipped := build(hostedMCPRoster{skipped: []string{"github_personal"}})
+	if !strings.Contains(skipped, denial) {
+		t.Error("with nothing mounted the no-tools sentence must remain")
+	}
+	for _, want := range []string{"could NOT be mounted this turn", "`github_personal`", "Settings → Connections"} {
+		if !strings.Contains(skipped, want) {
+			t.Errorf("skipped-connector notice missing %q\n--- prompt ---\n%s", want, skipped)
+		}
+	}
+}
+
+// TestHostedRosterFromOverlay covers the overlay → prompt-roster derivation:
+// nil-safe, the agentcore tool-name formula, sorted, and skipped names carried
+// through even when nothing mounted.
+func TestHostedRosterFromOverlay(t *testing.T) {
+	if got := hostedRosterFromOverlay(nil); len(got.tools) != 0 || len(got.skipped) != 0 {
+		t.Fatalf("nil overlay → %+v, want zero value", got)
+	}
+	active := &RemoteMCPOverlay{
+		Broker:  inertMCPBroker{},
+		Servers: map[string]bool{"github_work": true, "notion": true},
+		Catalog: []mcp.ServerTool{
+			{ServerName: "notion", Tool: mcp.Tool{Name: "search"}},
+			{ServerName: "github_work", Tool: mcp.Tool{Name: "get_me"}},
+		},
+		Skipped: []string{"slack", "github_personal"},
+	}
+	got := hostedRosterFromOverlay(active)
+	if want := []string{"mcp_github_work_get_me", "mcp_notion_search"}; !reflect.DeepEqual(got.tools, want) {
+		t.Errorf("tools = %v, want %v", got.tools, want)
+	}
+	if want := []string{"github_personal", "slack"}; !reflect.DeepEqual(got.skipped, want) {
+		t.Errorf("skipped = %v, want %v", got.skipped, want)
+	}
+	if active.Skipped[0] != "slack" {
+		t.Error("deriving the roster must not sort the overlay's own Skipped slice in place")
+	}
+	inactive := &RemoteMCPOverlay{Skipped: []string{"github"}, Catalog: []mcp.ServerTool{{ServerName: "github", Tool: mcp.Tool{Name: "x"}}}}
+	if got := hostedRosterFromOverlay(inactive); len(got.tools) != 0 || len(got.skipped) != 1 {
+		t.Errorf("inactive overlay → %+v, want no tools and the skipped name", got)
 	}
 }
