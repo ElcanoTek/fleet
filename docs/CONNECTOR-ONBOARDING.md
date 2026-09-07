@@ -145,7 +145,7 @@ Google Workspace trio, GitHub, Notion, Slack, Linear, Atlassian, Asana,
 monday.com, Airtable, Stripe, PayPal, HubSpot, Canva, Figma, Zapier, Hugging
 Face — and a test caps it at 8–20 entries, never community provenance. The
 same pass audited the directory for dead/low-quality listings and added
-newly-verified official endpoints (see CHANGELOG).
+newly-verified official endpoints (see that PR in the repository history).
 
 ## Deviations / honest scope
 

@@ -23,7 +23,7 @@ successful use of it. Fan-out is never forced.
 - **Backfill.** Migration 061 flips the column default to true and backfills
   existing rows (pre-#1043 `false` was the default nobody chose, not an explicit
   opt-out). **Behavior change:** existing scheduled tasks start seeing
-  `spawn_subagent` — recorded in the CHANGELOG.
+  `spawn_subagent` — recorded in the PR that shipped it.
 - **Tri-state create.** `TaskCreate.allow_delegation` is a `*bool`
   (`DelegationAllowed()` resolves nil → true), so an old export, bundle template,
   or API client that omits the field gets the default while an explicit false

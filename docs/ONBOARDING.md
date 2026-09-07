@@ -5,12 +5,12 @@ real, streamed chat turn through the rootless-Podman sandbox — in well under
 30 minutes on a box that already has the toolchain.
 
 This guide is a narrative shortcut, not a replacement for the canonical docs.
-It reuses the exact commands from [`README.md`](README.md),
-[`CONTRIBUTING.md`](CONTRIBUTING.md), and the [`Makefile`](Makefile); when in
+It reuses the exact commands from [`README.md`](../README.md),
+[`CONTRIBUTING.md`](../CONTRIBUTING.md), and the [`Makefile`](../Makefile); when in
 doubt those are the source of truth. For the architecture, read the README
 "Architecture at a glance"; for the agent runtime internals, read
-[`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md). Agents working in this repo
-should read [`AGENTS.md`](AGENTS.md) first.
+[`docs/AGENT-RUNTIME.md`](AGENT-RUNTIME.md). Agents working in this repo
+should read [`AGENTS.md`](../AGENTS.md) first.
 
 > **What you are about to stand up.** fleet is **one** Go process that runs
 > interactive chat *and* a scheduling engine on one box, driven by **one**
@@ -31,8 +31,8 @@ them so a local run agrees with the gate.
 
 | Tool | Version | Why |
 | --- | --- | --- |
-| **Go** | **1.21 or newer** — you do *not* need the exact patch release [`go.mod`](go.mod) pins | the backend; CI reads `go-version-file: go.mod`, so `go.mod` is the one declaration. The Makefile exports `GOTOOLCHAIN=auto`, so `make build` fetches the pinned toolchain itself — a distro Go that lags `go.mod` is fine, it just needs to be new enough (1.21+) to do the fetch |
-| **Node.js** | the major in [`web/.nvmrc`](web/.nvmrc) (currently **24**) + npm | the `web/` Next.js app. CI reads that same file via `node-version-file`, so there is one declaration and nothing to keep in sync by hand |
+| **Go** | **1.21 or newer** — you do *not* need the exact patch release [`go.mod`](../go.mod) pins | the backend; CI reads `go-version-file: go.mod`, so `go.mod` is the one declaration. The Makefile exports `GOTOOLCHAIN=auto`, so `make build` fetches the pinned toolchain itself — a distro Go that lags `go.mod` is fine, it just needs to be new enough (1.21+) to do the fetch |
+| **Node.js** | the major in [`web/.nvmrc`](../web/.nvmrc) (currently **24**) + npm | the `web/` Next.js app. CI reads that same file via `node-version-file`, so there is one declaration and nothing to keep in sync by hand |
 | **golangci-lint** | **v2.13.1** | the lint gate. `.golangci.yml` no longer pins `run.go` — golangci-lint defaults to the go.mod version — so only the binary version is pinned, in CI |
 | **Podman** (rootless) | recent | the execution sandbox; needed for the sandbox-backed tests / first chat turn. Most unit tests self-skip when podman is absent. |
 | **PostgreSQL** | a local cluster you can create DBs on | the chat/scheduler store suites |
@@ -183,7 +183,7 @@ sandbox image, starts the fake LLM, boots fleet pointed at it, builds and
 `next start`s the web app, seeds the test users, and health-polls everything (no
 fixed sleeps). The `chat-sandbox` spec is the one to watch: the fake LLM drives a
 real `bash` + `run_python` loop in the **real Podman sandbox** and the real tool
-stdout streams back over SSE. See [`web/e2e/live/README.md`](web/e2e/live/README.md)
+stdout streams back over SSE. See [`web/e2e/live/README.md`](../web/e2e/live/README.md)
 for the full env table.
 
 ### Option B — one task end-to-end with a real model (`fleet task run`)
@@ -202,7 +202,7 @@ scripts/run_workflow_live.sh docs/examples/local-task.yaml
 The script ensures the sandbox image exists, mints a fresh isolated workspace,
 and points a stable `latest.log` symlink at the run so you can `tail -f` it. The
 example task writes and reads back a file in the sandbox workspace. See
-[`docs/examples/local-task.yaml`](docs/examples/local-task.yaml) for the
+[`docs/examples/local-task.yaml`](examples/local-task.yaml) for the
 task schema.
 
 > **Why no real key in Option A.** The non-negotiable invariant is *no secrets in
@@ -244,16 +244,14 @@ Every pull request must be green before merge. The CI jobs
 | **e2e-live** | the full real stack with a stubbed LLM (no OpenRouter spend) | `cd web && npm run test:e2e:live` (Option A above) |
 
 Then follow the contributor conventions in
-[`CONTRIBUTING.md`](CONTRIBUTING.md):
+[`CONTRIBUTING.md`](../CONTRIBUTING.md):
 
-- Branch off the latest `main` with a descriptive prefix (`feat/…`, `fix/…`,
-  `chore/…`, `docs/…`, `test/…`).
-- Keep the PR focused; write a clear description (what changed, why, how
-  verified).
-- **Sign off every commit** with the Developer Certificate of Origin:
-  `git commit -s -m "..."`.
+- Branch off the latest **`dev`** with a descriptive prefix (`feat/…`,
+  `fix/…`, `docs/…`); PRs target `dev`, and `main` receives only promotions.
+- Keep the PR focused; fill in the PR template (what changed and why, what you
+  actually ran to verify it, scope and deviations).
 
-Do not weaken any of the non-negotiable invariants in [`AGENTS.md`](AGENTS.md)
+Do not weaken any of the non-negotiable invariants in [`AGENTS.md`](../AGENTS.md)
 (the sandbox is mandatory, credentials stay host-side, governance is one core,
 no secrets in the repo, honest docs, client content stays external).
 

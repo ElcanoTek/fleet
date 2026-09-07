@@ -231,7 +231,7 @@ docs/             architecture & operator docs; docs/adr/ records the load-beari
 
 > **Naming note (v1 glossary):** `chat`, `moc`, `gig`, and `cutlass` — which
 > appear in code comments, env-var prefixes (`CUTLASS_*`), docs, and the
-> CHANGELOG — are the names of the internal predecessor stack that fleet
+> git history — are the names of the internal predecessor stack that fleet
 > consolidates and replaces. They are historical aliases inside this repo, not
 > separate public projects.
 
@@ -292,8 +292,9 @@ make lint       # golangci-lint run
 ```
 
 For the full build/test workflow (including the Postgres-backed Go suites, the
-web app, and the Playwright e2e suites), see
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+web app, and the Playwright e2e suites), see [`AGENTS.md`](AGENTS.md) — the
+operating guide for humans and agents alike — and
+[`docs/ONBOARDING.md`](docs/ONBOARDING.md) for the clone-to-first-turn path.
 
 ### Running one task locally (`fleet task run`)
 
@@ -384,6 +385,7 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | [`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md) | The HTTP API as an automation substrate — keys, kicking off jobs, consuming structured output |
 | [`docs/API-CLIENTS.md`](docs/API-CLIENTS.md) | Reaching the API from another machine — what the TLS front routes, the key store the service reads, `X-API-Key`, the free connection test |
 | [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) | The connector catalog — bundled vs third-party trust classes |
+| [`docs/README.md`](docs/README.md) | The full documentation index — every design note, runbook and ADR, by question |
 | [`docs/adr/`](docs/adr/) | Architecture Decision Records — the *why* behind the non-negotiable invariants |
 | [`SECURITY.md`](SECURITY.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) | Reporting a vulnerability · contributor workflow + CI gates |
 
