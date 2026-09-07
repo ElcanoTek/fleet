@@ -151,6 +151,19 @@ than by a major-version bump.
 
 ### Fixed
 
+- **The weekly claim benchmark no longer trips PostgreSQL's bind-parameter
+  limit.** `BenchmarkClaimNextPendingTask` seeded its pending tasks in
+  hard-coded chunks of 1000 rows per multi-row INSERT — right at ~57 insert
+  columns, and silently wrong once the task-column registry passed 65 (68
+  columns × 1000 rows is 68000 parameters, over the 65535 ceiling). Because
+  `b.N` only lands above ~963 on some machines, the `Weekly benchmarks` run
+  failed intermittently (2026-08-24, 2026-09-07) with `extended protocol
+  limited to 65535 parameters`. The chunk is now `db.MaxTaskBatchRows()`,
+  derived from the registry, so adding a column shrinks it instead of breaking
+  it; `AddTaskBatch` refuses an oversized slice up front with the row/column
+  arithmetic in the error; and a test pins the public batch endpoint's
+  `MaxBatchSize` (100) under that ceiling so a full atomic batch always fits
+  one statement. No operator action.
 - **Follow-ups from the hardening pass's own review.** Five defects in the
   fixes that shipped in the previous entry, each found by review rather than by
   a test, and each now covered by one:
