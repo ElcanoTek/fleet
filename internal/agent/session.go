@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"charm.land/fantasy"
@@ -177,7 +178,7 @@ type TurnSummaryContent struct {
 // every entry before it is discarded, and the summary text is emitted
 // as a synthetic assistant message. Pre-summary entries remain in the
 // DB and the UI; they just stop entering the model's context.
-func replayHistory(entries []HistoryEntry) ([]fantasy.Message, error) {
+func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Message, error) {
 	// Find the index of the most recent summary entry. Anything before
 	// it is supplanted by the summary itself.
 	startIdx := 0
@@ -305,7 +306,7 @@ func replayHistory(entries []HistoryEntry) ([]fantasy.Message, error) {
 			switch e.Role {
 			case "user":
 				flushAssistant()
-				parts := loadHistoryImageParts(c.Images)
+				parts := loadHistoryImageParts(c.Images, uploadsRoot)
 				// The model sees what it saw the first time: the user's text
 				// plus that turn's injected context (rows written before
 				// migration 056 carry it inside c.Text already, and their
@@ -355,21 +356,32 @@ func replayHistory(entries []HistoryEntry) ([]fantasy.Message, error) {
 // carry no media type (uploads have historically been PNG-normalized).
 const defaultImageMediaType = "image/png"
 
-// CALLER CONTRACT — read before adding a producer of TurnInput.ImageAttachments.
-// This function performs NO path containment of its own. Every a.Path it reads
-// must already have been confined to the uploads root by the producer; today the
-// sole producer is httpapi's validateAttachments (attachments.go), which rebuilds
-// each path as Join(root, rel) after a filepath.Rel + filepath.IsLocal guard and
-// stores only that. A future producer — a scheduled path, taskrun, an MCP-driven
-// path — that skips that guard turns the os.ReadFile below into an arbitrary
-// host-file read straight into the model context.
-//
-// This is a documented contract, not an enforced boundary, and it is stated that
-// way deliberately: the uploads root lives on the config used by buildSandboxPool
-// and is not currently threaded to this call site, so a local check here could
-// only re-assert part of the guard while looking like all of it. Thread the root
-// in and re-assert Rel+IsLocal+Join here if a second producer ever appears.
-func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRefMeta) {
+// confineToUploadsRoot rebuilds path from a trusted root: Rel of the cleaned
+// absolute path, rejected unless filepath.IsLocal, then Join so the Stat/ReadFile
+// sink never sees the raw value. This is the barrier CodeQL's go/path-injection
+// query models; validateAttachments already does it in httpapi, but that
+// sanitizer is lost across the ImageAttachment struct-field / package boundary.
+func confineToUploadsRoot(root, path string) (string, bool) {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(path) == "" {
+		return "", false
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	absRoot = filepath.Clean(absRoot)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(absRoot, filepath.Clean(abs))
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return filepath.Join(absRoot, rel), true
+}
+
+func loadImageAttachments(atts []ImageAttachment, uploadsRoot string) ([]fantasy.FilePart, []ImageRefMeta) {
 	const (
 		maxImages       = 8
 		maxBytesPerFile = 8 * 1024 * 1024
@@ -389,7 +401,12 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 			log.Printf("loadImageAttachments: skipping %q (over %d cap)", logSafeAgent(a.Name), maxImages)
 			continue
 		}
-		info, err := os.Stat(a.Path)
+		p, ok := confineToUploadsRoot(uploadsRoot, a.Path)
+		if !ok {
+			log.Printf("loadImageAttachments: %q is outside the uploads root (skipped)", logSafeAgent(a.Path))
+			continue
+		}
+		info, err := os.Stat(p)
 		if err != nil {
 			log.Printf("loadImageAttachments: stat %s: %s", logSafeAgent(a.Path), logSafeAgent(err.Error()))
 			continue
@@ -398,7 +415,7 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 			log.Printf("loadImageAttachments: %s is %d bytes (> %d cap)", logSafeAgent(a.Path), info.Size(), maxBytesPerFile)
 			continue
 		}
-		data, err := os.ReadFile(a.Path) // path was re-validated against uploads root
+		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
 		if err != nil {
 			log.Printf("loadImageAttachments: read %s: %s", logSafeAgent(a.Path), logSafeAgent(err.Error()))
 			continue
@@ -413,7 +430,7 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 			MediaType: mt,
 		})
 		refs = append(refs, ImageRefMeta{
-			Path:      a.Path,
+			Path:      p,
 			MediaType: mt,
 			Name:      a.Name,
 		})
@@ -425,7 +442,7 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 // user message so they replay as multimodal context on subsequent turns.
 // Any missing file is silently dropped — replay must never fail an entire
 // turn just because an attachment got swept (TTL) since it was uploaded.
-func loadHistoryImageParts(refs []ImageRefMeta) []fantasy.FilePart {
+func loadHistoryImageParts(refs []ImageRefMeta, uploadsRoot string) []fantasy.FilePart {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -435,18 +452,23 @@ func loadHistoryImageParts(refs []ImageRefMeta) []fantasy.FilePart {
 		if r.Path == "" {
 			continue
 		}
-		info, err := os.Stat(r.Path)
+		p, ok := confineToUploadsRoot(uploadsRoot, r.Path)
+		if !ok {
+			log.Printf("loadHistoryImageParts: %q is outside the uploads root (image dropped from replay)", logSafeAgent(r.Path))
+			continue
+		}
+		info, err := os.Stat(p)
 		if err != nil {
-			log.Printf("loadHistoryImageParts: stat %s: %v (image dropped from replay)", r.Path, err)
+			log.Printf("loadHistoryImageParts: stat %s: %v (image dropped from replay)", logSafeAgent(r.Path), err)
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			log.Printf("loadHistoryImageParts: %s is %d bytes (> %d cap)", r.Path, info.Size(), maxBytesPerFile)
+			log.Printf("loadHistoryImageParts: %s is %d bytes (> %d cap)", logSafeAgent(r.Path), info.Size(), maxBytesPerFile)
 			continue
 		}
-		data, err := os.ReadFile(r.Path) // path is from a previously validated history row
+		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
 		if err != nil {
-			log.Printf("loadHistoryImageParts: read %s: %v", r.Path, err)
+			log.Printf("loadHistoryImageParts: read %s: %v", logSafeAgent(r.Path), err)
 			continue
 		}
 		mt := strings.TrimSpace(r.MediaType)

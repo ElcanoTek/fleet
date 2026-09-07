@@ -17,7 +17,7 @@ func TestLoadImageAttachments(t *testing.T) {
 	parts, refs := loadImageAttachments([]ImageAttachment{
 		{Path: pngPath, MediaType: "image/png", Name: "shot.png"},
 		{Path: filepath.Join(dir, "missing.jpg"), MediaType: "image/jpeg", Name: "missing.jpg"},
-	})
+	}, dir)
 	if len(parts) != 1 {
 		t.Fatalf("expected 1 fantasy.FilePart, got %d", len(parts))
 	}
@@ -32,11 +32,37 @@ func TestLoadImageAttachments(t *testing.T) {
 	}
 }
 
+func TestLoadImageAttachments_RejectsPathOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.png")
+	if err := os.WriteFile(outside, []byte("SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parts, refs := loadImageAttachments([]ImageAttachment{
+		{Path: outside, MediaType: "image/png", Name: "secret.png"},
+	}, root)
+	if len(parts) != 0 || len(refs) != 0 {
+		t.Fatalf("read a file outside the uploads root: parts=%d refs=%d", len(parts), len(refs))
+	}
+}
+
+func TestLoadImageAttachments_EmptyRootReadsNothing(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "x.png")
+	if err := os.WriteFile(p, []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parts, _ := loadImageAttachments([]ImageAttachment{{Path: p, Name: "x.png"}}, "")
+	if len(parts) != 0 {
+		t.Fatalf("empty uploads root must fail closed, got %d parts", len(parts))
+	}
+}
+
 func TestLoadImageAttachments_DefaultsMimeWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "x.png")
 	_ = os.WriteFile(p, []byte("a"), 0o600)
-	parts, refs := loadImageAttachments([]ImageAttachment{{Path: p, Name: "x.png"}})
+	parts, refs := loadImageAttachments([]ImageAttachment{{Path: p, Name: "x.png"}}, dir)
 	if len(parts) != 1 || parts[0].MediaType != "image/png" {
 		t.Errorf("expected default media image/png, got %+v", parts)
 	}
@@ -63,7 +89,7 @@ func TestReplayHistory_PreservesUserImages(t *testing.T) {
 		}),
 		mustEntry("assistant", "text", TextContent{Text: "a square"}),
 	}
-	msgs, err := replayHistory(entries)
+	msgs, err := replayHistory(entries, dir)
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -104,7 +130,7 @@ func TestReplayHistory_ImageMissingFileGracefullyDropped(t *testing.T) {
 			},
 		}),
 	}
-	msgs, err := replayHistory(entries)
+	msgs, err := replayHistory(entries, t.TempDir())
 	if err != nil {
 		t.Fatalf("replayHistory should not fail on missing image: %v", err)
 	}

@@ -57,6 +57,12 @@ type TurnInput struct {
 
 	// ImageAttachments are user-attached image files for THIS turn only.
 	ImageAttachments []ImageAttachment
+	// UploadsRoot is the host directory image paths must stay inside
+	// (EmailAttachmentDir/uploads, usually the caller's per-user subtree).
+	// loadImageAttachments rebuilds each path with Rel+IsLocal+Join against
+	// this root so a client-supplied Path cannot read arbitrary host files.
+	// Empty means image files are not read (fail closed).
+	UploadsRoot string
 
 	// ConversationID scopes per-turn filesystem state to this chat.
 	ConversationID string
@@ -1585,11 +1591,11 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 // are persisted as the first entry of the turn; the run loop's accumulated
 // entries follow.
 func assembleTurnMessages(in TurnInput) ([]fantasy.Message, HistoryEntry, error) {
-	history, err := replayHistory(in.History)
+	history, err := replayHistory(in.History, in.UploadsRoot)
 	if err != nil {
 		return nil, HistoryEntry{}, fmt.Errorf("replay history: %w", err)
 	}
-	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments)
+	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments, in.UploadsRoot)
 	messages := make([]fantasy.Message, 0, len(history)+1)
 	messages = append(messages, history...)
 	// The model gets both halves, joined here and nowhere else; the persisted
@@ -1652,6 +1658,9 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 // Mirrors chat's session.go::RunTurn over the unified loop.
 func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*TurnResult, error) {
 	startedAt := time.Now()
+	if strings.TrimSpace(in.UploadsRoot) == "" && m.config != nil && m.config.EmailAttachmentDir != "" {
+		in.UploadsRoot = filepath.Join(m.config.EmailAttachmentDir, "uploads")
+	}
 	persona := defaultIfEmpty(strings.TrimSpace(in.Persona), m.config.PersonaDefault)
 
 	if in.ConversationID != "" {

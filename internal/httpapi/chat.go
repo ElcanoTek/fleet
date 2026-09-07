@@ -671,6 +671,7 @@ func (s *Server) runTurnAsync(
 		SkillProposer:             &skillProposer{ctx: turnCtx, store: s.store, user: user},
 		Lockdown:                  conv.Lockdown,
 		ImageAttachments:          imageAttachments,
+		UploadsRoot:               userUploadsRoot(s.cfg.EmailAttachmentDir, user),
 		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),
 		ApprovalStager: &approvalStager{
 			ctx:             turnCtx,
