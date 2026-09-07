@@ -108,7 +108,14 @@ Re-request the reviewer after pushing for a changes-requested review.
 
 - **gitleaks**: CI pins **8.30.1**. Its rule set differs from older builds, so
   a tree clean under 8.21 can fail under 8.30, and `.gitleaksignore` entries
-  that look stale under an old binary are still needed by CI.
+  that look stale under an old binary are still needed by CI. A gitleaks
+  finding is the one scanner result the ownership rule does **not** let you
+  clear with a waiver by default: `.gitleaksignore` is for values verified to
+  be fake fixtures or false positives, with the verification written next to
+  the entry. A real credential is removed and treated as compromised — rotated
+  by whoever owns it, or reported privately per `SECURITY.md` — and the PR
+  says so without quoting the value. "No secrets in the repo" is an
+  `AGENTS.md` invariant; a green scanner over a live secret violates it twice.
 - **`make lint` skips loudly** when ruff or actionlint/shellcheck is missing
   and prints the install command. A green `make lint` is not proof; read the
   output.
@@ -143,5 +150,8 @@ a flaky test stays flaky for a year.
   path before acting on events. The same pattern as `CLAUDE.md → AGENTS.md`;
   nothing lives under `.claude/` but the link.
 
-Adding a new agent that has its own skills directory means one more symlink
-into `.agents/skills/`, never a second copy of the rules.
+Adding an agent that scans only its own directory means one more symlink
+**in that agent's directory** pointing back at `.agents/skills/steward` —
+exactly the shape of the Claude one above — never a second copy of the rules,
+and never a link placed inside `.agents/skills/`, which already holds the
+canonical skill.

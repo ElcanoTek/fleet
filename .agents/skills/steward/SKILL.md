@@ -25,6 +25,12 @@ whatever caused the failure.
 - A Semgrep or CodeQL rule started matching? Fix the code; if it is a true
   false positive, add the reviewed waiver **with its written reason**
   (`.github/codeql-accepted-findings.json`, a `//nolint` with a reason).
+- gitleaks flagged something? First decide what it is. A **real credential**
+  is never waived: remove it, treat it as compromised (rotate it, or tell a
+  maintainer privately so they can — see `SECURITY.md`), and say so in the PR
+  without quoting the value. Only a value you have **verified** is a fake
+  fixture or a false positive gets a `.gitleaksignore` entry, and the entry's
+  comment says how you verified it.
 - The base went red under you? Merge the base in, then fix what is red.
 - Another PR already carries the fix? Port it into yours now. It no-ops on
   merge. Waiting for that PR to land is still waiting.
@@ -88,14 +94,16 @@ not the event that woke you. Events arrive late and out of order.
   names), `nolintlint` (every `//nolint` needs a reason), `gocyclo`, gofmt.
 - A PR to `dev` runs the fast lane only. If you touched concurrency,
   dependencies, the sandbox image or web flows, run the deferred lane
-  yourself: `make test-race`, `make govulncheck`,
-  `npx playwright test --project=mocked`.
+  yourself: `make test-race`, `make govulncheck`, `make ci-e2e-mocked` (the
+  Playwright command itself must run from `web/`; the Makefile target does).
 
 ## Never
 
 - **Merge, approve, or enable auto-merge.** Every PR waits for a human; your
   job ends at green + mergeable + every thread addressed.
 - Skip, disable, quarantine or loosen a test to get green.
+- Waive a gitleaks finding you have not verified is fake. A scanner made green
+  over a live secret is worse than a red one.
 - Rebase, amend or force-push a branch someone else has checked out. Merge the
   base in. (`dev` and `main` are never rewritten.)
 - Push an empty commit or close-and-reopen a PR to re-trigger CI.
