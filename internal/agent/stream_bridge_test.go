@@ -56,8 +56,16 @@ func (o *capturingObserver) concatText() string {
 	return s
 }
 
-// bridgeMockModel streams reasoning + a tool call + tool result + final text so
-// the test exercises every callback the streaming bridge forwards.
+// bridgeMockModel plays the provider side of a two-step tool turn, the way a
+// real provider (and cmd/fake-llm) does: the first stream carries reasoning
+// and a tool call and finishes with FinishReasonToolCalls, so the loop
+// executes the tool and calls the model again; the second stream carries the
+// final text and finishes with FinishReasonStop. fantasy ≥ 0.42 dispatches
+// tools only on an explicit tool-calls turn (agent.go, `result.FinishReason !=
+// FinishReasonToolCalls` ends the loop), so a single stream that mixed a tool
+// call with the final text and a Stop finish — the shape this mock had until
+// the 0.42 bump — was a protocol no provider speaks, and the test passed only
+// because 0.41 tolerated it.
 type bridgeMockModel struct {
 	mu        sync.Mutex
 	callCount int
@@ -74,28 +82,39 @@ func (m *bridgeMockModel) Generate(_ context.Context, _ fantasy.Call) (*fantasy.
 func (m *bridgeMockModel) Stream(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 	m.mu.Lock()
 	m.callCount++
+	call := m.callCount
 	m.mu.Unlock()
+	if call == 1 {
+		return func(yield func(fantasy.StreamPart) bool) {
+			// Reasoning block.
+			if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeReasoningStart, ID: "r1"}) {
+				return
+			}
+			if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeReasoningDelta, ID: "r1", Delta: "thinking…"}) {
+				return
+			}
+			if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeReasoningEnd, ID: "r1"}) {
+				return
+			}
+			// One tool call (run_bash); the turn ends on tool-calls so the
+			// loop executes it, emits the result, and calls the model again.
+			if !yield(fantasy.StreamPart{
+				Type:          fantasy.StreamPartTypeToolCall,
+				ID:            "call_1",
+				ToolCallName:  "run_bash",
+				ToolCallInput: `{"command":"echo hi"}`,
+			}) {
+				return
+			}
+			yield(fantasy.StreamPart{
+				Type:         fantasy.StreamPartTypeFinish,
+				FinishReason: fantasy.FinishReasonToolCalls,
+				Usage:        fantasy.Usage{InputTokens: 100, OutputTokens: 20},
+			})
+		}, nil
+	}
 	return func(yield func(fantasy.StreamPart) bool) {
-		// Reasoning block.
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeReasoningStart, ID: "r1"}) {
-			return
-		}
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeReasoningDelta, ID: "r1", Delta: "thinking…"}) {
-			return
-		}
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeReasoningEnd, ID: "r1"}) {
-			return
-		}
-		// One tool call (run_bash) — the loop executes it and emits the result.
-		if !yield(fantasy.StreamPart{
-			Type:          fantasy.StreamPartTypeToolCall,
-			ID:            "call_1",
-			ToolCallName:  "run_bash",
-			ToolCallInput: `{"command":"echo hi"}`,
-		}) {
-			return
-		}
-		// Final user-visible text.
+		// Final user-visible text, after the tool result is in the history.
 		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "All done. "}) {
 			return
 		}
@@ -105,7 +124,7 @@ func (m *bridgeMockModel) Stream(_ context.Context, _ fantasy.Call) (fantasy.Str
 		yield(fantasy.StreamPart{
 			Type:         fantasy.StreamPartTypeFinish,
 			FinishReason: fantasy.FinishReasonStop,
-			Usage:        fantasy.Usage{InputTokens: 120, OutputTokens: 30},
+			Usage:        fantasy.Usage{InputTokens: 20, OutputTokens: 10},
 		})
 	}, nil
 }
