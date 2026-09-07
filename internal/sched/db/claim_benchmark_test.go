@@ -10,11 +10,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// benchSeedChunk bounds how many tasks are inserted per AddTaskBatch call so a
-// large seed can't exceed PostgreSQL's 65535-bind-parameter limit (AddTask
-// carries ~57 columns/row).
-const benchSeedChunk = 1000
-
 // BenchmarkClaimNextPendingTask measures scheduler claim throughput — the
 // FOR UPDATE SKIP LOCKED transaction each worker runs to lease the next pending
 // task (#296). It seeds b.N claimable pending tasks BEFORE the timer starts,
@@ -35,8 +30,15 @@ func BenchmarkClaimNextPendingTask(b *testing.B) {
 			CreatedAt: now,
 		}
 	}
-	for i := 0; i < len(tasks); i += benchSeedChunk {
-		end := i + benchSeedChunk
+	// Seed in chunks of MaxTaskBatchRows — the registry-derived ceiling on
+	// rows per multi-row INSERT — so the seed can never trip PostgreSQL's
+	// 65535-bind-parameter limit. This used to be a hard-coded 1000, which was
+	// correct at ~57 insert columns and silently wrong once the registry grew
+	// past 65 (68 columns × 1000 rows = 68000 parameters): the weekly run then
+	// failed only on machines where b.N happened to land above 963.
+	chunk := MaxTaskBatchRows()
+	for i := 0; i < len(tasks); i += chunk {
+		end := i + chunk
 		if end > len(tasks) {
 			end = len(tasks)
 		}

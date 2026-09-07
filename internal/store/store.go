@@ -2233,6 +2233,53 @@ func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newSta
 	return n > 0, nil
 }
 
+// ClaimApprovalAndSetModel resolves a pending approval as "approved" AND pins
+// its conversation to model in ONE transaction. It exists for the
+// suggest_advanced_model card, whose resolution IS the model flip: doing the
+// two writes separately (claim, then SetModel) left a window where a transient
+// failure on the second write recorded the approval as approved — with a
+// result_text claiming the conversation was pinned — while the conversation
+// stayed on the old model, and a retry then saw a resolved row and never
+// re-attempted the pin. Here either both rows change or neither does: a lost
+// claim returns (false, nil) with nothing written; a conversation that is
+// missing, soft-deleted or not the user's returns ErrConversationNotFound and
+// the claim is rolled back, so the approval stays pending and the caller can
+// retry. Same claim predicate as ClaimApproval (pending + not expired).
+func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approvalID, resultText, convID, model string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().Unix()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2
+		 WHERE id = $3 AND user_email = $4 AND status = 'pending'
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)`,
+		resultText, now, approvalID, userEmail, now,
+	)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	res, err = tx.ExecContext(ctx,
+		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		model, now, convID, userEmail,
+	)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, ErrConversationNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ClaimExpiredApproval atomically rejects (or otherwise resolves) a
 // pending approval whose expires_at deadline has already passed. Used
 // only by the expiry sweep (#225) so notification/audit still happens

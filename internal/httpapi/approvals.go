@@ -1524,24 +1524,23 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		return
 	}
 
-	// User accepted. Claim, then pin the conversation to the advanced model.
-	// The model flip is pure metadata (no external side effect), so a claim
-	// that wins and then fails to pin is reported as an error to THIS caller
-	// — the resolution row records what was attempted, not a success.
+	// User accepted. The claim and the model pin are ONE transaction
+	// (store.ClaimApprovalAndSetModel): the resolution row's text says the
+	// conversation is pinned, so it must not be written unless the pin landed.
+	// Before, a claim that won and then failed to pin (a transient DB error)
+	// returned 500 with the approval already recorded as approved — and the
+	// retry saw a resolved row, echoed it, and never pinned. Now a failed pin
+	// rolls the claim back, the card stays pending, and the retry works.
 	advancedModel := agentcore.CurrentAdvancedModel()
 	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", advancedModel)
-	claimed, err := s.store.ClaimApproval(r.Context(), user, approval.ID, "approved", resultText)
+	claimed, err := s.store.ClaimApprovalAndSetModel(r.Context(), user, approval.ID, resultText, approval.ConversationID, advancedModel)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("ClaimApprovalAndSetModel (suggest_advanced approval): %v", err)
+		http.Error(w, "could not pin conversation model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if !claimed {
 		s.writeResolvedApprovalState(w, r, user, approval.ID)
-		return
-	}
-	if err := s.store.SetModel(execCtx, user, approval.ConversationID, advancedModel); err != nil {
-		log.Printf("SetModel (suggest_advanced approval): %v", err)
-		http.Error(w, "could not pin conversation model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),

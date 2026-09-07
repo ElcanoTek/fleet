@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 )
@@ -113,5 +114,69 @@ func TestSetApprovalResult_UpdatesClaimedRow(t *testing.T) {
 	got, _ = s.GetApproval(ctx, "alice@example.com", a.ID)
 	if got.ResultText != "sent ok" {
 		t.Fatalf("result_text = %q, want %q", got.ResultText, "sent ok")
+	}
+}
+
+// TestClaimApprovalAndSetModel_AtomicAndRetryable pins the suggest_advanced
+// resolution's contract: the approved claim and the model pin land together
+// or not at all. A pin that cannot land (here: a conversation id that is not
+// the user's) rolls the claim back — the approval is still pending and the
+// model untouched — so the same call can be retried and then wins.
+func TestClaimApprovalAndSetModel_AtomicAndRetryable(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const user = "alice@example.com"
+
+	conv, err := s.CreateConversation(ctx, user, "t", "victoria", "cheap/model", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	a, err := s.CreateApproval(ctx, conv.ID, user, "suggest_advanced_model", "call_1", `{}`, 0, ApprovalSeat{})
+	if err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+
+	// The pin fails: wrong conversation. Nothing may have changed.
+	claimed, err := s.ClaimApprovalAndSetModel(ctx, user, a.ID, "pinned", "not-a-conversation", "advanced/model")
+	if claimed || !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf("bad conversation: claimed=%v err=%v, want false/ErrConversationNotFound", claimed, err)
+	}
+	got, err := s.GetApproval(ctx, user, a.ID)
+	if err != nil {
+		t.Fatalf("GetApproval: %v", err)
+	}
+	if got.Status != "pending" {
+		t.Fatalf("after a failed pin the approval is %q; the claim must have rolled back", got.Status)
+	}
+	c, err := s.Get(ctx, user, conv.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if c.Model != "cheap/model" {
+		t.Fatalf("model = %q after a failed claim; want unchanged", c.Model)
+	}
+
+	// The retry wins and both rows change.
+	claimed, err = s.ClaimApprovalAndSetModel(ctx, user, a.ID, "pinned", conv.ID, "advanced/model")
+	if err != nil || !claimed {
+		t.Fatalf("retry: claimed=%v err=%v, want true/nil", claimed, err)
+	}
+	got, _ = s.GetApproval(ctx, user, a.ID)
+	if got.Status != "approved" || got.ResultText != "pinned" {
+		t.Fatalf("approval = %q/%q, want approved/pinned", got.Status, got.ResultText)
+	}
+	c, _ = s.Get(ctx, user, conv.ID)
+	if c.Model != "advanced/model" {
+		t.Fatalf("model = %q, want advanced/model", c.Model)
+	}
+
+	// A second resolution loses the claim without touching anything.
+	claimed, err = s.ClaimApprovalAndSetModel(ctx, user, a.ID, "again", conv.ID, "other/model")
+	if claimed || err != nil {
+		t.Fatalf("already resolved: claimed=%v err=%v, want false/nil", claimed, err)
+	}
+	c, _ = s.Get(ctx, user, conv.ID)
+	if c.Model != "advanced/model" {
+		t.Fatalf("a lost claim changed the model to %q", c.Model)
 	}
 }

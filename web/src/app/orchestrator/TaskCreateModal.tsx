@@ -154,10 +154,14 @@ const RUN_IF_TIMEOUT_MIN = 1;
 const RUN_IF_TIMEOUT_MAX = 300;
 
 // normalizeRunIfTimeout turns the raw timeout input into the integer the API
-// gets: blank/NaN → the default, otherwise clamped into the accepted range.
+// gets: blank/NaN/zero/negative → the default, otherwise clamped into the
+// accepted range. Zero is the API's own "use the default 30" spelling (an
+// omitted timeout_seconds), so a task created by an API client with no timeout
+// arrives here as 0 and must round-trip as 30 — clamping it to the minimum
+// silently turned a 30s gate into a 1s one on any unrelated edit.
 export function normalizeRunIfTimeout(raw: string): number {
   const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n)) return RUN_IF_TIMEOUT_DEFAULT;
+  if (!Number.isFinite(n) || n <= 0) return RUN_IF_TIMEOUT_DEFAULT;
   return Math.min(RUN_IF_TIMEOUT_MAX, Math.max(RUN_IF_TIMEOUT_MIN, n));
 }
 
@@ -218,8 +222,9 @@ function taskToFormValues(task: Task | null) {
     // Held as the RAW input string (not a number) so the field can be emptied
     // while retyping: a number-typed state had to drop the NaN a cleared
     // <input type=number> reports, which made backspacing to blank impossible.
-    // Parsed and clamped by normalizeRunIfTimeout on blur and on submit.
-    runIfTimeout: String(task?.run_if?.timeout_seconds ?? RUN_IF_TIMEOUT_DEFAULT),
+    // Parsed and clamped by normalizeRunIfTimeout on blur and on submit. A
+    // stored 0 means "the default" (see normalizeRunIfTimeout), so show 30.
+    runIfTimeout: String(task?.run_if?.timeout_seconds || RUN_IF_TIMEOUT_DEFAULT),
     // The form has no exit-code field; carried so an edit echoes the stored
     // gate faithfully (a lossy echo reads as a run_if change server-side and
     // 403s non-admin edits of unrelated fields).
