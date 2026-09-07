@@ -294,7 +294,7 @@ make lint       # golangci-lint run
 For the full build/test workflow (including the Postgres-backed Go suites, the
 web app, and the Playwright e2e suites), see [`AGENTS.md`](AGENTS.md) — the
 operating guide for humans and agents alike — and
-[`docs/ONBOARDING.md`](docs/ONBOARDING.md) for the clone-to-first-turn path.
+[`ONBOARDING.md`](ONBOARDING.md) for the clone-to-first-turn path.
 
 ### Running one task locally (`fleet task run`)
 

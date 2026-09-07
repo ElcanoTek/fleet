@@ -136,7 +136,7 @@ jobs:
             case "$f" in
               docs/*.md|LICENSE) : ;;
               README.md|CONTRIBUTING.md|SECURITY.md) : ;;
-              CODE_OF_CONDUCT.md|AGENTS.md|CLAUDE.md) : ;;
+              CODE_OF_CONDUCT.md|AGENTS.md|CLAUDE.md|ONBOARDING.md) : ;;
               *) docs_only=false ;;
             esac
           done <<< "$files"
