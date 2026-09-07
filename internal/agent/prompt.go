@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -518,8 +519,9 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	//    byte-stable across turns (docs/PROMPT-CACHE-CONTRACT.md).
 	sb.WriteString("## MCP Tools (live registry)\n\n")
 	bundled := m.activeMCPToolNames(enabledOptionalMCPServers)
-	mcpNames := make([]string, 0, len(bundled)+len(hosted.tools))
-	mcpNames = append(append(mcpNames, bundled...), hosted.tools...)
+	// slices.Concat allocates the merged copy itself; spelling the capacity as
+	// len(a)+len(b) is what CodeQL flags as go/allocation-size-overflow.
+	mcpNames := slices.Concat(bundled, hosted.tools)
 	sort.Strings(mcpNames)
 	if len(mcpNames) == 0 {
 		sb.WriteString("No MCP tools are currently connected. Do not attempt to call any `mcp_*` tool — none will resolve.\n\n")
