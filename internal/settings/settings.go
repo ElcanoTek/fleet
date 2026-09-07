@@ -326,7 +326,7 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 			// Out-of-bounds env default: keep it verbatim. It is what the runtime
 			// actually does and what a reset must revert to; only NEW admin writes
 			// are held to the registry bounds.
-			log.Printf("workspace settings: env default for %s is outside the admin-settable bounds (%v); keeping it as the default", logSafe(spec.Key), err)
+			log.Printf("workspace settings: env default for %s is outside the admin-settable bounds (%s); keeping it as the default", logSafe(spec.Key), logSafe(err.Error()))
 			nd = strings.TrimSpace(d)
 		}
 		s.defaults[spec.Key] = nd

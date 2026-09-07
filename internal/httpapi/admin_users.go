@@ -200,7 +200,7 @@ func (s *Server) setOpsRole(r *http.Request, email, role string) {
 	}
 	if err := s.opsAdmins.SetRole(r.Context(), email, role); err != nil {
 		//nolint:gosec // G706: %q escapes CR/LF; role is validated before this call.
-		log.Printf("WARNING: admin users: set ops role %q for %q failed: %v", logSafe(role), logSafe(email), err)
+		log.Printf("WARNING: admin users: set ops role %q for %q failed: %s", logSafe(role), logSafe(email), logSafe(err.Error()))
 	}
 }
 

@@ -391,7 +391,7 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 		}
 		info, err := os.Stat(a.Path)
 		if err != nil {
-			log.Printf("loadImageAttachments: stat %s: %v", logSafeAgent(a.Path), err)
+			log.Printf("loadImageAttachments: stat %s: %s", logSafeAgent(a.Path), logSafeAgent(err.Error()))
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
@@ -400,7 +400,7 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 		}
 		data, err := os.ReadFile(a.Path) // path was re-validated against uploads root
 		if err != nil {
-			log.Printf("loadImageAttachments: read %s: %v", logSafeAgent(a.Path), err)
+			log.Printf("loadImageAttachments: read %s: %s", logSafeAgent(a.Path), logSafeAgent(err.Error()))
 			continue
 		}
 		mt := strings.TrimSpace(a.MediaType)

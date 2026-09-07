@@ -550,7 +550,7 @@ func run() error {
 			Class:          event.Class,
 		}
 		if err := chatStore.RecordPanicEvent(ctx, record); err != nil {
-			log.Printf("panic event persist failed (location=%s incident=%s): %v", logSafe(event.Location), logSafe(event.IncidentID), err)
+			log.Printf("panic event persist failed (location=%s incident=%s): %s", logSafe(event.Location), logSafe(event.IncidentID), logSafe(err.Error()))
 		}
 	}
 
