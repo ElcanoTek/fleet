@@ -11,10 +11,12 @@ cannot carry. The historical one-paragraph feature notes are in
 [`FEATURE-NOTES.md`](FEATURE-NOTES.md), and every decision that touches an
 invariant is an ADR in [`adr/`](adr/), which keeps its own index.
 
-Three other entry points sit outside this directory:
+Four other entry points sit outside this directory:
 [`../AGENTS.md`](../AGENTS.md) (the operating guide, for humans and agents
 alike), [`../CONTRIBUTING.md`](../CONTRIBUTING.md) (the contributor front
-door) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKILL.md)
+door), [`../ONBOARDING.md`](../ONBOARDING.md) (clone to a first sandboxed
+chat turn — at the root because Claude Code's `/team-onboarding` reads it
+there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKILL.md)
 (how a PR is driven to green after it is opened).
 
 ## By question
@@ -218,7 +220,6 @@ above fails otherwise.
 - [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
 - [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) — The node toolchain handoff (`fleet update` ⇄ `fleet doctor --node`)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management
-- [`ONBOARDING.md`](ONBOARDING.md) — Onboarding: clone to your first sandbox session
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections
 - [`OPERATORS.md`](OPERATORS.md) — Operating fleet
 - [`OPS-CONNECTOR-DEFAULTS.md`](OPS-CONNECTOR-DEFAULTS.md) — Operations connector defaults
