@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -63,11 +62,7 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 	}
 	modelSlug := model.Model()
 
-	uploadsRoot := ""
-	if m.config != nil && m.config.EmailAttachmentDir != "" {
-		uploadsRoot = filepath.Join(m.config.EmailAttachmentDir, "uploads")
-	}
-	messages, err := replayHistory(in.History, uploadsRoot)
+	messages, err := replayHistory(in.History, in.UploadsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("replay history for summarize: %w", err)
 	}

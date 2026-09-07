@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,6 +44,28 @@ func TestLoadImageAttachments_RejectsPathOutsideRoot(t *testing.T) {
 	}, root)
 	if len(parts) != 0 || len(refs) != 0 {
 		t.Fatalf("read a file outside the uploads root: parts=%d refs=%d", len(parts), len(refs))
+	}
+}
+
+func TestAssembleTurnMessages_EmptyUploadsRootSkipsImages(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "shot.png")
+	if err := os.WriteFile(p, []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, entry, err := assembleTurnMessages(TurnInput{
+		UserMessage:      "see this",
+		ImageAttachments: []ImageAttachment{{Path: p, MediaType: "image/png", Name: "shot.png"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tc TextContent
+	if err := json.Unmarshal(entry.Content, &tc); err != nil {
+		t.Fatal(err)
+	}
+	if len(tc.Images) != 0 {
+		t.Fatalf("omitted UploadsRoot must fail closed, got %d image refs", len(tc.Images))
 	}
 }
 

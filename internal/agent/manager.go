@@ -58,10 +58,11 @@ type TurnInput struct {
 	// ImageAttachments are user-attached image files for THIS turn only.
 	ImageAttachments []ImageAttachment
 	// UploadsRoot is the host directory image paths must stay inside
-	// (EmailAttachmentDir/uploads, usually the caller's per-user subtree).
-	// loadImageAttachments rebuilds each path with Rel+IsLocal+Join against
-	// this root so a client-supplied Path cannot read arbitrary host files.
-	// Empty means image files are not read (fail closed).
+	// (the authenticated user's uploads subtree). loadImageAttachments
+	// rebuilds each path with Rel+IsLocal+Join against this root so a
+	// client-supplied Path cannot read arbitrary host files. Empty means
+	// image files are not read (fail closed). Callers that handle images
+	// MUST pass the scoped root; RunTurn does not invent one.
 	UploadsRoot string
 
 	// ConversationID scopes per-turn filesystem state to this chat.
@@ -175,6 +176,9 @@ type SummarizeInput struct {
 	// OnTextDelta, if non-nil, is invoked for each chunk of summary text the
 	// model produces (wired to the SSE stream). Optional.
 	OnTextDelta func(text string)
+	// UploadsRoot confines history-image replay the same way TurnInput does.
+	// Empty means those files are not read (fail closed).
+	UploadsRoot string
 }
 
 // SummarizeResult is what the summarize endpoint returns.
@@ -1658,9 +1662,6 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 // Mirrors chat's session.go::RunTurn over the unified loop.
 func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*TurnResult, error) {
 	startedAt := time.Now()
-	if strings.TrimSpace(in.UploadsRoot) == "" && m.config != nil && m.config.EmailAttachmentDir != "" {
-		in.UploadsRoot = filepath.Join(m.config.EmailAttachmentDir, "uploads")
-	}
 	persona := defaultIfEmpty(strings.TrimSpace(in.Persona), m.config.PersonaDefault)
 
 	if in.ConversationID != "" {
