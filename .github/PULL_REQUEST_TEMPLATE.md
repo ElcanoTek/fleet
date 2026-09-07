@@ -28,7 +28,8 @@ sentence, not a wasted one.
 
 - [ ] The title and "What changed, and why" are written for the release notes
       they become (there is no changelog file — ADR-0061). On a **promotion
-      PR** the body *is* the release notes: one bullet per `dev` PR, breaking
+      PR** they prefill the squash commit message, which `release.yml`
+      publishes as the release notes: one bullet per `dev` PR, breaking
       changes and operator actions stated plainly
 - [ ] A design note (`docs/<FEATURE>.md`) added, if this ships a feature
 - [ ] An ADR added or superseded in `docs/adr/`, if this adds, weakens or

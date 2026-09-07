@@ -36,8 +36,8 @@ print `PASS`, not `SKIP`.
   merge alongside everyone else's; a grab-bag conflicts with all of them.
 - Fill in the PR template rather than deleting it: what changed and why, what
   you actually ran to verify it, and the scope and deviations. The title and
-  the "why" become the generated release notes, so write them for the operator
-  who reads those. There is no changelog file
+  the "why" are what the promoter carries into the release notes, so write
+  them for the operator who reads those. There is no changelog file
   ([ADR-0061](docs/adr/0061-retire-the-changelog.md)).
 - Every PR waits for a human to merge. Nothing merges itself.
 - After it is open, the PR is driven to green by whoever holds it — red
@@ -56,15 +56,17 @@ govulncheck, Grype, both Playwright suites) sees the code.
 Feature work merges into `dev` (the fast lane); `dev` is promoted to `main`
 via a **squash**-merge PR — the squash titles are the promotion log.
 
-**The promotion PR's body is the release notes.** GitHub's generated notes see
-one PR per release — the promotion — and none of the `dev` PRs behind it, so
-`release.yml` copies the promotion body into the published release ahead of
-the generated list. Write it for the operator who reads it there: one bullet
-per `dev` PR with its number and one-line *why*, and any breaking change or
-operator action stated plainly (ADR-0061 retired the changelog on this basis).
-An agent's attribution trailer at the end of the body (the "Generated with"
-line, its session link, the signature under a rule) is stripped on the way in;
-everything else in the body is published as written.
+**The promotion's squash commit message is the release notes.** `release.yml`
+publishes the released commit's message verbatim, then GitHub's generated PR
+list (which sees only the promotion, never the `dev` PRs behind it). GitHub
+prefills the squash dialog with the promotion PR's title and body, so write the
+body's "What changed, and why" for the operator who reads the release: one
+bullet per `dev` PR with its number and one-line *why*, and any breaking change
+or operator action stated plainly (ADR-0061 retired the changelog on this
+basis). In the dialog, keep that section and drop the rest — verification,
+scope, the checklist, any tool's footer. What is in the box when you click
+merge is what ships. (Merging through the API instead? Pass the same text as
+the commit message.)
 
 Squashing
 has one structural side effect: the branches' merge-base never advances, so
