@@ -62,6 +62,9 @@ one PR per release — the promotion — and none of the `dev` PRs behind it, so
 the generated list. Write it for the operator who reads it there: one bullet
 per `dev` PR with its number and one-line *why*, and any breaking change or
 operator action stated plainly (ADR-0061 retired the changelog on this basis).
+An agent's attribution trailer at the end of the body (the "Generated with"
+line, its session link, the signature under a rule) is stripped on the way in;
+everything else in the body is published as written.
 
 Squashing
 has one structural side effect: the branches' merge-base never advances, so
