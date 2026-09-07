@@ -54,8 +54,13 @@ Two properties worth knowing:
 - **Only the newest release is listed.** After publishing, the workflow deletes
   every older release *object*, so the Releases page always shows exactly the
   current release. **Tags are never deleted** — they are what builds and
-  `fleet update` derive identity from. An older release's notes are its
-  commit message: `git log -1 v2026.09.04.2`.
+  `fleet update` derive identity from. An older release's prose is its commit
+  message, `git log -1 v2026.09.04.2`; the generated half of its notes (the
+  merged-PR list and compare link) is not archived, and is reconstructed from
+  the tags: `git log --oneline v2026.09.04.1..v2026.09.04.2` and
+  `https://github.com/ElcanoTek/fleet/compare/v2026.09.04.1...v2026.09.04.2`.
+  That is the one deliberately lossy part: the published page for an old
+  release is gone, its content is not.
 
 ## Reading a build's identity
 

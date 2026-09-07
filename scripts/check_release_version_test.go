@@ -74,6 +74,7 @@ func TestReleaseWorkflowTagsEveryGreenPushToMain(t *testing.T) {
 		{"gh release view", "publication must be idempotent: a re-run after a failed `gh release create` is how a tag without its release is recovered"},
 		{"gh release create", "the tag is published as a release so its notes are generated"},
 		{"gh release delete", "only the newest release object is kept; without the prune the Releases page grows by several entries a day"},
+		{"scripts/version.sh filter", "the prune must decide what is a release tag through the one validator in version.sh, not a regex copied into the workflow"},
 		{"group: release-${{ github.event.workflow_run.head_sha }}", "the concurrency group must key on the COMMIT: a single `release` group displaces the PENDING run when a third queues, dropping a green commit's tag entirely"},
 	} {
 		if !strings.Contains(wf, want.needle) {

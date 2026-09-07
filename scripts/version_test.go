@@ -495,3 +495,34 @@ func TestIdentityIsNotBorrowedFromAnEnclosingRepo(t *testing.T) {
 		}
 	}
 }
+
+// TestFilterKeepsOnlyReleaseTagsInVersionOrder: release.yml decides which
+// superseded release objects to prune by piping `gh release list` through
+// `version.sh filter` — so the one validator in this file, not a regex copied
+// into the workflow, is what says "this is one of ours", and the ordering must
+// be numeric per field (v….10 after v….9, which plain string sort gets wrong).
+func TestFilterKeepsOnlyReleaseTagsInVersionOrder(t *testing.T) {
+	r := newTestRepo(t)
+	r.commit("a")
+
+	cmd := exec.Command(r.script, "filter")
+	cmd.Dir = r.dir
+	cmd.Env = r.hermeticEnv()
+	cmd.Stdin = strings.NewReader(strings.Join([]string{
+		"v2026.09.04.1oops", // glob-shaped, not a release tag
+		"v2026.09.07.10",
+		"release-1",
+		"v2026.09.07.9",
+		"",
+		"v2026.09.04.2",
+		"v2025.12.31.3",
+	}, "\n") + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("version.sh filter: %v\n%s", err, out)
+	}
+	want := "v2025.12.31.3\nv2026.09.04.2\nv2026.09.07.9\nv2026.09.07.10"
+	if got := strings.TrimSpace(string(out)); got != want {
+		t.Errorf("filter = %q, want %q (release tags only, oldest first, numeric per field)", got, want)
+	}
+}
