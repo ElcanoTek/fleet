@@ -170,7 +170,7 @@ func TestDeprecationWindowsAreNotKeyedToAReleaseNumber(t *testing.T) {
 		"README.md",
 		"AGENTS.md",
 		"CONTRIBUTING.md",
-		"docs/ONBOARDING.md",
+		"ONBOARDING.md",
 		"SECURITY.md",
 		"docs/DEPLOYMENT.md",
 		"docs/OPERATORS.md",

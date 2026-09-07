@@ -7,7 +7,7 @@ detail lives in three places, and this file deliberately does not repeat them:
   the tree, human or agent: what fleet is, the build/test/lint targets and why
   the `fleet_host_executor` tag matters, the two CI lanes, the non-negotiable
   invariants, the conventions. Read it first.
-- **[`docs/ONBOARDING.md`](docs/ONBOARDING.md)** — clone to a passing
+- **[`ONBOARDING.md`](ONBOARDING.md)** — clone to a passing
   `make test` and one real sandboxed chat turn, in one linear path.
 - **[`docs/README.md`](docs/README.md)** — the docs index: a curated
   by-question list, then every page under `docs/` A–Z (a test keeps that
@@ -17,7 +17,7 @@ detail lives in three places, and this file deliberately does not repeat them:
 
 Prerequisites are Go (the version in `go.mod`), Node (the major in
 `web/.nvmrc`), rootless Podman for the sandbox-backed tests, and PostgreSQL for
-the store suites. `docs/ONBOARDING.md` walks through installing them; the
+the store suites. `ONBOARDING.md` walks through installing them; the
 Makefile is the source of truth for every command (`make help`).
 
 Before opening a PR: `make build && make lint && make test && make ci-web`
