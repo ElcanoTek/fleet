@@ -274,11 +274,24 @@ type RemoteMCPOverlay struct {
 }
 
 // connectFailureReason renders a hosted-server connect error for the skip
-// log line. The error can quote a user-supplied server's response, which is
-// untrusted input into an operator's terminal and into this process's memory,
-// so in order it is:
+// log line. credential is the value that rode the failed request (the bearer,
+// the api_key header value or the query-parameter key — the same string in
+// every case; empty when the server took none). The error can quote a
+// user-supplied server's response, which is untrusted input into an
+// operator's terminal and into this process's memory, so in order it is:
 //
-//   - cut to a bounded prefix BEFORE anything else touches it — a JSON-RPC
+//   - stripped of the request's own credential FIRST, over the WHOLE text and
+//     in every form a transport puts it on the wire (as sent, and its
+//     url.QueryEscape / url.PathEscape encodings, which is how
+//     mcp.WithQueryParam sends a query-authenticated key). This is a plain
+//     ReplaceAll per form — one linear pass, no patterns — and it is what
+//     the two redactor passes below cannot be relied on for: the redactors'
+//     literal floor (internal/redact minLiteralLen) ignores a key under 8
+//     bytes that validateAPIKeyAuth accepts, they know only the raw value and
+//     not its URL encoding, and a run of padding before an echoed credential
+//     could straddle the input cut so that neither pass ever sees it whole.
+//     Nothing else secret is in this request for the vendor to echo;
+//   - cut to a bounded prefix before anything else touches it — a JSON-RPC
 //     error near the transport's 64 MiB cap must not be tokenised, joined and
 //     scanned whole for a 240-byte log line;
 //   - redacted by BOTH process-wide redactors, on the text AS SENT — before
@@ -299,10 +312,11 @@ type RemoteMCPOverlay struct {
 //   - bounded on a rune boundary, so the line names the failure class without
 //     becoming a transcript of the vendor's response body.
 //
-// The input bound is applied before redaction, so a credential could survive
-// only if it began inside the first 240 bytes and ran past the 8 KiB cut —
-// no real token is that long.
-func connectFailureReason(err error) string {
+// The input bound is applied before the redactor passes, so a REGISTERED
+// literal other than this request's credential could survive only if it began
+// inside the first 240 bytes and ran past the 8 KiB cut — and no such literal
+// is in this request for the vendor to echo in the first place.
+func connectFailureReason(credential string, err error) string {
 	if err == nil {
 		return ""
 	}
@@ -310,7 +324,8 @@ func connectFailureReason(err error) string {
 		maxInput  = 8 << 10 // bytes of the raw error considered at all
 		maxReason = 240     // bytes of the rendered reason
 	)
-	raw := truncateAtRune(err.Error(), maxInput)
+	raw := maskCredential(err.Error(), credential)
+	raw = truncateAtRune(raw, maxInput)
 	raw = redactBoth(raw) // on the bytes as sent: literals match verbatim only
 	raw = strings.Map(func(r rune) rune {
 		if unicode.IsPrint(r) {
@@ -323,6 +338,37 @@ func connectFailureReason(err error) string {
 		s = truncateAtRune(s, maxReason) + "…"
 	}
 	return s
+}
+
+// maskCredential replaces every occurrence of the credential that rode the
+// failed request, whatever its length, in each form a transport can have put
+// it on the wire: as sent (Authorization / api_key header), url.QueryEscape'd
+// (mcp.WithQueryParam builds the query with url.Values.Encode, so a space
+// becomes `+`), the `%20` spelling of that, and url.PathEscape'd. A vendor
+// that echoes its request URI or headers into an error body echoes one of
+// these. It works on the whole text, not a bounded prefix, so padding cannot
+// push the credential across the cut; each form is one strings.ReplaceAll,
+// which is a single scan even over the transport's 64 MiB body cap.
+func maskCredential(text, credential string) string {
+	if credential == "" {
+		return text
+	}
+	query := url.QueryEscape(credential)
+	forms := []string{
+		credential,
+		query,
+		strings.ReplaceAll(query, "+", "%20"),
+		url.PathEscape(credential),
+	}
+	seen := make(map[string]bool, len(forms))
+	for _, form := range forms {
+		if form == "" || seen[form] {
+			continue
+		}
+		seen[form] = true
+		text = strings.ReplaceAll(text, form, "[REDACTED]")
+	}
+	return text
 }
 
 // redactBoth runs text through the main process's redactor and the broker's;
@@ -476,7 +522,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// "failed to connect" left the GitHub verification in #1006 blind
 			// to which one it was. The wire to the parent still carries only the
 			// public name — this stays a host-side log line.
-			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(aerr))
+			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(bearer, aerr))
 			overlay.Skipped = append(overlay.Skipped, regName)
 			continue
 		}

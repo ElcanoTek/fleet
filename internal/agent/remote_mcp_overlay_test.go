@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -385,28 +386,28 @@ func TestBrowserbaseKeyFuncMatchesURLWithExplicitPort(t *testing.T) {
 // GitHub verification in #1006 sat blind behind a value-free "failed to
 // connect"), while staying one bounded, whitespace-flat line.
 func TestConnectFailureReason(t *testing.T) {
-	if got := connectFailureReason(nil); got != "" {
+	if got := connectFailureReason("", nil); got != "" {
 		t.Fatalf("nil error → %q, want empty", got)
 	}
-	got := connectFailureReason(errors.New("initialize:\n  HTTP 401 Unauthorized\t{\"error\":\"invalid_token\"}"))
+	got := connectFailureReason("", errors.New("initialize:\n  HTTP 401 Unauthorized\t{\"error\":\"invalid_token\"}"))
 	if want := `initialize: HTTP 401 Unauthorized {"error":"invalid_token"}`; got != want {
 		t.Errorf("reason = %q, want %q (whitespace collapsed, content kept)", got, want)
 	}
-	long := connectFailureReason(errors.New(strings.Repeat("x", 1000)))
+	long := connectFailureReason("", errors.New(strings.Repeat("x", 1000)))
 	if len(long) > 240+len("…") || !strings.HasSuffix(long, "…") {
 		t.Errorf("reason not bounded: len=%d suffix=%q", len(long), long[len(long)-3:])
 	}
 
 	// The cut lands on a rune boundary: 300 three-byte runes must not leave
 	// a split rune in front of the ellipsis.
-	wide := connectFailureReason(errors.New(strings.Repeat("€", 300)))
+	wide := connectFailureReason("", errors.New(strings.Repeat("€", 300)))
 	if !utf8.ValidString(wide) || !strings.HasSuffix(wide, "…") || len(wide) > 240+len("…") {
 		t.Errorf("multibyte reason is not valid, bounded UTF-8: len=%d valid=%v", len(wide), utf8.ValidString(wide))
 	}
 
 	// Control characters from the vendor's body are separators, never bytes
 	// that reach the terminal.
-	ctl := connectFailureReason(errors.New("\x1b[2Jwiped\x07 the \x1b]8;;http://x\x07screen\x1b]8;;\x07"))
+	ctl := connectFailureReason("", errors.New("\x1b[2Jwiped\x07 the \x1b]8;;http://x\x07screen\x1b]8;;\x07"))
 	if strings.ContainsAny(ctl, "\x1b\x07\r\n") {
 		t.Errorf("control bytes survived: %q", ctl)
 	}
@@ -416,7 +417,7 @@ func TestConnectFailureReason(t *testing.T) {
 
 	// A response the size of the transport cap is bounded BEFORE it is
 	// processed; the result is still one short line.
-	huge := connectFailureReason(errors.New("initialize: " + strings.Repeat("A ", 32<<20)))
+	huge := connectFailureReason("", errors.New("initialize: "+strings.Repeat("A ", 32<<20)))
 	if len(huge) > 240+len("…") {
 		t.Errorf("huge reason not bounded: len=%d", len(huge))
 	}
@@ -426,7 +427,7 @@ func TestConnectFailureReason(t *testing.T) {
 	// registered there, not in agentcore's set.
 	const bearer = "brk-literal-9f8e7d6c5b4a3210"
 	mcpbroker.RegisterSecretLiteral(bearer)
-	if got := connectFailureReason(errors.New("initialize: HTTP 401: token " + bearer + " rejected")); strings.Contains(got, bearer) {
+	if got := connectFailureReason("", errors.New("initialize: HTTP 401: token "+bearer+" rejected")); strings.Contains(got, bearer) {
 		t.Errorf("broker-registered literal reached the log line: %q", got)
 	}
 
@@ -436,13 +437,53 @@ func TestConnectFailureReason(t *testing.T) {
 	// "abcd  efgh" into "abcd efgh" and the registered value stops matching.
 	const spacedKey = "spaced-literal-1a2b3c  4d5e6f  7a8b9c"
 	mcpbroker.RegisterSecretLiteral(spacedKey)
-	got = connectFailureReason(errors.New("initialize: HTTP 401: key " + spacedKey + " rejected"))
+	got = connectFailureReason("", errors.New("initialize: HTTP 401: key "+spacedKey+" rejected"))
 	if strings.Contains(got, spacedKey) || strings.Contains(got, strings.Join(strings.Fields(spacedKey), " ")) {
 		t.Errorf("space-bearing literal reached the log line: %q", got)
 	}
 	agentcore.RegisterSecretLiteral("main-literal-9z8y7x  6w5v4u")
-	got = connectFailureReason(errors.New("initialize: main-literal-9z8y7x  6w5v4u leaked"))
+	got = connectFailureReason("", errors.New("initialize: main-literal-9z8y7x  6w5v4u leaked"))
 	if strings.Contains(got, "main-literal-9z8y7x 6w5v4u") {
 		t.Errorf("space-bearing agentcore literal reached the log line: %q", got)
+	}
+}
+
+// The credential that rode the failed request is masked directly, without the
+// redactors' 8-byte literal floor, over the whole text, and in the encodings a
+// transport puts on the wire — the three ways a registered literal alone can
+// miss it.
+func TestConnectFailureReasonMasksTheRequestCredential(t *testing.T) {
+	// Too short for the literal floor (validateAPIKeyAuth accepts it).
+	if got := connectFailureReason("k3y", errors.New("initialize: HTTP 401: key k3y is not valid")); strings.Contains(got, "k3y") {
+		t.Errorf("short credential reached the log line: %q", got)
+	}
+
+	// Query-authenticated: the vendor echoes the request URI, so the key
+	// appears url-encoded (url.Values.Encode: `+` for a space, %2F for `/`).
+	const key = "ab/cd ef+gh%ij"
+	echoed := "initialize: GET /mcp?api_key=" + url.QueryEscape(key) + " rejected; also " + strings.ReplaceAll(url.QueryEscape(key), "+", "%20") + " and " + url.PathEscape(key)
+	got := connectFailureReason(key, errors.New(echoed))
+	for _, form := range []string{key, url.QueryEscape(key), strings.ReplaceAll(url.QueryEscape(key), "+", "%20"), url.PathEscape(key)} {
+		if strings.Contains(got, form) {
+			t.Errorf("encoded credential %q reached the log line: %q", form, got)
+		}
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("expected a placeholder in %q", got)
+	}
+
+	// Padding before the credential pushes it across the 8 KiB input cut;
+	// the whitespace collapse would then bring its surviving prefix into the
+	// first 240 bytes. Masking on the whole text first makes that moot.
+	const long = "straddle-credential-0123456789abcdef0123456789abcdef"
+	padded := "initialize: " + strings.Repeat(" ", (8<<10)-len("initialize: ")-len(long)/2) + long + " rejected"
+	got = connectFailureReason(long, errors.New(padded))
+	if strings.Contains(got, long[:16]) {
+		t.Errorf("straddling credential reached the log line: %q", got)
+	}
+
+	// No credential: nothing is masked, the message is intact.
+	if got := connectFailureReason("", errors.New("dial tcp: i/o timeout")); got != "dial tcp: i/o timeout" {
+		t.Errorf("empty credential altered the reason: %q", got)
 	}
 }
