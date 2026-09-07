@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -75,6 +76,21 @@ type RemoteMCPResolver interface {
 	AcquireTokenByID(ctx context.Context, email, serverID string) (string, error)
 	// SafeHTTPClient is the SSRF-safe client used to dial user-supplied servers.
 	SafeHTTPClient() *http.Client
+}
+
+// RemoteMCPStatusMarker is the optional resolver seam the overlay uses to
+// record a credential rejection on the connection row. A server that answers
+// the per-turn mount with HTTP 401 has refused the stored token, and without
+// this the row kept reading `connected` until the token's natural expiry made
+// a refresh fail — for GitHub after "Revoke all user tokens", eight hours in
+// which Settings → Connections showed nothing wrong while every turn skipped
+// the server (#1006). Optional (a type assertion) so test fakes and older
+// resolvers keep compiling; remotemcp.Service implements it. The row is the
+// OWNER's: for a shared connection the grantee's run marks the owner's row,
+// because it is the owner's token that died — the same row the refresh path
+// already marks on invalid_grant.
+type RemoteMCPStatusMarker interface {
+	MarkRemoteMCPUnauthorized(ctx context.Context, ownerEmail, serverID, detail string) error
 }
 
 // RemoteMCPSelection says which of a user's hosted connections a run mounts,
@@ -273,6 +289,30 @@ type RemoteMCPOverlay struct {
 	// failed to connect. Callers surface these to the owner (a needs-reauth server
 	// silently doing nothing is a correctness trap, especially for headless runs).
 	Skipped []string
+}
+
+// recordRefusedMount flips the connection to needs_reauth when the mount
+// failed because the server REFUSED the credential (HTTP 401) — and only
+// then: a 5xx, a timeout or a TLS failure says nothing about the token, and
+// marking those would send the user to re-authorize a connection that is
+// fine. Best-effort: a store failure is logged, never fails the turn.
+func recordRefusedMount(ctx context.Context, resolver RemoteMCPResolver, email, regName string, conn RemoteMCPConn, err error) {
+	var hs *mcp.HTTPStatusError
+	if !errors.As(err, &hs) || !hs.Unauthorized() {
+		return
+	}
+	marker, ok := resolver.(RemoteMCPStatusMarker)
+	if !ok {
+		return
+	}
+	owner := conn.Owner
+	if owner == "" {
+		owner = email
+	}
+	detail := fmt.Sprintf("the server rejected the stored credential (HTTP %d) — reconnect, or update the key, to use", hs.StatusCode)
+	if merr := marker.MarkRemoteMCPUnauthorized(ctx, owner, conn.ID, detail); merr != nil {
+		log.Printf("remote-mcp: could not record the credential rejection for %q: %v", regName, merr)
+	}
 }
 
 // connectFailureReason renders a hosted-server connect error for the skip
@@ -661,6 +701,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// public name — this stays a host-side log line.
 			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(bearer, aerr))
 			overlay.Skipped = append(overlay.Skipped, regName)
+			recordRefusedMount(ctx, resolver, email, regName, conn, aerr)
 			continue
 		}
 		overlay.Servers[regName] = true
