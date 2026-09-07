@@ -286,7 +286,9 @@ func (o *RemoteMCPOverlay) Active() bool {
 // hostedMCPRoster is what the system prompt's live-registry section needs to
 // know about this turn's per-user hosted (remote) MCP overlay: the model-facing
 // names of every tool the overlay mounted, and the registration names of the
-// connections it could not mount. The frozen startup roster the section
+// selected connections whose token could not be acquired or that failed to
+// connect (Skipped — a connection dropped by maxOverlayServers is logged, not
+// listed). The frozen startup roster the section
 // otherwise draws on knows only bundle servers (ADR-0006), so without this a
 // deployment whose only connectors are hosted OAuth ones told the model "No MCP
 // tools are currently connected. Do not attempt to call any `mcp_*` tool" while
@@ -308,19 +310,50 @@ type hostedMCPRoster struct {
 // No allowlist is applied: hosted seats do not participate in the bundle's
 // per-task credential allowlist (docs/REMOTE-MCP-MULTI-LOGIN.md) — the
 // credential-owning child already narrowed the catalog it handed back.
+//
+// Every name is passed through promptSafeName. A hosted connection's name is
+// user-authored (the add path trims it and requires it non-empty, nothing
+// more) and a connection can be shared to other users, so a name is a channel
+// by which one user could place text into another user's SYSTEM prompt. The
+// tool-name grammar the model APIs enforce is the natural bound: a legitimate
+// name is unchanged, anything else is reduced to that grammar.
 func hostedRosterFromOverlay(o *RemoteMCPOverlay) hostedMCPRoster {
 	if o == nil {
 		return hostedMCPRoster{}
 	}
 	var r hostedMCPRoster
 	if o.Active() {
-		r.tools = computeMCPToolRosterFromCatalog(o.Catalog, nil)
+		for _, name := range computeMCPToolRosterFromCatalog(o.Catalog, nil) {
+			r.tools = append(r.tools, promptSafeName(name))
+		}
 	}
-	if len(o.Skipped) > 0 {
-		r.skipped = append([]string(nil), o.Skipped...)
-		sort.Strings(r.skipped)
+	for _, name := range o.Skipped {
+		r.skipped = append(r.skipped, promptSafeName(name))
 	}
+	sort.Strings(r.skipped)
 	return r
+}
+
+// promptSafeName reduces a hosted registration or tool name to the identifier
+// grammar model APIs accept for tool names — ASCII letters, digits, `_`, `-`
+// and `.`, at most 64 bytes — replacing anything else with `_`. A name that
+// already fits comes back unchanged; one that does not could never have been
+// a callable tool anyway, and must not reach the system prompt as written.
+func promptSafeName(name string) string {
+	const maxLen = 64
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= maxLen {
+			break
+		}
+	}
+	return b.String()
 }
 
 // Validate checks the ownership contract an injected opener must satisfy. A
