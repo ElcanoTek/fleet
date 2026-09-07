@@ -550,6 +550,7 @@ func run() error {
 			Class:          event.Class,
 		}
 		if err := chatStore.RecordPanicEvent(ctx, record); err != nil {
+			//nolint:gosec // G706: logSafe strips CR/LF from location, incident id, and the store error; gosec cannot see through the helper.
 			log.Printf("panic event persist failed (location=%s incident=%s): %s", logSafe(event.Location), logSafe(event.IncidentID), logSafe(err.Error()))
 		}
 	}
