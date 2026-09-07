@@ -82,7 +82,7 @@ not the event that woke you. Events arrive late and out of order.
 
 - `make test`, `make lint`, `make ci-go`, `make ci-web`. Never a bare
   `go test ./...` — it omits `-tags fleet_host_executor` and builds a different
-  tree than CI. Tests run in the foreground, `-p 1`.
+  tree than CI. Tests run in the foreground via `scripts/go-test.sh`.
 - **A two-second green Go run is a skipped run.** Set `DATABASE_URL` and
   `FLEET_TEST_DATABASE_URL` to a real Postgres and confirm with `-v` that the
   tests you care about print `PASS`, not `SKIP`.
