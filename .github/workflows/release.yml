@@ -184,7 +184,17 @@ jobs:
           # the CREATION: the prune below still runs, so a re-run after a
           # cancelled or failed prune also restores the "one release listed"
           # property instead of leaving it to the next release.
-          if gh release view "${TAG}" >/dev/null 2>&1; then
+          #
+          # A re-run for a tag that a NEWER release has since superseded must
+          # not publish either: its release object was pruned on purpose, and
+          # re-creating it — with `--latest` — would point /releases/latest at
+          # an old tag until the next successful run. The newest release tag
+          # in the checkout (fetch-depth 0, fetch-tags) decides; on a normal
+          # run that is the tag this workflow just pushed.
+          newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
+          if [ "${TAG}" != "${newest}" ]; then
+            echo "::notice::${TAG} is superseded by ${newest}; not publishing a release for it."
+          elif gh release view "${TAG}" >/dev/null 2>&1; then
             echo "::notice::release ${TAG} is already published; skipping creation."
           else
             # The release notes are the released commit's message, then
@@ -239,16 +249,28 @@ jobs:
           # run can never delete a faster run's release. Housekeeping only:
           # any failure here warns, it does not un-publish anything — and
           # every deletion's status is kept, so one that failed among several
-          # cannot hide behind a later one that succeeded.
-          if ! superseded="$(gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
-                              | scripts/version.sh filter | head -n -1)"; then
-            echo "::warning::could not list releases to prune; ${TAG} is published, the Releases page just lists more than one entry."
-            superseded=""
-          fi
+          # cannot hide behind a later one that succeeded. Listing is paged
+          # (`--limit`), so list-and-delete repeats until a listing shows one
+          # release or nothing more can be deleted; a backlog larger than one
+          # page (a long run of failed prunes) is cleared in one run rather
+          # than one page per release.
           prune_failed=0
-          for old in ${superseded}; do
-            echo "pruning superseded release ${old} (its tag stays)"
-            gh release delete "${old}" --yes || prune_failed=1
+          for _pass in 1 2 3 4 5; do
+            if ! superseded="$(gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
+                                | scripts/version.sh filter | head -n -1)"; then
+              echo "::warning::could not list releases to prune; ${TAG} is published, the Releases page just lists more than one entry."
+              prune_failed=1
+              break
+            fi
+            [ -n "${superseded}" ] || break
+            deleted=0
+            for old in ${superseded}; do
+              echo "pruning superseded release ${old} (its tag stays)"
+              if gh release delete "${old}" --yes; then deleted=1; else prune_failed=1; fi
+            done
+            # Nothing deleted this pass means every remaining candidate
+            # failed; another pass would only repeat the same failures.
+            [ "${deleted}" -eq 1 ] || break
           done
           if [ "${prune_failed}" -ne 0 ]; then
             echo "::warning::could not prune every older release; ${TAG} is published, the Releases page just lists more than one entry."
