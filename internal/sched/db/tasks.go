@@ -57,12 +57,38 @@ func (db *Database) AddTaskBatch(ctx context.Context, tasks []*models.Task) erro
 	return db.AddTaskBatchTx(ctx, nil, tasks)
 }
 
+// pgMaxBindParams is PostgreSQL's hard ceiling on bind parameters in one
+// extended-protocol statement (the Bind message carries a uint16 count). A
+// multi-row INSERT past it is rejected server-side with "extended protocol
+// limited to 65535 parameters" before a single row is written.
+const pgMaxBindParams = 65535
+
+// MaxTaskBatchRows is the largest task slice AddTaskBatch / AddTaskBatchTx can
+// insert in one statement: pgMaxBindParams divided by the registry-derived
+// per-row column count. It is a function, not a constant, on purpose — every
+// task column added to taskColumnRegistry (#1126) lowers it, and a hand-copied
+// number silently rots (the weekly claim benchmark seeded 1000 rows per call
+// from exactly such a constant and broke the week the insert set crossed 65
+// columns). Callers that seed or import more rows than this chunk their input
+// by it; the public batch endpoint's cap (handlers.MaxBatchSize) is pinned
+// well below it by test.
+func MaxTaskBatchRows() int {
+	return pgMaxBindParams / len(taskInsertSet)
+}
+
 // AddTaskBatchTx inserts a slice of tasks in a single parameterised INSERT within
 // an existing transaction (#227), ensuring atomic multi-row insertions run in
 // a single round-trip. An empty slice is a no-op.
 func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*models.Task) error {
 	if len(tasks) == 0 {
 		return nil
+	}
+	if limit := MaxTaskBatchRows(); len(tasks) > limit {
+		// Fail before building a statement Postgres would reject anyway, and
+		// say why: the server's message names the parameter limit but not the
+		// row/column arithmetic behind it.
+		return fmt.Errorf("sched/db: AddTaskBatch of %d tasks × %d columns exceeds PostgreSQL's %d bind-parameter limit (max %d rows per call; split the batch)",
+			len(tasks), len(taskInsertSet), pgMaxBindParams, limit)
 	}
 
 	cols := len(taskInsertSet)

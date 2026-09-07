@@ -508,3 +508,37 @@ func assertRecurrenceSpawned(t *testing.T, d *Database, id uuid.UUID, want bool,
 func uuidPtr(u uuid.UUID) *uuid.UUID { return &u }
 
 func strPtr(s string) *string { return &s }
+
+// TestMaxTaskBatchRowsTracksRegistry pins the multi-row INSERT ceiling to the
+// registry it derives from: MaxTaskBatchRows rows fit PostgreSQL's 65535
+// bind-parameter budget and one more row does not, and AddTaskBatchTx refuses
+// an oversized slice up front — with the row/column arithmetic in the error —
+// instead of shipping a statement the server rejects. DB-free: the guard runs
+// before any connection is touched, so a zero Database is enough.
+func TestMaxTaskBatchRowsTracksRegistry(t *testing.T) {
+	cols := len(taskInsertSet)
+	limit := MaxTaskBatchRows()
+	if limit < 1 {
+		t.Fatalf("MaxTaskBatchRows() = %d; the insert set (%d columns) no longer fits a single row", limit, cols)
+	}
+	if limit*cols > pgMaxBindParams {
+		t.Fatalf("MaxTaskBatchRows() = %d × %d columns = %d parameters, over the %d limit", limit, cols, limit*cols, pgMaxBindParams)
+	}
+	if (limit+1)*cols <= pgMaxBindParams {
+		t.Fatalf("MaxTaskBatchRows() = %d is not the ceiling: %d rows × %d columns = %d still fits %d", limit, limit+1, cols, (limit+1)*cols, pgMaxBindParams)
+	}
+
+	tasks := make([]*models.Task, limit+1)
+	for i := range tasks {
+		tasks[i] = &models.Task{ID: uuid.New(), Prompt: "over", Status: models.TaskStatusPending}
+	}
+	err := (&Database{}).AddTaskBatchTx(context.Background(), nil, tasks)
+	if err == nil {
+		t.Fatalf("AddTaskBatchTx accepted %d rows (max %d)", len(tasks), limit)
+	}
+	for _, want := range []string{fmt.Sprint(len(tasks)), fmt.Sprint(cols), fmt.Sprint(pgMaxBindParams), fmt.Sprint(limit)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not carry %q", err, want)
+		}
+	}
+}

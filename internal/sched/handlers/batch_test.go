@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -242,5 +243,16 @@ func TestCreateTaskBatch_RateLimitAccounting(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("over-cap batch: status = %d, want 429 (%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestMaxBatchSizeFitsOneInsert pins the endpoint's ceiling under the db
+// layer's: a full POST /tasks/batch (MaxBatchSize rows) must land in ONE
+// multi-row INSERT, so the atomic path never has to split a transaction and a
+// registry growing past the point where 100 rows no longer fit 65535 bind
+// parameters fails here, not in production.
+func TestMaxBatchSizeFitsOneInsert(t *testing.T) {
+	if limit := db.MaxTaskBatchRows(); MaxBatchSize > limit {
+		t.Fatalf("MaxBatchSize = %d exceeds db.MaxTaskBatchRows() = %d: a full batch no longer fits one INSERT", MaxBatchSize, limit)
 	}
 }
