@@ -9,8 +9,9 @@ detail lives in three places, and this file deliberately does not repeat them:
   invariants, the conventions. Read it first.
 - **[`docs/ONBOARDING.md`](docs/ONBOARDING.md)** — clone to a passing
   `make test` and one real sandboxed chat turn, in one linear path.
-- **[`docs/README.md`](docs/README.md)** — the index of every design note,
-  runbook and ADR.
+- **[`docs/README.md`](docs/README.md)** — the docs index: a curated
+  by-question list, then every page under `docs/` A–Z (a test keeps that
+  list complete).
 
 ## Getting set up
 
@@ -19,9 +20,13 @@ Prerequisites are Go (the version in `go.mod`), Node (the major in
 the store suites. `docs/ONBOARDING.md` walks through installing them; the
 Makefile is the source of truth for every command (`make help`).
 
-Before opening a PR: `make lint && make test && make ci-web`. Tests skip
-silently without a database — set `DATABASE_URL` and `FLEET_TEST_DATABASE_URL`
-and check with `-v` that the suites you care about print `PASS`, not `SKIP`.
+Before opening a PR: `make build && make lint && make test && make ci-web`
+(or `make ci-local`, the whole gate). `make build` is not decoration: lint and
+tests compile with the `fleet_host_executor` tag, the release binary
+deliberately does not, and only `make build` / `make compile` checks that
+tree. Tests skip silently without a database — set `DATABASE_URL` and
+`FLEET_TEST_DATABASE_URL` and check with `-v` that the suites you care about
+print `PASS`, not `SKIP`.
 
 ## Branches and pull requests
 
@@ -49,7 +54,16 @@ govulncheck, Grype, both Playwright suites) sees the code.
 ### Promotions (dev → main)
 
 Feature work merges into `dev` (the fast lane); `dev` is promoted to `main`
-via a **squash**-merge PR — the squash titles are the promotion log. Squashing
+via a **squash**-merge PR — the squash titles are the promotion log.
+
+**The promotion PR's body is the release notes.** GitHub's generated notes see
+one PR per release — the promotion — and none of the `dev` PRs behind it, so
+`release.yml` copies the promotion body into the published release ahead of
+the generated list. Write it for the operator who reads it there: one bullet
+per `dev` PR with its number and one-line *why*, and any breaking change or
+operator action stated plainly (ADR-0061 retired the changelog on this basis).
+
+Squashing
 has one structural side effect: the branches' merge-base never advances, so
 any region dev changes, promotes, and later changes again would read as
 both-sides-modified (a spurious conflict) on the next promotion PR.

@@ -35,12 +35,20 @@ In practice it cost more than it gave:
 - `CHANGELOG.md` is deleted. Its history stays in git (`git log -- CHANGELOG.md`
   and any pre-2026-09-07 checkout).
 - **The PR is the record.** A change's *what* and *why* are written once, in
-  the PR body's "What changed, and why", and its title is written knowing it
-  becomes a line in the generated release notes. A feature's design still gets
-  its `docs/<FEATURE>.md`; an invariant change still gets its ADR.
-- **Breaking changes** are announced in the PR title and body — that is what
-  operators see in the release notes — and, where they touch an invariant, in
-  the ADR. `docs/VERSIONING.md` says so in place of the changelog bullet.
+  the PR body's "What changed, and why". A feature's design still gets its
+  `docs/<FEATURE>.md`; an invariant change still gets its ADR.
+- **The promotion PR's body is the release notes.** Promotions squash-merge
+  `dev` into `main`, so GitHub's generated notes see exactly one PR per
+  release — the promotion — and none of the `dev` PRs. `release.yml` therefore
+  composes each release's notes as the promotion PR body first, then GitHub's
+  generated list (via the `releases/generate-notes` API, the same text
+  `--generate-notes` produces). The promoter writes that body for the operator
+  who reads it: one bullet per `dev` PR with its *why*, and every breaking
+  change or operator action stated plainly. The `dev` PR bodies stay one click
+  away behind the numbers.
+- **Breaking changes** are announced in the promotion body (and the `dev` PR
+  that introduced them) and, where they touch an invariant, in the ADR.
+  `docs/VERSIONING.md` says so in place of the changelog bullet.
 - Nothing is added back that is edited by every PR. A per-release curated
   notes file, a `docs/CHANGES.md`, or a section in `README.md` would recreate
   the same conflict; the generated notes are the changelog.
@@ -54,9 +62,11 @@ In practice it cost more than it gave:
   at the repository history. ADRs that quote the old file as history are left
   as written; history is not drift.
 - The CI docs-only classifier drops `CHANGELOG.md` from its list.
-- Release notes remain generated (`release.yml`, `--generate-notes`). Their
-  quality is now a function of PR titles, which is where review attention
-  belongs.
+- Release notes are the promotion body plus the generated list
+  (`release.yml`). Their quality is now a function of the promotion body and
+  the `dev` PR titles, which is where review attention belongs. A promotion
+  PR with an empty body ships a release whose only prose is the generated
+  list; the workflow warns rather than blocks.
 
 ## Enforcement
 

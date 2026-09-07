@@ -70,6 +70,7 @@ jobs:
           && github.event.workflow_run.head_branch == 'main' }}
     permissions:
       contents: write # creates the tag and the GitHub release
+      pull-requests: read # reads the promotion PR whose body becomes the release notes
     steps:
       # Checks out the DEFAULT BRANCH, deliberately NOT the SHA from the event.
       #
@@ -173,6 +174,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           # Idempotent by construction: this step also runs on a re-run for a
@@ -183,12 +185,48 @@ jobs:
             echo "::notice::release ${TAG} is already published; nothing to do."
             exit 0
           fi
-          # --generate-notes writes the notes from the commits/PRs since the
-          # previous tag, which is exactly the changelog for a rolling train —
-          # the reason there is no hand-curated changelog file at all
-          # (docs/VERSIONING.md, ADR-0061).
+
+          # The release notes are two parts, and the order matters.
+          #
+          # 1. The PROMOTION PR's body. Promotions squash-merge dev into main,
+          #    so GitHub's generated notes see exactly one PR per release — the
+          #    promotion — and none of the dev PRs whose "What changed, and
+          #    why" is the actual record of the change (ADR-0061 retired the
+          #    changelog on the strength of those bodies). The promotion body
+          #    is where CONTRIBUTING.md has the promoter list every dev PR with
+          #    its why and any operator action, so it goes first, verbatim.
+          #    Looked up from the certified SHA's associated PRs; a re-tag of a
+          #    direct push (no PR) simply has no such section.
+          # 2. GitHub's generated notes (the same text --generate-notes would
+          #    have produced: the merged PR list, contributors, compare link),
+          #    fetched through the releases/generate-notes API so the two can
+          #    be composed into one --notes-file. The API picks the previous
+          #    tag itself, exactly as --generate-notes does.
+          #
+          # Either lookup failing must not block a release: fall back to
+          # whatever part is available, and say so in the log.
+          notes="$(mktemp)"
+          repo="${GITHUB_REPOSITORY}"
+          if promo="$(gh api "repos/${repo}/commits/${HEAD_SHA}/pulls" \
+                --jq '[.[] | select(.base.ref == "main")][0] | select(. != null) | "## \(.title) (#\(.number))\n\n\(.body // "")"' 2>/dev/null)" \
+             && [ -n "${promo}" ]; then
+            printf '%s\n\n' "${promo}" >>"${notes}"
+          else
+            echo "::warning::no promotion PR found for ${HEAD_SHA}; release notes carry only the generated section."
+          fi
+          if generated="$(gh api -X POST "repos/${repo}/releases/generate-notes" \
+                -f tag_name="${TAG}" --jq '.body' 2>/dev/null)" \
+             && [ -n "${generated}" ]; then
+            printf '%s\n' "${generated}" >>"${notes}"
+          else
+            echo "::warning::generate-notes API returned nothing for ${TAG}; release notes carry only the promotion body."
+          fi
+          if [ ! -s "${notes}" ]; then
+            echo "Rolling release ${TAG}, tagged automatically from the green CI run on main." >"${notes}"
+          fi
+
           gh release create "${TAG}" \
             --title "fleet ${TAG#v}" \
-            --generate-notes \
+            --notes-file "${notes}" \
             --latest \
             --verify-tag

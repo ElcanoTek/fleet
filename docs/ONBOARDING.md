@@ -246,12 +246,10 @@ Every pull request must be green before merge. The CI jobs
 Then follow the contributor conventions in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md):
 
-- Branch off the latest `main` with a descriptive prefix (`feat/…`, `fix/…`,
-  `chore/…`, `docs/…`, `test/…`).
-- Keep the PR focused; write a clear description (what changed, why, how
-  verified).
-- **Sign off every commit** with the Developer Certificate of Origin:
-  `git commit -s -m "..."`.
+- Branch off the latest **`dev`** with a descriptive prefix (`feat/…`,
+  `fix/…`, `docs/…`); PRs target `dev`, and `main` receives only promotions.
+- Keep the PR focused; fill in the PR template (what changed and why, what you
+  actually ran to verify it, scope and deviations).
 
 Do not weaken any of the non-negotiable invariants in [`AGENTS.md`](../AGENTS.md)
 (the sandbox is mandatory, credentials stay host-side, governance is one core,

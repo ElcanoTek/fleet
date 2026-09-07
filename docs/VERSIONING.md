@@ -180,9 +180,12 @@ real values when someone actually packages the chart.
 CalVer cannot warn you that an upgrade is breaking, and fleet does not pretend
 otherwise. A breaking change is announced in prose:
 
-- the PR title and its "What changed, and why", written for the operator who
-  reads them in the generated release notes: what breaks and what to do about
-  it ([ADR-0061](adr/0061-retire-the-changelog.md));
+- the **promotion PR's body**, which `release.yml` copies into the published
+  release notes ahead of GitHub's generated PR list — the generated list sees
+  only the squash-merged promotion, never the `dev` PRs behind it — so the
+  promoter states there what breaks and what an operator must do, and the
+  `dev` PR's own "What changed, and why" carries the detail one click away
+  ([ADR-0061](adr/0061-retire-the-changelog.md));
 - an **ADR** in [`adr/`](adr/) when it adds, weakens, or reverses an invariant
   (required by [`../AGENTS.md`](../AGENTS.md));
 - for the HTTP API specifically, the `Deprecation` / `Sunset` / `Link` contract
