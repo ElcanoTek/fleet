@@ -2448,7 +2448,19 @@ export function ChatExperience({
       clearConversation();
       return true;
     }
-    await loadConversation(nextConversation.id);
+    // From here the delete HAS succeeded — the row is gone on the server and
+    // out of both lists — so nothing below may make it read as a failure.
+    // loadConversation throws on a non-2xx, and letting that escape left the
+    // confirm open over a chat that no longer existed (a second Delete then
+    // 404'd) plus an unhandled rejection. Fall back to the empty pane and say
+    // what actually happened.
+    try {
+      await loadConversation(nextConversation.id);
+    } catch (err) {
+      console.error("load next conversation after delete error:", err);
+      clearConversation();
+      showRailError("Deleted the chat, but couldn't open the next one.");
+    }
     return true;
   };
 

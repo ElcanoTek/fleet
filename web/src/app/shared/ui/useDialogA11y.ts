@@ -22,6 +22,17 @@ import type { RefObject } from "react";
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// dialogStack is the module-wide order of currently-open dialogs using this
+// hook, oldest first. Only the TOPMOST one reacts to Escape and Tab. Without
+// it, a confirm summoned from inside another modal (Delete from the log
+// viewer, Stop from the task modal) meant two document-level capture
+// listeners: Escape in the confirm closed the confirm AND the modal under it
+// (preventDefault does not stop propagation), and the two Tab traps fought
+// over focus. Every open dialog still installs its listener — it just yields
+// while something newer is open, and takes over again when that closes.
+const dialogStack: symbol[] = [];
+const isTopDialog = (token: symbol): boolean => dialogStack[dialogStack.length - 1] === token;
+
 export type DialogA11yOptions = {
   // Where focus lands when the dialog opens. Defaults to the first focusable
   // element (historical behavior); the New Task modal points this at its
@@ -67,7 +78,13 @@ export function useDialogA11y(
     const nodes = focusables();
     (initial ?? nodes[0] ?? container)?.focus();
 
+    const token = Symbol("dialog");
+    dialogStack.push(token);
+
     const onKeyDown = (event: KeyboardEvent) => {
+      // A newer dialog is open on top of this one: its listener handles the
+      // key; this one stays quiet so Escape closes one layer, not two.
+      if (!isTopDialog(token)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onCloseRef.current();
@@ -96,6 +113,8 @@ export function useDialogA11y(
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
+      const at = dialogStack.indexOf(token);
+      if (at >= 0) dialogStack.splice(at, 1);
       if (trigger && typeof trigger.focus === "function") trigger.focus();
     };
   }, [open, containerRef]);
