@@ -1,12 +1,13 @@
 # Scan cron alarm — files an issue when a SCHEDULED CodeQL or Semgrep run fails.
 #
 # WHY THIS IS ITS OWN WORKFLOW rather than a job inside codeql.yml/semgrep.yml:
-# those two are REUSABLE workflows called by ci.yml and dev-ci.yml, and a called
+# those two are REUSABLE workflows called by ci.yml, and a called
 # workflow may not request token permissions its caller did not grant — the
 # check happens at PLAN time, before any `if:` can skip the job. Verified the
 # hard way: adding an `issues: write` alarm job inside them failed the entire
-# calling Dev CI run with `startup_failure` (run 32578976517), which meant NO
-# scanning ran on that head at all. A `workflow_run` watcher has no caller, so
+# calling Dev CI run (then the fast lane on the since-retired `dev` branch) with
+# `startup_failure` (run 32578976517), which meant NO scanning ran on that head
+# at all. A `workflow_run` watcher has no caller, so
 # it can hold `issues: write` without widening any gate's token.
 #
 # govulncheck-scheduled.yml and grype-scheduled.yml keep their in-job alarm

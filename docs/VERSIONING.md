@@ -31,10 +31,10 @@ with each other, on purpose.
 
 ## How a release happens
 
-1. Work lands on `dev` (fast lane CI).
-2. A promotion PR squash-merges `dev` into `main` behind the full `CI gate`.
-3. `CI` goes green on that push to `main`.
-4. **[`release.yml`](../.github/workflows/release.yml) tags it.** It fires on
+1. A PR squash-merges into `main` behind the full `CI gate` (`main` is the
+   only branch, [ADR-0062](adr/0062-trunk-based-development.md)).
+2. `CI` goes green on that push to `main`.
+3. **[`release.yml`](../.github/workflows/release.yml) tags it.** It fires on
    `CI`'s completion, checks the run was a green *push* to `main`, computes the
    next unused ordinal for today, tags the exact SHA CI certified, and publishes
    a GitHub release whose notes are generated from the commits since the
@@ -135,7 +135,7 @@ claiming a release it was not built from.
 
 The tag arrives **after** the build that most operators take. `release.yml`
 tags a push to `main` only once its `CI` run has gone green — minutes after the
-push — so a `fleet update` run right after a promotion fetches the new commit,
+push — so a `fleet update` run right after a merge fetches the new commit,
 finds no tag on it yet, and stamps `dev+g<sha>` into a binary that is running
 exactly the tree `v2026.09.04.1` will name. Nothing is wrong with the checkout.
 `update` says so at build time when the stamp carries no release, and
@@ -196,12 +196,10 @@ real values when someone actually packages the chart.
 CalVer cannot warn you that an upgrade is breaking, and fleet does not pretend
 otherwise. A breaking change is announced in prose:
 
-- the **promotion's squash commit message**, which `release.yml` publishes as
-  the release notes ahead of GitHub's generated PR list — the generated list
-  sees only the squash-merged promotion, never the `dev` PRs behind it — so
-  the promoter states there what breaks and what an operator must do, and the
-  `dev` PR's own "What changed, and why" carries the detail one click away
-  ([ADR-0061](adr/0061-retire-the-changelog.md));
+- the **squash commit message** of the PR, which `release.yml` publishes as
+  the release notes ahead of GitHub's generated PR list, so the author states
+  there what breaks and what an operator must do, and the PR itself carries
+  the detail one click away ([ADR-0061](adr/0061-retire-the-changelog.md));
 - an **ADR** in [`adr/`](adr/) when it adds, weakens, or reverses an invariant
   (required by [`../AGENTS.md`](../AGENTS.md));
 - for the HTTP API specifically, the `Deprecation` / `Sunset` / `Link` contract

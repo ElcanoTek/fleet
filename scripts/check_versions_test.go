@@ -171,11 +171,6 @@ func TestDuplicatedToolPinsAgree(t *testing.T) {
 	}{
 		{"GRYPE_VERSION", ".github/workflows/grype-scheduled.yml", regexp.MustCompile(`GRYPE_VERSION:\s*'([^']+)'`)},
 		{"GRYPE_SHA256", ".github/workflows/grype-scheduled.yml", regexp.MustCompile(`GRYPE_SHA256:\s*'([^']+)'`)},
-		{"GITLEAKS_VERSION", ".github/workflows/dev-ci.yml", regexp.MustCompile(`GITLEAKS_VERSION:\s*'([^']+)'`)},
-		{"RUFF_VERSION", ".github/workflows/dev-ci.yml", regexp.MustCompile(`RUFF_VERSION:\s*'([^']+)'`)},
-		{"ACTIONLINT_VERSION", ".github/workflows/dev-ci.yml", regexp.MustCompile(`ACTIONLINT_VERSION:\s*'([^']+)'`)},
-		{"ACTIONLINT_SHA256", ".github/workflows/dev-ci.yml", regexp.MustCompile(`ACTIONLINT_SHA256:\s*'([^']+)'`)},
-		{"golangci-lint version", ".github/workflows/dev-ci.yml", regexp.MustCompile(`golangci-lint-action@\S+[^\n]*\n\s*with:\s+(?:#[^\n]*\n\s+)*version:\s*(v[\d.]+)`)},
 	} {
 		a := tc.re.FindStringSubmatch(ci)
 		b := tc.re.FindStringSubmatch(readFile(t, root, tc.other))
@@ -236,18 +231,16 @@ func TestPostgresMajorAgreesAcrossCI(t *testing.T) {
 	}
 }
 
-// TestGoSuiteLanesInstallMatchingPgClient: the two lanes that run the full
-// `go test ./...` suite against a Postgres service — ci.yml's `go` job and
-// dev-ci.yml's — must each install a matching postgresql-client AND put that
-// client's versioned bin dir on PATH. Both halves have failed in production,
-// one per lane, and both failures were invisible:
+// TestGoSuiteLanesInstallMatchingPgClient: the lane that runs the full
+// `go test ./...` suite against a Postgres service — ci.yml's `go` job — must
+// install a matching postgresql-client AND put that client's versioned bin dir
+// on PATH. Both halves have failed in production (the first on the since-
+// retired dev fast lane, the second here), and both failures were invisible:
 //
-//   - dev-ci.yml had no client install at all. The runner ships client 16
+//   - the dev lane had no client install at all. The runner ships client 16
 //     against a server-18 service, and TestBackupRestoreRoundTrip self-skips on
 //     a major mismatch, so the ONLY coverage of `fleet backup` / `fleet restore`
-//     ran as a SKIP on every dev push. It also meant ci.yml's copy of this step
-//     was the only copy, so a broken version of it could not surface until a
-//     dev→main promotion PR.
+//     ran as a SKIP on every dev push.
 //   - ci.yml installed the client and asserted the major, and the assertion
 //     could not pass: /usr/bin/pg_dump is a symlink to postgresql-common's
 //     pg_wrapper, which dispatches on the version/cluster in ~/.postgresqlrc or
@@ -259,7 +252,7 @@ func TestPostgresMajorAgreesAcrossCI(t *testing.T) {
 // requires every postgres major named anywhere in .github/workflows to agree —
 // so this test asserts only the two things that broke.
 //
-// Scoped to these two files by name rather than derived: benchmark.yml,
+// Scoped to the file by name rather than derived: benchmark.yml,
 // e2e-canary.yml and ci.yml's own e2e-live job also declare a Postgres service
 // but never run the Go suite, so requiring a pg_dump client of them would be
 // noise, and pretending to infer "the lanes that run go test ./... with a
@@ -270,7 +263,6 @@ func TestGoSuiteLanesInstallMatchingPgClient(t *testing.T) {
 
 	for _, wf := range []string{
 		".github/workflows/ci.yml",
-		".github/workflows/dev-ci.yml",
 	} {
 		body := readFile(t, root, wf)
 
@@ -364,8 +356,8 @@ func TestGoMinorAgreesEverywhere(t *testing.T) {
 }
 
 // TestGolangciLintPinAgreesWithDocs: the golangci-lint binary version is
-// declared in ci.yml (TestDuplicatedToolPinsAgree already holds dev-ci.yml to
-// it) and then RESTATED in prose in two docs that tell a contributor which
+// declared in ci.yml and then RESTATED in prose in two docs that tell a
+// contributor which
 // version to install. Those copies are invisible to every other check, and they
 // drift exactly the way you would expect: the v2.12.2 -> v2.13.1 bump that Go
 // 1.27 forced updated ONBOARDING.md and missed docs/TESTING.md, which went on

@@ -16,10 +16,10 @@ security queries only) and [`TESTING.md`](TESTING.md) (the rest of the ladder).
 | **`shellcheck`** | **the 18 tracked `*.sh` files (~6.2k lines) — the deploy path** | **~2s** | **blocks** (`ci-gate`) | job log |
 | `govulncheck` | Go dependency CVEs (called symbols) | ~30s | **blocks** (`ci-gate`) | job log + Security tab |
 | `grype` | sandbox image CVEs (fixable **CRITICAL + HIGH**, **RPMs only**) | ~1m | **blocks** (`ci-gate`) | job log + Security tab |
-| `gitleaks` | secrets (on `main` and `dev` — the two branches with a CI lane) | ~10s | **blocks** (`ci-gate`) | job log |
+| `gitleaks` | secrets (on every PR into `main` and every push to `main`) | ~10s | **blocks** (`ci-gate`) | job log |
 | **`npm audit`** | npm dependency CVEs (web + rampart-service) | ~5s | **blocks** (`ci-gate`) | job log |
-| CodeQL | **interprocedural taint / `security-extended`** | ~2m | **blocks** on an unwaived High-band finding (`ci-gate`/`Dev gate` via workflow_call) | job log + Security tab |
-| **Semgrep** | **Go/JS/Python SAST + Actions supply chain** | ~40s | **blocks** on any unsuppressed finding (`ci-gate`/`Dev gate` via workflow_call) | job log + artifact |
+| CodeQL | **interprocedural taint / `security-extended`** | ~2m | **blocks** on an unwaived High-band finding (`ci-gate` via workflow_call) | job log + Security tab |
+| **Semgrep** | **Go/JS/Python SAST + Actions supply chain** | ~40s | **blocks** on any unsuppressed finding (`ci-gate` via workflow_call) | job log + artifact |
 
 Four things were added here (**ruff**, **Semgrep**, then **actionlint** and
 **shellcheck**) and one was narrowed (**CodeQL**, to security queries only).
@@ -39,12 +39,15 @@ the 5 actionlint and 3 shellcheck items were fixed or annotated with reasons
 before the gate went in, because a gate switched on over a backlog is a gate
 people learn to scroll past.
 
-**Read "blocks" with one caveat, and it is a big one.** Every lane above reaches
-its branch's aggregate gate job — but a gate job only *blocks a merge* where it
-is a **required status check**. On `main` it is (`CI gate`). On `dev` the ruleset
-requires no status checks at all, so `Dev gate` is red-but-not-required there.
-The "gates?" column describes the wiring, which is real; the enforcement half is
-branch-dependent. See ["Known gaps"](#known-gaps-deliberately-not-closed-here).
+**Read "blocks" precisely.** Every lane above reaches the aggregate gate job,
+`ci-gate` — and a gate job only *blocks a merge* where it is a **required status
+check**. It is: `main` is the only long-lived branch, `CI gate` is its single
+required check, and `ci.yml` is the only CI workflow, so the wiring the "gates?"
+column describes and the enforcement are the same thing. That was not always
+so — until the `dev` integration branch was retired
+([ADR-0062](adr/0062-trunk-based-development.md)) its `Dev gate` was
+red-but-not-required, the largest caveat on this page; see
+["Known gaps"](#known-gaps) for the record.
 
 ## Why each tool is where it is
 
@@ -133,7 +136,10 @@ and protected branches`. The zero measured the **diff**, not the tree.
 The first full-tree evaluation was therefore the **push** that merged that work:
 Dev CI run 527, which reported **38 Go and 17 javascript-typescript findings** and
 turned `Dev gate` red — with no PR-shaped way out, because a PR into `dev` is
-scanned diff-informed and comes back green while `dev` itself stays red.
+scanned diff-informed and comes back green while `dev` itself stays red. (`dev`
+and its lane have since been retired, [ADR-0062](adr/0062-trunk-based-development.md);
+the same dynamic applies unchanged to a PR into `main` versus the push that
+merges it.)
 
 The generalisable rule, worth carrying to any scanner that supports diff-scoped
 analysis: **a PR-event CodeQL run certifies a diff, not a tree.** Any claim of
@@ -295,7 +301,7 @@ Python `#`, TypeScript `//`), including the one waiver that had to become a
 
 `govulncheck` is Go-only and `grype` scans the sandbox *image*, so the web
 tier's dependency tree — and `scripts/rampart-service`'s — had no CVE gate at
-all. `npm audit --audit-level=low` now runs in the `web` job of both CI lanes,
+all. `npm audit --audit-level=low` now runs in the `web` job of `ci.yml`,
 lockfile-only (no install needed), before the expensive `npm ci`, and fails on
 **any** severity. Like govulncheck, its verdict is a function of the clock as
 well as the commit: a new advisory can redden an unchanged tree, and that is
@@ -322,8 +328,8 @@ its API, and adm-zip 0.6 round-trips a zip. Audit result after: 0 vulnerabilitie
 in both trees.
 
 An override is a fork of upstream's intent, correct only while upstream is
-broken — so `scripts/check-npm-overrides.sh` runs beside the audit in both lanes
-and **fails once every parent version actually present in the lockfile accepts
+broken — so `scripts/check-npm-overrides.sh` runs beside the audit in the `web`
+job and **fails once every parent version actually present in the lockfile accepts
 the patched line**, with removal instructions. Checking `@latest` is not enough:
 a transitive consumer can remain pinned to an older vulnerable parent. The step
 invokes it as `"$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"` — the job runs
@@ -392,21 +398,19 @@ validated by `tsc`).
 
 ## What gates — the wiring, and where enforcement actually lands
 
-Every lane in the table reaches the branch's aggregate gate:
+Every lane in the table reaches the one aggregate gate:
 
-- `ci-gate` (the single required status check on `main`) `needs` **every other
-  job in `ci.yml`** — the docs-only classifier, gitleaks, the actionlint/shellcheck
-  workflow+shell lint, the migration DDL lint, the Helm chart lint, Go, ruff,
-  CodeQL, Semgrep, web, both Playwright lanes and Grype.
-- `Dev gate` `needs` the same set that exists on `dev` — but nothing in the `dev`
-  ruleset requires `Dev gate` to be green, so on that branch it is a red check
-  rather than a closed gate. That gap is the first item under "Known gaps" and it
-  is the single most important qualifier on this whole document.
+- `ci-gate` (the single required status check on `main`, the only long-lived
+  branch) `needs` **every other job in `ci.yml`** — the docs-only classifier,
+  gitleaks, the actionlint/shellcheck workflow+shell lint, the migration DDL
+  lint, the Helm chart lint, Go, ruff, CodeQL, Semgrep, web, both Playwright
+  lanes and Grype. Because it is required, a red lane is a closed gate, not a
+  red X beside a mergeable PR.
 
 **That "every other job" is a test, not a habit — and it is the strongest
 anti-rot control here, so it should not stay invisible the way it did until
-now.** `scripts/check_gate_needs_test.go` parses both workflow files and fails
-`make test` if any job is missing from its gate's `needs`. Adding a job and
+now.** `scripts/check_gate_needs_test.go` parses `ci.yml` and fails
+`make test` if any job is missing from `ci-gate`'s `needs`. Adding a job and
 forgetting to extend `needs` is otherwise a silent one-line regression that
 produces a red-but-not-required lane — exactly how the CodeQL Go extraction
 break sat unnoticed for weeks. Two sibling tests hold the neighbouring
@@ -427,9 +431,8 @@ is deliberate and narrowly bounded — the classifier is a prose allow-list, and
 skip from any other cause fails the gate.
 
 The scanners get there because `codeql.yml` and `semgrep.yml` are **reusable
-workflows** (`on: workflow_call`): `ci.yml` and `dev-ci.yml` each call them as a
-job, and a job that calls a reusable workflow sits in a gate's `needs` like any
-other job. A scanner finding therefore blocks a merge through the existing
+workflows** (`on: workflow_call`): `ci.yml` calls each of them as a job, and a
+job that calls a reusable workflow sits in a gate's `needs` like any other job. A scanner finding therefore blocks a merge through the existing
 required check — **no branch-protection change, no new required check.**
 
 Worth recording as a correction: an earlier revision of this document claimed
@@ -467,50 +470,30 @@ this repo.
 (Code scanning merge protection — the ruleset's alert-severity rule — remains
 available on top as a belt-and-braces option, but nothing depends on it now.)
 
-## Known gaps, deliberately not closed here
+## Known gaps
 
 Stated rather than left for rediscovery:
 
-- **Nothing in `dev-ci.yml` is a required check on `dev`, so every job in it —
-  CodeQL and Semgrep included — is red-but-not-required there.** This is the
-  largest gap on the page and it cannot be closed from a pull request, so it is
-  written down rather than implied away.
+- **Closed, and recorded here because it was the largest gap on the page:
+  `Dev gate` was never a required check on `dev`.** Until 2026-09-07 work
+  landed on a `dev` integration branch under a separate `dev-ci.yml`, and the
+  `dev` ruleset's only rules were `deletion` and `non_fast_forward` — no
+  `pull_request` rule, no `required_status_checks` — so every job in that lane,
+  CodeQL and Semgrep included, was *red-but-not-required*: real wiring producing
+  a red X beside a mergeable PR. It compounded with Dependabot's
+  `github-actions` ecosystem targeting `dev` daily with no `cooldown` (a
+  `github-actions` bump rewrites `.github/workflows/*`, i.e. what CI executes),
+  and the removal of `auto-merge-dependabot.yml` — whose own header explained
+  that `gh pr merge --auto` holds only on *required* checks and then listed
+  `dev` anyway — closed the compounding risk but not the gap itself. No pull
+  request could close it, because nothing in a workflow file can make itself
+  required.
 
-  The `dev` ruleset's only rules are `deletion` and `non_fast_forward`. There is
-  no `pull_request` rule and no `required_status_checks` block, so there is no
-  status check for GitHub to hold a merge on. `main` is the branch that does
-  require one (`CI gate`). Every sentence in this document about a scanner
-  "blocking" describes wiring that is genuinely in place — the `workflow_call`
-  jobs really do sit in `Dev gate`'s `needs` — and on `dev` that wiring produces
-  a red X beside a mergeable PR.
-
-  Two things compound it, and together they are the actual risk:
-
-  1. `.github/dependabot.yml` points the `github-actions` ecosystem at `dev` on a
-     **daily** interval with **no `cooldown`** — Dependabot supports `cooldown`
-     for `gomod` and `npm` only, so the one ecosystem whose "dependency" is the
-     CI definition itself is also the one that cannot be made to wait.
-  2. A `github-actions` bump **is a rewrite of `.github/workflows/*`**: it
-     changes what CI executes.
-
-  So the shape to avoid is: a same-day patch bump to a third-party action landing
-  unattended on a branch with no required checks, rewriting the workflows that are
-  supposed to check it.
-
-  **What removes it is that this repository no longer merges anything
-  automatically.** `auto-merge-dependabot.yml` was deleted. Its header had argued
-  the case against itself — it explained that `gh pr merge --auto` holds a merge
-  only on *required* checks, named `dev` as a branch with none, and then listed
-  `dev` in its own `branches:` filter, so the mitigation the previous revision of
-  this document credited was in fact the delivery mechanism. Every dependency
-  bump, every ecosystem, every bump level now waits for a human.
-
-  That closes the compounding risk but **not** the underlying gap: a hand-merged
-  PR into `dev` still merges over a red `Dev gate`, because nothing requires it.
-
-  **The remaining fix is a repo-settings action and belongs to the owner:** add
-  `Dev gate` to the `dev` ruleset's required status checks. Nothing in a workflow
-  file can make itself required, so no PR can close this item.
+  Retiring `dev` did ([ADR-0062](adr/0062-trunk-based-development.md)). `main`
+  is the only long-lived branch, `ci.yml` is the only CI workflow, `CI gate` is
+  its required check, and Dependabot targets `main`, so a version bump — any
+  ecosystem, any bump level — meets the full gate directly and still waits for a
+  human, since nothing in this repository merges automatically.
 
 - **`_test.go` files are outside CodeQL's database** (625 files in this tree —
   the count moves with the suite) — `autobuild` builds packages, not tests.
@@ -550,4 +533,5 @@ Stated rather than left for rediscovery:
   `grype` the alarm is a separate JOB rather than a step, holding `issues: write`
   on its own so the scan itself does not run beside that scope. Learned by breaking it: an
   `issues: write` alarm job inside the called workflows startup-failed the
-  entire calling Dev CI run.
+  entire calling run (on the since-retired Dev CI lane; the constraint applies
+  equally to `ci.yml`).

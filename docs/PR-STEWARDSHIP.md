@@ -4,7 +4,7 @@ The **procedure** for driving a fleet pull request to green after it is opened
 lives in the skill at
 [`.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKILL.md): read
 that first, and read it before acting on any PR event. This page is the
-reference behind it — what each CI lane actually runs, how promotions work,
+reference behind it — what CI actually runs, how a merge becomes a release,
 which reviewers post what, the exact tool versions, and the traps that have
 each caught a past session. The skill says *do this*; this page says *here is
 why, and here are the details*.
@@ -18,9 +18,10 @@ rationale and detail live where they can be long.
 ## Why "fix it, whatever it is"
 
 fleet is developed at speed by several agents and humans at once: short-lived
-branches, several merges to `dev` a day, a promotion to `main` whenever `dev`
-is worth shipping. That only works if the tree stays green and nobody waits on
-anybody. An agent that stops at "this failure isn't from my diff" hands a
+branches, several merges to `main` a day, and every green merge is a release
+([ADR-0062](adr/0062-trunk-based-development.md), ADR-0059). That only works if
+the tree stays green and nobody waits on anybody. An agent that stops at "this
+failure isn't from my diff" hands a
 maintainer a red PR and a diagnosis; an agent that bumps the dependency, ports
 the fix, or adds the reviewed waiver hands them a green PR and a sentence. The
 second one is the job. Humans in this repo decide what to merge — they should
@@ -30,16 +31,18 @@ The same logic covers review threads: a finding on code the PR did not touch
 is still a defect in the tree the PR will land in, and the person already
 holding the branch is the cheapest one to fix it.
 
-## The two CI lanes
+## The one CI lane
 
-Which CI a PR gets depends on its base branch, and what "red" means differs:
+Every PR targets `main` and gets the same workflow, `CI` (`ci.yml`): Go
+build/vet/lint/test against Postgres including the `-race` lane, govulncheck,
+ruff, web lint/typecheck/test/build, both Playwright suites (mocked and live
+against a real backend + sandbox), the Grype image scan, Helm lint, migration
+DDL lint, gitleaks, actionlint/shellcheck, CodeQL and Semgrep. `CI gate` is the
+one required status check, so red is always a hard block; a docs-only PR skips
+the heavy jobs via the `changes` classifier and the gate accepts exactly that
+skip. Expect a full run to take about 25 minutes, most of it the `-race` lane.
 
-| PR base | Workflow | What runs | Is red a hard block? |
-| --- | --- | --- | --- |
-| `dev` | `Dev CI (fast lane)` (`dev-ci.yml`) | compile/vet/lint/test against Postgres, ruff, web lint/typecheck/test/build, migration DDL lint, gitleaks, actionlint/shellcheck, Helm lint, CodeQL, Semgrep | **No** — the `dev` ruleset requires no status checks, so `Dev gate` is a red X beside a mergeable PR. Treat it as blocking anyway. |
-| `main` | `CI` (`ci.yml`) | everything above **plus** the `-race` lane, govulncheck, the Grype image scan, and both Playwright suites (mocked and live) | **Yes** — `CI gate` is the one required check. |
-
-Three lanes depend on live external data and can go red on a diff that did not
+Three jobs depend on live external data and can go red on a diff that did not
 cause it: `govulncheck` (Go vulnerability DB), `npm audit` (advisory feed, both
 npm trees, any severity) and Semgrep (registry rule packs, which the Semgrep
 Rules License forbids vendoring). The weekly Grype and scheduled scans behave
@@ -50,23 +53,16 @@ versus what only reports, and [`docs/CODEQL.md`](CODEQL.md) plus
 [ADR-0048](adr/0048-codeql-severity-gating.md) for the CodeQL High-band
 threshold and the accepted-findings register.
 
-## Promotions
+## Merging is releasing
 
-A promotion is a PR with head `dev` and base `main`, **squash**-merged; the
-squash titles are the promotion log. The `Promotion ancestry` workflow then
-records a `-s ours` merge back onto `dev`, gated on tree identity, so the next
-promotion does not see spurious both-sides-modified conflicts.
-
-- The promotion PR's diff moves whenever `dev` moves. A fix that lands on `dev`
-  while the promotion is open rides along automatically; note it in the PR
-  body rather than opening a second promotion.
-- A fix for a promotion-PR failure is a PR to `dev`. Never a commit on the
-  promotion, never a direct push to `main`.
-- The promotion PR is the first time the full gate sees the code. Whoever
-  opens one owns driving it green.
-- Run the ancestry merge by hand only if the workflow failed and
-  `main^{tree}` equals `dev^{tree}`; the procedure is in
-  [`CONTRIBUTING.md`](../CONTRIBUTING.md) ("Promotions").
+Every PR is **squash**-merged into `main`, and every green push to `main` is
+tagged and published by `release.yml` (ADR-0059). The squash commit message —
+prefilled from the PR title and body — is the release notes, verbatim, ahead
+of GitHub's generated list (ADR-0061). So the PR body's "What changed, and
+why" is written for the operator who reads the release, and the merge dialog
+is where the checklist, the verification section and any tool footer get
+dropped. A fix for a red `main` is the next PR; nothing is ever pushed to
+`main` directly and history is never rewritten there.
 
 ## Reviewers
 
@@ -94,8 +90,8 @@ Re-request the reviewer after pushing for a changes-requested review.
 - **Integration tests skip silently.** The scheduler packages
   (`internal/sched/...`) call `t.Skip` when `DATABASE_URL` is unset or
   unreachable; the chat store (`internal/store`, and the HTTP API tests on it)
-  does the same for `FLEET_TEST_DATABASE_URL`. `dev-ci.yml` sets both against
-  a Postgres service; set them the same way locally. At least two past
+  does the same for `FLEET_TEST_DATABASE_URL`. `ci.yml`'s `go` job sets both
+  against a Postgres service; set them the same way locally. At least two past
   sessions reported green suites that had not run.
 - **golangci-lint**: CI pins **v2.13.1**, and a binary built with an older Go
   refuses this `go.mod` ("the Go language version used to build golangci-lint

@@ -156,7 +156,7 @@ lint-go:
 # this and the CI job cannot disagree.
 #
 # Skips LOUDLY when ruff is absent rather than failing: not every contributor has
-# it, and CI enforces the gate regardless (ci.yml + dev-ci.yml `python` job). The
+# it, and CI enforces the gate regardless (ci.yml `python` job). The
 # message names the install command so a local skip is a choice, not a surprise —
 # a check that quietly does nothing is the failure mode this repo keeps writing
 # post-mortems about.
@@ -185,7 +185,7 @@ lint-migrations:
 # does not parse expressions and does not shellcheck run blocks.
 #
 # Skips LOUDLY when actionlint is absent, same contract as lint-python: CI
-# enforces the gate regardless (ci.yml + dev-ci.yml `actions` job), so a local
+# enforces the gate regardless (ci.yml `actions` job), so a local
 # skip is a choice, not a surprise.
 lint-actions:
 	@if command -v actionlint >/dev/null 2>&1; then \

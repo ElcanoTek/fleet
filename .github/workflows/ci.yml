@@ -7,7 +7,7 @@ on:
     branches: [main]
   # Manual runs. Exists because pull_request webhook deliveries were observed
   # being dropped during a GitHub incident (2026-08-26, Actions + Pull
-  # Requests degraded): a dev->main promotion PR sat with NO way to produce
+  # Requests degraded): a PR into main sat with NO way to produce
   # the required "CI gate" check — its opened event was lost and five
   # subsequent synchronize events never spawned a run. A dispatch on the PR's
   # head ref runs the identical suite on the identical head SHA, so the
@@ -26,11 +26,10 @@ permissions:
   contents: read
 
 # Rapid successive pushes to the SAME pull request cancel the previous run.
-# `dev-ci.yml` has had this since it was written; this lane — the expensive one,
-# carrying mocked Playwright, the live e2e against a real backend + rootless
-# sandbox, and the Grype image scan — did not, so a branch pushed three times in
-# a minute queued three full suites and the two stale ones still had to finish
-# before the interesting one started.
+# This suite carries mocked Playwright, the live e2e against a real backend +
+# rootless sandbox, and the Grype image scan, so without cancellation a branch
+# pushed three times in a minute queued three full suites and the two stale
+# ones still had to finish before the interesting one started.
 #
 # `cancel-in-progress` is deliberately NOT blanket-true: a push to `main` is a
 # merge that already happened, and its run is the tree-wide verdict the
@@ -1187,7 +1186,7 @@ jobs:
           # push replaces the head. This job still runs (`if: always()`);
           # conclude neutral rather than stamping a meaningless red X on the
           # stale commit — the superseding run on the new head is what the
-          # required check actually evaluates (#1302, same shape as Dev gate).
+          # required check actually evaluates (#1302).
           # Caveat, accepted deliberately: a HUMAN cancelling the run on a
           # PR's current head also lands here and turns the required check
           # green over a suite that did not finish. Cancelling a run and then

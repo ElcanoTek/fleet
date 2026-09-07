@@ -9,16 +9,17 @@ delegate to the same commands the workflows run, so "make it green locally" and
 "make CI green" are the same act. The source of truth is, and remains, the
 workflow files themselves:
 
-- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — the full gate on
-  `main` (every job must be green to merge; `CI gate` is the required check).
-- [`.github/workflows/dev-ci.yml`](../.github/workflows/dev-ci.yml) — the fast
-  lane on `dev`. Same shape, fewer lanes — and its aggregate `Dev gate` is **not**
-  a required check, see "Which lanes run where" below.
+- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — the one PR gate,
+  on pull requests into `main` and pushes to `main` (every job must be green to
+  merge; `CI gate` is the single required check). `main` is the only long-lived
+  branch — the `dev` integration branch and its separate fast-lane workflow were
+  retired in [ADR-0062](adr/0062-trunk-based-development.md), so the full gate
+  runs on every PR; see "Which lanes run where" below.
 - [`.github/workflows/codeql.yml`](../.github/workflows/codeql.yml) and
   [`.github/workflows/semgrep.yml`](../.github/workflows/semgrep.yml) — the two
   SAST lanes. Both are **reusable** workflows (`on: workflow_call`) with no
-  push/PR triggers of their own: `ci.yml` and `dev-ci.yml` call them as jobs, so
-  they land in the caller's gate. Each also keeps a weekly `schedule`.
+  push/PR triggers of their own: `ci.yml` calls them as jobs, so they land in
+  `CI gate`. Each also keeps a weekly `schedule`.
 - [`.github/workflows/e2e-canary.yml`](../.github/workflows/e2e-canary.yml) —
   the nightly real-model canary (never a PR gate).
 - [`.github/workflows/grype-scheduled.yml`](../.github/workflows/grype-scheduled.yml)
@@ -55,42 +56,30 @@ fix this doc (and the `make` targets) to match.
 The fast PR-gate subset (everything except the browser/sandbox e2e lanes) is one
 command: `make ci-local`.
 
-## Which lanes run where — `dev` vs `main`
+## Which lanes run where — one branch, one gate
 
-The table above is [`ci.yml`](../.github/workflows/ci.yml), and **`ci.yml` only
-fires on `main`** (its `push` and `pull_request` triggers filter to it). Work
-normally lands on the `dev` integration branch first — Dependabot targets `dev`
-by default, see [`dependabot.yml`](../.github/dependabot.yml) — so `dev` has its
-own lane, [`dev-ci.yml`](../.github/workflows/dev-ci.yml), and the two tiers
-divide the work like this:
+The table above is [`ci.yml`](../.github/workflows/ci.yml), and it is the
+**only** CI lane: it fires on pull requests into `main` and on pushes to `main`,
+and `main` is the only long-lived branch. There is no integration branch, no
+"fast lane" that defers the slow jobs, and no promotion step at which a deferred
+job would run for the first time — every non-docs-only PR gets the whole table,
+`-race`, govulncheck, the Grype image scan, both Playwright suites and both SAST
+scanners included, and `CI gate` (which `needs` every other job) is the single
+required status check on `main`. Dependabot targets `main` too, see
+[`dependabot.yml`](../.github/dependabot.yml), so a version bump meets the same
+gate as any other change. PRs are squash-merged, and the squash commit is what
+`release.yml` tags. Why the repository moved to this shape, and what it retired,
+is [ADR-0062](adr/0062-trunk-based-development.md).
 
-| | `dev-ci.yml` (fast lane) | `ci.yml` (full gate) |
-| --- | --- | --- |
-| **Fires on** | PRs into `dev`, and pushes to `dev` | PRs into `main`, and pushes to `main` — in practice, the dev→main promotion PR |
-| **Runs** | Go compile / vet / lint / test (with Postgres), Python lint (ruff check + format), **CodeQL**, **Semgrep**, web lint / typecheck / test / build **plus the npm CVE audit and the override canary**, migration DDL lint, gitleaks | everything in the table above |
-| **Skips** | `-race`, govulncheck, the Grype image scan, both Playwright suites | nothing |
-| **Aggregate check** | `Dev gate` | `CI gate` |
-| **Is that aggregate a *required* check?** | **No** — see the caveat below | Yes |
-
-The split is "does it compile, lint, pass tests, and pass the SAST scanners" on
-`dev`; "is it safe to ship" on the promotion. The skipped lanes are the slow ones,
-and none of them is what a routine change breaks.
-
-**CodeQL and Semgrep used to be on that skipped list. They are not any more** —
-both are reusable workflows that `dev-ci.yml` calls as jobs, so they sit in
-`Dev gate`'s `needs` and run on every push to `dev` and every PR into it. An
-earlier revision of this table said the fast lane skipped CodeQL, which was the
-opposite of what shipped.
-
-> **The caveat that qualifies this whole section: `Dev gate` is not a required
-> status check.** The `dev` ruleset's only rules are `deletion` and
-> `non_fast_forward` — there is no `pull_request` rule and no
-> `required_status_checks` — so every job in `dev-ci.yml`, the two scanners
-> included, is *red-but-not-required* on `dev`. A failing fast lane produces a red
-> X beside a mergeable PR. `main` is the branch that genuinely gates, on
-> `CI gate`. Making `Dev gate` required is a repo-settings action that no pull
-> request can perform; it is tracked as an open item in
-> [`SCANNING.md`](SCANNING.md) ("Known gaps").
+> **Historical note.** Until 2026-09-07 work landed on a `dev` integration
+> branch first, under a separate `dev-ci.yml` "fast lane" that skipped `-race`,
+> govulncheck, Grype and both Playwright suites and deferred them to the
+> dev→main promotion PR. That lane's aggregate `Dev gate` was never a required
+> status check, so a scanner failure there was a red X beside a mergeable PR —
+> the "red-but-not-required" gap that earlier revisions of this document and
+> [`SCANNING.md`](SCANNING.md) carried as their largest caveat. Retiring `dev`
+> closed it: on `main`, `CI gate` is required, so every job in the table blocks
+> the merge.
 
 **One more thing worth knowing about `ci.yml`, because it decides whether the
 suite runs at all:** a `changes` job classifies each push/PR as docs-only, and the
@@ -106,13 +95,19 @@ additionally **refuses to pass over a `skipped` job unless the classifier
 actually said docs-only**, so a skip produced by any other cause fails the gate
 instead of passing silently.
 
-> **Both triggers on the fast lane matter.** The `pull_request` trigger was added
-> after a period when PRs into `dev` were gated by nothing but CodeQL, which made
-> `dev` itself the first thing to ever build a change. Every Dependabot PR merged
-> unverified, and a `next` 16.3.0 bump landed a TypeScript error that only
-> surfaced at the promotion — where it is far more expensive to unpick, because
-> several changes are already stacked on it. The web lane was missing from this
-> file entirely for the same reason: nothing on `dev` ran `web/` at all.
+> **Both triggers matter.** `ci.yml` fires on `pull_request` *and* `push`, and
+> the pair is deliberate: the PR run is what gates the merge, and the push run
+> is the tree-wide verdict (a `pull_request` CodeQL run is diff-informed, see
+> [`SCANNING.md`](SCANNING.md)) and the commit `release.yml` tags. The lesson
+> behind it is historical but worth keeping: on the old `dev` lane the
+> `pull_request` trigger was added only after a period when PRs into `dev` were
+> gated by nothing but CodeQL, which made the branch itself the first thing to
+> ever build a change. Every Dependabot PR merged unverified, and a `next`
+> 16.3.0 bump landed a TypeScript error that only surfaced at the promotion —
+> where it was far more expensive to unpick, because several changes were
+> already stacked on it. The web lane was missing from that file entirely for
+> the same reason: nothing on `dev` ran `web/` at all. A branch whose PRs are
+> not built is a branch that finds out late.
 
 ## Convenience targets that mirror CI
 
@@ -221,8 +216,9 @@ image); run them via the `npm` scripts documented below.
 - **PostgreSQL 18** for the Go suites that touch the chat/scheduler stores. CI
   uses the `postgres:18` service container.
 - **Podman (rootless) + pasta** for the live e2e and sandbox-invariant tests.
-  Most unit tests self-skip when podman is absent; the `go` job actively masks
-  podman so the container-sandbox tests skip in that fast lane.
+  Most unit tests self-skip when podman is absent; `ci.yml`'s `go` job actively
+  masks podman so the container-sandbox tests self-skip there (the real sandbox
+  is exercised by the `e2e-live` job in the same run).
 - **gitleaks** for the secret-scan lane (CI pins `8.30.1`).
 
 ---
@@ -405,8 +401,8 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
 
 > **Podman in this lane.** CI masks `podman` so the container-sandbox
 > integration tests in `internal/sandbox` cleanly self-skip (building the
-> ~1.3 GB sandbox image per unit-test run would dominate this fast lane; the real
-> sandbox is exercised in `e2e-live`). The host-backend sandbox tests (bash /
+> ~1.3 GB sandbox image per unit-test run would dominate the `go` job; the real
+> sandbox is exercised in `e2e-live`, which runs in the same `ci.yml` run). The host-backend sandbox tests (bash /
 > python3 via `os/exec`) still run. Locally, the container tests self-skip when
 > podman is absent or when you run as root (an euid guard). To run the container
 > invariants for real, see the live lane below.
