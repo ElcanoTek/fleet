@@ -335,6 +335,38 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    make test-cover   # writes coverage.out, prints the project total
    ```
 
+   **Test-only knobs.** A few production timings are package-level `var`s
+   (or carry a setter) purely so the test binary can shorten them — the tests
+   assert a *decision* (retry in place, give up, kill the group, deliver the
+   webhook), never the length of the pause, and at production values the
+   pauses alone were most of the suite's wall-clock. Each is set once, in an
+   `init()` of a `*_test.go` file, so nothing races on it:
+
+   | Knob | Production | In tests | Set by |
+   |---|---|---|---|
+   | `store.SetPasswordHashCostForTests` (bcrypt work factor; refuses to run outside `go test`) | `bcrypt.DefaultCost` | `bcrypt.MinCost` | `internal/store/hashcost_test.go`, `internal/httpapi/hashcost_test.go` |
+   | `agentcore.streamBlipRetryDelay` / `terminalRetryBaseDelay` | 3s / 500ms | 10ms / 5ms | `internal/agentcore/retry_delays_test.go` |
+   | `sandbox.BashWaitDelay` | 10s | 500ms | `internal/tools/wait_delay_test.go` |
+   | `scheduler.runIfWaitDelay` | 10s | per case | `TestEvalRunIfBackgroundChildDoesNotHang` |
+   | `handlers.a2aStreamPollInterval` | 1s | 50ms | `internal/sched/handlers/a2a_poll_test.go` |
+   | `(*push.Dispatcher).SetScanInterval` | 1s | 50ms | the A2A push tests |
+   | `mcp.stdioCloseGrace` | 3s | 200ms | the stdio transport tests |
+
+   Before these, a cost-10 bcrypt hash per fixture user made hashing — not
+   Postgres — the dominant cost of the `store` and `httpapi` suites (and the
+   race detector inflates that pure-Go work several-fold), and six agentcore
+   tests each sat through the 3s blip delay. When you add a test that waits on
+   a production timing, reach for one of these rather than a longer sleep; when
+   you need a new one, keep the production value where it is, make the
+   override test-only, and add a row here.
+
+   **Do not assert on wall-clock.** A bound like "finished in under 60% of the
+   sequential sum" measures the CI box, not the code: with packages running in
+   parallel under `-race`, `TestSpawn_ParallelExecutionWallClock` tripped its
+   480ms limit at 486ms while the children were provably concurrent. Assert
+   the property instead (peak in-flight count, the group is empty, the frame
+   sequence) and log the elapsed time for information.
+
 5. **go test -race** — the race detector is the gate for fleet's in-process
    coordination (worker pool, SSE fan-out, single-owner DB leases, the admission
    semaphore). Same DSNs and tag, but a **sibling CI job** (`go-race`) so the

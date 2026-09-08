@@ -775,13 +775,15 @@ func TestA2AStreamingLifecycle(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
 	}
 
-	// Drive the lifecycle in the DB while reading frames.
+	// Drive the lifecycle in the DB while reading frames. Each pause is
+	// several poll intervals (see a2a_poll_test.go) so the stream observes
+	// every state rather than skipping one.
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(6 * a2aStreamPollInterval)
 		if _, err := store.UpdateTasksStatusBatch([]uuid.UUID{task.ID}, models.TaskStatusPending, models.TaskStatusRunning); err != nil {
 			t.Errorf("to running: %v", err)
 		}
-		time.Sleep(1500 * time.Millisecond)
+		time.Sleep(6 * a2aStreamPollInterval)
 		if _, err := store.UpdateTasksStatusBatch([]uuid.UUID{task.ID}, models.TaskStatusRunning, models.TaskStatusSuccess); err != nil {
 			t.Errorf("to success: %v", err)
 		}

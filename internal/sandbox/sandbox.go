@@ -41,7 +41,11 @@ import (
 // (e.g. `server &`) keeps them open and cmd.Run blocks forever — past
 // the tool's own timeout — wedging the agent. Folded in from cutlass's
 // direct-exec bash path during the P3 sandbox/tools merge.
-const BashWaitDelay = 10 * time.Second
+//
+// A var rather than a const only so a test binary can shorten it: the tests
+// that prove the WaitDelay backstop fires (a backgrounded child holding the
+// pipes) otherwise sit through the full 10s each.
+var BashWaitDelay = 10 * time.Second
 
 // BashOutputCaptureCap bounds how many bytes of stdout/stderr are held
 // in memory per stream. A command like `yes` or a verbose build can

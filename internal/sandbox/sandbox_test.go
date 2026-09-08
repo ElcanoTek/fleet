@@ -292,8 +292,11 @@ func TestPoolContainerFailureSurfacesToCaller(t *testing.T) {
 	})
 	defer p.Close()
 
-	// Every Take must return an error — no degradation, no fallback.
-	for i := 0; i < 5; i++ {
+	// Every Take must return an error — no degradation, no fallback. Two
+	// cold starts show the second attempt is refused the same way as the
+	// first; each is a real podman run of a missing image (seconds), so no
+	// more than that.
+	for i := 0; i < 2; i++ {
 		_, _, err := p.Take(context.Background())
 		if err == nil {
 			t.Fatalf("Take attempt %d: expected container error, got nil — host-mode fallback was removed and should not return", i+1)

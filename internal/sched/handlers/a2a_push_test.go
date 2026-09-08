@@ -224,6 +224,7 @@ func TestA2APushDeliveryLifecycle(t *testing.T) {
 	// allowPrivate: the httptest receiver is loopback — the exact posture the
 	// FLEET_A2A_PUSH_ALLOW_PRIVATE escape hatch exists for.
 	dispatcher := schedpush.New(store, true)
+	dispatcher.SetScanInterval(50 * time.Millisecond) // one scan per second would cost this test 1s per delivery
 	ctx, cancel := t.Context(), func() {}
 	_ = cancel
 	go dispatcher.Run(ctx)
@@ -303,6 +304,7 @@ func TestA2APushSSRFGuardBlocksLoopback(t *testing.T) {
 	// still MARKED (at-least-once ATTEMPT is the contract), so the work list
 	// drains without a byte reaching the receiver.
 	dispatcher := schedpush.New(store, false)
+	dispatcher.SetScanInterval(50 * time.Millisecond)
 	go dispatcher.Run(t.Context())
 
 	drained := waitFor(t, func() bool {

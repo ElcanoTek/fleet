@@ -620,8 +620,9 @@ func TestBashToolBackgroundChildDoesNotHang(t *testing.T) {
 	if !strings.Contains(result.Stdout, "started") {
 		t.Errorf("Expected stdout to contain 'started', got %q", result.Stdout)
 	}
-	// sandbox.BashWaitDelay is 10s; allow generous slack but require it to
-	// be far below the 30s the orphan holds the pipe.
+	// sandbox.BashWaitDelay is shortened for this test binary (see
+	// wait_delay_test.go); allow generous slack but require the return to be
+	// far below the 30s the orphan holds the pipe.
 	if elapsed > 20*time.Second {
 		t.Fatalf("runBash blocked %v on a background child's pipe; WaitDelay regression", elapsed)
 	}
