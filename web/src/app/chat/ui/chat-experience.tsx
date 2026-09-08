@@ -51,6 +51,7 @@ import {
 } from "./history";
 import { type ModelPrices } from "@/app/shared/lib/modelCost";
 import { mcpAccountOverrides } from "./mcpAccounts";
+import { allocMessageIds } from "./messageIds";
 import {
   droppedOptionalMcpServerNames,
   enabledOptionalMcpServerNames,
@@ -2193,7 +2194,7 @@ export function ChatExperience({
           // No assistant message exists yet — park the cards on a
           // placeholder so they still have somewhere to live.
           next.push({
-            id: Date.now(),
+            id: allocMessageIds(),
             role: "assistant",
             content: "",
             state: "done",

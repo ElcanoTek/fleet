@@ -25,6 +25,7 @@ import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
+import { allocMessageIds } from "./messageIds";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
 
 // One pending input in a conversation's #785 queue (wire shape of
@@ -666,7 +667,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // already there.
           if (prev && prev.role === "user" && prev.content === text) return current;
           const bubble = {
-            id: nowMs(),
+            id: allocMessageIds(),
             role: "user" as const,
             content: text,
             injectedContext,
@@ -1318,7 +1319,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       ) {
         assistantId = last.id;
       } else {
-        assistantId = nowMs();
+        // Reserve a pair: the replayed user.message bubble takes
+        // assistantId - 1, and both must be unique in the conversation.
+        assistantId = allocMessageIds(2) + 1;
         setConvMessages(convId, (curr) => [
           ...curr,
           {
@@ -2041,7 +2044,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // upload (formerly handled by a pendingAttachments.length effect).
     setSpreadsheetNudgeDismissed(false);
 
-    const baseId = nowMs();
+    const baseId = allocMessageIds(2);
     const assistantId = baseId + 1;
 
     // The receipt for the chips the user saw in the composer, so an
