@@ -30,10 +30,23 @@ type sleepingChildModel struct {
 	delay       time.Duration
 	costUSD     float64
 	streamCount atomic.Int64
+	// inFlight counts streams currently inside the sleep; peakInFlight records
+	// the highest value inFlight reached. Sequential dispatch can never push the
+	// peak above 1, so the peak is a load-independent witness of concurrency.
+	inFlight     atomic.Int64
+	peakInFlight atomic.Int64
 }
 
 func (m *sleepingChildModel) Stream(ctx context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 	m.streamCount.Add(1)
+	cur := m.inFlight.Add(1)
+	defer m.inFlight.Add(-1)
+	for {
+		peak := m.peakInFlight.Load()
+		if cur <= peak || m.peakInFlight.CompareAndSwap(peak, cur) {
+			break
+		}
+	}
 	// Sleep honoring cancellation so a per-child timeout / parent cancel actually
 	// shortens the run. On cancellation, surface it as a stream error so the child
 	// produces NO clean final answer (→ success=false), exactly like a real timeout.
@@ -426,18 +439,23 @@ func TestSpawn_ParallelExecutionWallClock(t *testing.T) {
 	})
 
 	start := time.Now()
-	_ = parent.Execute(context.Background(), "fan out") // errors at the round cap; we only time round 0
+	_ = parent.Execute(context.Background(), "fan out") // errors at the round cap; we only care about round 0
 	elapsed := time.Since(start)
 
 	if got := slow.streamCount.Load(); got < int64(n) {
 		t.Fatalf("expected all %d children to run (each streams once), got %d", n, got)
 	}
-	sequential := time.Duration(n) * childWork
-	// Concurrent execution must finish well under the sequential sum. A generous
-	// bound (60%) absorbs scheduler jitter / CI load while still failing a
-	// regression to sequential dispatch.
-	if elapsed >= time.Duration(float64(sequential)*0.6) {
-		t.Fatalf("fan-out took %s; sequential would be ~%s — children did NOT run concurrently (Parallel marking regressed?)",
-			elapsed, sequential)
+	// Concurrency is asserted on overlap, not wall-clock. Sequential dispatch
+	// runs the children one after another, so at most ONE child is ever inside
+	// its sleep and the peak is exactly 1; parallel dispatch overlaps them and the
+	// peak climbs above 1. A wall-clock bound (formerly 60% of the sequential
+	// sum) measured the CI box instead: with packages running in parallel under
+	// -race (#1458) the 4×200ms fan-out took 486ms and tripped a 480ms limit
+	// while the children were in fact concurrent.
+	if peak := slow.peakInFlight.Load(); peak < 2 {
+		t.Fatalf("peak in-flight children = %d (fan-out took %s for %d×%s) — children did NOT run concurrently (Parallel marking regressed?)",
+			peak, elapsed, n, childWork)
 	}
+	t.Logf("peak in-flight children = %d of %d; fan-out took %s (sequential would be ~%s)",
+		slow.peakInFlight.Load(), n, elapsed, time.Duration(n)*childWork)
 }
