@@ -213,11 +213,6 @@ image); run them via the `npm` scripts documented below.
   version, so that stays a single declaration too.
 - **Node.js** — the major in [`web/.nvmrc`](../web/.nvmrc) (currently 24) — and npm, for the
   `web/` lanes. CI reads the same file via `node-version-file`.
-  A newer Node also runs the unit tests: Node 25+ defines a `localStorage`
-  global that is unusable without `--localstorage-file`, and `vitest.setup.ts`
-  replaces it with an in-memory Storage so the ~20 tests that touch storage
-  do not fail spuriously. Use the pinned major for anything you want to match
-  CI byte-for-byte (`mise exec node@24 -- npm test` if you use mise).
 - **PostgreSQL 18** for the Go suites that touch the chat/scheduler stores. CI
   uses the `postgres:18` service container.
 - **Podman (rootless) + pasta** for the live e2e and sandbox-invariant tests.
