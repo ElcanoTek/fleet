@@ -102,7 +102,9 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	// which a cmd.Cancel does not — os/exec stops watching the context once
 	// the direct child is reaped. The container backend holds the same
 	// invariant via its in-container killer; here we have direct process
-	// control.
+	// control. Run, not RunAndKillSurvivors: a detached background process
+	// (`server >/dev/null 2>&1 &`) outlives the call on purpose, as it does
+	// inside the container until the sandbox is retired.
 	//
 	// Without WaitDelay, the wait blocks until the stdout/stderr pipes
 	// close — a background grandchild (e.g. `server &`) that escaped the group
