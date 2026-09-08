@@ -529,6 +529,19 @@ How the invariants hold:
   row lock with a post-lock expiry re-check, persisting any rotated (single-use)
   refresh token in the same transaction. A dead refresh token marks the
   connection `needs_reauth` and the server is skipped — the run still completes.
+  So does an access token that expires with **no** refresh token to renew it:
+  the row used to stay `connected` while every turn skipped the server as
+  "token unavailable" (#1006).
+- **Google is asked for a refresh token; nobody else needs asking.** Most
+  authorization servers issue a refresh token by default. Google issues one
+  only when the authorize request carries `access_type=offline`, and only on
+  the first consent for a (user, client) pair unless `prompt=consent` forces
+  the consent screen — without both, a Google Workspace connector lived one
+  hour and had to be reconnected by hand. `mcpoauth.FlowConfig.AuthCodeURL`
+  adds both when the discovered issuer is `accounts.google.com`, and to no one
+  else: `prompt` is an OpenID Connect parameter whose values another server may
+  validate. A vendor with its own refresh-token contract gets its own clause
+  there, keyed on the issuer.
 - **A refused mount is recorded, not just skipped.** When the vendor's server
   answers the per-turn connect with HTTP 401 — a revoked grant, GitHub's
   "Revoke all user tokens", a key rotated on the vendor side — the connection
@@ -544,7 +557,11 @@ How the invariants hold:
   - **Terminal** — `invalid_grant` (refresh token revoked/expired/already
     rotated), `invalid_client` (the AS no longer recognizes our client
     credentials), `unauthorized_client` (this client may not use the
-    refresh grant). Re-issuing the same request can never succeed, so the
+    refresh grant) — plus GitHub's own spellings, `bad_refresh_token` and
+    `incorrect_client_credentials`, which GitHub returns with **HTTP 200**;
+    the token-endpoint parser reads an `error` member on a 2xx body too, so
+    those classify instead of surfacing as an opaque "no access_token" that
+    was retried every turn. Re-issuing the same request can never succeed, so the
     connection is marked `needs_reauth` with a reason naming the actual cause
     (`mcpoauth.ReauthDetail`, rendered in Settings → Connections) and the user
     reconnects — which re-runs DCR through the normal connect flow.

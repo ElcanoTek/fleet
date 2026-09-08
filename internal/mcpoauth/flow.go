@@ -65,6 +65,21 @@ type FlowConfig struct {
 	// AuthMethods is token_endpoint_auth_methods_supported from AS metadata;
 	// it selects client_secret_basic vs client_secret_post when a secret exists.
 	AuthMethods []string
+	// Issuer is the authorization server's issuer identifier from discovery.
+	// It selects the vendor-specific authorization parameters some servers
+	// need before they will issue a refresh token (see AuthCodeURL).
+	Issuer string
+}
+
+// isGoogleIssuer reports whether issuer is Google's authorization server
+// (https://accounts.google.com, with or without a trailing slash — the PRM
+// and the AS metadata spell it differently).
+func isGoogleIssuer(issuer string) bool {
+	u, err := url.Parse(strings.TrimSpace(issuer))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, "accounts.google.com")
 }
 
 // AuthCodeURL builds the authorization request URL including PKCE S256 and the
@@ -82,6 +97,23 @@ func (f FlowConfig) AuthCodeURL(state, codeChallenge string) string {
 	v.Set("code_challenge_method", "S256")
 	if f.Resource != "" {
 		v.Set("resource", f.Resource)
+	}
+	// RFC 6749 leaves refresh-token issuance to the server, and most servers
+	// (GitHub, Notion, …) issue one by default. Google does not: without
+	// `access_type=offline` it treats the login as an online session and
+	// returns a one-hour access token alone, so a hosted Workspace connector
+	// died after an hour and had to be reconnected by hand (measured verifying
+	// Google Drive for #1006). Google also mints the refresh token only on the
+	// FIRST consent for a (user, client) pair — a later plain re-authorization
+	// returns an access token but no refresh token again — so `prompt=consent`
+	// forces the consent screen on every reconnect. Both are Google's
+	// parameters, not the spec's, and `prompt` is an OpenID Connect parameter
+	// whose values another server may validate, so they are sent to Google
+	// only. Another vendor with its own refresh-token contract gets its own
+	// clause here, keyed on the issuer, never on the catalog entry.
+	if isGoogleIssuer(f.Issuer) {
+		v.Set("access_type", "offline")
+		v.Set("prompt", "consent")
 	}
 	sep := "?"
 	if strings.Contains(f.AuthorizationEndpoint, "?") {
@@ -200,11 +232,21 @@ func (f FlowConfig) tokenRequest(ctx context.Context, httpClient *http.Client, f
 		TokenType    string `json:"token_type"`
 		ExpiresIn    int64  `json:"expires_in"`
 		Scope        string `json:"scope"`
+		Error        string `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &tr); err != nil {
 		return nil, fmt.Errorf("decode token response: %w", err)
 	}
 	if tr.AccessToken == "" {
+		if tr.Error != "" {
+			// GitHub answers every token-endpoint failure — bad_verification_code,
+			// bad_refresh_token, incorrect_client_credentials — with HTTP 200 and
+			// an RFC 6749 §5.2 body. Reporting it as the OAuthError it is lets the
+			// refresh path classify it (a dead refresh token is terminal and marks
+			// the connection needs-reauth) instead of retrying an opaque "no
+			// access_token" every turn while the row reads connected (#1006).
+			return nil, parseTokenError(raw, resp.StatusCode)
+		}
 		return nil, fmt.Errorf("token response contained no access_token")
 	}
 	tok := &Token{

@@ -28,7 +28,7 @@ func (e *OAuthError) Error() string {
 // needs-reauth and degrade gracefully rather than failing the whole run.
 func IsInvalidGrant(err error) bool {
 	var oe *OAuthError
-	return errors.As(err, &oe) && oe.Code == "invalid_grant"
+	return errors.As(err, &oe) && (oe.Code == "invalid_grant" || oe.Code == "bad_refresh_token")
 }
 
 // IsInvalidTarget reports whether err is an OAuthError with code invalid_target
@@ -65,6 +65,12 @@ func IsInvalidScope(err error) bool {
 //   - invalid_client       the client credentials are no longer recognized
 //   - unauthorized_client  this client may not use the refresh_token grant
 //
+// plus GitHub's own spellings of the first two, which its token endpoint
+// returns (with HTTP 200) instead of the RFC codes:
+//
+//   - bad_refresh_token             = invalid_grant
+//   - incorrect_client_credentials  = invalid_client
+//
 // Everything else stays transient (the caller rolls back and retries later):
 // network failures, 5xx, and invalid_scope — which Refresh recovers from on its
 // own by retrying without the scope parameter.
@@ -74,7 +80,8 @@ func IsTerminalRefreshError(err error) bool {
 		return false
 	}
 	switch oe.Code {
-	case "invalid_grant", "invalid_client", "unauthorized_client":
+	case "invalid_grant", "invalid_client", "unauthorized_client",
+		"bad_refresh_token", "incorrect_client_credentials":
 		return true
 	default:
 		return false
@@ -91,7 +98,7 @@ func ReauthDetail(err error) string {
 		return "authorization expired — reconnect required"
 	}
 	switch oe.Code {
-	case "invalid_client":
+	case "invalid_client", "incorrect_client_credentials":
 		return "the authorization server no longer recognizes this client — reconnect required"
 	case "unauthorized_client":
 		return "this client is not permitted to refresh access — reconnect required"

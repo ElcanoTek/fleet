@@ -612,6 +612,11 @@ type RefreshFunc func(ctx context.Context, current RemoteMCPTokens) (RefreshResu
 // The refresh HTTP call happens while the row lock is held; refreshFn MUST bound
 // it with a timeout. This is the simplest correct implementation for OAuth 2.1
 // single-use refresh-token rotation; a lease pattern is the scale upgrade.
+// ReauthDetailNoRefreshToken is the status_detail written when a login's
+// access token expired and the authorization server never issued a refresh
+// token to renew it with. Static text: never the server's own words.
+const ReauthDetailNoRefreshToken = "the login expired and the authorization server issued no refresh token — reconnect to use"
+
 func (s *Store) EnsureFreshToken(ctx context.Context, server *RemoteMCPServer, marginSeconds int64, refreshFn RefreshFunc) (string, error) {
 	email := normalizeEmail(server.UserEmail)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -659,6 +664,23 @@ func (s *Store) EnsureFreshToken(ctx context.Context, server *RemoteMCPServer, m
 		return current.AccessToken, tx.Commit()
 	}
 	if current.RefreshToken == "" {
+		// The access token has expired and the AS never issued a refresh token
+		// (Google without access_type=offline, or an AS that issues none), so
+		// there is nothing to retry. Record that: before this the row kept
+		// reading `connected` while every turn skipped the server as "token
+		// unavailable", and Settings → Connections showed nothing wrong
+		// (#1006). Same commit discipline as the terminal branch below so the
+		// status sticks; the failure counter is untouched because no refresh
+		// was attempted.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE remote_mcp_servers SET status = $2, status_detail = $3, updated_at = $4 WHERE id = $1`,
+			server.ID, RemoteMCPStatusNeedsReauth, ReauthDetailNoRefreshToken, now); err != nil {
+			return "", err
+		}
+		committed = true
+		if err := tx.Commit(); err != nil {
+			return "", err
+		}
 		return "", ErrRemoteMCPNeedsReauth
 	}
 

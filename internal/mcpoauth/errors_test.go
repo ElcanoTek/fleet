@@ -18,8 +18,10 @@ func TestIsTerminalRefreshError(t *testing.T) {
 		{"invalid_grant", true},
 		{"invalid_client", true},
 		{"unauthorized_client", true},
-		{"invalid_scope", false},  // Refresh recovers from this on its own
-		{"invalid_target", false}, // Refresh retries without `resource`
+		{"bad_refresh_token", true},            // GitHub's spelling of invalid_grant
+		{"incorrect_client_credentials", true}, // GitHub's spelling of invalid_client
+		{"invalid_scope", false},               // Refresh recovers from this on its own
+		{"invalid_target", false},              // Refresh retries without `resource`
 		{"invalid_request", false},
 		{"temporarily_unavailable", false},
 		{"http_500", false},

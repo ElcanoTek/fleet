@@ -62,6 +62,85 @@ func TestAuthCodeURL(t *testing.T) {
 			t.Errorf("auth URL param %q = %q, want %q", k, got, want)
 		}
 	}
+	// Google's refresh-token parameters are Google's only: a server whose
+	// issuer is anything else must not see them (prompt is an OIDC parameter
+	// whose values a server may validate).
+	for _, k := range []string{"access_type", "prompt"} {
+		if q.Has(k) {
+			t.Errorf("auth URL for a non-Google issuer carries %q=%q", k, q.Get(k))
+		}
+	}
+}
+
+// TestAuthCodeURLGoogleAsksForARefreshToken: Google issues a refresh token
+// only when asked with access_type=offline, and only on the first consent
+// unless prompt=consent forces the screen — without both, a Google Workspace
+// connector lived one hour and had to be reconnected by hand (#1006). Both
+// spellings of Google's issuer (the AS metadata has no trailing slash, the
+// PRM has one) must select the parameters.
+func TestAuthCodeURLGoogleAsksForARefreshToken(t *testing.T) {
+	for _, issuer := range []string{"https://accounts.google.com", "https://accounts.google.com/"} {
+		f := FlowConfig{
+			AuthorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+			ClientID:              "c",
+			RedirectURI:           "https://fleet.example.com/cb",
+			Issuer:                issuer,
+		}
+		u, err := url.Parse(f.AuthCodeURL("s", "ch"))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		q := u.Query()
+		if q.Get("access_type") != "offline" || q.Get("prompt") != "consent" {
+			t.Errorf("issuer %q: access_type=%q prompt=%q, want offline/consent", issuer, q.Get("access_type"), q.Get("prompt"))
+		}
+	}
+	if isGoogleIssuer("https://accounts.google.com.evil.example") || isGoogleIssuer("https://evil.example/accounts.google.com") {
+		t.Error("issuer matching must be on the exact host")
+	}
+}
+
+// TestTokenRequest2xxErrorBodyIsOAuthError: GitHub's token endpoint answers a
+// dead refresh token — and a wrong client secret — with HTTP 200 and an
+// RFC 6749 §5.2 error body. Both must surface as the OAuthError they are, so
+// the refresh path classifies them as terminal instead of retrying an opaque
+// "no access_token" forever (#1006).
+func TestTokenRequest2xxErrorBodyIsOAuthError(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body)) // HTTP 200, GitHub-style
+	}))
+	defer srv.Close()
+	f := FlowConfig{TokenEndpoint: srv.URL + "/token", ClientID: "c", ClientSecret: "s"}
+
+	body = `{"error":"bad_refresh_token","error_description":"The refresh token passed is incorrect or expired."}`
+	_, err := f.Refresh(context.Background(), srv.Client(), "ghr_dead")
+	var oe *OAuthError
+	if !errors.As(err, &oe) || oe.Code != "bad_refresh_token" || oe.HTTPStatus != http.StatusOK {
+		t.Fatalf("refresh err = %v (%T), want OAuthError bad_refresh_token with HTTPStatus 200", err, err)
+	}
+	if !IsTerminalRefreshError(err) || !IsInvalidGrant(err) {
+		t.Error("a dead GitHub refresh token must be terminal (and read as invalid_grant)")
+	}
+	if ReauthDetail(err) != "authorization expired — reconnect required" {
+		t.Errorf("ReauthDetail = %q", ReauthDetail(err))
+	}
+
+	body = `{"error":"incorrect_client_credentials","error_description":"The client_id and/or client_secret passed are incorrect."}`
+	_, err = f.Exchange(context.Background(), srv.Client(), "code", "verifier")
+	if !errors.As(err, &oe) || oe.Code != "incorrect_client_credentials" {
+		t.Fatalf("exchange err = %v, want OAuthError incorrect_client_credentials", err)
+	}
+	if !strings.Contains(ReauthDetail(err), "no longer recognizes this client") {
+		t.Errorf("ReauthDetail = %q, want the client-credentials wording", ReauthDetail(err))
+	}
+
+	// A 200 with neither a token nor an error keeps the plain diagnostic.
+	body = `{"token_type":"bearer"}`
+	if _, err = f.Refresh(context.Background(), srv.Client(), "rt"); err == nil || errors.As(err, &oe) {
+		t.Errorf("empty 200 body → %v, want a plain no-access_token error", err)
+	}
 }
 
 func TestExchangeSendsResourceAndVerifier(t *testing.T) {

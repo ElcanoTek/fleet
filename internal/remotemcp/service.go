@@ -792,6 +792,7 @@ func (s *Service) flowConfig(server *store.RemoteMCPServer, clientSecret string)
 		Scopes:                splitFields(server.Scopes),
 		Resource:              server.URL,
 		AuthMethods:           splitFields(server.AuthMethods),
+		Issuer:                server.Issuer,
 	}
 }
 
