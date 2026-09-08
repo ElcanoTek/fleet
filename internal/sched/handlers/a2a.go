@@ -99,8 +99,10 @@ func (h *Handlers) SetA2A(cfg *A2AConfig) {
 // a2aStreamPollInterval is how often a streaming method re-reads the task row.
 // Task-level status transitions are seconds-to-minutes apart, so 1s keeps the
 // wire honest without hammering Postgres; the row is the source of truth, so
-// nothing is ever lost to buffer eviction (docs/A2A.md).
-const a2aStreamPollInterval = time.Second
+// nothing is ever lost to buffer eviction (docs/A2A.md). A var only so the
+// package's tests can poll faster: every lifecycle test otherwise pays a full
+// second per state transition it waits for.
+var a2aStreamPollInterval = time.Second
 
 // a2aStreamHeartbeat matches the run-log stream's keep-alive cadence.
 const a2aStreamHeartbeat = 15 * time.Second

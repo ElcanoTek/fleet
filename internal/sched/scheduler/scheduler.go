@@ -11,16 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/procgroup"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -123,7 +122,10 @@ const runIfStderrTruncated = "\n…[stderr truncated]"
 // after the gate's process exits or its timeout fires. Without it a grandchild
 // that inherited the pipe and escaped the process-group kill (setsid) would
 // block the sequential scheduler tick indefinitely.
-const runIfWaitDelay = 10 * time.Second
+//
+// A var rather than a const only so the test that proves the backstop fires
+// can shorten it instead of sitting through it.
+var runIfWaitDelay = 10 * time.Second
 
 type cappedRunIfStderr struct {
 	buf       bytes.Buffer
@@ -696,32 +698,30 @@ func (s *Scheduler) evalRunIf(task *models.Task) (shouldRun bool, reason string,
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", task.RunIf.Command) //nolint:gosec // G204: run_if is an operator-trusted host-side gate by design (#269); see RunIf doc.
+	cmd := exec.Command("sh", "-c", task.RunIf.Command) //nolint:gosec,noctx // G204: run_if is an operator-trusted host-side gate by design (#269); see RunIf doc. noctx: procgroup.Run below owns cancellation (whole-group kill, also after sh exits).
 	// Restricted PATH: no sudo, no package managers. HOME=/tmp so a command
 	// that reads $HOME (e.g. git -C) doesn't fail on a missing home dir, and so
 	// a stray write doesn't pollute the fleet process's real home.
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=/tmp"}
 	var stderr cappedRunIfStderr
 	cmd.Stderr = &stderr
-	// Run the gate as its own process-group leader and SIGKILL the WHOLE group
-	// on cancel/timeout: CommandContext's default kill signals only the direct
-	// sh, so a backgrounded grandchild would survive the timeout while holding
-	// the stderr pipe open — and the pipe copier would block cmd.Run (and this
-	// scheduler tick: lease recovery, the wake sweep) indefinitely. Same
-	// invariant as the host sandbox's bash path (internal/sandbox/host.go).
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return os.ErrProcessDone // group-killed above; nothing more to signal
-	}
+	// The gate runs as its own process-group leader and the WHOLE group is
+	// SIGKILLed at the timeout — procgroup does that even after sh itself has
+	// exited, which exec.CommandContext's Cancel does not (it stops watching
+	// the context once the direct child is reaped). Otherwise a backgrounded
+	// grandchild would survive the timeout while holding the stderr pipe open,
+	// and the pipe copier would block this scheduler tick (lease recovery, the
+	// wake sweep) until WaitDelay. A gate is a check, not a launcher, so
+	// whatever it leaves behind is killed the moment it has been waited for
+	// (RunAndKillSurvivors): a recurring gate that backgrounds a helper with
+	// its output redirected would otherwise leak one host process per tick.
+	//
 	// WaitDelay is the backstop for a grandchild that escaped the group (e.g.
-	// setsid): it force-closes the stderr pipe after the gate exits so cmd.Run
+	// setsid): it force-closes the stderr pipe after the gate exits so the run
 	// honors the documented [1,300]s ceiling instead of blocking on the pipe.
 	cmd.WaitDelay = runIfWaitDelay
 
-	runErr := cmd.Run()
+	runErr := procgroup.RunAndKillSurvivors(ctx, cmd)
 	if ctx.Err() == context.DeadlineExceeded {
 		return false, "check timed out", ctx.Err()
 	}

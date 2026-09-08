@@ -22,9 +22,9 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/procgroup"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -91,26 +91,24 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	// scanned rather than being a coverage hole; in-source codeql[]
 	// suppressions do not work with that pipeline — see codeql.yml).
 	//nolint:gosec // shell execution is the purpose of this tool
-	cmd := exec.CommandContext(cmdCtx, "bash", "-c", req.Command)
+	cmd := exec.Command("bash", "-c", req.Command) //nolint:noctx // procgroup.Run below owns cancellation (whole-group kill, also after bash exits)
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
 	}
-	// Run bash as its own process-group leader and SIGKILL the WHOLE group on
-	// cancel/timeout (#796): Go's default CommandContext kill signals only the
-	// direct child, so backgrounded grandchildren survived a cancelled call.
-	// The container backend holds the same invariant via its in-container
-	// killer; here we have direct process control.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return os.ErrProcessDone // group-killed above; nothing more to signal
-	}
-	// Without WaitDelay, cmd.Run blocks until the stdout/stderr pipes
-	// close — a background grandchild (e.g. `server &`) holding them
-	// open would hang the agent forever, even after the timeout killed
-	// bash itself.
+	// bash runs as its own process-group leader and the WHOLE group is
+	// SIGKILLed on cancel/timeout (#796): Go's default CommandContext kill
+	// signals only the direct child, so backgrounded grandchildren survived a
+	// cancelled call. procgroup.Run also fires after bash itself has exited,
+	// which a cmd.Cancel does not — os/exec stops watching the context once
+	// the direct child is reaped. The container backend holds the same
+	// invariant via its in-container killer; here we have direct process
+	// control. Run, not RunAndKillSurvivors: a detached background process
+	// (`server >/dev/null 2>&1 &`) outlives the call on purpose, as it does
+	// inside the container until the sandbox is retired.
+	//
+	// Without WaitDelay, the wait blocks until the stdout/stderr pipes
+	// close — a background grandchild (e.g. `server &`) that escaped the group
+	// (setsid) and holds them open would hang the agent forever.
 	cmd.WaitDelay = BashWaitDelay
 
 	// Capture stdout/stderr separately, bounded so runaway output can't
@@ -120,7 +118,7 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	cmd.Stdout = stdoutBuf
 	cmd.Stderr = stderrBuf
 
-	execErr := cmd.Run()
+	execErr := procgroup.Run(cmdCtx, cmd)
 
 	stdoutBytes, stdoutDiscarded := stdoutBuf.snapshot()
 	stderrBytes, stderrDiscarded := stderrBuf.snapshot()

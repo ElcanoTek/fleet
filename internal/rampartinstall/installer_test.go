@@ -153,6 +153,7 @@ func TestInstallHealthTimeout(t *testing.T) {
 	_, _ = fmt.Sscanf(srv.URL, "http://127.0.0.1:%d", &port)
 	i.port = port
 	i.healthBudget = 300 * time.Millisecond // exercise the timeout fast
+	i.healthPoll = 20 * time.Millisecond    // ...and do not spend it inside one 2s pause
 
 	if err := i.Start("boss@x.com"); err != nil {
 		t.Fatalf("Start: %v", err)

@@ -208,6 +208,12 @@ func (e *engine) generateTerminalStructuredOutput(
 // and replaying ALL of it.
 const terminalGenerateAttempts = 4
 
+// terminalRetryBaseDelay is the base of the exponential backoff between
+// transient-failure retries of the terminal structured-output call (500ms, 1s,
+// 2s, ...). A var only so the package's tests can shorten it — one test drives
+// every attempt to exhaustion and was paying the full 7.5s of backoff.
+var terminalRetryBaseDelay = 500 * time.Millisecond
+
 // terminalGenerateWithRetry is the terminal phase's resilience layer. Ordinary
 // rounds run behind streamRoundWithResilience (in-band retries, blip recovery,
 // fallback failover); this non-streaming Generate gets the equivalent bounded
@@ -235,7 +241,7 @@ func terminalGenerateWithRetry(ctx context.Context, model fantasy.LanguageModel,
 			select {
 			case <-ctx.Done():
 				return nil, fmt.Errorf("%w: context cancelled: %w", ErrStructuredOutputGeneration, ctx.Err())
-			case <-time.After(time.Duration(1<<i) * 500 * time.Millisecond):
+			case <-time.After(time.Duration(1<<i) * terminalRetryBaseDelay):
 			}
 		default:
 			return nil, fmt.Errorf("%w: %w", ErrStructuredOutputGeneration, err)

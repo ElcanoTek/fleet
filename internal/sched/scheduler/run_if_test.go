@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -171,10 +172,16 @@ func TestEvalRunIfTimeout(t *testing.T) {
 // until the child exits. Mirrors the host sandbox's bash regression test.
 func TestEvalRunIfBackgroundChildDoesNotHang(t *testing.T) {
 	s, _ := newTestScheduler(t)
+	// Both halves hold at any WaitDelay; the production 10s only made this
+	// the slowest test in the sched group (20s). evalRunIf runs synchronously
+	// on this goroutine, so setting the var here is ordered before every read.
+	oldDelay := runIfWaitDelay
+	t.Cleanup(func() { runIfWaitDelay = oldDelay })
 
 	// Child outlives the gate but not its timeout: WaitDelay must force the
 	// pipe closed and the gate's clean exit 0 must still count as "run". The
 	// backgrounded sleep inherits the gate's stderr pipe and holds it open.
+	runIfWaitDelay = 500 * time.Millisecond
 	start := time.Now()
 	task := &models.Task{RunIf: &models.RunIf{Command: "sleep 45 & exit 0", ExitCodeIs: 0, TimeoutSeconds: 60}}
 	ok, reason, err := s.evalRunIf(task)
@@ -188,19 +195,76 @@ func TestEvalRunIfBackgroundChildDoesNotHang(t *testing.T) {
 	if elapsed > 25*time.Second {
 		t.Fatalf("evalRunIf blocked %v on a background child's pipe; WaitDelay regression", elapsed)
 	}
+	t.Logf("background child: gate returned after %v (WaitDelay %v)", elapsed, runIfWaitDelay)
 
 	// Child outlives the TIMEOUT: the process-group SIGKILL must reap it at
-	// the deadline so the check errors at ~timeout, not at the child's exit.
+	// the deadline so the check errors at ~timeout, not at the child's exit
+	// and not at WaitDelay. This runs with the production WaitDelay on
+	// purpose: before procgroup.Run, the kill was skipped once sh had exited
+	// and this half took the whole 10s — the pipe was freed by the backstop,
+	// not by the kill.
+	runIfWaitDelay = oldDelay
 	start = time.Now()
-	task = &models.Task{RunIf: &models.RunIf{Command: "sleep 60 & exit 0", ExitCodeIs: 0, TimeoutSeconds: 2}}
+	task = &models.Task{RunIf: &models.RunIf{Command: "sleep 60 & exit 0", ExitCodeIs: 0, TimeoutSeconds: 1}}
 	_, _, err = s.evalRunIf(task)
 	elapsed = time.Since(start)
 	if err == nil {
 		t.Fatal("evalRunIf(child past timeout): expected timeout error")
 	}
-	if elapsed > 20*time.Second {
-		t.Fatalf("evalRunIf blocked %v past its 2s timeout; group-kill regression", elapsed)
+	if elapsed >= runIfWaitDelay {
+		t.Fatalf("evalRunIf returned after %v — the orphan was reaped by WaitDelay (%v), not by the group kill at the 1s timeout", elapsed, runIfWaitDelay)
 	}
+	t.Logf("child past timeout: gate returned after %v (timeout 1s, WaitDelay %v)", elapsed, runIfWaitDelay)
+}
+
+// TestEvalRunIfKillsDetachedGrandchild: a gate that backgrounds a helper with
+// its output redirected holds no pipe, so the gate returns at once — and
+// before procgroup.RunAndKillSurvivors that helper was never killed, leaking
+// one host process per tick of a recurring gate.
+func TestEvalRunIfKillsDetachedGrandchild(t *testing.T) {
+	s, _ := newTestScheduler(t)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	task := &models.Task{RunIf: &models.RunIf{
+		Command: "sleep 60 >/dev/null 2>&1 & echo $! > " + pidFile + "; exit 0", ExitCodeIs: 0, TimeoutSeconds: 30,
+	}}
+	start := time.Now()
+	ok, reason, err := s.evalRunIf(task)
+	if err != nil || !ok {
+		t.Fatalf("evalRunIf: ok=%v reason=%q err=%v", ok, reason, err)
+	}
+	if elapsed := time.Since(start); elapsed >= runIfWaitDelay {
+		t.Fatalf("gate took %v: the detached helper held a pipe it should not have", elapsed)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("pid file: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("pid file %q: %v", raw, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for helperRunning(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("detached helper %d is still running after the gate returned — it was not killed with the gate's group", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// helperRunning reads /proc: a killed orphan may linger as a zombie under a
+// PID 1 that does not reap, and a zombie is not running.
+func helperRunning(pid int) bool {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	i := strings.LastIndexByte(string(stat), ')')
+	if i < 0 {
+		return false
+	}
+	fields := strings.Fields(string(stat[i+1:]))
+	return len(fields) > 0 && fields[0] != "Z" && fields[0] != "X"
 }
 
 // TestHandleSkipLogLineIsJSON pins the task_skipped log record against

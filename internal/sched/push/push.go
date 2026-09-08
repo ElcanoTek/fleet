@@ -78,6 +78,8 @@ type Dispatcher struct {
 	store  Store
 	client *http.Client
 	logf   func(format string, args ...any)
+	// scanEvery, when set, replaces scanInterval (SetScanInterval).
+	scanEvery time.Duration
 }
 
 // New builds a dispatcher. allowPrivate disables the SSRF dial guard (never
@@ -96,11 +98,22 @@ func New(store Store, allowPrivate bool) *Dispatcher {
 	return &Dispatcher{store: store, client: client, logf: log.Printf}
 }
 
+// SetScanInterval overrides the pause between scans (default scanInterval).
+// It exists for tests, which otherwise wait a full second for every delivery
+// they assert on; call it before Run.
+func (d *Dispatcher) SetScanInterval(interval time.Duration) {
+	d.scanEvery = interval
+}
+
 // Run scans until ctx ends. Deliveries within a tick run sequentially — the
 // batch bound keeps a tick finite, and per-receiver parallelism is not worth
 // its complexity until a real integrator needs it.
 func (d *Dispatcher) Run(ctx context.Context) {
-	ticker := time.NewTicker(scanInterval)
+	every := d.scanEvery
+	if every <= 0 {
+		every = scanInterval
+	}
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		select {

@@ -87,6 +87,9 @@ type Installer struct {
 	// healthBudget bounds the post-start health wait (default 90s; small in
 	// tests to exercise the never-healthy failure path).
 	healthBudget time.Duration
+	// healthPoll is the pause between health probes (default 2s; small in
+	// tests so a 300ms budget is not spent inside one 2s pause).
+	healthPoll time.Duration
 
 	mu    sync.Mutex
 	state State
@@ -107,6 +110,7 @@ func New(podmanBinary string, setURL func(ctx context.Context, url, updatedBy st
 		client:       &http.Client{Timeout: 3 * time.Second},
 		state:        StateIdle,
 		healthBudget: 90 * time.Second,
+		healthPoll:   2 * time.Second,
 	}
 }
 
@@ -271,7 +275,7 @@ func (i *Installer) waitHealthy(ctx context.Context, budget time.Duration) error
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(i.healthPoll):
 		}
 	}
 	return fmt.Errorf("service did not become healthy within %s (podman logs %s)", budget, ContainerName)

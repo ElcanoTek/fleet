@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -125,7 +126,7 @@ func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*U
 	if len(plainPassword) < 8 {
 		return nil, errors.New("password must be at least 8 characters")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), passwordHashCost)
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
@@ -400,13 +401,35 @@ func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID 
 // microseconds while a wrong password costs ~50-100ms — a timing oracle
 // that enumerates the provisioned allowlist from the public login form.
 // Generated (not a literal) so it stays cost-matched with CreateUser.
-var dummyPasswordHash = func() []byte {
-	h, err := bcrypt.GenerateFromPassword([]byte("timing-equalizer-dummy"), bcrypt.DefaultCost)
+var dummyPasswordHash = mustHashDummyPassword()
+
+func mustHashDummyPassword() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("timing-equalizer-dummy"), passwordHashCost)
 	if err != nil {
 		panic(err)
 	}
 	return h
-}()
+}
+
+// passwordHashCost is the bcrypt work factor for every password hash this
+// package writes and for the timing-equalizer dummy above. It is
+// bcrypt.DefaultCost in every binary; only SetPasswordHashCostForTests lowers
+// it, and that refuses to run outside `go test`.
+var passwordHashCost = bcrypt.DefaultCost
+
+// SetPasswordHashCostForTests lowers the bcrypt work factor for a test binary.
+// A cost-10 hash is ~70ms of pure CPU (several-fold more under -race), and the
+// store and httpapi suites provision hundreds of users, so at the default cost
+// hashing — not the database — dominates their wall-clock. The dummy hash is
+// regenerated so failed-login timing stays cost-matched with CreateUser.
+// It panics outside `go test`: the cost is a security parameter, not a knob.
+func SetPasswordHashCostForTests(cost int) {
+	if !testing.Testing() {
+		panic("store: SetPasswordHashCostForTests called outside go test")
+	}
+	passwordHashCost = cost
+	dummyPasswordHash = mustHashDummyPassword()
+}
 
 // VerifyUser returns nil iff the provided plaintext matches the stored
 // hash. Returns ErrUserNotFound / ErrBadPassword for the two failure
@@ -463,7 +486,7 @@ func (s *Store) UpdatePassword(ctx context.Context, email, plainPassword string)
 	if len(plainPassword) < 8 {
 		return errors.New("password must be at least 8 characters")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), passwordHashCost)
 	if err != nil {
 		return err
 	}

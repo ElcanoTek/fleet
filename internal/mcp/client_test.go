@@ -181,9 +181,12 @@ func TestStdioWrite_WedgedStdinHonorsCtx(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found, skipping stdio test")
 	}
+	// Registered before t.Cleanup(tr.Close) so — cleanups run last-in-first-out
+	// — Close still sees the short grace. A defer here restored the 3s default
+	// first and every Close then waited the full production grace.
 	old := stdioCloseGrace
 	stdioCloseGrace = 200 * time.Millisecond
-	defer func() { stdioCloseGrace = old }()
+	t.Cleanup(func() { stdioCloseGrace = old })
 
 	// A child that never reads stdin: the pipe fills and every later write
 	// byte blocks in the kernel.
@@ -228,9 +231,12 @@ func TestStdioNotify_WedgedStdinHonorsCtx(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found, skipping stdio test")
 	}
+	// Registered before t.Cleanup(tr.Close) so — cleanups run last-in-first-out
+	// — Close still sees the short grace. A defer here restored the 3s default
+	// first and every Close then waited the full production grace.
 	old := stdioCloseGrace
 	stdioCloseGrace = 200 * time.Millisecond
-	defer func() { stdioCloseGrace = old }()
+	t.Cleanup(func() { stdioCloseGrace = old })
 
 	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
 	if err != nil {
@@ -260,9 +266,12 @@ func TestStdioNotify_WedgedStdinHonorsCtx(t *testing.T) {
 }
 
 func TestStdioClose_KillsHungChild(t *testing.T) {
+	// Registered before t.Cleanup(tr.Close) so — cleanups run last-in-first-out
+	// — Close still sees the short grace. A defer here restored the 3s default
+	// first and every Close then waited the full production grace.
 	old := stdioCloseGrace
 	stdioCloseGrace = 200 * time.Millisecond
-	defer func() { stdioCloseGrace = old }()
+	t.Cleanup(func() { stdioCloseGrace = old })
 
 	// A child that ignores stdin EOF and sleeps forever.
 	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
@@ -1660,6 +1669,12 @@ func TestStdioTransportDeadAfterCancel(t *testing.T) {
 	_, filename, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(filename)
 	scriptPath := filepath.Join(dir, "testdata", "slow_server.py")
+
+	// The slow server never exits on stdin close; Close would otherwise wait
+	// the full production grace before killing it.
+	oldGrace := stdioCloseGrace
+	stdioCloseGrace = 200 * time.Millisecond
+	t.Cleanup(func() { stdioCloseGrace = oldGrace })
 
 	transport, err := NewStdioTransport("python3", []string{scriptPath}, nil)
 	if err != nil {

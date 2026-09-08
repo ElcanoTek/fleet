@@ -48,7 +48,7 @@ func cmdCleanup(argv []string) int {
 			return errf(2, "cleanup: unknown flag %q (want --dry-run and/or --deep)", a)
 		}
 	}
-	return runCleanup(opts, defaultCleanupHost())
+	return runCleanup(opts, newCleanupHost())
 }
 
 type cleanupOpts struct {
@@ -68,6 +68,11 @@ type cleanupHost struct {
 func defaultCleanupHost() cleanupHost {
 	return cleanupHost{lookPath: exec.LookPath, run: runLoud, out: os.Stdout}
 }
+
+// newCleanupHost is how cmdCleanup obtains its host. A var so the flag-parsing
+// tests can substitute a fake: with the real host, a `--dry-run` runs
+// `podman system df` against the developer's actual store (seconds each).
+var newCleanupHost = defaultCleanupHost
 
 // runCleanup is the whole verb behind the cleanupHost seam. Exit code: 0 when
 // no prune step applied to this box (no podman, no Go toolchain, or --dry-run)

@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -52,10 +53,21 @@ func TestRunReadiness_CriticalDown_NotReady503(t *testing.T) {
 }
 
 func TestRunReadiness_Parallel(t *testing.T) {
-	// Three probes each sleeping ~100ms must finish well under 300ms if run
-	// concurrently (proves fan-out, not serialization).
+	// Three probes each sleeping ~100ms must overlap (fan-out, not
+	// serialization). Concurrency is asserted on the peak number of probes
+	// inside their sleep at once: sequential execution can never push it above
+	// 1, and unlike a wall-clock bound it does not measure the CI box.
+	var inFlight, peak atomic.Int64
 	slow := func(name string) Check {
 		return Check{Name: name, Probe: func(ctx context.Context) Result {
+			cur := inFlight.Add(1)
+			defer inFlight.Add(-1)
+			for {
+				p := peak.Load()
+				if cur <= p || peak.CompareAndSwap(p, cur) {
+					break
+				}
+			}
 			select {
 			case <-time.After(100 * time.Millisecond):
 				return Result{Status: StatusOK}
@@ -70,9 +82,10 @@ func TestRunReadiness_Parallel(t *testing.T) {
 	if resp.Status != Ready || code != 200 {
 		t.Fatalf("want ready/200, got %s/%d", resp.Status, code)
 	}
-	if elapsed > 250*time.Millisecond {
-		t.Errorf("checks did not run in parallel: took %s", elapsed)
+	if p := peak.Load(); p < 2 {
+		t.Errorf("checks did not run in parallel: peak in-flight = %d (took %s)", p, elapsed)
 	}
+	t.Logf("peak in-flight probes = %d of 3; took %s", peak.Load(), elapsed)
 }
 
 func TestRunReadiness_TimeoutBecomesError(t *testing.T) {

@@ -71,12 +71,15 @@ const (
 	// aliases, so the lifted test's t.Setenv keeps working.
 	retryMaxAttemptsEnv = "CUTLASS_RETRY_MAX_ATTEMPTS"
 	// maxInnerEscalations caps how many outer-loop recoveries per round.
-	maxInnerEscalations = 3
-	// streamBlipRetryDelay is the wait before retrying the same model after a
-	// transient mid-stream error.
-	streamBlipRetryDelay      = 3 * time.Second
+	maxInnerEscalations       = 3
 	providerFirstChunkTimeout = 30 * time.Second
 )
+
+// streamBlipRetryDelay is the wait before retrying the same model after a
+// transient mid-stream error. A var (not a const) only so the package's tests
+// can shorten it: six of them drive a blip through this path, and at 3s each
+// the waits were most of the package's wall-clock.
+var streamBlipRetryDelay = 3 * time.Second
 
 // resilienceConfig is resolved once at engine construction.
 type resilienceConfig struct {
