@@ -5,9 +5,11 @@
 # patched versions of transitive dependencies whose parents have not released a
 # fix yet:
 #
-#   sharp   ^0.35.3  — @huggingface/transformers pins sharp ^0.34.5, which
+#   sharp   ^0.35.4  — @huggingface/transformers pins sharp ^0.34.5, which
 #                      carries the libvips CVEs (CVE-2026-33327/-33328/-35590/
-#                      -35591, GHSA-f88m-g3jw-g9cj).
+#                      -35591, GHSA-f88m-g3jw-g9cj); 0.35.4 also closes the
+#                      bundled-libheif advisory GHSA-rgj7-g3m4-5g8c
+#                      (GHSA-g89c-p67h-r497, GHSA-2jg2-4ch7-h545).
 #   adm-zip ^0.6.0   — onnxruntime-node pins adm-zip ^0.5.16, which carries
 #                      GHSA-xcpc-8h2w-3j85 (crafted-ZIP 4 GB allocation).
 #
@@ -115,7 +117,7 @@ check() {
   fi
 }
 
-check "@huggingface/transformers" "sharp"   "0.35.0"
+check "@huggingface/transformers" "sharp"   "0.35.4"
 check "onnxruntime-node"          "adm-zip" "0.6.0"
 
 exit "$stale"
