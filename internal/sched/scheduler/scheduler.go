@@ -706,20 +706,22 @@ func (s *Scheduler) evalRunIf(task *models.Task) (shouldRun bool, reason string,
 	var stderr cappedRunIfStderr
 	cmd.Stderr = &stderr
 	// The gate runs as its own process-group leader and the WHOLE group is
-	// SIGKILLed at the timeout — procgroup.Run does that even after sh itself
-	// has exited, which exec.CommandContext's Cancel does not (it stops
-	// watching the context once the direct child is reaped). Otherwise a
-	// backgrounded grandchild would survive the timeout while holding the
-	// stderr pipe open, and the pipe copier would block this scheduler tick
-	// (lease recovery, the wake sweep) until WaitDelay. Same invariant as the
-	// host sandbox's bash path (internal/sandbox/host.go).
+	// SIGKILLed at the timeout — procgroup does that even after sh itself has
+	// exited, which exec.CommandContext's Cancel does not (it stops watching
+	// the context once the direct child is reaped). Otherwise a backgrounded
+	// grandchild would survive the timeout while holding the stderr pipe open,
+	// and the pipe copier would block this scheduler tick (lease recovery, the
+	// wake sweep) until WaitDelay. A gate is a check, not a launcher, so
+	// whatever it leaves behind is killed the moment it has been waited for
+	// (RunAndKillSurvivors): a recurring gate that backgrounds a helper with
+	// its output redirected would otherwise leak one host process per tick.
 	//
 	// WaitDelay is the backstop for a grandchild that escaped the group (e.g.
 	// setsid): it force-closes the stderr pipe after the gate exits so the run
 	// honors the documented [1,300]s ceiling instead of blocking on the pipe.
 	cmd.WaitDelay = runIfWaitDelay
 
-	runErr := procgroup.Run(ctx, cmd)
+	runErr := procgroup.RunAndKillSurvivors(ctx, cmd)
 	if ctx.Err() == context.DeadlineExceeded {
 		return false, "check timed out", ctx.Err()
 	}
