@@ -92,8 +92,14 @@ type RemoteMCPServer struct {
 	Account string `json:"account"`
 	// IsDefault marks the seat a user's chats mount for Name when neither the
 	// conversation nor a task pins another. Exactly one per (user, name).
-	IsDefault             bool   `json:"is_default"`
-	URL                   string `json:"url"`
+	IsDefault bool   `json:"is_default"`
+	URL       string `json:"url"`
+	// Resource is the RFC 8707 resource indicator the token request carries —
+	// the server's PRM-declared `resource` when it shares URL's origin. '' means
+	// the same as URL (rows created before the column, and every vendor whose
+	// PRM names its endpoint). It is NOT dialed: Slack declares its bare origin
+	// while serving MCP at /mcp (#1006).
+	Resource              string `json:"-"`
 	Transport             string `json:"transport"`
 	Status                string `json:"status"`
 	StatusDetail          string `json:"status_detail,omitempty"`
@@ -117,7 +123,8 @@ type RemoteMCPServerInput struct {
 	UserEmail             string
 	Name                  string
 	Account               string // seat label (#988); canonicalized; "" = the unlabeled seat
-	URL                   string // canonical
+	URL                   string // canonical form of the typed endpoint — what fleet dials
+	Resource              string // RFC 8707 indicator from the PRM; "" = same as URL
 	Transport             string
 	Issuer                string
 	AuthorizationEndpoint string
@@ -241,20 +248,20 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 	// than yield two defaults.
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO remote_mcp_servers (
-			id, user_email, name, url, transport, status, status_detail,
+			id, user_email, name, url, resource, transport, status, status_detail,
 			issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
 			scopes, auth_methods, client_id, client_secret_enc, registration_access_token_enc,
 			auth_kind, api_key_header, api_key_query, api_key_enc,
 			account, is_default,
 			created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+		VALUES ($1,$2,$3,$4,$23,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
 			$22,
 			NOT EXISTS (SELECT 1 FROM remote_mcp_servers d WHERE d.user_email = $2 AND d.name = $3 AND d.is_default),
 			$21,$21)`,
 		id, email, in.Name, in.URL, in.Transport, status,
 		in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
 		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc,
-		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account)
+		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account, strings.TrimSpace(in.Resource))
 	if err != nil {
 		if pgUniqueViolation(err) {
 			if account == "" {
@@ -267,13 +274,13 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 	return s.GetRemoteMCPServer(ctx, email, id)
 }
 
-const remoteMCPColumns = `id, user_email, name, url, transport, status, status_detail,
+const remoteMCPColumns = `id, user_email, name, url, resource, transport, status, status_detail,
 	issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
 	scopes, auth_methods, client_id, auth_kind, api_key_header, api_key_query, account, is_default, created_at, updated_at`
 
 func scanRemoteMCPServer(row interface{ Scan(...any) error }) (*RemoteMCPServer, error) {
 	var m RemoteMCPServer
-	if err := row.Scan(&m.ID, &m.UserEmail, &m.Name, &m.URL, &m.Transport, &m.Status, &m.StatusDetail,
+	if err := row.Scan(&m.ID, &m.UserEmail, &m.Name, &m.URL, &m.Resource, &m.Transport, &m.Status, &m.StatusDetail,
 		&m.Issuer, &m.AuthorizationEndpoint, &m.TokenEndpoint, &m.RegistrationEndpoint, &m.RevocationEndpoint,
 		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.APIKeyQuery, &m.Account, &m.IsDefault, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err

@@ -382,10 +382,17 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	s.noteSecrets(clientSecret, regToken)
 
 	server, err := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
-		UserEmail:             in.Email,
-		Name:                  name,
-		Account:               in.Account,
-		URL:                   disco.Resource,
+		UserEmail: in.Email,
+		Name:      name,
+		Account:   in.Account,
+		// The connection URL is what the user typed (canonical): the MCP endpoint
+		// fleet dials, the DB key, the AAD, the routing name. The PRM-declared
+		// resource travels separately, to the authorization server only — Slack
+		// declares its bare origin while serving MCP at /mcp, and adopting that
+		// as the URL made every mount dial the root and die on its redirect
+		// (#1006).
+		URL:                   canonURL,
+		Resource:              disco.Resource,
 		Transport:             store.RemoteMCPTransportStreamableHTTP,
 		Issuer:                disco.AS.Issuer,
 		AuthorizationEndpoint: disco.AS.AuthorizationEndpoint,
@@ -790,10 +797,22 @@ func (s *Service) flowConfig(server *store.RemoteMCPServer, clientSecret string)
 		ClientSecret:          clientSecret,
 		RedirectURI:           s.RedirectURI(),
 		Scopes:                splitFields(server.Scopes),
-		Resource:              server.URL,
+		Resource:              resourceIndicator(server),
 		AuthMethods:           splitFields(server.AuthMethods),
 		Issuer:                server.Issuer,
 	}
+}
+
+// resourceIndicator is the RFC 8707 `resource` the authorize, exchange and
+// refresh requests carry: the value the server's protected-resource metadata
+// declared, kept apart from the connection URL since #1006, or the connection
+// URL itself for rows created before that column existed (for them the two
+// were the same value by construction).
+func resourceIndicator(server *store.RemoteMCPServer) string {
+	if r := strings.TrimSpace(server.Resource); r != "" {
+		return r
+	}
+	return server.URL
 }
 
 func splitFields(s string) []string {

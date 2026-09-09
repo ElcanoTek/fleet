@@ -1,0 +1,19 @@
+-- 057_remote_mcp_resource.sql — keep the RFC 8707 resource indicator apart
+-- from the connection URL.
+--
+-- A hosted MCP connection has always stored ONE url: what fleet dials for MCP
+-- calls, the DB key, the encryption AAD, the broker routing name — and the
+-- `resource` value sent to the authorization server. Discovery adopted the
+-- server's protected-resource metadata `resource` as that url whenever it
+-- shared the typed server's origin (RFC 9728 §3.3). For every vendor verified
+-- so far the two coincide. Slack's does not: its PRM declares
+-- `https://mcp.slack.com` — the bare origin — while it serves MCP at
+-- `https://mcp.slack.com/mcp`, and the origin root answers every request with
+-- a redirect the SSRF-safe client refuses by design. So a Slack connection
+-- authorized cleanly and then failed at every mount (#1006, 2026-09-09).
+--
+-- The connection url is now the canonical form of the URL the user typed —
+-- the endpoint — and this column carries the PRM-declared indicator for the
+-- token request. '' means "same as url", which is also what every existing
+-- row means (their url IS the value the PRM declared).
+ALTER TABLE remote_mcp_servers ADD COLUMN IF NOT EXISTS resource TEXT NOT NULL DEFAULT '';

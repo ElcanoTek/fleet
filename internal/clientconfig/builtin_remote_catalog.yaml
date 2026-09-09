@@ -2197,11 +2197,14 @@ servers:
     auth: oauth
     featured: true
     setup_hint: >-
-      Slack's server has no automatic client registration — use the client
-      ID and secret Slack publishes in its MCP docs, and a workspace admin
-      must have approved MCP access for your workspace.
+      Slack's server has no automatic client registration and publishes no
+      shared client: create your own Slack app (internal to your workspace
+      -- Slack prohibits unlisted apps for MCP), add your Fleet callback as
+      a Redirect URL under OAuth & Permissions, and paste its client ID and
+      secret here. A workspace admin must approve the app.
     setup_url: "https://docs.slack.dev/ai/slack-mcp-server/"
     client_registration: manual
+    client_secret: required
   - name: superhuman-mail
     display_name: Superhuman Mail
     description: >-
