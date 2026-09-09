@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
 	"charm.land/fantasy"
-
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -212,6 +212,43 @@ func buildFantasyTools(
 	optIn map[string]bool,
 	cfg toolBuildConfig,
 ) ([]fantasy.AgentTool, error) {
+	tools, _, err := buildFantasyToolsWithRoster(nativeTools, mcpServerTools, broker, allow, policy, optionalServers, optIn, cfg)
+	return tools, err
+}
+
+// toolRoster is what buildFantasyToolsWithRoster actually registered, in the
+// terms the system prompt's live-registry section needs (live_registry.go):
+// which MCP tools the model can call by name, or — above the disclosure
+// threshold — how many are hidden behind tool_search/tool_describe/tool_call
+// and for which connectors. It is derived from the SAME loop that builds the
+// roster, so the prompt can never disagree with the tool list about what is
+// callable (#1006: the section used to be written before the roster existed,
+// and above the threshold it listed 159 names none of which resolved).
+type toolRoster struct {
+	// directMCP holds the model-facing `mcp_<server>_<tool>` names registered
+	// directly, sorted. Empty when the MCP set was deferred.
+	directMCP []string
+	// deferredMCP is how many MCP tools sit behind the disclosure bridges
+	// (0 when nothing was deferred).
+	deferredMCP int
+	// deferredByServer counts the deferred tools per registration (server)
+	// name, so the section can name the connectors the bridges reach.
+	deferredByServer map[string]int
+}
+
+// buildFantasyToolsWithRoster is buildFantasyTools plus the roster summary the
+// run loop appends to the system prompt after the tools exist.
+func buildFantasyToolsWithRoster(
+	nativeTools []fantasy.AgentTool,
+	mcpServerTools []mcp.ServerTool,
+	broker MCPBroker,
+	allow mcpAllowlist,
+	policy Policy,
+	optionalServers mcpOptionalSet,
+	optIn map[string]bool,
+	cfg toolBuildConfig,
+) ([]fantasy.AgentTool, toolRoster, error) {
+	var roster toolRoster
 	// mcpServerTools is the tool CATALOG (discovery, as data); broker is the seam
 	// each tool's CALL routes through (the in-process localMCPBroker by default, or
 	// an injected out-of-process broker — issue #167). They are deliberately
@@ -229,6 +266,8 @@ func buildFantasyTools(
 	// registered directly when the roster fits, or hidden behind the disclosure
 	// bridges when it would blow the ceiling.
 	mcpTools := make([]fantasy.AgentTool, 0, len(mcpServerTools))
+	mcpNames := make([]string, 0, len(mcpServerTools))
+	mcpByServer := map[string]int{}
 	mcpSkippedOptional := 0
 	mcpSkippedAllowlist := 0
 	mcpSkippedPersona := 0
@@ -286,6 +325,8 @@ func buildFantasyTools(
 		// wrapping only the advertised bridge would leave the hidden tool itself
 		// as a future bypass route.
 		mcpTools = append(mcpTools, withModelOutputBoundary(mt))
+		mcpNames = append(mcpNames, mt.Name())
+		mcpByServer[st.ServerName]++
 	}
 
 	confirmAudit := []fantasy.AgentTool{}
@@ -326,13 +367,15 @@ func buildFantasyTools(
 		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona)",
 			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona)
 		if len(allTools) > maxToolsPerRequest {
-			return nil, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
+			return nil, toolRoster{}, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
+		roster.deferredMCP = len(mcpTools)
+		roster.deferredByServer = mcpByServer
 		// The model-output boundary sits inside the universal panic boundary: a
 		// panic in a tool, policy hook, output screen, artifact stager, or bridge
 		// dispatch becomes one paired in-band result, while every ordinary result
 		// crosses the hard byte cap before Fantasy can retain it.
-		return containToolRoster(BoundModelOutputTools(allTools), cfg.panicAttribution, policy), nil
+		return containToolRoster(BoundModelOutputTools(allTools), cfg.panicAttribution, policy), roster, nil
 	}
 
 	allTools = append(allTools, mcpTools...)
@@ -342,9 +385,11 @@ func buildFantasyTools(
 		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona)
 
 	if len(allTools) > maxToolsPerRequest {
-		return nil, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
+		return nil, toolRoster{}, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
 	}
-	return containToolRoster(BoundModelOutputTools(allTools), cfg.panicAttribution, policy), nil
+	sort.Strings(mcpNames)
+	roster.directMCP = mcpNames
+	return containToolRoster(BoundModelOutputTools(allTools), cfg.panicAttribution, policy), roster, nil
 }
 
 // buildConfirmAuditPolicyTool returns the scheduled confirm_audit tool wired to

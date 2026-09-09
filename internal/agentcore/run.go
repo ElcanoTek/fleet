@@ -359,7 +359,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 
 	eng := newRunEngine(cfg, deps, logSession)
 
-	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)
+	// basePrompt is the driver's system prompt as authored (persona, protocols,
+	// skills, notes). The live-registry section is appended below, once the
+	// tool roster exists — see live_registry.go for why it cannot be written
+	// earlier. Sub-agent children receive the base (internal/agent/subagent.go)
+	// and run through this same loop, so each appends its own roster's section.
+	basePrompt, messages, label, err := deps.Input.Prompt(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("input source: %w", err)
 	}
@@ -437,14 +442,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// the pre-load catalog — mcp_load appeared to succeed and changed
 	// nothing). An injected deps.MCPCatalog stays static by design: the
 	// injector owns its lifecycle.
-	buildTools := func() ([]fantasy.AgentTool, error) {
+	buildTools := func() ([]fantasy.AgentTool, toolRoster, error) {
 		catalog := deps.MCPCatalog
 		if catalog == nil {
 			catalog = mcpClient.GetAllTools()
 		}
-		tools, err := buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
+		tools, roster, err := buildFantasyToolsWithRoster(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 		if err != nil {
-			return nil, err
+			return nil, toolRoster{}, err
 		}
 		// Gate-4 (#294): NARROW the registered roster to the persona's tool
 		// allowlist BEFORE the agent (and thus the first LLM call) sees it, so a
@@ -462,13 +467,19 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		if cfg.PersonaPolicy != nil {
 			tools = resolvePersonaTools(cfg.PersonaName, *cfg.PersonaPolicy, tools, deps.Observer)
 		}
-		return tools, observerBoundary.Err()
+		return tools, roster, observerBoundary.Err()
 	}
 
-	fantasyTools, err := buildTools()
+	fantasyTools, roster, err := buildTools()
 	if err != nil {
 		return Result{}, fmt.Errorf("build tools: %w", err)
 	}
+	// The prompt the model sees = the driver's base + what this roster makes
+	// callable. Every later consumer of systemPrompt (the agent, the context
+	// prefix accounting, the finalize seam, terminal structured output) uses
+	// this augmented form, so what the model was told and what it was offered
+	// never diverge.
+	systemPrompt := withLiveRegistry(basePrompt, roster)
 	eng.setModelContextPrefix(systemPrompt, fantasyTools)
 
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
@@ -526,10 +537,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 
 		// Rebuild on MCP-server dirty (cutlass mcp_load_servers path).
 		if deps.MCPServersDirty != nil && deps.MCPServersDirty() {
-			fantasyTools, err = buildTools()
+			fantasyTools, roster, err = buildTools()
 			if err != nil {
 				return Result{}, fmt.Errorf("rebuild tools: %w", err)
 			}
+			// The roster changed, so the section describing it is re-derived
+			// from the base — never appended a second time.
+			systemPrompt = withLiveRegistry(basePrompt, roster)
 			eng.setModelContextPrefix(systemPrompt, fantasyTools)
 			agent = buildAgent(activeModel)
 			if deps.ClearMCPDirty != nil {

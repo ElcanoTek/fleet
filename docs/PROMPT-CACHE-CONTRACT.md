@@ -16,8 +16,11 @@ guard test that fences it.
 A request is, in order:
 
 1. **System prompt** (one or more system messages) — the base instructions +
-   persona + protocols + the MCP/skill roster. Assembled driver-side
-   (`internal/agent`), stable across the turns of a conversation.
+   persona + protocols + the skill roster, assembled driver-side
+   (`internal/agent`), plus the "MCP Tools (live registry)" section that
+   `agentcore.Run` appends from the roster it built (`live_registry.go`):
+   sorted names or sorted connector counts, no volatile tokens, so it is as
+   stable across the turns of a conversation as the rest.
 2. **Tool definitions** — the serialized tool roster (name, description,
    parameters schema, required list) the model may call. Assembled in
    `internal/agentcore` (`buildFantasyTools`).

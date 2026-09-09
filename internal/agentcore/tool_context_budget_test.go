@@ -170,7 +170,13 @@ func TestRun_ModelContextBudgetGuardsEverySuccessiveInnerToolStep(t *testing.T) 
 	if len(prompts) != toolSteps+1 {
 		t.Fatalf("provider received %d prompts, want %d tool steps plus final stop", len(prompts), toolSteps+1)
 	}
-	prefix := buildModelContextPrefixBudget(systemPrompt, []fantasy.AgentTool{tool})
+	// The provider receives the driver's prompt PLUS the live-registry section
+	// Run appends from the built roster (live_registry.go); the estimator
+	// excludes the leading system message only when it matches this prefix
+	// byte for byte, so the independent accounting here must use the same
+	// augmented prompt the engine reserved for. No MCP tools → empty roster.
+	sentSystemPrompt := withLiveRegistry(systemPrompt, toolRoster{})
+	prefix := buildModelContextPrefixBudget(sentSystemPrompt, []fantasy.AgentTool{tool})
 	accounting := contextAccounting(prefix, DefaultMaxCompletionTokens, 128_000)
 	reducedBeforeProvider := false
 	for i, prompt := range prompts {

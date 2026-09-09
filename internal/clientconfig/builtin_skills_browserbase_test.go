@@ -29,11 +29,12 @@ func TestBuiltinSkillBrowserbaseCoversFailureModes(t *testing.T) {
 		why    string
 	}{
 		{
-			name:   "does not trust the live registry",
+			name:   "reads the live registry and the deferred-roster path",
 			needle: "MCP Tools (live registry)",
-			why: "the prompt's live-registry section is built from the shared catalog and is blind to " +
-				"per-user hosted connectors, so it can deny tools the model actually holds. Without this " +
-				"warning the agent refuses a working connector.",
+			why: "the prompt's live-registry section is derived from the registered roster (hosted " +
+				"connectors included) and, above the disclosure threshold, says the tools sit behind " +
+				"tool_search/tool_call. The skill must send the model to that section and to tool_call, " +
+				"or a large roster makes it conclude a working connector is missing.",
 		},
 		{
 			name:   "tool names are not hardcoded",
