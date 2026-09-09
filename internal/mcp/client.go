@@ -193,6 +193,14 @@ func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (jso
 			return interpretJSONRPC(env, wantID)
 		}
 	}
+	// The head holds only what the peek or the decoder pulled through the tee
+	// so far — for a plain-text body that is one bufio fill, i.e. one Read. A
+	// server (or proxy) that flushes its reason in pieces would leave the quoted
+	// line cut at the first chunk, so drain up to the cap through br before
+	// quoting: headCapture stops at httpStatusBodyCap regardless, so this reads
+	// at most that much more and restores the whole-first-line guarantee the
+	// pre-tee io.ReadAll(io.LimitReader(...)) gave.
+	_, _ = io.Copy(io.Discard, io.LimitReader(br, int64(httpStatusBodyCap)))
 	return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Body: firstLine(bytes.TrimSpace(head.buf))}
 }
 

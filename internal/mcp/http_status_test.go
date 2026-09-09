@@ -173,6 +173,35 @@ func TestHTTPTransportNon2xxLargeTextBodyStaysStatusError(t *testing.T) {
 	}
 }
 
+// A plain-text reason delivered in two flushed chunks must still be quoted
+// whole. The head is filled through a tee by whatever the peek pulls — one
+// Read — so without an explicit drain the error would carry only the first
+// chunk ("forbidden: the caller") and lose exactly the diagnostic #1454 exists
+// to surface.
+func TestHTTPTransportNon2xxChunkedTextBodyQuotesWholeLine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("forbidden: the caller "))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = w.Write([]byte("does not have permission\n" + strings.Repeat("x", 20000)))
+	}))
+	defer srv.Close()
+
+	c := NewClient()
+	defer func() { _ = c.Close() }()
+	err := c.AddHTTPServerWithOptions(context.Background(), "s", srv.URL, HTTPServerOptions{})
+	var hs *HTTPStatusError
+	if !errors.As(err, &hs) {
+		t.Fatalf("error %v (%T) is not an *HTTPStatusError", err, err)
+	}
+	if hs.Body != "forbidden: the caller does not have permission" {
+		t.Errorf("chunked body quoted as %q, want the whole first line", hs.Body)
+	}
+}
+
 // A Google-style REST error object is JSON but not JSON-RPC: it has an
 // "error" key yet neither a jsonrpc member nor our request id, so it must be
 // reported as the status plus its text — not as a phantom id mismatch.

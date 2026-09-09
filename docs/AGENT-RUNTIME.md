@@ -538,11 +538,11 @@ How the invariants hold:
   a 5xx, a timeout or a TLS failure says nothing about the credential. The
   transport reports such answers as the status plus the body's first line
   (`mcp.HTTPStatusError`) rather than a JSON decode error — unless the body is
-  itself a JSON-RPC response, which wins at any size (Google's Drive MCP server
-  answers `tools/list` with HTTP 403 and a complete result when the project has
-  not enabled `drivemcp.googleapis.com`; the mount succeeds, one log line notes
-  the disagreement, and the tool calls that follow carry Google's real
-  "the caller does not have permission").
+  itself a JSON-RPC response, which wins at any size the 2xx path would accept
+  (Google's Drive MCP server answers `tools/list` with HTTP 403 and a complete
+  result when the project has not enabled `drivemcp.googleapis.com`; the mount
+  succeeds, one log line notes the disagreement, and the tool calls that follow
+  carry Google's real "the caller does not have permission").
 - **Refresh failures are classified, not lumped together.** The split decides
   whether the user is asked to do something, so it errs toward *not* bothering
   them (`mcpoauth.IsTerminalRefreshError`):
