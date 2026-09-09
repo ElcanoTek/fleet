@@ -415,6 +415,49 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 	}
 }
 
+// TestBuiltinRemoteCatalogClientSecretRequired: client_secret: required
+// mirrors what the add-time guard enforces (mcpoauth.PublicClientAllowed): the
+// vendor's authorization-server metadata lists no "none" in
+// token_endpoint_auth_methods_supported (an omitted list means
+// client_secret_basic, RFC 8414 §2), so a secretless manual client can never
+// complete the exchange and the card must not call the secret optional. Every
+// probeable manual entry was checked against its live metadata on 2026-09-10
+// (#1006); the flagged set is pinned here so a new manual entry is a conscious
+// decision, not an omission.
+func TestBuiltinRemoteCatalogClientSecretRequired(t *testing.T) {
+	entries, err := loadBuiltinRemoteCatalog()
+	if err != nil {
+		t.Fatalf("builtin catalog: %v", err)
+	}
+	byName := make(map[string]RemoteMCPCatalogEntry, len(entries))
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	secretRequired := []string{
+		"alloydb", "asana", "box", "docusign", "front", "github", "google-calendar", "google-chat",
+		"google-docs", "google-drive", "google-gemini-agent-platform", "google-gmail", "google-people",
+		"google-sheets", "google-slides", "hubspot", "slack", "wrike", "xero", "zoom",
+	}
+	for _, name := range secretRequired {
+		e, ok := byName[name]
+		if !ok {
+			t.Errorf("entry %q: expected in the builtin catalog", name)
+			continue
+		}
+		if e.ClientRegistration != "manual" || e.ClientSecret != "required" {
+			t.Errorf("entry %q: registration %q secret %q, want manual + required (its AS accepts no public clients)", name, e.ClientRegistration, e.ClientSecret)
+		}
+	}
+	// Vendors whose metadata DOES list "none" can serve a public client, so
+	// the flag would wrongly demand a secret there: amazon-ads (LWA lists
+	// client_secret_basic, private_key_jwt AND none) and doordash (none only).
+	for _, name := range []string{"amazon-ads", "doordash"} {
+		if e, ok := byName[name]; ok && e.ClientSecret != "" {
+			t.Errorf("entry %q: client_secret %q, but its AS accepts public clients — leave unflagged", name, e.ClientSecret)
+		}
+	}
+}
+
 // TestRemoteMCPCatalogClientSecretValidation: the flag takes one value and
 // only rides a manual client registration — anything else is a manifest bug
 // the loader must fail loud on, like every other catalog field.

@@ -67,11 +67,16 @@ is the validation.
   client path in `AddServer`, instead of letting the add fail mid-discovery.
 - `client_secret: required` — the vendor accepts no public clients, so the
   card makes the secret field mandatory instead of "optional". Only
-  meaningful with `client_registration: manual`. Set on `github`: its
-  metadata publishes no `token_endpoint_auth_methods_supported` (which per
-  RFC 8414 §2 means `client_secret_basic`), and its token endpoint answers
-  `incorrect_client_credentials` to a secretless exchange — measured while
-  verifying the official GitHub server for #1006.
+  meaningful with `client_registration: manual`. The rule is the one the
+  add-time guard enforces: the authorization server's metadata lists no
+  `none` in `token_endpoint_auth_methods_supported` (an omitted list means
+  `client_secret_basic`, RFC 8414 §2). Set on every built-in manual entry
+  whose live metadata said so on 2026-09-10 — GitHub (measured first: a
+  secretless exchange answers `incorrect_client_credentials`, #1006), Slack,
+  HubSpot, Zoom, Box, Asana, Docusign, Front, Wrike, Xero, AlloyDB and the
+  eight Google Workspace servers. Left off `amazon-ads` and `doordash`, whose
+  metadata lists `none`, and off the six `tenant` entries, whose URL cannot
+  be probed without a tenant. `TestBuiltinRemoteCatalog` pins the set.
 
 **Add-time guardrail for secretless manual clients** (`remotemcp.AddServer`,
 `ErrClientSecretRequired` → HTTP 422): a manual `client_id` with no secret is
