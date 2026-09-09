@@ -413,8 +413,6 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 	if gh.ClientRegistration != "manual" || gh.ClientSecret != "required" {
 		t.Errorf("github = registration %q secret %q, want manual + required", gh.ClientRegistration, gh.ClientSecret)
 	}
-
-	}
 }
 
 // TestBuiltinRemoteCatalogClientSecretRequired: client_secret: required
