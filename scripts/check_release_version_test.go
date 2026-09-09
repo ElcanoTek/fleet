@@ -140,10 +140,10 @@ func TestNoHandAuthoredReleaseNumbers(t *testing.T) {
 		}
 	}
 
-	// Both npm packages are private and never published, so their "version" is
-	// pure ceremony — pinned at the placeholder, and matching their lockfiles so
+	// The npm package is private and never published, so its "version" is
+	// pure ceremony — pinned at the placeholder, and matching its lockfile so
 	// `npm ci` stays happy.
-	for _, pkg := range []string{"web", "scripts/rampart-service"} {
+	for _, pkg := range []string{"web"} {
 		manifest := pkgJSON(t, root, filepath.Join(pkg, "package.json"))
 		got, _ := manifest["version"].(string)
 		if got != "0.0.0" {

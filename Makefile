@@ -277,18 +277,16 @@ ci-go: compile
 	$(MAKE) test-race
 	$(MAKE) govulncheck
 
-# The Web CI job, verbatim: both npm audits → the override canary → npm ci →
-# lint → typecheck → vitest → build. It said "verbatim" while running four of
-# those eight, which is the wrong half of a CI==local promise: the two
-# `npm audit` CVE gates, scripts/check-npm-overrides.sh, and the explicit
-# `npm run typecheck` were all missing, so a contributor could go green locally
-# and red on the PR. The typecheck matters most of the four — `next build`
+# The Web CI job, verbatim: npm audit → npm ci → lint → typecheck → vitest →
+# build. It once said "verbatim" while running only half of those steps, which
+# is the wrong half of a CI==local promise: the `npm audit` CVE gate and the
+# explicit `npm run typecheck` were missing, so a contributor could go green
+# locally and red on the PR. The typecheck matters most — `next build`
 # type-checks too, but it runs LAST, so dropping the explicit gate is what turns
-# a one-line type error into a multi-minute discovery.
+# a one-line type error into a multi-minute discovery. (web/ is the only npm
+# tree since ADR-0063 removed scripts/rampart-service.)
 ci-web:
 	cd web && npm audit --audit-level=low
-	cd scripts/rampart-service && npm audit --audit-level=low
-	scripts/check-npm-overrides.sh
 	cd web && npm ci && npm run lint && npm run typecheck && npx vitest run && npm run build
 
 # The mocked Playwright CI job, run from web/. Assumes browsers are installed

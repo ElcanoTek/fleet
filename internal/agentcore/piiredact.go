@@ -16,9 +16,9 @@ import (
 // It is DEFAULT OFF: cmd/fleet installs a redactor at boot only when
 // FLEET_PII_REDACTION_ENABLED is set. A nil redactor makes redactPII a
 // pass-through no-op, so an unconfigured deployment is byte-for-byte unchanged.
-// The Redactor INTERFACE lets an external ONNX/HTTP classifier (Rampart) replace
-// the built-in deterministic PatternRedactor as a follow-on with no call-site
-// change here.
+// The Redactor INTERFACE keeps this call site provider-neutral; the built-in
+// deterministic PatternRedactor is the only implementation shipped (ADR-0063
+// removed the external Rampart engine).
 var (
 	piiMu       sync.RWMutex
 	piiRedactor piiredact.Redactor

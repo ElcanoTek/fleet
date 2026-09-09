@@ -225,7 +225,9 @@ above fails otherwise.
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections
 - [`OPERATORS.md`](OPERATORS.md) — Operating fleet
 - [`OPS-CONNECTOR-DEFAULTS.md`](OPS-CONNECTOR-DEFAULTS.md) — Operations connector defaults
-- [`PII-REDACTION.md`](PII-REDACTION.md) — Optional PII redaction (#450)
+- [`PII-REDACTION.md`](PII-REDACTION.md) — Optional PII redaction (#450); the
+  Rampart ML engine was removed in
+  [ADR-0063](adr/0063-remove-the-rampart-pii-engine.md)
 - [`PR-STEWARDSHIP.md`](PR-STEWARDSHIP.md) — PR stewardship — the reference
 - [`PRIME-AGENT-COMPARISON.md`](PRIME-AGENT-COMPARISON.md) — Prime Agent comparison — what fleet borrowed, and what it deliberately didn't
 - [`PROJECTS.md`](PROJECTS.md) — Projects / Spaces: shared team workspaces

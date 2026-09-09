@@ -167,11 +167,8 @@ func (s *Server) Routes() http.Handler {
 	// delivery attempt host-side.
 	mux.Handle("/admin/notify-settings", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminNotifySettings)))))
 	mux.Handle("/admin/notify-settings/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminNotifySettingsTest)))))
-	// PII redaction probe: run the live redactor over a synthetic sample.
-	mux.Handle("/admin/pii-redaction/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPIIProbe)))))
+	// Guardrail probe: run the live detector over a synthetic sample.
 	mux.Handle("/admin/guardrail/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminGuardrailProbe)))))
-	// One-click Rampart service install (build + run + supervise via podman).
-	mux.Handle("/admin/pii-redaction/install", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPIIInstall)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth

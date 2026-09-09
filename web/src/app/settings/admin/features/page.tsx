@@ -12,10 +12,10 @@
 // this file learns about it still renders (in "Other", from its raw key) —
 // new backend settings never silently vanish from the panel.
 //
-// This page renders ONLY what the live registry serves plus the live Rampart
-// actions (detection probe + one-click service install) — no mock-only rows.
+// This page renders ONLY what the live registry serves plus the live guardrail
+// action (detector probe) — no mock-only rows.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { humanizeVarName } from "@/app/shared/lib/taskTemplates";
@@ -27,7 +27,6 @@ import {
   btnClass,
   CodeChip,
   ConnBadge,
-  InlineConfirmButton,
   Segmented,
   SETTINGS_INPUT,
   SetSwitch,
@@ -59,8 +58,8 @@ type ResolvedSetting = {
   // An override row exists but no longer validates (bounds tightened in a
   // later release): the default serves, and the row can only be cleared.
   stale?: boolean;
-  // The stored value failed to apply at boot (e.g. a rampart engine whose
-  // service URL vanished from the env) — env-derived behavior serves.
+  // The stored value failed to apply at boot (e.g. a guardrail mode whose
+  // detector URL vanished from the env) — env-derived behavior serves.
   apply_error?: string;
 };
 
@@ -77,27 +76,13 @@ const META: Record<string, SettingMeta> = {
   pii_redaction_mode: {
     label: "PII redaction",
     description:
-      "OPTIONAL and OFF by default. When on, scans every tool result for PII (emails, SSNs, credit cards, IPs, phone numbers) before it reaches the model, on top of the always-on secret scrubber. It only ever touches TOOL OUTPUT — never what users type into chat — so you can always send PII in a message; set the mode to Off to disable it entirely. Deterministic pattern matching (or the Rampart engine below) — a redaction aid, not a certified DLP engine.",
+      "OPTIONAL and OFF by default. When on, scans every tool result for PII (emails, SSNs, credit cards, IPs, phone numbers) before it reaches the model, on top of the always-on secret scrubber. It only ever touches TOOL OUTPUT — never what users type into chat — so you can always send PII in a message; set the mode to Off to disable it entirely. Deterministic pattern matching — a redaction aid, not a certified DLP engine.",
     optionHelp: {
       off: "Off (default): tool output passes through unchanged. PII is never redacted anywhere.",
       observe: "Detect and audit-log findings (kind + count, never the value) without changing the output — a monitoring posture.",
       redact: "Replace each detected span with a [PII:kind] marker so the model sees the structure without the value.",
       block: "Withhold any tool result containing PII entirely — the strictest posture; the model sees only a blocked notice.",
     },
-  },
-  pii_redaction_engine: {
-    label: "PII detection engine",
-    description:
-      "Which detector PII redaction uses WHEN it is on (no effect while the mode above is Off). Pattern: built-in deterministic regexes (emails, SSNs, cards, IPs, phones) — no dependencies. Rampart: a small ML token-classification model (17 entity types incl. names, addresses, government IDs, bank numbers) running as a service you deploy next to fleet — see docs/PII-REDACTION.md. If the Rampart service is unreachable, tool calls fall back to the pattern engine.",
-    optionHelp: {
-      pattern: "Deterministic regex detection: five PII shapes, zero moving parts.",
-      rampart: "ML detection via your Rampart service (requires the service URL below). Redacts with stable numbered placeholders like [GIVEN_NAME_1].",
-    },
-  },
-  pii_rampart_url: {
-    label: "Rampart service URL",
-    description:
-      "Endpoint of your Rampart detection service (e.g. http://127.0.0.1:8787/v1/redact). Deploy it from scripts/rampart-service in the fleet repo. Leave empty when using the pattern engine.",
   },
   guardrail_mode: {
     label: "Prompt-injection guardrail",
@@ -182,7 +167,7 @@ const PRIVACY_GROUP = "Privacy & data protection";
 const GROUPS: { title: string; keys: string[] }[] = [
   {
     title: PRIVACY_GROUP,
-    keys: ["pii_redaction_mode", "pii_redaction_engine", "pii_rampart_url", "guardrail_mode", "guardrail_url"],
+    keys: ["pii_redaction_mode", "guardrail_mode", "guardrail_url"],
   },
   {
     title: "Agent runtime",
@@ -210,10 +195,9 @@ const GROUPS: { title: string; keys: string[] }[] = [
   },
 ];
 
-// The Rampart action block has no setting row of its own; this is the haystack
-// the filter matches so "install", "podman", etc. keep the block visible.
-const RAMPART_ACTIONS_SEARCH_TEXT =
-  "rampart test detection install rampart service redactor podman";
+// The guardrail action block has no setting row of its own; this is the
+// haystack the filter matches so "probe", "detector", etc. keep it visible.
+const GUARDRAIL_ACTIONS_SEARCH_TEXT = "guardrail test prompt-injection detector probe";
 
 async function fetchSettings(): Promise<ResolvedSetting[] | null> {
   const response = await fetch("/api/admin/settings", { cache: "no-store" });
@@ -339,7 +323,7 @@ function FeaturesAdmin() {
   const other = (settings ?? []).filter((s) => !known.has(s.key));
   if (other.length > 0) grouped.push({ title: "Other", settings: other });
 
-  // Live filtering over label + description + env var + key (plus the Rampart
+  // Live filtering over label + description + env var + key (plus the guardrail
   // action block's search text); a group with nothing visible hides entirely.
   const ql = q.trim().toLowerCase();
   const rowMatches = (s: ResolvedSetting) => {
@@ -347,7 +331,7 @@ function FeaturesAdmin() {
     const meta = metaFor(s.key);
     return `${meta.label} ${meta.description} ${s.env_var} ${s.key}`.toLowerCase().includes(ql);
   };
-  const actionsMatch = !ql || RAMPART_ACTIONS_SEARCH_TEXT.includes(ql);
+  const actionsMatch = !ql || GUARDRAIL_ACTIONS_SEARCH_TEXT.includes(ql);
   const visibleGroups = grouped
     .map((g) => ({
       title: g.title,
@@ -411,12 +395,7 @@ function FeaturesAdmin() {
                     onReset={() => void reset(s.key)}
                   />
                 ))}
-                {group.actions ? (
-                  <>
-                    <RampartActions />
-                    <GuardrailActions />
-                  </>
-                ) : null}
+                {group.actions ? <GuardrailActions /> : null}
               </ConnPanel>
             </ConnGroup>
           ))
@@ -729,90 +708,7 @@ function IntControl({
   );
 }
 
-/* ── Rampart actions (Privacy group): detection probe + one-click install ── */
-
-// PIIProbe result — the live redactor (exactly what tool calls go through) run
-// over a synthetic sample: engine, detected kinds, latency, redacted preview.
-// A dead Rampart service reports as a failure here (tool calls themselves fall
-// back to the pattern engine).
-type PIIProbeResult = {
-  ok: boolean;
-  engine: string;
-  mode: string;
-  detail: string;
-  redacted?: string;
-  latency_ms: number;
-};
-
-// Install-job status from /api/admin/pii-redaction/install.
-type PIIInstallStatus = {
-  state: "idle" | "running" | "done" | "failed";
-  log: string[] | null;
-  container_running: boolean;
-  url?: string;
-};
-
-function RampartActions() {
-  const [probe, setProbe] = useState<"idle" | "running" | PIIProbeResult>("idle");
-
-  const runProbe = async () => {
-    setProbe("running");
-    try {
-      const response = await fetch("/api/admin/pii-redaction/test", { method: "POST" });
-      if (!response.ok) {
-        throw new Error((await response.text()).trim() || `Probe failed: ${response.status}`);
-      }
-      setProbe((await response.json()) as PIIProbeResult);
-    } catch (err) {
-      setProbe({
-        ok: false,
-        engine: "",
-        mode: "",
-        detail: err instanceof Error ? err.message : "Probe failed.",
-        latency_ms: 0,
-      });
-    }
-  };
-
-  return (
-    <div
-      className="grid gap-[0.55rem] border-b border-[var(--color-border-subtle)] px-[0.1rem] py-[0.95rem] last:border-b-0"
-      data-testid="pii-probe"
-    >
-      <div className="flex flex-wrap items-center gap-[0.65rem]">
-        <button
-          type="button"
-          onClick={() => void runProbe()}
-          disabled={probe === "running"}
-          data-testid="pii-probe-run"
-          className={btnClass({ sm: true, reveal: true })}
-        >
-          Test detection
-        </button>
-        {probe === "running" ? (
-          <ActStatus state="running">Running the redactor over the sample…</ActStatus>
-        ) : probe === "idle" ? (
-          <ActNote>runs the live redactor over a synthetic sample — save changes first</ActNote>
-        ) : null}
-      </div>
-      {probe !== "idle" && probe !== "running" ? (
-        <div className="grid gap-[0.3rem]" data-testid="pii-probe-result">
-          <ActStatus state={probe.ok ? "ok" : "err"}>
-            {probe.ok ? "✓" : "✕"} {probe.engine ? `${probe.engine} engine (${probe.mode})` : ""}
-            {probe.detail ? ` — ${probe.detail}` : ""}
-            {probe.latency_ms > 0 ? ` (${probe.latency_ms} ms)` : ""}
-          </ActStatus>
-          {probe.redacted ? (
-            <code className="block overflow-x-auto rounded-[0.3rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1 font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-secondary)]">
-              {probe.redacted}
-            </code>
-          ) : null}
-        </div>
-      ) : null}
-      <PIIInstallLine />
-    </div>
-  );
-}
+/* ── Guardrail actions (Privacy group): detector probe ── */
 
 type GuardrailProbeResult = {
   ok: boolean;
@@ -868,158 +764,6 @@ function GuardrailActions() {
           {probe.detail ? ` — ${probe.detail}` : ""}
           {probe.latency_ms > 0 ? ` (${probe.latency_ms} ms)` : ""}
         </ActStatus>
-      ) : null}
-    </div>
-  );
-}
-
-// PIIInstallLine — the one-click Rampart service install: fleet builds the
-// service container (model baked in), runs it on loopback, supervises it, and
-// saves the URL setting. 501 (installer not wired) hides the affordance.
-function PIIInstallLine() {
-  const [status, setStatus] = useState<PIIInstallStatus | null | "unavailable">(null);
-  const [error, setError] = useState("");
-  // The in-flight poll timer lives in a ref so the mount effect's cleanup can
-  // stop it: an install takes minutes, and an admin who navigates away mid-way
-  // must not leave a 3s fetch loop setting state on an unmounted component.
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopPolling = useCallback(() => {
-    if (pollTimer.current !== null) {
-      clearInterval(pollTimer.current);
-      pollTimer.current = null;
-    }
-  }, []);
-
-  const refresh = useCallback(async (): Promise<PIIInstallStatus | null> => {
-    const response = await fetch("/api/admin/pii-redaction/install", { cache: "no-store" });
-    if (response.status === 501) {
-      setStatus("unavailable");
-      return null;
-    }
-    if (!response.ok) return null;
-    const st = (await response.json()) as PIIInstallStatus;
-    setStatus(st);
-    return st;
-  }, []);
-
-  const poll = useCallback(() => {
-    stopPolling();
-    pollTimer.current = setInterval(() => {
-      // A transient network failure mid-poll is not a terminal state: swallow
-      // it and let the next tick retry rather than reject unhandled.
-      void refresh()
-        .then((st) => {
-          if (st && st.state !== "running") stopPolling();
-        })
-        .catch(() => undefined);
-    }, 3000);
-  }, [refresh, stopPolling]);
-
-  useEffect(() => {
-    // Kick off the status fetch on a microtask so no setState runs in the
-    // effect's synchronous phase (react-hooks/set-state-in-effect); resume
-    // polling if an install is already running when the panel mounts.
-    let cancelled = false;
-    const id = setTimeout(() => {
-      void refresh()
-        .then((st) => {
-          if (!cancelled && st?.state === "running") poll();
-        })
-        .catch(() => undefined);
-    }, 0);
-    return () => {
-      cancelled = true;
-      clearTimeout(id);
-      stopPolling();
-    };
-  }, [refresh, poll, stopPolling]);
-
-  // The two mutations share one shape: a failed HTTP status or a thrown fetch
-  // (network down, JSON parse) both land in the inline error line instead of
-  // an unhandled rejection that leaves the button looking like it did nothing.
-  const mutate = async (method: "POST" | "DELETE", failLabel: string) => {
-    setError("");
-    try {
-      const response = await fetch("/api/admin/pii-redaction/install", { method });
-      if (!response.ok) {
-        setError((await response.text()).trim() || `${failLabel}: ${response.status}`);
-        return null;
-      }
-      const st = (await response.json()) as PIIInstallStatus;
-      setStatus(st);
-      return st;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : failLabel);
-      return null;
-    }
-  };
-
-  const install = async () => {
-    const st = await mutate("POST", "Install failed");
-    if (st) poll();
-  };
-
-  const uninstall = () => mutate("DELETE", "Uninstall failed");
-
-  if (status === "unavailable" || status === null) return null;
-
-  const running = status.state === "running";
-  const lastLog = status.log?.length ? status.log[status.log.length - 1] : "";
-
-  return (
-    <div className="flex flex-wrap items-center gap-[0.65rem]" data-testid="pii-install">
-      {status.container_running ? (
-        <>
-          <ConnBadge variant="success">Service installed</ConnBadge>
-          <span className="font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
-            {status.url}
-          </span>
-          <InlineConfirmButton
-            label="Remove"
-            confirmLabel="Confirm remove"
-            onConfirm={() => void uninstall()}
-            testId="pii-install-remove"
-          />
-        </>
-      ) : (
-        <>
-          <button
-            type="button"
-            onClick={() => void install()}
-            disabled={running}
-            data-testid="pii-install-run"
-            className={btnClass({ sm: true, reveal: true })}
-          >
-            Install Rampart service
-          </button>
-          {running ? (
-            <ActStatus state="running">{lastLog || "working…"}</ActStatus>
-          ) : (
-            <ActNote>
-              builds + runs the detection service on this box (podman, loopback) and fills in the
-              URL
-            </ActNote>
-          )}
-        </>
-      )}
-      {status.state === "failed" && lastLog ? (
-        <p
-          className="m-0 w-full text-[0.74rem] text-[var(--color-danger)]"
-          role="alert"
-          data-testid="pii-install-error"
-        >
-          {lastLog}
-        </p>
-      ) : null}
-      {error ? (
-        <p
-          className="m-0 w-full text-[0.74rem] text-[var(--color-danger)]"
-          role="alert"
-          data-testid="pii-install-request-error"
-        >
-          {error}
-        </p>
       ) : null}
     </div>
   );
