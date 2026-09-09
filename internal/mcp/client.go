@@ -173,18 +173,92 @@ const httpStatusBodyCap = 4 * 1024
 // response keeps its existing parse; anything else becomes an HTTPStatusError
 // carrying the status and the body's first line.
 func (t *HTTPTransport) httpStatusResponse(resp *http.Response, wantID int) (json.RawMessage, error) {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, httpStatusBodyCap))
-	trimmed := bytes.TrimSpace(body)
-	if len(trimmed) > 0 && trimmed[0] == '{' {
-		var probe struct {
-			JSONRPC string          `json:"jsonrpc"`
-			Error   json.RawMessage `json:"error"`
-		}
-		if json.Unmarshal(trimmed, &probe) == nil && (probe.JSONRPC != "" || len(probe.Error) > 0) {
-			return t.parseJSONResponse(bytes.NewReader(trimmed), wantID)
+	// Keep the first httpStatusBodyCap bytes for the error message while the
+	// decoder streams the whole body: the two must not share one bound. The
+	// first version of this path decoded only that head, so a JSON-RPC body
+	// longer than 4 KiB on a non-2xx became "unparsable" — and Google's Drive
+	// MCP server answers tools/list with HTTP 403 and a complete 43-tool
+	// result when the project has not enabled the drivemcp service (#1006),
+	// which left the server unmountable where every fleet before the status
+	// check would have honored the body.
+	head := &headCapture{max: httpStatusBodyCap}
+	br := bufio.NewReader(io.TeeReader(resp.Body, head))
+	if first, err := peekNonSpace(br); err == nil && first == '{' {
+		// A JSON-RPC response is identified by its version member or by
+		// answering our request id — not by merely having an "error" key,
+		// which a Google-style REST error ({"error":{"code":403,…}}) also
+		// has and which must stay an HTTPStatusError with its own text.
+		if env, derr := decodeJSONRPCEnvelope(br); derr == nil && (env.JSONRPC != "" || env.ID.matchesInt(wantID)) {
+			t.noteStatusBodyMismatch(resp.StatusCode, env)
+			return interpretJSONRPC(env, wantID)
 		}
 	}
-	return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Body: firstLine(trimmed)}
+	// The head holds only what the peek or the decoder pulled through the tee
+	// so far — for a plain-text body that is one bufio fill, i.e. one Read. A
+	// server (or proxy) that flushes its reason in pieces would leave the quoted
+	// line cut at the first chunk, so drain up to the cap through br before
+	// quoting: headCapture stops at httpStatusBodyCap regardless, so this reads
+	// at most that much more and restores the whole-first-line guarantee the
+	// pre-tee io.ReadAll(io.LimitReader(...)) gave.
+	_, _ = io.Copy(io.Discard, io.LimitReader(br, int64(httpStatusBodyCap)))
+	return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Body: firstLine(bytes.TrimSpace(head.buf))}
+}
+
+// noteStatusBodyMismatch logs — once per transport, so a chatty server does
+// not flood the host log — that the server answered a non-2xx status with a
+// JSON-RPC RESULT. The body wins: it is the protocol-level answer, and every
+// fleet before the status check honored it. The disagreement is still worth
+// one line, because for Google's Workspace MCP servers it is the visible
+// symptom of a project that has not enabled the *mcp.googleapis.com service
+// (or is not enrolled in the Developer Preview); the tool calls that follow
+// carry the real "the caller does not have permission".
+func (t *HTTPTransport) noteStatusBodyMismatch(status int, env *jsonrpcEnvelope) {
+	if len(env.Result) == 0 || string(env.Result) == nullString {
+		return
+	}
+	t.mu.Lock()
+	logged := t.statusMismatchLogged
+	t.statusMismatchLogged = true
+	t.mu.Unlock()
+	if logged {
+		return
+	}
+	log.Printf("MCP http: server answered HTTP %d %s with a JSON-RPC result; honoring the body (the status is out of spec — for a Google Workspace MCP server, check that the project has enabled the *mcp.googleapis.com service)", status, http.StatusText(status))
+}
+
+// headCapture is an io.Writer that keeps only the first max bytes written
+// through it, so an error message can quote the start of a body the decoder
+// streamed past without the body being held in memory twice.
+type headCapture struct {
+	buf []byte
+	max int
+}
+
+func (h *headCapture) Write(p []byte) (int, error) {
+	if room := h.max - len(h.buf); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		h.buf = append(h.buf, p[:room]...)
+	}
+	return len(p), nil
+}
+
+// peekNonSpace consumes leading JSON whitespace and reports the next byte
+// without consuming it.
+func peekNonSpace(br *bufio.Reader) (byte, error) {
+	for {
+		b, err := br.Peek(1)
+		if err != nil {
+			return 0, err
+		}
+		switch b[0] {
+		case ' ', '\t', '\r', '\n':
+			_, _ = br.ReadByte()
+		default:
+			return b[0], nil
+		}
+	}
 }
 
 // firstLine returns the first line of b, whitespace-collapsed and bounded, for
@@ -1220,12 +1294,15 @@ func (t *StdioTransport) Close() error {
 
 // HTTPTransport implements Transport for HTTP-based MCP servers
 type HTTPTransport struct {
-	url       string
-	headers   map[string]string
-	client    *http.Client
-	nextID    int
-	mu        sync.Mutex
-	sessionID string // MCP session ID captured from initialize response
+	// statusMismatchLogged makes the "non-2xx status with a JSON-RPC result"
+	// warning fire once per transport (guarded by mu), not once per call.
+	statusMismatchLogged bool
+	url                  string
+	headers              map[string]string
+	client               *http.Client
+	nextID               int
+	mu                   sync.Mutex
+	sessionID            string // MCP session ID captured from initialize response
 }
 
 func NewHTTPTransport(url string) *HTTPTransport {
@@ -1401,13 +1478,26 @@ var httpResponseCaptureCap = stdioResponseCaptureCap
 // JSON-RPC id of the request this response answers: a mismatch is rejected
 // (the stdio path matches ids the same way) rather than misattributed.
 func (t *HTTPTransport) parseJSONResponse(body io.Reader, wantID int) (json.RawMessage, error) {
-	var response struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      JSONRPCID       `json:"id"`
-		Result  json.RawMessage `json:"result"`
-		Error   json.RawMessage `json:"error"`
+	env, err := decodeJSONRPCEnvelope(body)
+	if err != nil {
+		return nil, err
 	}
+	return interpretJSONRPC(env, wantID)
+}
 
+// jsonrpcEnvelope is the wire shape of one JSON-RPC response.
+type jsonrpcEnvelope struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      JSONRPCID       `json:"id"`
+	Result  json.RawMessage `json:"result"`
+	Error   json.RawMessage `json:"error"`
+}
+
+// decodeJSONRPCEnvelope streams one JSON-RPC response out of body, reading at
+// most httpResponseCaptureCap bytes; past the cap it fails with a clean
+// per-call error instead of buffering the body unbounded.
+func decodeJSONRPCEnvelope(body io.Reader) (*jsonrpcEnvelope, error) {
+	var response jsonrpcEnvelope
 	// N is cap+1 so "hit the cap" is distinguishable from "read exactly cap
 	// bytes of valid JSON": a decode failure with the limiter exhausted means
 	// the body overran the ceiling, not that its JSON was malformed.
@@ -1418,7 +1508,13 @@ func (t *HTTPTransport) parseJSONResponse(body io.Reader, wantID int) (json.RawM
 		}
 		return nil, err
 	}
+	return &response, nil
+}
 
+// interpretJSONRPC turns a decoded envelope into the call's result or error:
+// a response that does not answer wantID is never attributed as its result,
+// and an error member becomes an *RPCError callers can inspect.
+func interpretJSONRPC(response *jsonrpcEnvelope, wantID int) (json.RawMessage, error) {
 	if !response.ID.matchesInt(wantID) {
 		// A server that cannot attribute a request answers with id:null
 		// (or a wrong id), and its error member is the only diagnostic
