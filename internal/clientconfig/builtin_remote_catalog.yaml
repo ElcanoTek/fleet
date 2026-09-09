@@ -774,6 +774,7 @@ servers:
       callback URL shown in your Fleet instance's OAuth settings, then
       paste its client ID and secret here.
     client_registration: manual
+    client_secret: required
   - name: chroma-package-search
     display_name: Chroma Package Search
     description: >-
@@ -1461,6 +1462,7 @@ servers:
       callback URL shown in your Fleet instance's OAuth settings, then
       paste its client ID and secret here.
     client_registration: manual
+    client_secret: required
   - name: atlassian
     display_name: Atlassian (Rovo)
     description: >-
@@ -1494,6 +1496,7 @@ servers:
       callback URL shown in your Fleet instance's OAuth settings, then
       paste its client ID and secret here.
     client_registration: manual
+    client_secret: required
   - name: cal-com
     display_name: Cal.com
     description: >-
@@ -1580,6 +1583,7 @@ servers:
       callback URL shown in your Fleet instance's OAuth settings, then
       paste its client ID and secret here.
     client_registration: manual
+    client_secret: required
   - name: dropbox
     display_name: Dropbox
     description: >-
@@ -1640,6 +1644,7 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+    client_secret: required
   - name: google-docs
     display_name: Google Docs (Workspace MCP)
     description: >-
@@ -1660,6 +1665,7 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+    client_secret: required
   - name: google-drive
     display_name: Google Drive (Workspace MCP)
     description: >-
@@ -1681,6 +1687,7 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+    client_secret: required
   - name: google-people
     display_name: Google Contacts (Workspace MCP)
     description: >-
@@ -1700,6 +1707,7 @@ servers:
       create an OAuth client -- then paste its client ID and secret here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+    client_secret: required
   - name: google-sheets
     display_name: Google Sheets (Workspace MCP)
     description: >-
@@ -1720,6 +1728,7 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+    client_secret: required
   - name: google-slides
     display_name: Google Slides (Workspace MCP)
     description: >-
@@ -1740,6 +1749,7 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+    client_secret: required
   - name: google-workspace-self-hosted
     display_name: Google Workspace (self-hosted, full suite)
     description: >-
@@ -2002,6 +2012,7 @@ servers:
       callback URL shown in your Fleet instance's OAuth settings, then
       paste its client ID and secret here.
     client_registration: manual
+    client_secret: required
   - name: zenhub
     display_name: Zenhub
     description: >-
@@ -2071,6 +2082,7 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+    client_secret: required
   - name: google-gmail
     display_name: Google Gmail (Workspace MCP)
     description: >-
@@ -2092,6 +2104,7 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+    client_secret: required
   - name: grain
     display_name: Grain
     description: >-
@@ -2200,8 +2213,10 @@ servers:
       Slack's server has no automatic client registration and publishes no
       shared client: create your own Slack app (internal to your workspace
       -- Slack prohibits unlisted apps for MCP), add your Fleet callback as
-      a Redirect URL under OAuth & Permissions, and paste its client ID and
-      secret here. A workspace admin must approve the app.
+      a Redirect URL under OAuth & Permissions, turn on Model Context
+      Protocol under Features > Agents & AI Apps (hand-made apps have it
+      off, and the server refuses them until it is on), and paste its client
+      ID and secret here. A workspace admin must approve the app.
     setup_url: "https://docs.slack.dev/ai/slack-mcp-server/"
     client_registration: manual
     client_secret: required
@@ -2252,6 +2267,7 @@ servers:
       callback URL shown in your Fleet instance's OAuth settings, then
       paste its client ID and secret here.
     client_registration: manual
+    client_secret: required
   - name: apollo-io
     display_name: Apollo.io
     description: >-
@@ -2309,6 +2325,7 @@ servers:
       to the account), then paste them here.
     setup_url: "https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server"
     client_registration: manual
+    client_secret: required
   - name: lusha
     display_name: Lusha
     description: >-
@@ -2463,6 +2480,7 @@ servers:
       callback URL shown in your Fleet instance's OAuth settings, then
       paste its client ID and secret here.
     client_registration: manual
+    client_secret: required
   - name: gorgias
     display_name: Gorgias
     description: >-
@@ -3144,6 +3162,7 @@ servers:
       secret here.
     setup_url: "https://developer.xero.com/documentation/tools-and-resources/mcp-server"
     client_registration: manual
+    client_secret: required
   - name: zerodha-kite
     display_name: Zerodha Kite
     description: >-
@@ -3948,6 +3967,7 @@ servers:
       callback URL shown in your Fleet instance's OAuth settings, then
       paste its client ID and secret here.
     client_registration: manual
+    client_secret: required
   - name: heygen
     display_name: HeyGen
     description: >-
