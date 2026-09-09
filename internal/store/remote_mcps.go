@@ -601,6 +601,11 @@ type RefreshResult struct {
 // for transient failures (the transaction rolls back).
 type RefreshFunc func(ctx context.Context, current RemoteMCPTokens) (RefreshResult, error)
 
+// ReauthDetailNoRefreshToken is the status_detail written when a login's
+// access token expired and the authorization server never issued a refresh
+// token to renew it with. Static text: never the server's own words.
+const ReauthDetailNoRefreshToken = "the login expired and the authorization server issued no refresh token — reconnect to use"
+
 // EnsureFreshToken returns a valid access token for server, refreshing if the
 // stored one expires within marginSeconds. It serializes concurrent callers for
 // the same server with SELECT ... FOR UPDATE and double-checks expiry after
@@ -612,11 +617,6 @@ type RefreshFunc func(ctx context.Context, current RemoteMCPTokens) (RefreshResu
 // The refresh HTTP call happens while the row lock is held; refreshFn MUST bound
 // it with a timeout. This is the simplest correct implementation for OAuth 2.1
 // single-use refresh-token rotation; a lease pattern is the scale upgrade.
-// ReauthDetailNoRefreshToken is the status_detail written when a login's
-// access token expired and the authorization server never issued a refresh
-// token to renew it with. Static text: never the server's own words.
-const ReauthDetailNoRefreshToken = "the login expired and the authorization server issued no refresh token — reconnect to use"
-
 func (s *Store) EnsureFreshToken(ctx context.Context, server *RemoteMCPServer, marginSeconds int64, refreshFn RefreshFunc) (string, error) {
 	email := normalizeEmail(server.UserEmail)
 	tx, err := s.db.BeginTx(ctx, nil)

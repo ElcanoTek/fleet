@@ -22,7 +22,8 @@ func (e *OAuthError) Error() string {
 	return fmt.Sprintf("oauth error %q (http %d)", e.Code, e.HTTPStatus)
 }
 
-// IsInvalidGrant reports whether err is an OAuthError with code invalid_grant —
+// IsInvalidGrant reports whether err is an OAuthError with code invalid_grant
+// (or GitHub's spelling, bad_refresh_token) —
 // the signal that a refresh token has been revoked/expired/rotated away and the
 // connection needs the user to re-authorize. Callers mark the connection
 // needs-reauth and degrade gracefully rather than failing the whole run.
