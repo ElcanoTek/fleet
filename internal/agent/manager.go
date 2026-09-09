@@ -1569,10 +1569,11 @@ func (m *Manager) admitInteractiveTurn(ctx context.Context) (func(), error) {
 
 // composeTurnSystemPrompt builds the per-turn system prompt, first fetching the
 // admin-curated knowledge base (best-effort: a notes failure runs the turn
-// without the section rather than failing it). `hosted` is the per-user remote
-// overlay's roster for this turn: RunTurn opens that overlay first and
-// composes the prompt second, so the prompt's live-registry section can name
-// the hosted tools the model is about to be offered (#1006).
+// without the section rather than failing it). `hosted` carries the per-user
+// remote overlay's outcome for this turn — the hosted connections that could
+// NOT be mounted: RunTurn opens that overlay first and composes the prompt
+// second, so the prompt can name them (#1006). The tools that DID mount are
+// described by agentcore.Run's roster-derived live-registry section, not here.
 func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, persona string, hosted hostedMCPRoster) (string, error) {
 	var notes []agentcore.Note
 	if m.notesProvider != nil {
@@ -1723,13 +1724,14 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	modelSlug := model.Model()
 
 	// Open the per-user hosted (remote) MCP overlay BEFORE composing the system
-	// prompt: the prompt's live-registry section lists the `mcp_*` tools this
-	// turn can call, and the hosted tools only exist once the overlay is up.
-	// With the prompt composed first (the order until #1006's GitHub
-	// verification), a hosted-only deployment handed the model a prompt that
-	// denied the very tools in its tool list. Composition still precedes the
-	// user-message commit below, so a persona/prompt failure keeps failing with
-	// no side effects (#798).
+	// prompt: the prompt's "not mounted this turn" section needs the overlay's
+	// skipped list, which only exists once the overlay is up. (The live
+	// registry of tools that DID mount is appended by agentcore.Run from the
+	// built roster, so it can no longer disagree with the tool list — the
+	// hosted-only failure #1006's GitHub verification caught, where a prompt
+	// composed first denied the very tools in the list, is closed at the
+	// source.) Composition still precedes the user-message commit below, so a
+	// persona/prompt failure keeps failing with no side effects (#798).
 	overlay := m.openTurnRemoteOverlay(ctx, in, turnCatalog)
 	if overlay != nil {
 		defer overlay.Close()

@@ -194,11 +194,15 @@ registered, and the key value is read per call, so rotation never needs one.
   #1006 follow-up, `buildSystemPrompt` ran before the per-user overlay opened and its
   roster came from the bundled catalog, so the `## MCP Tools (live registry)` section
   could claim nothing was connected while the connector's tools were in the model's tool
-  list. `RunTurn` now opens the overlay first and the section lists hosted tools by their
-  registered names, and names the selected connections whose token could not be acquired
-  or that failed to connect (a connection dropped by the overlay's server cap is logged,
-  not named). The skill and the tool description keep their own guidance; they no longer
-  have to work around the prompt.
+  list. Two follow-ups closed it: `RunTurn` opens the overlay first, and the section is
+  now appended by `agentcore.Run` from the roster it actually registered
+  (`internal/agentcore/live_registry.go`) — hosted tools by their registered names, or,
+  above the disclosure threshold, the connectors reachable through `tool_search` /
+  `tool_call` — so it cannot disagree with the tool list. The prompt builder still names
+  the selected connections whose token could not be acquired or that failed to connect
+  (a connection dropped by the overlay's server cap is logged, not named). The skill and
+  the tool description tell the model the section is authoritative and how to find this
+  connector when the roster is deferred.
 - **Redaction can collide with the URL.** Tool output passes through the shared secret
   redactor, which replaces 8+ characters after markers like `token=` or `api_key=`. A
   viewer URL carrying such a parameter would reach the model as `[REDACTED]`, and

@@ -33,6 +33,17 @@ Below the threshold nothing changes: every tool registers directly, byte-for-
 byte as before (so the #507 prompt-cache prefix stays intact for small
 catalogs).
 
+**The system prompt follows the roster, not the other way round.** The
+"MCP Tools (live registry)" section the model reads is appended by
+`agentcore.Run` *after* `buildFantasyTools` returns, from what it actually
+registered (`internal/agentcore/live_registry.go`): below the threshold it
+lists the `mcp_*` names verbatim; above it, it says how many tools sit behind
+the bridges, names the connectors, and tells the model that a direct `mcp_*`
+call will fail and `tool_call` is the way in. The section used to be written
+by the driver before the roster existed, so above the threshold it listed
+every name as callable — the model called one, got "tool not found", and gave
+up on a working connector (#1006, four hosted connectors = 159 tools).
+
 ## BM25 index (`internal/tools/bm25_index.go`)
 
 Textbook BM25 (k1=1.5, b=0.75) over tokenized tool metadata. The tokenizer

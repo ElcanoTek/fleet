@@ -25,12 +25,14 @@ but `mcp_bb_start` if that is what they typed. Match on the `_start` /
 `_navigate` / `_act` / `_observe` / `_extract` endings, never on a name you
 assumed.
 
-**Do not trust the `## MCP Tools (live registry)` section of your system
-prompt here.** It is built from the server's shared connector catalog and does
-not know about per-user hosted connections, so it can say nothing is connected
-while these tools sit in your tool list. Your tool list wins. If your roster is
-large enough that MCP tools are behind `tool_search` / `tool_call`, search for
-"browserbase" before concluding anything is missing.
+**The `## MCP Tools (live registry)` section of your system prompt is derived
+from the tools actually registered this turn**, hosted connections included, so
+it agrees with your tool list. Read it first: if it lists this connector's
+tools, call them by those names; if it says the roster is large and MCP tools
+sit behind `tool_search` / `tool_describe` / `tool_call`, search for
+"browserbase" and invoke through `tool_call` — a direct `mcp_*` call will fail
+in that mode. Conclude that the connector is missing only when neither form
+finds it.
 
 Then handle what is actually absent:
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -503,41 +502,24 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 		sb.WriteString("Do NOT use this tool for charts, plots, or data visualizations — use `run_python` with matplotlib instead (free, deterministic, can read your data).\n\n")
 	}
 
-	// 6. MCP tool roster — what's actually wired up THIS turn. Prevents the
-	//    model from confidently calling `mcp_email_search_emails` when the
-	//    email subprocess failed to start (or the operator never set the
-	//    AWS creds). Empty list = explicit "no MCP tools available" so the
-	//    model doesn't hallucinate one.
+	// 6. The MCP tool roster — "## MCP Tools (live registry)" — is NOT written
+	//    here. It is appended by agentcore.Run once the tool roster exists
+	//    (agentcore/live_registry.go), because only the roster knows which
+	//    tools survived the gates and whether they were deferred behind
+	//    tool_search/tool_describe/tool_call above the disclosure threshold.
+	//    Written here, before the roster, the section listed 159 hosted names
+	//    as callable that a deferred roster does not register, and the model
+	//    gave up on a working connector (#1006).
 	//
-	//    Two sources, because two catalogs exist: the frozen startup roster
-	//    covers bundle servers (filtered by the conversation's opt-ins), and
-	//    `hosted` carries the per-user remote overlay (#443) RunTurn opened
-	//    for this turn — which is why RunTurn composes the prompt AFTER that
-	//    overlay is up. Before that ordering, a hosted-only deployment denied
-	//    its own tools here (#1006). The merge is copied, never appended onto
-	//    the shared roster slice, and sorted so the prompt-cache prefix stays
-	//    byte-stable across turns (docs/PROMPT-CACHE-CONTRACT.md).
-	sb.WriteString("## MCP Tools (live registry)\n\n")
-	bundled := m.activeMCPToolNames(enabledOptionalMCPServers)
-	// slices.Concat allocates the merged copy itself; spelling the capacity as
-	// len(a)+len(b) is what CodeQL flags as go/allocation-size-overflow.
-	mcpNames := slices.Concat(bundled, hosted.tools)
-	sort.Strings(mcpNames)
-	if len(mcpNames) == 0 {
-		sb.WriteString("No MCP tools are currently connected. Do not attempt to call any `mcp_*` tool — none will resolve.\n\n")
-	} else {
-		sb.WriteString("These are the only `mcp_*` tools registered for this turn. Call exactly these names:\n\n")
-		for _, n := range mcpNames {
-			fmt.Fprintf(&sb, "- `%s`\n", n)
-		}
-		sb.WriteString("\n")
-	}
+	//    What this builder does know and the roster does not: which hosted
+	//    connectors the user set up that could NOT be mounted this turn
+	//    (`hosted.skipped`, from the per-user overlay RunTurn opened before
+	//    composing the prompt). That is the one case where "no such tool" is
+	//    the wrong answer, so name them: the model sends the user to reconnect
+	//    rather than improvising a workaround (the scheduled runner prepends
+	//    the same notice, scheduledrun.withSkippedRemoteNotice).
 	if len(hosted.skipped) > 0 {
-		// A connector the user set up but that could not be mounted is the
-		// one case where "no such tool" is the wrong answer: name it, so the
-		// model sends the user to reconnect it rather than improvising a
-		// workaround (the scheduled runner prepends the same notice,
-		// scheduledrun.withSkippedRemoteNotice).
+		sb.WriteString("## Hosted connectors not mounted this turn\n\n")
 		sb.WriteString("Hosted connector(s) the user has set up that could NOT be mounted this turn — the login needs re-authorization or the server did not respond: ")
 		for i, n := range hosted.skipped {
 			if i > 0 {
