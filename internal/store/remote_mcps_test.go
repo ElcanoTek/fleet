@@ -197,6 +197,41 @@ func TestEnsureFreshTokenNeedsReauthCarriesDetail(t *testing.T) {
 	}
 }
 
+// An expired access token with NO refresh token to renew it (Google without
+// access_type=offline issues exactly this) has nothing to retry, so the row
+// must say so — it used to keep reading `connected` while every turn skipped
+// the server (#1006). The refresh callback is never invoked and the failure
+// counter stays put: no refresh was attempted.
+func TestEnsureFreshTokenNoRefreshTokenMarksNeedsReauth(t *testing.T) {
+	s := newTestStoreWithCipher(t)
+	ctx := context.Background()
+	srv, _ := s.CreateRemoteMCPServer(ctx, sampleServerInput("u@x.com"))
+	if err := s.StoreOAuthTokens(ctx, srv, RemoteMCPTokens{AccessToken: "at", ExpiresAt: time.Now().Add(-10 * time.Second).Unix()}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	_, err := s.EnsureFreshToken(ctx, srv, 300, func(context.Context, RemoteMCPTokens) (RefreshResult, error) {
+		t.Fatal("refresh must not be called without a refresh token")
+		return RefreshResult{}, nil
+	})
+	if !errors.Is(err, ErrRemoteMCPNeedsReauth) {
+		t.Fatalf("err = %v, want ErrRemoteMCPNeedsReauth", err)
+	}
+	srv, _ = s.GetRemoteMCPServer(ctx, "u@x.com", srv.ID)
+	if srv.Status != RemoteMCPStatusNeedsReauth {
+		t.Errorf("status = %q, want needs_reauth", srv.Status)
+	}
+	if srv.StatusDetail != ReauthDetailNoRefreshToken {
+		t.Errorf("detail = %q, want %q", srv.StatusDetail, ReauthDetailNoRefreshToken)
+	}
+	var fails int
+	if err := s.db.QueryRowContext(ctx, `SELECT failed_refresh_count FROM remote_mcp_oauth WHERE server_id = $1`, srv.ID).Scan(&fails); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	if fails != 0 {
+		t.Errorf("failed_refresh_count = %d, want 0 (no refresh was attempted)", fails)
+	}
+}
+
 func TestEnsureFreshTokenNoExpiryUsable(t *testing.T) {
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
