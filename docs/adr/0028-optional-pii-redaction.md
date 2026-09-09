@@ -1,6 +1,6 @@
 # ADR-0028: Optional, provider-neutral PII redaction at the tool-output choke point
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0063](0063-remove-the-rampart-pii-engine.md) — the external Rampart engine that later shipped behind the `Redactor` interface was removed again; the pattern engine and the tool-output choke point stand
 - **Date:** 2026-07-02
 - **Deciders:** fleet maintainers
 

@@ -17,7 +17,7 @@ security queries only) and [`TESTING.md`](TESTING.md) (the rest of the ladder).
 | `govulncheck` | Go dependency CVEs (called symbols) | ~30s | **blocks** (`ci-gate`) | job log + Security tab |
 | `grype` | sandbox image CVEs (fixable **CRITICAL + HIGH**, **RPMs only**) | ~1m | **blocks** (`ci-gate`) | job log + Security tab |
 | `gitleaks` | secrets (on every PR into `main` and every push to `main`) | ~10s | **blocks** (`ci-gate`) | job log |
-| **`npm audit`** | npm dependency CVEs (web + rampart-service) | ~5s | **blocks** (`ci-gate`) | job log |
+| **`npm audit`** | npm dependency CVEs (`web/`) | ~5s | **blocks** (`ci-gate`) | job log |
 | CodeQL | **interprocedural taint / `security-extended`** | ~2m | **blocks** on an unwaived High-band finding (`ci-gate` via workflow_call) | job log + Security tab |
 | **Semgrep** | **Go/JS/Python SAST + Actions supply chain** | ~40s | **blocks** on any unsuppressed finding (`ci-gate` via workflow_call) | job log + artifact |
 
@@ -297,44 +297,27 @@ Python `#`, TypeScript `//`), including the one waiver that had to become a
 *trailing* comment because a standalone comment inside a Go import block breaks
 `goimports`.
 
-### npm audit owns dependency CVEs for the two npm trees (new, blocking)
+### npm audit owns dependency CVEs for the npm tree (blocking)
 
 `govulncheck` is Go-only and `grype` scans the sandbox *image*, so the web
-tier's dependency tree — and `scripts/rampart-service`'s — had no CVE gate at
-all. `npm audit --audit-level=low` now runs in the `web` job of `ci.yml`,
-lockfile-only (no install needed), before the expensive `npm ci`, and fails on
-**any** severity. Like govulncheck, its verdict is a function of the clock as
-well as the commit: a new advisory can redden an unchanged tree, and that is
-the point.
+tier's dependency tree had no CVE gate at all. `npm audit --audit-level=low`
+runs in the `web` job of `ci.yml`, lockfile-only (no install needed), before
+the expensive `npm ci`, and fails on **any** severity. Like govulncheck, its
+verdict is a function of the clock as well as the commit: a new advisory can
+redden an unchanged tree, and that is the point.
 
-Turning it on surfaced a real backlog immediately:
-
-- `web/` was already clean — 0 vulnerabilities — thanks to the steady stream of
-  merged Dependabot PRs.
-- `scripts/rampart-service` **had no `package-lock.json` at all**, which meant
-  no reproducible installs and nothing for an auditor to read. Generating one
-  exposed **5 high-severity vulnerabilities** the missing lockfile had been
-  hiding: `sharp <0.35.0` (libvips CVE-2026-33327/-33328/-35590/-35591) and,
-  one layer down, `adm-zip <0.6.0` (GHSA-xcpc-8h2w-3j85, crafted-ZIP 4 GB
-  allocation) via `onnxruntime-node`.
-
-The locked dependency tree fixes neither: `@huggingface/transformers 4.2.0`
-still pins `sharp ^0.34.5` and `onnxruntime-node 1.24.3`, whose `adm-zip` range
-is `^0.5.16`. So `package.json` carries two `overrides` (`sharp ^0.35.3`,
-`adm-zip ^0.6.0`, each the release immediately after the vulnerable line). The
-overridden stack was **installed and load-tested**, not just resolved: sharp
-renders a PNG through the new libvips, transformers loads on it, rampart exports
-its API, and adm-zip 0.6 round-trips a zip. Audit result after: 0 vulnerabilities
-in both trees.
-
-An override is a fork of upstream's intent, correct only while upstream is
-broken — so `scripts/check-npm-overrides.sh` runs beside the audit in the `web`
-job and **fails once every parent version actually present in the lockfile accepts
-the patched line**, with removal instructions. Checking `@latest` is not enough:
-a transitive consumer can remain pinned to an older vulnerable parent. The step
-invokes it as `"$GITHUB_WORKSPACE/scripts/check-npm-overrides.sh"` — the job runs
-under `working-directory: web`, where a repo-relative path resolves wrong; exit
-127 on the first CI run taught that one.
+`web/` is the only npm tree. Until
+[ADR-0063](adr/0063-remove-the-rampart-pii-engine.md) there was a second one,
+`scripts/rampart-service` (the reference Rampart PII detection service), and it
+is the cautionary tale behind this gate: it shipped with no lockfile, its first
+lockfile exposed five high-severity findings (libvips CVEs in `sharp`, a
+crafted-ZIP allocation in `adm-zip`) that had to be force-patched with npm
+`overrides` plus a canary script watching for the day the overrides became
+droppable, and in the end an advisory arrived (adm-zip GHSA-vwc7-r8mq-g2x9)
+with **no patched release at all**, reddening every open PR. The gate has no
+accepted-advisory register — the feature that carried the unfixable dependency
+was removed instead. If a second npm tree ever returns, it comes with a
+lockfile, an audit step and an owner from day one.
 
 ## Findings are readable from the job log, on purpose
 

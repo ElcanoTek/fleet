@@ -103,4 +103,4 @@ result with both as-of inputs.
 - Extraction is default-off and LLM-derived: the graph is a lossy projection
   of the records, not a second source of truth.
 - No automatic (non-human-confirmed) retirement policy.
-- PII classification belongs to the rampart integration (#450).
+- PII classification belongs to the PII redaction pass (#450), not to memory.
