@@ -7,7 +7,7 @@ import FeaturesAdminPage from "./page";
 // and re-renders from the response, an enum change PUTs the picked option, an
 // overridden row resets via DELETE, unknown server keys still render (never
 // vanish), a server-side rejection surfaces as a row error, the filter hides
-// empty groups, and the Rampart probe/install flows report honestly.
+// empty groups, and the guardrail probe reports honestly.
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
@@ -78,20 +78,6 @@ function mockFetch(
   onWrite?: (url: string, init: RequestInit) => { status: number; body: unknown } | undefined,
 ) {
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
-    // The Rampart install manager polls this on mount; default to "not
-    // wired" (501) so it renders nothing unless a test opts in.
-    if (url.includes("/pii-redaction/install")) {
-      const custom = onWrite?.(url, init ?? { method: "GET" });
-      if (custom) {
-        return {
-          ok: custom.status < 400,
-          status: custom.status,
-          json: async () => custom.body,
-          text: async () => JSON.stringify(custom.body),
-        };
-      }
-      return { ok: false, status: 501, json: async () => ({}), text: async () => "" };
-    }
     if (!init || init.method === undefined || init.method === "GET") {
       return { ok: true, status: 200, json: async () => ({ settings }) };
     }
@@ -303,42 +289,43 @@ describe("FeaturesAdminPage", () => {
     expect(screen.queryByText("PII redaction")).toBeNull();
     expect(screen.queryByText("Privacy & data protection")).toBeNull();
 
-    // The Rampart action block keeps the Privacy group alive via its own
+    // The guardrail action block keeps the Privacy group alive via its own
     // search text even when every setting row is filtered out.
-    fireEvent.change(filter, { target: { value: "podman" } });
+    fireEvent.change(filter, { target: { value: "detector" } });
     expect(screen.getByText("Privacy & data protection")).toBeInTheDocument();
-    expect(screen.getByTestId("pii-probe-run")).toBeInTheDocument();
+    expect(screen.getByTestId("guardrail-probe-run")).toBeInTheDocument();
     expect(screen.queryByText("PII redaction")).toBeNull();
 
     fireEvent.change(filter, { target: { value: "zzz-no-match" } });
     expect(screen.getByText(/No settings match/)).toBeInTheDocument();
   });
 
-  it("saves a url setting via its Save button and runs the detection probe", async () => {
-    const RAMPART_URL: Resolved = {
-      key: "pii_rampart_url",
+  it("saves a url setting via its Save button and runs the guardrail probe", async () => {
+    const GUARDRAIL_URL: Resolved = {
+      key: "guardrail_url",
       kind: "url",
-      env_var: "FLEET_PII_RAMPART_URL",
+      env_var: "FLEET_GUARDRAIL_URL",
       value: "",
       source: "default",
       default: "",
     };
-    const fetchMock = mockFetch([PII, RAMPART_URL], (url, init) => {
-      if (init.method === "PUT" && url.includes("pii_rampart_url")) {
+    const fetchMock = mockFetch([PII, GUARDRAIL_URL], (url, init) => {
+      if (init.method === "PUT" && url.includes("guardrail_url")) {
         return {
           status: 200,
-          body: { ...RAMPART_URL, value: "http://127.0.0.1:8787/v1/redact", source: "admin" },
+          body: { ...GUARDRAIL_URL, value: "http://127.0.0.1:8790/v1/check", source: "admin" },
         };
       }
-      if (init.method === "POST" && url.includes("pii-redaction/test")) {
+      if (init.method === "POST" && url.includes("guardrail/test")) {
         return {
           status: 200,
           body: {
             ok: true,
-            engine: "rampart",
-            mode: "redact",
-            detail: "name×1, ssn×1",
-            redacted: "Contact [GIVEN_NAME_1] ...",
+            mode: "observe",
+            profile: "prompt-injection",
+            flagged: true,
+            score: 0.97,
+            detail: "instruction override",
             latency_ms: 12,
           },
         };
@@ -348,33 +335,34 @@ describe("FeaturesAdminPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<FeaturesAdminPage />);
 
-    const input = await screen.findByTestId("input-pii_rampart_url");
-    fireEvent.change(input, { target: { value: "http://127.0.0.1:8787/v1/redact" } });
-    fireEvent.click(screen.getByTestId("save-pii_rampart_url"));
+    const input = await screen.findByTestId("input-guardrail_url");
+    fireEvent.change(input, { target: { value: "http://127.0.0.1:8790/v1/check" } });
+    fireEvent.click(screen.getByTestId("save-guardrail_url"));
     await waitFor(() => expect(screen.getByText("Overridden")).toBeInTheDocument());
     const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
     expect(JSON.parse(String(put?.[1]?.body))).toEqual({
-      value: "http://127.0.0.1:8787/v1/redact",
+      value: "http://127.0.0.1:8790/v1/check",
     });
 
-    // Probe: reports engine + findings + redacted preview.
-    fireEvent.click(screen.getByTestId("pii-probe-run"));
-    const result = await screen.findByTestId("pii-probe-result");
-    expect(result).toHaveTextContent(/rampart engine \(redact\)/);
-    expect(result).toHaveTextContent(/name×1, ssn×1/);
-    expect(result).toHaveTextContent(/\[GIVEN_NAME_1\]/);
+    // Probe: reports profile + mode + verdict + detail.
+    fireEvent.click(screen.getByTestId("guardrail-probe-run"));
+    const probe = screen.getByTestId("guardrail-probe");
+    await waitFor(() => expect(probe).toHaveTextContent(/prompt-injection \(observe\)/));
+    expect(probe).toHaveTextContent(/flagged/);
+    expect(probe).toHaveTextContent(/instruction override/);
   });
 
-  it("surfaces a probe failure (dead rampart service) honestly", async () => {
+  it("surfaces a probe failure (dead guardrail detector) honestly", async () => {
     const fetchMock = mockFetch([PII], (url, init) => {
-      if (init.method === "POST" && url.includes("pii-redaction/test")) {
+      if (init.method === "POST" && url.includes("guardrail/test")) {
         return {
           status: 200,
           body: {
             ok: false,
-            engine: "rampart",
-            mode: "redact",
-            detail: "rampart service unreachable: connection refused (tool calls fall back to the pattern engine)",
+            mode: "block",
+            profile: "prompt-injection",
+            flagged: false,
+            detail: "detector unreachable: connection refused",
             latency_ms: 3,
           },
         };
@@ -383,106 +371,9 @@ describe("FeaturesAdminPage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<FeaturesAdminPage />);
-    fireEvent.click(await screen.findByTestId("pii-probe-run"));
-    const result = await screen.findByTestId("pii-probe-result");
-    expect(result).toHaveTextContent(/unreachable/);
-    expect(result).toHaveTextContent(/fall back to the pattern engine/);
-  });
-
-  it("offers one-click Rampart install and shows the running service", async () => {
-    let installed = false;
-    const fetchMock = mockFetch([PII], (url, init) => {
-      if (!url.includes("/pii-redaction/install")) return undefined;
-      if (init.method === "POST") {
-        installed = true;
-        return { status: 200, body: { state: "done", log: ["done"], container_running: true, url: "http://127.0.0.1:8787/v1/redact" } };
-      }
-      // GET status poll.
-      return installed
-        ? { status: 200, body: { state: "done", log: ["done"], container_running: true, url: "http://127.0.0.1:8787/v1/redact" } }
-        : { status: 200, body: { state: "idle", log: [], container_running: false } };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    render(<FeaturesAdminPage />);
-
-    const btn = await screen.findByTestId("pii-install-run", undefined, { timeout: 5000 });
-    fireEvent.click(btn);
-    await waitFor(() => expect(screen.getByText("Service installed")).toBeInTheDocument());
-    expect(screen.getByText("http://127.0.0.1:8787/v1/redact")).toBeInTheDocument();
-    const post = fetchMock.mock.calls.find(
-      ([u, i]) => String(u).includes("/pii-redaction/install") && (i as RequestInit)?.method === "POST",
-    );
-    expect(post).toBeTruthy();
-  });
-
-  it("removes the managed container only after inline confirmation", async () => {
-    const fetchMock = mockFetch([PII], (url, init) => {
-      if (!url.includes("/pii-redaction/install")) return undefined;
-      if (init.method === "DELETE") {
-        return { status: 200, body: { state: "idle", log: [], container_running: false } };
-      }
-      // GET status: a running managed container.
-      return {
-        status: 200,
-        body: { state: "done", log: ["done"], container_running: true, url: "http://127.0.0.1:8787/v1/redact" },
-      };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    render(<FeaturesAdminPage />);
-
-    const remove = await screen.findByTestId("pii-install-remove", undefined, { timeout: 5000 });
-    // First click arms; no DELETE yet.
-    fireEvent.click(remove);
-    expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(false);
-    expect(remove).toHaveTextContent("Confirm remove");
-    // Second click fires the DELETE and the affordance returns to install.
-    fireEvent.click(remove);
-    await waitFor(() =>
-      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(true),
-    );
-    await waitFor(() => expect(screen.getByTestId("pii-install-run")).toBeInTheDocument());
-  });
-
-  it("stops the install poll loop when the panel unmounts mid-install", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      const fetchMock = mockFetch([PII], (url) => {
-        if (!url.includes("/pii-redaction/install")) return undefined;
-        // GET status: an install already in flight, never finishing.
-        return { status: 200, body: { state: "running", log: ["building…"], container_running: false } };
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      const { unmount } = render(<FeaturesAdminPage />);
-      await screen.findByTestId("pii-install", undefined, { timeout: 5000 });
-      // Let the poll tick at least once so the interval is really armed.
-      await vi.advanceTimersByTimeAsync(3100);
-      const polls = () =>
-        fetchMock.mock.calls.filter(([u]) => String(u).includes("/pii-redaction/install")).length;
-      expect(polls()).toBeGreaterThanOrEqual(2);
-      unmount();
-      const after = polls();
-      await vi.advanceTimersByTimeAsync(10000);
-      // No further status fetches once the component is gone.
-      expect(polls()).toBe(after);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("surfaces a thrown install request as an inline error instead of hanging", async () => {
-    const fetchMock = mockFetch([PII], (url, init) => {
-      if (!url.includes("/pii-redaction/install")) return undefined;
-      if (init.method === "POST") throw new TypeError("Failed to fetch");
-      return { status: 200, body: { state: "idle", log: [], container_running: false } };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    render(<FeaturesAdminPage />);
-    fireEvent.click(await screen.findByTestId("pii-install-run", undefined, { timeout: 5000 }));
-    expect(await screen.findByTestId("pii-install-request-error")).toHaveTextContent(
-      "Failed to fetch",
-    );
-    // The button is still usable for a retry.
-    expect(screen.getByTestId("pii-install-run")).not.toBeDisabled();
+    fireEvent.click(await screen.findByTestId("guardrail-probe-run"));
+    const probe = screen.getByTestId("guardrail-probe");
+    await waitFor(() => expect(probe).toHaveTextContent(/unreachable/));
   });
 
   it("disables only the saving row while its write is in flight", async () => {
@@ -491,9 +382,6 @@ describe("FeaturesAdminPage", () => {
       release = r;
     });
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
-      if (url.includes("/pii-redaction/install")) {
-        return { ok: false, status: 501, json: async () => ({}), text: async () => "" };
-      }
       if (!init || init.method === undefined || init.method === "GET") {
         return { ok: true, status: 200, json: async () => ({ settings: [SUBAGENTS, PII] }) };
       }
@@ -520,13 +408,6 @@ describe("FeaturesAdminPage", () => {
     );
   });
 
-  it("hides the install affordance when the installer is not wired (501)", async () => {
-    vi.stubGlobal("fetch", mockFetch([PII])); // default install stub = 501
-    render(<FeaturesAdminPage />);
-    await screen.findByText("PII redaction");
-    await waitFor(() => expect(screen.queryByTestId("pii-install")).toBeNull());
-  });
-
   it("reports the admin-allowlist 403 instead of an empty panel", async () => {
     vi.stubGlobal(
       "fetch",
@@ -541,9 +422,6 @@ describe("FeaturesAdminPage reload", () => {
   it("Retry after a failed load renders the fresh server list", async () => {
     let fail = true;
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
-      if (url.includes("/pii-redaction/install")) {
-        return { ok: false, status: 501, json: async () => ({}), text: async () => "" };
-      }
       if (!init || init.method === undefined || init.method === "GET") {
         if (fail) return { ok: false, status: 502, json: async () => ({}), text: async () => "" };
         return { ok: true, status: 200, json: async () => ({ settings: [SUBAGENTS] }) };

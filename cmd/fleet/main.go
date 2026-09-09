@@ -2480,23 +2480,23 @@ func learnedInstructionProvider(cfg *config.Config, st *storage.Storage) schedul
 }
 
 // configurePIIRedaction installs the process-wide PII redactor (#450) from the
-// env config, before the store is up. The env→(mode, engine, URL) semantics
-// live in ONE place — the piiRedactorState in the workspace-settings wiring —
-// so what boots here is byte-identical to what the admin panel reports as the
-// default and what Reset re-applies. Any DB override is layered on later by
-// the settings boot apply (appendWorkspaceSettingsOption).
+// env config, before the store is up. The env→mode semantics live in ONE
+// place — the piiRedactorState in the workspace-settings wiring — so what
+// boots here is byte-identical to what the admin panel reports as the default
+// and what Reset re-applies. Any DB override is layered on later by the
+// settings boot apply (appendWorkspaceSettingsOption).
 func configurePIIRedaction(cfg *config.Config) {
 	st := newPIIRedactorState(cfg)
 	if err := st.rebuild(); err != nil {
-		// The seed degrades rampart-without-URL to the pattern engine, so this
-		// is belt-and-suspenders; a failure here means no redactor installed.
+		// defaultPIIRedactionMode only ever yields a registry value, so this is
+		// belt-and-suspenders; a failure here means no redactor installed.
 		log.Printf("PII redaction: failed to install redactor from env config: %v", err)
 		return
 	}
 	if st.mode != string(piiredact.ModeOff) {
-		// Both values are validated constants, never raw env input.
-		//nolint:gosec // G706: mode/engine are validated constants (observe/redact/block × pattern/rampart), never raw input.
-		log.Printf("PII redaction: enabled (mode=%s, engine=%s)", st.mode, st.engine)
+		// The mode is a validated constant, never raw env input.
+		//nolint:gosec // G706: mode is a validated constant (observe/redact/block), never raw input.
+		log.Printf("PII redaction: enabled (mode=%s, engine=pattern)", st.mode)
 	}
 }
 

@@ -39,7 +39,7 @@ needs a restart, ever.
   they did before this feature. Failure honesty is per-layer: an edit whose
   apply hook fails is **rolled back** (Set) or **restored** (Reset) so the DB
   can never disagree with the running system across a restart; a stored value
-  that fails to apply at boot (e.g. a rampart engine whose service URL
+  that fails to apply at boot (e.g. a guardrail mode whose detector URL
   disappeared) keeps the panel up and marks that row ("saved but NOT in
   effect", `apply_error`) so the admin can fix or Reset it from the UI —
   and fixing a dependency **auto-heals** dependent keys without a reboot.
@@ -59,8 +59,6 @@ needs a restart, ever.
 | Setting key | Kind | Env var default | What it controls |
 | --- | --- | --- | --- |
 | `pii_redaction_mode` | `off`/`observe`/`redact`/`block` | `FLEET_PII_REDACTION_ENABLED` + `FLEET_PII_REDACTION_MODE` | Optional PII pass over tool output ([PII-REDACTION.md](PII-REDACTION.md)) |
-| `pii_redaction_engine` | `pattern`/`rampart` | `FLEET_PII_REDACTION_ENGINE` | Detector: built-in regexes or the Rampart ML service ([PII-REDACTION.md](PII-REDACTION.md)) |
-| `pii_rampart_url` | http(s) URL (or empty) | `FLEET_PII_RAMPART_URL` | Rampart detection service endpoint |
 | `guardrail_mode` | `off`/`observe`/`block` | `FLEET_GUARDRAIL_MODE` | Host-side untrusted-ingress screening ([GUARDRAILS.md](GUARDRAILS.md)) |
 | `guardrail_url` | http(s) URL (or empty) | `FLEET_GUARDRAIL_URL` | Prompt-injection detector endpoint |
 | `tool_disclosure_threshold` | int 1–100000 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | Roster size that triggers BM25 tool disclosure ([TOOL-DISCLOSURE.md](TOOL-DISCLOSURE.md)) |

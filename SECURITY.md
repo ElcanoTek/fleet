@@ -151,8 +151,8 @@ is recorded under "Known gaps" in [`docs/SCANNING.md`](docs/SCANNING.md).)
 ## Supply-chain security (dependencies)
 
 Fleet pulls third-party code from three ecosystems — Go modules at the repo root,
-npm packages under `web/` and under `scripts/rampart-service`, and Fedora RPMs
-inside the sandbox image — and relies on several deliberate controls to keep a
+npm packages under `web/`, and Fedora RPMs inside the sandbox image — and relies
+on several deliberate controls to keep a
 compromised or fresh-and-unvetted release from reaching `main`:
 
 - **Go module integrity is verified, with the defaults intact.** The repo commits
@@ -169,21 +169,16 @@ compromised or fresh-and-unvetted release from reaching `main`:
   every PR (the `govulncheck` job in `.github/workflows/ci.yml`), failing the
   build on a known-vulnerable dependency that fleet actually calls into.
 - **npm dependency-CVE scanning.** `npm audit --audit-level=low` runs in the
-  `web` job of **both** CI lanes, lockfile-only (before the install, so a
-  vulnerable lockfile fails fast) and against **both** npm trees — `web/` and
-  `scripts/rampart-service` — failing the build on **any** severity. Like
-  govulncheck, its verdict is a function of the clock as well as the commit: a
-  newly published advisory can redden an unchanged tree, which is the point.
-
-  Two `overrides` in `scripts/rampart-service/package.json` are load-bearing and
-  worth disclosing: `sharp ^0.35.3` and `adm-zip ^0.6.0`, each the release
-  immediately after a vulnerable range that **the locked dependency tree does
-  not yet accept** (`@huggingface/transformers` still pins `sharp ^0.34.5` and
-  `onnxruntime-node 1.24.3`, which pins `adm-zip ^0.5.16`). An override is a fork
-  of upstream's intent, correct only while that tree is broken — so
-  `scripts/check-npm-overrides.sh` runs beside the audit in the `web` job and
-  **fails with removal instructions once every locked parent accepts the patched
-  line**. The audit above remains the CVE gate.
+  `web` CI job, lockfile-only (before the install, so a vulnerable lockfile
+  fails fast) against the `web/` tree — the only npm tree since the
+  `scripts/rampart-service` reference service was removed
+  ([ADR-0063](docs/adr/0063-remove-the-rampart-pii-engine.md)) — failing the
+  build on **any** severity. Like govulncheck, its verdict is a function of
+  the clock as well as the commit: a newly published advisory can redden an
+  unchanged tree, which is the point. There is no accepted-advisory register
+  for this gate: the one advisory no bump could ever clear (adm-zip
+  GHSA-vwc7-r8mq-g2x9, reachable only through the rampart service's ML
+  runtime) was resolved by removing the tree that carried it.
 - **Container-image CVE scanning.** CI also scans the rootless-Podman sandbox
   image (built from `config/default/sandbox/Containerfile`) with Grype in the
   `grype-scan` job, a surface `govulncheck` (Go modules only) cannot see.

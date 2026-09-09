@@ -83,21 +83,20 @@ type Spec struct {
 // boot-bound setting here would make the admin page dishonest.
 func Registry() []Spec {
 	return []Spec{
-		// Privacy & data protection. The three PII keys feed ONE redactor: the
-		// cmd/fleet apply hooks rebuild it from the current trio on any change.
+		// Privacy & data protection. The PII mode feeds ONE redactor (the
+		// built-in deterministic pattern engine); the cmd/fleet apply hook
+		// rebuilds it on any change. The retired `pii_redaction_engine` and
+		// `pii_rampart_url` keys (ADR-0063) are deliberately NOT registered: a
+		// persisted row under either key is simply never resolved, so an
+		// upgraded deployment loses the Rampart selection and keeps the mode.
 		{Key: "pii_redaction_mode", Kind: KindEnum,
 			Enum:   []string{"off", "observe", "redact", "block"},
 			EnvVar: "FLEET_PII_REDACTION_ENABLED / FLEET_PII_REDACTION_MODE"},
-		// ORDER MATTERS: the URL must apply BEFORE the engine. Boot ApplyAll
-		// runs hooks in this order, and the engine hook validates that a
-		// rampart selection has a URL — url-after-engine would reject a
-		// perfectly good persisted config at every boot (caught live).
-		// TestPIIRegistryOrderBootSafe guards this.
-		{Key: "pii_rampart_url", Kind: KindURL,
-			EnvVar: "FLEET_PII_RAMPART_URL"},
-		{Key: "pii_redaction_engine", Kind: KindEnum,
-			Enum:   []string{"pattern", "rampart"},
-			EnvVar: "FLEET_PII_REDACTION_ENGINE"},
+		// ORDER MATTERS: the URL must apply BEFORE the mode. Boot ApplyAll runs
+		// hooks in this order, and the guardrail mode hook validates that a
+		// non-off mode has a detector URL — url-after-mode would reject a
+		// perfectly good persisted config at every boot (caught live, on the
+		// PII engine this ordering rule was first written for).
 		{Key: "guardrail_url", Kind: KindURL,
 			EnvVar: "FLEET_GUARDRAIL_URL"},
 		{Key: "guardrail_mode", Kind: KindEnum,
@@ -239,7 +238,7 @@ type Resolved struct {
 	// panel, and could silently spring back to life if the bounds loosen again.
 	Stale bool `json:"stale,omitempty"`
 	// ApplyError, when non-empty, says this setting's last apply FAILED (e.g. a
-	// persisted rampart engine whose service URL disappeared from the env
+	// persisted guardrail mode whose detector URL disappeared from the env
 	// across a restart) — the stored value is NOT in effect. Surfaced so the
 	// panel is honest per-row and the admin can fix or Reset from the UI.
 	ApplyError string `json:"apply_error,omitempty"`
@@ -419,8 +418,8 @@ func (s *Service) Set(ctx context.Context, key, value, updatedBy string) (Resolv
 }
 
 // retryFailedLocked re-applies any key whose last apply failed (ApplyError),
-// after some other setting changed — settings can depend on each other (the
-// rampart engine needs the rampart URL), so fixing the dependency should heal
+// after some other setting changed — settings can depend on each other (a
+// non-off guardrail mode needs the guardrail URL), so fixing the dependency should heal
 // the dependent without a reboot or a redundant re-save. Best-effort: a key
 // that still fails keeps its error. Callers hold s.mu.
 func (s *Service) retryFailedLocked(ctx context.Context) {
@@ -444,7 +443,7 @@ func (s *Service) retryFailedLocked(ctx context.Context) {
 }
 
 // Reset deletes one override and re-applies the env-derived default. If the
-// default cannot apply (e.g. resetting a rampart URL that the engine setting
+// default cannot apply (e.g. resetting a guardrail URL that the mode setting
 // still needs), the deleted row is re-inserted (compensation) so the DB never
 // disagrees with the running system across a restart.
 func (s *Service) Reset(ctx context.Context, key, updatedBy string) (Resolved, error) {

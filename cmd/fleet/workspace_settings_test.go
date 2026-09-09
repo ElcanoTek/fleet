@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -21,7 +20,7 @@ import (
 // wiring gap, so passing construction proves full coverage of the registry.
 func TestBuildWorkspaceSettingsCoversRegistry(t *testing.T) {
 	cfg := &config.Config{ErrorAnalysisEnabled: true, AutoTitle: true}
-	if _, _, _, err := buildWorkspaceSettings(cfg, nil); err != nil {
+	if _, _, err := buildWorkspaceSettings(cfg, nil); err != nil {
 		t.Fatalf("buildWorkspaceSettings should cover every registry key: %v", err)
 	}
 }
@@ -78,50 +77,35 @@ func TestGatedErrorAnalyzerDisabled(t *testing.T) {
 	}
 }
 
-// TestPIIRedactorState: the three-hook state machine behind the PII settings.
-// Load-bearing: engine switches rebuild the redactor, rampart without a URL
-// is rejected AND rolls the state back (so a later valid change isn't
-// poisoned), env rampart-without-URL degrades to pattern at the seed (never
-// fail-open), and the probe reports the live engine.
+// TestPIIRedactorState: the mode hook behind the PII setting. Load-bearing: a
+// non-off mode installs the deterministic pattern redactor (the only engine
+// since ADR-0063), an invalid mode is rejected AND rolls the state back so a
+// later valid change isn't poisoned, and "off" clears the redactor entirely.
 func TestPIIRedactorState(t *testing.T) {
 	t.Cleanup(func() { agentcore.SetPIIRedactor(nil) })
 
 	st := newPIIRedactorState(&config.Config{})
-
-	// Even while mode is off, engine=rampart without a URL is rejected — an
-	// accepted-but-inert value would boobytrap the later mode change.
-	if err := st.applyEngine("rampart", true); err == nil {
-		t.Fatal("rampart without a URL must be rejected even in off mode")
+	if st.mode != "off" || st.current != nil {
+		t.Fatalf("default config should seed off with no redactor, got mode=%q current=%T", st.mode, st.current)
 	}
 
 	if err := st.applyMode("redact", true); err != nil {
 		t.Fatalf("mode: %v", err)
 	}
-
-	// rampart without a URL: rejected, and the engine field rolls back so the
-	// state stays consistent for the next apply.
-	if err := st.applyEngine("rampart", true); err == nil {
-		t.Fatal("rampart without a URL must be rejected")
+	pr, ok := st.current.(*piiredact.PatternRedactor)
+	if !ok {
+		t.Fatalf("current redactor = %T, want PatternRedactor", st.current)
 	}
-	if st.engine != "pattern" {
-		t.Fatalf("engine should roll back to pattern, got %q", st.engine)
+	if got := pr.Redact("mail alex.rivera@example.com").Text; got != "mail [PII:email]" {
+		t.Errorf("installed redactor should redact the sample, got %q", got)
 	}
 
-	// URL first, then engine: accepted; the installed redactor is rampart.
-	if err := st.applyURL("http://127.0.0.1:1/v1/redact", true); err != nil {
-		t.Fatalf("url: %v", err)
+	// An invalid mode is rejected and the previous mode survives.
+	if err := st.applyMode("shred", true); err == nil {
+		t.Fatal("invalid mode must be rejected")
 	}
-	if err := st.applyEngine("rampart", true); err != nil {
-		t.Fatalf("engine after url: %v", err)
-	}
-	if _, ok := st.current.(*piiredact.RampartRedactor); !ok {
-		t.Fatalf("current redactor = %T, want RampartRedactor", st.current)
-	}
-
-	// Probe against the dead URL surfaces the failure (no silent fallback).
-	res := st.Probe(context.Background())
-	if res.OK || res.Engine != "rampart" {
-		t.Errorf("probe against dead service = %+v, want ok=false engine=rampart", res)
+	if st.mode != "redact" || st.current == nil {
+		t.Fatalf("failed apply must roll back: mode=%q current=%T", st.mode, st.current)
 	}
 
 	// Off clears the redactor entirely.
@@ -132,55 +116,12 @@ func TestPIIRedactorState(t *testing.T) {
 		t.Error("off must clear the current redactor")
 	}
 
-	// Env seed: rampart without a URL degrades to pattern (never fail-open).
-	seeded := newPIIRedactorState(&config.Config{
-		PIIRedactionEnabled: true, PIIRedactionMode: "redact", PIIRedactionEngine: "rampart",
-	})
-	if seeded.engine != "pattern" {
-		t.Fatalf("env rampart without URL should seed as pattern, got %q", seeded.engine)
-	}
+	// Env seed: enabled + mode installs the pattern engine at boot.
+	seeded := newPIIRedactorState(&config.Config{PIIRedactionEnabled: true, PIIRedactionMode: "observe"})
 	if err := seeded.rebuild(); err != nil {
 		t.Fatalf("seeded rebuild: %v", err)
 	}
-	probe := seeded.Probe(context.Background())
-	if !probe.OK || probe.Engine != "pattern" || probe.Redacted == "" {
-		t.Errorf("pattern probe = %+v", probe)
-	}
-	if !strings.Contains(probe.Redacted, "[PII:email]") {
-		t.Errorf("pattern probe should redact the synthetic sample: %q", probe.Redacted)
-	}
-}
-
-// TestPIIRegistryOrderBootSafe replays what boot ApplyAll does — the real PII
-// hooks, in ACTUAL registry order, with a persisted rampart config — and
-// asserts the engine survives. Guards the url-before-engine registry ordering:
-// with engine first, the hook would see the empty seed URL and reject a
-// perfectly good persisted config at every boot (caught live before this test
-// existed).
-func TestPIIRegistryOrderBootSafe(t *testing.T) {
-	t.Cleanup(func() { agentcore.SetPIIRedactor(nil) })
-
-	st := newPIIRedactorState(&config.Config{})
-	hooks := map[string]func(string, bool) error{
-		"pii_redaction_mode":   st.applyMode,
-		"pii_rampart_url":      st.applyURL,
-		"pii_redaction_engine": st.applyEngine,
-	}
-	overrides := map[string]string{
-		"pii_redaction_mode":   "redact",
-		"pii_rampart_url":      "http://127.0.0.1:8787/v1/redact",
-		"pii_redaction_engine": "rampart",
-	}
-	for _, spec := range settings.Registry() {
-		hook, ok := hooks[spec.Key]
-		if !ok {
-			continue
-		}
-		if err := hook(overrides[spec.Key], true); err != nil {
-			t.Fatalf("boot-order apply of %s failed: %v", spec.Key, err)
-		}
-	}
-	if _, ok := st.current.(*piiredact.RampartRedactor); !ok {
-		t.Fatalf("after boot-order apply, redactor = %T, want RampartRedactor", st.current)
+	if seeded.current == nil || seeded.current.Mode() != piiredact.ModeObserve {
+		t.Errorf("seeded redactor = %T, want an observe-mode PatternRedactor", seeded.current)
 	}
 }

@@ -47,7 +47,7 @@ fix this doc (and the `make` targets) to match.
 | Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL or HIGH **Fedora RPM**) | see below |
 | CodeQL | `codeql` (called workflow) | `security-extended` taint analysis over go / python / javascript-typescript / actions; fails on an unwaived **High-band** finding | not wrapped (see [`CODEQL.md`](CODEQL.md)) |
 | Semgrep | `semgrep` (called workflow) | `p/github-actions` + `p/golang` + `p/javascript` + `p/python`; fails on **any** unsuppressed finding | `semgrep scan --config …` (see [`SCANNING.md`](SCANNING.md)) |
-| npm CVE audit | `web` | `npm audit --audit-level=low`, lockfile-only, over `web/` **and** `scripts/rampart-service` — fails on any severity; plus `scripts/check-npm-overrides.sh` | `npm audit --audit-level=low` in each tree |
+| npm CVE audit | `web` | `npm audit --audit-level=low`, lockfile-only, over `web/` — fails on any severity | `cd web && npm audit --audit-level=low` |
 | Web lint/test/build | `web` | oxlint + `tsc --noEmit` + vitest + `next build` | `make ci-web` |
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
 | Playwright (live) | `e2e-live` | Real stack + rootless-Podman sandbox, fake LLM | `npm run test:e2e:live` |
@@ -457,16 +457,14 @@ make ci-go
 
 ## Web lint / test / build — CI job `web`
 
-Runs from `web/`. The job is: `npm audit --audit-level=low` (web) →
-`npm audit --audit-level=low` (`scripts/rampart-service`) →
-`scripts/check-npm-overrides.sh` → `npm ci` → `npm run lint` (**oxlint**, not
-ESLint — see the TypeScript 7 section above, which explains why ESLint was
-replaced) → `npm run typecheck` (`tsc --noEmit`) → `npx vitest run` (unit tests)
-→ `npm run build` (`next build`).
+Runs from `web/`. The job is: `npm audit --audit-level=low` → `npm ci` →
+`npm run lint` (**oxlint**, not ESLint — see the TypeScript 7 section above,
+which explains why ESLint was replaced) → `npm run typecheck` (`tsc --noEmit`)
+→ `npx vitest run` (unit tests) → `npm run build` (`next build`).
 
-The two audits and the override canary run **before** `npm ci`, deliberately:
-they are lockfile-only, so they cost seconds and fail before the expensive
-install. The explicit typecheck is not redundant with `next build` — the build
+The audit runs **before** `npm ci`, deliberately: it is lockfile-only, so it
+costs seconds and fails before the expensive install. The explicit typecheck
+is not redundant with `next build` — the build
 type-checks too, but it runs last, so without this step a one-line type error
 surfaces minutes in.
 

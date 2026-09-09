@@ -87,7 +87,7 @@ func TestNodeMajorAgreesEverywhere(t *testing.T) {
 	// engines.node — the constraint npm reports on. Nothing reads .nvmrc to
 	// produce it, so without this assertion bumping .nvmrc leaves it stale and
 	// silent (engines is a warning npm never fails on).
-	for _, rel := range []string{"web/package.json", "scripts/rampart-service/package.json"} {
+	for _, rel := range []string{"web/package.json"} {
 		eng, ok := pkgJSON(t, root, rel)["engines"].(map[string]any)
 		if !ok {
 			t.Errorf("%s has no engines block; expected engines.node >= %d", rel, want)
@@ -117,12 +117,6 @@ func TestNodeMajorAgreesEverywhere(t *testing.T) {
 		t.Errorf("@types/node = %q, cannot read a major", spec)
 	} else if got != want {
 		t.Errorf("@types/node = %q (major %d) but web/.nvmrc says %d — @types/node's major tracks the runtime major", spec, got, want)
-	}
-
-	// The rampart container should sit on the same node line as everything else.
-	cf := readFile(t, root, "scripts/rampart-service/Containerfile")
-	if !strings.Contains(cf, "node:"+strconv.Itoa(want)+"-slim") {
-		t.Errorf("scripts/rampart-service/Containerfile does not use node:%d-slim (web/.nvmrc says %d)", want, want)
 	}
 }
 
