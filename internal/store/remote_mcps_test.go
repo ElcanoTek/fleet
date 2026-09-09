@@ -361,3 +361,35 @@ func TestClearOAuthTokensKeepsRegistration(t *testing.T) {
 		t.Errorf("wrong owner: err = %v, want ErrRemoteMCPNotFound", err)
 	}
 }
+
+// The RFC 8707 resource indicator persists apart from the connection URL, and
+// a row created without one reads back ” (= "same as URL"), which is what
+// every pre-057 row means.
+func TestRemoteMCPResourceIndicatorPersists(t *testing.T) {
+	s := newTestStoreWithCipher(t)
+	ctx := context.Background()
+	in := sampleServerInput("u@x.com")
+	in.URL, in.Resource = "https://mcp.slack.com/mcp", "https://mcp.slack.com"
+	srv, err := s.CreateRemoteMCPServer(ctx, in)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := s.GetRemoteMCPServer(ctx, "u@x.com", srv.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.URL != in.URL || got.Resource != in.Resource {
+		t.Errorf("url=%q resource=%q, want %q / %q", got.URL, got.Resource, in.URL, in.Resource)
+	}
+	plain, err := s.CreateRemoteMCPServer(ctx, sampleServerInput("v@x.com"))
+	if err != nil {
+		t.Fatalf("create plain: %v", err)
+	}
+	if plain.Resource != "" {
+		t.Errorf("resource without a PRM value = %q, want empty", plain.Resource)
+	}
+	list, err := s.ListRemoteMCPServers(ctx, "u@x.com")
+	if err != nil || len(list) != 1 || list[0].Resource != in.Resource {
+		t.Errorf("list carries resource: %v / %+v", err, list)
+	}
+}

@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -67,7 +69,7 @@ func (f *fakeStore) CreateRemoteMCPServer(_ context.Context, in store.RemoteMCPS
 		}
 	}
 	srv := &store.RemoteMCPServer{
-		ID: id, UserEmail: strings.ToLower(in.UserEmail), Name: in.Name, Account: account, IsDefault: isDefault, URL: in.URL,
+		ID: id, UserEmail: strings.ToLower(in.UserEmail), Name: in.Name, Account: account, IsDefault: isDefault, URL: in.URL, Resource: in.Resource,
 		Transport: in.Transport, Status: in.Status,
 		Issuer: in.Issuer, AuthorizationEndpoint: in.AuthorizationEndpoint, TokenEndpoint: in.TokenEndpoint,
 		RegistrationEndpoint: in.RegistrationEndpoint, RevocationEndpoint: in.RevocationEndpoint,
@@ -336,6 +338,14 @@ func (f *fakeStore) ConsumeOAuthFlow(_ context.Context, state string) (*store.OA
 
 // oauthTestServer is an MCP server + authorization server in one httptest server.
 func oauthTestServer(t *testing.T, refreshBehavior string) *httptest.Server {
+	return newOAuthTestServer(t, refreshBehavior, "/mcp", nil)
+}
+
+// newOAuthTestServer is oauthTestServer with two knobs: prmResourcePath is what
+// the protected-resource metadata declares as `resource`, relative to the
+// origin ("" = the bare origin, as Slack's server does), and sawResource, when
+// non-nil, receives the `resource` form field of every token request.
+func newOAuthTestServer(t *testing.T, refreshBehavior, prmResourcePath string, sawResource *string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
@@ -347,7 +357,7 @@ func oauthTestServer(t *testing.T, refreshBehavior string) *httptest.Server {
 	})
 	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"resource":              base + "/mcp",
+			"resource":              base + prmResourcePath,
 			"authorization_servers": []string{base},
 			"scopes_supported":      []string{"mcp:read"},
 		})
@@ -367,6 +377,9 @@ func oauthTestServer(t *testing.T, refreshBehavior string) *httptest.Server {
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
+		if sawResource != nil {
+			*sawResource = r.Form.Get("resource")
+		}
 		switch r.Form.Get("grant_type") {
 		case "authorization_code":
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at-init", "refresh_token": "rt-init", "token_type": "Bearer", "expires_in": 1})
@@ -1286,5 +1299,65 @@ func TestServiceAddManualClientRequiredStillWinsWithoutClientID(t *testing.T) {
 	_, _, err := svc.AddServer(context.Background(), AddServerInput{Email: "u@x.com", Name: "gh", URL: srv.URL + "/mcp"})
 	if !errors.Is(err, ErrManualClientRequired) {
 		t.Fatalf("err = %v, want ErrManualClientRequired", err)
+	}
+}
+
+// TestServiceAddKeepsTypedEndpointWhenPRMDeclaresOrigin: Slack's PRM declares
+// `resource: https://mcp.slack.com` — the bare origin — while its MCP endpoint
+// is /mcp, and the origin root answers every request with a redirect the
+// SSRF-safe client refuses. Adopting the declared value as the CONNECTION URL
+// authorized cleanly and then failed every mount (#1006). The typed endpoint
+// must stay the connection URL; the PRM value is kept as the RFC 8707
+// indicator and is what the authorize URL and the token request carry.
+func TestServiceAddKeepsTypedEndpointWhenPRMDeclaresOrigin(t *testing.T) {
+	fs := newFakeStore()
+	var sawResource string
+	srv := newOAuthTestServer(t, "rotate", "", &sawResource) // PRM resource = origin
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	server, _, err := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "slack", URL: srv.URL + "/mcp"})
+	if err != nil {
+		t.Fatalf("AddServer: %v", err)
+	}
+	if server.URL != srv.URL+"/mcp" {
+		t.Fatalf("connection URL = %q, want the typed endpoint %q (the PRM's origin must not replace it)", server.URL, srv.URL+"/mcp")
+	}
+	origin, err := mcpoauth.CanonicalResourceURI(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Resource != origin {
+		t.Fatalf("resource indicator = %q, want the PRM-declared origin %q", server.Resource, origin)
+	}
+
+	authURL, err := svc.Authorize(ctx, "u@x.com", server.ID)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("resource"); got != origin {
+		t.Errorf("authorize resource=%q, want %q", got, origin)
+	}
+	state := u.Query().Get("state")
+	if _, err := svc.Complete(ctx, "u@x.com", state, "code-1"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if sawResource != origin {
+		t.Errorf("token request resource=%q, want %q", sawResource, origin)
+	}
+}
+
+// A row created before the resource column existed carries ” and keeps
+// sending its URL, which for those rows IS the PRM-declared value.
+func TestResourceIndicatorFallsBackToURL(t *testing.T) {
+	if got := resourceIndicator(&store.RemoteMCPServer{URL: "https://mcp.acme.com/mcp"}); got != "https://mcp.acme.com/mcp" {
+		t.Errorf("fallback = %q", got)
+	}
+	if got := resourceIndicator(&store.RemoteMCPServer{URL: "https://mcp.slack.com/mcp", Resource: " https://mcp.slack.com "}); got != "https://mcp.slack.com" {
+		t.Errorf("declared = %q", got)
 	}
 }

@@ -56,8 +56,12 @@ type AuthServerMetadata struct {
 
 // Discovered bundles everything a caller needs to start an authorization flow.
 type Discovered struct {
-	// Resource is the canonical MCP server URI — the RFC 8707 resource indicator
-	// and the audience the issued token is bound to.
+	// Resource is the RFC 8707 resource indicator — the audience the issued
+	// token is bound to: the PRM-declared `resource` when it shares the typed
+	// server's origin, else the typed canonical URL. It is NOT necessarily the
+	// MCP endpoint: Slack declares its bare origin while serving MCP at /mcp,
+	// so callers keep the typed URL as the connection URL and send this value
+	// only to the authorization server (#1006).
 	Resource string
 	PRM      ProtectedResourceMetadata
 	AS       AuthServerMetadata
