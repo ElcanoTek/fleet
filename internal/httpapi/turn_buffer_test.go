@@ -234,3 +234,66 @@ func TestTurnBuffer_AttachPersisterFailureLeavesNoPersister(t *testing.T) {
 		t.Errorf("FinishTurn calls = %d, InsertTurnEvents calls = %d, want 0/0 for a turn that was never created", p.finishes, p.inserts)
 	}
 }
+
+// recordingPersister is a persister whose CreateTurn succeeds; it counts
+// what the buffer hands it so a test can see the live path was wired.
+type recordingPersister struct {
+	mu       sync.Mutex
+	inserted int
+	finishes int
+}
+
+func (p *recordingPersister) CreateTurn(context.Context, string, string, int64) error { return nil }
+
+func (p *recordingPersister) InsertTurnEvents(_ context.Context, evs []store.TurnEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.inserted += len(evs)
+	return nil
+}
+
+func (p *recordingPersister) FinishTurn(context.Context, string, store.TurnStatus, int64, bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.finishes++
+	return nil
+}
+
+// Emit may run while attachPersister is still wiring the persister: the
+// buffer is registered in Server.inflight BEFORE startTurn attaches, and the
+// previous turn's completion goroutine publishes queue.updated into whatever
+// buffer is live for the conversation. attachPersister therefore assigns
+// persister/persistCh under b.mu, the same lock Emit reads them under. This
+// test drives that interleaving directly so the race detector (CI's -race
+// lane, where TestChatSecondTurnReplaysHistory first caught it) has a
+// deterministic reproduction; the assertion at the end only proves the turn
+// still seals with a persister wired.
+func TestTurnBuffer_AttachPersisterConcurrentWithEmit(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		buf := newTurnBuffer("conv-1", fmt.Sprintf("turn-%d", round))
+		p := &recordingPersister{}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 50; i++ {
+				buf.Emit("queue.updated", map[string]any{"i": i})
+			}
+		}()
+		close(start)
+		if err := buf.attachPersister(context.Background(), p); err != nil {
+			t.Fatalf("attachPersister: %v", err)
+		}
+		wg.Wait()
+		buf.Emit("done", map[string]any{"ok": true})
+		buf.Finish()
+		p.mu.Lock()
+		finishes := p.finishes
+		p.mu.Unlock()
+		if finishes != 1 {
+			t.Fatalf("round %d: FinishTurn calls = %d, want 1 (persister must be wired)", round, finishes)
+		}
+	}
+}

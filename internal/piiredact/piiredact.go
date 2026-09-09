@@ -1,8 +1,9 @@
 // Package piiredact is an OPTIONAL, provider-neutral PII redaction pass for
 // content that flows into the model context (#450). It is DEFAULT OFF and
 // deterministic (regex + validators) so it runs self-hosted with NO model
-// server; an external ONNX/HTTP classifier (e.g. Rampart) is a pluggable
-// follow-on that can implement the same Redactor interface.
+// server. The Redactor interface stays provider-neutral so an external
+// classifier could implement the same contract, but none is shipped: the
+// Rampart engine that once did was removed (ADR-0063).
 //
 // It COMPLEMENTS internal/redact (which scrubs SECRETS unconditionally): PII
 // redaction is opt-in, has strictness MODES, and reports structured findings
@@ -98,8 +99,7 @@ func (r Result) Summary() string {
 }
 
 // Redactor is the provider-neutral interface. The deterministic PatternRedactor
-// is the built-in impl; an external ONNX/HTTP classifier (Rampart) is a
-// follow-on that satisfies the same contract.
+// is the built-in — and, since ADR-0063, the only shipped — implementation.
 type Redactor interface {
 	Redact(text string) Result
 	Mode() Mode

@@ -51,8 +51,6 @@ func (f *fakeStore) DeleteWorkspaceSetting(_ context.Context, key string) error 
 func testDefaults() map[string]string {
 	return map[string]string{
 		"pii_redaction_mode":                "off",
-		"pii_redaction_engine":              "pattern",
-		"pii_rampart_url":                   "",
 		"guardrail_url":                     "",
 		"guardrail_mode":                    "off",
 		"tool_disclosure_threshold":         "128",
@@ -158,12 +156,12 @@ func TestValidate(t *testing.T) {
 		{"tool_disclosure_threshold", "100001", "", true},
 		{"tool_disclosure_threshold", "abc", "", true},
 		{"max_tool_output_bytes", "0", "0", false}, // MinZeroOK: 0 = safe runtime default
-		{"pii_redaction_engine", "Rampart", "rampart", false},
-		{"pii_redaction_engine", "onnx", "", true},
-		{"pii_rampart_url", "", "", false}, // empty = not configured
-		{"pii_rampart_url", "http://127.0.0.1:8787/v1/redact", "http://127.0.0.1:8787/v1/redact", false},
-		{"pii_rampart_url", "ftp://x", "", true},
-		{"pii_rampart_url", "not a url", "", true},
+		{"guardrail_mode", "Block", "block", false},
+		{"guardrail_mode", "shred", "", true},
+		{"guardrail_url", "", "", false}, // empty = not configured
+		{"guardrail_url", "http://127.0.0.1:8790/v1/check", "http://127.0.0.1:8790/v1/check", false},
+		{"guardrail_url", "ftp://x", "", true},
+		{"guardrail_url", "not a url", "", true},
 		{"max_tool_output_bytes", "512", "", true}, // below Min and not 0
 		{"max_tool_output_bytes", "65536", "65536", false},
 		{"max_tool_output_bytes", "131072", "131072", false},
@@ -391,15 +389,15 @@ func TestSetCompensatesOnApplyFailure(t *testing.T) {
 }
 
 // TestResetCompensatesOnApplyFailure: resetting a key whose DEFAULT cannot
-// apply (e.g. clearing a rampart URL the engine still needs) restores the
+// apply (e.g. clearing a guardrail URL the mode still needs) restores the
 // deleted row, so DB and live state never diverge across a restart.
 func TestResetCompensatesOnApplyFailure(t *testing.T) {
 	st := newFakeStore()
 	applied := map[string]string{}
 	hooks := testHooks(applied)
-	hooks["pii_rampart_url"] = func(v string, _ bool) error {
+	hooks["guardrail_url"] = func(v string, _ bool) error {
 		if v == "" {
-			return fmt.Errorf("engine still needs a URL")
+			return fmt.Errorf("guardrail mode still needs a URL")
 		}
 		return nil
 	}
@@ -408,14 +406,14 @@ func TestResetCompensatesOnApplyFailure(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := svc.Set(ctx, "pii_rampart_url", "http://127.0.0.1:8787/v1/redact", "admin@x"); err != nil {
+	if _, err := svc.Set(ctx, "guardrail_url", "http://127.0.0.1:8790/v1/check", "admin@x"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if _, err := svc.Reset(ctx, "pii_rampart_url", "admin@x"); err == nil {
+	if _, err := svc.Reset(ctx, "guardrail_url", "admin@x"); err == nil {
 		t.Fatal("reset should fail when the default cannot apply")
 	}
-	row, ok := st.rows["pii_rampart_url"]
-	if !ok || row.Value != "http://127.0.0.1:8787/v1/redact" {
+	row, ok := st.rows["guardrail_url"]
+	if !ok || row.Value != "http://127.0.0.1:8790/v1/check" {
 		t.Fatalf("failed reset must restore the previous row, got %+v (present=%v)", row, ok)
 	}
 }
@@ -485,21 +483,21 @@ func TestApplyAllLoadFailureIsTyped(t *testing.T) {
 	}
 }
 
-// TestDependentKeyHealsAfterFix: a key that failed to apply at boot (rampart
-// engine with no URL) recovers automatically when the setting it depends on
-// is fixed — no reboot, no redundant re-save of the failed key.
+// TestDependentKeyHealsAfterFix: a key that failed to apply at boot (guardrail
+// mode "block" with no URL) recovers automatically when the setting it depends
+// on is fixed — no reboot, no redundant re-save of the failed key.
 func TestDependentKeyHealsAfterFix(t *testing.T) {
 	st := newFakeStore()
-	st.rows["pii_redaction_engine"] = store.WorkspaceSetting{Key: "pii_redaction_engine", Value: "rampart"}
+	st.rows["guardrail_mode"] = store.WorkspaceSetting{Key: "guardrail_mode", Value: "block"}
 	applied := map[string]string{}
 	hooks := testHooks(applied)
 	var url string
-	hooks["pii_rampart_url"] = func(v string, _ bool) error { url = v; return nil }
-	hooks["pii_redaction_engine"] = func(v string, _ bool) error {
-		if v == "rampart" && url == "" {
+	hooks["guardrail_url"] = func(v string, _ bool) error { url = v; return nil }
+	hooks["guardrail_mode"] = func(v string, _ bool) error {
+		if v != "off" && url == "" {
 			return fmt.Errorf("needs a URL")
 		}
-		applied["pii_redaction_engine"] = v
+		applied["guardrail_mode"] = v
 		return nil
 	}
 	svc, err := NewService(st, testDefaults(), hooks)
@@ -508,21 +506,21 @@ func TestDependentKeyHealsAfterFix(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Boot: the engine row fails (no URL yet) and is marked.
+	// Boot: the mode row fails (no URL yet) and is marked.
 	if err := svc.ApplyAll(ctx); err == nil {
-		t.Fatal("boot apply should report the failing engine")
+		t.Fatal("boot apply should report the failing mode")
 	}
 
-	// The admin fixes the dependency — the engine heals without being touched.
-	if _, err := svc.Set(ctx, "pii_rampart_url", "http://127.0.0.1:8787/v1/redact", "admin@x"); err != nil {
+	// The admin fixes the dependency — the mode heals without being touched.
+	if _, err := svc.Set(ctx, "guardrail_url", "http://127.0.0.1:8790/v1/check", "admin@x"); err != nil {
 		t.Fatalf("Set url: %v", err)
 	}
-	if applied["pii_redaction_engine"] != "rampart" {
-		t.Fatal("fixing the URL should re-apply the failed engine setting")
+	if applied["guardrail_mode"] != "block" {
+		t.Fatal("fixing the URL should re-apply the failed mode setting")
 	}
 	snap, _ := svc.Snapshot(ctx)
 	for _, r := range snap {
-		if r.Key == "pii_redaction_engine" && r.ApplyError != "" {
+		if r.Key == "guardrail_mode" && r.ApplyError != "" {
 			t.Errorf("healed key must clear ApplyError: %+v", r)
 		}
 	}

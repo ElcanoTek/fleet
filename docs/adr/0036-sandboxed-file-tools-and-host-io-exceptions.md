@@ -143,6 +143,7 @@ read it that way:
   named rather than implicit.
 
 - **Admin-triggered host `podman` build/run** was not enumerated either.
+  (Removed with the Rampart engine in ADR-0063; recorded here as it stood.)
   `internal/rampartinstall/installer.go` shells out to `podman` with fixed
   arguments behind `POST /admin/pii-redaction/install`, which is admin-gated
   (`internal/httpapi/routes.go`) and not model-callable. Same reasoning: fixed

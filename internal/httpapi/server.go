@@ -67,14 +67,9 @@ type Server struct {
 	// nil in tests/mock mode: the /admin/notify-settings endpoints answer 501.
 	notifySettings notifySettingsService
 
-	// piiProbe backs the Features panel's PII "Test detection" button
-	// (WithPIIRedactionProbe). nil in tests/mock mode: the endpoint answers 501.
-	piiProbe       func(ctx context.Context) PIIProbeResult
+	// guardrailProbe backs the Features panel's guardrail "Test" button
+	// (WithGuardrailProbe). nil in tests/mock mode: the endpoint answers 501.
 	guardrailProbe func(ctx context.Context) GuardrailProbeResult
-
-	// piiInstaller backs the one-click Rampart service install
-	// (WithPIIRampartInstaller). nil: the endpoints answer 501.
-	piiInstaller piiRampartInstaller
 
 	// isMember reports whether an email may use chat — the scoped-tier
 	// gate consulted by membershipMiddleware. nil in production, where it

@@ -62,11 +62,11 @@ cd web && npm ci && npm run lint && npm run typecheck && npm run test && npm run
 cd web && npx playwright test --project=mocked     # mocked e2e
 ```
 
-There are **two** npm trees — `web/` and `scripts/rampart-service/` — and CI
-audits both (`npm audit --audit-level=low`, lockfile-only) plus
-`scripts/check-npm-overrides.sh`, the override canary. `make ci-web` runs all
-eight steps; the hand-rolled line above skips the audits and the canary, which is
-how a clean local run turns into a red PR.
+`web/` is the only npm tree (the second one, `scripts/rampart-service/`, was
+removed in ADR-0063), and CI audits it (`npm audit --audit-level=low`,
+lockfile-only) before the install. `make ci-web` runs every step; the
+hand-rolled line above skips the audit, which is how a clean local run turns
+into a red PR.
 
 CI mirrors all of this in **one workflow on one branch**. fleet is trunk-based
 ([ADR-0062](docs/adr/0062-trunk-based-development.md)): `main` is the only
@@ -93,7 +93,7 @@ human. Tests are deterministic without a live model: use the fake-LLM seam
 CodeQL (security queries, `security-extended`) and Semgrep (Go/JS/Python SAST +
 Actions supply chain) run on every PR: `codeql.yml` and `semgrep.yml` are
 reusable workflows that ci.yml calls as jobs, so their results roll up into
-`CI gate` like any other job. `npm audit` (both npm trees, lockfile-only, any
+`CI gate` like any other job. `npm audit` (the `web/` tree, lockfile-only, any
 severity) and ruff (`check` **and** `format --check`) gate the same way.
 
 Their thresholds differ, and the difference is load-bearing:
@@ -197,7 +197,7 @@ same PR.
   signal, not a gate: add tests that catch real behavior, not to chase a
   number. (The merge gates are build/vet/lint, ruff — `check` and
   `format --check` — actionlint + shellcheck, the test suites, the `-race` lane,
-  govulncheck, Grype, `npm audit` + `scripts/check-npm-overrides.sh`, CodeQL,
+  govulncheck, Grype, `npm audit`, CodeQL,
   Semgrep, the Helm chart lint, both Playwright suites, the migration
   linter, and gitleaks — all rolled up into the one required `CI gate` check.)
 - **Match the surrounding code:** naming, idioms, and comment density. The

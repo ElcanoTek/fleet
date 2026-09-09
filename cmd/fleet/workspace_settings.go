@@ -26,7 +26,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/notifyadmin"
 	"github.com/ElcanoTek/fleet/internal/piiredact"
-	"github.com/ElcanoTek/fleet/internal/rampartinstall"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/settings"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -36,11 +35,9 @@ import (
 // Defaults are snapshotted from the env-derived Config BEFORE any override
 // applies, so "Reset to default" always reverts to what this deployment's env
 // file configures.
-func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Service, *piiRedactorState, *guardrailState, error) {
+func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Service, *guardrailState, error) {
 	defaults := map[string]string{
 		"pii_redaction_mode":                defaultPIIRedactionMode(cfg),
-		"pii_redaction_engine":              defaultPIIRedactionEngine(cfg),
-		"pii_rampart_url":                   cfg.PIIRampartURL,
 		"guardrail_url":                     cfg.GuardrailURL,
 		"guardrail_mode":                    defaultGuardrailMode(cfg),
 		"tool_disclosure_threshold":         strconv.Itoa(agentcore.EnvToolDisclosureThreshold()),
@@ -60,14 +57,13 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 	pii := newPIIRedactorState(cfg)
 	guard := newGuardrailState(cfg)
 	hooks := map[string]settings.ApplyFunc{
-		// The three PII keys feed one redactor: each hook updates its slice of
-		// the shared state and rebuilds. Rebuild errors (rampart without a URL)
-		// surface to the admin and roll the write back.
-		"pii_redaction_mode":   pii.applyMode,
-		"pii_redaction_engine": pii.applyEngine,
-		"pii_rampart_url":      pii.applyURL,
-		"guardrail_url":        guard.applyURL,
-		"guardrail_mode":       guard.applyMode,
+		// The PII mode rebuilds the one process-wide redactor; the two guardrail
+		// keys feed one detector the same way. Rebuild errors (a non-off
+		// guardrail mode without a URL) surface to the admin and roll the
+		// write back.
+		"pii_redaction_mode": pii.applyMode,
+		"guardrail_url":      guard.applyURL,
+		"guardrail_mode":     guard.applyMode,
 		// The two agentcore knobs shadow a PER-USE env read: with no admin
 		// override the holder is CLEARED (not pinned to the boot env value), so
 		// an env-file edit + #286 reload — or any process-env change — keeps
@@ -92,7 +88,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"shared_files_max_total_mb":         applyIntSetting(cfg.SetSharedFilesMaxTotalMB),
 	}
 	svc, err := settings.NewService(st, defaults, hooks)
-	return svc, pii, guard, err
+	return svc, guard, err
 }
 
 func defaultGuardrailMode(cfg *config.Config) string {
@@ -199,42 +195,18 @@ func defaultPIIRedactionMode(cfg *config.Config) string {
 	return string(mode)
 }
 
-// defaultPIIRedactionEngine maps FLEET_PII_REDACTION_ENGINE onto the registry
-// value: "rampart" only when explicitly asked for AND a service URL is set;
-// anything else (unset, junk, or rampart with no URL — which could never
-// activate and must not fail redaction OPEN at boot) is the deterministic
-// "pattern" engine. The URL-less degrade is logged by configurePIIRedaction.
-func defaultPIIRedactionEngine(cfg *config.Config) string {
-	if strings.EqualFold(strings.TrimSpace(cfg.PIIRedactionEngine), "rampart") {
-		if strings.TrimSpace(cfg.PIIRampartURL) == "" {
-			return "pattern"
-		}
-		return "rampart"
-	}
-	return "pattern"
-}
-
-// piiRedactorState is the shared state behind the three PII settings hooks
-// (mode, engine, rampart URL). Any change rebuilds the ONE process-wide
-// redactor from the full trio, so the hooks compose regardless of apply
-// order. The settings Service serializes hook calls, but the probe endpoint
-// reads concurrently — hence the mutex.
+// piiRedactorState is the state behind the PII mode hook: the mode, and the
+// redactor the last rebuild installed (nil while off), so tests and boot can
+// see exactly what tool calls run through. The settings Service serializes
+// hook calls; the mutex keeps boot-time rebuild and a concurrent apply honest.
 type piiRedactorState struct {
-	mu     sync.Mutex
-	mode   string
-	engine string
-	url    string
-	// current is what rebuild installed — kept for the admin Test probe, which
-	// must exercise exactly what tool calls run through.
+	mu      sync.Mutex
+	mode    string
 	current piiredact.Redactor
 }
 
 func newPIIRedactorState(cfg *config.Config) *piiRedactorState {
-	return &piiRedactorState{
-		mode:   defaultPIIRedactionMode(cfg),
-		engine: defaultPIIRedactionEngine(cfg),
-		url:    cfg.PIIRampartURL,
-	}
+	return &piiRedactorState{mode: defaultPIIRedactionMode(cfg)}
 }
 
 // rebuild is the exported-shape wrapper for boot-time installs.
@@ -256,99 +228,23 @@ func (p *piiRedactorState) applyMode(value string, _ bool) error {
 	return nil
 }
 
-func (p *piiRedactorState) applyEngine(value string, _ bool) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	prev := p.engine
-	p.engine = value
-	if err := p.rebuildLocked(); err != nil {
-		p.engine = prev
-		return err
-	}
-	return nil
-}
-
-func (p *piiRedactorState) applyURL(value string, _ bool) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	prev := p.url
-	p.url = value
-	if err := p.rebuildLocked(); err != nil {
-		p.url = prev
-		return err
-	}
-	return nil
-}
-
-// rebuildLocked constructs and installs the redactor for the current trio.
-// "off" installs nil (the tool-output pass is a byte-for-byte no-op); the
-// rampart engine without a URL is a configuration error the admin sees (and
-// the settings write rolls back). Callers hold p.mu.
+// rebuildLocked constructs and installs the redactor for the current mode.
+// "off" installs nil (the tool-output pass is a byte-for-byte no-op); any other
+// mode installs the deterministic pattern engine. Callers hold p.mu.
 func (p *piiRedactorState) rebuildLocked() error {
 	mode, err := piiredact.ParseMode(p.mode)
 	if err != nil {
 		return err
-	}
-	// Engine/URL consistency holds REGARDLESS of mode: accepting
-	// engine=rampart with no URL while the mode is off would boobytrap the
-	// later mode change with a confusing rampart error (observed live).
-	if p.engine == "rampart" && strings.TrimSpace(p.url) == "" {
-		return fmt.Errorf("the rampart engine needs a detection service URL — set pii_rampart_url (or FLEET_PII_RAMPART_URL) first; see docs/PII-REDACTION.md for deploying the service")
 	}
 	if mode == piiredact.ModeOff {
 		p.current = nil
 		agentcore.SetPIIRedactor(nil)
 		return nil
 	}
-	var r piiredact.Redactor
-	if p.engine == "rampart" {
-		r = piiredact.NewRampart(mode, p.url)
-	} else {
-		r = piiredact.New(mode)
-	}
+	r := piiredact.New(mode)
 	p.current = r
 	agentcore.SetPIIRedactor(r)
 	return nil
-}
-
-// Probe runs the CURRENT redactor over a fixed synthetic sample for the admin
-// "Test detection" button (POST /admin/pii-redaction/test). For the rampart
-// engine it goes through ProbeService, so a dead detection service reports as
-// a failure instead of silently falling back — surfacing connectivity is the
-// point of the button. The sample is synthetic; the response carries kinds +
-// counts and the redacted preview, never operator data.
-func (p *piiRedactorState) Probe(ctx context.Context) httpapi.PIIProbeResult {
-	p.mu.Lock()
-	current := p.current
-	mode, engine := p.mode, p.engine
-	p.mu.Unlock()
-
-	res := httpapi.PIIProbeResult{Mode: mode, Engine: engine}
-	if current == nil {
-		res.Detail = "PII redaction is off — set a mode to test detection"
-		return res
-	}
-	const sample = "Contact Alex Rivera at alex.rivera@example.com or (415) 555-0134, SSN 123-45-6789, 12 Main St, Springfield."
-	start := time.Now()
-	var out piiredact.Result
-	if rr, ok := current.(*piiredact.RampartRedactor); ok {
-		out, err := rr.ProbeService(ctx, sample)
-		res.LatencyMS = time.Since(start).Milliseconds()
-		if err != nil {
-			res.Detail = fmt.Sprintf("rampart service unreachable: %v (tool calls fall back to the pattern engine)", err)
-			return res
-		}
-		res.OK = true
-		res.Detail = out.Summary()
-		res.Redacted = out.Text
-		return res
-	}
-	out = current.Redact(sample)
-	res.LatencyMS = time.Since(start).Milliseconds()
-	res.OK = true
-	res.Detail = out.Summary()
-	res.Redacted = out.Text
-	return res
 }
 
 // defaultModelTier resolves a model tier's env-derived boot default: the env
@@ -436,7 +332,7 @@ func applyEnvShadowedInt(set func(int), clearSentinel int) settings.ApplyFunc {
 // default or hook — a programming error, also caught by
 // TestBuildWorkspaceSettingsCoversRegistry) degrades the same way.
 func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st *store.Store) []httpapi.Option {
-	svc, pii, guard, err := buildWorkspaceSettings(cfg, st)
+	svc, guard, err := buildWorkspaceSettings(cfg, st)
 	if err != nil {
 		log.Printf("workspace settings: DISABLED — service construction failed (this is a wiring bug): %v", err)
 		return opts
@@ -461,22 +357,11 @@ func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st
 	if applyErr != nil {
 		log.Printf("workspace settings: some overrides NOT in effect (env-derived behavior serves for those keys; fix or Reset them from the admin panel): %v", applyErr)
 	}
-	// The PII probe + one-click Rampart installer ride with the panel: both
-	// exercise the same state the hooks maintain, so they are only honest when
-	// the panel is live too. The installer writes pii_rampart_url through the
-	// SAME audited settings path an admin edit uses, and fleet re-starts the
-	// managed container after a box reboot (rootless --restart=always does not
-	// survive reboots without systemd).
-	installer := rampartinstall.New("podman", func(ctx context.Context, url, updatedBy string) error {
-		_, err := svc.Set(ctx, "pii_rampart_url", url, updatedBy)
-		return err
-	})
-	go installer.EnsureRunning(context.Background())
+	// The guardrail probe rides with the panel: it exercises the same state the
+	// hooks maintain, so it is only honest when the panel is live too.
 	return append(opts,
 		httpapi.WithWorkspaceSettings(svc),
-		httpapi.WithPIIRedactionProbe(pii.Probe),
-		httpapi.WithGuardrailProbe(guard.Probe),
-		httpapi.WithPIIRampartInstaller(installer))
+		httpapi.WithGuardrailProbe(guard.Probe))
 }
 
 // gatedErrorAnalyzer wraps the Manager's post-failure diagnosis (#317) so the

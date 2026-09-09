@@ -86,8 +86,6 @@ jobs:
 
           - [ ] \`web/.nvmrc\` → ${TARGET_MAJOR} (the single declaration point; CI, bootstrap, doctor, update all read it)
           - [ ] \`web/package.json\` \`engines.node\` → \`>=${TARGET_MAJOR}\`, and \`@types/node\` → \`^${TARGET_MAJOR}\`
-          - [ ] \`scripts/rampart-service/package.json\` \`engines.node\` → \`>=${TARGET_MAJOR}\`
-          - [ ] \`scripts/rampart-service/Containerfile\` → \`node:${TARGET_MAJOR}-slim\` (a Dependabot docker PR for this may already exist — fold it in or close it against this issue)
           - [ ] \`make test\` (\`TestNodeMajorAgreesEverywhere\` green) + \`make ci-web\`
 
           This issue dedupes by title: the weekly cron will not file another while this one is open."
