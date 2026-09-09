@@ -71,3 +71,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0060](0060-remove-the-fleet-admin-shim.md) | Remove the `fleet-admin` shim, and evict it from the boxes that have it | Accepted; completes ADR-0012 |
 | [0061](0061-retire-the-changelog.md) | Retire `CHANGELOG.md`; the PR is the record and the release notes are generated | Accepted; extends ADR-0059 |
 | [0062](0062-trunk-based-development.md) | Trunk-based development: `main` is the only branch, every PR squash-merges into it, one CI lane | Accepted; amends ADR-0059 and ADR-0061 |
+| [0063](0063-remove-the-rampart-pii-engine.md) | Remove the Rampart PII engine, its one-click installer and the `scripts/rampart-service` npm tree; PII redaction keeps the built-in pattern engine | Accepted; amends ADR-0028 and ADR-0036 |

@@ -113,13 +113,23 @@ func (b *turnBuffer) attachPersister(ctx context.Context, p eventSinkPersister) 
 	// Finish then called FinishTurn (and the backfill) against a turn row that
 	// was never inserted — a spurious error for a turn the caller had already
 	// abandoned at the CreateTurn failure.
-	b.persister = p
+	//
+	// Under b.mu: Emit reads persistCh under the lock, and Emit CAN run before
+	// attach finishes — the buffer is registered in Server.inflight before
+	// startTurn attaches the persister, and the previous turn's completion
+	// goroutine publishes queue.updated into whatever buffer is live for the
+	// conversation (emitQueueUpdate). The race detector caught exactly that
+	// interleaving in TestChatSecondTurnReplaysHistory.
+	//
 	// Buffered channel so Emit never blocks on DB latency. If the
 	// goroutine falls far enough behind that Emit drops events here,
 	// the in-memory buffer still has them and Finish backfills the full
 	// snapshot before sealing the turn (see needsBackfill / Finish), so
 	// the persisted ledger is healed rather than left with a permanent gap.
+	b.mu.Lock()
+	b.persister = p
 	b.persistCh = make(chan bufferedEvent, 512)
+	b.mu.Unlock()
 	b.persistWG.Add(1)
 	go b.runPersister()
 	return nil

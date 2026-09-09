@@ -417,13 +417,16 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_DEFAULT_NETWORK_MODE":                 true,
 	"FLEET_PII_REDACTION_ENABLED":                true,
 	"FLEET_PII_REDACTION_MODE":                   true,
-	"FLEET_PII_REDACTION_ENGINE":                 true,
-	"FLEET_PII_RAMPART_URL":                      true,
-	"FLEET_GUARDRAIL_MODE":                       true,
-	"FLEET_GUARDRAIL_PROFILE":                    true,
-	"FLEET_GUARDRAIL_URL":                        true,
-	"FLEET_CONTEXT_HANDLES_ENABLED":              true,
-	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED":    true,
+	// Retired with the Rampart engine (ADR-0063). Still loaded from the env
+	// file so Load's boot warning can name a stale value wherever it is set;
+	// nothing reads either key.
+	"FLEET_PII_REDACTION_ENGINE":              true,
+	"FLEET_PII_RAMPART_URL":                   true,
+	"FLEET_GUARDRAIL_MODE":                    true,
+	"FLEET_GUARDRAIL_PROFILE":                 true,
+	"FLEET_GUARDRAIL_URL":                     true,
+	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
+	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
 
 	// ── A2A protocol server (#1279) ──
 	"FLEET_A2A_ENABLED":            true,
@@ -1115,16 +1118,6 @@ type Config struct {
 	// when enabled), or "block" (withhold the tool result from the model).
 	// FLEET_PII_REDACTION_MODE. Validated + defaulted in cmd/fleet.
 	PIIRedactionMode string
-	// PIIRedactionEngine picks the detector: "pattern" (the built-in
-	// deterministic regexes, the default) or "rampart" (the MiniLM ONNX
-	// token-classification model behind an operator-deployed HTTP service —
-	// see docs/PII-REDACTION.md). FLEET_PII_REDACTION_ENGINE. Validated +
-	// defaulted in cmd/fleet; rampart additionally needs PIIRampartURL.
-	PIIRedactionEngine string
-	// PIIRampartURL is the Rampart detection service endpoint
-	// (FLEET_PII_RAMPART_URL), e.g. http://127.0.0.1:8787/v1/redact. Empty =
-	// the rampart engine cannot activate.
-	PIIRampartURL string
 	// GuardrailMode controls optional host-side prompt-injection screening at
 	// untrusted ingress: off (default), observe, or block.
 	GuardrailMode string
@@ -1715,8 +1708,6 @@ func Load(envFile string) (*Config, error) {
 		// PII redaction (#450) — optional, default off.
 		PIIRedactionEnabled: lp.getenvFleetBool("PII_REDACTION_ENABLED", false),
 		PIIRedactionMode:    strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE"))),
-		PIIRedactionEngine:  strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_ENGINE"))),
-		PIIRampartURL:       strings.TrimSpace(getenvFleet("PII_RAMPART_URL")),
 		GuardrailMode:       strings.ToLower(strings.TrimSpace(getenvFleet("GUARDRAIL_MODE"))),
 		GuardrailProfile:    strings.TrimSpace(getenvFleet("GUARDRAIL_PROFILE")),
 		GuardrailURL:        strings.TrimSpace(getenvFleet("GUARDRAIL_URL")),
@@ -1830,6 +1821,15 @@ func Load(envFile string) (*Config, error) {
 	case "", "open", "allowlisted", "lockdown":
 	default:
 		return nil, fmt.Errorf("FLEET_DEFAULT_NETWORK_MODE must be one of open|allowlisted|lockdown, got %q", cfg.DefaultNetworkMode)
+	}
+
+	// Retired knobs (ADR-0063): the Rampart PII engine is gone, so these two do
+	// nothing any more. Say so once at boot instead of silently ignoring an
+	// operator's env file — PII redaction always runs the built-in pattern engine.
+	for _, k := range []string{"PII_REDACTION_ENGINE", "PII_RAMPART_URL"} {
+		if strings.TrimSpace(getenvFleet(k)) != "" {
+			log.Printf("Warning: FLEET_%s is set but no longer used — the Rampart PII engine was removed (docs/adr/0063); PII redaction uses the built-in pattern engine", k)
+		}
 	}
 
 	// Capture the boot environment last, once the process env is in its final
