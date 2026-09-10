@@ -266,13 +266,76 @@ func TestCancelQueuedInputs_CoversQueueOnly(t *testing.T) {
 	enqueue(t, s, convID, "cli-2", "b", InputModeQueued)
 	claimed, _ := s.ClaimNextQueuedInput(ctx, convID, "turn-a")
 
-	n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID)
+	n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID, time.Now().UnixNano())
 	if err != nil || n != 1 {
 		t.Fatalf("cancelled %d err=%v, want 1 (the still-queued row)", n, err)
 	}
 	items, _ := s.ListQueuedInputs(ctx, "u@example.com", convID)
 	if len(items) != 1 || items[0].ID != claimed.ID {
 		t.Fatalf("running row must survive Stop: %+v", items)
+	}
+}
+
+// The Stop sweep is bounded to rows accepted BEFORE the Stop instant (#1477):
+// a follow-up accepted after Stop began — in the same wall-clock second — must
+// keep its acknowledgement, and the acceptance key the sweep compares is the
+// sub-second one EnqueueInput stamps, not created_at.
+func TestCancelQueuedInputs_SparesRowsAcceptedAfterStop(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	before := enqueue(t, s, convID, "cli-before", "before stop", InputModeQueued)
+	stop := time.Now().UnixNano()
+	after := enqueue(t, s, convID, "cli-after", "after stop", InputModeQueued)
+	if before.AcceptedAt >= stop || after.AcceptedAt < stop {
+		t.Fatalf("acceptance instants do not bracket the Stop: before=%d stop=%d after=%d", before.AcceptedAt, stop, after.AcceptedAt)
+	}
+	if before.CreatedAt != before.AcceptedAt/int64(time.Second) {
+		t.Fatalf("CreatedAt %d is not AcceptedAt %d in whole seconds", before.CreatedAt, before.AcceptedAt)
+	}
+
+	n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID, stop)
+	if err != nil || n != 1 {
+		t.Fatalf("cancelled %d err=%v, want 1 (only the pre-Stop row)", n, err)
+	}
+	items, _ := s.ListQueuedInputs(ctx, "u@example.com", convID)
+	if len(items) != 1 || items[0].ID != after.ID || items[0].State != InputStateQueued {
+		t.Fatalf("post-Stop row must survive the sweep still queued: %+v", items)
+	}
+	// The stored key round-trips through every read path.
+	if got, err := s.LookupInput(ctx, convID, "cli-after"); err != nil || got == nil || got.AcceptedAt != after.AcceptedAt {
+		t.Fatalf("LookupInput AcceptedAt: got=%v err=%v want %d", got, err, after.AcceptedAt)
+	}
+	claimed, err := s.ClaimNextQueuedInput(ctx, convID, "turn-b")
+	if err != nil || claimed == nil || claimed.AcceptedAt != after.AcceptedAt {
+		t.Fatalf("ClaimNextQueuedInput AcceptedAt: got=%v err=%v want %d", claimed, err, after.AcceptedAt)
+	}
+}
+
+// Rows written before migration 058 have no accepted_at_ns; every read and the
+// sweep fall back to created_at in nanoseconds, so a legacy pre-Stop row is
+// still swept and a legacy row from a later second is still spared.
+func TestCancelQueuedInputs_LegacyRowsFallBackToCreatedAt(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	old := enqueue(t, s, convID, "cli-old", "legacy", InputModeQueued)
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET accepted_at_ns = NULL, created_at = $2 WHERE id = $1`,
+		old.ID, old.CreatedAt-5); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LookupInput(ctx, convID, "cli-old")
+	if err != nil || got == nil || got.AcceptedAt != (old.CreatedAt-5)*int64(time.Second) {
+		t.Fatalf("legacy AcceptedAt fallback: got=%v err=%v", got, err)
+	}
+	// A Stop from an earlier second than the legacy row spares it…
+	if n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID, (old.CreatedAt-6)*int64(time.Second)); err != nil || n != 0 {
+		t.Fatalf("Stop before the legacy row swept %d rows (err=%v), want 0", n, err)
+	}
+	// …and a Stop after it sweeps it.
+	if n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID, time.Now().UnixNano()); err != nil || n != 1 {
+		t.Fatalf("Stop after the legacy row swept %d rows (err=%v), want 1", n, err)
 	}
 }
 

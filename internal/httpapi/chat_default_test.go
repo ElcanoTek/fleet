@@ -593,8 +593,10 @@ func (s *fakeChatStore) EnqueueInput(_ context.Context, r store.InputQueueRow) (
 			return it, false, nil
 		}
 	}
+	accepted := time.Now()
 	r.State = store.InputStateQueued
 	r.Position = int64(len(s.queue) + 1)
+	r.CreatedAt, r.UpdatedAt, r.AcceptedAt = accepted.Unix(), accepted.Unix(), accepted.UnixNano()
 	s.queue = append(s.queue, r)
 	return r, true, nil
 }
@@ -683,12 +685,12 @@ func (s *fakeChatStore) CompleteInjectedInputs(_ context.Context, turnID string)
 	return nil
 }
 
-func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, _, convID string) (int, error) {
+func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, _, convID string, before int64) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
 	for i := range s.queue {
-		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued && s.queue[i].AcceptedAt < before {
 			s.queue[i].State = store.InputStateCancelled
 			n++
 		}

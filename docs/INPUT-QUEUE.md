@@ -75,9 +75,16 @@ dispatch outright — an
 unjournaled post-injection side effect cannot exist. Re-queued rows (including
 concurrency-cap refusals and transient launch failures) get a bounded
 delayed re-kick so the queue self-heals without waiting for the next
-submission. Stop scope=all records a per-conversation epoch before sweeping,
-so a row in claim-limbo (claimed by a racing drain, invisible to the sweep)
-still cannot launch after Stop. The `input_id` idempotency key is honored on
+submission. Stop scope=all records the Stop instant per conversation
+(wall-clock nanoseconds, the same clock and precision as each row's
+`accepted_at_ns`, migration 058) and sweeps only the rows accepted before it,
+so a follow-up submitted a moment after Stop — while the cancelled turn is
+still finishing — keeps its acknowledgement and runs (#1477); a row in
+claim-limbo (claimed by a racing drain, invisible to the sweep) is refused by
+the same comparison, so the sweep and the launch gate agree on exactly one
+swept set. While the sweep runs, the drain defers (a per-conversation
+interlock) and a claim that slipped past it is refused at registration by a
+per-conversation Stop generation. The `input_id` idempotency key is honored on
 the direct path too: a retry that lands after the conversation went idle
 returns the accepted item instead of running a duplicate turn.
 

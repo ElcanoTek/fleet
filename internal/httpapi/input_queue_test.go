@@ -208,7 +208,7 @@ func (w *sweepHoldStore) SettleTurnInputs(ctx context.Context, turnID, drainedID
 	return w.chatStore.SettleTurnInputs(ctx, turnID, drainedID)
 }
 
-func (w *sweepHoldStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string) (int, error) {
+func (w *sweepHoldStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string, before int64) (int, error) {
 	if !w.srv.stopSweepPending(convID) {
 		w.t.Error("Stop swept the queue without holding the drain interlock: a cancelled turn's tail-call drain could claim the FIFO head first")
 	}
@@ -217,7 +217,7 @@ func (w *sweepHoldStore) CancelQueuedInputs(ctx context.Context, userEmail, conv
 	case <-time.After(5 * time.Second):
 		w.t.Error("sweep held 5s without the cancelled turn settling: Stop must cancel the active turn before it sweeps")
 	}
-	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID)
+	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID, before)
 }
 
 func TestQueue_StopCoversQueuedWork(t *testing.T) {
@@ -231,12 +231,11 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	s.agent = eng
 	// Stop scope=all cancels the active turn first (the model must stop at
 	// once) and sweeps the queue second. The cancelled turn's completion
-	// tail-calls maybeDrainQueue, and the epoch gate cannot stop a row
-	// accepted in the same second as the Stop (created_at is whole seconds,
-	// the comparison is strict), so the drain must be held off while the
-	// sweep is in flight. The -race lane lost that race on main; this
-	// wrapper pins the sweep behind the turn's settlement so the test
-	// exercises the losing order deterministically.
+	// tail-calls maybeDrainQueue, which must be held off while the sweep is
+	// in flight so it cannot claim the FIFO head from under the sweep. The
+	// -race lane lost that race on main; this wrapper pins the sweep behind
+	// the turn's settlement so the test exercises the losing order
+	// deterministically.
 	hold := &sweepHoldStore{chatStore: s.store, t: t, srv: s, settled: make(chan struct{})}
 	s.store = hold
 
@@ -286,16 +285,18 @@ func TestQueue_StopSweepInterlockDefersDrain(t *testing.T) {
 	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
 	s.agent = eng
 
-	// A queued row with no turn running — exactly the state a cancelled
-	// turn's tail-call drain finds when it races the Stop's sweep.
+	// A row accepted after the Stop began, queued with no turn running —
+	// exactly the state a cancelled turn's tail-call drain finds when it
+	// races the Stop's sweep. (A row accepted BEFORE the Stop is refused by
+	// stopGateForRow regardless; the interlock is what keeps the drain from
+	// claiming anything from under the sweep.)
+	s.beginStopSweep(conv.ID)
 	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
 		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
 		Message: "follow-up", Attachments: "[]", Mode: store.InputModeQueued,
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	s.beginStopSweep(conv.ID)
 	s.maybeDrainQueue(conv.ID)
 	time.Sleep(100 * time.Millisecond)
 	if n := eng.turns.Load(); n != 0 {
@@ -313,11 +314,82 @@ func TestQueue_StopSweepInterlockDefersDrain(t *testing.T) {
 	waitFor(t, "deferred row drained", func() bool { return eng.turns.Load() == 1 })
 }
 
+// sweepPausingStore pauses the drain inside its turn preparation (the
+// memories load) — i.e. after launchQueuedTurn has decided the row is
+// post-Stop and before startTurn reaches registration — and lets the test act
+// while it is paused. Pure channel handoff: nothing flows from the store call
+// into the server.
+type sweepPausingStore struct {
+	chatStore
+	reached chan struct{} // closed when the drain enters ListMemories
+	proceed chan struct{} // closed by the test to let the drain continue
+	once    sync.Once
+}
+
+func (w *sweepPausingStore) ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error) {
+	w.once.Do(func() {
+		close(w.reached)
+		<-w.proceed
+	})
+	return w.chatStore.ListMemories(ctx, userEmail)
+}
+
+// launchPausedInPrep claims the conversation's FIFO head and launches it,
+// returning once the drain is paused in turn preparation: the row is claimed
+// (invisible to any sweep) and decided post-Stop, but not yet registered.
+// The returned channel yields launchQueuedTurn's result after the test lets
+// the drain proceed.
+func launchPausedInPrep(t *testing.T, s *Server, convID string) (*sweepPausingStore, <-chan bool) {
+	t.Helper()
+	row, err := s.store.ClaimNextQueuedInput(t.Context(), convID, "claim-placeholder")
+	if err != nil || row == nil {
+		t.Fatalf("claim: row=%v err=%v", row, err)
+	}
+	pause := &sweepPausingStore{chatStore: s.store, reached: make(chan struct{}), proceed: make(chan struct{})}
+	s.store = pause
+	launched := make(chan bool, 1)
+	go func() { launched <- s.launchQueuedTurn(convID, row) }()
+	select {
+	case <-pause.reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain never reached turn preparation")
+	}
+	return pause, launched
+}
+
+// expectGateCancelled lets a paused drain proceed and asserts the registration
+// gate refused it: no turn started and the claimed row ended cancelled — not
+// un-claimed, which would let it launch on the post-sweep re-kick.
+func expectGateCancelled(t *testing.T, s *Server, eng *gatedEngine, convID, clientID string, pause *sweepPausingStore, launched <-chan bool) {
+	t.Helper()
+	close(pause.proceed)
+	select {
+	case ok := <-launched:
+		if !ok {
+			t.Fatal("launchQueuedTurn reported a lost registerTurn race; the generation gate must handle the row itself")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("launchQueuedTurn did not return")
+	}
+	time.Sleep(150 * time.Millisecond)
+	if n := eng.turns.Load(); n != 0 {
+		t.Fatalf("row claimed before a Stop launched %d turn(s)", n)
+	}
+	got, err := s.store.LookupInput(t.Context(), convID, clientID)
+	if err != nil || got == nil {
+		t.Fatalf("lookup: row=%v err=%v", got, err)
+	}
+	if got.State != store.InputStateCancelled {
+		t.Fatalf("row state = %q, want %q: the gate must cancel the row, not leave it to re-launch", got.State, store.InputStateCancelled)
+	}
+}
+
 // TestQueue_StopSweepGatesClaimedRowAtRegistration covers the drain that
-// passed maybeDrainQueue's interlock check just before a Stop sweep began and
-// went on to claim the FIFO head: the sweep can no longer see that row, so
-// registration must refuse it under the interlock and cancel it — not
-// un-claim it, which would let it launch on the post-sweep re-kick.
+// passed maybeDrainQueue's interlock check and stopGateForRow before a Stop
+// began, with the FIFO head already claimed: the sweep can no longer see that
+// row, so registration must refuse it (the Stop generation moved) while the
+// sweep is still in flight, and the row must stay cancelled after the sweep
+// ends and re-kicks the drain.
 func TestQueue_StopSweepGatesClaimedRowAtRegistration(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
@@ -334,30 +406,12 @@ func TestQueue_StopSweepGatesClaimedRowAtRegistration(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// The racing drain captured the Stop generation and claimed before the
-	// sweep started…
-	gen, _ := s.stopSweepState(conv.ID)
-	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
-	if err != nil || row == nil {
-		t.Fatalf("claim: row=%v err=%v", row, err)
-	}
-	// …and the Stop sweep begins before that drain reaches registration.
-	s.markStopAll(conv.ID)
+	pause, launched := launchPausedInPrep(t, s, conv.ID)
+	// The Stop begins after the claim and the drain's decision; its sweep is
+	// still in flight when the drain reaches registration.
 	s.beginStopSweep(conv.ID)
-	if !s.launchQueuedTurn(conv.ID, row, gen) {
-		t.Fatal("launchQueuedTurn reported a lost registerTurn race; the sweep gate must handle the row itself")
-	}
-	time.Sleep(100 * time.Millisecond)
-	if n := eng.turns.Load(); n != 0 {
-		t.Fatalf("claimed row launched %d turn(s) under a pending Stop sweep", n)
-	}
-	got, err := s.store.LookupInput(t.Context(), conv.ID, "cli-q-1")
-	if err != nil || got == nil {
-		t.Fatalf("lookup: row=%v err=%v", got, err)
-	}
-	if got.State != store.InputStateCancelled {
-		t.Fatalf("row state = %q, want %q: the gate must cancel the row, not leave it to re-launch", got.State, store.InputStateCancelled)
-	}
+	expectGateCancelled(t, s, eng, conv.ID, "cli-q-1", pause, launched)
+
 	// Lifting the interlock re-kicks the drain; the cancelled row must not run.
 	s.endStopSweep(conv.ID)
 	time.Sleep(150 * time.Millisecond)
@@ -366,10 +420,97 @@ func TestQueue_StopSweepGatesClaimedRowAtRegistration(t *testing.T) {
 	}
 }
 
-// TestQueue_StopSweepGenerationGatesSlowDrain covers the drain that claimed
-// before a Stop and then spent longer preparing its turn than the whole sweep
-// took: by the time it registers the interlock is released, so only the Stop
-// generation it captured before claiming can tell it the row was swept.
+// stalledQueueListStore stalls ListQueuedInputs until its context expires —
+// a store that has stopped answering — and records whether the drain's
+// admission slot had already been released when the stall began.
+type stalledQueueListStore struct {
+	chatStore
+	released       *atomic.Bool
+	releasedFirst  atomic.Bool
+	listCalls      atomic.Int32
+	ctxHadDeadline atomic.Bool
+}
+
+func (w *stalledQueueListStore) ListQueuedInputs(ctx context.Context, _, _ string) ([]store.InputQueueRow, error) {
+	w.listCalls.Add(1)
+	w.releasedFirst.Store(w.released.Load())
+	_, hasDeadline := ctx.Deadline()
+	w.ctxHadDeadline.Store(hasDeadline)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(10 * time.Second):
+		return nil, errors.New("queue refresh context was not bounded")
+	}
+}
+
+// TestQueue_SweptLaunchReleasesSlotBeforeQueueRefresh: when the registration
+// gate refuses a claimed row, the drain's per-user admission slot must be
+// released before the best-effort queue refresh, and that refresh must run on
+// a bounded context. Otherwise a store that has stopped answering pins a slot
+// for as long as it stalls, and repeats of the race exhaust the per-user cap
+// (429s) while no turn is running.
+func TestQueue_SweptLaunchReleasesSlotBeforeQueueRefresh(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
+		Message: "follow-up", Attachments: "[]", Mode: store.InputModeQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
+	if err != nil || row == nil {
+		t.Fatalf("claim: row=%v err=%v", row, err)
+	}
+	// A direct submission is running (registered during the sweep), so the
+	// queue refresh has a live buffer to publish into and reaches the store.
+	if _, _, _, ok := s.registerTurn(conv.ID, func() {}); !ok {
+		t.Fatal("registerTurn refused on an idle conversation")
+	}
+	var released atomic.Bool
+	stall := &stalledQueueListStore{chatStore: s.store, released: &released}
+	s.store = stall
+	// A Stop began after the drain decided its row: the gate refuses it.
+	gen, _ := s.stopGateForRow(conv.ID, row.AcceptedAt)
+	s.beginStopSweep(conv.ID)
+	defer s.endStopSweep(conv.ID)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- s.startTurn(nil, nil, user, conv, chatRequest{ConversationID: conv.ID, Message: row.Message},
+			&queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: gen}, func() { released.Store(true) })
+	}()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("startTurn reported a lost registerTurn race; the gate must handle the row itself")
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("startTurn did not return: the swept path's queue refresh is not bounded")
+	}
+	if stall.listCalls.Load() == 0 {
+		t.Fatal("precondition: the swept path never reached the queue refresh")
+	}
+	if !stall.releasedFirst.Load() {
+		t.Fatal("admission slot was still held when the queue refresh stalled")
+	}
+	if !stall.ctxHadDeadline.Load() {
+		t.Fatal("queue refresh ran on an unbounded context")
+	}
+	if got, err := s.store.LookupInput(t.Context(), conv.ID, "cli-q-1"); err != nil || got == nil || got.State != store.InputStateCancelled {
+		t.Fatalf("swept row: %+v err=%v, want cancelled", got, err)
+	}
+}
+
+// TestQueue_StopSweepGenerationGatesSlowDrain covers the drain that decided
+// its row before a Stop and then spent longer preparing its turn than the
+// whole sweep took: by the time it registers the interlock is released, so
+// only the Stop generation it carries can tell it the row is now pre-Stop.
 func TestQueue_StopSweepGenerationGatesSlowDrain(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
@@ -386,29 +527,11 @@ func TestQueue_StopSweepGenerationGatesSlowDrain(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	gen, _ := s.stopSweepState(conv.ID)
-	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
-	if err != nil || row == nil {
-		t.Fatalf("claim: row=%v err=%v", row, err)
-	}
+	pause, launched := launchPausedInPrep(t, s, conv.ID)
 	// A whole Stop comes and goes while the drain is still preparing.
-	s.markStopAll(conv.ID)
 	s.beginStopSweep(conv.ID)
 	s.endStopSweep(conv.ID)
-	if !s.launchQueuedTurn(conv.ID, row, gen) {
-		t.Fatal("launchQueuedTurn reported a lost registerTurn race; the generation gate must handle the row itself")
-	}
-	time.Sleep(150 * time.Millisecond)
-	if n := eng.turns.Load(); n != 0 {
-		t.Fatalf("row claimed before a completed Stop launched %d turn(s)", n)
-	}
-	got, err := s.store.LookupInput(t.Context(), conv.ID, "cli-q-1")
-	if err != nil || got == nil {
-		t.Fatalf("lookup: row=%v err=%v", got, err)
-	}
-	if got.State != store.InputStateCancelled {
-		t.Fatalf("row state = %q, want %q", got.State, store.InputStateCancelled)
-	}
+	expectGateCancelled(t, s, eng, conv.ID, "cli-q-1", pause, launched)
 }
 
 // flakyTerminalStore fails the first n MarkClaimedInputTerminal writes.
@@ -505,53 +628,94 @@ func TestQueue_TerminalizeRetryRespectsLaterClaim(t *testing.T) {
 	}
 }
 
-// TestQueue_StopSweepGenerationSparesLaterRow: a drain that sampled the Stop
-// generation, then stalled across an entire Stop, then claimed a row accepted
-// in a LATER second than that Stop began must run it — the row was never in
-// the swept set, and cancelling it would discard an acknowledged follow-up.
-func TestQueue_StopSweepGenerationSparesLaterRow(t *testing.T) {
-	s := serverFixture(t)
-	const user = "alice@x.com"
-	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
-	s.agent = eng
+// TestQueue_StopSparesRowAcceptedAfterStop (#1477): a row accepted after a
+// Stop began — in the same wall-clock second, moments later — was never in
+// that Stop's swept set and must run when the drain claims it, whether the
+// Stop has finished or its sweep is still in flight.
+func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		endSweep bool
+	}{
+		{"after the sweep ended", true},
+		{"while the sweep is in flight", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := serverFixture(t)
+			const user = "alice@x.com"
+			conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+			s.agent = eng
 
-	staleGen, _ := s.stopSweepState(conv.ID)
-	// A whole Stop, two seconds ago from the row's point of view.
-	s.markStopAll(conv.ID)
-	s.beginStopSweep(conv.ID)
-	s.endStopSweep(conv.ID)
-	s.inflightMu.Lock()
-	s.stopEpochs[conv.ID] -= 2
-	s.inflightMu.Unlock()
-
-	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
-		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
-		Message: "post-stop follow-up", Attachments: "[]", Mode: store.InputModeQueued,
-	}); err != nil {
-		t.Fatal(err)
+			// Stay clear of a second boundary so the Stop and the enqueue
+			// below land in the same wall-clock second — the case that
+			// used to be ambiguous.
+			if now := time.Now(); now.Nanosecond() > int(800*time.Millisecond) {
+				time.Sleep(time.Until(now.Truncate(time.Second).Add(time.Second)))
+			}
+			epoch, _, _ := s.beginStopSweep(conv.ID)
+			if tc.endSweep {
+				s.endStopSweep(conv.ID)
+			} else {
+				defer s.endStopSweep(conv.ID)
+			}
+			row0, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+				ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
+				Message: "post-stop follow-up", Attachments: "[]", Mode: store.InputModeQueued,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row0.AcceptedAt < epoch {
+				t.Fatalf("row accepted at %d is not after the Stop at %d", row0.AcceptedAt, epoch)
+			}
+			if row0.CreatedAt != epoch/int64(time.Second) {
+				t.Fatalf("Stop (%d) and enqueue (%d) fell in different seconds; the same-second case is what this test pins", epoch, row0.AcceptedAt)
+			}
+			row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
+			if err != nil || row == nil {
+				t.Fatalf("claim: row=%v err=%v", row, err)
+			}
+			if !s.launchQueuedTurn(conv.ID, row) {
+				t.Fatal("launchQueuedTurn reported a lost registerTurn race")
+			}
+			<-eng.started
+			eng.release <- struct{}{}
+			waitFor(t, "post-Stop row ran", func() bool { return eng.turns.Load() == 1 })
+		})
 	}
-	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
-	if err != nil || row == nil {
-		t.Fatalf("claim: row=%v err=%v", row, err)
-	}
-	if !s.launchQueuedTurn(conv.ID, row, staleGen) {
-		t.Fatal("launchQueuedTurn reported a lost registerTurn race")
-	}
-	<-eng.started
-	eng.release <- struct{}{}
-	waitFor(t, "post-Stop row ran", func() bool { return eng.turns.Load() == 1 })
 }
 
-// TestQueue_StopSweepSparesLaterRowDuringSweep: a row accepted in a later
-// second than the Stop began was never in that Stop's swept set, so it must
-// run even if the drain reaches registration while the sweep is still in
-// flight — holding it to the pending sweep would cancel an acknowledged
-// follow-up.
-func TestQueue_StopSweepSparesLaterRowDuringSweep(t *testing.T) {
+// postStopEnqueueStore is the #1477 scenario at the handler: while the Stop's
+// sweep is held (as a slow store would hold it), a follow-up is accepted —
+// the cancelled turn still looks running, so it becomes a queue row, and its
+// insert commits before the sweep's statement runs. The sweep must cancel
+// only the row that existed when Stop began.
+type postStopEnqueueStore struct {
+	chatStore
+	t          *testing.T
+	user, conv string
+	epoch      int64 // the Stop instant the handler passed to the sweep
+	postRow    store.InputQueueRow
+}
+
+func (w *postStopEnqueueStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string, before int64) (int, error) {
+	w.epoch = before
+	row, created, err := w.EnqueueInput(ctx, store.InputQueueRow{
+		ID: "q-post", ConversationID: w.conv, UserEmail: w.user, ClientInputID: "cli-post",
+		Message: "submitted after Stop", Attachments: "[]", Mode: store.InputModeQueued,
+	})
+	if err != nil || !created {
+		w.t.Errorf("post-Stop enqueue: created=%v err=%v", created, err)
+	}
+	w.postRow = row
+	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID, before)
+}
+
+func TestQueue_StopSparesFollowUpSubmittedAfterStop(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -560,32 +724,52 @@ func TestQueue_StopSweepSparesLaterRowDuringSweep(t *testing.T) {
 	}
 	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
 	s.agent = eng
+	wrap := &postStopEnqueueStore{chatStore: s.store, t: t, user: user, conv: conv.ID}
+	s.store = wrap
 
-	staleGen, _ := s.stopSweepState(conv.ID)
-	// A Stop that began two seconds ago and whose sweep is still running.
-	s.markStopAll(conv.ID)
-	s.beginStopSweep(conv.ID)
-	defer s.endStopSweep(conv.ID)
-	s.inflightMu.Lock()
-	s.stopEpochs[conv.ID] -= 2
-	s.inflightMu.Unlock()
-
-	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
-		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
-		Message: "post-stop follow-up", Attachments: "[]", Mode: store.InputModeQueued,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
-	if err != nil || row == nil {
-		t.Fatalf("claim: row=%v err=%v", row, err)
-	}
-	if !s.launchQueuedTurn(conv.ID, row, staleGen) {
-		t.Fatal("launchQueuedTurn reported a lost registerTurn race")
-	}
+	go postChatJSON(t, s, user, map[string]any{"message": "long task", "conversation_id": conv.ID})
 	<-eng.started
+	if w := postChatJSON(t, s, user, map[string]any{"message": "pre-stop follow-up", "conversation_id": conv.ID, "input_id": "cli-pre"}); w.Code != http.StatusAccepted {
+		t.Fatalf("queue submit: %d", w.Code)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+		"/conversations/"+conv.ID+"/cancel", strings.NewReader(`{}`))
+	req.Header.Set("X-Chat-Server-Token", "tok")
+	req.Header.Set("X-User-Email", user)
+	wc := httptest.NewRecorder()
+	s.Routes().ServeHTTP(wc, req)
+	if wc.Code != http.StatusNoContent {
+		t.Fatalf("cancel: %d", wc.Code)
+	}
+	if wrap.postRow.AcceptedAt < wrap.epoch {
+		t.Fatalf("post-Stop row accepted at %d, before the Stop at %d", wrap.postRow.AcceptedAt, wrap.epoch)
+	}
+	pre, err := s.store.LookupInput(t.Context(), conv.ID, "cli-pre")
+	if err != nil || pre == nil || pre.State != store.InputStateCancelled {
+		t.Fatalf("pre-Stop row: %+v err=%v, want cancelled", pre, err)
+	}
+	post, err := s.store.LookupInput(t.Context(), conv.ID, "cli-post")
+	if err != nil || post == nil || post.State == store.InputStateCancelled {
+		t.Fatalf("post-Stop row: %+v err=%v, must not be swept", post, err)
+	}
+
+	waitFor(t, "active turn cancelled", func() bool { return eng.cancelled.Load() == 1 })
+	// The cancelled turn's completion tail-call (or the sweep's re-kick)
+	// drains the post-Stop row as the next turn.
+	select {
+	case <-eng.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-Stop follow-up never drained after the Stop")
+	}
 	eng.release <- struct{}{}
-	waitFor(t, "post-Stop row ran during the sweep", func() bool { return eng.turns.Load() == 1 })
+	waitFor(t, "post-Stop follow-up ran", func() bool {
+		got, err := s.store.LookupInput(context.Background(), conv.ID, "cli-post")
+		return err == nil && got != nil && got.State == store.InputStateCompleted
+	})
+	if eng.turns.Load() != 2 {
+		t.Fatalf("turns = %d, want 2 (the stopped turn and the post-Stop follow-up)", eng.turns.Load())
+	}
 }
 
 // TestQueue_TerminalizeRetryRequeueRekicks: when the first attempt to return a
@@ -625,90 +809,6 @@ func TestQueue_TerminalizeRetryRequeueRekicks(t *testing.T) {
 		t.Fatal("re-queued row never drained: the successful retry did not re-kick the drain")
 	}
 	waitFor(t, "re-queued row ran", func() bool { return eng.turns.Load() == 1 })
-}
-
-// sweepPausingStore pauses the drain inside its turn preparation (the
-// memories load) — i.e. after launchQueuedTurn has decided which Stop
-// generation to carry and before startTurn reaches registration — and lets
-// the test act while it is paused. Pure channel handoff: nothing flows from
-// the store call into the server.
-type sweepPausingStore struct {
-	chatStore
-	reached chan struct{} // closed when the drain enters ListMemories
-	proceed chan struct{} // closed by the test to let the drain continue
-	once    sync.Once
-}
-
-func (w *sweepPausingStore) ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error) {
-	w.once.Do(func() {
-		close(w.reached)
-		<-w.proceed
-	})
-	return w.chatStore.ListMemories(ctx, userEmail)
-}
-
-// TestQueue_StopSweepGenerationNotAdoptedMidSweep: a drain that claimed
-// before a Stop must not adopt that Stop's generation just because the row's
-// created_at check ran a moment before the Stop began. If it did, a sweep that
-// finishes while the drain is still preparing the turn would leave the gate
-// with a matching generation and no active sweep, and the claimed row —
-// invisible to that sweep — would launch after Stop.
-func TestQueue_StopSweepGenerationNotAdoptedMidSweep(t *testing.T) {
-	s := serverFixture(t)
-	const user = "alice@x.com"
-	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
-	s.agent = eng
-
-	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
-		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
-		Message: "follow-up", Attachments: "[]", Mode: store.InputModeQueued,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	gen, _ := s.stopSweepState(conv.ID)
-	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
-	if err != nil || row == nil {
-		t.Fatalf("claim: row=%v err=%v", row, err)
-	}
-	// Stop begins after the claim; its sweep is in flight as the drain
-	// launches, and ends while the drain is paused in turn preparation.
-	s.markStopAll(conv.ID)
-	s.beginStopSweep(conv.ID)
-	pause := &sweepPausingStore{chatStore: s.store, reached: make(chan struct{}), proceed: make(chan struct{})}
-	s.store = pause
-
-	launched := make(chan bool, 1)
-	go func() { launched <- s.launchQueuedTurn(conv.ID, row, gen) }()
-	select {
-	case <-pause.reached:
-	case <-time.After(5 * time.Second):
-		t.Fatal("drain never reached turn preparation")
-	}
-	s.endStopSweep(conv.ID)
-	close(pause.proceed)
-	select {
-	case ok := <-launched:
-		if !ok {
-			t.Fatal("launchQueuedTurn reported a lost registerTurn race; the generation gate must handle the row itself")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("launchQueuedTurn did not return")
-	}
-	time.Sleep(150 * time.Millisecond)
-	if n := eng.turns.Load(); n != 0 {
-		t.Fatalf("row claimed before a Stop launched %d turn(s) after that Stop's sweep ended", n)
-	}
-	got, err := s.store.LookupInput(t.Context(), conv.ID, "cli-q-1")
-	if err != nil || got == nil {
-		t.Fatalf("lookup: row=%v err=%v", got, err)
-	}
-	if got.State != store.InputStateCancelled {
-		t.Fatalf("row state = %q, want %q", got.State, store.InputStateCancelled)
-	}
 }
 
 func TestQueue_IdempotentSubmission(t *testing.T) {
