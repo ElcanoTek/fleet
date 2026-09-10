@@ -484,12 +484,12 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if scope == "all" {
-		// One lock section records the Stop instant, arms the drain
+		// One lock section records the Stop boundary, arms the drain
 		// interlock and captures the running turn (beginStopSweep). The
 		// cancelled turn's completion tail-calls maybeDrainQueue, which
 		// must not claim the FIFO head while this sweep is still on its way
 		// to cancelling it; a drain that claimed just before is refused by
-		// the instant (stopGateForRow) or the generation (registerTurnGated).
+		// the boundary (stopGateForRow) or the generation (registerTurnGated).
 		// endStopSweep lifts the interlock and re-kicks the drain for
 		// anything accepted after the Stop.
 		//
@@ -505,7 +505,7 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		}
 		// Fresh context: Stop must sweep the queue even when the client
 		// aborts the request the moment the button is pressed. The sweep is
-		// bounded to rows accepted before the Stop instant (#1477): a
+		// bounded to rows accepted before the Stop began (#1477): a
 		// follow-up submitted after Stop, while the cancelled turn was still
 		// finishing, keeps its 202 and runs on the re-kick.
 		qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)

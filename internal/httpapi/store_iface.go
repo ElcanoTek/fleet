@@ -90,7 +90,8 @@ type chatStore interface {
 	MarkInputTerminal(ctx context.Context, id, state string) error
 	MarkClaimedInputTerminal(ctx context.Context, id, claimTurnID, state string) error
 	CompleteInjectedInputs(ctx context.Context, turnID string) error
-	CancelQueuedInputs(ctx context.Context, userEmail, convID string, before int64) (int, error)
+	CancelQueuedInputs(ctx context.Context, userEmail, convID string, upTo int64) (int, error)
+	AcceptedInputSeq() int64
 	RemoveQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
 	PromoteQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
 	BindInputTurn(ctx context.Context, id, turnID string) error

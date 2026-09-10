@@ -41,22 +41,50 @@ type InputQueueRow struct {
 	TurnID         string
 	CreatedAt      int64
 	UpdatedAt      int64
-	// AcceptedAt is the acceptance instant in wall-clock NANOSECONDS (#1477),
-	// the key the Stop scope=all sweep and the claim-limbo gate compare
-	// against the Stop instant. CreatedAt is the same instant in whole
-	// seconds. Rows written before migration 058 read back as
-	// CreatedAt * 1e9.
-	AcceptedAt int64
+	// AcceptedSeq is the row's position in the process-wide acceptance
+	// order (#1477): the key the Stop scope=all sweep and the claim-limbo
+	// gate compare against the counter value a Stop recorded when it began.
+	// Rows written without one (an older binary mid-deploy) read back as 0,
+	// inside every Stop's swept set.
+	AcceptedSeq int64
+}
+
+// AcceptedInputSeq returns the acceptance counter's current value: every row
+// accepted so far carries a sequence at or below it, and every row accepted
+// from now on carries a greater one. A Stop scope=all reads it (under the
+// same lock that arms its sweep) as the boundary of its swept set — a memory
+// read, so the Stop handler still does no database work before cancelling
+// the active turn.
+func (s *Store) AcceptedInputSeq() int64 {
+	return s.acceptedInputSeq.Load()
+}
+
+// seedAcceptedInputSeq starts the counter above every sequence already in the
+// table, so a restart cannot hand a new row a value a Stop in the previous
+// process would have swept.
+func (s *Store) seedAcceptedInputSeq(ctx context.Context) error {
+	var maxSeq int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(accepted_seq), 0) FROM chat_input_queue`).Scan(&maxSeq); err != nil {
+		return err
+	}
+	if cur := s.acceptedInputSeq.Load(); maxSeq > cur {
+		s.acceptedInputSeq.CompareAndSwap(cur, maxSeq)
+	}
+	return nil
 }
 
 // EnqueueInput inserts a queued input. Idempotent on (conversation_id,
 // client_input_id): a replayed POST returns the existing row with
 // created=false instead of duplicating the input.
 func (s *Store) EnqueueInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
-	accepted := time.Now()
-	now := accepted.Unix()
+	now := time.Now().Unix()
 	r.CreatedAt, r.UpdatedAt, r.State = now, now, InputStateQueued
-	r.AcceptedAt = accepted.UnixNano()
+	// Allocated before the insert, so a Stop that reads the counter after this
+	// point counts the row as pre-Stop even if the insert has not committed
+	// yet (the launch gate then refuses what the sweep could not see). A
+	// replayed input_id burns a value on its DO NOTHING path; gaps are fine.
+	r.AcceptedSeq = s.acceptedInputSeq.Add(1)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return InputQueueRow{}, false, err
@@ -73,12 +101,12 @@ func (s *Store) EnqueueInput(ctx context.Context, r InputQueueRow) (InputQueueRo
 	}
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO chat_input_queue
-		   (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at, accepted_at_ns)
+		   (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at, accepted_seq)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
 		         (SELECT COALESCE(MAX(position), 0) + 1 FROM chat_input_queue WHERE conversation_id = $2),
 		         $9, $9, $10)
 		 ON CONFLICT (conversation_id, client_input_id) DO NOTHING`,
-		r.ID, r.ConversationID, r.UserEmail, r.ClientInputID, r.Message, r.Attachments, r.Mode, r.State, now, r.AcceptedAt,
+		r.ID, r.ConversationID, r.UserEmail, r.ClientInputID, r.Message, r.Attachments, r.Mode, r.State, now, r.AcceptedSeq,
 	)
 	if err != nil {
 		return InputQueueRow{}, false, err
@@ -114,13 +142,12 @@ func (s *Store) getInputByClientID(ctx context.Context, convID, clientID string)
 }
 
 // inputQueueColumns is the column list every queue read scans (scanInputRow).
-// accepted_at_ns falls back to created_at * 1e9 for rows written before
-// migration 058 (or by an older binary mid-deploy): whole-second precision is
-// what those rows had, and a pre-Stop row from an earlier second still sorts
-// before any Stop instant taken after it.
+// accepted_seq reads back as 0 for a row written without one (an older binary
+// mid-deploy): 0 is at or below every Stop boundary, so such a row is swept by
+// any Stop — the pre-#1477 behaviour for it.
 const inputQueueColumns = `id, conversation_id, user_email, client_input_id, message, attachments,
        mode, state, position, COALESCE(turn_id, ''), created_at, updated_at,
-       COALESCE(accepted_at_ns, created_at * 1000000000)`
+       COALESCE(accepted_seq, 0)`
 
 const inputQueueSelect = `SELECT ` + inputQueueColumns + `
   FROM chat_input_queue`
@@ -130,7 +157,7 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanInputRow(row rowScanner) (InputQueueRow, error) {
 	var r InputQueueRow
 	err := row.Scan(&r.ID, &r.ConversationID, &r.UserEmail, &r.ClientInputID, &r.Message,
-		&r.Attachments, &r.Mode, &r.State, &r.Position, &r.TurnID, &r.CreatedAt, &r.UpdatedAt, &r.AcceptedAt)
+		&r.Attachments, &r.Mode, &r.State, &r.Position, &r.TurnID, &r.CreatedAt, &r.UpdatedAt, &r.AcceptedSeq)
 	return r, err
 }
 
@@ -245,21 +272,21 @@ func (s *Store) CompleteInjectedInputs(ctx context.Context, turnID string) error
 	return err
 }
 
-// CancelQueuedInputs cancels every still-queued row accepted BEFORE the
-// instant before (wall-clock nanoseconds, the AcceptedAt key) — the
-// Stop-covers-queue contract: /cancel scope=all cancels the rows that existed
-// when Stop began and nothing accepted after it (#1477), so a follow-up
-// submitted a moment after the Stop, while the cancelled turn was still
-// finishing, keeps the acknowledgement it was given. Running/injected rows
-// belong to the active turn's own lifecycle. The comparison is strict and
-// mirrors the claim-limbo gate in httpapi (a row accepted before the Stop is
-// refused there), so the two agree on exactly one swept set.
-func (s *Store) CancelQueuedInputs(ctx context.Context, userEmail, convID string, before int64) (int, error) {
+// CancelQueuedInputs cancels every still-queued row whose acceptance sequence
+// is at or below upTo — the Stop-covers-queue contract: /cancel scope=all
+// passes the counter value it read when it began (AcceptedInputSeq), so it
+// cancels the rows that existed at that instant and nothing accepted after it
+// (#1477); a follow-up submitted a moment after the Stop, while the cancelled
+// turn was still finishing, keeps the acknowledgement it was given.
+// Running/injected rows belong to the active turn's own lifecycle. The
+// claim-limbo gate in httpapi refuses by the same comparison, so the two
+// agree on exactly one swept set.
+func (s *Store) CancelQueuedInputs(ctx context.Context, userEmail, convID string, upTo int64) (int, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $3
 		  WHERE conversation_id = $1 AND user_email = $2 AND state = 'queued'
-		    AND COALESCE(accepted_at_ns, created_at * 1000000000) < $4`,
-		convID, userEmail, time.Now().Unix(), before)
+		    AND COALESCE(accepted_seq, 0) <= $4`,
+		convID, userEmail, time.Now().Unix(), upTo)
 	if err != nil {
 		return 0, err
 	}

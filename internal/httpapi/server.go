@@ -94,12 +94,13 @@ type Server struct {
 	// never observe — and "repair" — a mutation's intermediate on-disk state.
 	// See internal/httpapi/shared_files.go.
 	sharedFilesMu sync.Mutex
-	// stopEpochs records the last Stop scope=all instant per conversation
-	// (#785) in wall-clock nanoseconds — the same clock, and precision, that
-	// EnqueueInput stamps a row's AcceptedAt from (#1477). The queue sweep
-	// cancels the rows accepted before it, and a claim-limbo row accepted
-	// before it can never launch after it (stopGateForRow). All three maps
-	// below are written together by beginStopSweep.
+	// stopEpochs records the last Stop scope=all boundary per conversation
+	// (#785): the input-queue acceptance counter's value when the Stop began
+	// (#1477), so it compares exactly with each row's AcceptedSeq and is
+	// immune to the wall clock. The queue sweep cancels the rows at or below
+	// it, and a claim-limbo row at or below it can never launch after it
+	// (stopGateForRow). Never pruned, for the same reason as stopSweepGens
+	// below; all three maps are written together by beginStopSweep.
 	stopEpochs map[string]int64
 	// stopSweeps counts the Stop scope=all queue sweeps in flight per
 	// conversation. While one is pending, maybeDrainQueue defers instead of

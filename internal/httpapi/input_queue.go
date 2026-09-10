@@ -246,10 +246,14 @@ func (s *Server) rekickDrainAfter(convID string, d time.Duration) {
 // inflightMu section, so a drain deciding a claimed row's fate (stopGateForRow)
 // sees either none of it or all of it:
 //
-//   - the Stop instant (stopEpochs, wall-clock nanoseconds — the same clock
-//     EnqueueInput stamps AcceptedAt from). It is returned so the caller can
-//     bound CancelQueuedInputs to rows accepted before it (#1477), and it is
-//     the key the launch gate refuses claim-limbo rows by;
+//   - the Stop boundary (stopEpochs): the input-queue acceptance counter's
+//     value at that instant (store.AcceptedInputSeq — a memory read, so the
+//     Stop still does no database work before cancelling the turn). Every
+//     row accepted before the Stop carries a sequence at or below it, every
+//     row accepted after carries a greater one, whatever the wall clock does.
+//     It is returned so the caller can bound CancelQueuedInputs to the rows
+//     that existed when the Stop began (#1477), and it is the key the launch
+//     gate refuses claim-limbo rows by;
 //   - the interlock (stopSweeps). Until the matching endStopSweep,
 //     maybeDrainQueue defers rather than claims: the Stop cancels the active
 //     turn first (so the model stops the instant the button is pressed,
@@ -264,13 +268,13 @@ func (s *Server) rekickDrainAfter(convID string, d time.Duration) {
 // nothing was running.
 func (s *Server) beginStopSweep(convID string) (epoch int64, entry inflightEntry, running bool) {
 	s.inflightMu.Lock()
-	// The instant is read UNDER the lock: it and the generation must share
+	// The boundary is read UNDER the lock: it and the generation must share
 	// one linearization point. Read before it, a follow-up accepted after the
-	// instant but before the lock could be claimed, decided post-Stop with the
-	// old generation, and then refused at registration once this Stop bumps
-	// it — while the sweep, comparing against the instant, correctly spared
-	// it.
-	epoch = time.Now().UnixNano()
+	// boundary but before the lock could be claimed, decided post-Stop with
+	// the old generation, and then refused at registration once this Stop
+	// bumps it — while the sweep, comparing against the boundary, correctly
+	// spared it.
+	epoch = s.store.AcceptedInputSeq()
 	if s.stopEpochs == nil {
 		s.stopEpochs = make(map[string]int64)
 	}
@@ -279,17 +283,6 @@ func (s *Server) beginStopSweep(convID string) (epoch int64, entry inflightEntry
 	}
 	if s.stopSweepGens == nil {
 		s.stopSweepGens = make(map[string]uint64)
-	}
-	// An epoch only gates rows that were already accepted when Stop fired;
-	// once the max turn lifetime has passed nothing can still be in
-	// claim-limbo from that instant, so prune stale entries here instead of
-	// letting the map grow for the process lifetime. (The generation counter
-	// below is deliberately NOT pruned — see the field comment.)
-	horizon := epoch - int64(s.turnTimeout()) - int64(time.Minute)
-	for k, v := range s.stopEpochs {
-		if v < horizon {
-			delete(s.stopEpochs, k)
-		}
 	}
 	s.stopEpochs[convID] = epoch
 	s.stopSweeps[convID]++
@@ -322,30 +315,30 @@ func (s *Server) stopSweepPending(convID string) bool {
 }
 
 // stopGateForRow decides, atomically under inflightMu, what a drain does with
-// the row it has just claimed, given acceptedAt (the row's AcceptedAt, in
-// wall-clock nanoseconds):
+// the row it has just claimed, given acceptedSeq (the row's AcceptedSeq):
 //
-//   - stopped=true: a Stop scope=all began AFTER the row was accepted. The row
-//     was in that Stop's swept set; it was only invisible to CancelQueuedInputs
-//     because the claim had already moved it off 'queued'. The caller cancels
-//     it. The comparison is the same strict "accepted before the Stop instant"
-//     the sweep itself uses, so the two never disagree about a row (#1477):
-//     no same-second ambiguity remains, because both compare nanoseconds from
-//     the one process clock.
+//   - stopped=true: a Stop scope=all began AFTER the row was accepted (its
+//     boundary is at or above the row's sequence). The row was in that Stop's
+//     swept set; it was only invisible to CancelQueuedInputs because the claim
+//     had already moved it off 'queued'. The caller cancels it. The comparison
+//     is the same one the sweep uses, so the two never disagree about a row
+//     (#1477): no same-second ambiguity remains, because both compare the
+//     acceptance sequence, not a timestamp.
 //   - stopped=false: the row was accepted after the last Stop began (or none
 //     ever did), so no sweep — in flight or finished — can own it. gen is the
 //     conversation's current Stop generation, read in the same critical
 //     section; registerTurnGated refuses the launch only if a Stop begins from
 //     here on, which is exactly when the row becomes pre-Stop.
 //
-// Reading the epoch and the generation together is what makes this safe
+// Reading the boundary and the generation together is what makes this safe
 // against a Stop landing between the two: beginStopSweep writes both under the
-// same lock, so a drain that sees the new epoch also sees the new generation,
-// and one that sees neither is refused at registration by the generation.
-func (s *Server) stopGateForRow(convID string, acceptedAt int64) (gen uint64, stopped bool) {
+// same lock, so a drain that sees the new boundary also sees the new
+// generation, and one that sees neither is refused at registration by the
+// generation.
+func (s *Server) stopGateForRow(convID string, acceptedSeq int64) (gen uint64, stopped bool) {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
-	if epoch, ok := s.stopEpochs[convID]; ok && acceptedAt < epoch {
+	if epoch, ok := s.stopEpochs[convID]; ok && acceptedSeq <= epoch {
 		return 0, true
 	}
 	return s.stopSweepGens[convID], false
@@ -406,12 +399,12 @@ type queuedLaunch struct {
 // prep, buffer, and runTurnAsync path as a direct submission, so every
 // governance and persistence property (#798 included) holds unchanged.
 func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool {
-	// Stop scope=all gate: a row accepted before the Stop instant must not
+	// Stop scope=all gate: a row accepted before the Stop began must not
 	// launch, even if it was claimed (invisible to CancelQueuedInputs) while
 	// the sweep ran. A row accepted after it carries the Stop generation read
 	// in the same critical section, and the registration gate refuses the
 	// launch only if a Stop begins from here on.
-	sweepGen, stopped := s.stopGateForRow(convID, row.AcceptedAt)
+	sweepGen, stopped := s.stopGateForRow(convID, row.AcceptedSeq)
 	if stopped {
 		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
 		return true

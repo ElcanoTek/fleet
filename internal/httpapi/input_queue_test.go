@@ -208,7 +208,7 @@ func (w *sweepHoldStore) SettleTurnInputs(ctx context.Context, turnID, drainedID
 	return w.chatStore.SettleTurnInputs(ctx, turnID, drainedID)
 }
 
-func (w *sweepHoldStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string, before int64) (int, error) {
+func (w *sweepHoldStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string, upTo int64) (int, error) {
 	if !w.srv.stopSweepPending(convID) {
 		w.t.Error("Stop swept the queue without holding the drain interlock: a cancelled turn's tail-call drain could claim the FIFO head first")
 	}
@@ -217,7 +217,7 @@ func (w *sweepHoldStore) CancelQueuedInputs(ctx context.Context, userEmail, conv
 	case <-time.After(5 * time.Second):
 		w.t.Error("sweep held 5s without the cancelled turn settling: Stop must cancel the active turn before it sweeps")
 	}
-	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID, before)
+	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID, upTo)
 }
 
 func TestQueue_StopCoversQueuedWork(t *testing.T) {
@@ -476,7 +476,7 @@ func TestQueue_SweptLaunchReleasesSlotBeforeQueueRefresh(t *testing.T) {
 	stall := &stalledQueueListStore{chatStore: s.store, released: &released}
 	s.store = stall
 	// A Stop began after the drain decided its row: the gate refuses it.
-	gen, _ := s.stopGateForRow(conv.ID, row.AcceptedAt)
+	gen, _ := s.stopGateForRow(conv.ID, row.AcceptedSeq)
 	s.beginStopSweep(conv.ID)
 	defer s.endStopSweep(conv.ID)
 
@@ -629,7 +629,7 @@ func TestQueue_TerminalizeRetryRespectsLaterClaim(t *testing.T) {
 }
 
 // TestQueue_StopSparesRowAcceptedAfterStop (#1477): a row accepted after a
-// Stop began — in the same wall-clock second, moments later — was never in
+// Stop began — moments later, in the same wall-clock second — was never in
 // that Stop's swept set and must run when the drain claims it, whether the
 // Stop has finished or its sweep is still in flight.
 func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
@@ -650,12 +650,6 @@ func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
 			eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
 			s.agent = eng
 
-			// Stay clear of a second boundary so the Stop and the enqueue
-			// below land in the same wall-clock second — the case that
-			// used to be ambiguous.
-			if now := time.Now(); now.Nanosecond() > int(800*time.Millisecond) {
-				time.Sleep(time.Until(now.Truncate(time.Second).Add(time.Second)))
-			}
 			epoch, _, _ := s.beginStopSweep(conv.ID)
 			if tc.endSweep {
 				s.endStopSweep(conv.ID)
@@ -669,11 +663,8 @@ func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if row0.AcceptedAt < epoch {
-				t.Fatalf("row accepted at %d is not after the Stop at %d", row0.AcceptedAt, epoch)
-			}
-			if row0.CreatedAt != epoch/int64(time.Second) {
-				t.Fatalf("Stop (%d) and enqueue (%d) fell in different seconds; the same-second case is what this test pins", epoch, row0.AcceptedAt)
+			if row0.AcceptedSeq <= epoch {
+				t.Fatalf("row sequence %d is not after the Stop boundary %d", row0.AcceptedSeq, epoch)
 			}
 			row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
 			if err != nil || row == nil {
@@ -698,12 +689,12 @@ type postStopEnqueueStore struct {
 	chatStore
 	t          *testing.T
 	user, conv string
-	epoch      int64 // the Stop instant the handler passed to the sweep
+	epoch      int64 // the Stop boundary the handler passed to the sweep
 	postRow    store.InputQueueRow
 }
 
-func (w *postStopEnqueueStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string, before int64) (int, error) {
-	w.epoch = before
+func (w *postStopEnqueueStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string, upTo int64) (int, error) {
+	w.epoch = upTo
 	row, created, err := w.EnqueueInput(ctx, store.InputQueueRow{
 		ID: "q-post", ConversationID: w.conv, UserEmail: w.user, ClientInputID: "cli-post",
 		Message: "submitted after Stop", Attachments: "[]", Mode: store.InputModeQueued,
@@ -712,7 +703,7 @@ func (w *postStopEnqueueStore) CancelQueuedInputs(ctx context.Context, userEmail
 		w.t.Errorf("post-Stop enqueue: created=%v err=%v", created, err)
 	}
 	w.postRow = row
-	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID, before)
+	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID, upTo)
 }
 
 func TestQueue_StopSparesFollowUpSubmittedAfterStop(t *testing.T) {
@@ -742,8 +733,8 @@ func TestQueue_StopSparesFollowUpSubmittedAfterStop(t *testing.T) {
 	if wc.Code != http.StatusNoContent {
 		t.Fatalf("cancel: %d", wc.Code)
 	}
-	if wrap.postRow.AcceptedAt < wrap.epoch {
-		t.Fatalf("post-Stop row accepted at %d, before the Stop at %d", wrap.postRow.AcceptedAt, wrap.epoch)
+	if wrap.postRow.AcceptedSeq <= wrap.epoch {
+		t.Fatalf("post-Stop row has sequence %d, at or below the Stop boundary %d", wrap.postRow.AcceptedSeq, wrap.epoch)
 	}
 	pre, err := s.store.LookupInput(t.Context(), conv.ID, "cli-pre")
 	if err != nil || pre == nil || pre.State != store.InputStateCancelled {
