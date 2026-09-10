@@ -31,10 +31,14 @@ type gatedEngine struct {
 
 	turns     atomic.Int32
 	cancelled atomic.Int32
+	// ctx holds the context.Context of the most recent RunTurn, so a test
+	// can ask synchronously whether the active turn has been cancelled yet.
+	ctx atomic.Value
 }
 
 func (f *gatedEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
 	f.turns.Add(1)
+	f.ctx.Store(ctx)
 	select {
 	case f.started <- struct{}{}:
 	default:
@@ -185,6 +189,22 @@ func TestQueue_SecondSubmitQueuesThenDrainsAsSeparateTurn(t *testing.T) {
 	})
 }
 
+// sweepOrderStore records, at the moment Stop sweeps the queue, whether the
+// active turn had already been cancelled. Reading the turn's ctx.Err() is
+// synchronous, so the observation has no database race in either direction.
+type sweepOrderStore struct {
+	chatStore
+	turnCtx          func() context.Context
+	sweptAfterCancel atomic.Bool
+}
+
+func (w *sweepOrderStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string) (int, error) {
+	if tc := w.turnCtx(); tc != nil && tc.Err() != nil {
+		w.sweptAfterCancel.Store(true)
+	}
+	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID)
+}
+
 func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
@@ -194,11 +214,27 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	}
 	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
 	s.agent = eng
+	// Ordering invariant: Stop scope=all must sweep the queue BEFORE it
+	// cancels the active turn. A cancelled turn's completion tail-calls
+	// maybeDrainQueue, and the epoch gate cannot stop a row accepted in the
+	// same second as the Stop (created_at is whole seconds, the comparison
+	// is strict), so a sweep issued after the cancel races that drain for
+	// the FIFO head — and the -race lane lost the race on main. The
+	// turns==1 check below catches the lost race only under load; this
+	// wrapper catches the ordering bug deterministically.
+	order := &sweepOrderStore{chatStore: s.store, turnCtx: func() context.Context {
+		c, _ := eng.ctx.Load().(context.Context)
+		return c
+	}}
+	s.store = order
 
 	go postChatJSON(t, s, user, map[string]any{"message": "long task", "conversation_id": conv.ID})
 	<-eng.started
 	if w := postChatJSON(t, s, user, map[string]any{"message": "follow-up", "conversation_id": conv.ID}); w.Code != http.StatusAccepted {
 		t.Fatalf("queue submit: %d", w.Code)
+	}
+	if items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID); len(items) != 1 {
+		t.Fatalf("precondition: want 1 queued row, got %d", len(items))
 	}
 
 	// Stop (default scope=all): cancels the active turn AND the queued row.
@@ -210,6 +246,9 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	s.Routes().ServeHTTP(wc, req)
 	if wc.Code != http.StatusNoContent {
 		t.Fatalf("cancel: %d", wc.Code)
+	}
+	if order.sweptAfterCancel.Load() {
+		t.Fatal("Stop cancelled the active turn before sweeping the queue: the sweep must run first")
 	}
 	waitFor(t, "active turn cancelled", func() bool { return eng.cancelled.Load() == 1 })
 	eng.release <- struct{}{} // let the (cancelled) turn finish its bookkeeping
