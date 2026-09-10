@@ -339,15 +339,28 @@ func (s *Server) stoppedSince(convID string, createdAt int64) bool {
 	return ok && createdAt < epoch
 }
 
-// acceptedAfterLastStop reports whether a row was accepted in a later second
-// than the conversation's last Stop scope=all began (or no Stop ever did):
-// such a row cannot belong to that Stop's swept set. The mirror image of
-// stoppedSince; the same-second case is neither.
-func (s *Server) acceptedAfterLastStop(convID string, createdAt int64) bool {
+// sweepGenForRow returns the Stop generation registerTurnGated should compare
+// against for a claimed row, deciding atomically under inflightMu:
+//
+//   - If the row was accepted in a LATER second than the last Stop began (or
+//     no Stop ever did) and no sweep is in flight, the current generation. The
+//     row provably was not in any swept set, so only a Stop beginning from
+//     here on should refuse it. This is the mirror image of stoppedSince.
+//   - Otherwise claimGen, the drain's pre-claim generation, unchanged. A sweep
+//     in flight has not finished cancelling the set this row may be in, and a
+//     Stop the row does not post-date may have swept past it while claimed;
+//     both must still refuse at registration. Adopting an in-flight Stop's
+//     generation here would let the row launch once that sweep ends.
+//
+// The same-second case is neither and errs on the side of Stop (#1477).
+func (s *Server) sweepGenForRow(convID string, createdAt int64, claimGen uint64) uint64 {
 	s.inflightMu.Lock()
-	epoch, ok := s.stopEpochs[convID]
-	s.inflightMu.Unlock()
-	return !ok || createdAt > epoch
+	defer s.inflightMu.Unlock()
+	epoch, stopped := s.stopEpochs[convID]
+	if s.stopSweeps[convID] > 0 || (stopped && createdAt <= epoch) {
+		return claimGen
+	}
+	return s.stopSweepGens[convID]
 }
 
 // maybeDrainQueue claims and launches the conversation's next queued input
@@ -417,13 +430,10 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow, sweep
 	// is certainly post-Stop, whatever the drain's pre-claim generation says.
 	// A Stop that began and ended between this drain's sampling and its claim
 	// swept a queue this row was not yet in, so cancelling it would discard an
-	// acknowledged follow-up. Refresh the generation: the registration gate
-	// then refuses only on a Stop that begins from here on (a sweep still in
-	// flight refuses regardless). Same-second rows stay ambiguous and err on
-	// the side of Stop (#1477).
-	if s.acceptedAfterLastStop(convID, row.CreatedAt) {
-		sweepGen, _ = s.stopSweepState(convID)
-	}
+	// acknowledged follow-up. sweepGenForRow refreshes the generation in that
+	// case only — atomically, and never while a sweep is in flight — so the
+	// registration gate refuses on exactly the Stops this row can belong to.
+	sweepGen = s.sweepGenForRow(convID, row.CreatedAt, sweepGen)
 	// The ROW's owner is authoritative — the drain kick may come from another
 	// actor's request path (e.g. a different session's /cancel bookkeeping).
 	user := row.UserEmail
