@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // gatedEngine blocks each RunTurn until the test releases it, honoring the
@@ -31,14 +33,10 @@ type gatedEngine struct {
 
 	turns     atomic.Int32
 	cancelled atomic.Int32
-	// ctx holds the context.Context of the most recent RunTurn, so a test
-	// can ask synchronously whether the active turn has been cancelled yet.
-	ctx atomic.Value
 }
 
 func (f *gatedEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
 	f.turns.Add(1)
-	f.ctx.Store(ctx)
 	select {
 	case f.started <- struct{}{}:
 	default:
@@ -189,18 +187,34 @@ func TestQueue_SecondSubmitQueuesThenDrainsAsSeparateTurn(t *testing.T) {
 	})
 }
 
-// sweepOrderStore records, at the moment Stop sweeps the queue, whether the
-// active turn had already been cancelled. Reading the turn's ctx.Err() is
-// synchronous, so the observation has no database race in either direction.
-type sweepOrderStore struct {
+// sweepHoldStore forces the race Stop scope=all has to win: its queue sweep
+// (CancelQueuedInputs) does not proceed until the cancelled turn has finished
+// and settled — the point right before that turn's completion tail-calls
+// maybeDrainQueue. Without the stopSweeps interlock the drain then races the
+// sweep for the still-queued follow-up; with it, the drain defers. The
+// wrapper also asserts the interlock is actually held while the sweep runs,
+// which is the synchronous, database-independent form of that guarantee.
+type sweepHoldStore struct {
 	chatStore
-	turnCtx          func() context.Context
-	sweptAfterCancel atomic.Bool
+	t       *testing.T
+	srv     *Server
+	settled chan struct{}
+	once    sync.Once
 }
 
-func (w *sweepOrderStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string) (int, error) {
-	if tc := w.turnCtx(); tc != nil && tc.Err() != nil {
-		w.sweptAfterCancel.Store(true)
+func (w *sweepHoldStore) SettleTurnInputs(ctx context.Context, turnID, drainedID string) (int, int, error) {
+	w.once.Do(func() { close(w.settled) })
+	return w.chatStore.SettleTurnInputs(ctx, turnID, drainedID)
+}
+
+func (w *sweepHoldStore) CancelQueuedInputs(ctx context.Context, userEmail, convID string) (int, error) {
+	if !w.srv.stopSweepPending(convID) {
+		w.t.Error("Stop swept the queue without holding the drain interlock: a cancelled turn's tail-call drain could claim the FIFO head first")
+	}
+	select {
+	case <-w.settled:
+	case <-time.After(5 * time.Second):
+		w.t.Error("sweep held 5s without the cancelled turn settling: Stop must cancel the active turn before it sweeps")
 	}
 	return w.chatStore.CancelQueuedInputs(ctx, userEmail, convID)
 }
@@ -214,19 +228,16 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	}
 	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
 	s.agent = eng
-	// Ordering invariant: Stop scope=all must sweep the queue BEFORE it
-	// cancels the active turn. A cancelled turn's completion tail-calls
-	// maybeDrainQueue, and the epoch gate cannot stop a row accepted in the
-	// same second as the Stop (created_at is whole seconds, the comparison
-	// is strict), so a sweep issued after the cancel races that drain for
-	// the FIFO head — and the -race lane lost the race on main. The
-	// turns==1 check below catches the lost race only under load; this
-	// wrapper catches the ordering bug deterministically.
-	order := &sweepOrderStore{chatStore: s.store, turnCtx: func() context.Context {
-		c, _ := eng.ctx.Load().(context.Context)
-		return c
-	}}
-	s.store = order
+	// Stop scope=all cancels the active turn first (the model must stop at
+	// once) and sweeps the queue second. The cancelled turn's completion
+	// tail-calls maybeDrainQueue, and the epoch gate cannot stop a row
+	// accepted in the same second as the Stop (created_at is whole seconds,
+	// the comparison is strict), so the drain must be held off while the
+	// sweep is in flight. The -race lane lost that race on main; this
+	// wrapper pins the sweep behind the turn's settlement so the test
+	// exercises the losing order deterministically.
+	hold := &sweepHoldStore{chatStore: s.store, t: t, srv: s, settled: make(chan struct{})}
+	s.store = hold
 
 	go postChatJSON(t, s, user, map[string]any{"message": "long task", "conversation_id": conv.ID})
 	<-eng.started
@@ -247,9 +258,6 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	if wc.Code != http.StatusNoContent {
 		t.Fatalf("cancel: %d", wc.Code)
 	}
-	if order.sweptAfterCancel.Load() {
-		t.Fatal("Stop cancelled the active turn before sweeping the queue: the sweep must run first")
-	}
 	waitFor(t, "active turn cancelled", func() bool { return eng.cancelled.Load() == 1 })
 	eng.release <- struct{}{} // let the (cancelled) turn finish its bookkeeping
 
@@ -261,6 +269,47 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 	if eng.turns.Load() != 1 {
 		t.Fatalf("cancelled queue row still drained: %d turns", eng.turns.Load())
 	}
+}
+
+// TestQueue_StopSweepInterlockDefersDrain pins the mechanism behind
+// TestQueue_StopCoversQueuedWork: while a Stop scope=all sweep is in flight,
+// maybeDrainQueue must not claim, and when the sweep ends the deferred drain
+// must run so a row accepted after the Stop still launches.
+func TestQueue_StopSweepInterlockDefersDrain(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	// A queued row with no turn running — exactly the state a cancelled
+	// turn's tail-call drain finds when it races the Stop's sweep.
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
+		Message: "follow-up", Attachments: "[]", Mode: store.InputModeQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.beginStopSweep(conv.ID)
+	s.maybeDrainQueue(conv.ID)
+	time.Sleep(100 * time.Millisecond)
+	if n := eng.turns.Load(); n != 0 {
+		t.Fatalf("drain launched %d turn(s) while a Stop sweep was pending", n)
+	}
+	if items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID); len(items) != 1 {
+		t.Fatalf("row should still be queued while the sweep is pending, got %d", len(items))
+	}
+
+	// Lifting the interlock re-kicks the drain: the row runs without
+	// waiting for another submission.
+	s.endStopSweep(conv.ID)
+	<-eng.started
+	eng.release <- struct{}{}
+	waitFor(t, "deferred row drained", func() bool { return eng.turns.Load() == 1 })
 }
 
 func TestQueue_IdempotentSubmission(t *testing.T) {

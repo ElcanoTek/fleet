@@ -264,6 +264,44 @@ func (s *Server) markStopAll(convID string) {
 	s.inflightMu.Unlock()
 }
 
+// beginStopSweep marks a Stop scope=all queue sweep as in flight for convID.
+// Until the matching endStopSweep, maybeDrainQueue defers rather than claims:
+// the Stop cancels the active turn first (so the model stops the instant the
+// button is pressed, whatever the database is doing), and that turn's
+// completion tail-calls the drain — which, without this interlock, could
+// claim the FIFO head ahead of the sweep. The epoch gate below cannot close
+// that window on its own because created_at has second granularity.
+func (s *Server) beginStopSweep(convID string) {
+	s.inflightMu.Lock()
+	if s.stopSweeps == nil {
+		s.stopSweeps = make(map[string]int)
+	}
+	s.stopSweeps[convID]++
+	s.inflightMu.Unlock()
+}
+
+// endStopSweep releases the interlock taken by beginStopSweep and re-kicks
+// the drain, so a row accepted after the Stop (legitimately queued, and
+// deferred while the sweep ran) does not stall until the next submission.
+func (s *Server) endStopSweep(convID string) {
+	s.inflightMu.Lock()
+	if s.stopSweeps[convID] <= 1 {
+		delete(s.stopSweeps, convID)
+	} else {
+		s.stopSweeps[convID]--
+	}
+	s.inflightMu.Unlock()
+	s.rekickDrainAfter(convID, 0)
+}
+
+// stopSweepPending reports whether a Stop scope=all sweep is in flight for
+// convID.
+func (s *Server) stopSweepPending(convID string) bool {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	return s.stopSweeps[convID] > 0
+}
+
 // stoppedSince reports whether a Stop scope=all was issued after the row's
 // acceptance — the launch gate for claim-limbo rows. The comparison is STRICT:
 // created_at has second granularity, so a row accepted in the same second as
@@ -280,11 +318,16 @@ func (s *Server) stoppedSince(convID string, createdAt int64) bool {
 
 // maybeDrainQueue claims and launches the conversation's next queued input
 // when no turn is running. Re-entrant and race-safe: the claim is DB-atomic,
-// registerTurn refuses while a turn runs (the loser un-claims), and each
-// launched turn tail-calls back here on completion.
+// registerTurn refuses while a turn runs (the loser un-claims), a Stop
+// scope=all sweep holds the drain off until it has cancelled the queued set
+// (beginStopSweep), and each launched turn tail-calls back here on
+// completion.
 func (s *Server) maybeDrainQueue(convID string) {
 	if s.shuttingDown.Load() {
 		return // rows stay durable; boot recovery re-queues, never auto-runs
+	}
+	if s.stopSweepPending(convID) {
+		return // a Stop is sweeping the queue; endStopSweep re-kicks
 	}
 	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() {
 		return // its completion tail-call re-kicks

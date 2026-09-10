@@ -488,15 +488,21 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		// invisible to CancelQueuedInputs, but launchQueuedTurn gates on
 		// the epoch, so claim-limbo rows accepted before Stop still die.
 		s.markStopAll(id)
-		// Sweep BEFORE cancelling the active turn. While that turn runs,
-		// maybeDrainQueue refuses to claim (the inflight entry is running),
-		// so the sweep sees every queued row. Cancelling first would let a
-		// turn that dies on ctx.Done tail-call the drain and claim the
-		// FIFO head ahead of this sweep — and the epoch gate cannot catch
-		// a row accepted in the same second as the Stop (created_at has
-		// second granularity and the comparison is deliberately strict),
-		// so that row would run after the user pressed Stop.
-		//
+		// Interlock BEFORE the cancel: the cancelled turn's completion
+		// tail-calls maybeDrainQueue, which must not claim the FIFO head
+		// while this sweep is still on its way to cancelling it. The epoch
+		// alone cannot stop that row when it was accepted in the same
+		// second as the Stop (created_at is whole seconds; the comparison
+		// is deliberately strict). endStopSweep lifts the interlock and
+		// re-kicks the drain for anything accepted after the Stop.
+		s.beginStopSweep(id)
+		defer s.endStopSweep(id)
+	}
+	// Cancel FIRST, before any database work: the model must stop the
+	// instant the button is pressed, even if the sweep below stalls on a
+	// slow or unreachable store.
+	s.cancelInflight(id)
+	if scope == "all" {
 		// Fresh context: Stop must sweep the queue even when the client
 		// aborts the request the moment the button is pressed.
 		qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -507,6 +513,5 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		}
 		qcancel()
 	}
-	s.cancelInflight(id)
 	w.WriteHeader(http.StatusNoContent)
 }

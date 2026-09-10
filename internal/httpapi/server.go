@@ -96,7 +96,14 @@ type Server struct {
 	sharedFilesMu sync.Mutex
 	// stopEpochs records the last Stop scope=all instant per conversation
 	// (#785) so claim-limbo rows accepted before it can never launch after it.
-	stopEpochs      map[string]int64
+	stopEpochs map[string]int64
+	// stopSweeps counts the Stop scope=all queue sweeps in flight per
+	// conversation. While one is pending, maybeDrainQueue defers instead of
+	// claiming, so the turn cancelled by that Stop cannot tail-call the drain
+	// and launch the FIFO head before the sweep has cancelled it (the epoch
+	// gate above cannot catch a row accepted in the same second as the Stop).
+	// The sweep re-kicks the drain when it finishes.
+	stopSweeps      map[string]int
 	inflightCounter uint64
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
