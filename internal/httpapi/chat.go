@@ -309,7 +309,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			return
 		}
 		log.Printf("queued turn launch (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
-		s.terminalizeQueueRow(queued.rowID, queued.claimTurnID, store.InputStateQueued)
+		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateQueued)
 		// No turn launched, so no completion tail will re-drain: without an
 		// explicit re-kick a 202-acknowledged row stalls until the next
 		// submission on this conversation (possibly forever).
@@ -348,11 +348,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// register here.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
-	var sweepGen uint64
-	if queued != nil {
-		sweepGen = queued.sweepGen
-	}
-	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queued != nil, sweepGen)
+	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queued)
 	if swept {
 		// A Stop scope=all sweep began after this drain captured sweepGen
 		// (it may still be running, or have finished while we were loading
@@ -361,7 +357,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// set: cancel it here rather than un-claim it — an un-claimed row
 		// would outlive the sweep and launch on the re-kick.
 		turnCancel()
-		s.terminalizeQueueRow(queued.rowID, queued.claimTurnID, store.InputStateCancelled)
+		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateCancelled)
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		if releaseSlot != nil {
 			releaseSlot()

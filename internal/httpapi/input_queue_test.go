@@ -447,7 +447,7 @@ func TestQueue_TerminalizeQueueRowRetries(t *testing.T) {
 	flaky.failures.Store(1)
 	s.store = flaky
 
-	s.terminalizeQueueRow(row.ID, row.TurnID, store.InputStateCancelled)
+	s.terminalizeQueueRow(conv.ID, row.ID, row.TurnID, store.InputStateCancelled)
 	if got, _ := s.store.LookupInput(t.Context(), conv.ID, "cli-q-1"); got == nil || got.State != store.InputStateRunning {
 		t.Fatalf("first write was meant to fail; state=%v", got)
 	}
@@ -486,7 +486,7 @@ func TestQueue_TerminalizeRetryRespectsLaterClaim(t *testing.T) {
 	flaky := &flakyTerminalStore{chatStore: underlying}
 	flaky.failures.Store(1)
 	s.store = flaky
-	s.terminalizeQueueRow(first.ID, "claim-A", store.InputStateQueued)
+	s.terminalizeQueueRow(conv.ID, first.ID, "claim-A", store.InputStateQueued)
 	if err := underlying.MarkClaimedInputTerminal(t.Context(), first.ID, "claim-A", store.InputStateQueued); err != nil {
 		t.Fatal(err)
 	}
@@ -544,6 +544,87 @@ func TestQueue_StopSweepGenerationSparesLaterRow(t *testing.T) {
 	<-eng.started
 	eng.release <- struct{}{}
 	waitFor(t, "post-Stop row ran", func() bool { return eng.turns.Load() == 1 })
+}
+
+// TestQueue_StopSweepSparesLaterRowDuringSweep: a row accepted in a later
+// second than the Stop began was never in that Stop's swept set, so it must
+// run even if the drain reaches registration while the sweep is still in
+// flight — holding it to the pending sweep would cancel an acknowledged
+// follow-up.
+func TestQueue_StopSweepSparesLaterRowDuringSweep(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	staleGen, _ := s.stopSweepState(conv.ID)
+	// A Stop that began two seconds ago and whose sweep is still running.
+	s.markStopAll(conv.ID)
+	s.beginStopSweep(conv.ID)
+	defer s.endStopSweep(conv.ID)
+	s.inflightMu.Lock()
+	s.stopEpochs[conv.ID] -= 2
+	s.inflightMu.Unlock()
+
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
+		Message: "post-stop follow-up", Attachments: "[]", Mode: store.InputModeQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
+	if err != nil || row == nil {
+		t.Fatalf("claim: row=%v err=%v", row, err)
+	}
+	if !s.launchQueuedTurn(conv.ID, row, staleGen) {
+		t.Fatal("launchQueuedTurn reported a lost registerTurn race")
+	}
+	<-eng.started
+	eng.release <- struct{}{}
+	waitFor(t, "post-Stop row ran during the sweep", func() bool { return eng.turns.Load() == 1 })
+}
+
+// TestQueue_TerminalizeRetryRequeueRekicks: when the first attempt to return a
+// claimed row to 'queued' fails and the retry succeeds, the retry must re-kick
+// the drain — the caller's own kick has long since fired against a row that
+// was still 'running', and no turn remains to kick on completion.
+func TestQueue_TerminalizeRetryRequeueRekicks(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
+		Message: "follow-up", Attachments: "[]", Mode: store.InputModeQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
+	if err != nil || row == nil {
+		t.Fatalf("claim: row=%v err=%v", row, err)
+	}
+	flaky := &flakyTerminalStore{chatStore: s.store}
+	flaky.failures.Store(1)
+	s.store = flaky
+
+	s.terminalizeQueueRow(conv.ID, row.ID, row.TurnID, store.InputStateQueued)
+	// The caller's kick fires now, against a row still 'running': nothing to claim.
+	s.maybeDrainQueue(conv.ID)
+	select {
+	case <-eng.started:
+		eng.release <- struct{}{}
+	case <-time.After(queueTerminalizeRetryDelay + 5*time.Second):
+		t.Fatal("re-queued row never drained: the successful retry did not re-kick the drain")
+	}
+	waitFor(t, "re-queued row ran", func() bool { return eng.turns.Load() == 1 })
 }
 
 // sweepPausingStore pauses the drain inside its turn preparation (the
