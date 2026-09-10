@@ -88,6 +88,7 @@ type chatStore interface {
 	ClaimNextQueuedInput(ctx context.Context, convID, turnID string) (*store.InputQueueRow, error)
 	MarkInputInjected(ctx context.Context, id, turnID string) (bool, error)
 	MarkInputTerminal(ctx context.Context, id, state string) error
+	MarkClaimedInputTerminal(ctx context.Context, id, claimTurnID, state string) error
 	CompleteInjectedInputs(ctx context.Context, turnID string) error
 	CancelQueuedInputs(ctx context.Context, userEmail, convID string) (int, error)
 	RemoveQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)

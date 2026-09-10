@@ -342,6 +342,7 @@ func TestQueue_StopSweepGatesClaimedRowAtRegistration(t *testing.T) {
 		t.Fatalf("claim: row=%v err=%v", row, err)
 	}
 	// …and the Stop sweep begins before that drain reaches registration.
+	s.markStopAll(conv.ID)
 	s.beginStopSweep(conv.ID)
 	if !s.launchQueuedTurn(conv.ID, row, gen) {
 		t.Fatal("launchQueuedTurn reported a lost registerTurn race; the sweep gate must handle the row itself")
@@ -391,6 +392,7 @@ func TestQueue_StopSweepGenerationGatesSlowDrain(t *testing.T) {
 		t.Fatalf("claim: row=%v err=%v", row, err)
 	}
 	// A whole Stop comes and goes while the drain is still preparing.
+	s.markStopAll(conv.ID)
 	s.beginStopSweep(conv.ID)
 	s.endStopSweep(conv.ID)
 	if !s.launchQueuedTurn(conv.ID, row, gen) {
@@ -409,17 +411,17 @@ func TestQueue_StopSweepGenerationGatesSlowDrain(t *testing.T) {
 	}
 }
 
-// flakyTerminalStore fails the first n MarkInputTerminal writes.
+// flakyTerminalStore fails the first n MarkClaimedInputTerminal writes.
 type flakyTerminalStore struct {
 	chatStore
 	failures atomic.Int32
 }
 
-func (w *flakyTerminalStore) MarkInputTerminal(ctx context.Context, id, state string) error {
+func (w *flakyTerminalStore) MarkClaimedInputTerminal(ctx context.Context, id, claimTurnID, state string) error {
 	if w.failures.Add(-1) >= 0 {
 		return errors.New("simulated store outage")
 	}
-	return w.chatStore.MarkInputTerminal(ctx, id, state)
+	return w.chatStore.MarkClaimedInputTerminal(ctx, id, claimTurnID, state)
 }
 
 // TestQueue_TerminalizeQueueRowRetries: a claimed row whose cancel write
@@ -445,7 +447,7 @@ func TestQueue_TerminalizeQueueRowRetries(t *testing.T) {
 	flaky.failures.Store(1)
 	s.store = flaky
 
-	s.terminalizeQueueRow(row.ID, store.InputStateCancelled)
+	s.terminalizeQueueRow(row.ID, row.TurnID, store.InputStateCancelled)
 	if got, _ := s.store.LookupInput(t.Context(), conv.ID, "cli-q-1"); got == nil || got.State != store.InputStateRunning {
 		t.Fatalf("first write was meant to fail; state=%v", got)
 	}
@@ -453,6 +455,95 @@ func TestQueue_TerminalizeQueueRowRetries(t *testing.T) {
 		got, err := s.store.LookupInput(context.Background(), conv.ID, "cli-q-1")
 		return err == nil && got != nil && got.State == store.InputStateCancelled
 	})
+}
+
+// TestQueue_TerminalizeRetryRespectsLaterClaim: a re-queue write that
+// committed but reported an error is retried; by then another drain may have
+// re-claimed the row. The retry is guarded on the original claim placeholder,
+// so it must leave the re-claimed row alone rather than flip a live row back
+// to 'queued' and run the input twice.
+func TestQueue_TerminalizeRetryRespectsLaterClaim(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
+		Message: "follow-up", Attachments: "[]", Mode: store.InputModeQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	underlying := s.store
+	first, err := underlying.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-A")
+	if err != nil || first == nil {
+		t.Fatalf("claim A: row=%v err=%v", first, err)
+	}
+	// The un-claim "fails" from the driver's point of view but its UPDATE
+	// committed: emulate by failing the guarded write once while applying it
+	// underneath.
+	flaky := &flakyTerminalStore{chatStore: underlying}
+	flaky.failures.Store(1)
+	s.store = flaky
+	s.terminalizeQueueRow(first.ID, "claim-A", store.InputStateQueued)
+	if err := underlying.MarkClaimedInputTerminal(t.Context(), first.ID, "claim-A", store.InputStateQueued); err != nil {
+		t.Fatal(err)
+	}
+	// Another drain re-claims the row before the retry fires.
+	second, err := underlying.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-B")
+	if err != nil || second == nil {
+		t.Fatalf("claim B: row=%v err=%v", second, err)
+	}
+	time.Sleep(queueTerminalizeRetryDelay + 500*time.Millisecond)
+	got, err := underlying.LookupInput(t.Context(), conv.ID, "cli-q-1")
+	if err != nil || got == nil {
+		t.Fatalf("lookup: row=%v err=%v", got, err)
+	}
+	if got.State != store.InputStateRunning || got.TurnID != "claim-B" {
+		t.Fatalf("stale retry touched a re-claimed row: state=%q turn=%q, want running/claim-B", got.State, got.TurnID)
+	}
+}
+
+// TestQueue_StopSweepGenerationSparesLaterRow: a drain that sampled the Stop
+// generation, then stalled across an entire Stop, then claimed a row accepted
+// in a LATER second than that Stop began must run it — the row was never in
+// the swept set, and cancelling it would discard an acknowledged follow-up.
+func TestQueue_StopSweepGenerationSparesLaterRow(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	staleGen, _ := s.stopSweepState(conv.ID)
+	// A whole Stop, two seconds ago from the row's point of view.
+	s.markStopAll(conv.ID)
+	s.beginStopSweep(conv.ID)
+	s.endStopSweep(conv.ID)
+	s.inflightMu.Lock()
+	s.stopEpochs[conv.ID] -= 2
+	s.inflightMu.Unlock()
+
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
+		Message: "post-stop follow-up", Attachments: "[]", Mode: store.InputModeQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
+	if err != nil || row == nil {
+		t.Fatalf("claim: row=%v err=%v", row, err)
+	}
+	if !s.launchQueuedTurn(conv.ID, row, staleGen) {
+		t.Fatal("launchQueuedTurn reported a lost registerTurn race")
+	}
+	<-eng.started
+	eng.release <- struct{}{}
+	waitFor(t, "post-Stop row ran", func() bool { return eng.turns.Load() == 1 })
 }
 
 func TestQueue_IdempotentSubmission(t *testing.T) {

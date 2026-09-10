@@ -274,7 +274,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.startTurn(w, r, user, conv, req, "", 0, releaseSlot) {
+	if !s.startTurn(w, r, user, conv, req, nil, releaseSlot) {
 		// A concurrent submission won the registerTurn race between our busy
 		// check and now; the input must not be lost — queue it instead.
 		releaseSlot()
@@ -290,7 +290,11 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 // already running — every other failure is handled (responded/logged)
 // internally. releaseSlot is released by the turn goroutine on completion;
 // on false the caller releases it.
-func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queueRowID string, sweepGen uint64, releaseSlot func()) bool {
+func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queued *queuedLaunch, releaseSlot func()) bool {
+	queueRowID := ""
+	if queued != nil {
+		queueRowID = queued.rowID
+	}
 	reqCtx := context.Background()
 	if r != nil {
 		reqCtx = r.Context()
@@ -305,7 +309,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			return
 		}
 		log.Printf("queued turn launch (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
-		s.terminalizeQueueRow(queueRowID, store.InputStateQueued)
+		s.terminalizeQueueRow(queued.rowID, queued.claimTurnID, store.InputStateQueued)
 		// No turn launched, so no completion tail will re-drain: without an
 		// explicit re-kick a 202-acknowledged row stalls until the next
 		// submission on this conversation (possibly forever).
@@ -344,7 +348,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// register here.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
-	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queueRowID != "", sweepGen)
+	var sweepGen uint64
+	if queued != nil {
+		sweepGen = queued.sweepGen
+	}
+	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queued != nil, sweepGen)
 	if swept {
 		// A Stop scope=all sweep began after this drain captured sweepGen
 		// (it may still be running, or have finished while we were loading
@@ -353,7 +361,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// set: cancel it here rather than un-claim it — an un-claimed row
 		// would outlive the sweep and launch on the re-kick.
 		turnCancel()
-		s.terminalizeQueueRow(queueRowID, store.InputStateCancelled)
+		s.terminalizeQueueRow(queued.rowID, queued.claimTurnID, store.InputStateCancelled)
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		if releaseSlot != nil {
 			releaseSlot()
@@ -375,7 +383,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// double-run — an already-committed input after a crash.
 		bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.store.BindInputTurn(bctx, queueRowID, turnID); err != nil {
-			log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+			log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err)
 		}
 		bcancel()
 	}
