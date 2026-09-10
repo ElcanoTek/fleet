@@ -661,6 +661,17 @@ func (s *fakeChatStore) MarkInputTerminal(_ context.Context, id, state string) e
 	return nil
 }
 
+func (s *fakeChatStore) MarkClaimedInputTerminal(_ context.Context, id, claimTurnID, state string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].State == store.InputStateRunning && s.queue[i].TurnID == claimTurnID {
+			s.queue[i].State = state
+		}
+	}
+	return nil
+}
+
 func (s *fakeChatStore) CompleteInjectedInputs(_ context.Context, turnID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

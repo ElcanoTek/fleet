@@ -264,6 +264,66 @@ func (s *Server) markStopAll(convID string) {
 	s.inflightMu.Unlock()
 }
 
+// beginStopSweep marks a Stop scope=all queue sweep as in flight for convID.
+// Until the matching endStopSweep, maybeDrainQueue defers rather than claims:
+// the Stop cancels the active turn first (so the model stops the instant the
+// button is pressed, whatever the database is doing), and that turn's
+// completion tail-calls the drain — which, without this interlock, could
+// claim the FIFO head ahead of the sweep. The epoch gate below cannot close
+// that window on its own because created_at has second granularity. A drain
+// that passed maybeDrainQueue's check just before the sweep began is caught
+// at registration instead: registerTurnGated refuses under the same lock.
+//
+// It also bumps the conversation's Stop generation (see stopSweepGens) and
+// returns the turn running at that instant, captured under the same lock, so
+// the caller cancels exactly the turn present when the Stop began — not one a
+// direct submission registered a moment later. running is false when nothing
+// was running.
+func (s *Server) beginStopSweep(convID string) (entry inflightEntry, running bool) {
+	s.inflightMu.Lock()
+	if s.stopSweeps == nil {
+		s.stopSweeps = make(map[string]int)
+	}
+	if s.stopSweepGens == nil {
+		s.stopSweepGens = make(map[string]uint64)
+	}
+	s.stopSweeps[convID]++
+	s.stopSweepGens[convID]++
+	entry, ok := s.inflight[convID]
+	s.inflightMu.Unlock()
+	return entry, ok && entry.IsRunning()
+}
+
+// endStopSweep releases the interlock taken by beginStopSweep and re-kicks
+// the drain, so a row accepted after the Stop (legitimately queued, and
+// deferred while the sweep ran) does not stall until the next submission.
+func (s *Server) endStopSweep(convID string) {
+	s.inflightMu.Lock()
+	if s.stopSweeps[convID] <= 1 {
+		delete(s.stopSweeps, convID)
+	} else {
+		s.stopSweeps[convID]--
+	}
+	s.inflightMu.Unlock()
+	s.rekickDrainAfter(convID, 0)
+}
+
+// stopSweepPending reports whether a Stop scope=all sweep is in flight for
+// convID.
+func (s *Server) stopSweepPending(convID string) bool {
+	_, sweeping := s.stopSweepState(convID)
+	return sweeping
+}
+
+// stopSweepState returns, atomically, the conversation's Stop generation and
+// whether a Stop scope=all sweep is in flight. A drain captures the pair
+// before claiming; registerTurnGated compares the generation at launch.
+func (s *Server) stopSweepState(convID string) (gen uint64, sweeping bool) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	return s.stopSweepGens[convID], s.stopSweeps[convID] > 0
+}
+
 // stoppedSince reports whether a Stop scope=all was issued after the row's
 // acceptance — the launch gate for claim-limbo rows. The comparison is STRICT:
 // created_at has second granularity, so a row accepted in the same second as
@@ -278,13 +338,45 @@ func (s *Server) stoppedSince(convID string, createdAt int64) bool {
 	return ok && createdAt < epoch
 }
 
+// sweepGenForRow decides, atomically under inflightMu, what the registration
+// gate should hold a claimed row to:
+//
+//   - A row accepted in a LATER second than the last Stop began (or no Stop
+//     ever did) provably belongs to no swept set — not even one still being
+//     swept. It carries the current generation and postStop=true, so
+//     registerTurnGated refuses it only if a Stop begins from here on. This is
+//     the mirror image of stoppedSince.
+//   - Any other row keeps claimGen, the drain's pre-claim generation, and
+//     postStop=false: a Stop that began since the claim (its sweep running or
+//     finished) may have swept past the row while it was claimed, and must
+//     still refuse it at registration. Adopting an in-flight Stop's generation
+//     for such a row would let it launch the moment that sweep ends.
+//
+// The same-second case is the second bullet and errs on the side of Stop
+// (#1477).
+func (s *Server) sweepGenForRow(convID string, createdAt int64, claimGen uint64) (gen uint64, postStop bool) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	epoch, stopped := s.stopEpochs[convID]
+	if stopped && createdAt <= epoch {
+		return claimGen, false
+	}
+	return s.stopSweepGens[convID], true
+}
+
 // maybeDrainQueue claims and launches the conversation's next queued input
 // when no turn is running. Re-entrant and race-safe: the claim is DB-atomic,
-// registerTurn refuses while a turn runs (the loser un-claims), and each
-// launched turn tail-calls back here on completion.
+// registerTurn refuses while a turn runs (the loser un-claims), a Stop
+// scope=all sweep holds the drain off until it has cancelled the queued set
+// (beginStopSweep), and each launched turn tail-calls back here on
+// completion.
 func (s *Server) maybeDrainQueue(convID string) {
 	if s.shuttingDown.Load() {
 		return // rows stay durable; boot recovery re-queues, never auto-runs
+	}
+	sweepGen, sweeping := s.stopSweepState(convID)
+	if sweeping {
+		return // a Stop is sweeping the queue; endStopSweep re-kicks
 	}
 	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() {
 		return // its completion tail-call re-kicks
@@ -300,7 +392,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	if row == nil {
 		return
 	}
-	if !s.launchQueuedTurn(convID, row) {
+	if !s.launchQueuedTurn(convID, row, sweepGen) {
 		// A direct submission won the registerTurn race; put the row back.
 		// The winner's completion re-drains it, and the bounded re-kick
 		// covers a winner whose tail already ran before our un-claim landed.
@@ -313,17 +405,41 @@ func (s *Server) maybeDrainQueue(convID string) {
 	}
 }
 
+// queuedLaunch carries what startTurn needs to run a claimed queue row: the
+// row id, its claim placeholder turn id (the guard for every state write
+// before BindInputTurn stamps the real one — see MarkClaimedInputTerminal),
+// and the Stop generation the drain captured before claiming.
+type queuedLaunch struct {
+	rowID, claimTurnID string
+	sweepGen           uint64
+	// postStop: the row was accepted in a later second than the last Stop
+	// began (or none ever did), so no sweep in flight can own it.
+	postStop bool
+}
+
 // launchQueuedTurn runs one claimed queue row as an ordinary turn — the same
 // prep, buffer, and runTurnAsync path as a direct submission, so every
 // governance and persistence property (#798 included) holds unchanged.
-func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool {
+// sweepGen is the Stop generation the drain captured before claiming; the
+// registration gate refuses the launch if a Stop has begun since.
+func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow, sweepGen uint64) bool {
 	// Stop scope=all gate: a row accepted before the Stop instant must not
 	// launch, even if it was claimed (invisible to CancelQueuedInputs) while
 	// the sweep ran.
 	if s.stoppedSince(convID, row.CreatedAt) {
-		s.terminalizeQueueRow(row.ID, store.InputStateCancelled)
+		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
 		return true
 	}
+	// The converse: a row accepted in a LATER second than the last Stop began
+	// is certainly post-Stop, whatever the drain's pre-claim generation says.
+	// A Stop that began (and possibly ended) between this drain's sampling and
+	// its claim swept a queue this row was not yet in, so cancelling it would
+	// discard an acknowledged follow-up. sweepGenForRow decides atomically:
+	// such a row carries the current generation and a postStop mark, so the
+	// registration gate refuses only on a Stop that begins from here on; any
+	// other row keeps the pre-claim generation and is held to every Stop
+	// since, including a sweep still in flight.
+	sweepGen, postStop := s.sweepGenForRow(convID, row.CreatedAt, sweepGen)
 	// The ROW's owner is authoritative — the drain kick may come from another
 	// actor's request path (e.g. a different session's /cancel bookkeeping).
 	user := row.UserEmail
@@ -334,13 +450,13 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// TRANSIENT store failure: the 202-acknowledged input must survive.
 		// Back to queued + a bounded re-kick; never cancelled for weather.
 		log.Printf("input queue: conversation %s load failed: %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF; convID is a server-generated UUID.
-		s.terminalizeQueueRow(row.ID, store.InputStateQueued)
+		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
 		s.rekickDrainAfter(convID, 3*time.Second)
 		return true
 	}
 	if conv == nil {
 		// Definitively gone (deleted/expired): cancel is honest.
-		s.terminalizeQueueRow(row.ID, store.InputStateCancelled)
+		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
 		return true
 	}
 	var attachments []chatAttachment
@@ -354,7 +470,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// Cap full (often because the just-completed turn's own slot releases
 		// AFTER its tail drain). Re-queue with a bounded re-kick so the row
 		// drains once a slot frees instead of stalling until the next submit.
-		s.terminalizeQueueRow(row.ID, store.InputStateQueued)
+		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
 		s.rekickDrainAfter(convID, 2*time.Second)
 		return true
 	}
@@ -369,20 +485,53 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		Message:        row.Message,
 		Attachments:    attachments,
 	}
-	if !s.startTurn(nil, nil, user, conv, req, row.ID, releaseSlot) {
+	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen, postStop: postStop}, releaseSlot) {
 		releaseSlot()
 		return false
 	}
 	return true
 }
 
-// terminalizeQueueRow best-effort flips a row's state on a fresh context.
-func (s *Server) terminalizeQueueRow(id, state string) {
+// queueTerminalizeRetries and queueTerminalizeRetryDelay bound the retry of
+// a failed terminal-state write. A claimed row whose cancel/re-queue write
+// fails would otherwise sit at 'running' under a placeholder turn id —
+// invisible to the Stop sweep and to future drains — until boot recovery.
+const (
+	queueTerminalizeRetries    = 3
+	queueTerminalizeRetryDelay = 2 * time.Second
+)
+
+// terminalizeQueueRow flips a CLAIMED row's state on a fresh context, retrying
+// a failed write a bounded number of times on a tracked timer. The write is
+// guarded on the claim placeholder (MarkClaimedInputTerminal): if the first
+// attempt committed but reported an error, and another drain has since
+// re-claimed the row or a turn has bound it, the retry finds no matching row
+// and correctly does nothing — it can never flip a live row back to 'queued'.
+// A RETRIED write that returns a row to 'queued' re-kicks the drain itself:
+// the caller's own kick may already have fired against the still-'running'
+// row and found nothing to claim, and no turn is left to provide the
+// completion kick.
+func (s *Server) terminalizeQueueRow(convID, id, claimTurnID, state string) {
+	s.terminalizeQueueRowAttempt(convID, id, claimTurnID, state, queueTerminalizeRetries)
+}
+
+func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state string, retriesLeft int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.store.MarkInputTerminal(ctx, id, state); err != nil {
-		log.Printf("input queue state (%s -> %s): %v", id, state, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+	err := s.store.MarkClaimedInputTerminal(ctx, id, claimTurnID, state)
+	if err == nil {
+		if state == store.InputStateQueued && retriesLeft < queueTerminalizeRetries {
+			s.rekickDrainAfter(convID, 0)
+		}
+		return
 	}
+	log.Printf("input queue state (%s -> %s, %d retries left): %v", id, state, retriesLeft, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+	if retriesLeft <= 0 {
+		return
+	}
+	s.background.After("httpapi.queue_terminalize_retry", queueTerminalizeRetryDelay, func() {
+		s.terminalizeQueueRowAttempt(convID, id, claimTurnID, state, retriesLeft-1)
+	})
 }
 
 // handleQueueRoutes serves the queue API under /conversations/{id}/queue:

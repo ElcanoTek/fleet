@@ -205,6 +205,21 @@ func (s *Store) MarkInputTerminal(ctx context.Context, id, state string) error {
 	return err
 }
 
+// MarkClaimedInputTerminal flips one CLAIMED row (state 'running' under the
+// given claim placeholder turn id) to state. It is the guarded form the
+// launch path uses for every state write before BindInputTurn stamps the real
+// turn id: a write that is retried after an ambiguous error must not touch a
+// row another drain has since re-claimed (a different placeholder) or bound
+// to a live turn — flipping such a row back to 'queued' would run an
+// acknowledged input twice. Zero rows affected is the success case there.
+func (s *Store) MarkClaimedInputTerminal(ctx context.Context, id, claimTurnID, state string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = $3, updated_at = $4
+		  WHERE id = $1 AND state = 'running' AND turn_id = $2`,
+		id, claimTurnID, state, time.Now().Unix())
+	return err
+}
+
 // CompleteInjectedInputs marks a turn's injected steer rows completed — called
 // after the turn's canonical history commit, when the steered text became
 // durable exactly once (#798 CommitTurnHistory).

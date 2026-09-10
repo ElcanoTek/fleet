@@ -18,7 +18,7 @@ func TestInflightRegistry_RefusesWhileRunning(t *testing.T) {
 
 	// Register a turn for conv "A".
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	buf1, _, tok1, ok := s.registerTurn("A", cancel1, nil)
+	buf1, _, tok1, ok := s.registerTurn("A", cancel1)
 	if !ok {
 		t.Fatal("first register refused")
 	}
@@ -26,7 +26,7 @@ func TestInflightRegistry_RefusesWhileRunning(t *testing.T) {
 	// A second submission while the first is RUNNING is refused (#785): the
 	// running turn is never implicitly cancelled — the input queues instead.
 	_, cancel2 := context.WithCancel(context.Background())
-	if _, _, _, ok := s.registerTurn("A", cancel2, nil); ok {
+	if _, _, _, ok := s.registerTurn("A", cancel2); ok {
 		t.Fatal("registerTurn replaced a running turn; #785 requires refusal")
 	}
 	cancel2()
@@ -39,7 +39,7 @@ func TestInflightRegistry_RefusesWhileRunning(t *testing.T) {
 	s.finishTurn("A", tok1)
 	ctx3, cancel3 := context.WithCancel(context.Background())
 	defer cancel3()
-	buf3, _, tok3, ok := s.registerTurn("A", cancel3, nil)
+	buf3, _, tok3, ok := s.registerTurn("A", cancel3)
 	if !ok {
 		t.Fatal("register after finish refused")
 	}
@@ -65,14 +65,14 @@ func TestInflightRegistry_FinishScopedByToken(t *testing.T) {
 	s := serverFixture(t)
 
 	_, cancel1 := context.WithCancel(context.Background())
-	_, _, tok1, _ := s.registerTurn("A", cancel1, nil)
+	_, _, tok1, _ := s.registerTurn("A", cancel1)
 
 	// Finish the first turn, then start a replacement (the only order the
 	// #785 refusal semantics allow).
 	s.finishTurn("A", tok1)
 	_, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
-	_, _, _, _ = s.registerTurn("A", cancel2, nil)
+	_, _, _, _ = s.registerTurn("A", cancel2)
 
 	// A late duplicate finishTurn with the STALE token (the old turn's
 	// deferred finisher firing again) MUST NOT mutate the replacement entry.
@@ -95,7 +95,7 @@ func TestInflightRegistry_CancelInflight(t *testing.T) {
 	s := serverFixture(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	_, _, tok, _ := s.registerTurn("A", cancel, nil)
+	_, _, tok, _ := s.registerTurn("A", cancel)
 	defer s.finishTurn("A", tok)
 
 	if !s.cancelInflight("A") {
@@ -115,7 +115,7 @@ func TestInflightRegistry_CancelAfterFinishIsNoOp(t *testing.T) {
 	s := serverFixture(t)
 
 	_, cancel := context.WithCancel(context.Background())
-	_, _, tok, _ := s.registerTurn("A", cancel, nil)
+	_, _, tok, _ := s.registerTurn("A", cancel)
 	s.finishTurn("A", tok)
 
 	if s.cancelInflight("A") {
@@ -150,7 +150,7 @@ func TestCancelEndpoint_OwnerScoped(t *testing.T) {
 	// Register an in-flight turn under that conv.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, _, tok, _ := s.registerTurn(conv.ID, cancel, nil)
+	_, _, tok, _ := s.registerTurn(conv.ID, cancel)
 	defer s.finishTurn(conv.ID, tok)
 
 	h := s.Routes()
@@ -216,7 +216,7 @@ func TestInflightEndpoint_ReportsStatus(t *testing.T) {
 	// Register a turn and prime the buffer like postChat does.
 	_, turnCancel := context.WithCancel(context.Background())
 	defer turnCancel()
-	buf, turnID, tok, _ := s.registerTurn(conv.ID, turnCancel, nil)
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, turnCancel)
 	defer s.finishTurn(conv.ID, tok)
 	buf.Emit("conversation", map[string]any{"id": conv.ID})
 	buf.Emit("turn.started", map[string]any{"turn_id": turnID})
@@ -268,7 +268,7 @@ func TestStreamEndpoint_ReplaysFromLastEventID(t *testing.T) {
 	// returns promptly without a live channel.
 	_, turnCancel := context.WithCancel(context.Background())
 	defer turnCancel()
-	buf, turnID, tok, _ := s.registerTurn(conv.ID, turnCancel, nil)
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, turnCancel)
 	for i := 1; i <= 4; i++ {
 		buf.Emit("delta", map[string]any{"i": i})
 	}
