@@ -63,41 +63,49 @@ func TestQueue_DepthCapRejectsOverflowButAllowsReplay(t *testing.T) {
 	eng.release <- struct{}{}
 }
 
-// created_at has second granularity: a row accepted in the same second as the
-// Stop is a fresh post-Stop submission and must NOT be gated (strict <, not
-// <=). A row from an earlier second stays gated.
-func TestQueue_StopEpochGateIsStrict(t *testing.T) {
-	s := &Server{}
-	s.markStopAll("conv-1")
-	s.inflightMu.Lock()
-	epoch := s.stopEpochs["conv-1"]
-	s.inflightMu.Unlock()
-
-	if s.stoppedSince("conv-1", epoch) {
-		t.Fatal("row accepted in the Stop's own second was gated — a 202-acknowledged post-Stop input would be silently cancelled")
+// The Stop gate compares the row's acceptance sequence against the counter
+// value the Stop recorded when it began (#1477): a row accepted before the
+// Stop (sequence at or below the boundary) is refused, a row accepted after it
+// runs, and the generation it carries is the one the Stop bumped, so a further
+// Stop refuses it at registration.
+func TestQueue_StopGateIsExact(t *testing.T) {
+	st := &fakeChatStore{}
+	s := &Server{store: st}
+	if gen, stopped := s.stopGateForRow("conv-1", 1); stopped || gen != 0 {
+		t.Fatalf("never-stopped conversation gated: gen=%d stopped=%v", gen, stopped)
 	}
-	if !s.stoppedSince("conv-1", epoch-1) {
+	// Two rows accepted before the Stop, none after.
+	st.acceptedSeq.Store(2)
+	epoch, _, running := s.beginStopSweep("conv-1")
+	defer s.endStopSweep("conv-1")
+	if running {
+		t.Fatal("no turn was running")
+	}
+	if epoch != 2 {
+		t.Fatalf("Stop boundary = %d, want the counter's value 2", epoch)
+	}
+	if _, stopped := s.stopGateForRow("conv-1", epoch-1); !stopped {
 		t.Fatal("row accepted before the Stop was not gated")
 	}
-	if s.stoppedSince("conv-2", epoch-1) {
+	if _, stopped := s.stopGateForRow("conv-1", epoch); !stopped {
+		t.Fatal("last row accepted before the Stop was not gated")
+	}
+	gen, stopped := s.stopGateForRow("conv-1", epoch+1)
+	if stopped {
+		t.Fatal("row accepted after the Stop was gated — a 202-acknowledged post-Stop input would be silently cancelled")
+	}
+	if gen != 1 {
+		t.Fatalf("post-Stop row carries generation %d, want the Stop's generation 1", gen)
+	}
+	if _, stopped := s.stopGateForRow("conv-2", epoch); stopped {
 		t.Fatal("un-stopped conversation was gated")
 	}
-}
-
-// markStopAll prunes epochs older than the max turn lifetime so the map does
-// not grow for the process lifetime.
-func TestQueue_StopEpochsPruned(t *testing.T) {
-	s := &Server{stopEpochs: map[string]int64{
-		"ancient": time.Now().Unix() - int64(defaultTurnExecutionTimeout/time.Second) - 3600,
-	}}
-	s.markStopAll("fresh")
-	s.inflightMu.Lock()
-	defer s.inflightMu.Unlock()
-	if _, ok := s.stopEpochs["ancient"]; ok {
-		t.Fatal("stale stop epoch survived pruning")
-	}
-	if _, ok := s.stopEpochs["fresh"]; !ok {
-		t.Fatal("fresh stop epoch missing")
+	// A second Stop moves the generation: the row decided above is pre-Stop
+	// with respect to it and registerTurnGated must refuse it.
+	s.beginStopSweep("conv-1")
+	defer s.endStopSweep("conv-1")
+	if _, _, _, ok, swept := s.registerTurnGated("conv-1", func() {}, nil, &queuedLaunch{rowID: "r", claimTurnID: "c", sweepGen: gen}); ok || !swept {
+		t.Fatalf("registration after a later Stop: ok=%v swept=%v, want refused as swept", ok, swept)
 	}
 }
 

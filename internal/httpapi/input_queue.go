@@ -241,57 +241,55 @@ func (s *Server) rekickDrainAfter(convID string, d time.Duration) {
 	s.background.After("httpapi.queue_rekick", d, func() { s.maybeDrainQueue(convID) })
 }
 
-// markStopAll records a Stop scope=all instant for convID. Rows accepted
-// BEFORE it must not launch even if they were in claim-limbo (claimed by a
-// drain but not yet registered) when CancelQueuedInputs swept the queued set.
-func (s *Server) markStopAll(convID string) {
-	now := time.Now().Unix()
+// beginStopSweep records a Stop scope=all for convID and marks its queue
+// sweep as in flight. Everything a Stop needs to say is written under ONE
+// inflightMu section, so a drain deciding a claimed row's fate (stopGateForRow)
+// sees either none of it or all of it:
+//
+//   - the Stop boundary (stopEpochs): the input-queue acceptance counter's
+//     value at that instant (store.AcceptedInputSeq — a memory read, so the
+//     Stop still does no database work before cancelling the turn). Every
+//     row accepted before the Stop carries a sequence at or below it, every
+//     row accepted after carries a greater one, whatever the wall clock does.
+//     It is returned so the caller can bound CancelQueuedInputs to the rows
+//     that existed when the Stop began (#1477), and it is the key the launch
+//     gate refuses claim-limbo rows by;
+//   - the interlock (stopSweeps). Until the matching endStopSweep,
+//     maybeDrainQueue defers rather than claims: the Stop cancels the active
+//     turn first (so the model stops the instant the button is pressed,
+//     whatever the database is doing), and that turn's completion tail-calls
+//     the drain, which must not claim the FIFO head ahead of the sweep;
+//   - the Stop generation (stopSweepGens), which registerTurnGated compares
+//     against the value a drain read when it decided its row was post-Stop.
+//
+// It returns the turn running at that instant, captured under the same lock,
+// so the caller cancels exactly the turn present when the Stop began — not one
+// a direct submission registered a moment later. running is false when
+// nothing was running.
+func (s *Server) beginStopSweep(convID string) (epoch int64, entry inflightEntry, running bool) {
 	s.inflightMu.Lock()
+	// The boundary is read UNDER the lock: it and the generation must share
+	// one linearization point. Read before it, a follow-up accepted after the
+	// boundary but before the lock could be claimed, decided post-Stop with
+	// the old generation, and then refused at registration once this Stop
+	// bumps it — while the sweep, comparing against the boundary, correctly
+	// spared it.
+	epoch = s.store.AcceptedInputSeq()
 	if s.stopEpochs == nil {
 		s.stopEpochs = make(map[string]int64)
 	}
-	// An epoch only gates rows that were already accepted when Stop fired;
-	// once the max turn lifetime has passed nothing can still be in
-	// claim-limbo from that instant, so prune stale entries here instead of
-	// letting the map grow for the process lifetime.
-	horizon := now - int64(s.turnTimeout()/time.Second) - 60
-	for k, v := range s.stopEpochs {
-		if v < horizon {
-			delete(s.stopEpochs, k)
-		}
-	}
-	s.stopEpochs[convID] = now
-	s.inflightMu.Unlock()
-}
-
-// beginStopSweep marks a Stop scope=all queue sweep as in flight for convID.
-// Until the matching endStopSweep, maybeDrainQueue defers rather than claims:
-// the Stop cancels the active turn first (so the model stops the instant the
-// button is pressed, whatever the database is doing), and that turn's
-// completion tail-calls the drain — which, without this interlock, could
-// claim the FIFO head ahead of the sweep. The epoch gate below cannot close
-// that window on its own because created_at has second granularity. A drain
-// that passed maybeDrainQueue's check just before the sweep began is caught
-// at registration instead: registerTurnGated refuses under the same lock.
-//
-// It also bumps the conversation's Stop generation (see stopSweepGens) and
-// returns the turn running at that instant, captured under the same lock, so
-// the caller cancels exactly the turn present when the Stop began — not one a
-// direct submission registered a moment later. running is false when nothing
-// was running.
-func (s *Server) beginStopSweep(convID string) (entry inflightEntry, running bool) {
-	s.inflightMu.Lock()
 	if s.stopSweeps == nil {
 		s.stopSweeps = make(map[string]int)
 	}
 	if s.stopSweepGens == nil {
 		s.stopSweepGens = make(map[string]uint64)
 	}
+	s.stopEpochs[convID] = epoch
 	s.stopSweeps[convID]++
 	s.stopSweepGens[convID]++
 	entry, ok := s.inflight[convID]
 	s.inflightMu.Unlock()
-	return entry, ok && entry.IsRunning()
+	return epoch, entry, ok && entry.IsRunning()
 }
 
 // endStopSweep releases the interlock taken by beginStopSweep and re-kicks
@@ -311,71 +309,53 @@ func (s *Server) endStopSweep(convID string) {
 // stopSweepPending reports whether a Stop scope=all sweep is in flight for
 // convID.
 func (s *Server) stopSweepPending(convID string) bool {
-	_, sweeping := s.stopSweepState(convID)
-	return sweeping
-}
-
-// stopSweepState returns, atomically, the conversation's Stop generation and
-// whether a Stop scope=all sweep is in flight. A drain captures the pair
-// before claiming; registerTurnGated compares the generation at launch.
-func (s *Server) stopSweepState(convID string) (gen uint64, sweeping bool) {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
-	return s.stopSweepGens[convID], s.stopSweeps[convID] > 0
+	return s.stopSweeps[convID] > 0
 }
 
-// stoppedSince reports whether a Stop scope=all was issued after the row's
-// acceptance — the launch gate for claim-limbo rows. The comparison is STRICT:
-// created_at has second granularity, so a row accepted in the same second as
-// (but after) the Stop is a fresh post-Stop submission that must run, not be
-// silently discarded after its 202 acknowledgement. A pre-Stop row in that
-// same second is still swept by CancelQueuedInputs in the common (unclaimed)
-// case — only the sub-second claim-limbo overlap trades the other way.
-func (s *Server) stoppedSince(convID string, createdAt int64) bool {
-	s.inflightMu.Lock()
-	epoch, ok := s.stopEpochs[convID]
-	s.inflightMu.Unlock()
-	return ok && createdAt < epoch
-}
-
-// sweepGenForRow decides, atomically under inflightMu, what the registration
-// gate should hold a claimed row to:
+// stopGateForRow decides, atomically under inflightMu, what a drain does with
+// the row it has just claimed, given acceptedSeq (the row's AcceptedSeq):
 //
-//   - A row accepted in a LATER second than the last Stop began (or no Stop
-//     ever did) provably belongs to no swept set — not even one still being
-//     swept. It carries the current generation and postStop=true, so
-//     registerTurnGated refuses it only if a Stop begins from here on. This is
-//     the mirror image of stoppedSince.
-//   - Any other row keeps claimGen, the drain's pre-claim generation, and
-//     postStop=false: a Stop that began since the claim (its sweep running or
-//     finished) may have swept past the row while it was claimed, and must
-//     still refuse it at registration. Adopting an in-flight Stop's generation
-//     for such a row would let it launch the moment that sweep ends.
+//   - stopped=true: a Stop scope=all began AFTER the row was accepted (its
+//     boundary is at or above the row's sequence). The row was in that Stop's
+//     swept set; it was only invisible to CancelQueuedInputs because the claim
+//     had already moved it off 'queued'. The caller cancels it. The comparison
+//     is the same one the sweep uses, so the two never disagree about a row
+//     (#1477): no same-second ambiguity remains, because both compare the
+//     acceptance sequence, not a timestamp.
+//   - stopped=false: the row was accepted after the last Stop began (or none
+//     ever did), so no sweep — in flight or finished — can own it. gen is the
+//     conversation's current Stop generation, read in the same critical
+//     section; registerTurnGated refuses the launch only if a Stop begins from
+//     here on, which is exactly when the row becomes pre-Stop.
 //
-// The same-second case is the second bullet and errs on the side of Stop
-// (#1477).
-func (s *Server) sweepGenForRow(convID string, createdAt int64, claimGen uint64) (gen uint64, postStop bool) {
+// Reading the boundary and the generation together is what makes this safe
+// against a Stop landing between the two: beginStopSweep writes both under the
+// same lock, so a drain that sees the new boundary also sees the new
+// generation, and one that sees neither is refused at registration by the
+// generation.
+func (s *Server) stopGateForRow(convID string, acceptedSeq int64) (gen uint64, stopped bool) {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
-	epoch, stopped := s.stopEpochs[convID]
-	if stopped && createdAt <= epoch {
-		return claimGen, false
+	if epoch, ok := s.stopEpochs[convID]; ok && acceptedSeq <= epoch {
+		return 0, true
 	}
-	return s.stopSweepGens[convID], true
+	return s.stopSweepGens[convID], false
 }
 
 // maybeDrainQueue claims and launches the conversation's next queued input
 // when no turn is running. Re-entrant and race-safe: the claim is DB-atomic,
 // registerTurn refuses while a turn runs (the loser un-claims), a Stop
 // scope=all sweep holds the drain off until it has cancelled the queued set
-// (beginStopSweep), and each launched turn tail-calls back here on
-// completion.
+// (beginStopSweep), a claim that slipped past that check is refused by
+// stopGateForRow / registerTurnGated, and each launched turn tail-calls back
+// here on completion.
 func (s *Server) maybeDrainQueue(convID string) {
 	if s.shuttingDown.Load() {
 		return // rows stay durable; boot recovery re-queues, never auto-runs
 	}
-	sweepGen, sweeping := s.stopSweepState(convID)
-	if sweeping {
+	if s.stopSweepPending(convID) {
 		return // a Stop is sweeping the queue; endStopSweep re-kicks
 	}
 	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() {
@@ -392,7 +372,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	if row == nil {
 		return
 	}
-	if !s.launchQueuedTurn(convID, row, sweepGen) {
+	if !s.launchQueuedTurn(convID, row) {
 		// A direct submission won the registerTurn race; put the row back.
 		// The winner's completion re-drains it, and the bounded re-kick
 		// covers a winner whose tail already ran before our un-claim landed.
@@ -408,38 +388,27 @@ func (s *Server) maybeDrainQueue(convID string) {
 // queuedLaunch carries what startTurn needs to run a claimed queue row: the
 // row id, its claim placeholder turn id (the guard for every state write
 // before BindInputTurn stamps the real one — see MarkClaimedInputTerminal),
-// and the Stop generation the drain captured before claiming.
+// and the Stop generation stopGateForRow read when it decided the row was
+// post-Stop.
 type queuedLaunch struct {
 	rowID, claimTurnID string
 	sweepGen           uint64
-	// postStop: the row was accepted in a later second than the last Stop
-	// began (or none ever did), so no sweep in flight can own it.
-	postStop bool
 }
 
 // launchQueuedTurn runs one claimed queue row as an ordinary turn — the same
 // prep, buffer, and runTurnAsync path as a direct submission, so every
 // governance and persistence property (#798 included) holds unchanged.
-// sweepGen is the Stop generation the drain captured before claiming; the
-// registration gate refuses the launch if a Stop has begun since.
-func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow, sweepGen uint64) bool {
-	// Stop scope=all gate: a row accepted before the Stop instant must not
+func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool {
+	// Stop scope=all gate: a row accepted before the Stop began must not
 	// launch, even if it was claimed (invisible to CancelQueuedInputs) while
-	// the sweep ran.
-	if s.stoppedSince(convID, row.CreatedAt) {
+	// the sweep ran. A row accepted after it carries the Stop generation read
+	// in the same critical section, and the registration gate refuses the
+	// launch only if a Stop begins from here on.
+	sweepGen, stopped := s.stopGateForRow(convID, row.AcceptedSeq)
+	if stopped {
 		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
 		return true
 	}
-	// The converse: a row accepted in a LATER second than the last Stop began
-	// is certainly post-Stop, whatever the drain's pre-claim generation says.
-	// A Stop that began (and possibly ended) between this drain's sampling and
-	// its claim swept a queue this row was not yet in, so cancelling it would
-	// discard an acknowledged follow-up. sweepGenForRow decides atomically:
-	// such a row carries the current generation and a postStop mark, so the
-	// registration gate refuses only on a Stop that begins from here on; any
-	// other row keeps the pre-claim generation and is held to every Stop
-	// since, including a sweep still in flight.
-	sweepGen, postStop := s.sweepGenForRow(convID, row.CreatedAt, sweepGen)
 	// The ROW's owner is authoritative — the drain kick may come from another
 	// actor's request path (e.g. a different session's /cancel bookkeeping).
 	user := row.UserEmail
@@ -485,7 +454,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow, sweep
 		Message:        row.Message,
 		Attachments:    attachments,
 	}
-	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen, postStop: postStop}, releaseSlot) {
+	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen}, releaseSlot) {
 		releaseSlot()
 		return false
 	}

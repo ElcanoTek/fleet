@@ -350,18 +350,26 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
 	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queued)
 	if swept {
-		// A Stop scope=all sweep began after this drain captured sweepGen
-		// (it may still be running, or have finished while we were loading
-		// the conversation and history), and the drained row was already
-		// claimed, so the sweep could not see it. It belongs to the swept
-		// set: cancel it here rather than un-claim it — an un-claimed row
-		// would outlive the sweep and launch on the re-kick.
+		// A Stop scope=all began after this drain decided its row was
+		// post-Stop (it may still be sweeping, or have finished while we
+		// were loading the conversation and history), and the drained row
+		// was already claimed, so the sweep could not see it. It belongs to
+		// the swept set: cancel it here rather than un-claim it — an
+		// un-claimed row would outlive the sweep and launch on the re-kick.
 		turnCancel()
-		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateCancelled)
-		s.emitQueueUpdate(context.Background(), user, conv.ID)
+		// The user's admission slot goes back FIRST: nothing below needs it,
+		// and both writes are best-effort store calls that a slow or
+		// unreachable database could stall — the slot must not be held for
+		// that long, or repeats of this race exhaust the per-user cap while
+		// no turn is running. terminalizeQueueRow bounds its own context (and
+		// retries); the queue refresh gets a bounded one here.
 		if releaseSlot != nil {
 			releaseSlot()
 		}
+		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateCancelled)
+		qctx, qcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		s.emitQueueUpdate(qctx, user, conv.ID)
+		qcancel()
 		return true
 	}
 	if !ok {

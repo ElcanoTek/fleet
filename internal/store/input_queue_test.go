@@ -266,13 +266,102 @@ func TestCancelQueuedInputs_CoversQueueOnly(t *testing.T) {
 	enqueue(t, s, convID, "cli-2", "b", InputModeQueued)
 	claimed, _ := s.ClaimNextQueuedInput(ctx, convID, "turn-a")
 
-	n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID)
+	n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID, s.AcceptedInputSeq())
 	if err != nil || n != 1 {
 		t.Fatalf("cancelled %d err=%v, want 1 (the still-queued row)", n, err)
 	}
 	items, _ := s.ListQueuedInputs(ctx, "u@example.com", convID)
 	if len(items) != 1 || items[0].ID != claimed.ID {
 		t.Fatalf("running row must survive Stop: %+v", items)
+	}
+}
+
+// The Stop sweep is bounded to rows accepted BEFORE the Stop began (#1477):
+// a follow-up accepted after the Stop recorded the counter's value — in the
+// same wall-clock second — must keep its acknowledgement, and the key the
+// sweep compares is the acceptance sequence EnqueueInput allocates, not
+// created_at.
+func TestCancelQueuedInputs_SparesRowsAcceptedAfterStop(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	before := enqueue(t, s, convID, "cli-before", "before stop", InputModeQueued)
+	stop := s.AcceptedInputSeq()
+	after := enqueue(t, s, convID, "cli-after", "after stop", InputModeQueued)
+	if before.AcceptedSeq > stop || after.AcceptedSeq <= stop {
+		t.Fatalf("acceptance sequences do not bracket the Stop: before=%d stop=%d after=%d", before.AcceptedSeq, stop, after.AcceptedSeq)
+	}
+	if before.CreatedAt != after.CreatedAt && after.CreatedAt-before.CreatedAt > 1 {
+		t.Fatalf("rows unexpectedly far apart in time: %d vs %d", before.CreatedAt, after.CreatedAt)
+	}
+
+	n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID, stop)
+	if err != nil || n != 1 {
+		t.Fatalf("cancelled %d err=%v, want 1 (only the pre-Stop row)", n, err)
+	}
+	items, _ := s.ListQueuedInputs(ctx, "u@example.com", convID)
+	if len(items) != 1 || items[0].ID != after.ID || items[0].State != InputStateQueued {
+		t.Fatalf("post-Stop row must survive the sweep still queued: %+v", items)
+	}
+	// The stored key round-trips through every read path.
+	if got, err := s.LookupInput(ctx, convID, "cli-after"); err != nil || got == nil || got.AcceptedSeq != after.AcceptedSeq {
+		t.Fatalf("LookupInput AcceptedSeq: got=%v err=%v want %d", got, err, after.AcceptedSeq)
+	}
+	claimed, err := s.ClaimNextQueuedInput(ctx, convID, "turn-b")
+	if err != nil || claimed == nil || claimed.AcceptedSeq != after.AcceptedSeq {
+		t.Fatalf("ClaimNextQueuedInput AcceptedSeq: got=%v err=%v want %d", claimed, err, after.AcceptedSeq)
+	}
+}
+
+// A row written without accepted_seq (an older binary mid-deploy) reads back
+// as 0 and is inside every Stop's swept set — the pre-#1477 behaviour for it.
+func TestCancelQueuedInputs_LegacyRowsAlwaysSwept(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	old := enqueue(t, s, convID, "cli-old", "legacy", InputModeQueued)
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET accepted_seq = NULL WHERE id = $1`, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LookupInput(ctx, convID, "cli-old")
+	if err != nil || got == nil || got.AcceptedSeq != 0 {
+		t.Fatalf("legacy AcceptedSeq fallback: got=%v err=%v, want 0", got, err)
+	}
+	// Even a Stop that saw no acceptances at all sweeps it.
+	if n, err := s.CancelQueuedInputs(ctx, "u@example.com", convID, 0); err != nil || n != 1 {
+		t.Fatalf("Stop swept %d legacy rows (err=%v), want 1", n, err)
+	}
+}
+
+// The acceptance counter is seeded from the table at Open, so a restart never
+// hands a new row a sequence that a Stop in the previous process would have
+// swept — and never one at or below a row the previous process accepted.
+func TestAcceptedInputSeq_SeededFromTableAtOpen(t *testing.T) {
+	s := newTestStore(t)
+	convID := seedConvAndTurn(t, s, "t1")
+	enqueue(t, s, convID, "cli-1", "a", InputModeQueued)
+	last := enqueue(t, s, convID, "cli-2", "b", InputModeQueued)
+	if s.AcceptedInputSeq() != last.AcceptedSeq {
+		t.Fatalf("counter %d, want the last allocated sequence %d", s.AcceptedInputSeq(), last.AcceptedSeq)
+	}
+	// Force the table's max above the process counter, as a previous
+	// process's rows would be, then "restart".
+	if _, err := s.db.ExecContext(context.Background(),
+		`UPDATE chat_input_queue SET accepted_seq = $2 WHERE id = $1`, last.ID, last.AcceptedSeq+1000); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := Open(testDSN(), DefaultPoolConfig())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	if got := restarted.AcceptedInputSeq(); got != last.AcceptedSeq+1000 {
+		t.Fatalf("restarted counter %d, want the table's max %d", got, last.AcceptedSeq+1000)
+	}
+	next := enqueue(t, restarted, convID, "cli-3", "c", InputModeQueued)
+	if next.AcceptedSeq != last.AcceptedSeq+1001 {
+		t.Fatalf("first post-restart sequence %d, want %d", next.AcceptedSeq, last.AcceptedSeq+1001)
 	}
 }
 

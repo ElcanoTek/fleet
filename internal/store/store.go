@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +42,14 @@ const maxBatchRows = 500
 // migrations (see migrations.go + migrations/*.sql).
 type Store struct {
 	db *sql.DB
+	// acceptedInputSeq is the process-wide input-queue acceptance counter
+	// (#1477): EnqueueInput allocates the next value for every row it
+	// accepts, and a Stop scope=all records the current value as the boundary
+	// of its swept set. Seeded from MAX(accepted_seq) at Open so it never
+	// repeats across restarts; fleet runs as one process against its chat
+	// database (ADR-0004), which is what makes a process counter a total
+	// order. See AcceptedInputSeq.
+	acceptedInputSeq atomic.Int64
 	// searchEnabled gates full-text search index maintenance (#308): when false,
 	// AppendHistory skips writing message_search_content and the backfill is a
 	// no-op, so a high-write deployment can opt out of GIN index upkeep
@@ -265,7 +274,12 @@ func Open(dsn string, pool PoolConfig) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db, searchEnabled: true}, nil
+	st := &Store{db: db, searchEnabled: true}
+	if err := st.seedAcceptedInputSeq(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("seed input queue sequence: %w", err)
+	}
+	return st, nil
 }
 
 // Close the underlying database.

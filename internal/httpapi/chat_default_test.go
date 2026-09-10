@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,6 +136,7 @@ type fakeChatStore struct {
 	deleteAllUnpinned int
 	toolCalls         []store.ToolCallEntry
 	queue             []store.InputQueueRow
+	acceptedSeq       atomic.Int64
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -593,11 +595,15 @@ func (s *fakeChatStore) EnqueueInput(_ context.Context, r store.InputQueueRow) (
 			return it, false, nil
 		}
 	}
+	now := time.Now().Unix()
 	r.State = store.InputStateQueued
 	r.Position = int64(len(s.queue) + 1)
+	r.CreatedAt, r.UpdatedAt, r.AcceptedSeq = now, now, s.acceptedSeq.Add(1)
 	s.queue = append(s.queue, r)
 	return r, true, nil
 }
+
+func (s *fakeChatStore) AcceptedInputSeq() int64 { return s.acceptedSeq.Load() }
 
 func (s *fakeChatStore) CountPendingInputs(_ context.Context, convID string) (int, error) {
 	s.mu.Lock()
@@ -683,12 +689,12 @@ func (s *fakeChatStore) CompleteInjectedInputs(_ context.Context, turnID string)
 	return nil
 }
 
-func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, _, convID string) (int, error) {
+func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, _, convID string, upTo int64) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
 	for i := range s.queue {
-		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued && s.queue[i].AcceptedSeq <= upTo {
 			s.queue[i].State = store.InputStateCancelled
 			n++
 		}
