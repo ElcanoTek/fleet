@@ -82,6 +82,24 @@ func isGoogleIssuer(issuer string) bool {
 	return strings.EqualFold(u.Host, "accounts.google.com")
 }
 
+// isEntraIssuer reports whether issuer is a Microsoft Entra ID authorization
+// server (the public cloud and the US Government / China national clouds).
+// Entra has two quirks the generic flow must know about: its multi-tenant
+// metadata documents carry a templated issuer (see issuerMatches), and it
+// mints a refresh token only when `offline_access` is requested (see
+// Discovered.RequestedScopes). Matching is on the exact host.
+func isEntraIssuer(issuer string) bool {
+	u, err := url.Parse(strings.TrimSpace(issuer))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Host) {
+	case "login.microsoftonline.com", "login.microsoftonline.us", "login.partner.microsoftonline.cn":
+		return true
+	}
+	return false
+}
+
 // AuthCodeURL builds the authorization request URL including PKCE S256 and the
 // RFC 8707 resource indicator. state and codeChallenge are caller-supplied.
 func (f FlowConfig) AuthCodeURL(state, codeChallenge string) string {

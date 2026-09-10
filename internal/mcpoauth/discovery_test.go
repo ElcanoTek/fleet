@@ -182,6 +182,100 @@ func TestVerifyAuthServerRejectsIssuerMismatch(t *testing.T) {
 	}
 }
 
+// TestVerifyAuthServerAcceptsEntraTemplatedIssuer: Microsoft Entra's
+// multi-tenant metadata says issuer "https://login.microsoftonline.com/{tenantid}/v2.0"
+// while the PRM named ".../organizations/v2.0" (measured against the hosted
+// Azure DevOps MCP server for #1006). That one shape is accepted — and the
+// stored issuer is the PRM's, not the template — while everything adjacent
+// to it stays a mismatch.
+func TestVerifyAuthServerAcceptsEntraTemplatedIssuer(t *testing.T) {
+	templated := "https://login.microsoftonline.com/{tenantid}/v2.0"
+	for _, expected := range []string{
+		"https://login.microsoftonline.com/organizations/v2.0",
+		"https://login.microsoftonline.com/common/v2.0",
+		"https://login.microsoftonline.com/consumers/v2.0/",
+		"https://LOGIN.microsoftonline.com/Organizations/v2.0",
+	} {
+		as := &AuthServerMetadata{Issuer: templated, AuthorizationEndpoint: "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize", TokenEndpoint: "https://login.microsoftonline.com/organizations/oauth2/v2.0/token"}
+		if err := verifyAuthServer(expected, as); err != nil {
+			t.Errorf("expected %q: %v", expected, err)
+		}
+	}
+	if err := verifyAuthServer("https://login.microsoftonline.us/organizations/v2.0", &AuthServerMetadata{Issuer: "https://login.microsoftonline.us/{tenantid}/v2.0"}); err != nil {
+		t.Errorf("national cloud: %v", err)
+	}
+	rejected := map[string]string{
+		// A tenant-specific expected issuer gets a tenant-specific document from Entra; a template there is wrong.
+		"https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0": templated,
+		// The template is Entra's; another host may not borrow the allowance.
+		"https://evil.example.com/organizations/v2.0": "https://evil.example.com/{tenantid}/v2.0",
+		// Same Entra host, but the document names a different host.
+		"https://login.microsoftonline.com/organizations/v2.0": "https://evil.example.com/{tenantid}/v2.0",
+		// Template in the wrong position / extra segments / v1 vs v2.
+		"https://login.microsoftonline.com/organizations/v2.0/":  "https://login.microsoftonline.com/organizations/{tenantid}",
+		"https://login.microsoftonline.com/organizations/v2.0//": "https://login.microsoftonline.com/{tenantid}/v2.0/extra",
+		"https://login.microsoftonline.com/organizations/v1.0":   "https://login.microsoftonline.com/{tenantid}/v2.0",
+		// http, never.
+		"http://login.microsoftonline.com/organizations/v2.0": "http://login.microsoftonline.com/{tenantid}/v2.0",
+	}
+	for expected, actual := range rejected {
+		if err := verifyAuthServer(expected, &AuthServerMetadata{Issuer: actual}); err == nil {
+			t.Errorf("expected %q vs metadata %q: accepted, want mismatch", expected, actual)
+		}
+	}
+	// The exact-match path is untouched by the allowance.
+	if err := verifyAuthServer("https://as.example.com", &AuthServerMetadata{Issuer: "https://as.example.com/"}); err != nil {
+		t.Errorf("exact match: %v", err)
+	}
+}
+
+// TestRequestedScopesAddsOfflineAccessForEntraOnly: Entra mints a refresh
+// token only when `offline_access` is requested, and the Azure DevOps PRM
+// declares only its `.default` scope — so the scope is appended for an Entra
+// issuer that advertises it, once, without touching the PRM slice, and for
+// nobody else (#1006).
+func TestRequestedScopesAddsOfflineAccessForEntraOnly(t *testing.T) {
+	entra := &Discovered{
+		PRM: ProtectedResourceMetadata{ScopesSupported: []string{"https://mcp.dev.azure.com/.default"}},
+		AS: AuthServerMetadata{
+			Issuer:          "https://login.microsoftonline.com/organizations/v2.0",
+			ScopesSupported: []string{"openid", "profile", "email", "offline_access"},
+		},
+	}
+	got := entra.RequestedScopes()
+	want := []string{"https://mcp.dev.azure.com/.default", "offline_access"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("entra scopes = %v, want %v", got, want)
+	}
+	if entra.PRM.ScopesSupported[len(entra.PRM.ScopesSupported)-1] != "https://mcp.dev.azure.com/.default" {
+		t.Error("RequestedScopes must not mutate the PRM slice")
+	}
+	// Already present (any case) → not duplicated.
+	entra.PRM.ScopesSupported = []string{"https://mcp.dev.azure.com/.default", "Offline_Access"}
+	if got := entra.RequestedScopes(); len(got) != 2 {
+		t.Errorf("duplicate offline_access: %v", got)
+	}
+	// Entra that does not advertise offline_access → nothing appended.
+	entra.PRM.ScopesSupported = []string{"x/.default"}
+	entra.AS.ScopesSupported = []string{"openid"}
+	if got := entra.RequestedScopes(); strings.Join(got, " ") != "x/.default" {
+		t.Errorf("unadvertised: %v", got)
+	}
+	// Not Entra → PRM scopes verbatim, even when the AS lists offline_access.
+	other := &Discovered{
+		PRM: ProtectedResourceMetadata{ScopesSupported: []string{"read"}},
+		AS:  AuthServerMetadata{Issuer: "https://as.example.com", ScopesSupported: []string{"read", "offline_access"}},
+	}
+	if got := other.RequestedScopes(); strings.Join(got, " ") != "read" {
+		t.Errorf("non-entra: %v", got)
+	}
+	// No PRM scopes → the AS's list, as before.
+	other.PRM.ScopesSupported = nil
+	if got := other.RequestedScopes(); strings.Join(got, " ") != "read offline_access" {
+		t.Errorf("as fallback: %v", got)
+	}
+}
+
 func TestParseResourceMetadataURL(t *testing.T) {
 	cases := map[string]string{
 		`Bearer resource_metadata="https://x.com/.well-known/oauth-protected-resource"`: "https://x.com/.well-known/oauth-protected-resource",

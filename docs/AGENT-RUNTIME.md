@@ -552,6 +552,20 @@ How the invariants hold:
   else: `prompt` is an OpenID Connect parameter whose values another server may
   validate. A vendor with its own refresh-token contract gets its own clause
   there, keyed on the issuer.
+- **Microsoft Entra ID: a templated issuer, and `offline_access`.** Entra's
+  multi-tenant metadata (`login.microsoftonline.com/{common,organizations,
+  consumers}/v2.0`) says `issuer: https://login.microsoftonline.com/{tenantid}/v2.0`
+  — the literal template — because the tenant is only known after sign-in.
+  The mix-up check (`mcpoauth.issuerMatches`) accepts exactly that shape:
+  same https Entra host, same path, the template standing in for one of the
+  three multi-tenant aliases. A tenant GUID in the PRM's issuer, another
+  host, or the template anywhere else stays a mismatch, and the stored
+  issuer is the PRM's real URL, never the template. Entra also issues a
+  refresh token only when `offline_access` is requested, so
+  `Discovered.RequestedScopes` appends it for Entra issuers that advertise
+  it (the Microsoft-hosted Azure DevOps MCP server declares only its
+  `.default` scope). Measured for #1006: without the first fix Azure DevOps
+  could not be added at all; without the second it would have lived one hour.
 - **A refused mount is recorded, not just skipped.** When the vendor's server
   answers the per-turn connect with HTTP 401 — a revoked grant, GitHub's
   "Revoke all user tokens", a key rotated on the vendor side — the connection

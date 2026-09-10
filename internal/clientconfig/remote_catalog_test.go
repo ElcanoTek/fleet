@@ -434,7 +434,7 @@ func TestBuiltinRemoteCatalogClientSecretRequired(t *testing.T) {
 		byName[e.Name] = e
 	}
 	secretRequired := []string{
-		"alloydb", "asana", "box", "docusign", "front", "github", "google-calendar", "google-chat",
+		"alloydb", "asana", "azure-devops", "box", "docusign", "front", "github", "google-calendar", "google-chat",
 		"google-docs", "google-drive", "google-gemini-agent-platform", "google-gmail", "google-people",
 		"google-sheets", "google-slides", "hubspot", "slack", "wrike", "xero", "zoom",
 	}
