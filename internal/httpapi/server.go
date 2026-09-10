@@ -103,7 +103,15 @@ type Server struct {
 	// and launch the FIFO head before the sweep has cancelled it (the epoch
 	// gate above cannot catch a row accepted in the same second as the Stop).
 	// The sweep re-kicks the drain when it finishes.
-	stopSweeps      map[string]int
+	stopSweeps map[string]int
+	// stopSweepGens counts the Stop scope=all sweeps begun per conversation.
+	// A queue drain captures it before claiming (maybeDrainQueue) and
+	// registerTurnGated refuses when it has moved: a Stop that began — and
+	// possibly finished — while the drain was still preparing its turn swept
+	// a queue the claimed row had already left, so that row belongs to the
+	// swept set even though the interlock is no longer held. Pruned with
+	// stopEpochs.
+	stopSweepGens   map[string]uint64
 	inflightCounter uint64
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
@@ -641,23 +649,26 @@ func envInt(key string, def int) int {
 // This ungated form serves turns with no steer mailbox and no queue row
 // (webhooks); chat submissions and queue drains go through registerTurnGated.
 func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBuffer, string, uint64, bool) {
-	buf, turnID, token, ok, _ := s.registerTurnGated(convID, cancel, nil, false)
+	buf, turnID, token, ok, _ := s.registerTurnGated(convID, cancel, nil, false, 0)
 	return buf, turnID, token, ok
 }
 
 // registerTurnGated is registerTurn with an optional Stop-sweep gate for the
-// queue-drain path. With gate set, a Stop scope=all sweep in flight for convID
-// (beginStopSweep) refuses the registration — under the same inflightMu the
-// sweep took, so the check is atomic with the claim becoming a running turn.
-// This closes the window maybeDrainQueue's own check cannot: a drain that
-// passed that check just before the sweep began, then claimed the FIFO head,
-// would otherwise launch a row the sweep can no longer see (and, for a row
-// accepted in the same second as the Stop, the strict epoch gate would let
-// it through too). swept reports that refusal so the caller cancels the row
-// instead of un-claiming it.
-func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, gate bool) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
+// queue-drain path. With gate set, the registration is refused — under the
+// same inflightMu beginStopSweep takes, so the check is atomic with the claim
+// becoming a running turn — when a Stop scope=all sweep is in flight for
+// convID, OR when one has begun since the drain captured sweepGen
+// (stopSweepState) ahead of its claim. Together these close the windows
+// maybeDrainQueue's own check cannot: a drain that passed that check just
+// before the sweep began, then claimed the FIFO head, would otherwise launch
+// a row the sweep can no longer see, whether the sweep is still running or
+// finished while the drain was loading the conversation and history (and,
+// for a row accepted in the same second as the Stop, the strict epoch gate
+// would let it through too). swept reports that refusal so the caller cancels
+// the row instead of un-claiming it.
+func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, gate bool, sweepGen uint64) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
 	s.inflightMu.Lock()
-	if gate && s.stopSweeps[convID] > 0 {
+	if gate && (s.stopSweeps[convID] > 0 || s.stopSweepGens[convID] != sweepGen) {
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true
 	}

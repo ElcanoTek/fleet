@@ -258,6 +258,7 @@ func (s *Server) markStopAll(convID string) {
 	for k, v := range s.stopEpochs {
 		if v < horizon {
 			delete(s.stopEpochs, k)
+			delete(s.stopSweepGens, k)
 		}
 	}
 	s.stopEpochs[convID] = now
@@ -273,13 +274,25 @@ func (s *Server) markStopAll(convID string) {
 // that window on its own because created_at has second granularity. A drain
 // that passed maybeDrainQueue's check just before the sweep began is caught
 // at registration instead: registerTurnGated refuses under the same lock.
-func (s *Server) beginStopSweep(convID string) {
+//
+// It also bumps the conversation's Stop generation (see stopSweepGens) and
+// returns the turn running at that instant, captured under the same lock, so
+// the caller cancels exactly the turn present when the Stop began — not one a
+// direct submission registered a moment later. running is false when nothing
+// was running.
+func (s *Server) beginStopSweep(convID string) (entry inflightEntry, running bool) {
 	s.inflightMu.Lock()
 	if s.stopSweeps == nil {
 		s.stopSweeps = make(map[string]int)
 	}
+	if s.stopSweepGens == nil {
+		s.stopSweepGens = make(map[string]uint64)
+	}
 	s.stopSweeps[convID]++
+	s.stopSweepGens[convID]++
+	entry, ok := s.inflight[convID]
 	s.inflightMu.Unlock()
+	return entry, ok && entry.IsRunning()
 }
 
 // endStopSweep releases the interlock taken by beginStopSweep and re-kicks
@@ -299,9 +312,17 @@ func (s *Server) endStopSweep(convID string) {
 // stopSweepPending reports whether a Stop scope=all sweep is in flight for
 // convID.
 func (s *Server) stopSweepPending(convID string) bool {
+	_, sweeping := s.stopSweepState(convID)
+	return sweeping
+}
+
+// stopSweepState returns, atomically, the conversation's Stop generation and
+// whether a Stop scope=all sweep is in flight. A drain captures the pair
+// before claiming; registerTurnGated compares the generation at launch.
+func (s *Server) stopSweepState(convID string) (gen uint64, sweeping bool) {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
-	return s.stopSweeps[convID] > 0
+	return s.stopSweepGens[convID], s.stopSweeps[convID] > 0
 }
 
 // stoppedSince reports whether a Stop scope=all was issued after the row's
@@ -328,7 +349,8 @@ func (s *Server) maybeDrainQueue(convID string) {
 	if s.shuttingDown.Load() {
 		return // rows stay durable; boot recovery re-queues, never auto-runs
 	}
-	if s.stopSweepPending(convID) {
+	sweepGen, sweeping := s.stopSweepState(convID)
+	if sweeping {
 		return // a Stop is sweeping the queue; endStopSweep re-kicks
 	}
 	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() {
@@ -345,7 +367,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	if row == nil {
 		return
 	}
-	if !s.launchQueuedTurn(convID, row) {
+	if !s.launchQueuedTurn(convID, row, sweepGen) {
 		// A direct submission won the registerTurn race; put the row back.
 		// The winner's completion re-drains it, and the bounded re-kick
 		// covers a winner whose tail already ran before our un-claim landed.
@@ -361,7 +383,9 @@ func (s *Server) maybeDrainQueue(convID string) {
 // launchQueuedTurn runs one claimed queue row as an ordinary turn — the same
 // prep, buffer, and runTurnAsync path as a direct submission, so every
 // governance and persistence property (#798 included) holds unchanged.
-func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool {
+// sweepGen is the Stop generation the drain captured before claiming; the
+// registration gate refuses the launch if a Stop has begun since.
+func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow, sweepGen uint64) bool {
 	// Stop scope=all gate: a row accepted before the Stop instant must not
 	// launch, even if it was claimed (invisible to CancelQueuedInputs) while
 	// the sweep ran.
@@ -414,20 +438,42 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		Message:        row.Message,
 		Attachments:    attachments,
 	}
-	if !s.startTurn(nil, nil, user, conv, req, row.ID, releaseSlot) {
+	if !s.startTurn(nil, nil, user, conv, req, row.ID, sweepGen, releaseSlot) {
 		releaseSlot()
 		return false
 	}
 	return true
 }
 
-// terminalizeQueueRow best-effort flips a row's state on a fresh context.
+// queueTerminalizeRetries and queueTerminalizeRetryDelay bound the retry of
+// a failed terminal-state write. A claimed row whose cancel/re-queue write
+// fails would otherwise sit at 'running' under a placeholder turn id —
+// invisible to the Stop sweep and to future drains — until boot recovery.
+const (
+	queueTerminalizeRetries    = 3
+	queueTerminalizeRetryDelay = 2 * time.Second
+)
+
+// terminalizeQueueRow flips a row's state on a fresh context, retrying a
+// failed write a bounded number of times on a tracked timer.
 func (s *Server) terminalizeQueueRow(id, state string) {
+	s.terminalizeQueueRowAttempt(id, state, queueTerminalizeRetries)
+}
+
+func (s *Server) terminalizeQueueRowAttempt(id, state string, retriesLeft int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.store.MarkInputTerminal(ctx, id, state); err != nil {
-		log.Printf("input queue state (%s -> %s): %v", id, state, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+	err := s.store.MarkInputTerminal(ctx, id, state)
+	if err == nil {
+		return
 	}
+	log.Printf("input queue state (%s -> %s, %d retries left): %v", id, state, retriesLeft, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+	if retriesLeft <= 0 {
+		return
+	}
+	s.background.After("httpapi.queue_terminalize_retry", queueTerminalizeRetryDelay, func() {
+		s.terminalizeQueueRowAttempt(id, state, retriesLeft-1)
+	})
 }
 
 // handleQueueRoutes serves the queue API under /conversations/{id}/queue:

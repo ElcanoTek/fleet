@@ -274,7 +274,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.startTurn(w, r, user, conv, req, "", releaseSlot) {
+	if !s.startTurn(w, r, user, conv, req, "", 0, releaseSlot) {
 		// A concurrent submission won the registerTurn race between our busy
 		// check and now; the input must not be lost — queue it instead.
 		releaseSlot()
@@ -290,7 +290,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 // already running — every other failure is handled (responded/logged)
 // internally. releaseSlot is released by the turn goroutine on completion;
 // on false the caller releases it.
-func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queueRowID string, releaseSlot func()) bool {
+func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queueRowID string, sweepGen uint64, releaseSlot func()) bool {
 	reqCtx := context.Background()
 	if r != nil {
 		reqCtx = r.Context()
@@ -344,11 +344,12 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// register here.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
-	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queueRowID != "")
+	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queueRowID != "", sweepGen)
 	if swept {
-		// A Stop scope=all sweep is in flight and this drained row was
-		// claimed by a drain that passed maybeDrainQueue's check before the
-		// sweep began, so the sweep cannot see it. It belongs to the swept
+		// A Stop scope=all sweep began after this drain captured sweepGen
+		// (it may still be running, or have finished while we were loading
+		// the conversation and history), and the drained row was already
+		// claimed, so the sweep could not see it. It belongs to the swept
 		// set: cancel it here rather than un-claim it — an un-claimed row
 		// would outlive the sweep and launch on the re-kick.
 		turnCancel()
