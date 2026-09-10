@@ -630,8 +630,9 @@ func TestQueue_TerminalizeRetryRespectsLaterClaim(t *testing.T) {
 
 // TestQueue_StopSparesRowAcceptedAfterStop (#1477): a row accepted after a
 // Stop began — moments later, in the same wall-clock second — was never in
-// that Stop's swept set and must run when the drain claims it, whether the
-// Stop has finished or its sweep is still in flight.
+// that Stop's swept set and must run, whether the sweep has ended (its re-kick
+// drains the row: the production path) or is still in flight when a drain
+// claims and launches it.
 func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -651,11 +652,6 @@ func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
 			s.agent = eng
 
 			epoch, _, _ := s.beginStopSweep(conv.ID)
-			if tc.endSweep {
-				s.endStopSweep(conv.ID)
-			} else {
-				defer s.endStopSweep(conv.ID)
-			}
 			row0, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
 				ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
 				Message: "post-stop follow-up", Attachments: "[]", Mode: store.InputModeQueued,
@@ -666,16 +662,35 @@ func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
 			if row0.AcceptedSeq <= epoch {
 				t.Fatalf("row sequence %d is not after the Stop boundary %d", row0.AcceptedSeq, epoch)
 			}
-			row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
-			if err != nil || row == nil {
-				t.Fatalf("claim: row=%v err=%v", row, err)
+			if tc.endSweep {
+				// Ending the sweep re-kicks the drain, which claims and
+				// launches the row itself.
+				s.endStopSweep(conv.ID)
+			} else {
+				// The sweep is still in flight: no re-kick has fired, so
+				// this drain is the only claimant.
+				defer s.endStopSweep(conv.ID)
+				row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
+				if err != nil || row == nil {
+					t.Fatalf("claim: row=%v err=%v", row, err)
+				}
+				if !s.launchQueuedTurn(conv.ID, row) {
+					t.Fatal("launchQueuedTurn reported a lost registerTurn race")
+				}
 			}
-			if !s.launchQueuedTurn(conv.ID, row) {
-				t.Fatal("launchQueuedTurn reported a lost registerTurn race")
+			select {
+			case <-eng.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("post-Stop row never launched")
 			}
-			<-eng.started
 			eng.release <- struct{}{}
-			waitFor(t, "post-Stop row ran", func() bool { return eng.turns.Load() == 1 })
+			waitFor(t, "post-Stop row ran to completion", func() bool {
+				got, err := s.store.LookupInput(context.Background(), conv.ID, "cli-q-1")
+				return err == nil && got != nil && got.State == store.InputStateCompleted
+			})
+			if n := eng.turns.Load(); n != 1 {
+				t.Fatalf("turns = %d, want 1", n)
+			}
 		})
 	}
 }
