@@ -91,6 +91,16 @@ export default function LoginCard({
           </div>
         ) : null}
 
+        {/* Both inputs carry `w-full min-w-0` deliberately. An <input> has an
+            intrinsic width (its `size`, 20 chars by default) and a grid item's
+            default `min-width: auto` feeds that intrinsic width into the track
+            as its minimum contribution, so the label's `auto` track — and then
+            the form's — grew to fit the input rather than the card. On desktop
+            the 13px body font kept that intrinsic width under the card's inner
+            width so nothing showed; on touch devices globals.css forces form
+            controls to 16px (the iOS focus-zoom guard) and the fields and the
+            Sign in button ran off the right edge of the card. `min-w-0` lets
+            the track shrink to the card; `w-full` fills it. */}
         <form action="/api/auth/login" method="post" className="grid gap-4">
           <label htmlFor="email" className="grid gap-1.5 text-[0.8125rem] text-[var(--color-text-secondary)]">
             Email
@@ -100,7 +110,7 @@ export default function LoginCard({
               type="email"
               autoComplete="email"
               required
-              className="rounded-xl border border-[var(--color-border)] bg-transparent px-3 py-2.5 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+              className="w-full min-w-0 rounded-xl border border-[var(--color-border)] bg-transparent px-3 py-2.5 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
             />
           </label>
 
@@ -112,7 +122,7 @@ export default function LoginCard({
               type="password"
               autoComplete="current-password"
               required
-              className="rounded-xl border border-[var(--color-border)] bg-transparent px-3 py-2.5 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+              className="w-full min-w-0 rounded-xl border border-[var(--color-border)] bg-transparent px-3 py-2.5 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
             />
           </label>
 

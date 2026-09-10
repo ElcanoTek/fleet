@@ -37,6 +37,54 @@ test("the password form renders both sign-in options", async ({ page }) => {
   await expect(page.getByRole("link", { name: /use elcano email/i })).toBeVisible();
 });
 
+test.describe("the password form on a phone", () => {
+  // A touch-device viewport: globals.css bumps form controls to 16px under
+  // `(hover: none) and (pointer: coarse)` (the iOS focus-zoom guard), which is
+  // the condition that exposed the bug — the inputs had no width rule, so their
+  // intrinsic `size=20` width pushed the form's grid tracks (and the Sign in
+  // button stretched across them) past the card's right edge and off-screen.
+  // Desktop never showed it because the 13px body font kept that intrinsic
+  // width under the card's inner width.
+  test.use({
+    viewport: { width: 375, height: 812 },
+    deviceScaleFactor: 3,
+    isMobile: true,
+    hasTouch: true,
+  });
+
+  test("keeps the fields and the Sign in button inside the card", async ({ page }) => {
+    await page.goto("/login");
+    // The guard media query must actually be in effect, otherwise this test is
+    // silently exercising the desktop layout.
+    expect(await page.evaluate(() => matchMedia("(hover: none) and (pointer: coarse)").matches)).toBe(
+      true,
+    );
+
+    const form = page.locator("form[action='/api/auth/login']");
+    const formBox = await form.boundingBox();
+    expect(formBox).not.toBeNull();
+    const formRight = formBox!.x + formBox!.width;
+
+    for (const control of [
+      page.getByLabel(/email/i),
+      page.getByLabel(/password/i),
+      page.getByRole("button", { name: /sign in/i }),
+    ]) {
+      const box = await control.boundingBox();
+      expect(box).not.toBeNull();
+      // Allow sub-pixel rounding; a real overflow is tens of pixels.
+      expect(box!.x + box!.width).toBeLessThanOrEqual(formRight + 1);
+    }
+
+    // And nothing on the page forces a horizontal scroll.
+    const { scrollWidth, innerWidth } = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    }));
+    expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
+  });
+});
+
 test("password login: a verified credential lands on /chat", async ({ page }) => {
   // The form POSTs to /api/auth/login, which (in prod) verifies against
   // chat-server then sets the HMAC session cookie. Intercept that POST and
