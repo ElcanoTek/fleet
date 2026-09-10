@@ -263,8 +263,14 @@ func (s *Server) rekickDrainAfter(convID string, d time.Duration) {
 // a direct submission registered a moment later. running is false when
 // nothing was running.
 func (s *Server) beginStopSweep(convID string) (epoch int64, entry inflightEntry, running bool) {
-	epoch = time.Now().UnixNano()
 	s.inflightMu.Lock()
+	// The instant is read UNDER the lock: it and the generation must share
+	// one linearization point. Read before it, a follow-up accepted after the
+	// instant but before the lock could be claimed, decided post-Stop with the
+	// old generation, and then refused at registration once this Stop bumps
+	// it — while the sweep, comparing against the instant, correctly spared
+	// it.
+	epoch = time.Now().UnixNano()
 	if s.stopEpochs == nil {
 		s.stopEpochs = make(map[string]int64)
 	}
