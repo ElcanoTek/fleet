@@ -344,7 +344,21 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// register here.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
-	buf, turnID, turnToken, ok := s.registerTurn(conv.ID, turnCancel, steer)
+	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queueRowID != "")
+	if swept {
+		// A Stop scope=all sweep is in flight and this drained row was
+		// claimed by a drain that passed maybeDrainQueue's check before the
+		// sweep began, so the sweep cannot see it. It belongs to the swept
+		// set: cancel it here rather than un-claim it — an un-claimed row
+		// would outlive the sweep and launch on the re-kick.
+		turnCancel()
+		s.terminalizeQueueRow(queueRowID, store.InputStateCancelled)
+		s.emitQueueUpdate(context.Background(), user, conv.ID)
+		if releaseSlot != nil {
+			releaseSlot()
+		}
+		return true
+	}
 	if !ok {
 		turnCancel()
 		return false
@@ -514,7 +528,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			log.Printf("settle turn inputs (turn=%s): %v", turnID, serr)
 		}
 		if cancelledSteers > 0 {
-			log.Printf("input queue: cancelled %d injected steer(s) of failed turn %s — tools dispatched after injection, re-running could duplicate side effects (#823)", cancelledSteers, turnID) //nolint:gosec // G706: int count + server-generated turn UUID — no request-authored text is logged.
+			log.Printf("input queue: cancelled %d injected steer(s) of failed turn %s — tools dispatched after injection, re-running could duplicate side effects (#823)", cancelledSteers, turnID)
 		}
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		releaseOnce()

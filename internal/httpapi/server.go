@@ -637,20 +637,42 @@ func envInt(key string, def int) int {
 // falls back to the queue path). A RETAINED finished entry is still evicted +
 // sealed exactly as before. Returns the buffer, the turn ID, and a token that
 // finishTurn must present so stale finishers can't clobber a fresher entry.
-func (s *Server) registerTurn(convID string, cancel context.CancelFunc, steer *steerMailbox) (*turnBuffer, string, uint64, bool) {
+//
+// This ungated form serves turns with no steer mailbox and no queue row
+// (webhooks); chat submissions and queue drains go through registerTurnGated.
+func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBuffer, string, uint64, bool) {
+	buf, turnID, token, ok, _ := s.registerTurnGated(convID, cancel, nil, false)
+	return buf, turnID, token, ok
+}
+
+// registerTurnGated is registerTurn with an optional Stop-sweep gate for the
+// queue-drain path. With gate set, a Stop scope=all sweep in flight for convID
+// (beginStopSweep) refuses the registration — under the same inflightMu the
+// sweep took, so the check is atomic with the claim becoming a running turn.
+// This closes the window maybeDrainQueue's own check cannot: a drain that
+// passed that check just before the sweep began, then claimed the FIFO head,
+// would otherwise launch a row the sweep can no longer see (and, for a row
+// accepted in the same second as the Stop, the strict epoch gate would let
+// it through too). swept reports that refusal so the caller cancels the row
+// instead of un-claiming it.
+func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, gate bool) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
 	s.inflightMu.Lock()
+	if gate && s.stopSweeps[convID] > 0 {
+		s.inflightMu.Unlock()
+		return nil, "", 0, false, true
+	}
 	prev, hadPrev := s.inflight[convID]
 	if hadPrev && prev.IsRunning() {
 		s.inflightMu.Unlock()
-		return nil, "", 0, false
+		return nil, "", 0, false, false
 	}
 	if hadPrev {
 		delete(s.inflight, convID)
 	}
 	s.inflightCounter++
-	token := s.inflightCounter
-	turnID := uuid.NewString()
-	buf := newTurnBuffer(convID, turnID)
+	token = s.inflightCounter
+	turnID = uuid.NewString()
+	buf = newTurnBuffer(convID, turnID)
 	s.inflight[convID] = inflightEntry{
 		cancel: cancel,
 		token:  token,
@@ -670,7 +692,7 @@ func (s *Server) registerTurn(convID string, cancel context.CancelFunc, steer *s
 	if hadPrev && prev.buf != nil {
 		prev.buf.Finish()
 	}
-	return buf, turnID, token, true
+	return buf, turnID, token, true, false
 }
 
 // finishTurn seals the buffer and marks the entry finished, keeping it

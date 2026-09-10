@@ -270,7 +270,9 @@ func (s *Server) markStopAll(convID string) {
 // button is pressed, whatever the database is doing), and that turn's
 // completion tail-calls the drain — which, without this interlock, could
 // claim the FIFO head ahead of the sweep. The epoch gate below cannot close
-// that window on its own because created_at has second granularity.
+// that window on its own because created_at has second granularity. A drain
+// that passed maybeDrainQueue's check just before the sweep began is caught
+// at registration instead: registerTurnGated refuses under the same lock.
 func (s *Server) beginStopSweep(convID string) {
 	s.inflightMu.Lock()
 	if s.stopSweeps == nil {

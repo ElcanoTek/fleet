@@ -194,7 +194,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// runs fire-and-forget in a goroutine and the conversation surfaces in the
 	// notify_user's list the next time they open Fleet.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
-	buf, turnID, turnToken, ok := s.registerTurn(conv.ID, turnCancel, nil)
+	buf, turnID, turnToken, ok := s.registerTurn(conv.ID, turnCancel)
 	if !ok {
 		// Unreachable in practice — the conversation was created just above,
 		// so no turn can be running on it. Fail closed rather than panic.

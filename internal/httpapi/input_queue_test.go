@@ -312,6 +312,56 @@ func TestQueue_StopSweepInterlockDefersDrain(t *testing.T) {
 	waitFor(t, "deferred row drained", func() bool { return eng.turns.Load() == 1 })
 }
 
+// TestQueue_StopSweepGatesClaimedRowAtRegistration covers the drain that
+// passed maybeDrainQueue's interlock check just before a Stop sweep began and
+// went on to claim the FIFO head: the sweep can no longer see that row, so
+// registration must refuse it under the interlock and cancel it — not
+// un-claim it, which would let it launch on the post-sweep re-kick.
+func TestQueue_StopSweepGatesClaimedRowAtRegistration(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "q-1", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-q-1",
+		Message: "follow-up", Attachments: "[]", Mode: store.InputModeQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The racing drain's claim landed before the sweep started…
+	row, err := s.store.ClaimNextQueuedInput(t.Context(), conv.ID, "claim-placeholder")
+	if err != nil || row == nil {
+		t.Fatalf("claim: row=%v err=%v", row, err)
+	}
+	// …and the Stop sweep begins before that drain reaches registration.
+	s.beginStopSweep(conv.ID)
+	if !s.launchQueuedTurn(conv.ID, row) {
+		t.Fatal("launchQueuedTurn reported a lost registerTurn race; the sweep gate must handle the row itself")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := eng.turns.Load(); n != 0 {
+		t.Fatalf("claimed row launched %d turn(s) under a pending Stop sweep", n)
+	}
+	got, err := s.store.LookupInput(t.Context(), conv.ID, "cli-q-1")
+	if err != nil || got == nil {
+		t.Fatalf("lookup: row=%v err=%v", got, err)
+	}
+	if got.State != store.InputStateCancelled {
+		t.Fatalf("row state = %q, want %q: the gate must cancel the row, not leave it to re-launch", got.State, store.InputStateCancelled)
+	}
+	// Lifting the interlock re-kicks the drain; the cancelled row must not run.
+	s.endStopSweep(conv.ID)
+	time.Sleep(150 * time.Millisecond)
+	if n := eng.turns.Load(); n != 0 {
+		t.Fatalf("cancelled row ran after the sweep ended: %d turn(s)", n)
+	}
+}
+
 func TestQueue_IdempotentSubmission(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
