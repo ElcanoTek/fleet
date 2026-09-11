@@ -104,19 +104,19 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Ensure podman + pasta + postgres client
-        # Keep this step IDENTICAL to ci.yml's e2e-live equivalent. The two lanes
-        # boot the same stack through the same scripts/e2e-boot-server.sh, so any
-        # prerequisite only one of them installs is a difference that shows up as
-        # a canary-only failure nobody can reproduce from a PR. That is what the
-        # 2026-09-11 red canary looked like: e2e-live installed pasta
-        # defensively and stayed green, the canary relied on whatever the hosted
-        # image shipped, and its rootless sandbox probe started failing on the
-        # runner image bump from ubuntu-24.04/20260831.293 to /20260907.300 —
-        # with no fleet-side commit in between that touches the sandbox.
+        # Kept IDENTICAL to ci.yml's e2e-live equivalent. Both lanes boot the
+        # same stack through the same scripts/e2e-boot-server.sh, so any
+        # prerequisite only one of them installs is a difference that can only
+        # ever surface as a canary-only failure nobody can reproduce from a PR.
+        # pasta (passt) is the rootless network backend podman >= 5.0 defaults
+        # to; install it explicitly rather than relying on the runner image.
         #
-        # pasta (passt) is the rootless network backend for the per-turn podman
-        # tool sandbox; install it explicitly rather than relying on the runner
-        # image's default rootless backend.
+        # To be clear about what this step is NOT: it did not fix the 2026-09-11
+        # red canary. The hosted image already ships passt, and podman 4.9.3
+        # there uses slirp4netns anyway — a dispatch on this branch confirmed
+        # both. This is lane parity and the version prints below are diagnostics
+        # (the red run recorded no podman version at all). The actual fix for
+        # that failure is the keep-id pre-warm in scripts/e2e-boot-server.sh.
         run: |
           sudo apt-get update -qq
           command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
