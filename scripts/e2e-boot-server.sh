@@ -290,17 +290,74 @@ ensure_sandbox() {
       "$REPO_ROOT/scripts/build-sandbox-image.sh" "${FLEET_SANDBOX_IMAGE##*:}" \
       >>"$LOG_DIR/sandbox-build.log" 2>&1 || die "sandbox image build failed (see $LOG_DIR/sandbox-build.log)"
   fi
+  # Pay podman's one-time keep-id id-remapped layer copy BEFORE the probe —
+  # the same thing fleet does at boot, for the same reason (#1358).
+  #
+  # The FIRST keep-id start of a given image makes podman build an id-remapped
+  # copy of every layer into the rootless store: ~12s on a fast disk, minutes
+  # on a slow one. fleet absorbs that in sandbox.PrewarmKeepIDImage under a
+  # 15-minute budget, but that runs inside `fleet serve` — which this script
+  # does not start until AFTER the probe. So the probe was paying the copy
+  # itself, under NewContainer's plain 30s StartTimeout, on an image built
+  # seconds earlier and never once started. That is a coin flip on runner
+  # speed, and it is how the 2026-09-11 nightly canary died: the probe burned
+  # 33.8s — one expired 30s start — and reported only "the container sandbox
+  # is not working", while the same commit on the same runner image passed in
+  # 13s hours later.
+  #
+  # The idmap string must stay VERBATIM identical to sandbox.keepIDUserns:
+  # podman keys the cached copy on (image, idmap), so a different string
+  # primes the wrong entry and buys nothing.
+  #
+  # Best-effort, exactly as fleet's pre-warm is: if this fails the probe still
+  # runs and now reports why, and its own timeout remains the backstop.
+  log "sandbox: pre-warming the keep-id id-remapped copy of $FLEET_SANDBOX_IMAGE (one-time; minutes on slow disks)"
+  prewarm_start=$(date +%s)
+  prewarm_cmd=(podman run --rm "--userns=keep-id:uid=1000,gid=1000" "$FLEET_SANDBOX_IMAGE" true)
+  # `timeout` bounds a wedged podman without depending on it: not every dev box
+  # (macOS) ships coreutils' timeout, and the harness must run there too.
+  if command -v timeout >/dev/null 2>&1; then
+    prewarm_cmd=(timeout 900 "${prewarm_cmd[@]}")
+  fi
+  if "${prewarm_cmd[@]}" >>"$LOG_DIR/sandbox-prewarm.log" 2>&1; then
+    log "sandbox: keep-id copy ready in $(( $(date +%s) - prewarm_start ))s"
+  else
+    log "sandbox: keep-id pre-warm FAILED after $(( $(date +%s) - prewarm_start ))s (continuing — the probe below pays the copy under its own start timeout and will report the error):"
+    tail -n 20 "$LOG_DIR/sandbox-prewarm.log" >&2 || true
+  fi
   log "sandbox: probing $FLEET_SANDBOX_IMAGE (bash + run_python, normal + lockdown)"
   go_build_retry "$BIN_DIR/sandbox-probe" ./cmd/sandbox-probe sandbox-probe \
     || die "go build sandbox-probe failed (see $LOG_DIR/build.log)"
   mkdir -p "$WORKSPACE_BASE/probe-workspace" "$WORKSPACE_BASE/probe-bridge"
   chmod 0755 "$WORKSPACE_BASE/probe-workspace" "$WORKSPACE_BASE/probe-bridge" 2>/dev/null || true
-  FLEET_SANDBOX_IMAGE="$FLEET_SANDBOX_IMAGE" \
-  SANDBOX_WORKSPACE="$WORKSPACE_BASE/probe-workspace" \
-  SANDBOX_BRIDGE_DIR="$WORKSPACE_BASE/probe-bridge" \
-  SANDBOX_SUPPORTING="" \
-    "$BIN_DIR/sandbox-probe" >>"$LOG_DIR/sandbox-probe.log" 2>&1 \
-    || die "sandbox probe FAILED — the container sandbox is not working (see $LOG_DIR/sandbox-probe.log)"
+  if ! FLEET_SANDBOX_IMAGE="$FLEET_SANDBOX_IMAGE" \
+    SANDBOX_WORKSPACE="$WORKSPACE_BASE/probe-workspace" \
+    SANDBOX_BRIDGE_DIR="$WORKSPACE_BASE/probe-bridge" \
+    SANDBOX_SUPPORTING="" \
+    "$BIN_DIR/sandbox-probe" >>"$LOG_DIR/sandbox-probe.log" 2>&1; then
+    # Put the reason in the job output, for the same reason go_build_retry
+    # tails build.log: "see .e2e-run/logs/sandbox-probe.log" is a dead end in
+    # CI. The e2e-canary lane uploads NOTHING from that directory on purpose —
+    # it is the one job that boots with a real OPENROUTER_API_KEY, and an
+    # artifact on a public repo is world-downloadable — so before this tail a
+    # red canary reported only "the container sandbox is not working" and the
+    # podman error underneath it was unrecoverable after the runner was gone.
+    # stderr is the channel that is safe to say it on: Actions masks registered
+    # secrets in the log stream, and does not mask inside an artifact.
+    log "sandbox: probe FAILED — last 60 lines of sandbox-probe.log:"
+    tail -n 60 "$LOG_DIR/sandbox-probe.log" >&2 || true
+    # The rootless network stack is the part of this that drifts underneath us
+    # (a hosted-runner image bump, a podman major that changes the default
+    # backend), and it is invisible in a probe failure otherwise. Name the
+    # backend and whether each helper binary is actually on PATH.
+    log "sandbox: podman diagnostics —"
+    podman version >&2 || true
+    podman info --format 'networkBackend={{.Host.NetworkBackend}} rootless={{.Host.Security.Rootless}}' >&2 || true
+    for helper in pasta slirp4netns netavark crun conmon; do
+      printf '[e2e-boot]   %-12s %s\n' "$helper" "$(command -v "$helper" || echo 'NOT ON PATH')" >&2
+    done
+    die "sandbox probe FAILED — the container sandbox is not working (see $LOG_DIR/sandbox-probe.log)"
+  fi
   log "sandbox: probe OK"
 }
 

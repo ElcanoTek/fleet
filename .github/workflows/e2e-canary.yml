@@ -103,11 +103,28 @@ jobs:
         working-directory: web
         run: npx playwright install --with-deps chromium
 
-      - name: Ensure podman + postgres client
+      - name: Ensure podman + pasta + postgres client
+        # Kept IDENTICAL to ci.yml's e2e-live equivalent. Both lanes boot the
+        # same stack through the same scripts/e2e-boot-server.sh, so any
+        # prerequisite only one of them installs is a difference that can only
+        # ever surface as a canary-only failure nobody can reproduce from a PR.
+        # pasta (passt) is the rootless network backend podman >= 5.0 defaults
+        # to; install it explicitly rather than relying on the runner image.
+        #
+        # To be clear about what this step is NOT: it did not fix the 2026-09-11
+        # red canary. The hosted image already ships passt, and podman 4.9.3
+        # there uses slirp4netns anyway — a dispatch on this branch confirmed
+        # both. This is lane parity and the version prints below are diagnostics
+        # (the red run recorded no podman version at all). The actual fix for
+        # that failure is the keep-id pre-warm in scripts/e2e-boot-server.sh.
         run: |
           sudo apt-get update -qq
           command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
+          command -v pasta  >/dev/null 2>&1 || sudo apt-get install -y -qq passt
           command -v psql   >/dev/null 2>&1 || sudo apt-get install -y -qq postgresql-client
+          podman --version
+          pasta --version 2>/dev/null | head -1 || true
+          psql --version
 
       - name: Build the sandbox image from the default bundle
         id: sandbox
