@@ -295,12 +295,34 @@ ensure_sandbox() {
     || die "go build sandbox-probe failed (see $LOG_DIR/build.log)"
   mkdir -p "$WORKSPACE_BASE/probe-workspace" "$WORKSPACE_BASE/probe-bridge"
   chmod 0755 "$WORKSPACE_BASE/probe-workspace" "$WORKSPACE_BASE/probe-bridge" 2>/dev/null || true
-  FLEET_SANDBOX_IMAGE="$FLEET_SANDBOX_IMAGE" \
-  SANDBOX_WORKSPACE="$WORKSPACE_BASE/probe-workspace" \
-  SANDBOX_BRIDGE_DIR="$WORKSPACE_BASE/probe-bridge" \
-  SANDBOX_SUPPORTING="" \
-    "$BIN_DIR/sandbox-probe" >>"$LOG_DIR/sandbox-probe.log" 2>&1 \
-    || die "sandbox probe FAILED — the container sandbox is not working (see $LOG_DIR/sandbox-probe.log)"
+  if ! FLEET_SANDBOX_IMAGE="$FLEET_SANDBOX_IMAGE" \
+    SANDBOX_WORKSPACE="$WORKSPACE_BASE/probe-workspace" \
+    SANDBOX_BRIDGE_DIR="$WORKSPACE_BASE/probe-bridge" \
+    SANDBOX_SUPPORTING="" \
+    "$BIN_DIR/sandbox-probe" >>"$LOG_DIR/sandbox-probe.log" 2>&1; then
+    # Put the reason in the job output, for the same reason go_build_retry
+    # tails build.log: "see .e2e-run/logs/sandbox-probe.log" is a dead end in
+    # CI. The e2e-canary lane uploads NOTHING from that directory on purpose —
+    # it is the one job that boots with a real OPENROUTER_API_KEY, and an
+    # artifact on a public repo is world-downloadable — so before this tail a
+    # red canary reported only "the container sandbox is not working" and the
+    # podman error underneath it was unrecoverable after the runner was gone.
+    # stderr is the channel that is safe to say it on: Actions masks registered
+    # secrets in the log stream, and does not mask inside an artifact.
+    log "sandbox: probe FAILED — last 60 lines of sandbox-probe.log:"
+    tail -n 60 "$LOG_DIR/sandbox-probe.log" >&2 || true
+    # The rootless network stack is the part of this that drifts underneath us
+    # (a hosted-runner image bump, a podman major that changes the default
+    # backend), and it is invisible in a probe failure otherwise. Name the
+    # backend and whether each helper binary is actually on PATH.
+    log "sandbox: podman diagnostics —"
+    podman version >&2 || true
+    podman info --format 'networkBackend={{.Host.NetworkBackend}} rootless={{.Host.Security.Rootless}}' >&2 || true
+    for helper in pasta slirp4netns netavark crun conmon; do
+      printf '[e2e-boot]   %-12s %s\n' "$helper" "$(command -v "$helper" || echo 'NOT ON PATH')" >&2
+    done
+    die "sandbox probe FAILED — the container sandbox is not working (see $LOG_DIR/sandbox-probe.log)"
+  fi
   log "sandbox: probe OK"
 }
 
