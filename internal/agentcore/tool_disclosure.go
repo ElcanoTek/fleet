@@ -167,9 +167,28 @@ func (r *deferredToolRegistry) describeTool() fantasy.AgentTool {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("tool_describe: no tool named %q — use tool_search to find the right name.", name)), nil
 			}
 			info := t.Info()
-			schema, _ := json.MarshalIndent(info.Parameters, "", "  ")
-			return fantasy.NewTextResponse(fmt.Sprintf("Tool: %s\n\n%s\n\nParameters (JSON Schema):\n%s\n\nCall it with tool_call {\"name\":%q,\"arguments\":{…}}.",
-				info.Name, info.Description, string(schema), info.Name)), nil
+			// Print the schema the provider would receive for a directly
+			// registered tool: type, properties AND required. Until #1006's
+			// catalog audit this printed the properties map alone, so a model
+			// in deferred mode could not learn that Stripe's every API tool
+			// needs `stripe_context` and `livemode` — it omitted them and the
+			// vendor answered HTTP 422 — while the same tool registered
+			// directly (small roster) carried its required list natively.
+			props := info.Parameters
+			if props == nil {
+				props = map[string]any{}
+			}
+			schema := map[string]any{"type": "object", "properties": props}
+			if len(info.Required) > 0 {
+				schema["required"] = info.Required
+			}
+			out, _ := json.MarshalIndent(schema, "", "  ")
+			required := "none"
+			if len(info.Required) > 0 {
+				required = strings.Join(info.Required, ", ")
+			}
+			return fantasy.NewTextResponse(fmt.Sprintf("Tool: %s\n\n%s\n\nParameters (JSON Schema):\n%s\n\nRequired arguments: %s.\n\nCall it with tool_call {\"name\":%q,\"arguments\":{…}}.",
+				info.Name, info.Description, string(out), required, info.Name)), nil
 		})
 }
 
@@ -240,6 +259,19 @@ func (t *deferredToolCall) Run(ctx context.Context, tc fantasy.ToolCall) (fantas
 		//nolint:nilerr // intentional: a malformed arguments payload is reported to the MODEL as a text error response (like the two rejections above) so it can correct the call; a non-nil Go error would abort the run.
 		return fantasy.NewTextErrorResponse("tool_call: " + err.Error()), nil
 	}
+	// Refuse a call that omits an argument the tool's own schema marks
+	// required, and NAME the missing ones. The vendor would refuse it anyway,
+	// but its answer reaches the model only as the broker's masked
+	// "credential-owner call failed" (the real text is a host-log line), which
+	// reads as a broken credential rather than a fixable call — Stripe's
+	// `stripe_context`/`livemode` 422s sent a model off to tell the user to
+	// reconnect (#1006). Checked here, before the broker and before any
+	// policy or audit record, so the correction costs one model step.
+	if missing := missingRequiredArguments(tool.Info().Required, args); len(missing) > 0 {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf(
+			"tool_call: %s requires argument(s) it did not receive: %s. Run tool_describe %q for the schema, then call again with every required argument.",
+			name, strings.Join(missing, ", "), name)), nil
+	}
 
 	// Dispatch through the real tool's Run with the SAME call id, so its policy
 	// gate + broker + audit + redaction all apply as if called directly.
@@ -267,6 +299,29 @@ func normalizeDeferredArguments(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, fmt.Errorf("arguments must be a JSON object")
 	}
 	return one, nil
+}
+
+// missingRequiredArguments returns the names in required that args (a JSON
+// object) does not carry, or carries as JSON null — the schema's `required`
+// means present, and a null is what a model emits when it knows the name but
+// not the value. An unparsable object yields nothing: the dispatch path
+// reports that shape on its own.
+func missingRequiredArguments(required []string, args json.RawMessage) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	var have map[string]json.RawMessage
+	if err := json.Unmarshal(args, &have); err != nil {
+		return nil
+	}
+	var missing []string
+	for _, name := range required {
+		v, ok := have[name]
+		if !ok || strings.TrimSpace(string(v)) == "null" {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // oneLine collapses whitespace and clamps a description for the search listing.

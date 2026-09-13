@@ -176,6 +176,82 @@ func TestDisclosureSearchDescribeCall(t *testing.T) {
 	}
 }
 
+// TestDisclosureDescribeShowsRequiredAndCallEnforcesIt is the #1006 catalog
+// audit regression: Stripe's every API tool marks `stripe_context` and
+// `livemode` required, tool_describe printed the properties map without the
+// required list, and a deferred-mode model omitted them; Stripe answered
+// HTTP 422, which the broker masked as "credential-owner call failed", and the
+// model told the user to reconnect. tool_describe must show `required`, and
+// tool_call must refuse the incomplete call BEFORE the broker, naming what is
+// missing.
+func TestDisclosureDescribeShowsRequiredAndCallEnforcesIt(t *testing.T) {
+	broker := &fakeBroker{}
+	stripe := mcp.ServerTool{ServerName: "stripe", Tool: mcp.Tool{
+		Name:        "stripe_api_search",
+		Description: "Search for Stripe API operations",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"intent":         map[string]interface{}{"type": "string"},
+				"stripe_context": map[string]interface{}{"type": "string"},
+				"livemode":       map[string]interface{}{"type": "boolean"},
+				"limit":          map[string]interface{}{"type": "integer"},
+			},
+			"required": []interface{}{"intent", "stripe_context", "livemode"},
+		},
+	}}
+	loose := mcp.ServerTool{ServerName: "stripe", Tool: mcp.Tool{
+		Name:        "list_accounts",
+		Description: "List accounts",
+		InputSchema: map[string]interface{}{"type": "object"},
+	}}
+	reg := newDeferredToolRegistry(mcpToolsFrom([]mcp.ServerTool{stripe, loose}, broker))
+	const name = "mcp_stripe_stripe_api_search"
+
+	// describe: the schema carries the required list, and the summary line names it.
+	dresp, _ := reg.describeTool().Run(context.Background(), fantasy.ToolCall{Input: `{"name":"` + name + `"}`})
+	if dresp.IsError {
+		t.Fatalf("describe: %+v", dresp)
+	}
+	for _, want := range []string{`"required": [`, `"stripe_context"`, `"livemode"`, "Required arguments: intent, stripe_context, livemode."} {
+		if !strings.Contains(dresp.Content, want) {
+			t.Errorf("describe output lacks %q:\n%s", want, dresp.Content)
+		}
+	}
+	// a tool without a required list says so and prints no required key.
+	lresp, _ := reg.describeTool().Run(context.Background(), fantasy.ToolCall{Input: `{"name":"mcp_stripe_list_accounts"}`})
+	if lresp.IsError || !strings.Contains(lresp.Content, "Required arguments: none.") || strings.Contains(lresp.Content, `"required"`) {
+		t.Errorf("describe of a tool without required: %+v", lresp)
+	}
+
+	// call missing two required arguments: refused, both named, broker untouched.
+	cresp, _ := reg.callTool().Run(context.Background(), fantasy.ToolCall{ID: "tc-1", Input: `{"name":"` + name + `","arguments":{"intent":"get balance"}}`})
+	if !cresp.IsError || !strings.Contains(cresp.Content, "stripe_context, livemode") || !strings.Contains(cresp.Content, "tool_describe") {
+		t.Fatalf("incomplete call must be refused naming the missing arguments: %+v", cresp)
+	}
+	if broker.lastTool != "" {
+		t.Fatalf("broker reached with an incomplete call: %s/%s", broker.lastServer, broker.lastTool)
+	}
+	// a JSON null counts as missing.
+	nresp, _ := reg.callTool().Run(context.Background(), fantasy.ToolCall{ID: "tc-2", Input: `{"name":"` + name + `","arguments":{"intent":"x","stripe_context":"acct_1","livemode":null}}`})
+	if !nresp.IsError || !strings.Contains(nresp.Content, "livemode") || strings.Contains(nresp.Content, "stripe_context,") {
+		t.Fatalf("null required argument must be reported as missing, and only it: %+v", nresp)
+	}
+	// complete call dispatches.
+	ok, _ := reg.callTool().Run(context.Background(), fantasy.ToolCall{ID: "tc-3", Input: `{"name":"` + name + `","arguments":{"intent":"x","stripe_context":"acct_1","livemode":false}}`})
+	if ok.IsError || broker.lastTool != "stripe_api_search" || !strings.Contains(broker.lastArgs, "acct_1") {
+		t.Fatalf("complete call must dispatch: %+v (broker %s/%s %s)", ok, broker.lastServer, broker.lastTool, broker.lastArgs)
+	}
+	// optional arguments are never demanded.
+	if m := missingRequiredArguments([]string{"a"}, json.RawMessage(`{"a":1,"b":2}`)); m != nil {
+		t.Errorf("missing = %v, want none", m)
+	}
+	// an unparsable object is left to the dispatch path to report.
+	if m := missingRequiredArguments([]string{"a"}, json.RawMessage(`{not json`)); m != nil {
+		t.Errorf("unparsable args must not be judged here: %v", m)
+	}
+}
+
 func findTool(ts []fantasy.AgentTool, name string) fantasy.AgentTool {
 	for _, t := range ts {
 		if t.Info().Name == name {
