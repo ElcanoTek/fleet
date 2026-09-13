@@ -535,6 +535,17 @@ How the invariants hold:
 - **SSRF guard.** User-supplied URLs are dialed through a client that rejects
   private/loopback/link-local/metadata IPs at connect time (DNS-rebinding safe)
   and refuses redirects.
+- **Authorization-server metadata is looked for where both specs put it.**
+  An issuer with a path component (`https://access.stripe.com/mcp`,
+  `https://mcp.datadoghq.com/v1/mcp`, GitHub's `/login/oauth`) may publish
+  its document at RFC 8414 §3.1's *inserted* location
+  (`/.well-known/oauth-authorization-server/mcp`) or at OpenID Connect
+  Discovery's *appended* one (`/mcp/.well-known/openid-configuration`).
+  `mcpoauth.authServerMetadataCandidates` tries, in the MCP spec's order,
+  RFC 8414 inserted, OIDC inserted, OIDC appended, then the appended RFC 8414
+  form fleet historically asked for; a failed Add names every location it
+  tried. Before this, only the appended forms were tried and thirteen
+  official catalog vendors could not be added at all (#1006 audit).
 - **Rotation-safe refresh.** Tokens are refreshed under a `SELECT … FOR UPDATE`
   row lock with a post-lock expiry re-check, persisting any rotated (single-use)
   refresh token in the same transaction. A dead refresh token marks the
