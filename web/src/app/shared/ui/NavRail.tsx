@@ -2,10 +2,11 @@
 
 // NavRail — the shared left rail that unifies Chat and the Operations Center
 // into one experience (#169). It owns the frame both surfaces render: brand,
-// the Chat / Operations Center navigation (router links with active state), a
-// surface-specific middle slot (`children`), an optional surface-specific
-// `footer`, and the account menu. Two routes, one rail — switching surfaces is
-// ordinary navigation, so existing routing/auth are preserved.
+// the Chat / Operations Center / Guides navigation (router links with active
+// state), a surface-specific middle slot (`children`), an optional
+// surface-specific `footer`, and the account menu. One rail for every surface —
+// switching between them is ordinary navigation, so existing routing/auth are
+// preserved.
 //
 // Responsive/collapse model (the design's .rail):
 //   - <640px (below sm): the prior off-canvas drawer, toggled via sidebarOpen
@@ -29,15 +30,16 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
+import { NavToChat, NavToHelp, NavToOrchestrator } from "./CrossViewNav";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
 
 // "settings" renders the rail with neither surface active (the design's
 // settings view): Chat/Operations Center stay plain links and the account
-// button below takes the `current` tint instead.
-export type RailView = "chat" | "orchestrator" | "settings";
+// button below takes the `current` tint instead. "help" is the guides surface
+// (/help), which marks its own nav item and leaves the account button alone.
+export type RailView = "chat" | "orchestrator" | "settings" | "help";
 
 export const RAIL_COLLAPSED_STORAGE_KEY = "rail-collapsed";
 const NARROW_QUERY = "(max-width: 900px)";
@@ -359,6 +361,22 @@ export function NavRail({
               </span>
             ) : null}
           </NavToOrchestrator>
+          {/* The user guides. A third rail item rather than a link buried in a
+              menu: "what does DEAD_LETTERED mean" is a question people have
+              while looking at the board, and the answer should be one visible
+              click away on every surface. */}
+          <NavToHelp
+            className={navItemClass(activeView === "help", collapsed)}
+            ariaCurrent={activeView === "help" ? "page" : undefined}
+            dataTip={collapsed ? "Guides" : undefined}
+          >
+            <span className={navTileClass(activeView === "help")} aria-hidden="true">
+              <Icon name="book-open" className="size-[1rem]" />
+            </span>
+            <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
+              Guides
+            </span>
+          </NavToHelp>
         </nav>
 
         <div className="my-1 h-px shrink-0 bg-[var(--color-border)]" />

@@ -49,6 +49,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   the two CI lanes, promotion mechanics, reviewers, pinned tool versions, the
   local-reproduction traps — is
   [`docs/PR-STEWARDSHIP.md`](PR-STEWARDSHIP.md)
+- **Documentation for the people USING fleet** (the two in-app guides at
+  `/help`, the `fleet-guide` built-in skill that lets the assistant answer from
+  the same text, and the one-source-two-copies rule `make sync-guides` and
+  `scripts/check_guides_sync_test.go` enforce):
+  [`docs/USER-GUIDES.md`](USER-GUIDES.md)
 - **Testing strategy** (unit / fake-LLM / mocked + live Playwright / canary):
   [`docs/TESTING.md`](TESTING.md)
 - **The scanning stack** (who checks what, why ruff owns Python lint, why
@@ -267,6 +272,7 @@ above fails otherwise.
 - [`UPLOADS-AND-STORAGE.md`](UPLOADS-AND-STORAGE.md) — Uploads & storage management
 - [`UPSTREAM-ROUTING-FLOOR.md`](UPSTREAM-ROUTING-FLOOR.md) — Upstream routing: precision floor + served-upstream attribution
 - [`USAGE-ANALYTICS.md`](USAGE-ANALYTICS.md) — Usage analytics & budgets (#601)
+- [`USER-GUIDES.md`](USER-GUIDES.md) — The user guides: /help and the `fleet-guide` skill
 - [`VERSIONING.md`](VERSIONING.md) — Versioning and releases
 - [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md) — Web-tier shutdown — why `systemctl restart fleet-web` was dumping core
 - [`WEBHOOK-SIGNING.md`](WEBHOOK-SIGNING.md) — Webhook signing (verifying fleet's outbound webhooks)
