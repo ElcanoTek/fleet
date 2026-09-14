@@ -474,7 +474,7 @@ func TestProbeResourceMetadataPointerRefusesNonHTTP(t *testing.T) {
 func TestLocateResourceMetadataCandidatesOrder(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
 	t.Cleanup(srv.Close)
-	got, err := locateResourceMetadata(context.Background(), srv.Client(), srv.URL+"/v1/mcp")
+	got, advertised, err := locateResourceMetadata(context.Background(), srv.Client(), srv.URL+"/v1/mcp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,14 +486,17 @@ func TestLocateResourceMetadataCandidatesOrder(t *testing.T) {
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("candidates = %v, want %v", got, want)
 	}
-	got, _ = locateResourceMetadata(context.Background(), srv.Client(), srv.URL)
+	if advertised {
+		t.Error("well-known guesses must not be reported as advertised")
+	}
+	got, _, _ = locateResourceMetadata(context.Background(), srv.Client(), srv.URL)
 	if len(got) != 1 || got[0] != srv.URL+"/.well-known/oauth-protected-resource" {
 		t.Errorf("bare-origin candidates = %v", got)
 	}
 	// A query string is part of the canonical URL but not of where the
 	// document lives: every candidate is built from the path alone, and a
 	// percent-escaped segment survives verbatim.
-	got, _ = locateResourceMetadata(context.Background(), srv.Client(), srv.URL+"/tenant%2Fone/mcp?tenant=x")
+	got, _, _ = locateResourceMetadata(context.Background(), srv.Client(), srv.URL+"/tenant%2Fone/mcp?tenant=x")
 	want = []string{
 		srv.URL + "/.well-known/oauth-protected-resource/tenant%2Fone/mcp",
 		srv.URL + "/tenant%2Fone/mcp/.well-known/oauth-protected-resource",
@@ -514,7 +517,8 @@ func TestDiscoverLegacyOriginWhenPRMListsNoAuthorizationServers(t *testing.T) {
 	t.Cleanup(srv.Close)
 	base := srv.URL
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp"}) // no authorization_servers
+		// no authorization_servers, but a same-origin resource and scopes the vendor DID publish
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp/v1", ScopesSupported: []string{"read", "write"}})
 	})
 	legacyASHandlers(mux, base)
 	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
@@ -523,6 +527,14 @@ func TestDiscoverLegacyOriginWhenPRMListsNoAuthorizationServers(t *testing.T) {
 	}
 	if !d.LegacyOrigin || d.AS.Issuer != base || len(d.PRM.AuthorizationServers) != 1 || d.PRM.AuthorizationServers[0] != base {
 		t.Errorf("want the legacy-origin fallback, got %+v", d)
+	}
+	// The fetched document's other fields survive: its scopes drive
+	// RequestedScopes and its same-origin resource is adopted as usual.
+	if strings.Join(d.RequestedScopes(), " ") != "read write" {
+		t.Errorf("RequestedScopes = %v, want the PRM's own scopes", d.RequestedScopes())
+	}
+	if d.Resource != base+"/mcp/v1" || d.PRM.Resource != base+"/mcp/v1" {
+		t.Errorf("resource = %q / prm %q, want the PRM's same-origin resource adopted", d.Resource, d.PRM.Resource)
 	}
 	// ...and with no AS at the origin either, the error says the PRM named none.
 	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -535,6 +547,39 @@ func TestDiscoverLegacyOriginWhenPRMListsNoAuthorizationServers(t *testing.T) {
 	t.Cleanup(srv2.Close)
 	if _, err := Discover(context.Background(), srv2.Client(), srv2.URL+"/mcp"); err == nil || !strings.Contains(err.Error(), "lists no authorization_servers") || !strings.Contains(err.Error(), "legacy MCP 2025-03-26 fallback") {
 		t.Errorf("error must carry both halves: %v", err)
+	}
+}
+
+// TestDiscoverAdvertisedPointerFailureDoesNotFallBack: a modern server that
+// advertises its PRM location on the 401 and then cannot serve it (5xx,
+// malformed JSON, a timeout) is a server having a bad moment, not a
+// 2025-03-26 server with no metadata. Even with valid authorization-server
+// metadata at its origin, discovery must surface the failure rather than
+// persist a synthesized configuration the server never published.
+func TestDiscoverAdvertisedPointerFailureDoesNotFallBack(t *testing.T) {
+	for name, serve := range map[string]func(w http.ResponseWriter){
+		"500":            func(w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) },
+		"malformed json": func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"resource": `)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			base := srv.URL
+			mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/prm"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			})
+			mux.HandleFunc("/prm", func(w http.ResponseWriter, _ *http.Request) { serve(w) })
+			legacyASHandlers(mux, base) // the origin WOULD satisfy the legacy fallback
+			d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+			if err == nil {
+				t.Fatalf("Discover fell back to the origin behind an advertised pointer: %+v", d)
+			}
+			if !strings.Contains(err.Error(), "the server advertised at "+base+"/prm") {
+				t.Errorf("error must name the advertised location: %v", err)
+			}
+		})
 	}
 }
 

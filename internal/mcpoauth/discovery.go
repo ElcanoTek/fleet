@@ -79,7 +79,7 @@ type Discovered struct {
 // metadata, and verify it supports PKCE S256. httpClient MUST be the SSRF-safe
 // client in production; tests inject a plain client against httptest.
 func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (*Discovered, error) {
-	prmURLs, err := locateResourceMetadata(ctx, httpClient, canonicalServerURL)
+	prmURLs, advertised, err := locateResourceMetadata(ctx, httpClient, canonicalServerURL)
 	if err != nil {
 		return nil, err
 	}
@@ -97,16 +97,34 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		break
 	}
 	if prmURL == "" {
+		if advertised {
+			// The server told us where its metadata is (RFC 9728 §5.1) and
+			// then could not serve it — a 5xx, malformed JSON, a timeout.
+			// That is a modern server having a bad moment, not a 2025-03-26
+			// server with no metadata; falling back to its origin would
+			// persist a synthesized configuration the server never
+			// published. Surface the failure so the operator retries.
+			return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s: %w", prmURLs[0], fetchErr)
+		}
 		return discoverLegacyOrigin(ctx, httpClient, canonicalServerURL, fetchErr)
 	}
+
+	var as *AuthServerMetadata
+	legacy := false
 	if len(prm.AuthorizationServers) == 0 {
 		// RFC 9728 §2 makes authorization_servers OPTIONAL. A document that
 		// omits it yields no authorization server any more than a missing
 		// document does, so the same backwards-compatibility rule applies:
 		// the MCP server's own origin is the authorization server, still
-		// subject to the issuer check.
-		return discoverLegacyOrigin(ctx, httpClient, canonicalServerURL,
+		// subject to the issuer check. The document's OTHER fields
+		// (scopes_supported, resource) are the vendor's word and are kept.
+		origin, las, lerr := legacyOriginAuthServer(ctx, httpClient, canonicalServerURL,
 			fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL))
+		if lerr != nil {
+			return nil, lerr
+		}
+		prm.AuthorizationServers = []string{origin}
+		as, legacy = las, true
 	}
 
 	// The canonical identity defaults to the URL the user typed. RFC 9728 §3.3
@@ -123,25 +141,26 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		}
 	}
 
-	issuer := strings.TrimSpace(prm.AuthorizationServers[0])
-	as, err := fetchAuthServerMetadata(ctx, httpClient, issuer)
-	if err != nil {
-		return nil, err
+	if as == nil {
+		issuer := strings.TrimSpace(prm.AuthorizationServers[0])
+		as, err = fetchAuthServerMetadata(ctx, httpClient, issuer)
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyAuthServer(issuer, as); err != nil {
+			return nil, err
+		}
+		// Persist the issuer the PRM named and we verified against, not the
+		// document's spelling of it: for an Entra multi-tenant endpoint the
+		// document says the literal "{tenantid}" template (accepted by
+		// issuerMatches), which is not a URL anyone can dial or key a vendor
+		// clause on.
+		if !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
+			as.Issuer = issuer
+		}
 	}
 
-	if err := verifyAuthServer(issuer, as); err != nil {
-		return nil, err
-	}
-	// Persist the issuer the PRM named and we verified against, not the
-	// document's spelling of it: for an Entra multi-tenant endpoint the
-	// document says the literal "{tenantid}" template (accepted by
-	// issuerMatches), which is not a URL anyone can dial or key a vendor
-	// clause on.
-	if !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
-		as.Issuer = issuer
-	}
-
-	return &Discovered{Resource: resource, PRM: prm, AS: *as}, nil
+	return &Discovered{Resource: resource, PRM: prm, AS: *as, LegacyOrigin: legacy}, nil
 }
 
 // discoverLegacyOrigin is the MCP spec's backwards-compatibility rule for
@@ -158,26 +177,39 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 // fails too so an operator sees both halves of why the server could not be
 // added.
 func discoverLegacyOrigin(ctx context.Context, httpClient *http.Client, canonicalServerURL string, prmErr error) (*Discovered, error) {
-	origin, oerr := originOf(canonicalServerURL)
-	if oerr != nil {
-		return nil, fmt.Errorf("fetch protected-resource metadata: %w", prmErr)
-	}
-	as, err := fetchAuthServerMetadata(ctx, httpClient, origin)
+	origin, as, err := legacyOriginAuthServer(ctx, httpClient, canonicalServerURL, prmErr)
 	if err != nil {
-		return nil, fmt.Errorf("fetch protected-resource metadata: %w; and the server origin %s publishes no authorization-server metadata either (legacy MCP 2025-03-26 fallback): %w", prmErr, origin, err)
+		return nil, err
 	}
-	if err := verifyAuthServer(origin, as); err != nil {
-		return nil, fmt.Errorf("legacy authorization server at the MCP origin: %w", err)
-	}
-	// The verified issuer IS the origin; store that exact spelling (Cartesia's
-	// document says it with a trailing slash) so the row keys on one form.
-	as.Issuer = origin
 	return &Discovered{
 		Resource:     canonicalServerURL,
 		PRM:          ProtectedResourceMetadata{Resource: canonicalServerURL, AuthorizationServers: []string{origin}},
 		AS:           *as,
 		LegacyOrigin: true,
 	}, nil
+}
+
+// legacyOriginAuthServer fetches and verifies the authorization-server metadata
+// at the MCP server's own origin — the 2025-03-26 rule shared by "no PRM at
+// all" and "a PRM that names no authorization server". The verified issuer IS
+// the origin; it is stored in that exact spelling (Cartesia's document says it
+// with a trailing slash) so the row keys on one form. prmErr is why the PRM
+// yielded nothing and is carried into the error when the origin has nothing
+// either.
+func legacyOriginAuthServer(ctx context.Context, httpClient *http.Client, canonicalServerURL string, prmErr error) (string, *AuthServerMetadata, error) {
+	origin, oerr := originOf(canonicalServerURL)
+	if oerr != nil {
+		return "", nil, fmt.Errorf("fetch protected-resource metadata: %w", prmErr)
+	}
+	as, err := fetchAuthServerMetadata(ctx, httpClient, origin)
+	if err != nil {
+		return "", nil, fmt.Errorf("fetch protected-resource metadata: %w; and the server origin %s publishes no authorization-server metadata either (legacy MCP 2025-03-26 fallback): %w", prmErr, origin, err)
+	}
+	if err := verifyAuthServer(origin, as); err != nil {
+		return "", nil, fmt.Errorf("legacy authorization server at the MCP origin: %w", err)
+	}
+	as.Issuer = origin
+	return origin, as, nil
 }
 
 // RequestedScopes is the scope set the authorize request asks for: the
@@ -230,17 +262,22 @@ func containsFold(list []string, want string) bool {
 // (server URL + /.well-known/oauth-protected-resource — not in the RFC, but
 // what Uptime Robot's pointer names and what some vendors publish), then the
 // origin root.
-func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) ([]string, error) {
+//
+// advertised reports whether the server itself named the location (a 401
+// pointer) as opposed to fleet guessing the well-known ones: an advertised
+// document that then cannot be fetched is the server's failure to surface,
+// never grounds for the legacy-origin fallback.
+func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (candidates []string, advertised bool, err error) {
 	if u := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodGet, ""); u != "" {
-		return []string{u}, nil
+		return []string{u}, true, nil
 	}
 	if u := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodPost, initializeProbeBody); u != "" {
-		return []string{u}, nil
+		return []string{u}, true, nil
 	}
 	// Fallback: the conventional well-known locations.
 	origin, oerr := originOf(canonicalServerURL)
 	if oerr != nil {
-		return nil, oerr
+		return nil, false, oerr
 	}
 	root := origin + "/.well-known/oauth-protected-resource"
 	// The path component only: CanonicalResourceURI keeps a query string
@@ -248,14 +285,14 @@ func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canoni
 	// RFC 9728 §3.1 puts the document, so appending the well-known suffix to
 	// the whole URL would have put it inside the query. EscapedPath keeps a
 	// percent-escaped segment as the issuer spelled it.
-	u, err := url.Parse(canonicalServerURL)
-	if err != nil {
-		return nil, err
+	u, perr := url.Parse(canonicalServerURL)
+	if perr != nil {
+		return nil, false, perr
 	}
 	if path := strings.TrimSuffix(u.EscapedPath(), "/"); path != "" {
-		return []string{root + path, origin + path + "/.well-known/oauth-protected-resource", root}, nil
+		return []string{root + path, origin + path + "/.well-known/oauth-protected-resource", root}, false, nil
 	}
-	return []string{root}, nil
+	return []string{root}, false, nil
 }
 
 // ProbeProtocolVersion is the MCP protocol revision the discovery probe's

@@ -553,11 +553,14 @@ How the invariants hold:
   answers the GET with 404 and points only from the POST). Without a
   pointer it tries RFC 9728 §3.1's path-inserted well-known form, then the
   path-appended form, then the origin root — all built from the URL's path
-  alone, never its query. When no document exists at all, or the document
-  names no authorization server (`authorization_servers` is optional in RFC
-  9728), the MCP spec's backwards-compatibility rule applies: the server's own
-  origin is the authorization server, its RFC 8414 / OIDC document is fetched
-  there, and the typed URL is the resource (`Discovered.LegacyOrigin`). The
+  alone, never its query. When no document exists at any of those, or the
+  document names no authorization server (`authorization_servers` is optional
+  in RFC 9728; its other fields — scopes, resource — are kept), the MCP spec's
+  backwards-compatibility rule applies: the server's own origin is the
+  authorization server, its RFC 8414 / OIDC document is fetched there, and the
+  typed URL is the resource (`Discovered.LegacyOrigin`). A location the server
+  itself advertised on the 401 and then could not serve is an error, never a
+  fallback — that is a modern server failing, not a legacy one. The
   probe's `initialize` announces the same protocol revision as fleet's real
   transport (pinned by a test), and a session it happens to open is
   terminated before discovery moves on.
