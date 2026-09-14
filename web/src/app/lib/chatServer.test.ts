@@ -4,6 +4,7 @@ import {
   chatServerPassthrough,
   chatServerProxy,
   fetchSessionEpoch,
+  fetchExternalSessionEpoch,
   getChatServerBase,
   getSharedToken,
   chatServerHeaders,
@@ -83,6 +84,20 @@ describe("chatServer.ts", () => {
       process.env.CHAT_SERVER_TOKEN = "test-token";
       const headers = chatServerHeaders({ email: "user@example.com", epoch: "abcdef0123456789" });
       expect(headers.get("X-User-Session-Epoch")).toBe("abcdef0123456789");
+    });
+
+    it("forwards central identity metadata only for an OIDC session", () => {
+      process.env.CHAT_SERVER_TOKEN = "test-token";
+      const headers = chatServerHeaders({
+        email: "user@example.com",
+        epoch: "external-epoch",
+        source: "oidc",
+        issuer: "https://auth.example.com",
+        subject: "account-123",
+      });
+      expect(headers.get("X-User-Session-Source")).toBe("oidc");
+      expect(headers.get("X-External-Issuer")).toBe("https://auth.example.com");
+      expect(headers.get("X-External-Subject")).toBe("account-123");
     });
 
     // An elcano_auth session has no epoch to forward; chat-server admits a
@@ -190,6 +205,27 @@ describe("chatServer.ts", () => {
 
       fetchMock.mockResolvedValue(new Response("{}", { status: 200 }));
       expect(await fetchSessionEpoch("user@example.com")).toBeNull();
+    });
+  });
+
+  describe("fetchExternalSessionEpoch", () => {
+    beforeEach(() => {
+      process.env.CHAT_SERVER_URL = "http://chat.example.com";
+      process.env.CHAT_SERVER_TOKEN = "test-token";
+    });
+
+    it("binds the issuer and subject through the internal authenticated endpoint", async () => {
+      fetchMock.mockResolvedValue(new Response('{"session_epoch":"external-epoch"}', { status: 200 }));
+      expect(
+        await fetchExternalSessionEpoch("user@example.com", "https://auth.example.com", "account-123"),
+      ).toBe("external-epoch");
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://chat.example.com/auth/external-session-epoch");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(String(init.body))).toEqual({
+        issuer: "https://auth.example.com",
+        subject: "account-123",
+      });
     });
   });
 

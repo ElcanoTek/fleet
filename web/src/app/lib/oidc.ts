@@ -52,7 +52,7 @@ export function getOidcConfig(): OidcConfig | null {
   const clientSecret = (process.env.FLEET_OIDC_CLIENT_SECRET ?? "").trim();
   if (!issuer || !clientId || !clientSecret) return null;
 
-  const scopes = (process.env.FLEET_OIDC_SCOPES ?? "").trim() || "openid email profile";
+  const scopes = (process.env.FLEET_OIDC_SCOPES ?? "").trim() || "openid email";
   const allowedDomains = (process.env.FLEET_OIDC_ALLOWED_DOMAINS ?? "")
     .split(",")
     .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
@@ -74,6 +74,7 @@ export type DiscoveryDoc = {
   authorization_endpoint: string;
   token_endpoint: string;
   userinfo_endpoint?: string;
+  token_endpoint_auth_methods_supported?: string[];
 };
 
 // discoveryCache memoizes the per-issuer well-known document for the lifetime of
@@ -91,6 +92,13 @@ export async function discover(issuer: string, fetchImpl: typeof fetch = fetch):
     const doc = (await res.json()) as Partial<DiscoveryDoc>;
     if (!doc.authorization_endpoint || !doc.token_endpoint || !doc.issuer) {
       throw new Error("OIDC discovery document missing required endpoints");
+    }
+    // OIDC Discovery 4.3: the document's issuer MUST equal the issuer it was
+    // fetched from. Beyond the spec, Fleet keys external-session epochs by
+    // doc.issuer at login and by the configured issuer at back-channel logout;
+    // a mismatch would make every logout rotate a row no session points at.
+    if (doc.issuer.replace(/\/+$/, "") !== issuer.replace(/\/+$/, "")) {
+      throw new Error("OIDC discovery issuer does not match the configured issuer");
     }
     return doc as DiscoveryDoc;
   })();
@@ -156,7 +164,9 @@ export function emailDomainAllowed(email: string, allowedDomains: string[]): boo
   return allowedDomains.includes(email.slice(at + 1).toLowerCase());
 }
 
-export type IdTokenValidation = { ok: true; email: string } | { ok: false; reason: string };
+export type IdTokenValidation =
+  | { ok: true; email: string; subject: string }
+  | { ok: false; reason: string };
 
 // validateIdToken checks the security-relevant claims of an ID token obtained
 // from the token endpoint: issuer match, audience contains our client_id, not
@@ -192,11 +202,13 @@ export function validateIdToken(
 
   const email = typeof claims.email === "string" ? claims.email.trim().toLowerCase() : "";
   if (!email) return { ok: false, reason: "no email claim" };
+  const subject = typeof claims.sub === "string" ? claims.sub.trim() : "";
+  if (!subject || subject.length > 255) return { ok: false, reason: "no subject claim" };
   // Honor an explicit email_verified:false; absent is treated as verified since
   // not every IdP emits the claim.
   if (claims.email_verified === false) return { ok: false, reason: "email not verified" };
 
-  return { ok: true, email };
+  return { ok: true, email, subject };
 }
 
 // buildRedirectUri returns the callback URL the IdP redirects back to. A pinned

@@ -8,6 +8,7 @@ const discovery = {
   issuer: "https://idp.example.com",
   authorization_endpoint: "https://idp.example.com/authorize",
   token_endpoint: "https://idp.example.com/token",
+  token_endpoint_auth_methods_supported: ["client_secret_basic"],
 };
 
 function b64url(o: unknown): string {
@@ -20,6 +21,7 @@ function idToken(overrides: Record<string, unknown> = {}): string {
     aud: "client-123",
     exp: Math.floor(Date.now() / 1000) + 600,
     nonce: "the-nonce",
+    sub: "account-123",
     email: "Alice@Example.com",
     email_verified: true,
     ...overrides,
@@ -43,10 +45,14 @@ function stubFetch(token: string | null, epochStatus = 200) {
     }
     if (u === "https://idp.example.com/token") {
       expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Basic ${Buffer.from("client-123:secret-xyz").toString("base64")}`,
+      );
+      expect(String(init?.body)).not.toContain("client_secret");
       if (token === null) return new Response("bad", { status: 400 });
       return new Response(JSON.stringify({ id_token: token, access_token: "at" }), { status: 200 });
     }
-    if (u.endsWith("/auth/session-epoch")) {
+    if (u.endsWith("/auth/external-session-epoch")) {
       if (epochStatus !== 200) return new Response("nope", { status: epochStatus });
       return new Response(JSON.stringify({ session_epoch: TEST_EPOCH }), { status: 200 });
     }
@@ -102,6 +108,11 @@ describe("GET /api/auth/oidc/callback", () => {
     // The epoch chat-server reported is stamped in, so an admin password reset
     // evicts this SSO session too.
     expect(payload?.epoch).toBe(TEST_EPOCH);
+    expect(payload).toMatchObject({
+      source: "oidc",
+      issuer: "https://idp.example.com",
+      subject: "account-123",
+    });
 
     // Temp cookies are cleared.
     expect(res.cookies.get("fleet_oidc_state")?.value).toBe("");

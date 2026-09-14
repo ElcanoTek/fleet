@@ -33,6 +33,7 @@ const publicApiPaths = new Set([
   // the IdP (the start of every SSO login).
   "/api/auth/oidc/start",
   "/api/auth/oidc/callback",
+  "/api/auth/backchannel-logout",
   "/api/orchestrator/auth/login",
   "/api/orchestrator/auth/logout",
   "/api/orchestrator/auth/elcano-login",

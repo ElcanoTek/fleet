@@ -22,7 +22,19 @@ export async function resolveOrchestratorAuth(
   }
 
   const session = await getServerSession();
-  if (session) return { kind: "cookie", email: session.email, epoch: session.epoch };
+  if (session) {
+    const resolved: OrchestratorAuth = {
+      kind: "cookie",
+      email: session.email,
+      epoch: session.epoch,
+    };
+    if (resolved.kind === "cookie" && session.source === "oidc") {
+      resolved.source = "oidc";
+      resolved.issuer = session.issuer;
+      resolved.subject = session.subject;
+    }
+    return resolved;
+  }
 
   return null;
 }

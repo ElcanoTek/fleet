@@ -55,7 +55,7 @@ describe("getOidcConfig / oidcEnabled", () => {
     const c = getOidcConfig()!;
     expect(c).not.toBeNull();
     expect(c.issuer).toBe("https://idp.example.com");
-    expect(c.scopes).toBe("openid email profile");
+    expect(c.scopes).toBe("openid email");
     expect(c.buttonLabel).toBe("Sign in with SSO");
     expect(c.allowedDomains).toEqual([]);
     expect(oidcEnabled()).toBe(true);
@@ -109,6 +109,7 @@ describe("validateIdToken", () => {
   const now = 1_000_000;
   const base = {
     iss: "https://idp.example.com",
+    sub: "account-123",
     aud: "client-123",
     exp: now + 600,
     nonce: "nonce-abc",
@@ -117,7 +118,7 @@ describe("validateIdToken", () => {
 
   it("accepts a valid token and lowercases the email", () => {
     const v = validateIdToken(base, config, discovery, "nonce-abc", now);
-    expect(v).toEqual({ ok: true, email: "user@example.com" });
+    expect(v).toEqual({ ok: true, email: "user@example.com", subject: "account-123" });
   });
 
   it("accepts an array audience that contains the client id", () => {
@@ -132,6 +133,7 @@ describe("validateIdToken", () => {
     ["expired", { exp: now - 1 }],
     ["nonce mismatch", { nonce: "different" }],
     ["no email claim", { email: undefined }],
+    ["no subject claim", { sub: undefined }],
     ["email not verified", { email_verified: false }],
   ])("rejects on %s", (_label, override) => {
     const v = validateIdToken({ ...base, ...override }, config, discovery, "nonce-abc", now);
@@ -231,5 +233,24 @@ describe("buildRedirectUri", () => {
         buildRedirectUri({ ...config, redirectUri: "https://pinned.example.com/cb" }, req),
       ).toBe("https://pinned.example.com/cb");
     });
+  });
+});
+
+
+describe("discover issuer consistency", () => {
+  it("rejects a discovery document whose issuer differs from the configured one", async () => {
+    const { discover } = await import("./oidc");
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({
+          issuer: "https://other-idp.example.com",
+          authorization_endpoint: "https://idp.example.com/authorize",
+          token_endpoint: "https://idp.example.com/token",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as unknown as typeof fetch;
+    await expect(discover("https://mismatch-test.example.com", fetchImpl)).rejects.toThrow(
+      /issuer does not match/,
+    );
   });
 });

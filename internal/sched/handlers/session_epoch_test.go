@@ -133,6 +133,37 @@ func TestHeaderTrust_SessionEpoch(t *testing.T) {
 	})
 }
 
+func TestHeaderTrust_ExternalSessionEpoch(t *testing.T) {
+	h := epochHandler(liveEpochLookup)
+	h.SetExternalSessionEpochProvider(func(_ context.Context, issuer, subject, email string) (string, error) {
+		if issuer != "https://auth.example.com" || subject != "account-123" || email != "alice@elcanotek.com" {
+			t.Fatalf("external identity = %q %q %q", issuer, subject, email)
+		}
+		return "external-live", nil
+	})
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	req := epochRequest(http.MethodGet, "/api/me", "external-live")
+	req.Header.Set("X-User-Session-Source", "oidc")
+	req.Header.Set("X-External-Issuer", "https://auth.example.com")
+	req.Header.Set("X-External-Subject", "account-123")
+	rr := httptest.NewRecorder()
+	h.AdminOrUserAuthMiddleware(ok).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("fresh external session status = %d body %q", rr.Code, rr.Body.String())
+	}
+
+	req = epochRequest(http.MethodGet, "/api/me", "stale-external")
+	req.Header.Set("X-User-Session-Source", "oidc")
+	req.Header.Set("X-External-Issuer", "https://auth.example.com")
+	req.Header.Set("X-External-Subject", "account-123")
+	rr = httptest.NewRecorder()
+	h.AdminOrUserAuthMiddleware(ok).ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("stale external session status = %d body %q", rr.Code, rr.Body.String())
+	}
+}
+
 // POST /tasks and POST /upload live OUTSIDE AdminOrUserAuthMiddleware. They
 // share headerTrustUser precisely so a gate cannot hold on one and not the
 // others — task create/rerun and the upload staging area are the highest-value

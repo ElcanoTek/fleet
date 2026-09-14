@@ -37,6 +37,20 @@ describe("orchestratorServer.ts session epoch", () => {
       expect(h.get("X-User-Session-Epoch")).toBe("abcdef0123456789");
     });
 
+    it("forwards central identity metadata for OIDC sessions", () => {
+      const h = orchestratorHeaders({
+        kind: "cookie",
+        email: "user@example.com",
+        epoch: "external-epoch",
+        source: "oidc",
+        issuer: "https://auth.example.com",
+        subject: "account-123",
+      });
+      expect(h.get("X-User-Session-Source")).toBe("oidc");
+      expect(h.get("X-External-Issuer")).toBe("https://auth.example.com");
+      expect(h.get("X-External-Subject")).toBe("account-123");
+    });
+
     // An elcano_auth session has no epoch; the orchestrator admits a claimless
     // request rather than locking magic-link users out.
     it("omits the epoch header for a session without one", () => {
