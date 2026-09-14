@@ -826,7 +826,11 @@ func run() error {
 	// lookup, not the schema. Wired unconditionally: the chat store is open by
 	// the time these handlers exist, and a nil seam would silently stop checking.
 	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
-	h.SetExternalSessionEpochProvider(chatStore.ExternalSessionEpoch)
+	// Read-only on the request path; rows are created by the Next.js mint via
+	// httpapi's /auth/external-session-epoch.
+	h.SetExternalSessionEpochProvider(func(ctx context.Context, issuer, subject, _ string) (string, error) {
+		return chatStore.LookupExternalSessionEpoch(ctx, issuer, subject)
+	})
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.

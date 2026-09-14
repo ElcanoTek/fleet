@@ -36,7 +36,9 @@ carry `exp` (Auth signs a fresh `iat`/`exp` per delivery attempt). Duplicate
 events are idempotent by JWT `jti`; Fleet-native password sessions and the
 legacy magic-link route are not revoked or disabled. Every Fleet data request
 for an OIDC session forwards the signed cookie's issuer, subject, and epoch to
-both Go planes, which compare it with the live chat-store generation.
+both Go planes, which compare it with the live chat-store generation using a
+read-only lookup; the generation row is created once, at login mint, and a
+missing row fails closed. Replay ids are kept for seven days.
 
 The back-channel endpoint is intentionally public at the browser proxy: it is a
 server-to-server endpoint authenticated by Auth's Ed25519 signature, exact

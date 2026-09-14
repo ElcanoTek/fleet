@@ -228,6 +228,29 @@ func (s *Store) ExternalSessionEpoch(ctx context.Context, issuer, subject, email
 	return epoch, err
 }
 
+// LookupExternalSessionEpoch is the request-path read: the generation for an
+// identity that has already logged in, or "" when no row exists. It never
+// writes. A missing row cannot match any cookie claim, so an unknown identity
+// fails closed without the request path creating rows or bumping updated_at
+// on every call (ExternalSessionEpoch does that, and belongs at login only).
+func (s *Store) LookupExternalSessionEpoch(ctx context.Context, issuer, subject string) (string, error) {
+	issuer, subject = strings.TrimSpace(issuer), strings.TrimSpace(subject)
+	if issuer == "" || subject == "" {
+		return "", errors.New("issuer and subject are required")
+	}
+	var epoch string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT epoch FROM external_auth_epochs WHERE issuer = $1 AND subject = $2`, issuer, subject).Scan(&epoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return epoch, err
+}
+
+// externalLogoutEventRetention bounds the jti replay table. Auth's logout
+// tokens expire minutes after signing, so a week is generous.
+const externalLogoutEventRetention = 7 * 24 * time.Hour
+
 // RevokeExternalSessions rotates one central identity's generation. Upserting
 // a tombstone also makes a logout delivered before this Fleet has seen its
 // first login safe: that later login receives the already-rotated generation.
@@ -247,6 +270,10 @@ func (s *Store) RevokeExternalSessions(ctx context.Context, eventID, issuer, sub
 		return "", false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM external_logout_events WHERE received_at < $1`,
+		now-int64(externalLogoutEventRetention.Seconds())); err != nil {
+		return "", false, err
+	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO external_logout_events(event_id, issuer, subject, received_at)
 		VALUES($1, $2, $3, $4) ON CONFLICT(event_id) DO NOTHING`, eventID, issuer, subject, now)

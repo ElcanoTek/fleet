@@ -49,7 +49,10 @@ const (
 )
 
 type externalSessionStore interface {
+	// ExternalSessionEpoch creates or returns the generation; login mint only.
 	ExternalSessionEpoch(ctx context.Context, issuer, subject, email string) (string, error)
+	// LookupExternalSessionEpoch is the read-only request-path check.
+	LookupExternalSessionEpoch(ctx context.Context, issuer, subject string) (string, error)
 	RevokeExternalSessions(ctx context.Context, eventID, issuer, subject, email string) (string, bool, error)
 }
 
@@ -185,7 +188,9 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 					writeSessionRevoked(w)
 					return
 				}
-				liveEpoch, err = externalStore.ExternalSessionEpoch(ctx, issuer, subject, email)
+				// Read-only: the row was created at login mint. No row means
+				// no possible match, which the compare below turns into 401.
+				liveEpoch, err = externalStore.LookupExternalSessionEpoch(ctx, issuer, subject)
 				if err != nil {
 					http.Error(w, "session check failed", http.StatusInternalServerError)
 					return
