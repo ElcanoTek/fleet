@@ -299,7 +299,7 @@ func (d *Discovered) RequestedScopes() []string {
 	// refreshes without it, and a vendor that validates scopes may refuse an
 	// unrequested one. Other providers with the same rule (Ory's `offline`,
 	// IdentityServer) join here once a live connection has shown the need.
-	if (isEntraIssuer(d.AS.Issuer) || isAuth0Metadata(&d.AS)) && containsFold(d.AS.ScopesSupported, "offline_access") && !containsFold(out, "offline_access") {
+	if (isEntraIssuer(d.AS.Issuer) || isAuth0Metadata(&d.AS)) && containsScope(d.AS.ScopesSupported, "offline_access") && !containsScope(out, "offline_access") {
 		out = append(out, "offline_access")
 	}
 	return out
@@ -326,9 +326,16 @@ func isAuth0Metadata(as *AuthServerMetadata) bool {
 	return h == "auth0.com" || strings.HasSuffix(h, ".auth0.com")
 }
 
-func containsFold(list []string, want string) bool {
+// containsScope reports whether an OAuth scope list already carries a scope
+// token, compared EXACTLY. RFC 6749 §3.3 makes scope values "space-delimited,
+// case-sensitive strings", so "OFFLINE_ACCESS" is a different scope from
+// "offline_access" — folding them together would both mistake a differently
+// cased token for the advertised one and suppress the append that gives an
+// Entra or Auth0 connection its refresh token. Surrounding whitespace is not
+// part of a token, so it is still trimmed.
+func containsScope(list []string, want string) bool {
 	for _, s := range list {
-		if strings.EqualFold(strings.TrimSpace(s), want) {
+		if strings.TrimSpace(s) == want {
 			return true
 		}
 	}
@@ -800,7 +807,12 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	// No userinfo either: the claimed issuer is dialed for its own metadata,
 	// and net/http would turn userinfo into an Authorization header on that
 	// request (see endpointCarriesUserinfo).
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+	// ForceQuery as well as RawQuery: url.Parse records the bare "?" of
+	// "https://issuer.example?" only in ForceQuery, so checking RawQuery alone
+	// would admit it — and the canonical rebuild below, which keeps scheme,
+	// host and path, would silently drop the "?" and leave an issuer the copy
+	// never asserted, free to be self-confirmed by the origin's document.
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
 		return nil, fmt.Errorf("claimed issuer %q is not a plain http(s) URL", redactURLUserinfo(copyDoc.Issuer))
 	}
 	// Canonical spelling of the claimed issuer, used from here on. Resolving

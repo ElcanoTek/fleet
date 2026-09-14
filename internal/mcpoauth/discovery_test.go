@@ -859,6 +859,35 @@ func TestConfirmProxiedIssuerRedactsUserinfoInErrors(t *testing.T) {
 	}
 }
 
+// TestConfirmProxiedIssuerRefusesForcedEmptyQueryClaim: url.Parse records the
+// bare "?" of "https://issuer.example?" only in ForceQuery, leaving RawQuery
+// empty — so a validation that checks RawQuery alone admits it, and the
+// canonical rebuild (scheme, host, path) then drops the "?", leaving an issuer
+// the copy never asserted for the origin's document to self-confirm. The
+// endpoint comparers and the scope predicate already accounted for ForceQuery;
+// this validation did not.
+func TestConfirmProxiedIssuerRefusesForcedEmptyQueryClaim(t *testing.T) {
+	origin := "https://as.vendor.example"
+	originDoc := AuthServerMetadata{
+		Issuer:                        origin,
+		AuthorizationEndpoint:         origin + "/authorize",
+		TokenEndpoint:                 origin + "/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		if strings.TrimRight(claimed, "/") == origin {
+			doc := originDoc
+			return &doc, nil
+		}
+		return nil, errors.New("no metadata")
+	}
+	forced := originDoc
+	forced.Issuer = origin + "?"
+	if _, err := confirmProxiedIssuer(origin+"/tenantA", &forced, resolveOwn); err == nil {
+		t.Error("a claimed issuer with a forced empty query was accepted")
+	}
+}
+
 // TestConfirmProxiedIssuerKeepsClaimedIssuerSlashesScoped is the claimed-issuer
 // twin of the fetched-URL slash fix: trimming every trailing slash from the
 // copy's `issuer` collapses "https://as.example//" — a distinct routed path —
@@ -1034,7 +1063,7 @@ func TestConfirmProxiedIssuerFillsRefreshMetadataFromIssuer(t *testing.T) {
 		t.Error("the Auth0 marker was not recovered from the confirming issuer")
 	}
 	d := &Discovered{AS: *got}
-	if !containsFold(d.RequestedScopes(), "offline_access") {
+	if !containsScope(d.RequestedScopes(), "offline_access") {
 		t.Errorf("RequestedScopes = %v, want offline_access for the Auth0 tenant", d.RequestedScopes())
 	}
 	// A copy that DOES name its own scopes is making a claim — a proxy may
@@ -2139,10 +2168,24 @@ func TestRequestedScopesAddsOfflineAccessForEntraOnly(t *testing.T) {
 	if entra.PRM.ScopesSupported[len(entra.PRM.ScopesSupported)-1] != "https://mcp.dev.azure.com/.default" {
 		t.Error("RequestedScopes must not mutate the PRM slice")
 	}
-	// Already present (any case) → not duplicated.
-	entra.PRM.ScopesSupported = []string{"https://mcp.dev.azure.com/.default", "Offline_Access"}
+	// Already present, EXACTLY → not duplicated.
+	entra.PRM.ScopesSupported = []string{"https://mcp.dev.azure.com/.default", "offline_access"}
 	if got := entra.RequestedScopes(); len(got) != 2 {
 		t.Errorf("duplicate offline_access: %v", got)
+	}
+	// A differently cased token is a DIFFERENT scope, so the real one is still
+	// appended. This reverses the earlier "already present (any case)"
+	// assertion deliberately: RFC 6749 §3.3 makes scope values
+	// "space-delimited, case-sensitive strings", so "Offline_Access" is not
+	// the scope Entra mints a refresh token for. Treating it as present sent
+	// an authorize request carrying only the spelling the server does not
+	// recognize — no refresh token, which is the failure this whole clause
+	// exists to prevent. Nothing is lost by appending: the vendor's own token
+	// still goes out verbatim, exactly as it did before.
+	entra.PRM.ScopesSupported = []string{"https://mcp.dev.azure.com/.default", "Offline_Access"}
+	got = entra.RequestedScopes()
+	if strings.Join(got, " ") != "https://mcp.dev.azure.com/.default Offline_Access offline_access" {
+		t.Errorf("cased token = %v, want the real offline_access appended alongside it", got)
 	}
 	// Entra that does not advertise offline_access → nothing appended.
 	entra.PRM.ScopesSupported = []string{"x/.default"}
