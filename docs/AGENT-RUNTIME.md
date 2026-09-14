@@ -642,8 +642,11 @@ How the invariants hold:
   server advertising both Basic and Post may register this client as post-only,
   and choosing Basic off the advertised list would 401 every exchange and
   revocation. A `none` echo does not narrow it, since fleet asks to be public
-  first and a server may echo `none` while returning a secret anyway. The
-  secret comes back encrypted at rest like any other.
+  first and a server may echo `none` while returning a secret anyway, and a
+  granted method fleet cannot perform at all (`private_key_jwt`, an mTLS
+  method) is refused at registration rather than falling back to the advertised
+  list and failing the exchange after consent. The secret comes back encrypted
+  at rest like any other.
 - **Auth0 is asked for `offline_access`, like Entra.** An Auth0 tenant
   (recognized by its proprietary `mfa_challenge_endpoint`, or an
   `*.auth0.com` issuer) issues a refresh token only for that scope, which the

@@ -52,6 +52,24 @@ func (r *ClientRegistration) EffectiveAuthMethods(advertised []string) []string 
 	return advertised
 }
 
+// checkGrantedAuthMethod refuses a registration the token endpoint could never
+// use. fleet implements exactly three: client_secret_basic, client_secret_post,
+// and the public ("none") client. RFC 7591 §3.2.1 lets the server substitute
+// the method it granted, so a response naming client_secret_jwt,
+// private_key_jwt or an mTLS method is telling us this client authenticates in
+// a way fleet cannot — and falling through to the advertised list would pick
+// Basic or Post anyway, sending the user through a consent screen whose token
+// exchange and revocation are both bound to fail. Refusing here puts the
+// reason in front of the operator while they can still act on it.
+func (r *ClientRegistration) checkGrantedAuthMethod() error {
+	m := strings.TrimSpace(r.TokenEndpointAuthMethod)
+	if m == "" || strings.EqualFold(m, "none") ||
+		strings.EqualFold(m, "client_secret_basic") || strings.EqualFold(m, "client_secret_post") {
+		return nil
+	}
+	return fmt.Errorf("the server registered client %q with token_endpoint_auth_method %q, which fleet cannot perform (it implements client_secret_basic, client_secret_post and public clients)", r.ClientID, m)
+}
+
 // clientRegistrationRequest is the RFC 7591 registration payload. We register a
 // public-or-confidential client for the authorization-code grant with our fixed
 // redirect URI.
@@ -87,6 +105,9 @@ func Register(ctx context.Context, httpClient *http.Client, registrationEndpoint
 	}
 	reg, err := registerWithMethod(ctx, httpClient, registrationEndpoint, clientName, redirectURI, scope, "none")
 	if err == nil {
+		if cerr := reg.checkGrantedAuthMethod(); cerr != nil {
+			return nil, cerr
+		}
 		return reg, nil
 	}
 	var rej *registrationRejectedError
@@ -100,6 +121,9 @@ func Register(ctx context.Context, httpClient *http.Client, registrationEndpoint
 	reg, ferr := registerWithMethod(ctx, httpClient, registrationEndpoint, clientName, redirectURI, scope, fallback)
 	if ferr != nil {
 		return nil, fmt.Errorf("%w; retried as %s: %w", err, fallback, ferr)
+	}
+	if cerr := reg.checkGrantedAuthMethod(); cerr != nil {
+		return nil, cerr
 	}
 	if reg.ClientSecret == "" {
 		// We asked to be a confidential client only because this server had

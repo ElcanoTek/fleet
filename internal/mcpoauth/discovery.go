@@ -797,6 +797,17 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return nil, fmt.Errorf("claimed issuer %q is not a plain http(s) URL", redactURLUserinfo(copyDoc.Issuer))
 	}
+	// Canonical spelling of the claimed issuer, used from here on. Resolving
+	// its own document runs the STRICT issuer check, which compares the whole
+	// URL as written — so a copy claiming "https://issuer.example:443" against
+	// an issuer whose document says "https://issuer.example" would find no
+	// confirming document at all and a valid DocuSign-shaped copy would fail.
+	// Normalizing the EXPECTED value here fixes that without touching
+	// issuerMatches itself, which stays the exact-match check on the
+	// non-proxied path. The query and fragment are already refused above, so
+	// only the origin and path can differ; the path is still compared exactly
+	// but for a trailing slash.
+	claimed = normalizedOrigin(u) + trimOneTrailingSlash(u.EscapedPath())
 	// Parse the authorization-server URL AS WRITTEN. Trimming trailing slashes
 	// first would collapse "https://as.example//" — a distinct routed path —
 	// into the bare origin and hand a tenant-scoped URL the same-origin leg,

@@ -859,6 +859,45 @@ func TestConfirmProxiedIssuerRedactsUserinfoInErrors(t *testing.T) {
 	}
 }
 
+// TestConfirmProxiedIssuerNormalizesClaimedIssuerForResolve: resolving the
+// claimed issuer's own document runs the STRICT issuer check, which compares
+// the whole URL as written. A copy claiming "https://issuer.example:443"
+// against an issuer whose document says "https://issuer.example" would find no
+// confirming document at all — so a valid DocuSign-shaped copy would fail on a
+// spelling difference the rest of the path normalizes away.
+func TestConfirmProxiedIssuerNormalizesClaimedIssuerForResolve(t *testing.T) {
+	// The issuer's own document names the canonical (portless) form; the copy
+	// claims the :443 spelling. Only a normalized expectation can match.
+	issuer := "https://issuer.vendor.example"
+	ownDoc := AuthServerMetadata{
+		Issuer:                        issuer,
+		AuthorizationEndpoint:         issuer + "/authorize",
+		TokenEndpoint:                 issuer + "/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	var asked []string
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		asked = append(asked, claimed)
+		// Stand in for the strict fetch: the document is returned only when the
+		// expected issuer matches what the document says, as verifyAuthServer
+		// requires.
+		if claimed == issuer {
+			doc := ownDoc
+			return &doc, nil
+		}
+		return nil, errors.New("authorization-server issuer mismatch")
+	}
+	copyDoc := ownDoc
+	copyDoc.Issuer = "https://issuer.vendor.example:443"
+	got, err := confirmProxiedIssuer("https://mcp.vendor.example", &copyDoc, resolveOwn)
+	if err != nil {
+		t.Fatalf("confirmProxiedIssuer = %v (asked for %v), want the :443 spelling resolved canonically", err, asked)
+	}
+	if got.Issuer != issuer {
+		t.Errorf("recorded issuer = %q, want the canonical %q", got.Issuer, issuer)
+	}
+}
+
 // TestConfirmProxiedIssuerRedactsIssuerOwnEndpointInErrors: verifyAuthServer
 // checks the issuer and PKCE, not endpoint userinfo, so the claimed issuer's
 // OWN document can carry a credential — and the "the claimed issuer's own
@@ -1751,6 +1790,45 @@ func TestRegistrationEffectiveAuthMethodWins(t *testing.T) {
 	silent := &ClientRegistration{ClientID: "c1", ClientSecret: "s"}
 	if got := silent.EffectiveAuthMethods(advertised); len(got) != 2 {
 		t.Errorf("effective = %v, want the advertised list when the server does not echo", got)
+	}
+}
+
+// TestRegisterRejectsUnsupportedGrantedAuthMethod: RFC 7591 §3.2.1 lets the
+// server substitute the method it granted, and fleet implements exactly three
+// (Basic, Post, public). A response naming private_key_jwt or an mTLS method
+// says this client authenticates in a way fleet cannot; falling through to the
+// advertised list would pick Basic or Post anyway and fail the exchange after
+// the user completed consent.
+func TestRegisterRejectsUnsupportedGrantedAuthMethod(t *testing.T) {
+	for _, granted := range []string{"private_key_jwt", "client_secret_jwt", "tls_client_auth", "self_signed_tls_client_auth"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"client_id": "c1", "client_secret": "s3cr3t",
+				"token_endpoint_auth_method": granted,
+			})
+		}))
+		_, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"client_secret_basic"})
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), granted) {
+			t.Errorf("Register with granted %q = %v, want it refused by name", granted, err)
+		}
+	}
+	// The three fleet can perform are still accepted.
+	for _, granted := range []string{"none", "client_secret_basic", "client_secret_post", ""} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+			body := map[string]any{"client_id": "c1", "client_secret": "s3cr3t"}
+			if granted != "" {
+				body["token_endpoint_auth_method"] = granted
+			}
+			_ = json.NewEncoder(w).Encode(body)
+		}))
+		_, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"client_secret_basic"})
+		srv.Close()
+		if err != nil {
+			t.Errorf("Register with granted %q = %v, want it accepted", granted, err)
+		}
 	}
 }
 
