@@ -19,11 +19,13 @@ function deferred() {
 
 const statsMock = vi.fn();
 const tasksMock = vi.fn();
+const tagCatalogueMock = vi.fn();
 
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
     stats: () => statsMock(),
     tasks: (qs: string) => tasksMock(qs),
+    tagCatalogue: () => tagCatalogueMock(),
   },
 }));
 
@@ -34,6 +36,10 @@ afterEach(() => {
   taskDeferreds.clear();
   vi.restoreAllMocks();
 });
+
+// The catalogue fetch fires on activation in every test here; default it to an
+// empty list so a test that does not care about tags does not have to.
+tagCatalogueMock.mockResolvedValue([]);
 
 function qOf(qs: string): string {
   return new URLSearchParams(qs).get("q") ?? "";
@@ -173,5 +179,76 @@ describe("useDashboardData paging", () => {
       await result.current.reload();
     });
     expect(result.current.refreshNonce).toBe(2);
+  });
+});
+
+// ── Tag filter (#212) ────────────────────────────────────────────────────
+// Tags AND together server-side, so every selected tag has to reach the
+// request. `tag` is the one repeatable parameter in the query, and the
+// obvious URLSearchParams.set() would have kept only the last of them —
+// silently widening "carrying BOTH of these" to "carrying this one".
+describe("useDashboardData tag filter", () => {
+  function settle() {
+    statsMock.mockResolvedValue({});
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+  }
+
+  it("sends every selected tag, not just the last", async () => {
+    settle();
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tasksMock).toHaveBeenCalled());
+
+    act(() => result.current.setFilters({ tags: ["ops", "urgent"] }));
+    await waitFor(() => {
+      const qs = new URLSearchParams(tasksMock.mock.calls.at(-1)![0] as string);
+      expect(qs.getAll("tag")).toEqual(["ops", "urgent"]);
+    });
+  });
+
+  it("sends no tag parameter when none is selected", async () => {
+    settle();
+    renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tasksMock).toHaveBeenCalled());
+    const qs = new URLSearchParams(tasksMock.mock.calls.at(-1)![0] as string);
+    expect(qs.getAll("tag")).toEqual([]);
+  });
+
+  it("offers the catalogue unioned with the tags on the listed tasks", async () => {
+    statsMock.mockResolvedValue({});
+    // A tag created after the catalogue was fetched: it is on a listed task
+    // but not in the catalogue, and must still be selectable — that union is
+    // what makes fetching the catalogue once per activation safe.
+    tagCatalogueMock.mockResolvedValue([{ tag: "ops", task_count: 4 }]);
+    tasksMock.mockResolvedValue({
+      data: [{ id: "a", prompt: "p", tags: ["ops", "fresh"] }],
+      total: 1,
+    });
+
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(result.current.tagOptions).toContain("fresh"));
+    expect(result.current.tagOptions).toContain("ops");
+    // Catalogue first (busiest first), then whatever the page added.
+    expect(result.current.tagOptions).toEqual(["ops", "fresh"]);
+  });
+
+  it("keeps working when the catalogue fetch fails", async () => {
+    settle();
+    tagCatalogueMock.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tasksMock).toHaveBeenCalled());
+    // No unhandled rejection, no error surfaced to the board: the filter loses
+    // its suggestions, the dashboard keeps working.
+    expect(result.current.tagOptions).toEqual([]);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("clearFilters drops the tags too", async () => {
+    settle();
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tasksMock).toHaveBeenCalled());
+    act(() => result.current.setFilters({ tags: ["ops"] }));
+    await waitFor(() => expect(result.current.filters.tags).toEqual(["ops"]));
+    act(() => result.current.clearFilters());
+    expect(result.current.filters.tags).toEqual([]);
   });
 });

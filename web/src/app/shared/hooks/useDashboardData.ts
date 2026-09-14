@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   orchestratorApi,
   type DashboardStats,
@@ -18,6 +18,9 @@ export type TaskFilters = {
   completedToday: boolean;
   completedStatus: string;
   createdBy: string;
+  // Tags narrow to tasks carrying ALL of them (#212) — the server ANDs them,
+  // so each tag you add makes the board smaller, never larger.
+  tags: string[];
 };
 
 const EMPTY_FILTERS: TaskFilters = {
@@ -27,6 +30,7 @@ const EMPTY_FILTERS: TaskFilters = {
   completedToday: false,
   completedStatus: "",
   createdBy: "",
+  tags: [],
 };
 
 function buildTaskQuery(filters: TaskFilters, page: number, pageSize: number): string {
@@ -41,6 +45,9 @@ function buildTaskQuery(filters: TaskFilters, page: number, pageSize: number): s
     if (filters.completedStatus) p.set("completed_status", filters.completedStatus);
   }
   if (filters.createdBy) p.set("created_by", filters.createdBy);
+  // append, not set: `tag` is repeatable and every value has to survive the
+  // trip, since dropping one widens the result instead of narrowing it.
+  for (const tag of filters.tags) p.append("tag", tag);
   return p.toString();
 }
 
@@ -55,6 +62,9 @@ export type UseDashboardData = {
   // indistinguishable from an empty account.
   error: string | null;
   filters: TaskFilters;
+  // Tags the filter can offer: the deployment catalogue unioned with the tags
+  // on the listed tasks. Catalogue order (busiest first) is preserved.
+  tagOptions: string[];
   page: number;
   pageSize: number;
   setFilters: (next: Partial<TaskFilters>) => void;
@@ -90,6 +100,12 @@ export function useDashboardData(active: boolean): UseDashboardData {
   // of the task list (SleepingTasks) can refetch on the dashboard's cadence
   // instead of once at mount.
   const [refreshNonce, setRefreshNonce] = useState(0);
+  // The deployment's tags, for the board's tag filter. Fetched ONCE per
+  // activation rather than on the 30s refresh cadence: the catalogue is a
+  // GROUP BY over every task's tag array, it changes only when someone retags
+  // something, and paying for it every half-minute on every open dashboard
+  // buys nothing. tagOptions below closes the resulting gap.
+  const [tagCatalogue, setTagCatalogue] = useState<string[]>([]);
   // Monotonic id stamped on each reload so a superseded (slower, older) reload
   // cannot overwrite newer state — see reload().
   const runIdRef = useRef(0);
@@ -170,6 +186,33 @@ export function useDashboardData(active: boolean): UseDashboardData {
     };
   }, [active, reload]);
 
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    orchestratorApi
+      .tagCatalogue()
+      .then((rows) => {
+        if (!cancelled) setTagCatalogue(rows.map((r) => r.tag));
+      })
+      // A missing catalogue costs the filter its suggestions, nothing more:
+      // tagOptions still offers the tags on screen, and a tag already applied
+      // keeps filtering. Failing the whole dashboard over it would be worse.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
+
+  // What the tag filter offers: the catalogue, plus any tag on a task
+  // currently listed. The union is what makes the once-per-activation fetch
+  // safe — a tag created after the catalogue loaded is still selectable as
+  // soon as a task carrying it appears on the board.
+  const tagOptions = useMemo(() => {
+    const seen = new Set(tagCatalogue);
+    for (const task of tasks) for (const tag of task.tags ?? []) seen.add(tag);
+    return [...seen];
+  }, [tagCatalogue, tasks]);
+
   const setFilters = useCallback((next: Partial<TaskFilters>) => {
     setFiltersState((prev) => ({ ...prev, ...next }));
     setPage(1);
@@ -196,6 +239,7 @@ export function useDashboardData(active: boolean): UseDashboardData {
     loading,
     error,
     filters,
+    tagOptions,
     page,
     pageSize,
     setFilters,

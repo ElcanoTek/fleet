@@ -3057,6 +3057,70 @@ tr.sla-row-fail {
     flex: 1 1 100%;
   }
 }
+/* ── Task tags (#212) ─────────────────────────────────────────────────────
+   Chips share the conversation-label recipe and its hashed --chip colour, so
+   the same tag reads the same everywhere. Every chip is a button: on a row it
+   filters the board to its tag, in the filter bar it removes that tag. The
+   active state is the filled one — a tag currently narrowing the board should
+   not look identical to one merely present on a task. */
+.task-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+}
+.task-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 12rem;
+  overflow: hidden;
+  font-size: 0.65rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--chip) 38%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--chip) 12%, transparent);
+  color: color-mix(in srgb, var(--chip) 72%, white);
+  cursor: pointer;
+}
+.task-tag-chip:hover {
+  background: color-mix(in srgb, var(--chip) 24%, transparent);
+}
+.task-tag-chip-active {
+  background: color-mix(in srgb, var(--chip) 30%, transparent);
+  border-color: color-mix(in srgb, var(--chip) 62%, transparent);
+}
+.task-tag-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+:root[data-theme="light"] .task-tag-chip {
+  border-color: color-mix(in srgb, var(--chip) 48%, white);
+  background: color-mix(in srgb, var(--chip) 14%, white);
+  color: color-mix(in srgb, var(--chip) 42%, #15110e);
+}
+:root[data-theme="light"] .task-tag-chip-active {
+  background: color-mix(in srgb, var(--chip) 30%, white);
+}
+/* The select and the chips it fills sit on one line until the chips need
+   more room, at which point they wrap under it rather than squeezing the
+   select below its min-width. */
+.tag-filter-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.tag-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  max-width: 18rem;
+}
 .tasks-pagination {
   display: flex;
   align-items: center;

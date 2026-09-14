@@ -634,6 +634,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+/** One row of GET /tasks/tags: a tag and how many tasks carry it. */
+export type TagCount = {
+  tag: string;
+  task_count: number;
+};
+
 export const orchestratorApi = {
   stats: () => request<DashboardStats>("/stats"),
   tasks: (qs: string) => request<Paginated<Task>>(`/tasks${qs ? `?${qs}` : ""}`),
@@ -681,6 +687,12 @@ export const orchestratorApi = {
       method: "POST",
       body: JSON.stringify({ event, note: note ?? "" }),
     }),
+  // The distinct tags in use across the deployment, busiest first (#212). The
+  // board's tag filter offers these rather than only the tags on the page in
+  // front of you — a tag you cannot see is exactly the one you want to find.
+  // Deployment-wide, like the dashboard counters: a non-admin sees only their
+  // own tasks, so a tag here can narrow the board to nothing.
+  tagCatalogue: () => request<TagCount[]>("/tasks/tags"),
   upcomingRuns: (limit = 50, until?: string) =>
     request<{ upcoming: UpcomingRun[] }>(
       `/tasks/upcoming?limit=${limit}${until ? `&until=${encodeURIComponent(until)}` : ""}`,

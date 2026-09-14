@@ -84,12 +84,18 @@ export async function proxyToOrchestrator(
 /**
  * Builds the upstream query string from the incoming request's search params,
  * passing through only the named allow-list of params.
+ *
+ * Every value of a repeated param is forwarded, not just the first: the task
+ * list's `tag` filter is repeatable (`?tag=a&tag=b` means "carrying BOTH"), and
+ * keeping only the first silently widened that to "carrying a". Single-valued
+ * params are unaffected — one value in, one value out, in allow-list order.
  */
 export function passThroughQuery(request: NextRequest, allowed: string[]): string {
   const out = new URLSearchParams();
   for (const key of allowed) {
-    const v = request.nextUrl.searchParams.get(key);
-    if (v !== null && v !== "") out.set(key, v);
+    for (const v of request.nextUrl.searchParams.getAll(key)) {
+      if (v !== "") out.append(key, v);
+    }
   }
   const qs = out.toString();
   return qs ? `?${qs}` : "";
