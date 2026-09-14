@@ -660,6 +660,83 @@ func TestConfirmProxiedIssuerKeepsEncodedSlashPathScoped(t *testing.T) {
 	}
 }
 
+// TestConfirmProxiedIssuerKeepsLiteralDoubleSlashPathScoped is the
+// literal-slash twin of the "/%2F" test: "https://as.example//" is a distinct
+// routed path, and trimming trailing slashes before parsing collapsed it into
+// the bare origin — handing a tenant-scoped URL the same-origin leg.
+func TestConfirmProxiedIssuerKeepsLiteralDoubleSlashPathScoped(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	doc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example/tenantB",
+		AuthorizationEndpoint:         "https://as.vendor.example/tenantB/authorize",
+		TokenEndpoint:                 "https://as.vendor.example/tenantB/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	if _, err := confirmProxiedIssuer("https://as.vendor.example//", &doc, resolveOwn); err == nil || !strings.Contains(err.Error(), "scoped to one tenant") {
+		t.Fatalf("confirmProxiedIssuer = %v, want a literal // path kept tenant-scoped", err)
+	}
+}
+
+// TestConfirmProxiedIssuerScopedOriginFallbackNormalizesPort: the Chargebee
+// path fallback compares the scoped URL's origin against the claimed issuer.
+// A PRM written "https://as.example:443/tenant" against an origin-level
+// document claiming "https://as.example" is the same origin, and a raw string
+// comparison would reject the shape the fallback exists to accept.
+func TestConfirmProxiedIssuerScopedOriginFallbackNormalizesPort(t *testing.T) {
+	// Fabricated https URLs, not httptest: httptest always binds a
+	// non-default port, so it cannot exercise the default-port normalization
+	// this test is about. resolveOwn stands in for the origin's own document.
+	originDoc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example",
+		AuthorizationEndpoint:         "https://as.vendor.example/authorize",
+		TokenEndpoint:                 "https://as.vendor.example/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		if strings.TrimRight(claimed, "/") == originDoc.Issuer {
+			doc := originDoc
+			return &doc, nil
+		}
+		return nil, errors.New("no metadata")
+	}
+	if _, err := confirmProxiedIssuer("https://as.vendor.example:443/tenant", &originDoc, resolveOwn); err != nil {
+		t.Fatalf("confirmProxiedIssuer = %v, want the origin-level fallback to accept an explicit :443", err)
+	}
+	// A different origin on the same shape is still refused, so the
+	// normalization did not turn the fallback into a wildcard.
+	if _, err := confirmProxiedIssuer("https://other.vendor.example:443/tenant", &originDoc, resolveOwn); err == nil {
+		t.Error("confirmProxiedIssuer accepted an origin-level document from another host")
+	}
+}
+
+// TestSameEndpointURLDistinguishesForceQuery: https://as.example/token? has an
+// empty RawQuery like https://as.example/token, but Go puts the "?" on the
+// wire, so anything routing on the raw request target sees two endpoints.
+func TestSameEndpointURLDistinguishesForceQuery(t *testing.T) {
+	if sameEndpointURL("https://as.example/token", "https://as.example/token?") {
+		t.Error("sameEndpointURL treated /token and /token? as one endpoint")
+	}
+	if !sameEndpointURL("https://as.example/token?", "https://as.example:443/token?") {
+		t.Error("sameEndpointURL split one endpoint over the default port")
+	}
+}
+
+// TestIsAuth0MetadataMatchesHostWithExplicitPort: Host carries the port, so an
+// issuer written https://tenant.auth0.com:443 matched neither Auth0 test and
+// silently lost the `offline_access` that recognizing it exists to add.
+func TestIsAuth0MetadataMatchesHostWithExplicitPort(t *testing.T) {
+	for _, issuer := range []string{"https://tenant.auth0.com:443", "https://tenant.auth0.com", "https://AUTH0.com:443"} {
+		if !isAuth0Metadata(&AuthServerMetadata{Issuer: issuer}) {
+			t.Errorf("isAuth0Metadata(%q) = false, want an Auth0 tenant", issuer)
+		}
+	}
+	for _, issuer := range []string{"https://notauth0.com", "https://auth0.com.evil.example", "https://github.com"} {
+		if isAuth0Metadata(&AuthServerMetadata{Issuer: issuer}) {
+			t.Errorf("isAuth0Metadata(%q) = true, want a non-Auth0 issuer", issuer)
+		}
+	}
+}
+
 // TestConfirmProxiedIssuerFillsRefreshMetadataFromIssuer: a trimmed copy on the
 // claimed issuer's own token endpoint may omit the two fields that describe the
 // ISSUER rather than how to reach it — scopes_supported, where offline_access

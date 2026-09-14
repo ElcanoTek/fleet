@@ -318,7 +318,11 @@ func isAuth0Metadata(as *AuthServerMetadata) bool {
 	if err != nil {
 		return false
 	}
-	h := strings.ToLower(u.Host)
+	// Hostname(), not Host: the latter carries any explicit port, so an issuer
+	// written https://tenant.auth0.com:443 would match neither test and the
+	// tenant would go unrecognized — costing it the `offline_access` that is
+	// the whole point of recognizing it.
+	h := strings.ToLower(u.Hostname())
 	return h == "auth0.com" || strings.HasSuffix(h, ".auth0.com")
 }
 
@@ -787,8 +791,17 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return nil, fmt.Errorf("claimed issuer %q is not a plain http(s) URL", copyDoc.Issuer)
 	}
-	fetchedFrom = strings.TrimRight(strings.TrimSpace(fetchedFrom), "/")
-	if strings.EqualFold(claimed, fetchedFrom) {
+	// Parse the authorization-server URL AS WRITTEN. Trimming trailing slashes
+	// first would collapse "https://as.example//" — a distinct routed path —
+	// into the bare origin and hand a tenant-scoped URL the same-origin leg,
+	// the literal-slash twin of the "/%2F" decode trap scopedToOneTenant
+	// exists for.
+	fetchedFrom = strings.TrimSpace(fetchedFrom)
+	fu, ferr := url.Parse(fetchedFrom)
+	if ferr != nil {
+		return nil, fmt.Errorf("authorization server %q is not a URL: %w", fetchedFrom, ferr)
+	}
+	if sameIssuerIdentity(claimed, fetchedFrom) {
 		return nil, fmt.Errorf("claimed issuer is the fetched URL; nothing to confirm")
 	}
 	if err := verifyPKCE(copyDoc); err != nil {
@@ -802,8 +815,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	// path, so a query- or fragment-scoped tenant would otherwise be read as
 	// the whole origin and get a leg that admits a sibling's endpoints. For
 	// any of those, only the claimed issuer's own document may vouch.
-	fu, ferr := url.Parse(fetchedFrom)
-	bareOrigin := ferr == nil && !scopedToOneTenant(fu)
+	bareOrigin := !scopedToOneTenant(fu)
 	if !bareOrigin {
 		// Closing the same-origin leg is not enough on its own: a SIBLING
 		// tenant (https://as.example.com/tenantB) publishes a self-consistent
@@ -812,8 +824,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 		// The one document a scoped URL may be confirmed by is its own
 		// ORIGIN-level one — the measured Chargebee shape, where the origin
 		// answers every path with the document whose issuer IS the origin.
-		origin, oerr := originOf(fetchedFrom)
-		if oerr != nil || !strings.EqualFold(claimed, strings.TrimRight(origin, "/")) {
+		if !sameIssuerIdentity(claimed, normalizedOrigin(fu)) {
 			return nil, fmt.Errorf("authorization server %s is scoped to one tenant, so only its own origin may vouch for a document naming another issuer; this one claims %s", fetchedFrom, claimed)
 		}
 	}
@@ -944,6 +955,30 @@ func sameEndpointURL(a, b string) bool {
 	return normalizedOrigin(au) == normalizedOrigin(bu) &&
 		strings.TrimRight(au.EscapedPath(), "/") == strings.TrimRight(bu.EscapedPath(), "/") &&
 		au.RawQuery == bu.RawQuery &&
+		// ForceQuery is the bare "?" of https://as.example/token? — an empty
+		// RawQuery either way, but Go puts the "?" on the wire, so the two
+		// are different request targets to anything that routes on the raw
+		// target. Two URLs that reach different handlers are not one endpoint.
+		au.ForceQuery == bu.ForceQuery &&
+		au.Fragment == bu.Fragment
+}
+
+// sameIssuerIdentity reports whether two authorization-server URLs name the
+// same thing: canonical origins (so an explicit :443 or a mixed-case host does
+// not split one identity in two), and the routed remainder — escaped path,
+// query, fragment — compared exactly but for a trailing slash. It is the one
+// answer to "are these the same authorization server" inside the confirmation
+// path, so a spelling difference cannot decide whether a document confirms.
+func sameIssuerIdentity(a, b string) bool {
+	au, aerr := url.Parse(strings.TrimSpace(a))
+	bu, berr := url.Parse(strings.TrimSpace(b))
+	if aerr != nil || berr != nil {
+		return false
+	}
+	return normalizedOrigin(au) == normalizedOrigin(bu) &&
+		strings.TrimRight(au.EscapedPath(), "/") == strings.TrimRight(bu.EscapedPath(), "/") &&
+		au.RawQuery == bu.RawQuery &&
+		au.ForceQuery == bu.ForceQuery &&
 		au.Fragment == bu.Fragment
 }
 
