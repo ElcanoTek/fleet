@@ -331,10 +331,12 @@ func missingRequiredArguments(required []string, props map[string]any, args json
 }
 
 // schemaAdmitsNull reports whether a JSON Schema property accepts the JSON
-// null value. It recognises the shapes vendors use: `type: "null"` or a type
-// list containing "null", OpenAPI's `nullable: true`, an `enum` or `const`
-// naming null, an `anyOf`/`oneOf` arm that admits null, and an `allOf` whose
-// every arm does. A schema that constrains the value with none of those
+// null value. JSON Schema keywords apply conjunctively, so null is admitted
+// only when every keyword present accepts it: `type` must be "null" or a list
+// containing it (OpenAPI's `nullable: true` widens `type` the same way); an
+// `enum` must list null and a `const` must be null; at least one `anyOf` arm,
+// exactly one `oneOf` arm, and every `allOf` arm must admit it; a `not`
+// schema must not. A schema that constrains the value with none of those
 // keywords (`{}`, or description-only) accepts anything, null included — and
 // so do the boolean schema `true` and a property with no schema at all —
 // because the refusal must never be stricter than the vendor's own
@@ -347,65 +349,64 @@ func schemaAdmitsNull(schema any) bool {
 	if !ok {
 		return schema == nil
 	}
-	if b, ok := m["nullable"].(bool); ok && b {
-		return true
+	nullable, _ := m["nullable"].(bool)
+	if t, ok := m["type"]; ok && !nullable && !schemaTypeAdmitsNull(t) {
+		return false
 	}
-	constrained := false
-	if t, ok := m["type"]; ok {
-		constrained = true
-		switch t := t.(type) {
-		case string:
-			if t == "null" {
+	if enum, ok := m["enum"].([]any); ok && !containsNil(enum) {
+		return false
+	}
+	if c, ok := m["const"]; ok && c != nil {
+		return false
+	}
+	if arms, ok := m["anyOf"].([]any); ok && len(arms) > 0 && countAdmittingNull(arms) == 0 {
+		return false
+	}
+	if arms, ok := m["oneOf"].([]any); ok && len(arms) > 0 && countAdmittingNull(arms) != 1 {
+		return false
+	}
+	if arms, ok := m["allOf"].([]any); ok && countAdmittingNull(arms) != len(arms) {
+		return false
+	}
+	if n, ok := m["not"]; ok && schemaAdmitsNull(n) {
+		return false
+	}
+	return true
+}
+
+// schemaTypeAdmitsNull reports whether a JSON Schema `type` value — a single
+// name or a list of names — includes "null".
+func schemaTypeAdmitsNull(t any) bool {
+	switch t := t.(type) {
+	case string:
+		return t == "null"
+	case []any:
+		for _, v := range t {
+			if s, ok := v.(string); ok && s == "null" {
 				return true
-			}
-		case []any:
-			for _, v := range t {
-				if s, ok := v.(string); ok && s == "null" {
-					return true
-				}
 			}
 		}
 	}
-	if enum, ok := m["enum"].([]any); ok {
-		constrained = true
-		for _, v := range enum {
-			if v == nil {
-				return true
-			}
-		}
-	}
-	if c, ok := m["const"]; ok {
-		constrained = true
-		if c == nil {
+	return false
+}
+
+func containsNil(list []any) bool {
+	for _, v := range list {
+		if v == nil {
 			return true
 		}
 	}
-	for _, key := range []string{"anyOf", "oneOf"} {
-		arms, ok := m[key].([]any)
-		if !ok || len(arms) == 0 {
-			continue
-		}
-		constrained = true
-		for _, arm := range arms {
-			if schemaAdmitsNull(arm) {
-				return true
-			}
+	return false
+}
+
+func countAdmittingNull(schemas []any) int {
+	n := 0
+	for _, s := range schemas {
+		if schemaAdmitsNull(s) {
+			n++
 		}
 	}
-	if arms, ok := m["allOf"].([]any); ok && len(arms) > 0 {
-		constrained = true
-		all := true
-		for _, arm := range arms {
-			if !schemaAdmitsNull(arm) {
-				all = false
-				break
-			}
-		}
-		if all {
-			return true
-		}
-	}
-	return !constrained
+	return n
 }
 
 // oneLine collapses whitespace and clamps a description for the search listing.

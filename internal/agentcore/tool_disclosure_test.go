@@ -313,6 +313,19 @@ func TestDisclosureRequiredNullableArgumentAcceptsNull(t *testing.T) {
 		// an unconstrained schema accepts anything, null included.
 		`{}`:                  true,
 		`{"description":"x"}`: true,
+		// keywords apply conjunctively: a nullable type does not override an
+		// enum, const or not that excludes null, and oneOf needs exactly one arm.
+		`{"type":["string","null"],"enum":["x"]}`:                  false,
+		`{"type":["string","null"],"enum":["x",null]}`:             true,
+		`{"nullable":true,"enum":["x"]}`:                           false,
+		`{"type":["string","null"],"const":"x"}`:                   false,
+		`{"type":["string","null"],"not":{"const":null}}`:          false,
+		`{"not":{"type":"null"}}`:                                  false,
+		`{"not":{"type":"string"}}`:                                true,
+		`{"oneOf":[{"type":"null"},{"type":["string","null"]}]}`:   false,
+		`{"anyOf":[{"type":"null"},{"type":["string","null"]}]}`:   true,
+		`{"type":["string","null"],"allOf":[{"enum":["x",null]}]}`: true,
+		`{"type":["string","null"],"allOf":[{"enum":["x"]}]}`:      false,
 	} {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(schema), &m); err != nil {

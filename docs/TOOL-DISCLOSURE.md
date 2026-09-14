@@ -33,9 +33,13 @@ tunable live from Settings → Admin → Feature settings, see
     "credential-owner call failed", which reads as a broken credential rather
     than a fixable call. `required` means *present*: a required argument sent
     as JSON `null` is refused only when the property's own schema does not
-    admit null (`type: ["string","null"]`, `nullable: true`, an `anyOf` arm or
-    `enum` member of null all keep it valid), so the deferred path never
-    refuses a call the direct path would have executed.
+    admit null. The schema's keywords apply together, as JSON Schema says:
+    `type: ["string","null"]` or `nullable: true` admits it unless a sibling
+    `enum`, `const` or `not` excludes it; `anyOf` needs one arm that admits
+    it, `oneOf` exactly one, `allOf` every one; an unconstrained schema (`{}`
+    or the boolean `true`) admits everything. So the deferred path never
+    refuses a call the direct path would have executed, and never passes a
+    null the vendor's own schema forbids.
 
 A deferred `tool_call` routes through the **same `*mcpTool` wrapper** a direct
 call would, so the MCP broker + per-task credential allowlist (#184), the policy
