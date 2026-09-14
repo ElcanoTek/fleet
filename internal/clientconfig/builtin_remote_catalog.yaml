@@ -3194,8 +3194,10 @@ servers:
       historical data, instrument search, holdings, positions, margins and read-
       only order/GTT data. The hosted instance deliberately excludes
       place/modify/cancel order tools. No OAuth at the transport: the server
-      answers unauthenticated and the user signs in through its `login` tool,
-      which returns a Kite login link to open in the browser.
+      answers unauthenticated and user sign-in runs through its `login` tool,
+      which returns a Kite browser link; sign-in via the `login` tool works
+      within the turn that calls it, but the login does not persist across
+      turns and the connector cannot authenticate in scheduled runs.
     url: "https://mcp.kite.trade/mcp"
     vendor: Zerodha Broking Ltd.
     docs_url: "https://zerodha.com/products/mcp/"
@@ -3206,8 +3208,9 @@ servers:
     auth: open
     setup_hint: >-
       Nothing to enter: add the server, then ask the assistant to call the
-      Kite `login` tool and open the link it returns to sign in with your
-      Zerodha credentials. The session lives on Kite's side.
+      Kite `login` tool and open the link it returns. Sign-in via the `login`
+      tool works within the turn that calls it; the login does not persist across
+      turns and the connector cannot authenticate in scheduled runs.
 
   # ── design-media ────────────────────────────────────────────────
   - name: adobe-creativity

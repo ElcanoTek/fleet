@@ -96,12 +96,24 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   send `enabled_optional` naming the connection, or nothing hosted mounts and
   the model reports "no MCP tools".
 - **Scheduled tasks** mount every connected connection of the task's owner on
-  its default seat; `mcp_selection` pins a seat. A pin to a seat that is not
-  connected skips that connector and tells the model; a pin to a server the
-  owner never connected dead-letters the task without a model call.
+  its default seat, subject to the overlay ceiling. The overlay caps mounting
+  at `maxOverlayServers = 8` connected servers per user (`maxOverlayServers` in
+  `internal/agent/remote_mcp_overlay.go`), applied uniformly to chat,
+  scheduled runs, and the broker. Selection order follows connection list order
+  (`internal/remotemcp/resolver.go`'s `ConnectedServersForUser`: the owner's
+  own connections newest-first, then the ones shared with them); servers past the
+  8-server cap are skipped and logged. `mcp_selection` pins choose which seat
+  account mounts for a connector, but pins do **not** bypass the 8-server cap
+  or reorder servers ahead of it. A pin to a seat that is not connected skips
+  that connector and tells the model; a pin to a server the owner never
+  connected dead-letters the task without a model call.
 - **Expired tokens refresh headlessly** in both chat and scheduled runs,
-  under a row lock. A connection that cannot refresh is skipped and marked
-  *Reconnect needed*; the run completes without it.
+  under a row lock. Network errors and 5xx stay transient (the refresh path in
+  `internal/remotemcp/service.go`): the connection is skipped for that run,
+  remains connected, and is retried on the next call. Only terminal OAuth
+  errors (e.g. `invalid_grant`) mark the connection *Reconnect needed*
+  (`needs_reauth`). In either case, the run completes without the skipped
+  connector.
 - **More than 128 tools** switches the run to deferred mode: the model finds
   tools with `tool_search`, reads their schema with `tool_describe` (which
   lists the required arguments) and calls them with `tool_call`, which refuses

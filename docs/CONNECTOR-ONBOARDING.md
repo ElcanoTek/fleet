@@ -159,6 +159,15 @@ Face — and a test caps it at 8–20 entries, never community provenance. The
 same pass audited the directory for dead/low-quality listings and added
 newly-verified official endpoints (see that PR in the repository history).
 
+**Catalog corrections do not rewrite saved connections**: fleet builds the
+remote MCP mount from the saved row (`srv.URL`, via `connFor` in
+`internal/remotemcp/resolver.go`). The directory UI marks an entry "added"
+by name (`web/src/app/settings/connections/page.tsx`), so a user who connected
+an entry before a catalog fix (such as Cartesia, Octagon, or Globalping) keeps
+dialing the old URL and auth after upgrading, and cannot pick the corrected
+entry without removing the connection first. To adopt a catalog correction,
+the operator or user must Remove the connector and re-add it.
+
 ## Deviations / honest scope
 
 - **`auth: tenant` semantics narrowed**: it now means "your URL + OAuth". The

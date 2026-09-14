@@ -32,7 +32,7 @@ thing · **fixed by** names the fleet PR that had to land first.
 | Grafana Cloud | dynamic registration, public client | ✓ | ✓ | ✓ | ✓ `list_users_by_org`, `list_datasources` | — | — | — | — | **PASS** (connect + tools) — fixed by #1482 | 2026-09-14 |
 | Uptime Robot | dynamic registration (vendor returned a secret) | ✓ | ✓ | ✓ | ✓ `list-monitors`, `get-monitor-stats` | — | — | — | — | **PASS** (connect + tools) — fixed by #1485 (pointer only on POST) | 2026-09-14 |
 | Plaid | no protected-resource metadata (origin is the AS) | ✓ | ✓ | ✓ | ✓ `list_teams` | — | — | — | — | **PASS on the 2026-09-14 rig build**; on `main` after #1485's final form discovery is refused (the vendor answers 401 under its MCP path). Not fixed — skipped by decision | 2026-09-14 |
-| Cartesia | dynamic registration | ✓ (wrong URL) | ✓ | ✗ 404 | — | — | — | — | — | **catalog URL wrong**, corrected in #1495 (`/mcp`); not re-run since | 2026-09-14 |
+| Cartesia | dynamic registration | ✓ (wrong URL) | ✓ | ✗ 404 | — | — | — | — | — | **catalog URL wrong**, corrected in #1501 (`/mcp`, from #1495); not re-run since | 2026-09-14 |
 | Intercom | no protected-resource metadata | probe ✓ | — | — | — | — | — | — | — | discovery only; same `main` refusal as Plaid | 2026-09-14 |
 
 Cross-cutting checks, all live:
@@ -86,7 +86,7 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | F1 | metadata only at RFC 8414's path-inserted location (13 vendors) | fixed, #1482 merged |
 | F2 | no protected-resource metadata; origin is the AS | fixed, #1485 merged; `main`'s final form refuses a vendor that answers 401 under its MCP path (Plaid, Intercom) — **skipped by decision** |
 | F3 | metadata pointer only on the POST reply | fixed, #1485 merged |
-| F4 | document names another issuer (copy / proxy / hybrid) | fixed, #1488 open |
+| F4 | document names another issuer (copy / proxy / hybrid) | fixed, merged (#1488) |
 | F5 | registration always asks for a public client | two vendors accepted it anyway; retry on refusal in #1488 |
 | F6 | `offline_access` not requested where the vendor needs it | Entra (#1481) and Auth0 (#1488); IdentityServer, Keycloak, Ory unverified |
 | F7 | `tool_describe` hid the required-argument list | fixed, #1483 merged |
@@ -94,8 +94,9 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | F9 | `tool_search` ranks other connectors above the one named in the query | observation |
 | F10 | a connect failure is announced to the model as "needs re-authorization" | open, not started |
 | F11 | fleet has no legacy HTTP+SSE transport; Square and Smartlead document SSE-only endpoints | **skipped by decision**; entries left as they are |
-| C1–C9 | seven catalog data errors (Expensify, Cartesia, Octagon, Globalping, Zerodha Kite, Sage Intacct, OpenRouter); Square, Smartlead untouched | #1495 open |
+| C1–C9 | seven catalog data errors (Expensify, Cartesia, Octagon, Globalping, Zerodha Kite (its `login` tool session is per-turn only; no scheduled-run auth), Sage Intacct, OpenRouter); Square, Smartlead untouched | landed in #1501 (superseded #1495) |
 | F12 | Bugsnag's 401 points at its metadata over plain `http://`; the vendor redirects to https, fleet's client refuses redirects, and since #1485 a failed advertised pointer is fatal (it fell through to the well-known locations before) | open, not started — a same-host `http`→`https` upgrade of the pointer would cover it |
+| F13 | Saved connections retain their original URL and auth across catalog corrections until removed and re-added. | Open — reconciliation of saved rows to updated definitions is deferred, requiring a manual re-add for Cartesia, Octagon, and Globalping. |
 | V1 | 25 entries publish no scopes anywhere | live add needed per vendor |
 | V2 | GoCardless, Adobe, Square, Wrike answer 403 to every unauthenticated request from the audit network | re-probe from another network before calling them broken |
 | V3 | 22 tenant entries have a placeholder in the hostname and cannot be probed | expected |
@@ -335,6 +336,6 @@ Probe = fleet's `mcpoauth.Discover` plus the add-time guards, run against the ca
 | wrike | oauth | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) | — |  |  |
 | x-docs | open | open ✓ (initialize 200) | n/a |  |  |
 | xero | oauth | discovery ✓ | manual client, secret | https://identity.xero.com |  |
-| zerodha-kite | open | open ✓ (initialize 200) | n/a |  |  |
+| zerodha-kite | open | open ✓ (initialize 200) | n/a |  | `login` tool session lives only within the calling turn; does not persist across turns and cannot authenticate in scheduled runs |
 | zoom | oauth | discovery ✓ | manual client, secret | https://zoom.us |  |
 | zoominfo | oauth | discovery ✓ | self-registering, secret | https://okta-login.zoominfo.com/oauth2/default | AS lists no `none`; fleet asks `none`, retries confidential (#1488); docs_url 404 |
