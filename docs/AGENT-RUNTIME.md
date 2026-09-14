@@ -546,6 +546,36 @@ How the invariants hold:
   form fleet historically asked for; a failed Add names every location it
   tried. Before this, only the appended forms were tried and thirteen
   official catalog vendors could not be added at all (#1006 audit).
+- **Protected-resource metadata is asked for the way a client would, and a
+  server without any still connects.** Discovery probes the MCP URL with a
+  GET and then with an unauthenticated JSON-RPC `initialize` POST, taking the
+  `resource_metadata` pointer from whichever 401 carries one (Uptime Robot
+  answers the GET with 404 and points only from the POST). Without a
+  pointer it tries RFC 9728 §3.1's path-inserted well-known form, then the
+  path-appended form, then the origin root — all built from the URL's path
+  alone, never its query. When no document exists at any of those (every
+  location answers 404 or 410), or the document names no authorization server
+  (`authorization_servers` is optional
+  in RFC 9728; its other fields — scopes, resource — are kept), the MCP spec's
+  backwards-compatibility rule applies: the server's own origin is the
+  authorization server, its RFC 8414 / OIDC document is fetched there, and the
+  typed URL is the resource (`Discovered.LegacyOrigin`). A location the server
+  itself advertised on the 401 and then could not serve, a well-known
+  location that answered 5xx, timed out or returned malformed JSON, a probe
+  that got no answer at all, or a document that names no authorization server
+  *and* lacks a `resource` fleet can canonicalize (absolute, http(s), a host,
+  no userinfo — the same bar every stored resource passes, deliberately looser
+  than RFC 9728's https-only, fragment-free rule so development servers work),
+  is an error, never a fallback —
+  that is a modern server failing or misbehaving, not a legacy one. (A
+  document that does name an authorization server is handled as before,
+  whatever its `resource` says.) The probe reads only status and headers,
+  so an event stream a server holds open is closed, not drained. The
+  probe's `initialize` announces the same protocol revision as fleet's real
+  transport (pinned by a test), and a session it happens to open is
+  terminated before discovery moves on.
+  Intercom, Plaid, Cartesia, GoCardless and Square publish only that shape
+  and could not be added before (#1006 catalog audit).
 - **Rotation-safe refresh.** Tokens are refreshed under a `SELECT … FOR UPDATE`
   row lock with a post-lock expiry re-check, persisting any rotated (single-use)
   refresh token in the same transaction. A dead refresh token marks the

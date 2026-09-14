@@ -3,10 +3,12 @@ package mcpoauth
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newDiscoveryServer stands up an MCP server + colocated authorization server.
@@ -329,6 +331,513 @@ func TestFetchAuthServerMetadataErrorNamesEveryLocation(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %s", err.Error(), want)
 		}
+	}
+}
+
+// legacyASHandlers registers an RFC 8414 document at the ORIGIN root only (no
+// PRM anywhere), the shape of an MCP server written against the 2025-03-26
+// authorization flow.
+func legacyASHandlers(mux *http.ServeMux, base string) {
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{
+			Issuer:                        base + "/", // Cartesia spells it with a trailing slash
+			AuthorizationEndpoint:         base + "/authorize",
+			TokenEndpoint:                 base + "/token",
+			RegistrationEndpoint:          base + "/register",
+			CodeChallengeMethodsSupported: []string{"S256"},
+		})
+	})
+}
+
+// TestDiscoverLegacyOriginWhenNoPRM: no Protected Resource Metadata at any
+// location (401 without a pointer, well-known forms 404) but the origin
+// publishes authorization-server metadata — Intercom, Plaid, Cartesia,
+// GoCardless, Square (#1006 audit). The origin becomes the AS, the typed URL
+// the resource, and the result says so.
+func TestDiscoverLegacyOriginWhenNoPRM(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="OAuth", error="invalid_token"`) // Intercom: 401, no resource_metadata
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	legacyASHandlers(mux, base)
+
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if !d.LegacyOrigin {
+		t.Error("LegacyOrigin = false, want true")
+	}
+	if d.Resource != base+"/mcp" || d.PRM.Resource != base+"/mcp" {
+		t.Errorf("resource = %q / prm %q, want the typed URL", d.Resource, d.PRM.Resource)
+	}
+	if len(d.PRM.AuthorizationServers) != 1 || d.PRM.AuthorizationServers[0] != base {
+		t.Errorf("authorization_servers = %v, want [%s]", d.PRM.AuthorizationServers, base)
+	}
+	if d.AS.Issuer != base || d.AS.TokenEndpoint != base+"/token" || d.AS.RegistrationEndpoint != base+"/register" {
+		t.Errorf("AS = %+v, want the origin's document with the issuer normalized to the origin", d.AS)
+	}
+}
+
+// TestDiscoverNoPRMNoASNamesBothFailures: a server with neither document is
+// still refused, and the error carries the PRM failure AND the legacy
+// fallback's, so an operator sees the whole story.
+func TestDiscoverNoPRMNoASNamesBothFailures(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	t.Cleanup(srv.Close)
+	d, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp")
+	if err == nil {
+		t.Fatalf("Discover succeeded against a server with no metadata: %+v", d)
+	}
+	for _, want := range []string{"protected-resource metadata", "legacy MCP 2025-03-26 fallback", "authorization-server metadata"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err.Error(), want)
+		}
+	}
+}
+
+// TestDiscoverLegacyOriginStillVerifiesIssuer: the fallback extends no trust —
+// an origin whose document claims another issuer is a mix-up and is rejected.
+func TestDiscoverLegacyOriginStillVerifiesIssuer(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: "https://evil.example.com", AuthorizationEndpoint: "https://evil.example.com/a", TokenEndpoint: "https://evil.example.com/t"})
+	})
+	if _, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp"); err == nil || !strings.Contains(err.Error(), "issuer mismatch") {
+		t.Fatalf("legacy fallback accepted a foreign issuer: %v", err)
+	}
+}
+
+// TestDiscoverPointerOnlyOnPOST: Uptime Robot's shape — GET on the MCP URL is
+// 404 with no header, the 401 to a JSON-RPC initialize POST carries the
+// resource_metadata pointer, and the document lives at the path-APPENDED
+// well-known location that neither the inserted form nor the root serves.
+func TestDiscoverPointerOnlyOnPOST(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	var methods []string
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/mcp/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/mcp/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp", AuthorizationServers: []string{base}})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", CodeChallengeMethodsSupported: []string{"S256"}})
+	})
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if d.LegacyOrigin {
+		t.Error("a served PRM must not be reported as the legacy fallback")
+	}
+	if strings.Join(methods, ",") != "GET,POST" {
+		t.Errorf("server probed with %v, want GET then POST", methods)
+	}
+	if d.AS.TokenEndpoint != base+"/token" {
+		t.Errorf("token endpoint = %q", d.AS.TokenEndpoint)
+	}
+}
+
+// TestProbeResourceMetadataPointerRefusesNonHTTP: the probe never dials a
+// non-http(s) URL, whatever the caller passed.
+func TestProbeResourceMetadataPointerRefusesNonHTTP(t *testing.T) {
+	dialed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { dialed = true; w.WriteHeader(http.StatusUnauthorized) }))
+	t.Cleanup(srv.Close)
+	for _, u := range []string{"file:///etc/passwd", "gopher://" + strings.TrimPrefix(srv.URL, "http://"), "ftp://example.com/mcp"} {
+		if got, _ := probeResourceMetadataPointer(context.Background(), srv.Client(), u, http.MethodGet, ""); got != "" {
+			t.Errorf("%s: got pointer %q, want none", u, got)
+		}
+	}
+	if dialed {
+		t.Error("a non-http(s) URL reached the network")
+	}
+}
+
+// TestLocateResourceMetadataCandidatesOrder pins the well-known order when the
+// server gives no pointer: inserted, appended, root — and root alone for a
+// bare-origin URL.
+func TestLocateResourceMetadataCandidatesOrder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	t.Cleanup(srv.Close)
+	loc, err := locateResourceMetadata(context.Background(), srv.Client(), srv.URL+"/v1/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		srv.URL + "/.well-known/oauth-protected-resource/v1/mcp",
+		srv.URL + "/v1/mcp/.well-known/oauth-protected-resource",
+		srv.URL + "/.well-known/oauth-protected-resource",
+	}
+	got := loc.candidates
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("candidates = %v, want %v", got, want)
+	}
+	if loc.advertised || loc.probeErr != nil {
+		t.Errorf("well-known guesses after a 404 must be neither advertised nor a probe failure: %+v", loc)
+	}
+	loc, _ = locateResourceMetadata(context.Background(), srv.Client(), srv.URL)
+	got = loc.candidates
+	if len(got) != 1 || got[0] != srv.URL+"/.well-known/oauth-protected-resource" {
+		t.Errorf("bare-origin candidates = %v", got)
+	}
+	// A query string is part of the canonical URL but not of where the
+	// document lives: every candidate is built from the path alone, and a
+	// percent-escaped segment survives verbatim.
+	loc, _ = locateResourceMetadata(context.Background(), srv.Client(), srv.URL+"/tenant%2Fone/mcp?tenant=x")
+	got = loc.candidates
+	want = []string{
+		srv.URL + "/.well-known/oauth-protected-resource/tenant%2Fone/mcp",
+		srv.URL + "/tenant%2Fone/mcp/.well-known/oauth-protected-resource",
+		srv.URL + "/.well-known/oauth-protected-resource",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("query-scoped candidates = %v, want %v", got, want)
+	}
+}
+
+// TestDiscoverLegacyOriginWhenPRMListsNoAuthorizationServers: RFC 9728 makes
+// authorization_servers optional, and a document that omits it yields no
+// authorization server any more than a missing document does — so the same
+// backwards-compatibility fallback applies, issuer check included.
+func TestDiscoverLegacyOriginWhenPRMListsNoAuthorizationServers(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		// no authorization_servers, but a same-origin resource and scopes the vendor DID publish
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp/v1", ScopesSupported: []string{"read", "write"}})
+	})
+	legacyASHandlers(mux, base)
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if !d.LegacyOrigin || d.AS.Issuer != base || len(d.PRM.AuthorizationServers) != 1 || d.PRM.AuthorizationServers[0] != base {
+		t.Errorf("want the legacy-origin fallback, got %+v", d)
+	}
+	// The fetched document's other fields survive: its scopes drive
+	// RequestedScopes and its same-origin resource is adopted as usual.
+	if strings.Join(d.RequestedScopes(), " ") != "read write" {
+		t.Errorf("RequestedScopes = %v, want the PRM's own scopes", d.RequestedScopes())
+	}
+	if d.Resource != base+"/mcp/v1" || d.PRM.Resource != base+"/mcp/v1" {
+		t.Errorf("resource = %q / prm %q, want the PRM's same-origin resource adopted", d.Resource, d.PRM.Resource)
+	}
+	// ...and with no AS at the origin either, the error says the PRM named none.
+	var srv2 *httptest.Server
+	srv2 = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/oauth-protected-resource/mcp" {
+			_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: srv2.URL + "/mcp"}) // a valid resource, no authorization_servers
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv2.Close)
+	if _, err := Discover(context.Background(), srv2.Client(), srv2.URL+"/mcp"); err == nil || !strings.Contains(err.Error(), "lists no authorization_servers") || !strings.Contains(err.Error(), "legacy MCP 2025-03-26 fallback") {
+		t.Errorf("error must carry both halves: %v", err)
+	}
+}
+
+// TestDiscoverAdvertisedPointerFailureDoesNotFallBack: a modern server that
+// advertises its PRM location on the 401 and then cannot serve it (5xx,
+// malformed JSON, a timeout) is a server having a bad moment, not a
+// 2025-03-26 server with no metadata. Even with valid authorization-server
+// metadata at its origin, discovery must surface the failure rather than
+// persist a synthesized configuration the server never published.
+func TestDiscoverAdvertisedPointerFailureDoesNotFallBack(t *testing.T) {
+	for name, serve := range map[string]func(w http.ResponseWriter){
+		"500":            func(w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) },
+		"malformed json": func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"resource": `)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			base := srv.URL
+			mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/prm"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			})
+			mux.HandleFunc("/prm", func(w http.ResponseWriter, _ *http.Request) { serve(w) })
+			legacyASHandlers(mux, base) // the origin WOULD satisfy the legacy fallback
+			d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+			if err == nil {
+				t.Fatalf("Discover fell back to the origin behind an advertised pointer: %+v", d)
+			}
+			if !strings.Contains(err.Error(), "the server advertised at "+base+"/prm") {
+				t.Errorf("error must name the advertised location: %v", err)
+			}
+		})
+	}
+}
+
+// TestDiscoverWellKnownOperationalFailureDoesNotFallBack: the same rule for
+// the guessed well-known locations — a 500, a 429 or malformed JSON at one of
+// them is not "no metadata", so discovery surfaces it instead of taking the
+// legacy-origin fallback, even when the origin would satisfy it. Only when
+// every location answers 404/410 does the fallback apply.
+func TestDiscoverWellKnownOperationalFailureDoesNotFallBack(t *testing.T) {
+	for name, serve := range map[string]func(w http.ResponseWriter){
+		"500":            func(w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) },
+		"429":            func(w http.ResponseWriter) { w.WriteHeader(http.StatusTooManyRequests) },
+		"malformed json": func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"resource": `)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			base := srv.URL
+			mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) { http.NotFound(w, nil) })
+			// The inserted form is failing; the appended and root forms are absent.
+			mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) { serve(w) })
+			legacyASHandlers(mux, base) // the origin WOULD satisfy the legacy fallback
+			d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+			if err == nil {
+				t.Fatalf("Discover fell back to the origin past an operational failure: %+v", d)
+			}
+			if !strings.Contains(err.Error(), "not a 404") || strings.Contains(err.Error(), "legacy MCP 2025-03-26 fallback") {
+				t.Errorf("error must surface the operational failure and not mention the fallback: %v", err)
+			}
+		})
+	}
+	// 410 Gone is an absence too: the fallback still applies.
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusGone) })
+	legacyASHandlers(mux, srv.URL)
+	if d, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp"); err != nil || !d.LegacyOrigin {
+		t.Errorf("410 at every location must still take the legacy fallback: %v %+v", err, d)
+	}
+}
+
+// TestProbeDoesNotDrainOpenEventStream: a server that accepts the
+// unauthenticated initialize with a text/event-stream it then holds open must
+// not stall the probe — only status and headers are read, the body is closed,
+// and the session the server opened is still terminated.
+func TestProbeDoesNotDrainOpenEventStream(t *testing.T) {
+	var deletes []string
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			deletes = append(deletes, r.Header.Get("Mcp-Session-Id"))
+			w.WriteHeader(http.StatusOK)
+		default:
+			_, _ = io.Copy(io.Discard, r.Body) // so the server notices the client hanging up
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Mcp-Session-Id", "sess-sse")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			select { // hold the stream open until the client goes away
+			case <-r.Context().Done():
+			case <-done:
+			}
+		}
+	}))
+	t.Cleanup(func() { close(done); srv.Close() })
+	client := srv.Client() // no global timeout: a drain would hang here
+	start := time.Now()
+	got, err := probeResourceMetadataPointer(context.Background(), client, srv.URL+"/mcp", http.MethodPost, initializeProbeBody)
+	if got != "" || err != nil {
+		t.Errorf("probe = %q, %v; want no pointer and no error", got, err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("probe took %s against an open event stream; it must not drain the body", d)
+	}
+	if strings.Join(deletes, ",") != "sess-sse" {
+		t.Errorf("session termination DELETEs = %v, want exactly one for sess-sse", deletes)
+	}
+}
+
+// TestDiscoverProbeTransportFailureDoesNotFallBack: the pointer may live only
+// on the POST (Uptime Robot). If that request gets no answer at all, absent
+// well-known documents prove nothing, and discovery must surface the failure
+// rather than take the legacy-origin fallback, even when the origin would
+// satisfy it.
+func TestDiscoverProbeTransportFailureDoesNotFallBack(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done); srv.Close() })
+	base := srv.URL
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = io.Copy(io.Discard, r.Body)
+			select { // never answers: the client times out
+			case <-r.Context().Done():
+			case <-done:
+			}
+			return
+		}
+		http.NotFound(w, r)
+	})
+	legacyASHandlers(mux, base) // the origin WOULD satisfy the legacy fallback
+	client := srv.Client()
+	client.Timeout = 300 * time.Millisecond
+	d, err := Discover(context.Background(), client, base+"/mcp")
+	if err == nil {
+		t.Fatalf("Discover fell back to the origin past a probe that never answered: %+v", d)
+	}
+	if !strings.Contains(err.Error(), "did not answer") || strings.Contains(err.Error(), "legacy MCP 2025-03-26 fallback") {
+		t.Errorf("error must surface the probe failure and not mention the fallback: %v", err)
+	}
+}
+
+// TestDiscoverPRMWithoutResourceIsMalformedNotLegacy: RFC 9728 §2 requires
+// `resource`, and it is a URI. A document with no authorization_servers whose
+// resource is absent or not a valid resource URI (`{}`, `{"resource":"x"}`
+// all parse) is malformed, and must not be treated as "names no
+// authorization server" and waved into the legacy-origin fallback.
+func TestDiscoverPRMWithoutResourceIsMalformedNotLegacy(t *testing.T) {
+	for name, doc := range map[string]string{
+		"empty object":      `{}`,
+		"scopes only":       `{"scopes_supported":["read"]}`,
+		"relative resource": `{"resource":"x"}`,
+		"ftp resource":      `{"resource":"ftp://example.com/mcp"}`,
+		"userinfo resource": `{"resource":"https://user:pw@example.com/mcp"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(doc)) })
+			legacyASHandlers(mux, srv.URL) // the origin WOULD satisfy the legacy fallback
+			d, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp")
+			if err == nil {
+				t.Fatalf("Discover accepted a PRM without resource via the legacy fallback: %+v", d)
+			}
+			if !strings.Contains(err.Error(), "required resource field is missing or not a resource URI fleet can use") {
+				t.Errorf("error must name the malformed document: %v", err)
+			}
+		})
+	}
+}
+
+// TestDiscoverUnusablePRMAtFirstLocationTriesTheNext: a generic JSON
+// catch-all at the inserted well-known location (`{}` parses) must not stop
+// discovery when the appended location carries the real document — the same
+// continue-past-it treatment malformed JSON already gets.
+func TestDiscoverUnusablePRMAtFirstLocationTriesTheNext(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	mux.HandleFunc("/mcp/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp", AuthorizationServers: []string{base + "/as"}})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server/as", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: base + "/as", AuthorizationEndpoint: base + "/as/authorize", TokenEndpoint: base + "/as/token", CodeChallengeMethodsSupported: []string{"S256"}})
+	})
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover stopped at the unusable first location: %v", err)
+	}
+	if d.LegacyOrigin || d.AS.Issuer != base+"/as" {
+		t.Errorf("want the appended location's real document, got %+v", d)
+	}
+}
+
+// TestProbeReadsEveryWWWAuthenticateField: RFC 9110 lets a server send several
+// WWW-Authenticate field lines; the resource_metadata pointer may sit on any
+// of them, not only the first.
+func TestProbeReadsEveryWWWAuthenticateField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("WWW-Authenticate", `Basic realm="ops"`)
+		w.Header().Add("WWW-Authenticate", `Bearer realm="mcp", resource_metadata="https://example.com/.well-known/oauth-protected-resource/mcp"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	got, err := probeResourceMetadataPointer(context.Background(), srv.Client(), srv.URL+"/mcp", http.MethodGet, "")
+	if err != nil || got != "https://example.com/.well-known/oauth-protected-resource/mcp" {
+		t.Fatalf("pointer on the second WWW-Authenticate field: got %q, %v", got, err)
+	}
+}
+
+// TestProbeSessionTerminationIsBounded: a server that accepts the DELETE and
+// then never answers must not hold discovery for the client's full timeout;
+// the best-effort termination runs under its own short deadline.
+func TestProbeSessionTerminationIsBounded(t *testing.T) {
+	old := probeSessionTerminateTimeout
+	probeSessionTerminateTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { probeSessionTerminateTimeout = old })
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.Method == http.MethodDelete {
+			select { // accept the termination and never answer
+			case <-r.Context().Done():
+			case <-done:
+			}
+			return
+		}
+		w.Header().Set("Mcp-Session-Id", "sess-slow")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	t.Cleanup(func() { close(done); srv.Close() })
+	client := srv.Client() // no global timeout
+	start := time.Now()
+	if got, err := probeResourceMetadataPointer(context.Background(), client, srv.URL+"/mcp", http.MethodPost, initializeProbeBody); got != "" || err != nil {
+		t.Errorf("probe = %q, %v; want no pointer and no error", got, err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("probe took %s waiting on a session DELETE that never answered; the termination must be bounded", d)
+	}
+}
+
+// TestProbeTerminatesSessionItOpened: a server that accepts the unauthenticated
+// initialize (200 + Mcp-Session-Id) has allocated a session the probe never
+// wanted; the probe sends the Streamable HTTP DELETE for it and returns no
+// pointer. A GET that happens to carry the header is not a session the probe
+// opened and is left alone.
+func TestProbeTerminatesSessionItOpened(t *testing.T) {
+	var deletes []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			deletes = append(deletes, r.Header.Get("Mcp-Session-Id"))
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.Header().Set("Mcp-Session-Id", "sess-123")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	if got, _ := probeResourceMetadataPointer(context.Background(), srv.Client(), srv.URL+"/mcp", http.MethodPost, initializeProbeBody); got != "" {
+		t.Errorf("a 200 must yield no pointer, got %q", got)
+	}
+	if strings.Join(deletes, ",") != "sess-123" {
+		t.Errorf("session termination DELETEs = %v, want exactly one for sess-123", deletes)
+	}
+	deletes = nil
+	_, _ = probeResourceMetadataPointer(context.Background(), srv.Client(), srv.URL+"/mcp", http.MethodGet, "")
+	if len(deletes) != 0 {
+		t.Errorf("a GET opened no session and must terminate none: %v", deletes)
+	}
+	if !strings.Contains(initializeProbeBody, `"protocolVersion":"`+ProbeProtocolVersion+`"`) {
+		t.Errorf("probe body does not announce ProbeProtocolVersion: %s", initializeProbeBody)
 	}
 }
 

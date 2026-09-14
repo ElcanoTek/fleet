@@ -3,11 +3,13 @@ package mcpoauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // requireHTTPScheme refuses any URL that is not http:// or https:// before it
@@ -65,6 +67,16 @@ type Discovered struct {
 	Resource string
 	PRM      ProtectedResourceMetadata
 	AS       AuthServerMetadata
+	// LegacyOrigin is true when the authorization server was taken to be the
+	// MCP server's own origin, as the MCP spec's backwards-compatibility rule
+	// for 2025-03-26 servers directs. That happens in two shapes: the server
+	// published no Protected Resource Metadata at all, in which case PRM is
+	// synthesized (resource = the typed URL, authorization_servers = [origin])
+	// and nothing in it came from the vendor; or it published a document with
+	// a valid resource but no authorization_servers, in which case PRM is the
+	// vendor's document with only authorization_servers filled in as [origin]
+	// — its resource and scopes are real. Either way AS.Issuer is the origin.
+	LegacyOrigin bool
 }
 
 // Discover walks the MCP authorization discovery chain for a canonical server
@@ -73,28 +85,78 @@ type Discovered struct {
 // metadata, and verify it supports PKCE S256. httpClient MUST be the SSRF-safe
 // client in production; tests inject a plain client against httptest.
 func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (*Discovered, error) {
-	prmURLs, err := locateResourceMetadata(ctx, httpClient, canonicalServerURL)
+	loc, err := locateResourceMetadata(ctx, httpClient, canonicalServerURL)
 	if err != nil {
 		return nil, err
 	}
 
 	var prm ProtectedResourceMetadata
 	var prmURL string
-	var fetchErr error
-	for _, candidate := range prmURLs {
+	var fetchErr, operationalErr error
+	for _, candidate := range loc.candidates {
 		var got ProtectedResourceMetadata
 		if err := fetchJSON(ctx, httpClient, candidate, &got); err != nil {
 			fetchErr = err
+			if !metadataAbsent(err) {
+				operationalErr = err
+			}
+			continue
+		}
+		// A document that parses but is unusable — no authorization server
+		// AND no usable `resource` (`{}` and `{"resource":"x"}` both parse)
+		// — is malformed, not absent: a generic JSON catch-all
+		// at one well-known location must not stop the appended or root
+		// location from being tried, and must never be waved into the
+		// legacy-origin fallback as "names no authorization server".
+		if err := usablePRM(candidate, &got); err != nil {
+			fetchErr, operationalErr = err, err
 			continue
 		}
 		prm, prmURL = got, candidate
 		break
 	}
 	if prmURL == "" {
-		return nil, fmt.Errorf("fetch protected-resource metadata: %w", fetchErr)
+		// The legacy-origin fallback is for a server that HAS no Protected
+		// Resource Metadata — every location answered 404/410. A server that
+		// told us where its metadata is (RFC 9728 §5.1) and then could not
+		// serve it, or a well-known location that answered 5xx, timed out or
+		// returned malformed JSON, is a modern server having a bad moment;
+		// falling back to its origin would persist a synthesized
+		// configuration the server never published. Surface that failure so
+		// the operator retries.
+		if loc.advertised {
+			return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s: %w", loc.candidates[0], fetchErr)
+		}
+		if operationalErr != nil {
+			return nil, fmt.Errorf("fetch protected-resource metadata: %w (not a 404, so the server is not treated as one without metadata; retry, or check the server)", operationalErr)
+		}
+		if loc.probeErr != nil {
+			// A probe that got no answer at all (timeout, reset) may have
+			// been the one request the server puts its pointer on — Uptime
+			// Robot names it only on the POST. Absent well-known documents
+			// prove nothing then; the server did not get to speak.
+			return nil, fmt.Errorf("probe the MCP server for its protected-resource metadata pointer: %w (the server did not answer, so it is not treated as one without metadata; retry, or check the server)", loc.probeErr)
+		}
+		return discoverLegacyOrigin(ctx, httpClient, canonicalServerURL, fetchErr)
 	}
+
+	var as *AuthServerMetadata
+	legacy := false
 	if len(prm.AuthorizationServers) == 0 {
-		return nil, fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL)
+		// RFC 9728 §2 makes authorization_servers OPTIONAL. A document that
+		// omits it (usablePRM has already required a valid `resource`)
+		// yields no authorization server any more than a missing document
+		// does, so the same backwards-compatibility rule applies: the MCP
+		// server's own origin is the authorization server, still subject to
+		// the issuer check. The document's OTHER fields (scopes_supported,
+		// resource) are the vendor's word and are kept.
+		origin, las, lerr := legacyOriginAuthServer(ctx, httpClient, canonicalServerURL,
+			fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL))
+		if lerr != nil {
+			return nil, lerr
+		}
+		prm.AuthorizationServers = []string{origin}
+		as, legacy = las, true
 	}
 
 	// The canonical identity defaults to the URL the user typed. RFC 9728 §3.3
@@ -111,25 +173,94 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		}
 	}
 
-	issuer := strings.TrimSpace(prm.AuthorizationServers[0])
-	as, err := fetchAuthServerMetadata(ctx, httpClient, issuer)
+	if as == nil {
+		issuer := strings.TrimSpace(prm.AuthorizationServers[0])
+		as, err = fetchAuthServerMetadata(ctx, httpClient, issuer)
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyAuthServer(issuer, as); err != nil {
+			return nil, err
+		}
+		// Persist the issuer the PRM named and we verified against, not the
+		// document's spelling of it: for an Entra multi-tenant endpoint the
+		// document says the literal "{tenantid}" template (accepted by
+		// issuerMatches), which is not a URL anyone can dial or key a vendor
+		// clause on.
+		if !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
+			as.Issuer = issuer
+		}
+	}
+
+	return &Discovered{Resource: resource, PRM: prm, AS: *as, LegacyOrigin: legacy}, nil
+}
+
+// usablePRM reports whether a fetched Protected Resource Metadata document can
+// drive discovery: it names at least one authorization server, or — for the
+// legacy-origin rule — it carries the `resource` RFC 9728 §2 requires, in a
+// form fleet can canonicalize (CanonicalResourceURI: absolute, http(s), a
+// host, no userinfo — the same validator every stored resource passes). That
+// is deliberately fleet's own bar, not the RFC's full one: the canonicalizer
+// accepts http and drops a fragment so that development and test servers
+// work, and this check inherits exactly that. A document with neither is
+// malformed, and the error says so by location.
+func usablePRM(location string, prm *ProtectedResourceMetadata) error {
+	if len(prm.AuthorizationServers) > 0 {
+		return nil
+	}
+	if _, cerr := CanonicalResourceURI(prm.Resource); cerr != nil {
+		return fmt.Errorf("protected-resource metadata at %s names no authorization_servers and its required resource field is missing or not a resource URI fleet can use (%w): a malformed document, not a server without metadata", location, cerr)
+	}
+	return nil
+}
+
+// discoverLegacyOrigin is the MCP spec's backwards-compatibility rule for
+// servers that predate RFC 9728 Protected Resource Metadata (the 2025-03-26
+// authorization flow): when no PRM can be fetched, the MCP server's own origin
+// IS the authorization server, so its RFC 8414 / OIDC document is looked for
+// there and the resource is the URL the user typed. Intercom, Plaid, Cartesia,
+// GoCardless and Square still publish only this shape (#1006 catalog audit,
+// 2026-09-13) and fleet refused all five with "fetch protected-resource
+// metadata". A PRM that exists but names no authorization server takes the
+// same path. The origin is the same party the PRM would have named, so no new
+// trust is extended; the issuer check still applies to what it publishes.
+// prmErr is why the PRM yielded nothing, kept in the error when the fallback
+// fails too so an operator sees both halves of why the server could not be
+// added.
+func discoverLegacyOrigin(ctx context.Context, httpClient *http.Client, canonicalServerURL string, prmErr error) (*Discovered, error) {
+	origin, as, err := legacyOriginAuthServer(ctx, httpClient, canonicalServerURL, prmErr)
 	if err != nil {
 		return nil, err
 	}
+	return &Discovered{
+		Resource:     canonicalServerURL,
+		PRM:          ProtectedResourceMetadata{Resource: canonicalServerURL, AuthorizationServers: []string{origin}},
+		AS:           *as,
+		LegacyOrigin: true,
+	}, nil
+}
 
-	if err := verifyAuthServer(issuer, as); err != nil {
-		return nil, err
+// legacyOriginAuthServer fetches and verifies the authorization-server metadata
+// at the MCP server's own origin — the 2025-03-26 rule shared by "no PRM at
+// all" and "a PRM that names no authorization server". The verified issuer IS
+// the origin; it is stored in that exact spelling (Cartesia's document says it
+// with a trailing slash) so the row keys on one form. prmErr is why the PRM
+// yielded nothing and is carried into the error when the origin has nothing
+// either.
+func legacyOriginAuthServer(ctx context.Context, httpClient *http.Client, canonicalServerURL string, prmErr error) (string, *AuthServerMetadata, error) {
+	origin, oerr := originOf(canonicalServerURL)
+	if oerr != nil {
+		return "", nil, fmt.Errorf("fetch protected-resource metadata: %w", prmErr)
 	}
-	// Persist the issuer the PRM named and we verified against, not the
-	// document's spelling of it: for an Entra multi-tenant endpoint the
-	// document says the literal "{tenantid}" template (accepted by
-	// issuerMatches), which is not a URL anyone can dial or key a vendor
-	// clause on.
-	if !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
-		as.Issuer = issuer
+	as, err := fetchAuthServerMetadata(ctx, httpClient, origin)
+	if err != nil {
+		return "", nil, fmt.Errorf("fetch protected-resource metadata: %w; and the server origin %s publishes no authorization-server metadata either (legacy MCP 2025-03-26 fallback): %w", prmErr, origin, err)
 	}
-
-	return &Discovered{Resource: resource, PRM: prm, AS: *as}, nil
+	if err := verifyAuthServer(origin, as); err != nil {
+		return "", nil, fmt.Errorf("legacy authorization server at the MCP origin: %w", err)
+	}
+	as.Issuer = origin
+	return origin, as, nil
 }
 
 // RequestedScopes is the scope set the authorize request asks for: the
@@ -166,39 +297,171 @@ func containsFold(list []string, want string) bool {
 }
 
 // locateResourceMetadata determines the Protected Resource Metadata URL
-// candidates, in priority order. It first probes the server, hoping for a 401
-// whose WWW-Authenticate header points at the metadata (RFC 9728 §5.1); failing
-// that it falls back to the well-known locations: RFC 9728 §3.1's path-aware
-// form first (/.well-known/oauth-protected-resource/<path> — what Google's
-// Workspace MCP servers serve, and the MCP auth spec's prescribed location for
-// a resource with a path component), then the origin-root form (what GitHub
-// serves).
-func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, canonicalServerURL, nil)
-	if err != nil {
-		return nil, err
+// candidates for a canonical MCP server URL, in the order they are tried.
+//
+// First the server itself is asked: RFC 9728 §5.1 has it answer an
+// unauthenticated request with 401 and a WWW-Authenticate header whose
+// resource_metadata parameter points at the document. fleet used to send only
+// a GET; Uptime Robot (and, per the MCP transport, any server that treats GET
+// as the SSE stream) answers the GET with 404 and puts the pointer only on the
+// 401 to a POST — the JSON-RPC initialize a real client would send — so both
+// are probed, and the first pointer wins (#1006 catalog audit).
+//
+// Failing a pointer, the conventional well-known locations: RFC 9728 §3.1's
+// path-inserted form (origin + /.well-known/oauth-protected-resource + path,
+// the one Google's Workspace servers publish), then the path-APPENDED form
+// (server URL + /.well-known/oauth-protected-resource — not in the RFC, but
+// what Uptime Robot's pointer names and what some vendors publish), then the
+// origin root.
+//
+// The result says how the candidates were arrived at, because Discover's
+// legacy-origin fallback is only for a server that provably has no metadata:
+// advertised means the server itself named the location (a 401 pointer), so a
+// document that then cannot be fetched is the server's failure to surface;
+// probeErr means a probe got no answer at all (timeout, reset), so absent
+// well-known documents prove nothing — the pointer may have been on the
+// request that never completed.
+type prmLocations struct {
+	candidates []string
+	advertised bool
+	probeErr   error
+}
+
+func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (prmLocations, error) {
+	var probeErr error
+	u, perr := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodGet, "")
+	if u != "" {
+		return prmLocations{candidates: []string{u}, advertised: true}, nil
 	}
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	resp, err := httpClient.Do(req)
-	if err == nil {
-		defer func() { _ = resp.Body.Close() }()
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMetadataBytes))
-		if resp.StatusCode == http.StatusUnauthorized {
-			if u := parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate")); u != "" {
-				return []string{u}, nil
-			}
-		}
+	probeErr = perr
+	u, perr = probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodPost, initializeProbeBody)
+	if u != "" {
+		return prmLocations{candidates: []string{u}, advertised: true}, nil
+	}
+	if probeErr == nil {
+		probeErr = perr
 	}
 	// Fallback: the conventional well-known locations.
 	origin, oerr := originOf(canonicalServerURL)
 	if oerr != nil {
-		return nil, oerr
+		return prmLocations{}, oerr
 	}
 	root := origin + "/.well-known/oauth-protected-resource"
-	if path := strings.TrimSuffix(strings.TrimPrefix(canonicalServerURL, origin), "/"); path != "" {
-		return []string{root + path, root}, nil
+	// The path component only: CanonicalResourceURI keeps a query string
+	// (https://host/mcp?tenant=x is a real shape) and it is not part of where
+	// RFC 9728 §3.1 puts the document, so appending the well-known suffix to
+	// the whole URL would have put it inside the query. EscapedPath keeps a
+	// percent-escaped segment as the issuer spelled it.
+	pu, uerr := url.Parse(canonicalServerURL)
+	if uerr != nil {
+		return prmLocations{}, uerr
 	}
-	return []string{root}, nil
+	if path := strings.TrimSuffix(pu.EscapedPath(), "/"); path != "" {
+		return prmLocations{candidates: []string{root + path, origin + path + "/.well-known/oauth-protected-resource", root}, probeErr: probeErr}, nil
+	}
+	return prmLocations{candidates: []string{root}, probeErr: probeErr}, nil
+}
+
+// ProbeProtocolVersion is the MCP protocol revision the discovery probe's
+// initialize announces. It MUST equal the revision fleet's real transport
+// sends (internal/mcp's mcpProtocolVersion), so a server that routes or gates
+// initialization on the offered revision answers the probe exactly as it will
+// answer the connection the probe is validating. This package cannot import
+// internal/mcp (it reaches back here through internal/a2a), so the two are
+// held equal by TestProbeProtocolVersionMatchesTransport in internal/mcp.
+const ProbeProtocolVersion = "2024-11-05"
+
+// initializeProbeBody is the JSON-RPC initialize a real MCP client opens with;
+// an unauthenticated one is what makes a spec-following server answer 401 with
+// its resource_metadata pointer. Nothing in it identifies a user.
+const initializeProbeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + ProbeProtocolVersion + `","capabilities":{},"clientInfo":{"name":"fleet","version":"discovery-probe"}}}`
+
+// mcpSessionHeader is the Streamable HTTP transport's session header. A server
+// that accepts an unauthenticated initialize may allocate a session and name
+// it here; the probe wanted only the 401's pointer, so it ends any session it
+// opened (the transport's DELETE with the header) rather than leave one per
+// discovery for the vendor to expire.
+const mcpSessionHeader = "Mcp-Session-Id"
+
+// probeResourceMetadataPointer sends one unauthenticated request to the MCP
+// server and returns the resource_metadata URL from a 401's WWW-Authenticate,
+// or "" when the server answered anything else. The error is non-nil only
+// when no answer was obtained (a transport failure: timeout, reset, refused
+// dial; or a URL that cannot be requested at all) — that is not "no pointer",
+// and Discover treats it as a reason not to assume the server has no metadata. Only the status and
+// headers are read: a 2xx to an unauthenticated initialize may be an SSE
+// stream the server holds open, and draining it would wait for EOF. The body
+// is closed, not drained, and if the server opened a session (2xx with
+// Mcp-Session-Id) it is terminated best-effort after that close.
+func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, serverURL, method, body string) (string, error) {
+	// serverURL is the operator-typed MCP URL; CanonicalResourceURI has already
+	// refused a non-http(s) scheme, userinfo and a hostless URL before Discover
+	// is reached, and SafeHTTPClient resolves-then-dials past blocked IPs and
+	// refuses redirects. Refusing the scheme again by name here costs one line
+	// and keeps that argument local to the request site (see fetchJSON).
+	if err := requireHTTPScheme(serverURL); err != nil {
+		return "", err
+	}
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, serverURL, rd)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if sid := strings.TrimSpace(resp.Header.Get(mcpSessionHeader)); sid != "" && body != "" {
+			terminateProbeSession(ctx, httpClient, serverURL, sid)
+		}
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return "", nil
+	}
+	// A server may send several WWW-Authenticate field lines (RFC 9110
+	// §11.6.1); the pointer can sit on any of them, not only the first.
+	for _, h := range resp.Header.Values("WWW-Authenticate") {
+		if u := parseResourceMetadataURL(h); u != "" {
+			return u, nil
+		}
+	}
+	return "", nil
+}
+
+// probeSessionTerminateTimeout bounds the best-effort session-termination
+// DELETE on its own: its outcome is ignored, so its latency must not be able
+// to hold an Add for the client's full timeout, or forever on a client
+// without one. A var so tests can shorten it.
+var probeSessionTerminateTimeout = 5 * time.Second
+
+// terminateProbeSession sends the Streamable HTTP session-termination DELETE
+// for a session the discovery probe's initialize opened. Best-effort: a
+// server may answer 405 (termination not supported) or anything else, and the
+// probe's outcome does not depend on it — nor, thanks to the child deadline,
+// on how long the server takes to answer.
+func terminateProbeSession(ctx context.Context, httpClient *http.Client, serverURL, sessionID string) {
+	ctx, cancel := context.WithTimeout(ctx, probeSessionTerminateTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, serverURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set(mcpSessionHeader, sessionID)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close() // status is all that matters, and only for the log line it does not get
 }
 
 // parseResourceMetadataURL pulls the resource_metadata parameter (RFC 9728
@@ -496,6 +759,26 @@ func verifyAuthServer(expectedIssuer string, as *AuthServerMetadata) error {
 // guard and its no-redirect policy, and http.Transport would refuse a non-HTTP
 // scheme anyway; the explicit check below is one line and makes that argument
 // airtight rather than dependent on the transport's behavior.
+// httpStatusError is fetchJSON's non-2xx result. It carries the status so a
+// caller can tell "the document is not there" (404/410) from "the server is
+// failing to serve it" (5xx, 429, …): the MCP spec's legacy-origin fallback
+// applies to the first and must never be triggered by the second.
+type httpStatusError struct {
+	URL    string
+	Status int
+}
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("GET %s: status %d", e.URL, e.Status) }
+
+// metadataAbsent reports whether a fetchJSON failure means the document does
+// not exist at that location, as opposed to an operational failure (a 5xx, a
+// timeout, malformed JSON) that a modern server may recover from and that must
+// surface rather than be papered over by a synthesized configuration.
+func metadataAbsent(err error) bool {
+	var se *httpStatusError
+	return errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusGone)
+}
+
 func fetchJSON(ctx context.Context, httpClient *http.Client, url string, out any) error {
 	if err := requireHTTPScheme(url); err != nil {
 		return err
@@ -511,7 +794,7 @@ func fetchJSON(ctx context.Context, httpClient *http.Client, url string, out any
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+		return &httpStatusError{URL: url, Status: resp.StatusCode}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataBytes))
 	if err != nil {
