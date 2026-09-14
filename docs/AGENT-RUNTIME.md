@@ -535,6 +535,18 @@ How the invariants hold:
 - **SSRF guard.** User-supplied URLs are dialed through a client that rejects
   private/loopback/link-local/metadata IPs at connect time (DNS-rebinding safe)
   and refuses redirects.
+- **Protected-resource metadata is asked for the way a client would, and a
+  server without any still connects.** Discovery probes the MCP URL with a
+  GET and then with an unauthenticated JSON-RPC `initialize` POST, taking the
+  `resource_metadata` pointer from whichever 401 carries one (Uptime Robot
+  answers the GET with 404 and points only from the POST). Without a
+  pointer it tries RFC 9728 §3.1's path-inserted well-known form, then the
+  path-appended form, then the origin root. When no document exists at all,
+  the MCP spec's backwards-compatibility rule applies: the server's own
+  origin is the authorization server, its RFC 8414 / OIDC document is fetched
+  there, and the typed URL is the resource (`Discovered.LegacyOrigin`).
+  Intercom, Plaid, Cartesia, GoCardless and Square publish only that shape
+  and could not be added before (#1006 catalog audit).
 - **Rotation-safe refresh.** Tokens are refreshed under a `SELECT … FOR UPDATE`
   row lock with a post-lock expiry re-check, persisting any rotated (single-use)
   refresh token in the same transaction. A dead refresh token marks the

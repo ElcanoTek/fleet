@@ -65,6 +65,12 @@ type Discovered struct {
 	Resource string
 	PRM      ProtectedResourceMetadata
 	AS       AuthServerMetadata
+	// LegacyOrigin is true when the server published no Protected Resource
+	// Metadata and the authorization server was taken to be the server's own
+	// origin, as the MCP spec's backwards-compatibility rule for 2025-03-26
+	// servers directs. PRM is then synthesized (resource = the typed URL,
+	// authorization_servers = [origin]); nothing in it came from the vendor.
+	LegacyOrigin bool
 }
 
 // Discover walks the MCP authorization discovery chain for a canonical server
@@ -91,7 +97,7 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		break
 	}
 	if prmURL == "" {
-		return nil, fmt.Errorf("fetch protected-resource metadata: %w", fetchErr)
+		return discoverLegacyOrigin(ctx, httpClient, canonicalServerURL, fetchErr)
 	}
 	if len(prm.AuthorizationServers) == 0 {
 		return nil, fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL)
@@ -132,6 +138,40 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 	return &Discovered{Resource: resource, PRM: prm, AS: *as}, nil
 }
 
+// discoverLegacyOrigin is the MCP spec's backwards-compatibility rule for
+// servers that predate RFC 9728 Protected Resource Metadata (the 2025-03-26
+// authorization flow): when no PRM can be fetched, the MCP server's own origin
+// IS the authorization server, so its RFC 8414 / OIDC document is looked for
+// there and the resource is the URL the user typed. Intercom, Plaid, Cartesia,
+// GoCardless and Square still publish only this shape (#1006 catalog audit,
+// 2026-09-13) and fleet refused all five with "fetch protected-resource
+// metadata". The origin is the same party the PRM would have named, so no new
+// trust is extended; the issuer check still applies to what it publishes.
+// prmErr is the PRM failure, kept in the error when the fallback fails too so
+// an operator sees both halves of why the server could not be added.
+func discoverLegacyOrigin(ctx context.Context, httpClient *http.Client, canonicalServerURL string, prmErr error) (*Discovered, error) {
+	origin, oerr := originOf(canonicalServerURL)
+	if oerr != nil {
+		return nil, fmt.Errorf("fetch protected-resource metadata: %w", prmErr)
+	}
+	as, err := fetchAuthServerMetadata(ctx, httpClient, origin)
+	if err != nil {
+		return nil, fmt.Errorf("fetch protected-resource metadata: %w; and the server origin %s publishes no authorization-server metadata either (legacy MCP 2025-03-26 fallback): %w", prmErr, origin, err)
+	}
+	if err := verifyAuthServer(origin, as); err != nil {
+		return nil, fmt.Errorf("legacy authorization server at the MCP origin: %w", err)
+	}
+	// The verified issuer IS the origin; store that exact spelling (Cartesia's
+	// document says it with a trailing slash) so the row keys on one form.
+	as.Issuer = origin
+	return &Discovered{
+		Resource:     canonicalServerURL,
+		PRM:          ProtectedResourceMetadata{Resource: canonicalServerURL, AuthorizationServers: []string{origin}},
+		AS:           *as,
+		LegacyOrigin: true,
+	}, nil
+}
+
 // RequestedScopes is the scope set the authorize request asks for: the
 // PRM-declared `scopes_supported` (the resource knows what it needs), else the
 // authorization server's.
@@ -166,28 +206,28 @@ func containsFold(list []string, want string) bool {
 }
 
 // locateResourceMetadata determines the Protected Resource Metadata URL
-// candidates, in priority order. It first probes the server, hoping for a 401
-// whose WWW-Authenticate header points at the metadata (RFC 9728 §5.1); failing
-// that it falls back to the well-known locations: RFC 9728 §3.1's path-aware
-// form first (/.well-known/oauth-protected-resource/<path> — what Google's
-// Workspace MCP servers serve, and the MCP auth spec's prescribed location for
-// a resource with a path component), then the origin-root form (what GitHub
-// serves).
+// candidates for a canonical MCP server URL, in the order they are tried.
+//
+// First the server itself is asked: RFC 9728 §5.1 has it answer an
+// unauthenticated request with 401 and a WWW-Authenticate header whose
+// resource_metadata parameter points at the document. fleet used to send only
+// a GET; Uptime Robot (and, per the MCP transport, any server that treats GET
+// as the SSE stream) answers the GET with 404 and puts the pointer only on the
+// 401 to a POST — the JSON-RPC initialize a real client would send — so both
+// are probed, and the first pointer wins (#1006 catalog audit).
+//
+// Failing a pointer, the conventional well-known locations: RFC 9728 §3.1's
+// path-inserted form (origin + /.well-known/oauth-protected-resource + path,
+// the one Google's Workspace servers publish), then the path-APPENDED form
+// (server URL + /.well-known/oauth-protected-resource — not in the RFC, but
+// what Uptime Robot's pointer names and what some vendors publish), then the
+// origin root.
 func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, canonicalServerURL, nil)
-	if err != nil {
-		return nil, err
+	if u := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodGet, ""); u != "" {
+		return []string{u}, nil
 	}
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	resp, err := httpClient.Do(req)
-	if err == nil {
-		defer func() { _ = resp.Body.Close() }()
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMetadataBytes))
-		if resp.StatusCode == http.StatusUnauthorized {
-			if u := parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate")); u != "" {
-				return []string{u}, nil
-			}
-		}
+	if u := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodPost, initializeProbeBody); u != "" {
+		return []string{u}, nil
 	}
 	// Fallback: the conventional well-known locations.
 	origin, oerr := originOf(canonicalServerURL)
@@ -196,9 +236,43 @@ func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canoni
 	}
 	root := origin + "/.well-known/oauth-protected-resource"
 	if path := strings.TrimSuffix(strings.TrimPrefix(canonicalServerURL, origin), "/"); path != "" {
-		return []string{root + path, root}, nil
+		return []string{root + path, origin + path + "/.well-known/oauth-protected-resource", root}, nil
 	}
 	return []string{root}, nil
+}
+
+// initializeProbeBody is the JSON-RPC initialize a real MCP client opens with;
+// an unauthenticated one is what makes a spec-following server answer 401 with
+// its resource_metadata pointer. Nothing in it identifies a user.
+const initializeProbeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fleet","version":"discovery-probe"}}}`
+
+// probeResourceMetadataPointer sends one unauthenticated request to the MCP
+// server and returns the resource_metadata URL from a 401's WWW-Authenticate,
+// or "" when the server answered anything else (or not at all). The body is
+// drained and discarded: only the header matters here.
+func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, serverURL, method, body string) string {
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, serverURL, rd)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMetadataBytes))
+	if resp.StatusCode != http.StatusUnauthorized {
+		return ""
+	}
+	return parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate"))
 }
 
 // parseResourceMetadataURL pulls the resource_metadata parameter (RFC 9728

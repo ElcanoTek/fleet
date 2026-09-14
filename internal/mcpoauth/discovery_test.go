@@ -115,6 +115,150 @@ func TestDiscoverFallbackPathAwareWellKnown(t *testing.T) {
 	}
 }
 
+// legacyASHandlers registers an RFC 8414 document at the ORIGIN root only (no
+// PRM anywhere), the shape of an MCP server written against the 2025-03-26
+// authorization flow.
+func legacyASHandlers(mux *http.ServeMux, base string) {
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{
+			Issuer:                        base + "/", // Cartesia spells it with a trailing slash
+			AuthorizationEndpoint:         base + "/authorize",
+			TokenEndpoint:                 base + "/token",
+			RegistrationEndpoint:          base + "/register",
+			CodeChallengeMethodsSupported: []string{"S256"},
+		})
+	})
+}
+
+// TestDiscoverLegacyOriginWhenNoPRM: no Protected Resource Metadata at any
+// location (401 without a pointer, well-known forms 404) but the origin
+// publishes authorization-server metadata — Intercom, Plaid, Cartesia,
+// GoCardless, Square (#1006 audit). The origin becomes the AS, the typed URL
+// the resource, and the result says so.
+func TestDiscoverLegacyOriginWhenNoPRM(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="OAuth", error="invalid_token"`) // Intercom: 401, no resource_metadata
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	legacyASHandlers(mux, base)
+
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if !d.LegacyOrigin {
+		t.Error("LegacyOrigin = false, want true")
+	}
+	if d.Resource != base+"/mcp" || d.PRM.Resource != base+"/mcp" {
+		t.Errorf("resource = %q / prm %q, want the typed URL", d.Resource, d.PRM.Resource)
+	}
+	if len(d.PRM.AuthorizationServers) != 1 || d.PRM.AuthorizationServers[0] != base {
+		t.Errorf("authorization_servers = %v, want [%s]", d.PRM.AuthorizationServers, base)
+	}
+	if d.AS.Issuer != base || d.AS.TokenEndpoint != base+"/token" || d.AS.RegistrationEndpoint != base+"/register" {
+		t.Errorf("AS = %+v, want the origin's document with the issuer normalized to the origin", d.AS)
+	}
+}
+
+// TestDiscoverNoPRMNoASNamesBothFailures: a server with neither document is
+// still refused, and the error carries the PRM failure AND the legacy
+// fallback's, so an operator sees the whole story.
+func TestDiscoverNoPRMNoASNamesBothFailures(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	t.Cleanup(srv.Close)
+	d, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp")
+	if err == nil {
+		t.Fatalf("Discover succeeded against a server with no metadata: %+v", d)
+	}
+	for _, want := range []string{"protected-resource metadata", "legacy MCP 2025-03-26 fallback", "authorization-server metadata"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err.Error(), want)
+		}
+	}
+}
+
+// TestDiscoverLegacyOriginStillVerifiesIssuer: the fallback extends no trust —
+// an origin whose document claims another issuer is a mix-up and is rejected.
+func TestDiscoverLegacyOriginStillVerifiesIssuer(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: "https://evil.example.com", AuthorizationEndpoint: "https://evil.example.com/a", TokenEndpoint: "https://evil.example.com/t"})
+	})
+	if _, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp"); err == nil || !strings.Contains(err.Error(), "issuer mismatch") {
+		t.Fatalf("legacy fallback accepted a foreign issuer: %v", err)
+	}
+}
+
+// TestDiscoverPointerOnlyOnPOST: Uptime Robot's shape — GET on the MCP URL is
+// 404 with no header, the 401 to a JSON-RPC initialize POST carries the
+// resource_metadata pointer, and the document lives at the path-APPENDED
+// well-known location that neither the inserted form nor the root serves.
+func TestDiscoverPointerOnlyOnPOST(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	var methods []string
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/mcp/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/mcp/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp", AuthorizationServers: []string{base}})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", CodeChallengeMethodsSupported: []string{"S256"}})
+	})
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if d.LegacyOrigin {
+		t.Error("a served PRM must not be reported as the legacy fallback")
+	}
+	if strings.Join(methods, ",") != "GET,POST" {
+		t.Errorf("server probed with %v, want GET then POST", methods)
+	}
+	if d.AS.TokenEndpoint != base+"/token" {
+		t.Errorf("token endpoint = %q", d.AS.TokenEndpoint)
+	}
+}
+
+// TestLocateResourceMetadataCandidatesOrder pins the well-known order when the
+// server gives no pointer: inserted, appended, root — and root alone for a
+// bare-origin URL.
+func TestLocateResourceMetadataCandidatesOrder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	t.Cleanup(srv.Close)
+	got, err := locateResourceMetadata(context.Background(), srv.Client(), srv.URL+"/v1/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		srv.URL + "/.well-known/oauth-protected-resource/v1/mcp",
+		srv.URL + "/v1/mcp/.well-known/oauth-protected-resource",
+		srv.URL + "/.well-known/oauth-protected-resource",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("candidates = %v, want %v", got, want)
+	}
+	got, _ = locateResourceMetadata(context.Background(), srv.Client(), srv.URL)
+	if len(got) != 1 || got[0] != srv.URL+"/.well-known/oauth-protected-resource" {
+		t.Errorf("bare-origin candidates = %v", got)
+	}
+}
+
 func TestDiscoverIgnoresCrossOriginPRMResource(t *testing.T) {
 	// A PRM that names a resource on a DIFFERENT origin must NOT rebind the
 	// stored identity — Discover keeps the requested server URL (RFC 9728 §3.3).
