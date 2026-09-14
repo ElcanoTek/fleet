@@ -448,8 +448,11 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    **non-blocking** daily scan (08:00 UTC; also `workflow_dispatch`) runs the
    same command against the tip of `main` and reports to the Security tab
    (category `govulncheck-scheduled`), so an advisory is found on a schedule
-   instead of ambushing the next contributor. It makes nothing greener — the
-   gate still blocks a reachable vulnerability.
+   instead of ambushing the next contributor. This is the only govulncheck
+   upload (the PR gate uploads no SARIF), so the cron-only category does not
+   trigger the missing-configuration check that `grype-scheduled.yml`'s did
+   (see the Grype weekly-scan subsection). It makes nothing greener — the gate
+   still blocks a reachable vulnerability.
 
    It also sees strictly more than the gate does: `-format sarif` reports
    vulnerabilities in modules the build merely *requires* but never calls, at
