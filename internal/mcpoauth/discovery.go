@@ -803,7 +803,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	// the whole origin and get a leg that admits a sibling's endpoints. For
 	// any of those, only the claimed issuer's own document may vouch.
 	fu, ferr := url.Parse(fetchedFrom)
-	bareOrigin := ferr == nil && strings.Trim(fu.Path, "/") == "" && fu.RawQuery == "" && fu.Fragment == "" && fu.User == nil
+	bareOrigin := ferr == nil && !scopedToOneTenant(fu)
 	if !bareOrigin {
 		// Closing the same-origin leg is not enough on its own: a SIBLING
 		// tenant (https://as.example.com/tenantB) publishes a self-consistent
@@ -881,6 +881,24 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 		// own list is the correct one and is kept — a proxy's registered
 		// clients authenticate to the proxy.
 		out.TokenEndpointAuthMethodsSupported = own.TokenEndpointAuthMethodsSupported
+		// The same reasoning reaches two fields that describe the ISSUER
+		// rather than how to reach it, and that a trimmed copy may simply
+		// leave out. Both feed RequestedScopes, and losing either costs the
+		// connection its refresh token — the exact failure F6 exists to fix:
+		//   - scopes_supported, where `offline_access` is advertised;
+		//   - mfa_challenge_endpoint, the only marker of an Auth0 tenant
+		//     behind a custom domain (Checkly's auth.checklyhq.com — the
+		//     *.auth0.com host test does not see it).
+		// Filled in only where the copy is SILENT: a copy that names its own
+		// scopes is making a claim about what it accepts, and a proxy may
+		// legitimately offer fewer than the issuer behind it, so a populated
+		// list is never overwritten.
+		if len(out.ScopesSupported) == 0 {
+			out.ScopesSupported = own.ScopesSupported
+		}
+		if strings.TrimSpace(out.MFAChallengeEndpoint) == "" {
+			out.MFAChallengeEndpoint = own.MFAChallengeEndpoint
+		}
 	}
 	return &out, nil
 }
@@ -923,11 +941,43 @@ func sameEndpointURL(a, b string) bool {
 	if (au.User == nil) != (bu.User == nil) || (au.User != nil && au.User.String() != bu.User.String()) {
 		return false
 	}
-	return strings.EqualFold(au.Scheme, bu.Scheme) &&
-		strings.EqualFold(au.Host, bu.Host) &&
+	return normalizedOrigin(au) == normalizedOrigin(bu) &&
 		strings.TrimRight(au.EscapedPath(), "/") == strings.TrimRight(bu.EscapedPath(), "/") &&
 		au.RawQuery == bu.RawQuery &&
 		au.Fragment == bu.Fragment
+}
+
+// normalizedOrigin is the case- and default-port-normalized scheme://host of a
+// parsed URL — the half of a URL that RFC 3986 §6.2.2 makes case-insensitive,
+// with the scheme's default port dropped so https://as.example and
+// https://as.example:443 are the one origin they denote. Comparing URL.Host
+// raw fails that pair, which is how a copied document spelling an endpoint
+// with an explicit :443 would miss confirmation by the very issuer that
+// vouches for it. Nothing the server routes on — path, query — passes through
+// here; those are compared exactly by the caller.
+func normalizedOrigin(u *url.URL) string {
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		port = ""
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return scheme + "://" + host
+}
+
+// scopedToOneTenant reports whether an authorization-server URL is scoped to a
+// single tenant rather than naming a whole origin — by a path, a query, a
+// fragment or userinfo. Only an ABSENT or literal-root path is bare:
+// url.Parse DECODES percent-escapes into Path, so an issuer whose path is
+// "/%2F" arrives as "//" and would trim away to nothing, reading as a bare
+// origin while RawPath/EscapedPath keep it a distinct routed path — the same
+// decode trap authServerMetadataCandidates already navigates with EscapedPath.
+func scopedToOneTenant(u *url.URL) bool {
+	path := u.EscapedPath()
+	return (path != "" && path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil
 }
 
 // endpointCarriesUserinfo reports whether an endpoint URL embeds userinfo

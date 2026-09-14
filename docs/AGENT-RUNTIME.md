@@ -597,14 +597,22 @@ How the invariants hold:
   neither leg on another tenant's terms: the only document that may vouch for
   it is its own ORIGIN-level one, the measured Chargebee shape. A sibling
   tenant is self-consistent too, and accepting it would send the user through
-  the wrong tenant's authorization endpoint. Origins compare canonically
-  (`CanonicalResourceURI`), so a PRM spelling its authorization server with an
-  uppercase host or an explicit `:443` still matches its own endpoints. When
-  the token endpoint turns out to be the claimed issuer's own, that issuer's
-  `token_endpoint_auth_methods_supported` is what fleet keeps — a copy saying
-  `none` against an endpoint whose owner requires a secret would otherwise open
-  a secretless client; a proxy's token endpoint is its own, and there the
-  document's own list stands. The validated
+  the wrong tenant's authorization endpoint. "Scoped" is read off the
+  **escaped** path, so an issuer path of `/%2F` — which `url.Parse` decodes to
+  `//` — stays a tenant rather than reading as a bare origin. Origins compare
+  canonically throughout (lowercase scheme and host, the scheme's default port
+  dropped), so a PRM or a copy spelling a host in mixed case or with an
+  explicit `:443` still matches the endpoints it vouches for; paths and
+  queries compare exactly. When the token endpoint turns out to be the claimed
+  issuer's own, that issuer's document supplies
+  `token_endpoint_auth_methods_supported` — a copy saying `none` against an
+  endpoint whose owner requires a secret would otherwise open a secretless
+  client — and fills in `scopes_supported` and `mfa_challenge_endpoint` where
+  a trimmed copy left them out, since losing either costs the connection the
+  refresh token the `offline_access` rule below exists to secure. A populated
+  list is never overwritten (a proxy may offer fewer scopes than the issuer
+  behind it), and a proxy's token endpoint is its own, so there the document's
+  own values stand. The validated
   document's endpoints are what fleet dials (a proxy's registered clients only
   work with the proxy's endpoints), and its `Issuer` is recorded as the
   identity the vendor asserts. An endpoint belonging to neither party — a copy

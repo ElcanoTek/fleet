@@ -606,6 +606,109 @@ func TestConfirmProxiedIssuerKeepsProxyAuthMethods(t *testing.T) {
 	}
 }
 
+// TestSameEndpointURLNormalizesDefaultPort: an endpoint spelled with the
+// scheme's explicit default port is the same endpoint. Comparing URL.Host raw
+// rejects the pair, so a copy writing ":443" would miss confirmation by the
+// very issuer that vouches for it — while the path stays compared exactly.
+func TestSameEndpointURLNormalizesDefaultPort(t *testing.T) {
+	same := [][2]string{
+		{"https://as.example/token", "https://as.example:443/token"},
+		{"http://as.example/token", "http://as.example:80/token"},
+		{"https://AS.example/token", "https://as.example:443/token"},
+	}
+	for _, p := range same {
+		if !sameEndpointURL(p[0], p[1]) {
+			t.Errorf("sameEndpointURL(%q, %q) = false, want the same endpoint", p[0], p[1])
+		}
+	}
+	differ := [][2]string{
+		{"https://as.example/token", "https://as.example:8443/token"},
+		{"https://as.example/token", "https://as.example/Token"},
+		{"https://as.example/token", "http://as.example/token"},
+	}
+	for _, p := range differ {
+		if sameEndpointURL(p[0], p[1]) {
+			t.Errorf("sameEndpointURL(%q, %q) = true, want distinct endpoints", p[0], p[1])
+		}
+	}
+}
+
+// TestConfirmProxiedIssuerKeepsEncodedSlashPathScoped: url.Parse decodes
+// percent-escapes into Path, so an issuer path of "/%2F" arrives as "//" and a
+// slash-trimming test reads it as a bare origin — handing a tenant-scoped URL
+// the same-origin leg. EscapedPath keeps it a distinct routed path.
+func TestConfirmProxiedIssuerKeepsEncodedSlashPathScoped(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	fetchedFrom := "https://as.vendor.example/%2F"
+	doc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example/tenantB",
+		AuthorizationEndpoint:         "https://as.vendor.example/tenantB/authorize",
+		TokenEndpoint:                 "https://as.vendor.example/tenantB/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	if _, err := confirmProxiedIssuer(fetchedFrom, &doc, resolveOwn); err == nil || !strings.Contains(err.Error(), "scoped to one tenant") {
+		t.Fatalf("confirmProxiedIssuer = %v, want an encoded-slash path kept tenant-scoped", err)
+	}
+	// A genuinely bare origin, and its literal root form, still get the leg.
+	for _, bare := range []string{"https://as.vendor.example", "https://as.vendor.example/"} {
+		onOrigin := doc
+		onOrigin.AuthorizationEndpoint = "https://as.vendor.example/authorize"
+		onOrigin.TokenEndpoint = "https://as.vendor.example/token"
+		if _, err := confirmProxiedIssuer(bare, &onOrigin, resolveOwn); err != nil {
+			t.Errorf("confirmProxiedIssuer(%q) = %v, want the bare origin still accepted", bare, err)
+		}
+	}
+}
+
+// TestConfirmProxiedIssuerFillsRefreshMetadataFromIssuer: a trimmed copy on the
+// claimed issuer's own token endpoint may omit the two fields that describe the
+// ISSUER rather than how to reach it — scopes_supported, where offline_access
+// is advertised, and Auth0's mfa_challenge_endpoint, the only marker of a
+// custom-domain tenant. Losing either costs the connection its refresh token,
+// which is the exact failure F6 exists to fix.
+func TestConfirmProxiedIssuerFillsRefreshMetadataFromIssuer(t *testing.T) {
+	issMux := http.NewServeMux()
+	iss := httptest.NewServer(issMux)
+	t.Cleanup(iss.Close)
+	realDoc := AuthServerMetadata{
+		Issuer:                        iss.URL,
+		AuthorizationEndpoint:         iss.URL + "/authorize",
+		TokenEndpoint:                 iss.URL + "/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+		ScopesSupported:               []string{"openid", "offline_access"},
+		MFAChallengeEndpoint:          iss.URL + "/mfa/challenge",
+	}
+	issMux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(realDoc) })
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		return fetchAuthServerMetadataOpts(context.Background(), iss.Client(), claimed, false)
+	}
+	trimmed := realDoc
+	trimmed.ScopesSupported = nil
+	trimmed.MFAChallengeEndpoint = ""
+	got, err := confirmProxiedIssuer("https://mcp.vendor.example", &trimmed, resolveOwn)
+	if err != nil {
+		t.Fatalf("confirmProxiedIssuer: %v", err)
+	}
+	if !isAuth0Metadata(got) {
+		t.Error("the Auth0 marker was not recovered from the confirming issuer")
+	}
+	d := &Discovered{AS: *got}
+	if !containsFold(d.RequestedScopes(), "offline_access") {
+		t.Errorf("RequestedScopes = %v, want offline_access for the Auth0 tenant", d.RequestedScopes())
+	}
+	// A copy that DOES name its own scopes is making a claim — a proxy may
+	// offer fewer than the issuer behind it — so it is never overwritten.
+	narrow := realDoc
+	narrow.ScopesSupported = []string{"openid"}
+	got, err = confirmProxiedIssuer("https://mcp.vendor.example", &narrow, resolveOwn)
+	if err != nil {
+		t.Fatalf("confirmProxiedIssuer: %v", err)
+	}
+	if len(got.ScopesSupported) != 1 || got.ScopesSupported[0] != "openid" {
+		t.Errorf("scopes = %v, want the copy's own narrower list kept", got.ScopesSupported)
+	}
+}
+
 // TestFetchAuthServerMetadataErrorNamesEveryLocation: when every location
 // 404s the error lists each one, not just the last — the audit's failures
 // read as "openid-configuration: 404" alone and hid that the RFC 8414 form was
