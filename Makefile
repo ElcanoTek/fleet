@@ -1,4 +1,4 @@
-.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions fmt tidy clean help \
+.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions fmt tidy sync-guides clean help \
 	version helm-package govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 # GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
@@ -44,6 +44,7 @@ help:
 	@echo "  make helm-package package the Helm chart, stamped from the release tags"
 	@echo "  make fmt         gofmt the tree"
 	@echo "  make tidy        go mod tidy"
+	@echo "  make sync-guides copy the user guides into web/ after editing the skill copy"
 	@echo ""
 	@echo "CI-mirroring convenience targets (run the SAME commands CI runs — see docs/TESTING.md):"
 	@echo "  make govulncheck   dependency-CVE scan (CI 'go' job)"
@@ -212,6 +213,17 @@ fmt:
 
 tidy:
 	go mod tidy
+
+# The user guides (docs/USER-GUIDES.md) are one document with two readers: the
+# built-in fleet-guide skill hands them to the agent, and /help renders them in
+# the app. go:embed cannot reach outside its package and Turbopack refuses a
+# symlink out of the Next root, so the web tree keeps a verbatim copy — this
+# target refreshes it, and scripts/check_guides_sync_test.go fails on drift.
+sync-guides:
+	cp internal/clientconfig/builtin_skills/fleet-guide/chat.md \
+	   internal/clientconfig/builtin_skills/fleet-guide/operations-center.md \
+	   web/src/app/help/guides/
+	@echo "synced: web/src/app/help/guides/ ← internal/clientconfig/builtin_skills/fleet-guide/"
 
 clean:
 	go clean ./...

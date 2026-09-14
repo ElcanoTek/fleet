@@ -1,8 +1,9 @@
 import Link from "next/link";
 
-// CrossViewNav holds the two links that move between the app's two views —
-// /chat and /orchestrator. The one Next middleware gates both off the same
-// session cookie, so crossing between them never re-prompts for login.
+// CrossViewNav holds the links that move between the app's surfaces —
+// /chat, /orchestrator and the user guides at /help. The one Next middleware
+// gates them off the same session cookie, so crossing between them never
+// re-prompts for login.
 //
 // These used to be hand-rolled separately in each view's chrome. Centralizing
 // them here keeps the shared shell's cross-view affordance — and its stable
@@ -13,6 +14,7 @@ import Link from "next/link";
 
 const NAV_TO_ORCHESTRATOR_TESTID = "nav-to-orchestrator";
 const NAV_TO_CHAT_TESTID = "nav-to-chat";
+const NAV_TO_HELP_TESTID = "nav-to-help";
 
 export function NavToOrchestrator({
   className,
@@ -55,6 +57,30 @@ export function NavToChat({
     <Link
       href="/chat"
       data-testid={NAV_TO_CHAT_TESTID}
+      className={className}
+      aria-current={ariaCurrent}
+      data-tip={dataTip}
+    >
+      {children}
+    </Link>
+  );
+}
+
+export function NavToHelp({
+  className,
+  children = "Guides",
+  ariaCurrent,
+  dataTip,
+}: {
+  className?: string;
+  children?: React.ReactNode;
+  ariaCurrent?: "page";
+  dataTip?: string;
+}) {
+  return (
+    <Link
+      href="/help"
+      data-testid={NAV_TO_HELP_TESTID}
       className={className}
       aria-current={ariaCurrent}
       data-tip={dataTip}
