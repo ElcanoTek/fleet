@@ -17,7 +17,13 @@ import (
 // Canonical form (aligned with RFC 8707 §2 / RFC 9728): lowercase scheme and
 // host, default port removed, fragment removed, a lone root path "/" dropped.
 // Path (and any query) are otherwise preserved so a path-scoped MCP server keeps
-// its specificity. Userinfo (credentials embedded in the URL) is rejected.
+// its specificity — including a percent-escaped segment as the operator typed
+// it: "/tenant%2Fone/mcp" stays one segment, because decoding it to
+// "/tenant/one/mcp" would make fleet dial, key and name (RFC 8707 `resource`)
+// a different route than the one the vendor published (#1485 follow-up).
+// Escapes that are merely the default encoding of a character (%20 for a
+// space) are normalized, as before. Userinfo (credentials embedded in the URL)
+// is rejected.
 func CanonicalResourceURI(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -51,10 +57,16 @@ func CanonicalResourceURI(raw string) (string, error) {
 		canonHost = host + ":" + port
 	}
 
-	out := url.URL{Scheme: scheme, Host: canonHost, Path: u.Path, RawQuery: u.RawQuery}
+	// RawPath is set by url.Parse only when the operator's escaping differs
+	// from Go's default encoding of the decoded path — exactly the case where
+	// an escaped reserved character (%2F, %3F, %23) carries meaning the
+	// decoded form loses. String() emits it when it is a valid encoding of
+	// Path, and ignores it otherwise, so a stale or malformed RawPath can
+	// never leak into the identity.
+	out := url.URL{Scheme: scheme, Host: canonHost, Path: u.Path, RawPath: u.RawPath, RawQuery: u.RawQuery}
 	// A lone root path adds no identity; drop it so https://x/ == https://x.
 	if out.Path == "/" {
-		out.Path = ""
+		out.Path, out.RawPath = "", ""
 	}
 	return out.String(), nil
 }
