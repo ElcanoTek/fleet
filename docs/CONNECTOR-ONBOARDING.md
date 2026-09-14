@@ -75,8 +75,13 @@ is the validation.
   secretless exchange answers `incorrect_client_credentials`, #1006), Slack,
   HubSpot, Zoom, Box, Asana, Docusign, Front, Wrike, Xero, AlloyDB and the
   eight Google Workspace servers. Left off `amazon-ads` and `doordash`, whose
-  metadata lists `none`, and off the six `tenant` entries, whose URL cannot
-  be probed without a tenant. `TestBuiltinRemoteCatalog` pins the set.
+  metadata lists `none`, and off five of the six `tenant` entries, whose URL
+  cannot be probed without a tenant. Azure DevOps is the sixth: its
+  protected-resource metadata is organization-agnostic and names Microsoft
+  Entra, which lists no `none` and has no dynamic registration, so it is
+  flagged (`client_registration: manual` + `client_secret: required`) and
+  its hint walks through the app registration. `TestBuiltinRemoteCatalog`
+  pins the set.
 
 **Add-time guardrail for secretless manual clients** (`remotemcp.AddServer`,
 `ErrClientSecretRequired` → HTTP 422): a manual `client_id` with no secret is
