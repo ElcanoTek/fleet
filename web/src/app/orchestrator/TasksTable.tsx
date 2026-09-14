@@ -5,6 +5,7 @@ import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { Icon } from "@/app/shared/ui/Icon";
+import { labelChipStyle } from "@/app/shared/lib/labelColors";
 import { createdByLabel, scheduleLabel, slaBadge, TaskSlaBadge } from "./taskDisplay";
 
 // Statuses whose tasks can be edited: pending/scheduled edit in place;
@@ -59,6 +60,10 @@ export type TasksTableProps = {
   page: number;
   pageSize: number;
   filters: TaskFilters;
+  // Tags the filter offers (useDashboardData.tagOptions). Empty is a valid
+  // state — a deployment where nobody tags anything — and hides the control
+  // rather than showing an empty dropdown.
+  tagOptions?: string[];
   onFilters: (next: Partial<TaskFilters>) => void;
   // Reset every filter at once (useDashboardData.clearFilters). The button
   // only renders while some filter is set, and only when the parent wires it.
@@ -104,6 +109,7 @@ export function TasksTable({
   page,
   pageSize,
   filters,
+  tagOptions = [],
   onFilters,
   onClearFilters,
   onPage,
@@ -150,7 +156,20 @@ export function TasksTable({
     filters.query !== "" ||
     filters.scheduledOnly ||
     filters.completedToday ||
-    filters.createdBy !== "";
+    filters.createdBy !== "" ||
+    filters.tags.length > 0;
+
+  // Tags AND together server-side, so adding one always narrows and removing
+  // one always widens. Toggling is the whole interaction: the select adds,
+  // the chips (in the bar and on the rows) remove or add.
+  const toggleTag = (tag: string) => {
+    onFilters({
+      tags: filters.tags.includes(tag)
+        ? filters.tags.filter((t) => t !== tag)
+        : [...filters.tags, tag],
+    });
+  };
+  const unselectedTags = tagOptions.filter((t) => !filters.tags.includes(t));
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const start = total > 0 ? Math.min((page - 1) * pageSize + 1, total) : 0;
@@ -200,6 +219,54 @@ export function TasksTable({
             </select>
           </div>
         </div>
+        {tagOptions.length > 0 || filters.tags.length > 0 ? (
+          <div className="filter-group">
+            <label htmlFor="taskTagFilter" className="filter-label">
+              Tags
+            </label>
+            <div className="tag-filter-control">
+              <div className="select-wrap">
+                <select
+                  id="taskTagFilter"
+                  className="filter-select"
+                  aria-label="Filter by tag"
+                  // Always "" — this select is an ADD control, not a
+                  // selection. Holding the last-added tag would claim the
+                  // board is filtered by that one tag when it is filtered by
+                  // every chip beside it.
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) toggleTag(e.target.value);
+                  }}
+                >
+                  <option value="">{filters.tags.length > 0 ? "Add tag…" : "All"}</option>
+                  {unselectedTags.map((tag) => (
+                    <option key={tag} value={tag}>
+                      {tag}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {filters.tags.length > 0 ? (
+                <span className="tag-filter-chips" data-testid="tag-filter-chips">
+                  {filters.tags.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      className="task-tag-chip task-tag-chip-active"
+                      style={labelChipStyle(tag)}
+                      aria-label={`Stop filtering by tag ${tag}`}
+                      onClick={() => toggleTag(tag)}
+                    >
+                      {tag}
+                      <Icon name="close" className="size-3" />
+                    </button>
+                  ))}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <label className="filter-checkbox-label">
           <input
             type="checkbox"
@@ -278,6 +345,12 @@ export function TasksTable({
                     aria-label={`View task ${task.id.slice(0, 8)}`}
                     onClick={() => onOpenLogs(task)}
                     onKeyDown={(e) => {
+                      // Only open logs when the row itself is focused, not when
+                      // an event bubbles from a nested control (such as a tag
+                      // chip or action button). Otherwise pressing Enter/Space
+                      // on a focused chip opens the log viewer and preventDefault
+                      // blocks the chip's native activation click.
+                      if (e.target !== e.currentTarget) return;
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         onOpenLogs(task);
@@ -298,6 +371,11 @@ export function TasksTable({
                       ) : (
                         truncate((task.prompt ?? "").trim(), 80)
                       )}
+                      <TaskTagChips
+                        tags={task.tags}
+                        selected={filters.tags}
+                        onToggle={toggleTag}
+                      />
                     </td>
                     <td>
                       <span className={`status-badge status-${task.status ?? "unknown"}`}>
@@ -536,6 +614,14 @@ export function TasksTable({
                     ) : null}
                   </span>
                 </button>
+                {/* Outside the card button, not inside it: the card is itself a
+                    <button>, and a control nested in one has invalid semantics
+                    however it is marked up — assistive technology can expose
+                    only the outer "View task" button, or make the tag action
+                    ambiguous. As a sibling each chip is a real button with its
+                    own name. The card's border/background moved to this <li>
+                    so the chips still sit inside the visible card. */}
+                <TaskTagChips tags={task.tags} selected={filters.tags} onToggle={toggleTag} />
               </li>
             );
           })
@@ -590,6 +676,58 @@ export function TasksTable({
 }
 
 export default TasksTable;
+
+// TaskTagChips renders a task's tags (#212) as chips that filter the board.
+//
+// Tags were write-only before this: the create form accepted them, the API
+// stored them, and no surface ever showed one again — so the one thing a tag
+// is for, finding the rest of its group, could not be done. Clicking a chip
+// toggles that tag into the board's filter, which ANDs them server-side.
+//
+// Every chip is a real <button>. The phone card renders these OUTSIDE its own
+// card button rather than within it: a control nested inside a button has
+// invalid accessibility semantics however it is marked up, and dressing a span
+// as role="button" to dodge the HTML rule leaves the same problem — assistive
+// technology can expose only the outer control. Siblings, not children.
+function TaskTagChips({
+  tags,
+  selected,
+  onToggle,
+}: {
+  tags?: string[];
+  selected: string[];
+  onToggle: (tag: string) => void;
+}) {
+  if (!tags || tags.length === 0) return null;
+  return (
+    <span className="task-tag-row">
+      {tags.map((tag) => {
+        const active = selected.includes(tag);
+        const label = active ? `Stop filtering by tag ${tag}` : `Filter by tag ${tag}`;
+        const className = `task-tag-chip${active ? " task-tag-chip-active" : ""}`;
+        // The row (and the card) opens the log viewer, so every chip has to
+        // stop the event before it gets there.
+        const toggle = (e: React.SyntheticEvent) => {
+          e.stopPropagation();
+          onToggle(tag);
+        };
+        return (
+          <button
+            key={tag}
+            type="button"
+            className={className}
+            style={labelChipStyle(tag)}
+            aria-pressed={active}
+            aria-label={label}
+            onClick={toggle}
+          >
+            {tag}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
 
 // TasksEmptyState is the zero-row body of both the table and the phone cards:
 // a load in flight, a failed load (with Retry when the parent offers one), or

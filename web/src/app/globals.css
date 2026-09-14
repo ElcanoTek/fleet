@@ -3057,6 +3057,76 @@ tr.sla-row-fail {
     flex: 1 1 100%;
   }
 }
+/* ── Task tags (#212) ─────────────────────────────────────────────────────
+   Chips share the conversation-label recipe and its hashed --chip colour, so
+   the same tag reads the same everywhere. Every chip is a button: on a row it
+   filters the board to its tag, in the filter bar it removes that tag. The
+   active state is the filled one — a tag currently narrowing the board should
+   not look identical to one merely present on a task. */
+.task-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+}
+/* The chips are a sibling of the card button, so they carry the padding the
+   button would have given them — aligned to its text, not to the card edge. */
+.task-cards .task-tag-row {
+  padding: 0 0.8rem 0.7rem;
+  margin-top: 0;
+}
+.task-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 12rem;
+  overflow: hidden;
+  font-size: 0.65rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--chip) 38%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--chip) 12%, transparent);
+  color: color-mix(in srgb, var(--chip) 72%, white);
+  cursor: pointer;
+}
+.task-tag-chip:hover {
+  background: color-mix(in srgb, var(--chip) 24%, transparent);
+}
+.task-tag-chip-active {
+  background: color-mix(in srgb, var(--chip) 30%, transparent);
+  border-color: color-mix(in srgb, var(--chip) 62%, transparent);
+}
+.task-tag-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+:root[data-theme="light"] .task-tag-chip {
+  border-color: color-mix(in srgb, var(--chip) 48%, white);
+  background: color-mix(in srgb, var(--chip) 14%, white);
+  color: color-mix(in srgb, var(--chip) 42%, #15110e);
+}
+:root[data-theme="light"] .task-tag-chip-active {
+  background: color-mix(in srgb, var(--chip) 30%, white);
+}
+/* The select and the chips it fills sit on one line until the chips need
+   more room, at which point they wrap under it rather than squeezing the
+   select below its min-width. */
+.tag-filter-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.tag-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  max-width: 18rem;
+}
 .tasks-pagination {
   display: flex;
   align-items: center;
@@ -3083,21 +3153,35 @@ tr.sla-row-fail {
   margin: 0;
   padding: 0;
 }
+/* The box lives on the <li>, not on the button inside it. A task's tag chips
+   are controls and cannot be nested inside the card's own <button>, so they
+   render as its sibling — and this is what keeps them within the same visible
+   card rather than stranded beneath it. */
+.task-cards > li {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.55rem);
+  background: var(--color-surface-2, rgba(255, 255, 255, 0.03));
+  overflow: hidden;
+}
+/* The focus ring lives on the <li> because the <li> clips overflow and the
+   card button's outward box-shadow was invisible. :has() scopes it to the
+   button itself, so focusing a tag chip shows only the chip's own ring. */
+.task-cards > li:has(> .task-card:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
 .task-card {
   display: grid;
   gap: 0.45rem;
   width: 100%;
   text-align: left;
   padding: 0.7rem 0.8rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 0.55rem);
-  background: var(--color-surface-2, rgba(255, 255, 255, 0.03));
+  border: 0;
+  background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
 }
 .task-card:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
 }
 .task-card-top {
   display: flex;

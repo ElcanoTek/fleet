@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -60,6 +61,7 @@ func setupTaskAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux)
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
 		r.Get("/tasks", h.ListTasks)
+		r.Get("/tasks/tags", h.GetTagCatalogue)
 		r.Get("/tasks/export", h.HandleTaskExport)
 		r.Get("/tasks/upcoming", h.GetUpcomingRuns)
 		r.Get("/tasks/{task_id}", h.GetTask)
@@ -86,6 +88,39 @@ func addOwnedTask(t *testing.T, store *storage.Storage, createdBy *uuid.UUID, cr
 		t.Fatalf("add task: %v", err)
 	}
 	return task
+}
+
+func addOwnedTaskWithTags(t *testing.T, store *storage.Storage, createdBy *uuid.UUID, createdByKeyID *string, tags ...string) {
+	t.Helper()
+	task := &models.Task{
+		ID:             uuid.New(),
+		Prompt:         "task with a sensitive prompt",
+		Status:         models.TaskStatusSuccess,
+		CreatedBy:      createdBy,
+		CreatedByKeyID: createdByKeyID,
+		CreatedAt:      time.Now().UTC(),
+		Tags:           tags,
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+}
+
+// getTagCatalogue performs GET /tasks/tags with the given credential and returns the parsed TagCount list.
+func getTagCatalogue(t *testing.T, r *chi.Mux, header, value string) []db.TagCount {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/tasks/tags", nil)
+	req.Header.Set(header, value)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /tasks/tags: code=%d, body=%s", w.Code, w.Body.String())
+	}
+	var out []db.TagCount
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode tag catalogue: %v", err)
+	}
+	return out
 }
 
 // listTaskIDs performs GET /tasks with the given credential and returns the ids
@@ -257,5 +292,83 @@ func TestTaskReadUserScoping(t *testing.T) {
 	}
 	if ids := listTaskIDs(t, r, "Authorization", "Bearer root-token"); !ids[task.ID.String()] {
 		t.Error("admin user must list every task")
+	}
+}
+
+// TestTagCatalogueAuthz pins creator-scoped tag enumeration through GET /tasks/tags (#1082):
+// a non-admin principal receives only its own tags and counts, preventing information
+// leaks about other principals' tags or activity levels. An admin principal sees all.
+func TestTagCatalogueAuthz(t *testing.T) {
+	store, keyMgr, r := setupTaskAuthz(t)
+
+	alice := addLogUser(t, store, "alice", "client", "alice-token")
+	bob := addLogUser(t, store, "bob", "client", "bob-token")
+	addLogUser(t, store, "root", "admin", "root-token")
+
+	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey("owner", apikeys.KeyTypeTask, nil, 0, nil, "")
+	if err != nil {
+		t.Fatalf("create owner key: %v", err)
+	}
+	_, intruderRaw, err := keyMgr.CreateTypedKey("intruder", apikeys.KeyTypeTask, nil, 0, nil, "")
+	if err != nil {
+		t.Fatalf("create intruder key: %v", err)
+	}
+
+	addOwnedTaskWithTags(t, store, &alice.ID, nil, "alice-tag", "shared")
+	addOwnedTaskWithTags(t, store, &bob.ID, nil, "bob-secret", "shared")
+	addOwnedTaskWithTags(t, store, nil, &ownerKey.KeyID, "key-tag", "shared")
+
+	toMap := func(items []db.TagCount) map[string]int {
+		m := make(map[string]int, len(items))
+		for _, it := range items {
+			m[it.Tag] = it.TaskCount
+		}
+		return m
+	}
+
+	// Alice: sees "alice-tag" (1) and "shared" (1). Does NOT see bob-secret or key-tag.
+	aliceTags := toMap(getTagCatalogue(t, r, "Authorization", "Bearer alice-token"))
+	if len(aliceTags) != 2 || aliceTags["alice-tag"] != 1 || aliceTags["shared"] != 1 {
+		t.Errorf("alice tags mismatch: got %v", aliceTags)
+	}
+	if _, ok := aliceTags["bob-secret"]; ok {
+		t.Error("alice must not see bob's tag")
+	}
+	if _, ok := aliceTags["key-tag"]; ok {
+		t.Error("alice must not see key's tag")
+	}
+
+	// Bob: sees "bob-secret" (1) and "shared" (1).
+	bobTags := toMap(getTagCatalogue(t, r, "Authorization", "Bearer bob-token"))
+	if len(bobTags) != 2 || bobTags["bob-secret"] != 1 || bobTags["shared"] != 1 {
+		t.Errorf("bob tags mismatch: got %v", bobTags)
+	}
+	if _, ok := bobTags["alice-tag"]; ok {
+		t.Error("bob must not see alice's tag")
+	}
+
+	// Owner key: sees "key-tag" (1) and "shared" (1).
+	ownerTags := toMap(getTagCatalogue(t, r, "X-API-Key", ownerRaw))
+	if len(ownerTags) != 2 || ownerTags["key-tag"] != 1 || ownerTags["shared"] != 1 {
+		t.Errorf("owner key tags mismatch: got %v", ownerTags)
+	}
+
+	// Intruder key: sees empty catalogue.
+	intruderTags := getTagCatalogue(t, r, "X-API-Key", intruderRaw)
+	if len(intruderTags) != 0 {
+		t.Errorf("intruder key must see 0 tags, got %d", len(intruderTags))
+	}
+
+	// Admin user: sees all tags and full aggregate count for shared (3).
+	adminUserTags := toMap(getTagCatalogue(t, r, "Authorization", "Bearer root-token"))
+	if len(adminUserTags) != 4 || adminUserTags["shared"] != 3 ||
+		adminUserTags["alice-tag"] != 1 || adminUserTags["bob-secret"] != 1 || adminUserTags["key-tag"] != 1 {
+		t.Errorf("admin user tags mismatch: got %v", adminUserTags)
+	}
+
+	// Bootstrap admin key: sees all tags as well.
+	adminKeyTags := toMap(getTagCatalogue(t, r, "X-API-Key", "admin-key"))
+	if len(adminKeyTags) != 4 || adminKeyTags["shared"] != 3 {
+		t.Errorf("admin key tags mismatch: got %v", adminKeyTags)
 	}
 }

@@ -2959,7 +2959,7 @@ servers:
       find missing receipts, and analyze trends. Read-only — cannot approve
       reports, edit expenses, reimburse, or change workspace settings. OAuth 2.1
       with PKCE.
-    url: "https://www.expensify.com/mcp"
+    url: "https://www.expensify.com/mcp/"
     vendor: Expensify, Inc.
     docs_url: "https://help.expensify.com/articles/new-expensify/connections/connect-ai-assistants/Connect-Claude-to-Expensify-Using-MCP"
     category: finance
@@ -3056,7 +3056,7 @@ servers:
       tools over SEC filings, earnings-call transcripts, financial metrics,
       private/public market data, deep research, and prediction-market research.
       OAuth recommended; a non-OAuth variant embeds the API key in the path.
-    url: "https://mcp.octagonagents.com/mcp"
+    url: "https://mcp.octagonai.co/mcp"
     vendor: Octagon AI, Inc.
     docs_url: "https://octagonai.co/docs/guide/mcp-server"
     repo_url: "https://github.com/OctagonAI/octagon-mcp-server"
@@ -3105,6 +3105,17 @@ servers:
     tags: [accounting, erp, general-ledger, read-only]
     provenance: official
     auth: oauth
+    client_registration: manual
+    client_secret: required
+    setup_hint: >-
+      Sage Intacct's authorization server registers no clients itself and
+      accepts no public clients, so an administrator creates an OAuth client
+      for fleet in Sage Intacct (an AI-Enabled Web Services Developer License
+      is required — see the setup guide), registers the callback URL shown in
+      this form as its redirect URI, and pastes the client ID and client
+      secret here. Sign in afterwards with the Intacct user the connector
+      should act as.
+    setup_url: "https://developer.sage.com/intacct/mcps/intacct-mcp/latest/intacct-mcp-server/setup-and-connection-guide"
   - name: thirdweb
     display_name: thirdweb
     description: >-
@@ -3182,7 +3193,11 @@ servers:
       Official hosted MCP for Zerodha brokerage accounts: market quotes,
       historical data, instrument search, holdings, positions, margins and read-
       only order/GTT data. The hosted instance deliberately excludes
-      place/modify/cancel order tools; SSE also available at /sse.
+      place/modify/cancel order tools. No OAuth at the transport: the server
+      answers unauthenticated and user sign-in runs through its `login` tool,
+      which returns a Kite browser link; sign-in via the `login` tool works
+      within the turn that calls it, but the login does not persist across
+      turns and the connector cannot authenticate in scheduled runs.
     url: "https://mcp.kite.trade/mcp"
     vendor: Zerodha Broking Ltd.
     docs_url: "https://zerodha.com/products/mcp/"
@@ -3190,7 +3205,12 @@ servers:
     category: finance
     tags: [trading, brokerage, portfolio, market-data, india]
     provenance: official
-    auth: oauth
+    auth: open
+    setup_hint: >-
+      Nothing to enter: add the server, then ask the assistant to call the
+      Kite `login` tool and open the link it returns. Sign-in via the `login`
+      tool works within the turn that calls it; the login does not persist across
+      turns and the connector cannot authenticate in scheduled runs.
 
   # ── design-media ────────────────────────────────────────────────
   - name: adobe-creativity
@@ -3539,7 +3559,9 @@ servers:
     display_name: Globalping
     description: >-
       Run real network measurements (ping, traceroute, DNS, MTR, HTTP) from
-      thousands of probes worldwide. Works unauthenticated at lower rate limits.
+      thousands of probes worldwide. OAuth sign-in with a Globalping account
+      (the server registers fleet as a client itself; higher rate limits than
+      the former anonymous access).
     url: "https://mcp.globalping.dev/mcp"
     vendor: Volentio JSD Limited (jsDelivr)
     docs_url: "https://github.com/jsdelivr/globalping-mcp-server"
@@ -3547,7 +3569,7 @@ servers:
     category: observability
     tags: [network, ping, traceroute, dns, latency]
     provenance: official
-    auth: open
+    auth: oauth
   - name: grafana-cloud
     display_name: Grafana Cloud
     description: >-
@@ -3934,7 +3956,7 @@ servers:
       cloning/localization, pronunciation dictionaries, and credit usage. OAuth
       sign-in via play.cartesia.ai; the org must have at least one API key
       provisioned for the hosted server to work.
-    url: "https://mcp.cartesia.ai"
+    url: "https://mcp.cartesia.ai/mcp"
     vendor: Cartesia AI, Inc.
     docs_url: "https://docs.cartesia.ai/integrations/mcp"
     category: ai-ml
@@ -4075,7 +4097,7 @@ servers:
       rankings, benchmarks, docs search, and billable test messages.
     url: "https://mcp.openrouter.ai/mcp"
     vendor: OpenRouter, Inc.
-    docs_url: "https://openrouter.ai/docs/mcp-server"
+    docs_url: "https://openrouter.ai/docs/mcp"
     category: ai-ml
     tags: [models, llm, routing, pricing]
     provenance: official

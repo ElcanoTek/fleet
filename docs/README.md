@@ -124,6 +124,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   what a proxied issuer must prove, tenant scoping, dynamic client
   registration, the `offline_access` clause):
   [`docs/MCP-OAUTH-DISCOVERY.md`](MCP-OAUTH-DISCOVERY.md)
+- **Connecting hosted (official, per-user OAuth) MCP servers** — what each
+  vendor needs before Connect works, how to read a failure, and which vendors
+  were verified live: [`docs/HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) +
+  [`docs/MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md) (the #1006 status
+  table and the per-entry catalog audit)
 - **Bundle-managed SES/S3 email-report infrastructure:** use the external
   canonical [new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md);
   keep client-specific inventory in the external client bundle.
@@ -212,6 +217,7 @@ above fails otherwise.
 - [`generating-demo-gif.md`](generating-demo-gif.md) — Generating the demo GIFs (TUI + web)
 - [`GUARDRAILS.md`](GUARDRAILS.md) — Prompt-injection guardrails (#702)
 - [`HOOKS.md`](HOOKS.md) — Governed lifecycle hooks (#788)
+- [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
 - [`implementation-plans-enhancements.md`](implementation-plans-enhancements.md) — Implementation plan: #984 — Fleet ↔ Buzz bridge
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts
@@ -223,6 +229,7 @@ above fails otherwise.
 - [`MAINTENANCE.md`](MAINTENANCE.md) — Reclamation, disk backpressure, and stuck-task backstops
 - [`MCP-BROKER-SCOPES.md`](MCP-BROKER-SCOPES.md) — MCP broker scoped sessions
 - [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
+- [`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md) — Hosted MCP connector status — the #1006 OAuth pack and the catalog audit
 - [`MCP-CATALOG.md`](MCP-CATALOG.md) — The MCP connector directory — trust classes, built-in catalog, provenance
 - [`MCP-OAUTH-DISCOVERY.md`](MCP-OAUTH-DISCOVERY.md) — MCP OAuth discovery — the chain, proxied issuers, tenant scoping, registration, refresh scopes
 - [`MCP-RELOAD.md`](MCP-RELOAD.md) — MCP server hot-reload (#218)
@@ -265,6 +272,7 @@ above fails otherwise.
 - [`SUBAGENTS.md`](SUBAGENTS.md) — Sub-agents: default-on, parent decides, typed children (#1043)
 - [`TASK-SCHEDULE-UX.md`](TASK-SCHEDULE-UX.md) — Create Task schedule controls
 - [`TASK-SERIALIZATION.md`](TASK-SERIALIZATION.md) — Task serialization — opaque `serialization_key` mutual exclusion (#709)
+- [`TASK-TAGS.md`](TASK-TAGS.md) — Task tags on the board — chips, the tag filter, and the catalogue TTL
 - [`TASK-TITLES.md`](TASK-TITLES.md) — Task titles
 - [`TEAM-SHARING.md`](TEAM-SHARING.md) — Sharing work inside a project — team-shared chats and team learnings
 - [`TESTING.md`](TESTING.md) — Testing fleet

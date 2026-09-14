@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   orchestratorApi,
   type DashboardStats,
@@ -18,7 +18,14 @@ export type TaskFilters = {
   completedToday: boolean;
   completedStatus: string;
   createdBy: string;
+  // Tags narrow to tasks carrying ALL of them (#212) — the server ANDs them,
+  // so each tag you add makes the board smaller, never larger.
+  tags: string[];
 };
+
+// How long a fetched tag catalogue is considered fresh. See the effect that
+// uses it for why this is neither "once" nor "every reload".
+const TAG_CATALOGUE_TTL_MS = 5 * 60 * 1000;
 
 const EMPTY_FILTERS: TaskFilters = {
   status: "",
@@ -27,6 +34,7 @@ const EMPTY_FILTERS: TaskFilters = {
   completedToday: false,
   completedStatus: "",
   createdBy: "",
+  tags: [],
 };
 
 function buildTaskQuery(filters: TaskFilters, page: number, pageSize: number): string {
@@ -41,6 +49,9 @@ function buildTaskQuery(filters: TaskFilters, page: number, pageSize: number): s
     if (filters.completedStatus) p.set("completed_status", filters.completedStatus);
   }
   if (filters.createdBy) p.set("created_by", filters.createdBy);
+  // append, not set: `tag` is repeatable and every value has to survive the
+  // trip, since dropping one widens the result instead of narrowing it.
+  for (const tag of filters.tags) p.append("tag", tag);
   return p.toString();
 }
 
@@ -55,6 +66,9 @@ export type UseDashboardData = {
   // indistinguishable from an empty account.
   error: string | null;
   filters: TaskFilters;
+  // Tags the filter can offer: the deployment catalogue unioned with the tags
+  // on the listed tasks. Catalogue order (busiest first) is preserved.
+  tagOptions: string[];
   page: number;
   pageSize: number;
   setFilters: (next: Partial<TaskFilters>) => void;
@@ -90,9 +104,37 @@ export function useDashboardData(active: boolean): UseDashboardData {
   // of the task list (SleepingTasks) can refetch on the dashboard's cadence
   // instead of once at mount.
   const [refreshNonce, setRefreshNonce] = useState(0);
+  // The deployment's tags, for the board's tag filter. Fetched ONCE per
+  // activation rather than on the 30s refresh cadence: the catalogue is a
+  // GROUP BY over every task's tag array, it changes only when someone retags
+  // something, and paying for it every half-minute on every open dashboard
+  // buys nothing. tagOptions below closes the resulting gap.
+  const [tagCatalogue, setTagCatalogue] = useState<string[]>([]);
+  // When the catalogue was last requested, for the TTL below. 0 = never.
+  const catalogueFetchedAt = useRef(0);
   // Monotonic id stamped on each reload so a superseded (slower, older) reload
   // cannot overwrite newer state — see reload().
   const runIdRef = useRef(0);
+  // Monotonic generation counter for tag catalogue requests. Incremented on
+  // each fetch start and on deactivation/unmount so in-flight requests cannot
+  // overwrite newer state across activations or reload-triggered retries.
+  const catalogueGenRef = useRef(0);
+
+  // Invalidate any in-flight catalogue request whenever the hook deactivates
+  // or unmounts, and reset catalogueFetchedAt so that reactivating begins with
+  // a fresh fetch rather than waiting out the remainder of the TTL.
+  useEffect(() => {
+    const genRef = catalogueGenRef;
+    const fetchedAtRef = catalogueFetchedAt;
+    if (!active) {
+      genRef.current++;
+      fetchedAtRef.current = 0;
+    }
+    return () => {
+      genRef.current++;
+      fetchedAtRef.current = 0;
+    };
+  }, [active]);
 
   // reload depends on the current filters/page/size, so it changes when they
   // do. The effects below re-run on that identity change, which is exactly the
@@ -170,6 +212,53 @@ export function useDashboardData(active: boolean): UseDashboardData {
     };
   }, [active, reload]);
 
+  // Refreshed off the ordinary reload cadence, but at most once per
+  // TAG_CATALOGUE_TTL_MS. Once per activation was too rarely: `active` stays
+  // true for the whole signed-in session, so a tag created afterwards on a
+  // task that is not on the page in front of you never reached the dropdown
+  // until a full reload. Every 30s, with the rest of the dashboard, would be
+  // too often for a GROUP BY over every task's tag array that changes only
+  // when somebody retags something. The TTL bounds both: one query per five
+  // minutes per open dashboard, and a new tag is offered within five minutes
+  // of being created — sooner if a task carrying it appears (see tagOptions).
+  //
+  // Freshness is checked on [active, refreshNonce], but in-flight request
+  // supersession is governed by catalogueGenRef: a reload mid-flight does not
+  // increment the generation, so the response is applied when it resolves.
+  // When a response arrives with a mismatched generation, it is simply
+  // discarded: either a newer request already owns the current stamp, or the
+  // [active] effect already zeroed it on deactivation.
+  useEffect(() => {
+    if (!active) return;
+    if (Date.now() - catalogueFetchedAt.current < TAG_CATALOGUE_TTL_MS) return;
+    // Stamped before the request, not after: two reloads landing while one is
+    // in flight must not each start their own.
+    catalogueFetchedAt.current = Date.now();
+    const gen = ++catalogueGenRef.current;
+    orchestratorApi
+      .tagCatalogue()
+      .then((rows) => {
+        if (gen !== catalogueGenRef.current) return;
+        setTagCatalogue(rows.map((r) => r.tag));
+      })
+      // A missing catalogue costs the filter its suggestions, nothing more:
+      // tagOptions still offers the tags on screen, and a tag already applied
+      // keeps filtering. Failing the whole dashboard over it would be worse.
+      // The stamp stands, so a failing endpoint is retried on the TTL rather
+      // than on every reload.
+      .catch(() => {});
+  }, [active, refreshNonce]);
+
+  // What the tag filter offers: the catalogue, plus any tag on a task
+  // currently listed. The union is what closes the gap the TTL leaves — a tag
+  // created since the last catalogue fetch is selectable immediately, without
+  // waiting for the refresh, as soon as a task carrying it appears.
+  const tagOptions = useMemo(() => {
+    const seen = new Set(tagCatalogue);
+    for (const task of tasks) for (const tag of task.tags ?? []) seen.add(tag);
+    return [...seen];
+  }, [tagCatalogue, tasks]);
+
   const setFilters = useCallback((next: Partial<TaskFilters>) => {
     setFiltersState((prev) => ({ ...prev, ...next }));
     setPage(1);
@@ -196,6 +285,7 @@ export function useDashboardData(active: boolean): UseDashboardData {
     loading,
     error,
     filters,
+    tagOptions,
     page,
     pageSize,
     setFilters,

@@ -14,6 +14,8 @@ export async function GET(request: NextRequest) {
     "completed_today",
     "completed_status",
     "created_by",
+    // Repeatable: ?tag=a&tag=b narrows to tasks carrying BOTH (#212).
+    "tag",
   ]);
   return proxyToOrchestrator(request, `/tasks${qs}`);
 }

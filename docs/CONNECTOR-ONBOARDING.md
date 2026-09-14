@@ -74,7 +74,9 @@ is the validation.
   whose live metadata said so on 2026-09-10 — GitHub (measured first: a
   secretless exchange answers `incorrect_client_credentials`, #1006), Slack,
   HubSpot, Zoom, Box, Asana, Docusign, Front, Wrike, Xero, AlloyDB and the
-  eight Google Workspace servers. Left off `amazon-ads` and `doordash`, whose
+  eight Google Workspace servers — and Sage Intacct, whose metadata the
+  2026-09-14 catalog audit read the same way (no registration endpoint, no
+  `none`). Left off `amazon-ads` and `doordash`, whose
   metadata lists `none`, and off five of the six `tenant` entries, whose URL
   cannot be probed without a tenant. Azure DevOps is the sixth: its
   protected-resource metadata is organization-agnostic and names Microsoft
@@ -156,6 +158,15 @@ monday.com, Airtable, Stripe, PayPal, HubSpot, Canva, Figma, Zapier, Hugging
 Face — and a test caps it at 8–20 entries, never community provenance. The
 same pass audited the directory for dead/low-quality listings and added
 newly-verified official endpoints (see that PR in the repository history).
+
+**Catalog corrections do not rewrite saved connections**: fleet builds the
+remote MCP mount from the saved row (`srv.URL`, via `connFor` in
+`internal/remotemcp/resolver.go`). The directory UI marks an entry "added"
+by name (`web/src/app/settings/connections/page.tsx`), so a user who connected
+an entry before a catalog fix (such as Cartesia, Octagon, or Globalping) keeps
+dialing the old URL and auth after upgrading, and cannot pick the corrected
+entry without removing the connection first. To adopt a catalog correction,
+the operator or user must Remove the connector and re-add it.
 
 ## Deviations / honest scope
 

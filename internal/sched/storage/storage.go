@@ -1286,9 +1286,10 @@ func (s *Storage) UpdateTaskTags(ctx context.Context, taskID uuid.UUID, add, rem
 	return task, nil
 }
 
-// ListTagCatalogue returns every distinct tag in use with its task count (#212).
-func (s *Storage) ListTagCatalogue(ctx context.Context) ([]db.TagCount, error) {
-	return s.db.GetTagCatalogue(ctx)
+// ListTagCatalogue returns every distinct tag in use with its task count (#212),
+// scoped to the principal's visible rows (#1082).
+func (s *Storage) ListTagCatalogue(ctx context.Context, scope db.TagCatalogueScope) ([]db.TagCount, error) {
+	return s.db.GetTagCatalogue(ctx, scope)
 }
 
 // UpdateTaskStatusAtomic updates a task's status atomically, verifying lease
