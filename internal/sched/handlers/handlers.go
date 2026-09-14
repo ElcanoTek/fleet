@@ -1148,6 +1148,38 @@ func normalizeOptionalModel(value **string, fieldName string) error {
 	return nil
 }
 
+// completedStatusFilterable is the set completed_status accepts: the terminal
+// statuses a completed_today query can meaningfully ask for. Deliberately a
+// closed set — a typo like "errored" silently matching nothing would read as
+// "no failures today", which is the exact misreading this filter exists to
+// prevent.
+var completedStatusFilterable = map[string]bool{
+	string(models.TaskStatusSuccess):      true,
+	string(models.TaskStatusError):        true,
+	string(models.TaskStatusDeadLettered): true,
+	string(models.TaskStatusCancelled):    true,
+}
+
+// parseCompletedStatuses reads the completed_status parameter, which takes one
+// status or a comma-separated list. The list form exists because "failed" is
+// two statuses (see GetDashboardStats): a run comes to rest in dead_lettered or,
+// less often, error. A single value still parses, so existing callers are
+// unaffected.
+func parseCompletedStatuses(raw string) ([]string, error) {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		status := strings.TrimSpace(part)
+		if status == "" {
+			continue
+		}
+		if !completedStatusFilterable[status] {
+			return nil, fmt.Errorf("completed_status: unknown status %q", status)
+		}
+		out = append(out, status)
+	}
+	return out, nil
+}
+
 // ListTasks handles GET /tasks
 // Requires pagination with ?limit=N&offset=M query parameters.
 // Optional filter parameters:
@@ -1155,7 +1187,10 @@ func normalizeOptionalModel(value **string, fieldName string) error {
 //   - q: Search in prompt or task ID (case-insensitive substring match)
 //   - scheduled_only: If "true", only return tasks with scheduled_for or recurrence
 //   - completed_today: If "true", only return tasks completed today
-//   - completed_status: When completed_today=true, filter by this status (success/error)
+//   - completed_status: When completed_today=true, filter by terminal status.
+//     Accepts one status or a comma-separated list, e.g. "success" or
+//     "error,dead_lettered" (the dashboard's Failed Today card sends the latter,
+//     since a failure comes to rest in either). Unknown names are rejected.
 //
 // Returns a PaginatedResponse with total count.
 func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
@@ -1244,7 +1279,12 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 		hasFilters = true
 
 		if completedStatus := r.URL.Query().Get("completed_status"); completedStatus != "" {
-			filter.CompletedStatus = &completedStatus
+			statuses, err := parseCompletedStatuses(completedStatus)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			filter.CompletedStatuses = statuses
 		}
 	}
 
