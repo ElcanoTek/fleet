@@ -562,9 +562,11 @@ How the invariants hold:
   typed URL is the resource (`Discovered.LegacyOrigin`). A location the server
   itself advertised on the 401 and then could not serve, a well-known
   location that answered 5xx, timed out or returned malformed JSON, a probe
-  that got no answer at all, or a document missing RFC 9728's required
-  `resource`, is an error, never a fallback — that is a modern server failing
-  or misbehaving, not a legacy one. The probe reads only status and headers,
+  that got no answer at all, or a document that names no authorization server
+  *and* lacks a valid RFC 9728 `resource` URI, is an error, never a fallback —
+  that is a modern server failing or misbehaving, not a legacy one. (A
+  document that does name an authorization server is handled as before,
+  whatever its `resource` says.) The probe reads only status and headers,
   so an event stream a server holds open is closed, not drained. The
   probe's `initialize` announces the same protocol revision as fleet's real
   transport (pinned by a test), and a session it happens to open is

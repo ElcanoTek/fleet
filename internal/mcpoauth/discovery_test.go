@@ -542,9 +542,10 @@ func TestDiscoverLegacyOriginWhenPRMListsNoAuthorizationServers(t *testing.T) {
 		t.Errorf("resource = %q / prm %q, want the PRM's same-origin resource adopted", d.Resource, d.PRM.Resource)
 	}
 	// ...and with no AS at the origin either, the error says the PRM named none.
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var srv2 *httptest.Server
+	srv2 = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/oauth-protected-resource/mcp" {
-			_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: "x"})
+			_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: srv2.URL + "/mcp"}) // a valid resource, no authorization_servers
 			return
 		}
 		http.NotFound(w, r)
@@ -705,11 +706,18 @@ func TestDiscoverProbeTransportFailureDoesNotFallBack(t *testing.T) {
 }
 
 // TestDiscoverPRMWithoutResourceIsMalformedNotLegacy: RFC 9728 §2 requires
-// `resource`. A document with neither it nor authorization_servers (`{}`
-// parses) is malformed, and must not be treated as "names no authorization
-// server" and waved into the legacy-origin fallback.
+// `resource`, and it is a URI. A document with no authorization_servers whose
+// resource is absent or not a valid resource URI (`{}`, `{"resource":"x"}`
+// all parse) is malformed, and must not be treated as "names no
+// authorization server" and waved into the legacy-origin fallback.
 func TestDiscoverPRMWithoutResourceIsMalformedNotLegacy(t *testing.T) {
-	for name, doc := range map[string]string{"empty object": `{}`, "scopes only": `{"scopes_supported":["read"]}`} {
+	for name, doc := range map[string]string{
+		"empty object":      `{}`,
+		"scopes only":       `{"scopes_supported":["read"]}`,
+		"relative resource": `{"resource":"x"}`,
+		"ftp resource":      `{"resource":"ftp://example.com/mcp"}`,
+		"userinfo resource": `{"resource":"https://user:pw@example.com/mcp"}`,
+	} {
 		t.Run(name, func(t *testing.T) {
 			mux := http.NewServeMux()
 			srv := httptest.NewServer(mux)
@@ -720,7 +728,7 @@ func TestDiscoverPRMWithoutResourceIsMalformedNotLegacy(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Discover accepted a PRM without resource via the legacy fallback: %+v", d)
 			}
-			if !strings.Contains(err.Error(), "missing the required resource field") {
+			if !strings.Contains(err.Error(), "required resource field is missing or not a valid URI") {
 				t.Errorf("error must name the malformed document: %v", err)
 			}
 		})

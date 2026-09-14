@@ -129,11 +129,13 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 	legacy := false
 	if len(prm.AuthorizationServers) == 0 {
 		// RFC 9728 §2 makes authorization_servers OPTIONAL but `resource`
-		// REQUIRED. A document with neither — `{}` parses — is malformed,
-		// not a server without metadata, and must not be waved into the
-		// fallback as if it were.
-		if strings.TrimSpace(prm.Resource) == "" {
-			return nil, fmt.Errorf("protected-resource metadata at %s is missing the required resource field and names no authorization_servers: a malformed document, not a server without metadata", prmURL)
+		// REQUIRED, and a resource identifier is a URI. A document with no
+		// authorization server whose `resource` is absent or not a valid
+		// resource URI — `{}` and `{"resource":"x"}` both parse — is
+		// malformed, not a server without metadata, and must not be waved
+		// into the fallback as if it were.
+		if _, cerr := CanonicalResourceURI(prm.Resource); cerr != nil {
+			return nil, fmt.Errorf("protected-resource metadata at %s names no authorization_servers and its required resource field is missing or not a valid URI (%w): a malformed document, not a server without metadata", prmURL, cerr)
 		}
 		// A document that omits authorization_servers yields no
 		// authorization server any more than a missing document does, so the
