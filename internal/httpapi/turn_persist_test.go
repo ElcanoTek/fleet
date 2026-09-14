@@ -40,6 +40,11 @@ func (p *gatedPersister) InsertTurnEvents(ctx context.Context, events []store.Tu
 	if p.gate != nil {
 		select {
 		case <-p.gate:
+		// ctx.Done is an escape hatch so a bug that never opens the gate fails
+		// the test instead of hanging it to the 10m timeout. It is NOT part of
+		// the contract: taking it makes this a failed insert, which sets
+		// needsBackfill without any saturation — which is exactly why the test
+		// asserts droppedOnFull rather than needsBackfill.
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -90,14 +95,18 @@ func TestPersister_BackfillHealsDropsUnderBackpressure(t *testing.T) {
 	buf.Emit("turn.completed", map[string]any{}) // event #n; terminal marker
 
 	// Pin the precondition that makes the heal assertions meaningful: the live
-	// path really did drop. Without this the test would quietly decay into
-	// "persist 2000 events happily" if the buffering ever grew enough to absorb
-	// them, and would still pass while testing nothing.
+	// path really did drop, and dropped because the CHANNEL WAS FULL. Asserting
+	// needsBackfill would not prove that — a batch insert that merely errored
+	// sets the same flag, and the gate returns ctx.Err() if a flush's 5s budget
+	// expires while parked, so on a badly stalled runner this test could pass
+	// having exercised only the failed-insert path. droppedOnFull isolates real
+	// backpressure, and without it the test would quietly decay into "persist
+	// 2000 events happily" while still reporting PASS.
 	buf.mu.Lock()
-	dropped := buf.needsBackfill
+	dropped := buf.droppedOnFull
 	buf.mu.Unlock()
-	if !dropped {
-		t.Fatal("no event was dropped on the live path: backpressure never happened, so the backfill below has nothing to heal")
+	if dropped == 0 {
+		t.Fatal("persistCh was never full: backpressure never happened, so the backfill below has nothing to heal")
 	}
 
 	// Every drop is now recorded (Emit flags needsBackfill synchronously), so the
@@ -180,6 +189,21 @@ func TestPersister_LossyWhenBackfillFails(t *testing.T) {
 	}
 	if !rec.Lossy {
 		t.Error("turn must be flagged lossy=true when its events could not be persisted")
+	}
+
+	// The two signals are distinct, and this case is the proof: every insert
+	// failed, so needsBackfill is set, while nothing was ever dropped for a full
+	// channel. Pinning it here keeps the backpressure test's precondition honest
+	// — if droppedOnFull ever started tracking insert failures too, that test
+	// could silently go back to passing without any saturation.
+	buf.mu.Lock()
+	needsBackfill, droppedOnFull := buf.needsBackfill, buf.droppedOnFull
+	buf.mu.Unlock()
+	if !needsBackfill {
+		t.Error("needsBackfill must be set when a batch insert failed")
+	}
+	if droppedOnFull != 0 {
+		t.Errorf("droppedOnFull = %d, want 0: this case fails inserts, it never saturates persistCh", droppedOnFull)
 	}
 
 	s.inflightMu.Lock()

@@ -76,6 +76,12 @@ type turnBuffer struct {
 	// snapshot before sealing the turn, so a saturation/latency blip never
 	// leaves a permanent gap in the persisted ledger.
 	needsBackfill bool
+	// droppedOnFull counts the events Emit could not hand to the persister
+	// because persistCh was full. needsBackfill deliberately does NOT
+	// distinguish its two causes — it only has to answer "re-send the
+	// snapshot?" — so this isolates genuine backpressure from a failed batch
+	// insert. Written under mu on the same line that sets needsBackfill.
+	droppedOnFull int
 }
 
 // bufferedEvent is one already-serialized SSE frame. Data is the
@@ -270,6 +276,7 @@ func (b *turnBuffer) Emit(event string, payload any) {
 		case b.persistCh <- ev:
 		default:
 			b.needsBackfill = true // already under b.mu
+			b.droppedOnFull++
 			log.Printf("persister channel full (turn=%s); event id=%d deferred to Finish backfill", b.turnID, ev.ID)
 		}
 	}
