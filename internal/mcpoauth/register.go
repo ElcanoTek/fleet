@@ -63,8 +63,19 @@ func (r *ClientRegistration) EffectiveAuthMethods(advertised []string) []string 
 // reason in front of the operator while they can still act on it.
 func (r *ClientRegistration) checkGrantedAuthMethod() error {
 	m := strings.TrimSpace(r.TokenEndpointAuthMethod)
-	if m == "" || strings.EqualFold(m, "none") ||
-		strings.EqualFold(m, "client_secret_basic") || strings.EqualFold(m, "client_secret_post") {
+	if m == "" || strings.EqualFold(m, "none") {
+		return nil
+	}
+	if strings.EqualFold(m, "client_secret_basic") || strings.EqualFold(m, "client_secret_post") {
+		// A confidential method with no secret is unusable whichever request
+		// produced it — including the FIRST, public one, which a server may
+		// answer by substituting a confidential method. The token request
+		// authenticates only when a secret exists, so it would go out
+		// public-style against a client the server has registered as
+		// confidential and fail after the user completed consent.
+		if r.ClientSecret == "" {
+			return fmt.Errorf("the server registered client %q with token_endpoint_auth_method %q but no client_secret, which cannot authenticate at the token endpoint", r.ClientID, m)
+		}
 		return nil
 	}
 	return fmt.Errorf("the server registered client %q with token_endpoint_auth_method %q, which fleet cannot perform (it implements client_secret_basic, client_secret_post and public clients)", r.ClientID, m)

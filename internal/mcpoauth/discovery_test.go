@@ -859,6 +859,42 @@ func TestConfirmProxiedIssuerRedactsUserinfoInErrors(t *testing.T) {
 	}
 }
 
+// TestConfirmProxiedIssuerKeepsClaimedIssuerSlashesScoped is the claimed-issuer
+// twin of the fetched-URL slash fix: trimming every trailing slash from the
+// copy's `issuer` collapses "https://as.example//" — a distinct routed path —
+// into the bare origin, which the scoped-origin check then self-confirms, and
+// fleet records an issuer the copy never asserted.
+func TestConfirmProxiedIssuerKeepsClaimedIssuerSlashesScoped(t *testing.T) {
+	origin := "https://as.vendor.example"
+	originDoc := AuthServerMetadata{
+		Issuer:                        origin,
+		AuthorizationEndpoint:         origin + "/authorize",
+		TokenEndpoint:                 origin + "/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		if strings.TrimRight(claimed, "/") == origin {
+			doc := originDoc
+			return &doc, nil
+		}
+		return nil, errors.New("no metadata")
+	}
+	doubleSlash := originDoc
+	doubleSlash.Issuer = origin + "//"
+	if _, err := confirmProxiedIssuer(origin+"/tenantA", &doubleSlash, resolveOwn); err == nil {
+		t.Error("a claimed issuer of \"//\" was collapsed to the bare origin and self-confirmed")
+	}
+	// The genuinely bare origin, and its single-slash spelling, still vouch for
+	// a path-scoped server — the Chargebee shape must keep working.
+	for _, claimed := range []string{origin, origin + "/"} {
+		bare := originDoc
+		bare.Issuer = claimed
+		if _, err := confirmProxiedIssuer(origin+"/tenantA", &bare, resolveOwn); err != nil {
+			t.Errorf("claimed issuer %q = %v, want the origin fallback to accept it", claimed, err)
+		}
+	}
+}
+
 // TestConfirmProxiedIssuerNormalizesClaimedIssuerForResolve: resolving the
 // claimed issuer's own document runs the STRICT issuer check, which compares
 // the whole URL as written. A copy claiming "https://issuer.example:443"
@@ -1790,6 +1826,39 @@ func TestRegistrationEffectiveAuthMethodWins(t *testing.T) {
 	silent := &ClientRegistration{ClientID: "c1", ClientSecret: "s"}
 	if got := silent.EffectiveAuthMethods(advertised); len(got) != 2 {
 		t.Errorf("effective = %v, want the advertised list when the server does not echo", got)
+	}
+}
+
+// TestRegisterRejectsSecretlessConfidentialGrantOnFirstResponse: the secret
+// requirement applied only to the confidential RETRY, but a server can answer
+// the first, public request by substituting a confidential method — and then
+// omit the secret. tokenRequest authenticates only when a secret exists, so it
+// would go out public-style against a client registered as confidential and
+// fail after the user completed consent.
+func TestRegisterRejectsSecretlessConfidentialGrantOnFirstResponse(t *testing.T) {
+	for _, granted := range []string{"client_secret_basic", "client_secret_post"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			// The FIRST (public) request succeeds, but the server substitutes
+			// a confidential method and returns no secret.
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"client_id": "c1", "token_endpoint_auth_method": granted,
+			})
+		}))
+		_, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"client_secret_basic"})
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), "no client_secret") {
+			t.Errorf("Register granting %q with no secret = %v, want it refused", granted, err)
+		}
+	}
+	// A public client with no secret is still fine — that is what we asked for.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"client_id": "c1", "token_endpoint_auth_method": "none"})
+	}))
+	t.Cleanup(srv.Close)
+	if _, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", nil); err != nil {
+		t.Errorf("public registration with no secret = %v, want it accepted", err)
 	}
 }
 

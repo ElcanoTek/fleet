@@ -789,7 +789,13 @@ func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, i
 // proxy's endpoints are the ones its registered clients work with); its
 // issuer is recorded as the identity the vendor asserts.
 func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resolveOwn func(string) (*AuthServerMetadata, error)) (*AuthServerMetadata, error) {
-	claimed := strings.TrimRight(strings.TrimSpace(copyDoc.Issuer), "/")
+	// Parse the claimed issuer AS WRITTEN, like the authorization-server URL
+	// below. Trimming its trailing slashes first would collapse a copy
+	// claiming "https://as.example//" — a distinct routed path — into the bare
+	// origin, which the scoped-origin check would then happily self-confirm,
+	// and fleet would record an issuer the copy never asserted. The one
+	// tolerated trailing slash is applied by the comparators, not here.
+	claimed := strings.TrimSpace(copyDoc.Issuer)
 	u, err := url.Parse(claimed)
 	// No userinfo either: the claimed issuer is dialed for its own metadata,
 	// and net/http would turn userinfo into an Authorization header on that
@@ -807,7 +813,10 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	// non-proxied path. The query and fragment are already refused above, so
 	// only the origin and path can differ; the path is still compared exactly
 	// but for a trailing slash.
-	claimed = normalizedOrigin(u) + trimOneTrailingSlash(u.EscapedPath())
+	// The ORIGIN is normalized; the path is kept exactly as written, so
+	// "//" stays distinct from the bare origin. sameIssuerIdentity and
+	// sameEndpointURL apply the single-trailing-slash tolerance.
+	claimed = normalizedOrigin(u) + u.EscapedPath()
 	// Parse the authorization-server URL AS WRITTEN. Trimming trailing slashes
 	// first would collapse "https://as.example//" — a distinct routed path —
 	// into the bare origin and hand a tenant-scoped URL the same-origin leg,
