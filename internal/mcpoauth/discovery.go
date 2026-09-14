@@ -66,11 +66,15 @@ type Discovered struct {
 	Resource string
 	PRM      ProtectedResourceMetadata
 	AS       AuthServerMetadata
-	// LegacyOrigin is true when the server published no Protected Resource
-	// Metadata and the authorization server was taken to be the server's own
-	// origin, as the MCP spec's backwards-compatibility rule for 2025-03-26
-	// servers directs. PRM is then synthesized (resource = the typed URL,
-	// authorization_servers = [origin]); nothing in it came from the vendor.
+	// LegacyOrigin is true when the authorization server was taken to be the
+	// MCP server's own origin, as the MCP spec's backwards-compatibility rule
+	// for 2025-03-26 servers directs. That happens in two shapes: the server
+	// published no Protected Resource Metadata at all, in which case PRM is
+	// synthesized (resource = the typed URL, authorization_servers = [origin])
+	// and nothing in it came from the vendor; or it published a document with
+	// a valid resource but no authorization_servers, in which case PRM is the
+	// vendor's document with only authorization_servers filled in as [origin]
+	// — its resource and scopes are real. Either way AS.Issuer is the origin.
 	LegacyOrigin bool
 }
 
@@ -95,6 +99,16 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 			if !metadataAbsent(err) {
 				operationalErr = err
 			}
+			continue
+		}
+		// A document that parses but is unusable — no authorization server
+		// AND no valid RFC 9728 `resource` URI (`{}` and `{"resource":"x"}`
+		// both parse) — is malformed, not absent: a generic JSON catch-all
+		// at one well-known location must not stop the appended or root
+		// location from being tried, and must never be waved into the
+		// legacy-origin fallback as "names no authorization server".
+		if err := usablePRM(candidate, &got); err != nil {
+			fetchErr, operationalErr = err, err
 			continue
 		}
 		prm, prmURL = got, candidate
@@ -128,21 +142,13 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 	var as *AuthServerMetadata
 	legacy := false
 	if len(prm.AuthorizationServers) == 0 {
-		// RFC 9728 §2 makes authorization_servers OPTIONAL but `resource`
-		// REQUIRED, and a resource identifier is a URI. A document with no
-		// authorization server whose `resource` is absent or not a valid
-		// resource URI — `{}` and `{"resource":"x"}` both parse — is
-		// malformed, not a server without metadata, and must not be waved
-		// into the fallback as if it were.
-		if _, cerr := CanonicalResourceURI(prm.Resource); cerr != nil {
-			return nil, fmt.Errorf("protected-resource metadata at %s names no authorization_servers and its required resource field is missing or not a valid URI (%w): a malformed document, not a server without metadata", prmURL, cerr)
-		}
-		// A document that omits authorization_servers yields no
-		// authorization server any more than a missing document does, so the
-		// same backwards-compatibility rule applies: the MCP server's own
-		// origin is the authorization server, still subject to the issuer
-		// check. The document's OTHER fields (scopes_supported, resource)
-		// are the vendor's word and are kept.
+		// RFC 9728 §2 makes authorization_servers OPTIONAL. A document that
+		// omits it (usablePRM has already required a valid `resource`)
+		// yields no authorization server any more than a missing document
+		// does, so the same backwards-compatibility rule applies: the MCP
+		// server's own origin is the authorization server, still subject to
+		// the issuer check. The document's OTHER fields (scopes_supported,
+		// resource) are the vendor's word and are kept.
 		origin, las, lerr := legacyOriginAuthServer(ctx, httpClient, canonicalServerURL,
 			fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL))
 		if lerr != nil {
@@ -186,6 +192,21 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 	}
 
 	return &Discovered{Resource: resource, PRM: prm, AS: *as, LegacyOrigin: legacy}, nil
+}
+
+// usablePRM reports whether a fetched Protected Resource Metadata document can
+// drive discovery: it names at least one authorization server, or — for the
+// legacy-origin rule — it carries the `resource` RFC 9728 §2 requires, as a
+// valid resource URI (the same validator every stored resource passes). A
+// document with neither is malformed, and the error says so by location.
+func usablePRM(location string, prm *ProtectedResourceMetadata) error {
+	if len(prm.AuthorizationServers) > 0 {
+		return nil
+	}
+	if _, cerr := CanonicalResourceURI(prm.Resource); cerr != nil {
+		return fmt.Errorf("protected-resource metadata at %s names no authorization_servers and its required resource field is missing or not a valid URI (%w): a malformed document, not a server without metadata", location, cerr)
+	}
+	return nil
 }
 
 // discoverLegacyOrigin is the MCP spec's backwards-compatibility rule for

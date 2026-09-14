@@ -735,6 +735,31 @@ func TestDiscoverPRMWithoutResourceIsMalformedNotLegacy(t *testing.T) {
 	}
 }
 
+// TestDiscoverUnusablePRMAtFirstLocationTriesTheNext: a generic JSON
+// catch-all at the inserted well-known location (`{}` parses) must not stop
+// discovery when the appended location carries the real document — the same
+// continue-past-it treatment malformed JSON already gets.
+func TestDiscoverUnusablePRMAtFirstLocationTriesTheNext(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	mux.HandleFunc("/mcp/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp", AuthorizationServers: []string{base + "/as"}})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server/as", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: base + "/as", AuthorizationEndpoint: base + "/as/authorize", TokenEndpoint: base + "/as/token", CodeChallengeMethodsSupported: []string{"S256"}})
+	})
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover stopped at the unusable first location: %v", err)
+	}
+	if d.LegacyOrigin || d.AS.Issuer != base+"/as" {
+		t.Errorf("want the appended location's real document, got %+v", d)
+	}
+}
+
 // TestProbeTerminatesSessionItOpened: a server that accepts the unauthenticated
 // initialize (200 + Mcp-Session-Id) has allocated a session the probe never
 // wanted; the probe sends the Streamable HTTP DELETE for it and returns no
