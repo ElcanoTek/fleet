@@ -58,30 +58,62 @@ export function buildPromptWithRecipients(basePrompt: string, recipients: string
  * recipients the form should show. A prompt with no recognizable block comes
  * back unchanged with no recipients — which is also what happens to a block
  * that has been hand-edited into a shape this cannot vouch for.
+ *
+ * It takes *every* trailing block, not just the last one, because the bug being
+ * fixed here already wrote tasks with more than one. The old form kept the
+ * stored block in its textarea while starting with an empty recipient list, so
+ * anyone who added an address during an edit saved a second block on top of the
+ * first — and the agent, reading the prompt, honours both. Recovering only the
+ * last would show a chip list that under-reports who actually gets mail, leave
+ * a raw block sitting in the author's textarea, and keep the original bug alive
+ * for those tasks: replacing the prompt would still silently drop the earlier
+ * recipients, and deleting the visible chip would leave them mailing away.
  */
 export function splitPromptRecipients(stored: string): {
   basePrompt: string;
   recipients: string[];
 } {
-  const text = stored.trimEnd();
+  let text = stored.trimEnd();
+  const blocks: string[][] = [];
+  for (;;) {
+    const taken = takeTrailingBlock(text);
+    if (!taken) break;
+    // Walking backward, so put each block's addresses ahead of the ones already
+    // collected: the chips end up in the order the prompt lists them.
+    blocks.unshift(taken.recipients);
+    text = taken.rest;
+  }
+  if (blocks.length === 0) return { basePrompt: stored, recipients: [] };
+
+  // Overlapping blocks are the normal case for a task edited twice, and the
+  // chip list is keyed by address — so the same address appearing in two blocks
+  // must collapse to one chip. First mention wins.
+  return { basePrompt: text, recipients: [...new Set(blocks.flat())] };
+}
+
+/**
+ * Peel one block off the end of `text`, or report that there is nothing there
+ * this module is willing to claim.
+ */
+function takeTrailingBlock(text: string): { rest: string; recipients: string[] } | null {
   const start = text.lastIndexOf(`\n${BLOCK_HEADER}`);
-  if (start === -1) return { basePrompt: stored, recipients: [] };
+  if (start === -1) return null;
 
   const block = text.slice(start + 1);
-  if (!block.endsWith("\n---")) return { basePrompt: stored, recipients: [] };
+  if (!block.endsWith("\n---")) return null;
 
   const recipients = parseRecipients(block);
   // A block whose recipient list we cannot read is not ours to remove: leaving
   // it in the textarea shows the author exactly what is on their task.
-  if (recipients.length === 0) return { basePrompt: stored, recipients: [] };
+  if (recipients.length === 0) return null;
 
   // Rebuilding from the parsed recipients must reproduce the block byte for
   // byte. That equality is the whole safety argument — it means the only text
   // being taken out of the prompt is text this module would have put there, so
   // nothing an author wrote can be silently absorbed.
-  if (block !== recipientsBlock(recipients)) return { basePrompt: stored, recipients: [] };
+  if (block !== recipientsBlock(recipients)) return null;
 
-  return { basePrompt: text.slice(0, start).trimEnd(), recipients };
+  return { rest: text.slice(0, start).trimEnd(), recipients };
 }
 
 // parseRecipients reads the `    - address` lines under `  recipients:`.

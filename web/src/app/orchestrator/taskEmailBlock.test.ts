@@ -75,6 +75,57 @@ describe("splitPromptRecipients", () => {
     expect(splitPromptRecipients(stored)).toEqual({ basePrompt: stored, recipients: [] });
   });
 
+  // Legacy data the OLD form actually wrote. Editing a task opened with an empty
+  // recipient list while keeping the stored block in the textarea, so adding an
+  // address during an edit saved a second block on top of the first. The agent
+  // reads the prompt and honours both, so both sets really are receiving mail.
+  const legacyDoubleBlock = (first: string[], second: string[]) =>
+    // Exactly what the old buildFinalPrompt produced: base (which already ends
+    // in a block) + a freshly appended one.
+    buildPromptWithRecipients(buildPromptWithRecipients(BASE, first), second);
+
+  it("recovers recipients from every block a double-saved task accumulated", () => {
+    const stored = legacyDoubleBlock(["first@example.com"], ["second@example.com"]);
+    expect(splitPromptRecipients(stored)).toEqual({
+      basePrompt: BASE,
+      recipients: ["first@example.com", "second@example.com"],
+    });
+  });
+
+  it("leaves no block behind in the prompt the author sees", () => {
+    const { basePrompt } = splitPromptRecipients(
+      legacyDoubleBlock(["a@example.com"], ["b@example.com"]),
+    );
+    expect(basePrompt).not.toContain("CRITICAL ACTION");
+  });
+
+  it("collapses an address that appears in more than one block to a single chip", () => {
+    // The common shape: the second save re-listed the original recipient
+    // alongside the newly added one.
+    const stored = legacyDoubleBlock(["a@example.com"], ["a@example.com", "b@example.com"]);
+    expect(splitPromptRecipients(stored).recipients).toEqual([
+      "a@example.com",
+      "b@example.com",
+    ]);
+  });
+
+  it("normalizes a multi-block task to one block on the next save", () => {
+    const stored = legacyDoubleBlock(["a@example.com"], ["b@example.com"]);
+    const { basePrompt, recipients } = splitPromptRecipients(stored);
+    const resaved = buildPromptWithRecipients(basePrompt, recipients);
+    expect(resaved.match(/CRITICAL ACTION/g)).toHaveLength(1);
+    expect(splitPromptRecipients(resaved).recipients).toEqual(recipients);
+  });
+
+  it("removing a chip from a multi-block task really stops that mail", () => {
+    // The sharp edge of recovering only the last block: the hidden earlier one
+    // would keep mailing someone the form no longer shows.
+    const stored = legacyDoubleBlock(["ghost@example.com"], ["b@example.com"]);
+    const { basePrompt, recipients } = splitPromptRecipients(stored);
+    const remaining = recipients.filter((e) => e !== "ghost@example.com");
+    expect(buildPromptWithRecipients(basePrompt, remaining)).not.toContain("ghost@example.com");
+  });
+
   it("takes the addresses verbatim rather than reformatting them", () => {
     const mixed = ["First.Last+tag@Example.com", "b@example.com"];
     const { recipients } = splitPromptRecipients(buildPromptWithRecipients(BASE, mixed));
