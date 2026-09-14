@@ -768,6 +768,70 @@ func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, i
 	return nil, fmt.Errorf("fetch authorization-server metadata for %s: %s", issuer, strings.Join(tried, "; "))
 }
 
+// validateClaimedIssuer checks the issuer a proxied copy claims and returns its
+// canonical spelling — the form used for everything downstream.
+//
+// It must be a plain http(s) URL with a hostname and nothing else: no query
+// (RawQuery *or* the bare "?" that url.Parse records only in ForceQuery), no
+// fragment, no userinfo. Each of those would survive the validation and then be
+// dropped by the canonical rebuild, leaving an issuer the copy never asserted
+// for the origin's document to self-confirm. Hostname() rather than Host,
+// because "https://:443" has a non-empty authority and no host at all. Userinfo
+// is refused because the claimed issuer is dialled for its own metadata and
+// net/http would turn it into an Authorization header (see
+// endpointCarriesUserinfo).
+//
+// The returned spelling normalizes the ORIGIN only — lowercase scheme and host,
+// default port dropped — and keeps the path exactly as written, so "//" stays
+// distinct from a bare origin. Normalizing the origin is what lets a copy
+// claiming "https://issuer.example:443" find the document of an issuer that
+// calls itself "https://issuer.example", without touching issuerMatches, which
+// stays the exact-match check on the non-proxied path. The single-trailing-slash
+// tolerance belongs to the comparators, not here.
+//
+// Finally, a claim whose identity would CHANGE under the resolver's own
+// trailing-slash trim is refused: the strict fetch builds its candidate
+// locations from the trimmed form, so such a claim would be answered by a
+// different document entirely.
+func validateClaimedIssuer(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	u, err := url.Parse(trimmed)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
+		return "", fmt.Errorf("claimed issuer %q is not a plain http(s) URL", redactURLUserinfo(raw))
+	}
+	claimed := normalizedOrigin(u) + u.EscapedPath()
+	if !sameIssuerIdentity(claimed, strings.TrimRight(claimed, "/")) {
+		return "", fmt.Errorf("claimed issuer %s cannot be resolved as written — its trailing slashes are a distinct path the well-known lookup drops — so no document can confirm it", redactURLUserinfo(claimed))
+	}
+	return claimed, nil
+}
+
+// resolveConfirmingDocument fetches the claimed issuer's own metadata and
+// verifies the document that comes back really is that issuer's.
+//
+// The strict fetch accepts a document via issuerMatches, which folds case and
+// trims every trailing slash across the WHOLE URL — so asking for ".../tenant"
+// can return a document claiming ".../Tenant" or ".../tenant//", distinct
+// routed tenants whose endpoints would then vouch for the copy. That is the
+// mix-up confirmation exists to refuse, and it is the guarantee the runtime
+// note states, so it is enforced here rather than assumed.
+//
+// Entra's multi-tenant template is the one documented exception the strict
+// check makes — its document says the literal "{tenantid}", which no
+// byte-comparison can match — so it is preserved.
+func resolveConfirmingDocument(claimed string, resolveOwn func(string) (*AuthServerMetadata, error)) (*AuthServerMetadata, error) {
+	own, err := resolveOwn(claimed)
+	if own == nil {
+		return nil, err
+	}
+	if !sameIssuerIdentity(claimed, own.Issuer) &&
+		!strings.Contains(strings.ToLower(own.Issuer), entraTenantTemplate) {
+		return nil, fmt.Errorf("the document at the claimed issuer names %q, a different tenant", redactURLUserinfo(own.Issuer))
+	}
+	return own, nil
+}
+
 // confirmProxiedIssuer handles the vendor pattern the #1006 catalog audit met
 // five times: the protected-resource metadata names the MCP host as its
 // authorization server, and that host serves a document whose `issuer` is
@@ -796,43 +860,10 @@ func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, i
 // proxy's endpoints are the ones its registered clients work with); its
 // issuer is recorded as the identity the vendor asserts.
 func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resolveOwn func(string) (*AuthServerMetadata, error)) (*AuthServerMetadata, error) {
-	// Parse the claimed issuer AS WRITTEN, like the authorization-server URL
-	// below. Trimming its trailing slashes first would collapse a copy
-	// claiming "https://as.example//" — a distinct routed path — into the bare
-	// origin, which the scoped-origin check would then happily self-confirm,
-	// and fleet would record an issuer the copy never asserted. The one
-	// tolerated trailing slash is applied by the comparators, not here.
-	claimed := strings.TrimSpace(copyDoc.Issuer)
-	u, err := url.Parse(claimed)
-	// No userinfo either: the claimed issuer is dialed for its own metadata,
-	// and net/http would turn userinfo into an Authorization header on that
-	// request (see endpointCarriesUserinfo).
-	// ForceQuery as well as RawQuery: url.Parse records the bare "?" of
-	// "https://issuer.example?" only in ForceQuery, so checking RawQuery alone
-	// would admit it — and the canonical rebuild below, which keeps scheme,
-	// host and path, would silently drop the "?" and leave an issuer the copy
-	// never asserted, free to be self-confirmed by the origin's document.
-	// Hostname(), not Host: "https://:443" parses with a NON-empty Host of
-	// ":443" and an empty hostname, so a Host check admits it and the
-	// canonical rebuild below renders it "https://" — a hostless issuer that
-	// the same-origin leg could then accept without any issuer-owned metadata.
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
-		return nil, fmt.Errorf("claimed issuer %q is not a plain http(s) URL", redactURLUserinfo(copyDoc.Issuer))
+	claimed, err := validateClaimedIssuer(copyDoc.Issuer)
+	if err != nil {
+		return nil, err
 	}
-	// Canonical spelling of the claimed issuer, used from here on. Resolving
-	// its own document runs the STRICT issuer check, which compares the whole
-	// URL as written — so a copy claiming "https://issuer.example:443" against
-	// an issuer whose document says "https://issuer.example" would find no
-	// confirming document at all and a valid DocuSign-shaped copy would fail.
-	// Normalizing the EXPECTED value here fixes that without touching
-	// issuerMatches itself, which stays the exact-match check on the
-	// non-proxied path. The query and fragment are already refused above, so
-	// only the origin and path can differ; the path is still compared exactly
-	// but for a trailing slash.
-	// The ORIGIN is normalized; the path is kept exactly as written, so
-	// "//" stays distinct from the bare origin. sameIssuerIdentity and
-	// sameEndpointURL apply the single-trailing-slash tolerance.
-	claimed = normalizedOrigin(u) + u.EscapedPath()
 	// Parse the authorization-server URL AS WRITTEN. Trimming trailing slashes
 	// first would collapse "https://as.example//" — a distinct routed path —
 	// into the bare origin and hand a tenant-scoped URL the same-origin leg,
@@ -882,17 +913,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 			return nil, fmt.Errorf("authorization server %s is scoped to one tenant, so only its own origin may vouch for a document naming another issuer; this one claims %s", redactURLUserinfo(fetchedFrom), claimed)
 		}
 	}
-	// The strict resolver trims an issuer's trailing slashes to build its
-	// candidate locations, so a claim whose identity CHANGES under that trim
-	// ("https://issuer.example//") would be answered by a DIFFERENT document —
-	// the origin's — which would then vouch for endpoints the claimed issuer
-	// never published, and fleet would store the unasserted "//" identity.
-	// Refuse rather than confirm against the wrong document. An issuer with no
-	// trailing slashes, or exactly one, is unaffected.
-	if !sameIssuerIdentity(claimed, strings.TrimRight(claimed, "/")) {
-		return nil, fmt.Errorf("claimed issuer %s cannot be resolved as written — its trailing slashes are a distinct path the well-known lookup drops — so no document can confirm it", redactURLUserinfo(claimed))
-	}
-	own, ownErr := resolveOwn(claimed)
+	own, ownErr := resolveConfirmingDocument(claimed, resolveOwn)
 	confirmedBy := func(copyEP, ownEP string) bool {
 		return own != nil && ownEP != "" && sameEndpointURL(copyEP, ownEP)
 	}

@@ -934,6 +934,60 @@ func TestConfirmProxiedIssuerRefusesRelativeEndpoint(t *testing.T) {
 	}
 }
 
+// TestConfirmProxiedIssuerRevalidatesTheConfirmingDocument: the strict fetch
+// accepts a document via issuerMatches, which folds case and trims every
+// trailing slash across the whole URL — so resolving ".../tenant" can hand back
+// a document claiming ".../Tenant" or ".../tenant//". Those are distinct routed
+// tenants, and letting one vouch for the other's endpoints is exactly the
+// mix-up confirmation exists to refuse.
+func TestConfirmProxiedIssuerRevalidatesTheConfirmingDocument(t *testing.T) {
+	fetchedFrom := "https://mcp.vendor.example"
+	claimed := "https://issuer.vendor.example/tenant"
+	copyDoc := AuthServerMetadata{
+		Issuer:                        claimed,
+		AuthorizationEndpoint:         "https://issuer.vendor.example/tenant/authorize",
+		TokenEndpoint:                 "https://issuer.vendor.example/tenant/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	// A sibling tenant's document, with the same endpoints, of the kind
+	// issuerMatches would hand back.
+	for _, sibling := range []string{"https://issuer.vendor.example/Tenant", "https://issuer.vendor.example/tenant//"} {
+		resolveOwn := func(string) (*AuthServerMetadata, error) {
+			doc := copyDoc
+			doc.Issuer = sibling
+			return &doc, nil
+		}
+		if _, err := confirmProxiedIssuer(fetchedFrom, &copyDoc, resolveOwn); err == nil {
+			t.Errorf("a document claiming %q vouched for %q", sibling, claimed)
+		}
+	}
+	// The issuer's genuine own document still confirms.
+	exact := func(string) (*AuthServerMetadata, error) {
+		doc := copyDoc
+		return &doc, nil
+	}
+	if _, err := confirmProxiedIssuer(fetchedFrom, &copyDoc, exact); err != nil {
+		t.Errorf("the issuer's own document = %v, want it still confirming", err)
+	}
+	// Entra's multi-tenant template is the documented exception and must keep
+	// working: its document can never match byte-for-byte.
+	entraClaimed := "https://login.microsoftonline.com/organizations/v2.0"
+	entraCopy := AuthServerMetadata{
+		Issuer:                        entraClaimed,
+		AuthorizationEndpoint:         "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+		TokenEndpoint:                 "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	entraOwn := func(string) (*AuthServerMetadata, error) {
+		doc := entraCopy
+		doc.Issuer = "https://login.microsoftonline.com/{tenantid}/v2.0"
+		return &doc, nil
+	}
+	if _, err := confirmProxiedIssuer(fetchedFrom, &entraCopy, entraOwn); err != nil {
+		t.Errorf("Entra template = %v, want the documented exception preserved", err)
+	}
+}
+
 // TestConfirmProxiedIssuerRequiresAClaimedHostname: "https://:443" parses with
 // a NON-empty Host of ":443" and no hostname at all, so a Host check admits it
 // and the canonical rebuild renders it "https://" — a hostless issuer the
