@@ -348,10 +348,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		return nil, -1, fmt.Errorf("discover authorization server: %w", err)
 	}
 
-	scopes := strings.Join(disco.PRM.ScopesSupported, " ")
-	if scopes == "" {
-		scopes = strings.Join(disco.AS.ScopesSupported, " ")
-	}
+	scopes := strings.Join(disco.RequestedScopes(), " ")
 
 	clientID := strings.TrimSpace(in.ClientID)
 	clientSecret := in.ClientSecret

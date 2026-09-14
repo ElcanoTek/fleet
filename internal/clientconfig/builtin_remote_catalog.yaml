@@ -378,11 +378,11 @@ servers:
   - name: azure-devops
     display_name: Azure DevOps
     description: >-
-      Microsoft-hosted MCP server (public preview) for Azure DevOps work items,
-      repos, pull requests, pipelines, wikis, and test plans; tools filtered via
+      Microsoft-hosted MCP server for Azure DevOps work items, repos, pull
+      requests, pipelines, wikis, and test plans; tools filtered via
       X-MCP-Toolsets/X-MCP-Tools headers, read-only mode via X-MCP-Readonly.
-      Microsoft Entra ID OAuth; currently only VS Code and Visual Studio clients
-      are supported.
+      Microsoft Entra ID OAuth against your own app registration — Entra has
+      no dynamic client registration, so a client ID and secret are required.
     url: "https://mcp.dev.azure.com/{organization}"
     vendor: Microsoft Corporation
     docs_url: "https://learn.microsoft.com/en-us/azure/devops/mcp-server/remote-mcp-server?view=azure-devops"
@@ -391,11 +391,24 @@ servers:
     tags: [azure, devops, pipelines, repos, work-items]
     provenance: official
     auth: tenant
+    client_registration: manual
+    client_secret: required
     setup_hint: >-
-      {organization} is your Azure DevOps organization name — the part
-      after dev.azure.com/ when you sign in. Preview: your org must use
-      Microsoft Entra ID, and only VS Code and Visual Studio clients are
-      supported today.
+      {organization} is your Azure DevOps organization name — the part after
+      dev.azure.com/ when you sign in. The organization must be connected to a
+      Microsoft Entra tenant (standalone personal-Microsoft-account orgs are
+      not supported). In that tenant create an app registration: platform
+      Web, redirect URI = the callback URL shown in this form, a client
+      secret, and under API permissions add "Azure DevOps MCP" (application
+      ID 2a72489c-aab2-4b65-b93a-a91edccf33b8) → delegated permissions, then
+      Grant admin consent. Paste the Application (client) ID and the secret
+      here, then sign in with a work account native to that tenant — a
+      personal Microsoft account, even one made a tenant member, loops at
+      Microsoft's account picker — and make sure that user has opened
+      dev.azure.com once (Azure DevOps refuses calls for an identity that
+      never signed in interactively). Tokens refresh headlessly
+      (offline_access is requested); sign-out clears fleet's copy only —
+      Entra publishes no revocation endpoint.
     setup_url: "https://learn.microsoft.com/en-us/azure/devops/mcp-server/remote-mcp-server?view=azure-devops"
   - name: cast-ai
     display_name: CAST AI

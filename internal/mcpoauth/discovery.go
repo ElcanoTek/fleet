@@ -120,8 +120,49 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 	if err := verifyAuthServer(issuer, as); err != nil {
 		return nil, err
 	}
+	// Persist the issuer the PRM named and we verified against, not the
+	// document's spelling of it: for an Entra multi-tenant endpoint the
+	// document says the literal "{tenantid}" template (accepted by
+	// issuerMatches), which is not a URL anyone can dial or key a vendor
+	// clause on.
+	if !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
+		as.Issuer = issuer
+	}
 
 	return &Discovered{Resource: resource, PRM: prm, AS: *as}, nil
+}
+
+// RequestedScopes is the scope set the authorize request asks for: the
+// PRM-declared `scopes_supported` (the resource knows what it needs), else the
+// authorization server's.
+//
+// Microsoft Entra ID is the one vendor that needs a scope the resource never
+// declares: it issues a refresh token only when `offline_access` is requested
+// (MSAL appends it silently; a spec-driven client has to ask). Without it an
+// Azure DevOps connector would live one hour and then sit in `needs_reauth`
+// (the Google shape, #1006). `offline_access` is a standard OpenID Connect
+// scope and Entra advertises it in `scopes_supported`, so it is appended only
+// when the issuer is Entra and its metadata lists it — never sent to a
+// vendor whose consent screen might reject an unknown scope.
+func (d *Discovered) RequestedScopes() []string {
+	scopes := d.PRM.ScopesSupported
+	if len(scopes) == 0 {
+		scopes = d.AS.ScopesSupported
+	}
+	out := append([]string(nil), scopes...)
+	if isEntraIssuer(d.AS.Issuer) && containsFold(d.AS.ScopesSupported, "offline_access") && !containsFold(out, "offline_access") {
+		out = append(out, "offline_access")
+	}
+	return out
+}
+
+func containsFold(list []string, want string) bool {
+	for _, s := range list {
+		if strings.EqualFold(strings.TrimSpace(s), want) {
+			return true
+		}
+	}
+	return false
 }
 
 // locateResourceMetadata determines the Protected Resource Metadata URL
@@ -292,17 +333,79 @@ func fetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, issue
 	return nil, fmt.Errorf("fetch authorization-server metadata for %s: %w", issuer, lastErr)
 }
 
+// entraTenantTemplate is the literal placeholder Microsoft Entra ID puts in the
+// `issuer` of the metadata served by its multi-tenant endpoints
+// (login.microsoftonline.com/{common,organizations,consumers}/v2.0): the
+// document says "https://login.microsoftonline.com/{tenantid}/v2.0" because
+// the tenant is only known once a user signs in. RFC 8414 §3.3 wants the
+// issuer to equal the URL the document was fetched from; Entra's does not, and
+// every resource that names an Entra multi-tenant authorization server — the
+// Microsoft-hosted Azure DevOps MCP server does — is otherwise unreachable
+// (measured for #1006).
+const entraTenantTemplate = "{tenantid}"
+
+// issuerMatches is the mix-up-attack check: the metadata document must claim
+// to be the issuer the PRM named. Exact (case-insensitive, trailing-slash
+// tolerant) equality, plus one deliberately narrow allowance for Entra's
+// templated issuer: same https host, an Entra host, same number of path
+// segments, every segment equal except that the document may say
+// entraTenantTemplate exactly where the expected issuer names one of Entra's
+// multi-tenant aliases. Nothing else — a different host, a tenant GUID in the
+// expected issuer, or the template anywhere else stays a mismatch.
+func issuerMatches(expected, actual string) bool {
+	e := strings.TrimRight(strings.TrimSpace(expected), "/")
+	a := strings.TrimRight(strings.TrimSpace(actual), "/")
+	if strings.EqualFold(e, a) {
+		return true
+	}
+	if !isEntraIssuer(e) || !strings.Contains(strings.ToLower(a), entraTenantTemplate) {
+		return false
+	}
+	eu, err := url.Parse(e)
+	if err != nil {
+		return false
+	}
+	au, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	if eu.Scheme != "https" || au.Scheme != "https" || !strings.EqualFold(eu.Host, au.Host) || au.RawQuery != "" || au.Fragment != "" {
+		return false
+	}
+	es := strings.Split(strings.Trim(eu.Path, "/"), "/")
+	as := strings.Split(strings.Trim(au.Path, "/"), "/")
+	if len(es) != len(as) {
+		return false
+	}
+	templated := false
+	for i := range es {
+		if strings.EqualFold(as[i], entraTenantTemplate) {
+			switch strings.ToLower(es[i]) {
+			case "common", "organizations", "consumers":
+				templated = true
+				continue
+			}
+			return false
+		}
+		if !strings.EqualFold(es[i], as[i]) {
+			return false
+		}
+	}
+	return templated
+}
+
 // verifyAuthServer enforces the security-relevant invariants: the issuer must
-// match (no mix-up via metadata from one issuer naming another), and PKCE S256
-// must be supported (the MCP spec mandates it; an AS that only offers "plain"
-// must be rejected, never silently downgraded).
+// match (no mix-up via metadata from one issuer naming another; see
+// issuerMatches for the one vendor allowance), and PKCE S256 must be supported
+// (the MCP spec mandates it; an AS that only offers "plain" must be rejected,
+// never silently downgraded).
 func verifyAuthServer(expectedIssuer string, as *AuthServerMetadata) error {
 	// `issuer` is REQUIRED by RFC 8414 §2 and is the anchor of the mix-up-attack
 	// defense, so a document that omits it is rejected rather than waved through.
 	if as.Issuer == "" {
 		return fmt.Errorf("authorization-server metadata is missing the required issuer field")
 	}
-	if !strings.EqualFold(strings.TrimRight(expectedIssuer, "/"), strings.TrimRight(as.Issuer, "/")) {
+	if !issuerMatches(expectedIssuer, as.Issuer) {
 		return fmt.Errorf("authorization-server issuer mismatch: metadata says %q, expected %q", as.Issuer, expectedIssuer)
 	}
 	// An empty methods list means the AS didn't advertise; the MCP spec requires
