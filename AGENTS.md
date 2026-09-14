@@ -218,6 +218,20 @@ same PR.
   (e.g. `error_analysis`) stay excluded from the insert/upsert so a status
   write can never clobber them — every exclusion needs a reason string on
   its row, and the `sched/db` registry tests fail on schema↔registry drift.
+- **A user-visible change updates the user guides.** The two guides in
+  `internal/clientconfig/builtin_skills/fleet-guide/` are what `/help` renders
+  AND what the `fleet-guide` skill hands the assistant, so a stale sentence
+  there is a wrong answer given to a user in their own words. If your change
+  adds, renames, moves or removes something a person can see or press — a
+  control, a status badge, a card, a menu item, a shortcut, a limit, a default —
+  update the guide in the same PR and run `make sync-guides`. Two rules keep
+  this cheap: describe only what shipped (the same honesty bar as the rest of
+  this file), and say "by default" for anything an operator can configure. Where
+  a guide claim can be checked mechanically, check it — `scripts/` already pins
+  the shortcut tables against the shell's real bindings and the two guide copies
+  against each other, and that pattern is the reason to add a row rather than
+  trust a reviewer to notice. [`docs/USER-GUIDES.md`](docs/USER-GUIDES.md) has
+  the full contract.
 - **Ship features with honest scope.** Every feature lands with a design note
   recording what shipped, what deviated from the issue, and what was deliberately
   deferred — in a dedicated `docs/<FEATURE>.md` (plus an ADR when an invariant is
@@ -249,6 +263,9 @@ note, runbook and ADR, by question. The entry points an agent needs most:
   compaction, the MCP credential allowlist): [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md).
 - **Contributor workflow and releases:** [`CONTRIBUTING.md`](CONTRIBUTING.md),
   [`docs/VERSIONING.md`](docs/VERSIONING.md).
+- **Documentation for the people USING fleet** (the `/help` guides, the
+  `fleet-guide` skill, and what to update when a surface changes):
+  [`docs/USER-GUIDES.md`](docs/USER-GUIDES.md).
 - **Testing strategy and the scanning stack:** [`docs/TESTING.md`](docs/TESTING.md),
   [`docs/SCANNING.md`](docs/SCANNING.md).
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md).

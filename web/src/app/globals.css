@@ -5448,3 +5448,169 @@ select.mcp-server-picker__account-select {
   color: var(--color-text-muted);
   font-size: 0.875rem;
 }
+
+/* ── Guide prose (/help) ─────────────────────────────────────────
+   The user guides are read as documents, not as chat turns, so they get
+   their own rhythm rather than reusing .assistant-markdown-* (which is
+   tuned tight for a transcript bubble). Everything here is scoped under
+   .guide-prose and speaks only in semantic tokens, so both themes and any
+   bundle's palette follow for free. */
+.guide-prose {
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.68;
+}
+
+.guide-prose > :first-child {
+  margin-top: 0;
+}
+
+.guide-prose h2 {
+  font-family: var(--font-heading);
+  font-size: 1.16rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--color-text-primary);
+  margin: 2.4rem 0 0.75rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.guide-prose h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.guide-prose h3 {
+  font-family: var(--font-heading);
+  font-size: 0.98rem;
+  font-weight: 650;
+  line-height: 1.4;
+  color: var(--color-text-primary);
+  margin: 1.6rem 0 0.5rem;
+}
+
+/* Anchored sections land below the sticky topbar rather than under it when a
+   contents link or an in-guide cross-reference is followed. */
+.guide-prose h2,
+.guide-prose h3 {
+  scroll-margin-top: 1.5rem;
+}
+
+.guide-prose p {
+  margin: 0.75rem 0;
+}
+
+.guide-prose ul,
+.guide-prose ol {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.75rem 0;
+  padding-left: 1.25rem;
+}
+
+.guide-prose li::marker {
+  color: var(--color-accent);
+}
+
+.guide-prose strong {
+  font-weight: 650;
+  color: var(--color-text-primary);
+}
+
+.guide-prose a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The guides use blockquotes as callouts — the "one rule that holds on every
+   route" asides — so they read as a tinted panel, not as a quotation. */
+.guide-prose blockquote {
+  margin: 1.1rem 0;
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+  padding: 0.85rem 1.1rem;
+}
+
+.guide-prose blockquote > :first-child {
+  margin-top: 0;
+}
+
+.guide-prose blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.guide-prose code {
+  border-radius: 0.3rem;
+  background: color-mix(in srgb, var(--color-overlay-soft) 42%, transparent);
+  padding: 0.05rem 0.28rem;
+  font-family: var(--font-code-ui);
+  font-size: 0.88em;
+  color: var(--color-text-primary);
+}
+
+/* Tables carry most of the guides' detail (every control list is one), so they
+   get a real header rule and generous cell padding — and their own scroller,
+   since a five-column table is the one thing that cannot reflow on a phone. */
+.guide-table-shell {
+  overflow-x: auto;
+  margin: 1.1rem 0;
+}
+
+.guide-prose table {
+  width: 100%;
+  min-width: 30rem;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.guide-prose th,
+.guide-prose td {
+  padding: 0.6rem 0.9rem 0.6rem 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.guide-prose th {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  border-bottom-color: var(--color-border-strong);
+}
+
+.guide-prose td:first-child {
+  color: var(--color-text-primary);
+}
+
+.guide-prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.guide-prose hr {
+  height: 1px;
+  margin: 1.5rem 0;
+  border: 0;
+  background: var(--color-border);
+}
+
+/* On a phone the min-width above would put every table behind a sideways
+   scroll, and the guides are mostly two-column tables of prose that wrap
+   perfectly well. Drop the floor there and let them reflow instead. */
+@media (max-width: 640px) {
+  .guide-prose table {
+    min-width: 0;
+  }
+
+  .guide-prose th,
+  .guide-prose td {
+    padding-right: 0.6rem;
+  }
+}

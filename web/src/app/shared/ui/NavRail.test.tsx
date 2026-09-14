@@ -9,6 +9,7 @@ afterEach(() => cleanup());
 vi.mock("./CrossViewNav", () => ({
   NavToChat: () => <a href="/chat">Chat</a>,
   NavToOrchestrator: () => <a href="/orchestrator">Operations</a>,
+  NavToHelp: () => <a href="/help">Guides</a>,
 }));
 
 const collapse: RailCollapse = {
