@@ -615,9 +615,20 @@ run it in CI or with the commands above.
 A **non-blocking** weekly scan (Mondays 09:00 UTC; also `workflow_dispatch`)
 rebuilds the image against the latest unpinned `fedora-minimal:latest` base and
 reports **all** findings — including unfixed ones, with no `--fail-on` /
-`--only-fixed` — to the Security tab (category `grype-scheduled`), so a
-newly-disclosed CVE against the existing image surfaces as an informational alert
-rather than blocking `main`. It is never a PR gate.
+`--only-fixed` — so a newly-disclosed CVE against the existing image surfaces as
+an informational alert rather than blocking `main`. It is never a PR gate.
+Findings upload under the same `grype-sandbox-image` category as the per-PR gate:
+a category GitHub has seen on `main` is expected on every PR, and a category
+published only by this cron lane made Advanced Security report a missing
+configuration on each one. GitHub keeps one result set per `(tool, category,
+commit)`, so the weekly upload for the tip of `main` replaces the push-run's
+results for that commit, and a rebuilt image or refreshed advisory data can
+therefore change alert state on `main` without a source change; weekly results
+are no longer retained as a separate configuration. (One-time cleanup: renaming
+the category does not retire the configuration GitHub already recorded, so the
+existing `grype-scheduled` analyses on `main` must be deleted once through the
+code-scanning API — newest first, the last with `confirm_delete=true` — before
+the missing-configuration check disappears from PRs.)
 
 ---
 
