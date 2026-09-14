@@ -97,7 +97,12 @@ jobs:
         if: ${{ !cancelled() && hashFiles('grype-results.sarif') != '' }}
         with:
           sarif_file: 'grype-results.sarif'
-          category: 'grype-scheduled'
+          # Share the PR gate's category: a distinct category published only on
+          # main makes GitHub Advanced Security expect that configuration on
+          # every PR and report "1 configuration not found", because this weekly
+          # workflow never runs on PRs. (The legacy 'grype-scheduled' analyses
+          # on main were deleted via the code-scanning API; see docs/TESTING.md.)
+          category: 'grype-sandbox-image'
 
 
   alarm:
