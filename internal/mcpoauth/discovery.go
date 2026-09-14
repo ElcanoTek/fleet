@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // requireHTTPScheme refuses any URL that is not http:// or https:// before it
@@ -423,14 +424,30 @@ func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, 
 	if resp.StatusCode != http.StatusUnauthorized {
 		return "", nil
 	}
-	return parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate")), nil
+	// A server may send several WWW-Authenticate field lines (RFC 9110
+	// §11.6.1); the pointer can sit on any of them, not only the first.
+	for _, h := range resp.Header.Values("WWW-Authenticate") {
+		if u := parseResourceMetadataURL(h); u != "" {
+			return u, nil
+		}
+	}
+	return "", nil
 }
+
+// probeSessionTerminateTimeout bounds the best-effort session-termination
+// DELETE on its own: its outcome is ignored, so its latency must not be able
+// to hold an Add for the client's full timeout, or forever on a client
+// without one. A var so tests can shorten it.
+var probeSessionTerminateTimeout = 5 * time.Second
 
 // terminateProbeSession sends the Streamable HTTP session-termination DELETE
 // for a session the discovery probe's initialize opened. Best-effort: a
 // server may answer 405 (termination not supported) or anything else, and the
-// probe's outcome does not depend on it.
+// probe's outcome does not depend on it — nor, thanks to the child deadline,
+// on how long the server takes to answer.
 func terminateProbeSession(ctx context.Context, httpClient *http.Client, serverURL, sessionID string) {
+	ctx, cancel := context.WithTimeout(ctx, probeSessionTerminateTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, serverURL, nil)
 	if err != nil {
 		return

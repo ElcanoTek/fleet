@@ -760,6 +760,53 @@ func TestDiscoverUnusablePRMAtFirstLocationTriesTheNext(t *testing.T) {
 	}
 }
 
+// TestProbeReadsEveryWWWAuthenticateField: RFC 9110 lets a server send several
+// WWW-Authenticate field lines; the resource_metadata pointer may sit on any
+// of them, not only the first.
+func TestProbeReadsEveryWWWAuthenticateField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("WWW-Authenticate", `Basic realm="ops"`)
+		w.Header().Add("WWW-Authenticate", `Bearer realm="mcp", resource_metadata="https://example.com/.well-known/oauth-protected-resource/mcp"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	got, err := probeResourceMetadataPointer(context.Background(), srv.Client(), srv.URL+"/mcp", http.MethodGet, "")
+	if err != nil || got != "https://example.com/.well-known/oauth-protected-resource/mcp" {
+		t.Fatalf("pointer on the second WWW-Authenticate field: got %q, %v", got, err)
+	}
+}
+
+// TestProbeSessionTerminationIsBounded: a server that accepts the DELETE and
+// then never answers must not hold discovery for the client's full timeout;
+// the best-effort termination runs under its own short deadline.
+func TestProbeSessionTerminationIsBounded(t *testing.T) {
+	old := probeSessionTerminateTimeout
+	probeSessionTerminateTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { probeSessionTerminateTimeout = old })
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.Method == http.MethodDelete {
+			select { // accept the termination and never answer
+			case <-r.Context().Done():
+			case <-done:
+			}
+			return
+		}
+		w.Header().Set("Mcp-Session-Id", "sess-slow")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	t.Cleanup(func() { close(done); srv.Close() })
+	client := srv.Client() // no global timeout
+	start := time.Now()
+	if got, err := probeResourceMetadataPointer(context.Background(), client, srv.URL+"/mcp", http.MethodPost, initializeProbeBody); got != "" || err != nil {
+		t.Errorf("probe = %q, %v; want no pointer and no error", got, err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("probe took %s waiting on a session DELETE that never answered; the termination must be bounded", d)
+	}
+}
+
 // TestProbeTerminatesSessionItOpened: a server that accepts the unauthenticated
 // initialize (200 + Mcp-Session-Id) has allocated a session the probe never
 // wanted; the probe sends the Streamable HTTP DELETE for it and returns no
