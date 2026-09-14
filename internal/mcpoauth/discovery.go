@@ -878,6 +878,16 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 			return nil, fmt.Errorf("authorization server %s is scoped to one tenant, so only its own origin may vouch for a document naming another issuer; this one claims %s", redactURLUserinfo(fetchedFrom), claimed)
 		}
 	}
+	// The strict resolver trims an issuer's trailing slashes to build its
+	// candidate locations, so a claim whose identity CHANGES under that trim
+	// ("https://issuer.example//") would be answered by a DIFFERENT document —
+	// the origin's — which would then vouch for endpoints the claimed issuer
+	// never published, and fleet would store the unasserted "//" identity.
+	// Refuse rather than confirm against the wrong document. An issuer with no
+	// trailing slashes, or exactly one, is unaffected.
+	if !sameIssuerIdentity(claimed, strings.TrimRight(claimed, "/")) {
+		return nil, fmt.Errorf("claimed issuer %s cannot be resolved as written — its trailing slashes are a distinct path the well-known lookup drops — so no document can confirm it", redactURLUserinfo(claimed))
+	}
 	own, ownErr := resolveOwn(claimed)
 	confirmedBy := func(copyEP, ownEP string) bool {
 		return own != nil && ownEP != "" && sameEndpointURL(copyEP, ownEP)
@@ -899,6 +909,9 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	} {
 		if ep.copy == "" {
 			continue
+		}
+		if !absoluteHTTPEndpoint(ep.copy) {
+			return nil, fmt.Errorf("%s %q is not an absolute http(s) URL, so it could never be dialed", ep.name, redactURLUserinfo(ep.copy))
 		}
 		if endpointCarriesUserinfo(ep.copy) {
 			return nil, fmt.Errorf("%s %q embeds userinfo, which would become an Authorization header fleet never chose to send", ep.name, redactURLUserinfo(ep.copy))
@@ -999,6 +1012,13 @@ func sameEndpointURL(a, b string) bool {
 	if aerr != nil || berr != nil {
 		return false
 	}
+	// Neither a relative URL nor one without a host is an endpoint: they
+	// normalize to the same empty "://" origin and would compare equal to each
+	// other. The caller refuses them by name; refusing here too keeps the
+	// helper honest on its own terms.
+	if !absoluteHTTPEndpoint(a) || !absoluteHTTPEndpoint(b) {
+		return false
+	}
 	// Userinfo is part of an endpoint's identity, and endpointCarriesUserinfo
 	// has already refused it outright — comparing it here keeps this helper
 	// honest on its own terms rather than relying on that caller.
@@ -1026,6 +1046,11 @@ func sameIssuerIdentity(a, b string) bool {
 	au, aerr := url.Parse(strings.TrimSpace(a))
 	bu, berr := url.Parse(strings.TrimSpace(b))
 	if aerr != nil || berr != nil {
+		return false
+	}
+	// Same reason as sameEndpointURL: a relative or hostless URL is not an
+	// authorization server, and two of them would otherwise match.
+	if !absoluteHTTPEndpoint(a) || !absoluteHTTPEndpoint(b) {
 		return false
 	}
 	return normalizedOrigin(au) == normalizedOrigin(bu) &&
@@ -1119,6 +1144,21 @@ func scopedToOneTenant(u *url.URL) bool {
 // token exchange or a registration POST. Neither leg may admit it: sameOrigin
 // compares scheme://host and would not notice either. CanonicalResourceURI
 // already refuses userinfo on the resource side, so this matches it.
+// absoluteHTTPEndpoint reports whether an endpoint is a URL fleet could
+// actually dial: absolute, http(s), with a host. A RELATIVE endpoint
+// ("/oauth/token") parses without error and has neither scheme nor host, so
+// normalizedOrigin renders it "://" — and two relative endpoints would then
+// compare equal and confirm each other, after which AddServer would persist an
+// authorization URL the browser refuses as an unsupported scheme and a token
+// endpoint no request can reach.
+func absoluteHTTPEndpoint(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 func endpointCarriesUserinfo(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	return err == nil && u.User != nil

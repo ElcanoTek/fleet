@@ -859,6 +859,81 @@ func TestConfirmProxiedIssuerRedactsUserinfoInErrors(t *testing.T) {
 	}
 }
 
+// TestFetchAuthServerMetadataRefusesUnresolvableSlashClaim: the strict
+// resolver trims an issuer's trailing slashes to build its candidate
+// locations, so a copy claiming "https://host//" is answered by the ORIGIN's
+// document — which would then vouch for endpoints the "//" tenant never
+// published, and fleet would store the unasserted identity. Driven through
+// fetchAuthServerMetadata because the collapse happens in the resolver, a
+// layer below confirmProxiedIssuer.
+func TestFetchAuthServerMetadataRefusesUnresolvableSlashClaim(t *testing.T) {
+	// The claimed issuer must be a DIFFERENT host from the proxy, or the strict
+	// check accepts the document outright: issuerMatches trims trailing slashes
+	// with TrimRight, so "host//" already equals "host" there and
+	// confirmProxiedIssuer is never reached.
+	issMux := http.NewServeMux()
+	iss := httptest.NewServer(issMux)
+	t.Cleanup(iss.Close)
+	originDoc := AuthServerMetadata{Issuer: iss.URL, AuthorizationEndpoint: iss.URL + "/authorize", TokenEndpoint: iss.URL + "/token", CodeChallengeMethodsSupported: []string{"S256"}}
+	issMux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(originDoc) })
+
+	proxyMux := http.NewServeMux()
+	proxy := httptest.NewServer(proxyMux)
+	t.Cleanup(proxy.Close)
+	// The bare proxy serves a copy claiming the "//" identity, whose endpoints
+	// the ORIGIN's document would vouch for once the resolver collapses it.
+	claimDoc := originDoc
+	claimDoc.Issuer = iss.URL + "//"
+	proxyMux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(claimDoc) })
+	proxyMux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(claimDoc) })
+
+	_, err := fetchAuthServerMetadata(context.Background(), proxy.Client(), proxy.URL)
+	if err == nil {
+		t.Fatal("a claimed issuer the resolver cannot fetch as written was confirmed")
+	}
+	if !strings.Contains(err.Error(), "cannot be resolved as written") {
+		t.Errorf("error = %v, want the unresolvable-claim refusal", err)
+	}
+}
+
+// TestSameEndpointURLRefusesRelativeEndpoints: a relative endpoint parses
+// without error and has neither scheme nor host, so normalizedOrigin renders
+// it "://" — two of them would compare equal and confirm each other, and
+// AddServer would persist an authorization URL the browser refuses and a token
+// endpoint no request can reach.
+func TestSameEndpointURLRefusesRelativeEndpoints(t *testing.T) {
+	if sameEndpointURL("/oauth/token", "/oauth/token") {
+		t.Error("two relative endpoints compared equal")
+	}
+	if sameEndpointURL("https://as.example/token", "/token") {
+		t.Error("an absolute and a relative endpoint compared equal")
+	}
+	if sameIssuerIdentity("/tenant", "/tenant") {
+		t.Error("two relative issuers compared equal")
+	}
+	// Absolute endpoints are unaffected.
+	if !sameEndpointURL("https://as.example/token", "https://as.example/token") {
+		t.Error("absolute endpoints no longer compare equal")
+	}
+}
+
+// TestConfirmProxiedIssuerRefusesRelativeEndpoint: the refusal is by name at
+// the confirmation loop, so the operator reads why rather than seeing a
+// generic "not confirmed".
+func TestConfirmProxiedIssuerRefusesRelativeEndpoint(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	doc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example",
+		AuthorizationEndpoint:         "https://mcp.vendor.example/authorize",
+		TokenEndpoint:                 "/oauth/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	_, err := confirmProxiedIssuer("https://mcp.vendor.example", &doc, resolveOwn)
+	if err == nil || !strings.Contains(err.Error(), "not an absolute http(s) URL") {
+		t.Fatalf("confirmProxiedIssuer = %v, want the relative endpoint refused by name", err)
+	}
+}
+
 // TestConfirmProxiedIssuerRefusesForcedEmptyQueryClaim: url.Parse records the
 // bare "?" of "https://issuer.example?" only in ForceQuery, leaving RawQuery
 // empty — so a validation that checks RawQuery alone admits it, and the
