@@ -80,7 +80,7 @@ type Discovered struct {
 // metadata, and verify it supports PKCE S256. httpClient MUST be the SSRF-safe
 // client in production; tests inject a plain client against httptest.
 func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (*Discovered, error) {
-	prmURLs, advertised, err := locateResourceMetadata(ctx, httpClient, canonicalServerURL)
+	loc, err := locateResourceMetadata(ctx, httpClient, canonicalServerURL)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 	var prm ProtectedResourceMetadata
 	var prmURL string
 	var fetchErr, operationalErr error
-	for _, candidate := range prmURLs {
+	for _, candidate := range loc.candidates {
 		var got ProtectedResourceMetadata
 		if err := fetchJSON(ctx, httpClient, candidate, &got); err != nil {
 			fetchErr = err
@@ -109,11 +109,18 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		// falling back to its origin would persist a synthesized
 		// configuration the server never published. Surface that failure so
 		// the operator retries.
-		if advertised {
-			return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s: %w", prmURLs[0], fetchErr)
+		if loc.advertised {
+			return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s: %w", loc.candidates[0], fetchErr)
 		}
 		if operationalErr != nil {
 			return nil, fmt.Errorf("fetch protected-resource metadata: %w (not a 404, so the server is not treated as one without metadata; retry, or check the server)", operationalErr)
+		}
+		if loc.probeErr != nil {
+			// A probe that got no answer at all (timeout, reset) may have
+			// been the one request the server puts its pointer on — Uptime
+			// Robot names it only on the POST. Absent well-known documents
+			// prove nothing then; the server did not get to speak.
+			return nil, fmt.Errorf("probe the MCP server for its protected-resource metadata pointer: %w (the server did not answer, so it is not treated as one without metadata; retry, or check the server)", loc.probeErr)
 		}
 		return discoverLegacyOrigin(ctx, httpClient, canonicalServerURL, fetchErr)
 	}
@@ -121,12 +128,19 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 	var as *AuthServerMetadata
 	legacy := false
 	if len(prm.AuthorizationServers) == 0 {
-		// RFC 9728 §2 makes authorization_servers OPTIONAL. A document that
-		// omits it yields no authorization server any more than a missing
-		// document does, so the same backwards-compatibility rule applies:
-		// the MCP server's own origin is the authorization server, still
-		// subject to the issuer check. The document's OTHER fields
-		// (scopes_supported, resource) are the vendor's word and are kept.
+		// RFC 9728 §2 makes authorization_servers OPTIONAL but `resource`
+		// REQUIRED. A document with neither — `{}` parses — is malformed,
+		// not a server without metadata, and must not be waved into the
+		// fallback as if it were.
+		if strings.TrimSpace(prm.Resource) == "" {
+			return nil, fmt.Errorf("protected-resource metadata at %s is missing the required resource field and names no authorization_servers: a malformed document, not a server without metadata", prmURL)
+		}
+		// A document that omits authorization_servers yields no
+		// authorization server any more than a missing document does, so the
+		// same backwards-compatibility rule applies: the MCP server's own
+		// origin is the authorization server, still subject to the issuer
+		// check. The document's OTHER fields (scopes_supported, resource)
+		// are the vendor's word and are kept.
 		origin, las, lerr := legacyOriginAuthServer(ctx, httpClient, canonicalServerURL,
 			fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL))
 		if lerr != nil {
@@ -272,21 +286,37 @@ func containsFold(list []string, want string) bool {
 // what Uptime Robot's pointer names and what some vendors publish), then the
 // origin root.
 //
-// advertised reports whether the server itself named the location (a 401
-// pointer) as opposed to fleet guessing the well-known ones: an advertised
-// document that then cannot be fetched is the server's failure to surface,
-// never grounds for the legacy-origin fallback.
-func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (candidates []string, advertised bool, err error) {
-	if u := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodGet, ""); u != "" {
-		return []string{u}, true, nil
+// The result says how the candidates were arrived at, because Discover's
+// legacy-origin fallback is only for a server that provably has no metadata:
+// advertised means the server itself named the location (a 401 pointer), so a
+// document that then cannot be fetched is the server's failure to surface;
+// probeErr means a probe got no answer at all (timeout, reset), so absent
+// well-known documents prove nothing — the pointer may have been on the
+// request that never completed.
+type prmLocations struct {
+	candidates []string
+	advertised bool
+	probeErr   error
+}
+
+func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (prmLocations, error) {
+	var probeErr error
+	u, perr := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodGet, "")
+	if u != "" {
+		return prmLocations{candidates: []string{u}, advertised: true}, nil
 	}
-	if u := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodPost, initializeProbeBody); u != "" {
-		return []string{u}, true, nil
+	probeErr = perr
+	u, perr = probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodPost, initializeProbeBody)
+	if u != "" {
+		return prmLocations{candidates: []string{u}, advertised: true}, nil
+	}
+	if probeErr == nil {
+		probeErr = perr
 	}
 	// Fallback: the conventional well-known locations.
 	origin, oerr := originOf(canonicalServerURL)
 	if oerr != nil {
-		return nil, false, oerr
+		return prmLocations{}, oerr
 	}
 	root := origin + "/.well-known/oauth-protected-resource"
 	// The path component only: CanonicalResourceURI keeps a query string
@@ -294,14 +324,14 @@ func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canoni
 	// RFC 9728 §3.1 puts the document, so appending the well-known suffix to
 	// the whole URL would have put it inside the query. EscapedPath keeps a
 	// percent-escaped segment as the issuer spelled it.
-	u, perr := url.Parse(canonicalServerURL)
-	if perr != nil {
-		return nil, false, perr
+	pu, uerr := url.Parse(canonicalServerURL)
+	if uerr != nil {
+		return prmLocations{}, uerr
 	}
-	if path := strings.TrimSuffix(u.EscapedPath(), "/"); path != "" {
-		return []string{root + path, origin + path + "/.well-known/oauth-protected-resource", root}, false, nil
+	if path := strings.TrimSuffix(pu.EscapedPath(), "/"); path != "" {
+		return prmLocations{candidates: []string{root + path, origin + path + "/.well-known/oauth-protected-resource", root}, probeErr: probeErr}, nil
 	}
-	return []string{root}, false, nil
+	return prmLocations{candidates: []string{root}, probeErr: probeErr}, nil
 }
 
 // ProbeProtocolVersion is the MCP protocol revision the discovery probe's
@@ -327,18 +357,22 @@ const mcpSessionHeader = "Mcp-Session-Id"
 
 // probeResourceMetadataPointer sends one unauthenticated request to the MCP
 // server and returns the resource_metadata URL from a 401's WWW-Authenticate,
-// or "" when the server answered anything else (or not at all). The body is
-// drained and discarded: only the header matters here. If the server instead
-// accepted the initialize and opened a session (2xx with Mcp-Session-Id), the
-// session is terminated best-effort before returning.
-func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, serverURL, method, body string) string {
+// or "" when the server answered anything else. The error is non-nil only
+// when no answer was obtained (a transport failure: timeout, reset, refused
+// dial; or a URL that cannot be requested at all) — that is not "no pointer",
+// and Discover treats it as a reason not to assume the server has no metadata. Only the status and
+// headers are read: a 2xx to an unauthenticated initialize may be an SSE
+// stream the server holds open, and draining it would wait for EOF. The body
+// is closed, not drained, and if the server opened a session (2xx with
+// Mcp-Session-Id) it is terminated best-effort after that close.
+func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, serverURL, method, body string) (string, error) {
 	// serverURL is the operator-typed MCP URL; CanonicalResourceURI has already
 	// refused a non-http(s) scheme, userinfo and a hostless URL before Discover
 	// is reached, and SafeHTTPClient resolves-then-dials past blocked IPs and
 	// refuses redirects. Refusing the scheme again by name here costs one line
 	// and keeps that argument local to the request site (see fetchJSON).
 	if err := requireHTTPScheme(serverURL); err != nil {
-		return ""
+		return "", err
 	}
 	var rd io.Reader
 	if body != "" {
@@ -346,7 +380,7 @@ func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, 
 	}
 	req, err := http.NewRequestWithContext(ctx, method, serverURL, rd)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if body != "" {
@@ -354,20 +388,19 @@ func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, 
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMetadataBytes))
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if sid := strings.TrimSpace(resp.Header.Get(mcpSessionHeader)); sid != "" && body != "" {
 			terminateProbeSession(ctx, httpClient, serverURL, sid)
 		}
-		return ""
+		return "", nil
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
-		return ""
+		return "", nil
 	}
-	return parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate"))
+	return parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate")), nil
 }
 
 // terminateProbeSession sends the Streamable HTTP session-termination DELETE
@@ -384,8 +417,7 @@ func terminateProbeSession(ctx context.Context, httpClient *http.Client, serverU
 	if err != nil {
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMetadataBytes))
+	_ = resp.Body.Close() // status is all that matters, and only for the log line it does not get
 }
 
 // parseResourceMetadataURL pulls the resource_metadata parameter (RFC 9728

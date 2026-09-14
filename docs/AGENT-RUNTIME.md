@@ -560,10 +560,12 @@ How the invariants hold:
   backwards-compatibility rule applies: the server's own origin is the
   authorization server, its RFC 8414 / OIDC document is fetched there, and the
   typed URL is the resource (`Discovered.LegacyOrigin`). A location the server
-  itself advertised on the 401 and then could not serve, or a well-known
-  location that answered 5xx, timed out or returned malformed JSON, is an
-  error, never a fallback — that is a modern server failing, not a legacy
-  one. The
+  itself advertised on the 401 and then could not serve, a well-known
+  location that answered 5xx, timed out or returned malformed JSON, a probe
+  that got no answer at all, or a document missing RFC 9728's required
+  `resource`, is an error, never a fallback — that is a modern server failing
+  or misbehaving, not a legacy one. The probe reads only status and headers,
+  so an event stream a server holds open is closed, not drained. The
   probe's `initialize` announces the same protocol revision as fleet's real
   transport (pinned by a test), and a session it happens to open is
   terminated before discovery moves on.
