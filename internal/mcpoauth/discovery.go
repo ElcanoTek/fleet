@@ -830,6 +830,18 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 		// The one document a scoped URL may be confirmed by is its own
 		// ORIGIN-level one — the measured Chargebee shape, where the origin
 		// answers every path with the document whose issuer IS the origin.
+		// The origin fallback is the PATH-scoped Chargebee shape and nothing
+		// else. authServerMetadataCandidates keeps only scheme, host and path,
+		// so a query-, fragment- or userinfo-scoped URL has its scoping
+		// dropped before any fetch happens: the mismatched document and the
+		// claimed issuer's own metadata then come from the SAME origin-level
+		// well-known location, and the origin's document self-confirms. That
+		// is not an origin vouching for a tenant, it is the tenant silently
+		// disappearing and being replaced by the unscoped issuer — so those
+		// shapes get no fallback at all.
+		if fu.RawQuery != "" || fu.ForceQuery || fu.Fragment != "" || fu.User != nil {
+			return nil, fmt.Errorf("authorization server %s is scoped by something the well-known lookup drops (query, fragment or userinfo), so no document can confirm another issuer for it; this one claims %s", redactURLUserinfo(fetchedFrom), claimed)
+		}
 		if !sameIssuerIdentity(claimed, normalizedOrigin(fu)) {
 			return nil, fmt.Errorf("authorization server %s is scoped to one tenant, so only its own origin may vouch for a document naming another issuer; this one claims %s", redactURLUserinfo(fetchedFrom), claimed)
 		}
@@ -868,7 +880,10 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 		if bareOrigin && sameEndpointOrigin(ep.copy, fetchedFrom) {
 			continue
 		}
-		reason := fmt.Sprintf("the claimed issuer's own metadata says %q", ep.own)
+		// ep.own is redacted too: verifyAuthServer checks the issuer and PKCE,
+		// not endpoint userinfo, so the claimed issuer's OWN document can carry
+		// a credential into this message just as the copy can.
+		reason := fmt.Sprintf("the claimed issuer's own metadata says %q", redactURLUserinfo(ep.own))
 		if own == nil {
 			reason = fmt.Sprintf("the claimed issuer publishes no metadata (%v)", ownErr)
 		}

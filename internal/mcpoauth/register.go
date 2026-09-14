@@ -18,11 +18,38 @@ import (
 // token. A returned client_secret and the RFC 7592 registration_access_token are
 // secrets and are encrypted at rest by the caller.
 type ClientRegistration struct {
-	ClientID                string `json:"client_id"`
-	ClientSecret            string `json:"client_secret"`
-	ClientSecretExpiresAt   int64  `json:"client_secret_expires_at"`
+	ClientID              string `json:"client_id"`
+	ClientSecret          string `json:"client_secret"`
+	ClientSecretExpiresAt int64  `json:"client_secret_expires_at"`
+	// TokenEndpointAuthMethod is the method the server says this client
+	// ACTUALLY has, which RFC 7591 §3.2.1 lets it substitute for the one we
+	// asked for. It is narrower and more authoritative than the authorization
+	// server's advertised list: a server may advertise both client_secret_basic
+	// and client_secret_post and still register this client as post-only, and
+	// picking Basic off the advertised list would then 401 every exchange and
+	// revocation. Empty when the server does not echo it.
+	TokenEndpointAuthMethod string `json:"token_endpoint_auth_method"`
 	RegistrationAccessToken string `json:"registration_access_token"`
 	RegistrationClientURI   string `json:"registration_client_uri"`
+}
+
+// EffectiveAuthMethods is the token-endpoint authentication method list to
+// store for a dynamically registered client: the single method the server
+// echoed back, when it named a confidential one, else the authorization
+// server's advertised list.
+//
+// A "none" echo does NOT narrow the list. fleet asks to be a public client
+// first, and of the servers measured in the #1006 audit one echoed "none" and
+// returned a client_secret anyway; storing "none" there would drop the secret
+// out of the token request. The advertised list is the better guide in that
+// case, and PublicClientAllowed already decides separately whether a
+// secretless client is permitted at all.
+func (r *ClientRegistration) EffectiveAuthMethods(advertised []string) []string {
+	m := strings.TrimSpace(r.TokenEndpointAuthMethod)
+	if strings.EqualFold(m, "client_secret_basic") || strings.EqualFold(m, "client_secret_post") {
+		return []string{strings.ToLower(m)}
+	}
+	return advertised
 }
 
 // clientRegistrationRequest is the RFC 7591 registration payload. We register a

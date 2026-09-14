@@ -514,8 +514,11 @@ func TestConfirmProxiedIssuerRefusesQueryScopedSameOriginLeg(t *testing.T) {
 		TokenEndpoint:                 "https://as.vendor.example/tenantB/token",
 		CodeChallengeMethodsSupported: []string{"S256"},
 	}
-	if _, err := confirmProxiedIssuer(fetchedFrom, &doc, resolveOwn); err == nil || !strings.Contains(err.Error(), "scoped to one tenant") {
-		t.Fatalf("confirmProxiedIssuer = %v, want the same-origin leg shut for a query-scoped tenant", err)
+	// Refused outright: a query-scoped authorization server loses its scoping
+	// in the well-known lookup, so no document can confirm another issuer for
+	// it at all — a stronger refusal than merely closing the same-origin leg.
+	if _, err := confirmProxiedIssuer(fetchedFrom, &doc, resolveOwn); err == nil || !strings.Contains(err.Error(), "the well-known lookup drops") {
+		t.Fatalf("confirmProxiedIssuer = %v, want a query-scoped tenant refused", err)
 	}
 }
 
@@ -853,6 +856,73 @@ func TestConfirmProxiedIssuerRedactsUserinfoInErrors(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Errorf("endpoint refusal leaked the credential: %v", err)
+	}
+}
+
+// TestConfirmProxiedIssuerRedactsIssuerOwnEndpointInErrors: verifyAuthServer
+// checks the issuer and PKCE, not endpoint userinfo, so the claimed issuer's
+// OWN document can carry a credential — and the "the claimed issuer's own
+// metadata says %q" branch names that endpoint in an operator-facing error.
+func TestConfirmProxiedIssuerRedactsIssuerOwnEndpointInErrors(t *testing.T) {
+	const secret = "issuers0wnsecret"
+	issMux := http.NewServeMux()
+	iss := httptest.NewServer(issMux)
+	t.Cleanup(iss.Close)
+	ownDoc := AuthServerMetadata{
+		Issuer:                        iss.URL,
+		AuthorizationEndpoint:         iss.URL + "/authorize",
+		TokenEndpoint:                 "https://user:" + secret + "@" + strings.TrimPrefix(iss.URL, "http://") + "/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	issMux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(ownDoc) })
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		return fetchAuthServerMetadataOpts(context.Background(), iss.Client(), claimed, false)
+	}
+	// The copy names a DIFFERENT token endpoint, so the mismatch branch runs
+	// and formats the issuer's own (credential-bearing) endpoint.
+	copyDoc := ownDoc
+	copyDoc.TokenEndpoint = "https://elsewhere.example/token"
+	_, err := confirmProxiedIssuer("https://mcp.vendor.example", &copyDoc, resolveOwn)
+	if err == nil {
+		t.Fatal("a foreign token endpoint was accepted")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("the mismatch error leaked the issuer's own credential: %v", err)
+	}
+}
+
+// TestConfirmProxiedIssuerRefusesQueryScopedOriginFallback: the origin fallback
+// is the PATH-scoped Chargebee shape. For a query-scoped authorization server
+// the well-known lookup drops the query, so the mismatched document and the
+// claimed issuer's own metadata come from the SAME origin-level location and
+// the origin document self-confirms — which is not an origin vouching for a
+// tenant, it is the tenant being silently replaced by the unscoped issuer.
+func TestConfirmProxiedIssuerRefusesQueryScopedOriginFallback(t *testing.T) {
+	originDoc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example",
+		AuthorizationEndpoint:         "https://as.vendor.example/authorize",
+		TokenEndpoint:                 "https://as.vendor.example/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		if strings.TrimRight(claimed, "/") == originDoc.Issuer {
+			doc := originDoc
+			return &doc, nil
+		}
+		return nil, errors.New("no metadata")
+	}
+	for _, scoped := range []string{
+		"https://as.vendor.example?tenant=A",
+		"https://as.vendor.example?",
+		"https://as.vendor.example/#tenantA",
+	} {
+		if _, err := confirmProxiedIssuer(scoped, &originDoc, resolveOwn); err == nil {
+			t.Errorf("confirmProxiedIssuer(%q) accepted the unscoped origin in place of the tenant", scoped)
+		}
+	}
+	// The path-scoped shape the fallback exists for is untouched.
+	if _, err := confirmProxiedIssuer("https://as.vendor.example/tenantA", &originDoc, resolveOwn); err != nil {
+		t.Errorf("path-scoped Chargebee shape = %v, want it still accepted", err)
 	}
 }
 
@@ -1648,6 +1718,71 @@ func TestRegisterDoesNotRetryWithoutCause(t *testing.T) {
 	calls = 0
 	if _, err := Register(context.Background(), srv2.Client(), srv2.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"none", "private_key_jwt"}); err == nil || calls != 1 {
 		t.Fatalf("no confidential method listed: err=%v calls=%d, want one call and the refusal", err, calls)
+	}
+}
+
+// TestRegistrationEffectiveAuthMethodWins: RFC 7591 §3.2.1 lets the server
+// substitute the client metadata it actually granted. A server advertising
+// both Basic and Post may still register this client as post-only, and
+// basicAuthAllowed picks Basic off the advertised list — so every exchange and
+// revocation would authenticate the wrong way and 401.
+func TestRegistrationEffectiveAuthMethodWins(t *testing.T) {
+	advertised := []string{"client_secret_basic", "client_secret_post"}
+	post := &ClientRegistration{ClientID: "c1", ClientSecret: "s", TokenEndpointAuthMethod: "client_secret_post"}
+	if got := post.EffectiveAuthMethods(advertised); len(got) != 1 || got[0] != "client_secret_post" {
+		t.Errorf("effective = %v, want the granted client_secret_post alone", got)
+	}
+	if basicAuthAllowed(post.EffectiveAuthMethods(advertised)) {
+		t.Error("a post-only registered client would still authenticate with Basic")
+	}
+	basic := &ClientRegistration{ClientID: "c1", ClientSecret: "s", TokenEndpointAuthMethod: "CLIENT_SECRET_BASIC"}
+	if got := basic.EffectiveAuthMethods(advertised); len(got) != 1 || got[0] != "client_secret_basic" {
+		t.Errorf("effective = %v, want the granted method lowercased", got)
+	}
+	// A "none" echo must NOT narrow the list: fleet asks to be public first,
+	// and a server measured in the #1006 audit echoed "none" while returning a
+	// client_secret anyway — storing "none" would drop that secret from the
+	// token request.
+	none := &ClientRegistration{ClientID: "c1", ClientSecret: "s", TokenEndpointAuthMethod: "none"}
+	if got := none.EffectiveAuthMethods(advertised); len(got) != 2 {
+		t.Errorf("effective = %v, want the advertised list kept for a \"none\" echo", got)
+	}
+	// An absent field keeps the advertised list too.
+	silent := &ClientRegistration{ClientID: "c1", ClientSecret: "s"}
+	if got := silent.EffectiveAuthMethods(advertised); len(got) != 2 {
+		t.Errorf("effective = %v, want the advertised list when the server does not echo", got)
+	}
+}
+
+// TestRegisterCapturesEffectiveAuthMethod: the field has to survive decoding
+// of a real registration response, not just exist on the struct.
+func TestRegisterCapturesEffectiveAuthMethod(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req clientRegistrationRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.TokenEndpointAuthMethod == "none" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_client_metadata"})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		// Asked for Basic (first in fleet's preference); granted Post.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"client_id": "c1", "client_secret": "s3cr3t",
+			"token_endpoint_auth_method": "client_secret_post",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	advertised := []string{"client_secret_basic", "client_secret_post"}
+	reg, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", advertised)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if reg.TokenEndpointAuthMethod != "client_secret_post" {
+		t.Fatalf("TokenEndpointAuthMethod = %q, want the granted method", reg.TokenEndpointAuthMethod)
+	}
+	if basicAuthAllowed(reg.EffectiveAuthMethods(advertised)) {
+		t.Error("the stored methods would still select Basic for a post-only client")
 	}
 }
 

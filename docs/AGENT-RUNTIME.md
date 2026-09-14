@@ -595,7 +595,11 @@ How the invariants hold:
   chose to send. An authorization server scoped to one tenant — by a path
   (`https://as.example.com/tenantA`), a query, a fragment or userinfo — gets
   neither leg on another tenant's terms: the only document that may vouch for
-  it is its own ORIGIN-level one, the measured Chargebee shape. A sibling
+  it is its own ORIGIN-level one, the measured Chargebee shape — and only for
+  a PATH-scoped one: the well-known lookup keeps just scheme, host and path, so
+  a query-, fragment- or userinfo-scoped server would have its scoping dropped
+  before any fetch, let an origin document self-confirm, and be silently
+  replaced by the unscoped issuer; those get no fallback at all. A sibling
   tenant is self-consistent too, and accepting it would send the user through
   the wrong tenant's authorization endpoint. "Scoped" is read off the
   **escaped** path, so an issuer path of `/%2F` — which `url.Parse` decodes to
@@ -629,8 +633,14 @@ How the invariants hold:
   that, the same default the token endpoint already applies. The retry must
   come back with a `client_secret`: a confidential registration without one
   cannot authenticate at the token endpoint, so it is refused at add time
-  rather than after a consent screen. The secret comes back encrypted at rest
-  like any other.
+  rather than after a consent screen. RFC 7591 §3.2.1 also lets the server
+  substitute the metadata it granted, so when the response names an effective
+  `token_endpoint_auth_method` that is what fleet stores for the client — a
+  server advertising both Basic and Post may register this client as post-only,
+  and choosing Basic off the advertised list would 401 every exchange and
+  revocation. A `none` echo does not narrow it, since fleet asks to be public
+  first and a server may echo `none` while returning a secret anyway. The
+  secret comes back encrypted at rest like any other.
 - **Auth0 is asked for `offline_access`, like Entra.** An Auth0 tenant
   (recognized by its proprietary `mfa_challenge_endpoint`, or an
   `*.auth0.com` issuer) issues a refresh token only for that scope, which the
