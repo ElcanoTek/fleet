@@ -988,6 +988,73 @@ func TestConfirmProxiedIssuerRevalidatesTheConfirmingDocument(t *testing.T) {
 	}
 }
 
+// TestNormalizedOriginParsesPortsNumerically: url.URL.Port() preserves the
+// spelling, and Go resolves "0443" to 443 when it dials — so comparing the
+// port as a string made https://as.example:0443 a different identity from
+// https://as.example while both reach the same endpoint, and valid proxied
+// discovery failed on the difference.
+func TestNormalizedOriginParsesPortsNumerically(t *testing.T) {
+	same := [][2]string{
+		{"https://as.example/token", "https://as.example:0443/token"},
+		{"http://as.example/token", "http://as.example:080/token"},
+		{"https://as.example:8443/token", "https://as.example:08443/token"},
+	}
+	for _, p := range same {
+		if !sameEndpointURL(p[0], p[1]) {
+			t.Errorf("sameEndpointURL(%q, %q) = false, want one endpoint", p[0], p[1])
+		}
+	}
+	// A genuinely different port is still different.
+	if sameEndpointURL("https://as.example:8443/token", "https://as.example:8444/token") {
+		t.Error("distinct ports compared equal")
+	}
+	// The same rule reaches CanonicalResourceURI, which is the DB key and the
+	// encryption AAD: two spellings of one server must not become two
+	// identities, and the canonical form must stay a fixed point.
+	a, aerr := CanonicalResourceURI("https://mcp.example.com:0443/mcp")
+	b, berr := CanonicalResourceURI("https://mcp.example.com/mcp")
+	if aerr != nil || berr != nil {
+		t.Fatalf("canonicalize: %v / %v", aerr, berr)
+	}
+	if a != b {
+		t.Errorf("canonical %q != %q — one server, two identities", a, b)
+	}
+	if again, err := CanonicalResourceURI(a); err != nil || again != a {
+		t.Errorf("canonical form %q is not a fixed point: %q, %v", a, again, err)
+	}
+}
+
+// TestConfirmProxiedIssuerRedactsNestedFetchErrors: the errors a metadata fetch
+// produces quote the locations they tried and the issuer a document claimed,
+// and confirmProxiedIssuer interpolates that whole error into an
+// operator-facing failure. Redacting the URL fields one at a time cannot reach
+// inside a wrapped error's text, so the message itself is swept.
+func TestConfirmProxiedIssuerRedactsNestedFetchErrors(t *testing.T) {
+	const secret = "nesteds3cret"
+	resolveOwn := func(string) (*AuthServerMetadata, error) {
+		// The shape fetchAuthServerMetadataOpts produces when a document names
+		// a credential-bearing issuer.
+		return nil, errors.New(`authorization-server metadata at https://issuer.example/.well-known/oauth-authorization-server: ` +
+			`authorization-server issuer mismatch: metadata says "https://user:` + secret + `@issuer.example"`)
+	}
+	doc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example",
+		AuthorizationEndpoint:         "https://elsewhere.example/authorize",
+		TokenEndpoint:                 "https://elsewhere.example/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	_, err := confirmProxiedIssuer("https://mcp.vendor.example", &doc, resolveOwn)
+	if err == nil {
+		t.Fatal("a foreign endpoint was accepted")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("the nested fetch error leaked the credential: %v", err)
+	}
+	if !strings.Contains(err.Error(), "redacted@issuer.example") {
+		t.Errorf("expected a redacted URL in %v", err)
+	}
+}
+
 // TestConfirmProxiedIssuerRequiresAClaimedHostname: "https://:443" parses with
 // a NON-empty Host of ":443" and no hostname at all, so a Host check admits it
 // and the canonical rebuild renders it "https://" — a hostless issuer the

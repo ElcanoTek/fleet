@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -955,7 +956,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 		// a credential into this message just as the copy can.
 		reason := fmt.Sprintf("the claimed issuer's own metadata says %q", redactURLUserinfo(ep.own))
 		if own == nil {
-			reason = fmt.Sprintf("the claimed issuer publishes no metadata (%v)", ownErr)
+			reason = fmt.Sprintf("the claimed issuer publishes no metadata (%s)", redactErrorUserinfo(ownErr))
 		}
 		where := "on " + redactURLUserinfo(fetchedFrom)
 		if !bareOrigin {
@@ -1096,10 +1097,7 @@ func sameIssuerIdentity(a, b string) bool {
 func normalizedOrigin(u *url.URL) string {
 	scheme := strings.ToLower(u.Scheme)
 	host := strings.ToLower(u.Hostname())
-	port := u.Port()
-	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
-		port = ""
-	}
+	port := canonicalPort(scheme, u.Port())
 	// Hostname() strips the brackets from an IPv6 literal, so putting the port
 	// back with a bare colon would make https://[2001:db8::1]:8443 and
 	// https://[2001:db8::1:8443] — different network endpoints — normalize to
@@ -1158,6 +1156,22 @@ func scopedToOneTenant(u *url.URL) bool {
 	// while Go still puts the delimiter on the wire, so it is a distinct request
 	// target and candidate construction drops it, exactly like a query.
 	return (path != "" && path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil
+}
+
+// urlUserinfoRe matches the "user:password@" of any URL inside a larger string.
+var urlUserinfoRe = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^\s/@]*@`)
+
+// redactErrorUserinfo redacts credentials from an error's MESSAGE. The nested
+// errors a metadata fetch produces quote both the locations they tried and the
+// issuer a document claimed, either of which can carry userinfo, and those
+// errors are interpolated into operator-facing discovery failures. Redacting
+// the URL fields one by one cannot reach inside a wrapped error's text, so the
+// whole message is swept.
+func redactErrorUserinfo(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return urlUserinfoRe.ReplaceAllString(err.Error(), "${1}redacted@")
 }
 
 // endpointCarriesUserinfo reports whether an endpoint URL embeds userinfo
