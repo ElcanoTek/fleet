@@ -345,6 +345,12 @@ export function TasksTable({
                     aria-label={`View task ${task.id.slice(0, 8)}`}
                     onClick={() => onOpenLogs(task)}
                     onKeyDown={(e) => {
+                      // Only open logs when the row itself is focused, not when
+                      // an event bubbles from a nested control (such as a tag
+                      // chip or action button). Otherwise pressing Enter/Space
+                      // on a focused chip opens the log viewer and preventDefault
+                      // blocks the chip's native activation click.
+                      if (e.target !== e.currentTarget) return;
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         onOpenLogs(task);

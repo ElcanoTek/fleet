@@ -43,9 +43,13 @@ Cross-cutting checks, all live:
   with a notice; a pin to a server the owner never connected dead-letters the
   task before any model spend.
 - **Sharing**: a second rig user given one Notion seat sees only that seat, can
-  call its tools from chat and from a scheduled task, cannot manage it (every
-  owner action answers 404), and loses it the moment the owner revokes; the
-  owner's token row is never touched by the grantee's use.
+  call its tools from chat and from a scheduled task, and cannot manage it
+  (every owner action answers 404); revocation takes effect on the grantee's
+  next turn / next scheduled run (access is checked at mount time in
+  `ConnectedServersForUser`, so a run already holding the mount finishes);
+  grantees cannot see or manage the credential, but a grantee's run can trigger
+  the broker-managed refresh of the owner's token row (and a 401 at mount sends
+  the owner's row to `needs_reauth`).
 - **Headless refresh**: expired GitHub, Google Drive, Notion and Azure DevOps
   tokens were refreshed by scheduled runs with no browser.
 - **Deferred mode** (more than 128 tools): tool calls through
@@ -99,7 +103,7 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 
 ## Appendix — every official OAuth, tenant and open entry, probed 2026-09-14
 
-Probe = fleet's `mcpoauth.Discover` plus the add-time guards, run against the catalog as of #1495 with the code in `main` plus #1488. "discovery ✓" means Connect would reach the vendor's consent screen; it says nothing about tool calls. A tenant entry whose hostname carries a `{placeholder}` cannot be probed without a customer's value. Counts — discovery ✓: 177 · tenant: 31 · open ✓: 12 · discovery ✗: 7 · open: 3 · not probeable from the audit box: 1.
+Probe = fleet's `mcpoauth.Discover` plus the add-time guards, run against the catalog as of #1495 with the code in `main` plus #1488. "discovery ✓" means Connect would reach the vendor's consent screen; it says nothing about tool calls. A tenant entry whose hostname carries a `{placeholder}` cannot be probed without a customer's value; tenant hostnames in the table (e.g. `<tenant>`) are placeholders for the probe tenant. Counts — discovery ✓: 177 · tenant: 31 · open ✓: 12 · discovery ✗: 7 · open: 3 · not probeable from the audit box: 1.
 
 | entry | auth | probe verdict | client shape | issuer | notes |
 |---|---|---|---|---|---|
@@ -301,7 +305,7 @@ Probe = fleet's `mcpoauth.Discover` plus the add-time guards, run against the ca
 | snowflake | tenant | tenant — not probeable without a real tenant value | — |  |  |
 | socket | oauth | discovery ✓ | self-registering, public client ok | https://api.socket.dev |  |
 | sourcegraph | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| spacelift | tenant | discovery ✓ | self-registering, public client ok | https://fleet-probe.app.spacelift.io |  |
+| spacelift | tenant | discovery ✓ | self-registering, public client ok | https://<tenant>.app.spacelift.io |  |
 | sprout-social | oauth | discovery ✓ | self-registering, secret | https://identity.sproutsocial.com/oauth2/84e39c75-d770-45d9- | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
 | square | oauth | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) | — |  |  |
 | stainless | tenant | tenant — not probeable without a real tenant value | — |  |  |

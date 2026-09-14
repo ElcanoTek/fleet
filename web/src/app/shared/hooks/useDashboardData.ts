@@ -115,6 +115,26 @@ export function useDashboardData(active: boolean): UseDashboardData {
   // Monotonic id stamped on each reload so a superseded (slower, older) reload
   // cannot overwrite newer state — see reload().
   const runIdRef = useRef(0);
+  // Monotonic generation counter for tag catalogue requests. Incremented on
+  // each fetch start and on deactivation/unmount so in-flight requests cannot
+  // overwrite newer state across activations or reload-triggered retries.
+  const catalogueGenRef = useRef(0);
+
+  // Invalidate any in-flight catalogue request whenever the hook deactivates
+  // or unmounts, and reset catalogueFetchedAt so that reactivating begins with
+  // a fresh fetch rather than waiting out the remainder of the TTL.
+  useEffect(() => {
+    const genRef = catalogueGenRef;
+    const fetchedAtRef = catalogueFetchedAt;
+    if (!active) {
+      genRef.current++;
+      fetchedAtRef.current = 0;
+    }
+    return () => {
+      genRef.current++;
+      fetchedAtRef.current = 0;
+    };
+  }, [active]);
 
   // reload depends on the current filters/page/size, so it changes when they
   // do. The effects below re-run on that identity change, which is exactly the
@@ -201,17 +221,25 @@ export function useDashboardData(active: boolean): UseDashboardData {
   // when somebody retags something. The TTL bounds both: one query per five
   // minutes per open dashboard, and a new tag is offered within five minutes
   // of being created — sooner if a task carrying it appears (see tagOptions).
+  //
+  // Freshness is checked on [active, refreshNonce], but in-flight request
+  // supersession is governed by catalogueGenRef: a reload mid-flight does not
+  // increment the generation, so the response is applied when it resolves.
+  // When a response arrives with a mismatched generation, it is simply
+  // discarded: either a newer request already owns the current stamp, or the
+  // [active] effect already zeroed it on deactivation.
   useEffect(() => {
     if (!active) return;
     if (Date.now() - catalogueFetchedAt.current < TAG_CATALOGUE_TTL_MS) return;
     // Stamped before the request, not after: two reloads landing while one is
     // in flight must not each start their own.
     catalogueFetchedAt.current = Date.now();
-    let cancelled = false;
+    const gen = ++catalogueGenRef.current;
     orchestratorApi
       .tagCatalogue()
       .then((rows) => {
-        if (!cancelled) setTagCatalogue(rows.map((r) => r.tag));
+        if (gen !== catalogueGenRef.current) return;
+        setTagCatalogue(rows.map((r) => r.tag));
       })
       // A missing catalogue costs the filter its suggestions, nothing more:
       // tagOptions still offers the tags on screen, and a tag already applied
@@ -219,9 +247,6 @@ export function useDashboardData(active: boolean): UseDashboardData {
       // The stamp stands, so a failing endpoint is retried on the TTL rather
       // than on every reload.
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
   }, [active, refreshNonce]);
 
   // What the tag filter offers: the catalogue, plus any tag on a task

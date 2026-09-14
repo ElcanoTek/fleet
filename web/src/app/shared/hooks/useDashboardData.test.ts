@@ -292,4 +292,107 @@ describe("useDashboardData tag catalogue freshness", () => {
 
     now.mockRestore();
   });
+
+  it("does not discard an in-flight catalogue response when reload bumps the nonce before it resolves", async () => {
+    statsMock.mockResolvedValue({});
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+
+    const catDeferred = deferred();
+    tagCatalogueMock.mockReturnValue(catDeferred.promise);
+
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(1));
+
+    // Trigger a reload before the catalogue request resolves.
+    await act(async () => {
+      await result.current.reload();
+    });
+
+    // Resolve the delayed catalogue response.
+    await act(async () => {
+      catDeferred.resolve([{ tag: "ops", task_count: 1 }]);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.tagOptions).toContain("ops"));
+    expect(tagCatalogueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards an older fetch that resolves after a newer fetch across deactivation", async () => {
+    statsMock.mockResolvedValue({});
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+
+    const now = vi.spyOn(Date, "now");
+    let clock = 1_000_000;
+    now.mockImplementation(() => clock);
+
+    const dA = deferred();
+    const dB = deferred();
+    tagCatalogueMock.mockReturnValueOnce(dA.promise).mockReturnValueOnce(dB.promise);
+
+    // 1. Activate: starts fetch A
+    const { result, rerender } = renderHook(({ active }) => useDashboardData(active), {
+      initialProps: { active: true },
+    });
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(1));
+
+    // 2. Deactivate with A unresolved
+    rerender({ active: false });
+
+    // 3. Advance past TAG_CATALOGUE_TTL_MS (5 min)
+    clock += 6 * 60_000;
+
+    // 4. Reactivate: fetch B starts
+    rerender({ active: true });
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(2));
+
+    // 5. Resolve B with ["b"] first
+    await act(async () => {
+      dB.resolve([{ tag: "b", task_count: 1 }]);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.tagOptions).toEqual(["b"]));
+
+    // 6. Resolve A with ["a"] later — must be discarded as stale
+    await act(async () => {
+      dA.resolve([{ tag: "a", task_count: 1 }]);
+      await Promise.resolve();
+    });
+
+    // Tag options remains ["b"], not overwritten with ["a"]
+    expect(result.current.tagOptions).toEqual(["b"]);
+
+    now.mockRestore();
+  });
+
+  it("invalidates catalogue freshness on deactivation so reactivating before the TTL elapses refetches", async () => {
+    statsMock.mockResolvedValue({});
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+
+    const now = vi.spyOn(Date, "now");
+    let clock = 1_000_000;
+    now.mockImplementation(() => clock);
+
+    const dA = deferred();
+    const dB = deferred();
+    tagCatalogueMock.mockReturnValueOnce(dA.promise).mockReturnValueOnce(dB.promise);
+
+    // 1. Activate: starts fetch A
+    const { rerender } = renderHook(({ active }) => useDashboardData(active), {
+      initialProps: { active: true },
+    });
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(1));
+
+    // 2. Deactivate with A unresolved
+    rerender({ active: false });
+
+    // 3. Advance clock by only 10s (well before 5-minute TTL)
+    clock += 10_000;
+
+    // 4. Reactivate before TTL: freshness was invalidated, so a new fetch B starts
+    rerender({ active: true });
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(2));
+
+    now.mockRestore();
+  });
 });

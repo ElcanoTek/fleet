@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { TasksTable, type TasksTableProps } from "./TasksTable";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
@@ -545,6 +546,35 @@ describe("TasksTable tags", () => {
     renderTags({ onOpenLogs });
     fireEvent.click(screen.getAllByLabelText("Filter by tag ops")[0]);
     expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("does not open the log viewer when Enter or Space is pressed on a focused tag chip, and toggles the filter", async () => {
+    // The desktop row has an onKeyDown that opens logs on Enter/Space. A focused
+    // tag chip's keydown must not bubble to the row's handler; otherwise the
+    // row opens the log viewer and e.preventDefault() blocks the chip's native
+    // activation click.
+    const user = userEvent.setup();
+    const onOpenLogs = vi.fn();
+    const onFilters = renderTags({ onOpenLogs });
+
+    const [chip] = screen.getAllByLabelText("Filter by tag ops");
+    chip.focus();
+
+    await user.keyboard("{Enter}");
+    expect(onOpenLogs).not.toHaveBeenCalled();
+    expect(onFilters).toHaveBeenCalledWith({ tags: ["ops"] });
+
+    onFilters.mockClear();
+
+    await user.keyboard(" ");
+    expect(onOpenLogs).not.toHaveBeenCalled();
+    expect(onFilters).toHaveBeenCalledWith({ tags: ["ops"] });
+
+    // Pressing Enter on the row itself still opens logs.
+    const [row] = screen.getAllByRole("button", { name: /^View task / });
+    row.focus();
+    await user.keyboard("{Enter}");
+    expect(onOpenLogs).toHaveBeenCalledWith(tagged);
   });
 
   it("adds to the selection rather than replacing it — tags AND together", () => {
