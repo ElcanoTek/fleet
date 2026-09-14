@@ -367,6 +367,34 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    the property instead (peak in-flight count, the group is empty, the frame
    sequence) and log the elapsed time for information.
 
+   **Do not *manufacture* a condition with a sleep either — use a barrier.**
+   The mirror image of the rule above, and the subtler one: a test that needs a
+   slow dependency in order to provoke some behaviour must not get it by
+   sleeping and hoping the producer wins the race.
+   `TestPersister_BackfillHealsDropsUnderLatency` (now
+   `…UnderBackpressure`, renamed because the mechanism is the point) stalled
+   every `InsertTurnEvents` for 40ms so the bounded `persistCh` would saturate
+   and the live path would drop events. That is two clocks racing, and on a loaded
+   runner it lost: the `-race` lane went red on a PR whose diff touched no Go
+   code at all, while the same commit passed the non-race lane and passed
+   locally. That asymmetry is the tell — such a test is green on an idle box
+   and only fails where it costs you a CI cycle, so it cannot be dismissed as
+   "just a flake" and cannot be reproduced on demand either. Block instead —
+   the fake persister now parks every insert on a channel the test closes when
+   it is ready — and the condition becomes structural rather than
+   probabilistic: while a flush is parked the persister can absorb at most
+   `flushBatchSize + persistChanDepth` events, so emitting more than that sum
+   overflows at any speed. Deleting the sleeps also took the test from ~1.1s to
+   ~0.3s; a barrier is not just steadier than a sleep, it is faster, because it
+   waits exactly as long as it must.
+
+   Two habits make such a test honest. Name the capacities the guarantee rests
+   on (that is why those two constants are package-level rather than literals
+   at their use sites) so the margin is checkable instead of a magic number,
+   and **assert the precondition you engineered** — the test fails loudly if no
+   event was dropped, so it can never quietly decay into "persist 2000 events
+   happily" while still reporting PASS.
+
 5. **go test -race** — the race detector is the gate for fleet's in-process
    coordination (worker pool, SSE fan-out, single-owner DB leases, the admission
    semaphore). Same DSNs and tag, but a **sibling CI job** (`go-race`) so the

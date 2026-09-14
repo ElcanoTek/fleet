@@ -76,6 +76,12 @@ type turnBuffer struct {
 	// snapshot before sealing the turn, so a saturation/latency blip never
 	// leaves a permanent gap in the persisted ledger.
 	needsBackfill bool
+	// droppedOnFull counts the events Emit could not hand to the persister
+	// because persistCh was full. needsBackfill deliberately does NOT
+	// distinguish its two causes — it only has to answer "re-send the
+	// snapshot?" — so this isolates genuine backpressure from a failed batch
+	// insert. Written under mu on the same line that sets needsBackfill.
+	droppedOnFull int
 }
 
 // bufferedEvent is one already-serialized SSE frame. Data is the
@@ -128,12 +134,24 @@ func (b *turnBuffer) attachPersister(ctx context.Context, p eventSinkPersister) 
 	// the persisted ledger is healed rather than left with a permanent gap.
 	b.mu.Lock()
 	b.persister = p
-	b.persistCh = make(chan bufferedEvent, 512)
+	b.persistCh = make(chan bufferedEvent, persistChanDepth)
 	b.mu.Unlock()
 	b.persistWG.Add(1)
 	go b.runPersister()
 	return nil
 }
+
+// Persister sizing. These are named (rather than literals at their use sites)
+// because together they bound how much the persister can absorb while a flush
+// is in flight: at most flushBatchSize events held in the pending batch plus
+// persistChanDepth queued behind it. Emitting more than that sum while the
+// persister is stalled GUARANTEES the live path drops events, which is what
+// makes the backfill test deterministic instead of a race against a sleep.
+const (
+	persistChanDepth = 512
+	flushInterval    = 50 * time.Millisecond
+	flushBatchSize   = 64
+)
 
 // runPersister drains persistCh, batching writes every flushInterval
 // or flushBatchSize events (whichever comes first). Exits when
@@ -141,11 +159,6 @@ func (b *turnBuffer) attachPersister(ctx context.Context, p eventSinkPersister) 
 func (b *turnBuffer) runPersister() {
 	defer b.persistWG.Done()
 	defer safe.Recover("httpapi.turn_buffer.persister", nil)
-
-	const (
-		flushInterval  = 50 * time.Millisecond
-		flushBatchSize = 64
-	)
 
 	pending := make([]bufferedEvent, 0, flushBatchSize)
 	tick := time.NewTicker(flushInterval)
@@ -263,6 +276,7 @@ func (b *turnBuffer) Emit(event string, payload any) {
 		case b.persistCh <- ev:
 		default:
 			b.needsBackfill = true // already under b.mu
+			b.droppedOnFull++
 			log.Printf("persister channel full (turn=%s); event id=%d deferred to Finish backfill", b.turnID, ev.ID)
 		}
 	}
