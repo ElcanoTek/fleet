@@ -15,6 +15,7 @@ import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { Icon } from "@/app/shared/ui/Icon";
 import { OrchestratorLogin } from "./OrchestratorLogin";
 import { StatsGrid, type StatFilter } from "./StatsGrid";
+import { statFilterSelection } from "./statFilters";
 import { ServerClock } from "./ServerClock";
 import { TasksTable } from "./TasksTable";
 import { SleepingTasks } from "./SleepingTasks";
@@ -222,20 +223,9 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
       return;
     }
     setStatFilter(filter);
-    switch (filter) {
-      case "tasks-pending":
-        dashboard.setFilters({ status: "pending", completedToday: false, completedStatus: "" });
-        break;
-      case "tasks-running":
-        dashboard.setFilters({ status: "running", completedToday: false, completedStatus: "" });
-        break;
-      case "tasks-completed-today":
-        dashboard.setFilters({ status: "", completedToday: true, completedStatus: "success" });
-        break;
-      case "tasks-failed-today":
-        dashboard.setFilters({ status: "", completedToday: true, completedStatus: "error" });
-        break;
-    }
+    // The mapping lives in statFilters.ts so it can be tested: a counter and its
+    // own filter disagreeing is exactly the defect that shipped here once.
+    dashboard.setFilters(statFilterSelection(filter));
   };
 
   // Initial probe pending — keep the bare loading card (no rail yet).

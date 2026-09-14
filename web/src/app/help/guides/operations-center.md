@@ -29,18 +29,15 @@ once), **Active Agents**, **Pending Tasks**, **Running Tasks**, **Completed
 Today**, and **Failed Today**. Each of the four task counters is also a filter —
 click one to narrow the board.
 
-Two things about those numbers are worth knowing before you trust them.
+One thing about those numbers is worth knowing before you trust them: they
+count the **whole deployment**, while the board below shows only your own tasks
+unless you are an admin. So a non-zero counter can filter down to fewer rows
+than it promised, or to none — the difference is your colleagues' work, not a
+bug.
 
-They count the **whole deployment**, while the board below shows only your own
-tasks unless you are an admin. So a non-zero counter can filter down to fewer
-rows than it promised, or to none: the difference is your colleagues' work, not
-a bug.
-
-And **Failed Today counts only runs in `ERROR`** — it does not include
-`DEAD_LETTERED`, which, as [Run states](#4-run-states) explains, is where most
-failures actually end. A quiet-looking zero is therefore not proof of a clean
-day. Filter the board by status, or scan it for the red badge, before you
-conclude nothing went wrong.
+**Failed Today** counts a run that ended in either failure state, `ERROR` or
+`DEAD_LETTERED` (see [Run states](#4-run-states) for the difference), so a zero
+there really does mean nothing failed today.
 
 The clock in the corner shows **Server time** — the wall clock in the zone the
 deployment runs in, which is not necessarily your own and not necessarily UTC.

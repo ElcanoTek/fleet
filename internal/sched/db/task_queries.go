@@ -260,12 +260,23 @@ func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardSta
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, time.UTC)
 
+	// failed_today counts BOTH terminal failure statuses. Counting only `error`
+	// hid the majority of failures: handleRunFailure re-queues a retryable
+	// failure and dead-letters everything else — a deterministic failure on its
+	// first attempt, a retryable one once its budget is spent — so
+	// `dead_lettered` is where most failures actually come to rest, and `error`
+	// is the uncommon leftover for a failure the scheduler could not route.
+	// A dashboard that read zero on a day of quarantined work was telling an
+	// operator the opposite of the truth. Both stamp completed_at
+	// (DeadLetterTaskWithContext does so deliberately, "so the row reads as
+	// terminal everywhere a completed/errored task does"), so the same
+	// day-window predicate covers them.
 	err := db.conn.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE status = $1) as pending_tasks,
 			COUNT(*) FILTER (WHERE status IN ($2, $3)) as running_tasks,
 			COUNT(*) FILTER (WHERE status = $4 AND completed_at BETWEEN $5 AND $6) as completed_today,
-			COUNT(*) FILTER (WHERE status = $7 AND completed_at BETWEEN $5 AND $6) as failed_today
+			COUNT(*) FILTER (WHERE status IN ($7, $8) AND completed_at BETWEEN $5 AND $6) as failed_today
 		FROM tasks`,
 		string(models.TaskStatusPending),
 		string(models.TaskStatusRunning),
@@ -274,6 +285,7 @@ func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardSta
 		todayStart,
 		todayEnd,
 		string(models.TaskStatusError),
+		string(models.TaskStatusDeadLettered),
 	).Scan(&stats.PendingTasks, &stats.RunningTasks, &stats.CompletedTasksToday, &stats.FailedTasksToday)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get task stats: %w", err)
@@ -300,12 +312,17 @@ func (db *Database) GetAllTasksPaginated(ctx context.Context, limit, offset int)
 
 // TaskFilter contains optional filter parameters for task queries.
 type TaskFilter struct {
-	Status          *string
-	Query           *string
-	ScheduledOnly   bool
-	CompletedToday  bool
-	CompletedStatus *string
-	CreatedBy       *uuid.UUID
+	Status         *string
+	Query          *string
+	ScheduledOnly  bool
+	CompletedToday bool
+	// CompletedStatuses, when non-empty, restricts a completed_today query to
+	// these terminal statuses. It is a list rather than a single value because
+	// "failed today" is two statuses (error and dead_lettered) — see
+	// GetDashboardStats — and the card that filters the board must be able to
+	// show exactly the rows its counter counted.
+	CompletedStatuses []string
+	CreatedBy         *uuid.UUID
 	// HasDescription, when true, restricts to tasks carrying operator
 	// documentation (#281): a non-null, non-empty description.
 	HasDescription bool
@@ -381,9 +398,9 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 		whereClauses = append(whereClauses, fmt.Sprintf("completed_at BETWEEN $%d AND $%d", argIndex, argIndex+1))
 		args = append(args, todayStart, todayEnd)
 		argIndex += 2
-		if filter.CompletedStatus != nil && *filter.CompletedStatus != "" {
-			whereClauses = append(whereClauses, fmt.Sprintf("status = $%d", argIndex))
-			args = append(args, *filter.CompletedStatus)
+		if len(filter.CompletedStatuses) > 0 {
+			whereClauses = append(whereClauses, fmt.Sprintf("status = ANY($%d)", argIndex))
+			args = append(args, pqStringArray(filter.CompletedStatuses))
 			argIndex++
 		}
 	}
