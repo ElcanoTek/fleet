@@ -260,6 +260,7 @@ above fails otherwise.
 - [`SUBAGENTS.md`](SUBAGENTS.md) — Sub-agents: default-on, parent decides, typed children (#1043)
 - [`TASK-SCHEDULE-UX.md`](TASK-SCHEDULE-UX.md) — Create Task schedule controls
 - [`TASK-SERIALIZATION.md`](TASK-SERIALIZATION.md) — Task serialization — opaque `serialization_key` mutual exclusion (#709)
+- [`TASK-TAGS.md`](TASK-TAGS.md) — Task tags on the board — chips, the tag filter, and the catalogue TTL
 - [`TASK-TITLES.md`](TASK-TITLES.md) — Task titles
 - [`TEAM-SHARING.md`](TEAM-SHARING.md) — Sharing work inside a project — team-shared chats and team learnings
 - [`TESTING.md`](TESTING.md) — Testing fleet

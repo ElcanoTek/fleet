@@ -252,3 +252,44 @@ describe("useDashboardData tag filter", () => {
     expect(result.current.filters.tags).toEqual([]);
   });
 });
+
+// The catalogue used to be fetched once per activation. `active` stays true for
+// the whole signed-in session, so a tag created afterwards on a task that is
+// not on the current page never reached the dropdown until a full reload. The
+// fix is a TTL, not a fetch on every reload: the catalogue is a GROUP BY over
+// every task's tag array and paying for it every 30s buys nothing.
+describe("useDashboardData tag catalogue freshness", () => {
+  it("refetches on a reload once the catalogue is stale, and not before", async () => {
+    statsMock.mockResolvedValue({});
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+    tagCatalogueMock.mockResolvedValue([{ tag: "ops", task_count: 1 }]);
+
+    const now = vi.spyOn(Date, "now");
+    let clock = 1_000_000;
+    now.mockImplementation(() => clock);
+
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(1));
+
+    // A reload inside the TTL must not re-fetch it.
+    clock += 60_000;
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(tagCatalogueMock).toHaveBeenCalledTimes(1);
+
+    // Past the TTL, the next reload picks up the new tag.
+    clock += 5 * 60_000;
+    tagCatalogueMock.mockResolvedValue([
+      { tag: "ops", task_count: 1 },
+      { tag: "created-later", task_count: 1 },
+    ]);
+    await act(async () => {
+      await result.current.reload();
+    });
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.tagOptions).toContain("created-later"));
+
+    now.mockRestore();
+  });
+});
