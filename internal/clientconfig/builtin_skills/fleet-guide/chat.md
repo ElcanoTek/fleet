@@ -482,8 +482,8 @@ it is the whole of your prompt work in one file.
 > it on the task so the task picks up the new version. Editing instructions
 > inside a task instead creates a fork nobody else can see, and the library copy
 > quietly stops being true. The task's other settings — its schedule, its
-> recipients, the connectors it may use — are not part of the prompt and are not
-> disturbed by re-selecting one.
+> recipients, the connectors it may use — are fields of their own on the task
+> form, and inserting a prompt there does not disturb them.
 
 ## 10. From chat to a task
 

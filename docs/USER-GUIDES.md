@@ -138,6 +138,13 @@ produced a task that ran correctly and emailed its report to nobody, with no
 warning and nothing in the diff a reviewer would catch.
 
 The guides shipped with a warning; the fix followed in its own PR.
+
+The preservation is a property of the **task form**, not of storage, and the
+guides say so: recipients still live in the prompt, so a client that replaces a
+task's prompt through the API replaces the delivery instruction with it. Moving
+them to a column would make the guarantee unconditional, but it is a schema and
+runner change that would have to migrate every existing task's embedded block —
+out of proportion to the defect, and a separate decision.
 `taskEmailBlock.ts` now round-trips the block — built on the way out, split off
 on the way in — so recipients live in the form's own field and replacing the
 prompt cannot touch them. Parsing is deliberately conservative: a block is only
