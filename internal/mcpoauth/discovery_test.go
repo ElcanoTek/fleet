@@ -518,6 +518,94 @@ func TestConfirmProxiedIssuerRefusesQueryScopedSameOriginLeg(t *testing.T) {
 	}
 }
 
+// TestConfirmProxiedIssuerNormalizesOriginSpelling: the same-origin leg must
+// compare CANONICAL origins. A PRM that spells its authorization server with an
+// uppercase host or an explicit default port, against metadata using the plain
+// form, is the same origin — and raw scheme://host comparison would reject
+// every proxy endpoint and fail a legitimate ZoomInfo/OVHcloud-shaped document
+// that no other leg can accept.
+func TestConfirmProxiedIssuerNormalizesOriginSpelling(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	doc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example",
+		AuthorizationEndpoint:         "https://mcp.vendor.example/authorize",
+		TokenEndpoint:                 "https://mcp.vendor.example/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	for _, named := range []string{
+		"https://MCP.vendor.example",
+		"https://mcp.vendor.example:443",
+		"https://MCP.vendor.example:443/",
+	} {
+		if _, err := confirmProxiedIssuer(named, &doc, resolveOwn); err != nil {
+			t.Errorf("confirmProxiedIssuer(%q) = %v, want the proxy accepted on the canonical origin", named, err)
+		}
+	}
+	// A genuinely different host is still refused, so the normalization did
+	// not widen the leg.
+	if _, err := confirmProxiedIssuer("https://other.vendor.example", &doc, resolveOwn); err == nil {
+		t.Error("confirmProxiedIssuer accepted endpoints on a different origin")
+	}
+}
+
+// TestConfirmProxiedIssuerTakesAuthMethodsFromConfirmingIssuer: when the token
+// endpoint turns out to be the claimed issuer's OWN, that issuer's document is
+// the authority on how to authenticate there. A copy advertising "none"
+// against an endpoint whose owner requires a secret would otherwise reach
+// PublicClientAllowed, the registration fallback and the Basic-vs-post choice
+// as the vendor's word, opening a secretless client whose exchange then fails.
+func TestConfirmProxiedIssuerTakesAuthMethodsFromConfirmingIssuer(t *testing.T) {
+	issMux := http.NewServeMux()
+	iss := httptest.NewServer(issMux)
+	t.Cleanup(iss.Close)
+	realDoc := AuthServerMetadata{
+		Issuer:                            iss.URL,
+		AuthorizationEndpoint:             iss.URL + "/authorize",
+		TokenEndpoint:                     iss.URL + "/token",
+		CodeChallengeMethodsSupported:     []string{"S256"},
+		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic"},
+	}
+	issMux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(realDoc) })
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		return fetchAuthServerMetadataOpts(context.Background(), iss.Client(), claimed, false)
+	}
+	copyDoc := realDoc
+	copyDoc.TokenEndpointAuthMethodsSupported = []string{"none"}
+	got, err := confirmProxiedIssuer("https://mcp.vendor.example", &copyDoc, resolveOwn)
+	if err != nil {
+		t.Fatalf("confirmProxiedIssuer: %v", err)
+	}
+	if len(got.TokenEndpointAuthMethodsSupported) != 1 || got.TokenEndpointAuthMethodsSupported[0] != "client_secret_basic" {
+		t.Errorf("auth methods = %v, want the confirming issuer's", got.TokenEndpointAuthMethodsSupported)
+	}
+	if PublicClientAllowed(got.TokenEndpointAuthMethodsSupported) {
+		t.Error("the copy's \"none\" still reached PublicClientAllowed")
+	}
+}
+
+// TestConfirmProxiedIssuerKeepsProxyAuthMethods is the other half: a PROXY's
+// token endpoint is its own, not the claimed issuer's, and its registered
+// clients authenticate to the proxy — so the copy's list is the right one and
+// is kept.
+func TestConfirmProxiedIssuerKeepsProxyAuthMethods(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	fetchedFrom := "https://mcp.vendor.example"
+	doc := AuthServerMetadata{
+		Issuer:                            "https://as.vendor.example",
+		AuthorizationEndpoint:             fetchedFrom + "/authorize",
+		TokenEndpoint:                     fetchedFrom + "/token",
+		CodeChallengeMethodsSupported:     []string{"S256"},
+		TokenEndpointAuthMethodsSupported: []string{"none"},
+	}
+	got, err := confirmProxiedIssuer(fetchedFrom, &doc, resolveOwn)
+	if err != nil {
+		t.Fatalf("confirmProxiedIssuer: %v", err)
+	}
+	if len(got.TokenEndpointAuthMethodsSupported) != 1 || got.TokenEndpointAuthMethodsSupported[0] != "none" {
+		t.Errorf("auth methods = %v, want the proxy's own kept", got.TokenEndpointAuthMethodsSupported)
+	}
+}
+
 // TestFetchAuthServerMetadataErrorNamesEveryLocation: when every location
 // 404s the error lists each one, not just the last — the audit's failures
 // read as "openid-configuration: 404" alone and hid that the RFC 8414 form was

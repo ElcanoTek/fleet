@@ -821,6 +821,11 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	confirmedBy := func(copyEP, ownEP string) bool {
 		return own != nil && ownEP != "" && sameEndpointURL(copyEP, ownEP)
 	}
+	// Whether the TOKEN endpoint turned out to be the claimed issuer's own, as
+	// opposed to one of the proxy's. It decides whose
+	// token_endpoint_auth_methods_supported the caller gets; see the end of
+	// this function.
+	tokenIsIssuersOwn := false
 	var ownAuthz, ownToken, ownReg, ownRevoke string
 	if own != nil {
 		ownAuthz, ownToken, ownReg, ownRevoke = own.AuthorizationEndpoint, own.TokenEndpoint, own.RegistrationEndpoint, own.RevocationEndpoint
@@ -837,7 +842,13 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 		if endpointCarriesUserinfo(ep.copy) {
 			return nil, fmt.Errorf("%s %q embeds userinfo, which would become an Authorization header fleet never chose to send", ep.name, ep.copy)
 		}
-		if confirmedBy(ep.copy, ep.own) || (bareOrigin && sameOrigin(ep.copy, fetchedFrom)) {
+		if confirmedBy(ep.copy, ep.own) {
+			if ep.name == "token_endpoint" {
+				tokenIsIssuersOwn = true
+			}
+			continue
+		}
+		if bareOrigin && sameEndpointOrigin(ep.copy, fetchedFrom) {
 			continue
 		}
 		reason := fmt.Sprintf("the claimed issuer's own metadata says %q", ep.own)
@@ -852,7 +863,46 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	}
 	out := *copyDoc
 	out.Issuer = claimed
+	if tokenIsIssuersOwn {
+		// The token endpoint turned out to be the claimed issuer's own, so the
+		// claimed issuer's document — not the copy — is the authority on how
+		// to authenticate there. Callers read
+		// token_endpoint_auth_methods_supported for three decisions
+		// (PublicClientAllowed at add time, the confidential registration
+		// fallback, and Basic vs post at the token endpoint itself), so a copy
+		// that omits the field or advertises "none" against an endpoint whose
+		// owner requires a secret would open a secretless client and fail the
+		// exchange after the consent screen. An omitted list is adopted as
+		// readily as a populated one: RFC 8414 §2 gives it the meaning
+		// "client_secret_basic", which is exactly the claim being made.
+		//
+		// A PROXY's token endpoint is NOT the issuer's (it is confirmed by the
+		// same-origin leg, which does not set this flag), and there the copy's
+		// own list is the correct one and is kept — a proxy's registered
+		// clients authenticate to the proxy.
+		out.TokenEndpointAuthMethodsSupported = own.TokenEndpointAuthMethodsSupported
+	}
 	return &out, nil
+}
+
+// sameEndpointOrigin reports whether an endpoint sits on the same origin as the
+// URL the resource named as its authorization server, comparing CANONICAL
+// origins. sameOrigin compares raw scheme://host, and url.Parse normalizes
+// neither host case nor the scheme's default port, so a PRM spelling its
+// authorization server "https://MCP.vendor.example" or
+// "https://mcp.vendor.example:443" while its metadata uses the plain form would
+// fail this leg — and with it a legitimate proxy-shaped document that no other
+// leg can accept, since the claimed issuer does not vouch for proxy-local
+// endpoints. CanonicalResourceURI is this package's one canonicalizer
+// (lowercase scheme and host, default port dropped, userinfo refused), so both
+// sides go through it rather than growing a second normalizer here.
+func sameEndpointOrigin(endpoint, namedAuthServer string) bool {
+	ce, eerr := CanonicalResourceURI(endpoint)
+	cn, nerr := CanonicalResourceURI(namedAuthServer)
+	if eerr != nil || nerr != nil {
+		return false
+	}
+	return sameOrigin(ce, cn)
 }
 
 // sameEndpointURL compares two endpoint URLs the way a URL actually compares:
