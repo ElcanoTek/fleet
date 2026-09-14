@@ -65,8 +65,13 @@ had drifted. Corrected while porting:
   `CONVERSATION_TTL_DAYS` (14), and a per-user cap
   (`CONVERSATION_UNPINNED_CAP`, 50) can evict the oldest before the clock runs
   out. The draft stated 14 days flatly and omitted the cap.
-- **`⌘F`** was missing from the shortcut table (it opens search, and is
-  suppressed while typing so the browser's own find still works there).
+- **The shortcut table named three chords the app does not bind.** `⌘F`, `⌘N`
+  and `⌘J` are deliberately left to the browser (Chrome will not even let a page
+  intercept `⌘N`); the wired chords are `⌘⇧O` and `⇧Esc`. Worth recording how
+  this one went in, because it is the failure mode this page exists to prevent:
+  the first review round *added* `⌘F` in good faith, sourced from
+  `docs/keyboard-shortcuts.md`, which had gone stale. Both documents are now
+  corrected and pinned by a test — see [Keeping them true](#keeping-them-true).
 - **Two card classes** were missing: the display-only email-preview card, and
   notify mode, where a card records what was done rather than gating it
   (docs/APPROVAL-CARDS.md). The cards section's headline promise — nothing
