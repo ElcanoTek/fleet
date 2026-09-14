@@ -251,6 +251,14 @@ const initializeProbeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","para
 // or "" when the server answered anything else (or not at all). The body is
 // drained and discarded: only the header matters here.
 func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, serverURL, method, body string) string {
+	// serverURL is the operator-typed MCP URL; CanonicalResourceURI has already
+	// refused a non-http(s) scheme, userinfo and a hostless URL before Discover
+	// is reached, and SafeHTTPClient resolves-then-dials past blocked IPs and
+	// refuses redirects. Refusing the scheme again by name here costs one line
+	// and keeps that argument local to the request site (see fetchJSON).
+	if err := requireHTTPScheme(serverURL); err != nil {
+		return ""
+	}
 	var rd io.Reader
 	if body != "" {
 		rd = strings.NewReader(body)

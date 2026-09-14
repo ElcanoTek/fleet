@@ -452,6 +452,22 @@ func TestDiscoverPointerOnlyOnPOST(t *testing.T) {
 	}
 }
 
+// TestProbeResourceMetadataPointerRefusesNonHTTP: the probe never dials a
+// non-http(s) URL, whatever the caller passed.
+func TestProbeResourceMetadataPointerRefusesNonHTTP(t *testing.T) {
+	dialed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { dialed = true; w.WriteHeader(http.StatusUnauthorized) }))
+	t.Cleanup(srv.Close)
+	for _, u := range []string{"file:///etc/passwd", "gopher://" + strings.TrimPrefix(srv.URL, "http://"), "ftp://example.com/mcp"} {
+		if got := probeResourceMetadataPointer(context.Background(), srv.Client(), u, http.MethodGet, ""); got != "" {
+			t.Errorf("%s: got pointer %q, want none", u, got)
+		}
+	}
+	if dialed {
+		t.Error("a non-http(s) URL reached the network")
+	}
+}
+
 // TestLocateResourceMetadataCandidatesOrder pins the well-known order when the
 // server gives no pointer: inserted, appended, root — and root alone for a
 // bare-origin URL.
