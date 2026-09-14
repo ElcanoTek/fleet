@@ -208,6 +208,13 @@ When the assistant wants to do something with consequences outside the
 conversation, it stops and stages a card. Nothing happens until you answer, and
 if nobody answers, the answer is no.
 
+That is how cards behave by default. A deployment can also put an individual
+tool into **notify** mode, where the call runs first and its card is the record
+of what was done rather than a gate before it — so read the card's buttons, not
+just its presence: a card offering you a decision is holding the action, and one
+that only offers to be dismissed is telling you about it. The rules below are
+about the first kind.
+
 | Card | When it appears | Your choices |
 | --- | --- | --- |
 | Send this email? | The assistant has drafted a message and wants to send it. The card shows sender, recipients, subject, and body. | **Send** · **Cancel** |
@@ -229,10 +236,9 @@ Leave it unticked unless you know exactly what the rest of the conversation will
 do. Cards are not for exploring what an action would change; ask the assistant to
 describe the change first, then approve the card once you agree with it.
 
-A deployment can also put an individual tool into **notify** mode, where the card
-appears *after* the call as a record of what was done rather than a gate before
-it. Such a card says so on its face — if it offers you no buttons, it is telling
-you, not asking you.
+Which tools are gated and which merely report is set per deployment, not by the
+assistant, and it is worth knowing which is which for anything that touches a
+system outside the conversation. Your administrator can tell you.
 
 ### Two gentler cards
 

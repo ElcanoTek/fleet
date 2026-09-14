@@ -64,7 +64,7 @@ On the right of every row sit four actions:
 | **Run now** | Queue an immediate run, on top of whatever schedule exists. Offered on a task that is waiting or finished — not on one that is in flight or paused (see below). |
 | **Edit task** | Open the task for changes. See [Everyday actions](#5-everyday-actions) for what editing means on a finished task. |
 | **Stop this task** | The task will not run again. Its history stays on the board. A deliberate stop is not treated as a failure: nothing retries, nothing alerts. |
-| **Delete** | Removes the task **and its run history** permanently, and frees its name for reuse. Prefer Stop when you simply want something to cease running; delete only what should leave the record. |
+| **Delete** | Removes the task **and its run history** permanently. Prefer Stop when you simply want something to cease running; delete only what should leave the record — you never have to delete a task to reuse its title, since titles are labels and need not be unique. |
 
 Two kinds of row show fewer than four. While a run is **live** it can only be
 stopped: run-now, edit and delete are withheld until it finishes, so a second
@@ -135,24 +135,29 @@ Every status badge means one of ten things. What each one means, and what to do:
 | `PENDING` | Due and queued for a free agent slot. Nothing to do; it will start on its own. |
 | `LEASED` | An agent has claimed it and is starting it now. A brief, normal step between pending and running. |
 | `RUNNING` | Executing now. Open it to watch live if you are curious. |
-| `SUCCESS` | Finished and delivered. The result is in the recipients' inboxes and in the logs. |
-| `ERROR` | The run failed. If the cause was transient — a hiccup in a connection or a service — it retries by itself with increasing delays. If the cause was deterministic, something that would fail identically every time, it fails once, on purpose, and waits for a person. |
-| `DEAD_LETTERED` | Failed and out of retries, set aside for review. The row keeps its full record. Read the failure, fix the cause, and rerun; see [the next section but one](#6-when-a-run-goes-wrong). |
+| `SUCCESS` | The run completed. Its result is in the logs, and in the recipients' inboxes if the task has any — a task with no recipients succeeds quietly, so a green badge is not by itself proof that anyone was emailed. |
+| `ERROR` | A failure the scheduler could not route anywhere else — the uncommon one. Treat it like the row below: read it, fix the cause, rerun. A run that failed and is going to be retried does not sit here; it goes back to `PENDING` until its next attempt. |
+| `DEAD_LETTERED` | Failed and set aside for review — the badge most failures end on. It means one of two things, and the row says which: retries were exhausted, or the failure was deterministic and was quarantined on its first attempt without retrying. Either way nothing further happens on its own: read the failure, fix the cause, and rerun; see [When a run goes wrong](#6-when-a-run-goes-wrong). |
 | `CANCELLED` | A person stopped it. The record notes who. Deliberate stops never retry or alert. |
 | `PAUSED_AWAITING_INPUT` | The run reached a decision it was not willing to make alone and stopped to ask a question. It holds no resources while it waits. Answer it and it resumes from there; this state is the system working as designed, not a failure. Most deployments let it wait indefinitely, but an operator can set an expiry after which an unanswered run fails — ask yours whether one is set. |
 | `PAUSED_AWAITING_WAKE` | The run put itself to sleep until a set time or an expected event, for example to check back on something later. It wakes on its own; every sleep has a deadline. Sleeping runs also get their own short list on the dashboard, so parked work stays visible without a status filter. |
 
-> **The retry rule in one line.** Transient failures retry themselves;
-> deterministic failures wait for you. A task that failed and did not retry is
-> telling you a rerun would fail the same way until something changes.
+> **The retry rule in one line.** Transient failures retry themselves — quietly,
+> by going back to the queue with a growing delay. Deterministic ones do not:
+> they go straight to `DEAD_LETTERED` on the first attempt, because a rerun
+> would fail the same way until something changes. So a failure sitting in
+> `DEAD_LETTERED` has not necessarily burned through retries; it may never have
+> been retried at all, on purpose.
 
 ## 5. Everyday actions
 
 ### Run a task on demand
 
-**Run now** on any row queues an immediate run. Use it after fixing a prompt, or
-when someone needs today's report ahead of schedule. It does not disturb the
-task's regular schedule.
+**Run now** queues an immediate run. Use it after fixing a prompt, or when
+someone needs today's report ahead of schedule. It does not disturb the task's
+regular schedule. It is offered on a task that is waiting or finished, not on
+one that is already in flight or paused — those rows want a stop, an answer, or
+their wake time instead.
 
 ### Open a task's record
 
@@ -176,7 +181,9 @@ actually happened, and changes create new entries.
 ### Answer a paused task
 
 When a task pauses to ask a question, the question is waiting in its record, and
-a notification goes out. Provide the answer there and the task re-queues and
+a notification goes out if your deployment has a channel configured for one —
+not every deployment does, so if you are waiting on a run, the board is the
+thing that always knows. Provide the answer there and the task re-queues and
 continues with your answer in hand. A paused task consumes nothing while it
 waits, and by default it waits as long as it takes — but a deployment can set an
 expiry, after which an unanswered run is failed and its question cleared. If
@@ -198,9 +205,11 @@ Work down this list. Most problems resolve at the first or second step.
 than guessing around it. A missing source or a skipped section is usually named
 plainly in the output itself, along with what the run did instead.
 
-**2 · Read the analysis.** A task that failed terminally carries an automatic
-diagnosis: a classification of what went wrong and a suggested fix, attached to
-the failed row.
+**2 · Read the analysis.** A failed task usually carries an automatic diagnosis:
+a classification of what went wrong and a suggested fix, attached to the failed
+row. It is a convenience, not a guarantee — a deployment can switch it off, and
+generating it is best-effort — so if the row has no analysis, move straight on
+to the transcript rather than hunting for it.
 
 **3 · Read the transcript.** The log shows every step the run took. If the task
 retried, the record keeps each attempt; a picker in the log view switches between

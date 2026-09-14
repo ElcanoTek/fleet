@@ -69,7 +69,10 @@ had drifted. Corrected while porting:
   suppressed while typing so the browser's own find still works there).
 - **Two card classes** were missing: the display-only email-preview card, and
   notify mode, where a card records what was done rather than gating it
-  (docs/APPROVAL-CARDS.md).
+  (docs/APPROVAL-CARDS.md). The cards section's headline promise — nothing
+  happens until you answer — is now scoped to approve-mode cards up front, since
+  notify mode is a genuine exception to it and a reader who stops after the
+  first paragraph should not be misled.
 - **Datasets is not admin-only**; SLA, Usage and Adoption are
   (`orchestrator-client.tsx` render-guards exactly those three).
 - **The cost forecast** under the task form was undocumented.
@@ -88,6 +91,25 @@ had drifted. Corrected while porting:
 - **Tags do not filter the board.** The API takes `?tag=`, but `TaskFilters`
   offers only status, creator, scheduled-only and text, so the guide describes
   tags as stored metadata rather than a control on that screen.
+- **`ERROR` is not where a failure waits for you — `DEAD_LETTERED` is.**
+  `handleRunFailure` re-queues a retryable failure (back to `PENDING`, with
+  backoff), quarantines a deterministic one on its *first* attempt, and reaches
+  `ERROR` only when the re-queue itself fails. So `DEAD_LETTERED` does not imply
+  exhausted retries, and the draft's neat transient-vs-deterministic split was
+  attached to the wrong badge.
+- **`SUCCESS` means completed, not delivered.** Recipients are optional, so a
+  task with none succeeds quietly.
+- **Three more things that are conditional, not guaranteed:** the paused-task
+  notification (a deployment with no channel configured has a no-op notifier),
+  the automatic failure analysis (`FLEET_ERROR_ANALYSIS_ENABLED`, and
+  best-effort even when on), and the assistant having read these guides at all
+  (`skills_builtin: false`, `skills_hidden`, or a bundle skill winning the name
+  — `/help` renders either way, which is exactly why its copy now hedges).
+- **Deleting a task does not free a title.** The unique column is `name`, which
+  the in-app form never populates; the visible Title is the non-unique `title`.
+  The draft's "frees its name for reuse" (inherited from the delete button's own
+  tooltip) invited someone to destroy a run history to reuse a label, which the
+  same guide's "Keep the ledger" convention tells them not to do.
 - **De-branded.** The drafts were written for one deployment ("Elcano · Fleet",
   "your Elcano contact"). fleet is the engine, branding arrives in a bundle, and
   a deployment may be white-labeled — so the guides name no product at all (they

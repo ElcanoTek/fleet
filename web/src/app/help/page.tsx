@@ -73,19 +73,25 @@ export default function HelpIndex() {
           ))}
         </div>
 
-        {/* The guides are also the `fleet-guide` skill, so the assistant answers
-            from this same text. Saying so is the difference between a user
-            hunting through a page and just asking. */}
+        {/* The guides also ship as the `fleet-guide` skill, so the assistant
+            can answer from this same text. Hedged deliberately: a deployment can
+            set skills_builtin: false, list fleet-guide in skills_hidden, or ship
+            a bundle skill that wins the name — and this page renders either way.
+            Promising every reader that the assistant has read these pages would
+            be a claim this page cannot check. */}
         <p className="mt-8 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-5 py-4 text-[0.85rem] leading-[1.6] text-[var(--color-text-secondary)]">
           <strong className="font-semibold text-[var(--color-text-primary)]">
             You can also just ask.
           </strong>{" "}
-          The assistant reads these same guides, so &ldquo;how do I make this run
-          every Monday?&rdquo; is a fair question to put to it in{" "}
+          These guides ship to the assistant as well, so on most deployments
+          &ldquo;how do I make this run every Monday?&rdquo; is a fair question to
+          put to it in{" "}
           <Link href="/chat" className="underline underline-offset-2">
             Chat
           </Link>
-          . It will tell you where the control is — and often offer to do it.
+          : it will tell you where the control is, and often offer to do it. If it
+          says it doesn&rsquo;t know, the answer is on these pages — that part is
+          always here.
         </p>
       </div>
     </>
