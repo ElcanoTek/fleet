@@ -589,9 +589,13 @@ How the invariants hold:
   resource named a bare host, on that host itself. Endpoint URLs compare the
   way URLs do — scheme and host case-insensitively, path and query exactly —
   so a "confirmed" endpoint cannot differ from the vouched-for one in casing
-  alone. A path-bearing authorization server (`https://as.example.com/tenantA`)
-  gets neither leg on another tenant's terms: the only document that may vouch
-  for it is its own ORIGIN-level one, the measured Chargebee shape. A sibling
+  alone, and an endpoint embedding userinfo is refused outright — `net/http`
+  turns URL userinfo into a Basic `Authorization` header when the request sets
+  none itself, so confirming one would dial it with authentication fleet never
+  chose to send. An authorization server scoped to one tenant — by a path
+  (`https://as.example.com/tenantA`), a query, a fragment or userinfo — gets
+  neither leg on another tenant's terms: the only document that may vouch for
+  it is its own ORIGIN-level one, the measured Chargebee shape. A sibling
   tenant is self-consistent too, and accepting it would send the user through
   the wrong tenant's authorization endpoint. The validated
   document's endpoints are what fleet dials (a proxy's registered clients only

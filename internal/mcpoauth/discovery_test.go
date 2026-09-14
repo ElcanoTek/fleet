@@ -3,6 +3,7 @@ package mcpoauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -442,6 +443,78 @@ func TestFetchAuthServerMetadataTriesEveryMismatchedDocument(t *testing.T) {
 	}
 	if as.TokenEndpoint != base+"/token" {
 		t.Errorf("token endpoint = %q, want the confirmable document's", as.TokenEndpoint)
+	}
+}
+
+// TestFetchAuthServerMetadataTriesDocumentsDifferingOnlyInPKCE: the same trap
+// as the test above, one field deeper. Two candidates carry the same issuer
+// AND the same endpoints, differing only in code_challenge_methods_supported —
+// and confirmation reads that field (verifyPKCE) after the issuer check has
+// already queued both. Any dedupe key narrower than "everything confirmation
+// looks at" lets the plain-only document suppress the S256 one.
+func TestFetchAuthServerMetadataTriesDocumentsDifferingOnlyInPKCE(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	claimed := "https://as.vendor.example"
+	plainOnly := AuthServerMetadata{Issuer: claimed, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", CodeChallengeMethodsSupported: []string{"plain"}}
+	s256 := plainOnly
+	s256.CodeChallengeMethodsSupported = []string{"S256"}
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(plainOnly) })
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(s256) })
+	as, err := fetchAuthServerMetadata(context.Background(), srv.Client(), base)
+	if err != nil {
+		t.Fatalf("fetch = %v, want the S256 document accepted", err)
+	}
+	if len(as.CodeChallengeMethodsSupported) != 1 || as.CodeChallengeMethodsSupported[0] != "S256" {
+		t.Errorf("PKCE methods = %v, want the S256 document's", as.CodeChallengeMethodsSupported)
+	}
+}
+
+// TestConfirmProxiedIssuerRefusesUserinfoEndpoint: net/http turns URL userinfo
+// into a Basic Authorization header when the request sets none itself
+// (http.Client.send), so an endpoint that differs from the vouched-for one
+// only by an added "name@" would otherwise be confirmed and then dialed with
+// authentication fleet never chose to send. sameOrigin compares scheme://host
+// and would not notice either, so the refusal has to sit ahead of both legs —
+// this checks it on the bare-origin leg, where sameOrigin alone would pass it.
+func TestConfirmProxiedIssuerRefusesUserinfoEndpoint(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	fetchedFrom := "https://mcp.vendor.example"
+	doc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example",
+		AuthorizationEndpoint:         fetchedFrom + "/authorize",
+		TokenEndpoint:                 "https://attacker@mcp.vendor.example/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	if _, err := confirmProxiedIssuer(fetchedFrom, &doc, resolveOwn); err == nil || !strings.Contains(err.Error(), "userinfo") {
+		t.Fatalf("confirmProxiedIssuer = %v, want a userinfo-bearing endpoint refused", err)
+	}
+	// The same document without the userinfo is accepted on the bare-origin
+	// leg, so the refusal above is the userinfo and nothing else.
+	doc.TokenEndpoint = fetchedFrom + "/token"
+	if _, err := confirmProxiedIssuer(fetchedFrom, &doc, resolveOwn); err != nil {
+		t.Fatalf("confirmProxiedIssuer refused the same-origin document: %v", err)
+	}
+}
+
+// TestConfirmProxiedIssuerRefusesQueryScopedSameOriginLeg: a host scoped by a
+// QUERY (https://as.example?tenant=A) is one tenant among many, exactly like a
+// path-scoped one — and authServerMetadataCandidates keeps only scheme, host
+// and path, so the query is dropped and the URL would otherwise read as the
+// whole origin and open the same-origin leg to a sibling's endpoints.
+func TestConfirmProxiedIssuerRefusesQueryScopedSameOriginLeg(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	fetchedFrom := "https://as.vendor.example?tenant=A"
+	doc := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example/tenantB",
+		AuthorizationEndpoint:         "https://as.vendor.example/tenantB/authorize",
+		TokenEndpoint:                 "https://as.vendor.example/tenantB/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	if _, err := confirmProxiedIssuer(fetchedFrom, &doc, resolveOwn); err == nil || !strings.Contains(err.Error(), "scoped to one tenant") {
+		t.Fatalf("confirmProxiedIssuer = %v, want the same-origin leg shut for a query-scoped tenant", err)
 	}
 }
 
