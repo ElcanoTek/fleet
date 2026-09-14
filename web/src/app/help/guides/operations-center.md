@@ -95,14 +95,11 @@ only**, and searches across title, prompt, and ID.
 
 It also filters by **tag**. A task's tags appear as small coloured chips on its
 row; clicking one narrows the board to that tag, and the **Tags** dropdown in
-the filter bar picks from every tag in use across the deployment — including
-ones no task on the current page carries. Tags stack: each one you add narrows
-the board further, to tasks carrying *all* of them. Remove a tag by clicking
-its chip in the filter bar, or drop everything at once with **Clear filters**.
-
-Like the counters above, the dropdown lists tags from the whole deployment
-while the board shows only your own tasks, so a tag a colleague uses can filter
-down to nothing.
+the filter bar offers every tag on the tasks you can see (your own tasks by
+default; every task if you are an admin or have the view-all grant), including
+tags on tasks not on the current page. Tags stack: each one you add narrows the
+board further, to tasks carrying *all* of them. Remove a tag by clicking its
+chip in the filter bar, or drop everything at once with **Clear filters**.
 
 ### Whose tasks you see
 

@@ -2024,9 +2024,28 @@ func (h *Handlers) withAgentPool(stats *models.DashboardStats) *models.Dashboard
 }
 
 // GetTagCatalogue handles GET /tasks/tags (#212): the distinct tags in use with
-// per-tag task counts, busiest first. A read endpoint — group auth suffices.
+// per-tag task counts, busiest first. Scoped like ListTasks (#1082 own-rows
+// visibility): a principal without the fleet-wide grant (admin / view_all_logs)
+// sees only tags on tasks it created, preventing scoped users from learning
+// other principals' tags or activity levels.
 func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
-	catalogue, err := h.storage.ListTagCatalogue(r.Context())
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionViewTasks) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	var scope db.TagCatalogueScope
+	if !p.fleetWideTaskVisibility() {
+		switch {
+		case p.user != nil:
+			scope.VisibleToUserID = &p.user.ID
+		case p.apiKey != nil:
+			scope.VisibleToKeyID = &p.apiKey.KeyID
+		}
+	}
+
+	catalogue, err := h.storage.ListTagCatalogue(r.Context(), scope)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to load tag catalogue")
 		return

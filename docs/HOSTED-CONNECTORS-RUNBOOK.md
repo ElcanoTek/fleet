@@ -20,8 +20,11 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   vendor that asks for a redirect URI gets exactly that string.
 - **Some vendors refuse plain-http callbacks.** Slack requires HTTPS. Microsoft
   Entra allows `http://` only for `localhost` (not `127.0.0.1`) and ignores the
-  port there. Production deployments sit behind Caddy with TLS and never see
-  this; a local rig needs a tunnel for Slack.
+  port there. Single-box installs sit behind Caddy with TLS by default. A chart
+  deployment reaches the web tier however the operator exposes it — the chart's
+  optional Ingress (disabled by default, `ingress.tls` empty) or something in
+  front of it — and whatever the path, the public callback URL must be HTTPS or
+  HTTPS-only vendors (Slack) reject it; a local dev rig needs a tunnel for Slack.
 - **`FLEET_MCP_OAUTH_ENCRYPTION_KEY` is the connection.** Tokens, client
   secrets and registration tokens are sealed with it, bound to (owner, URL).
   Lose or rotate it and every hosted connection must be reconnected by its
@@ -114,10 +117,13 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   errors (e.g. `invalid_grant`) mark the connection *Reconnect needed*
   (`needs_reauth`). In either case, the run completes without the skipped
   connector.
-- **More than 128 tools** switches the run to deferred mode: the model finds
-  tools with `tool_search`, reads their schema with `tool_describe` (which
-  lists the required arguments) and calls them with `tool_call`, which refuses
-  a call missing a required argument and names it.
+- **More than 128 tools (by default)** switches the run to deferred mode:
+  `disclosureThreshold()` defaults to 128 tools and honours both the
+  `FLEET_TOOL_DISCLOSURE_THRESHOLD` environment variable and the live
+  `tool_disclosure_threshold` admin setting. Above that threshold, the model
+  finds tools with `tool_search`, reads their schema with `tool_describe`
+  (which lists the required arguments) and calls them with `tool_call`, which
+  refuses a call missing a required argument and names it.
 - **Seats and sharing.** One connection name can hold several logins; each is
   a seat with one owner-chosen default. Sharing is per seat, the grantee never
   sees the token, tool calls act as the owner at the vendor, and a revoked
@@ -129,8 +135,10 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
 Read `fleet.log` first. The lines that matter:
 
 - `remote-mcp: skipping server "<name>" for <user> — token unavailable` —
-  refresh failed; the row is or will be *Reconnect needed*. Have the owner
-  click Connect.
+  refresh failed. For terminal OAuth failures (e.g. `invalid_grant`), the row is
+  marked *Reconnect needed* (`needs_reauth`); have the owner click Connect. For
+  transient network errors or vendor 5xx, the same line is logged but the
+  connection stays connected and the next call retries automatically.
 - `remote-mcp: skipping server "<name>" … — failed to connect: … HTTP 404` —
   the vendor rejected the tools handshake; usually a wrong URL (check the
   vendor's documented MCP path), not a credential problem, although the

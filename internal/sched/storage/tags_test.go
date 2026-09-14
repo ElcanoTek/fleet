@@ -75,7 +75,7 @@ func TestTaskTagsFilterAndSemantics(t *testing.T) {
 	}
 
 	// Catalogue counts.
-	cat, err := database.GetTagCatalogue(ctx)
+	cat, err := database.GetTagCatalogue(ctx, db.TagCatalogueScope{})
 	if err != nil {
 		t.Fatalf("catalogue: %v", err)
 	}
@@ -123,5 +123,99 @@ func TestUpdateTaskTags(t *testing.T) {
 		if tag == "x" {
 			t.Errorf("tag in both add+remove should be removed, got %v", upd.Tags)
 		}
+	}
+}
+
+// TestTagCatalogueScope pins creator-scoped tag enumeration (#1082): a scoped
+// principal sees only tags from tasks it created, while fleet-wide scope
+// returns all tags.
+func TestTagCatalogueScope(t *testing.T) {
+	store, database := newTestStore(t)
+	ctx := context.Background()
+
+	userA := uuid.New()
+	userB := uuid.New()
+	keyA := "fleet_task_key_a"
+
+	t1 := mkTask("shared", "alpha")
+	t1.CreatedBy = &userA
+	t2 := mkTask("alpha", "user-a-only")
+	t2.CreatedBy = &userA
+
+	t3 := mkTask("shared", "beta")
+	t3.CreatedBy = &userB
+
+	t4 := mkTask("shared", "from-key")
+	t4.CreatedByKeyID = &keyA
+
+	t5 := mkTask("unowned")
+
+	for _, tk := range []*models.Task{t1, t2, t3, t4, t5} {
+		if _, err := store.AddTaskWithContext(ctx, tk); err != nil {
+			t.Fatalf("add: %v", err)
+		}
+	}
+
+	// Fleet-wide: see all tags across all users, keys, and unowned tasks.
+	catAll, err := database.GetTagCatalogue(ctx, db.TagCatalogueScope{})
+	if err != nil {
+		t.Fatalf("fleet-wide catalogue: %v", err)
+	}
+	countsAll := map[string]int{}
+	for _, c := range catAll {
+		countsAll[c.Tag] = c.TaskCount
+	}
+	if countsAll["shared"] != 3 || countsAll["alpha"] != 2 || countsAll["beta"] != 1 ||
+		countsAll["user-a-only"] != 1 || countsAll["from-key"] != 1 || countsAll["unowned"] != 1 {
+		t.Errorf("fleet-wide counts mismatch: %v", countsAll)
+	}
+
+	// User A scope: sees alpha (2), shared (1), user-a-only (1). Nothing from B, keyA, or unowned.
+	catA, err := database.GetTagCatalogue(ctx, db.TagCatalogueScope{VisibleToUserID: &userA})
+	if err != nil {
+		t.Fatalf("user A catalogue: %v", err)
+	}
+	countsA := map[string]int{}
+	for _, c := range catA {
+		countsA[c.Tag] = c.TaskCount
+	}
+	if len(countsA) != 3 || countsA["alpha"] != 2 || countsA["shared"] != 1 || countsA["user-a-only"] != 1 {
+		t.Errorf("user A counts mismatch: got %v", countsA)
+	}
+
+	// User B scope: sees beta (1), shared (1).
+	catB, err := database.GetTagCatalogue(ctx, db.TagCatalogueScope{VisibleToUserID: &userB})
+	if err != nil {
+		t.Fatalf("user B catalogue: %v", err)
+	}
+	countsB := map[string]int{}
+	for _, c := range catB {
+		countsB[c.Tag] = c.TaskCount
+	}
+	if len(countsB) != 2 || countsB["beta"] != 1 || countsB["shared"] != 1 {
+		t.Errorf("user B counts mismatch: got %v", countsB)
+	}
+
+	// Key A scope: sees from-key (1), shared (1).
+	catKey, err := database.GetTagCatalogue(ctx, db.TagCatalogueScope{VisibleToKeyID: &keyA})
+	if err != nil {
+		t.Fatalf("key A catalogue: %v", err)
+	}
+	countsKey := map[string]int{}
+	for _, c := range catKey {
+		countsKey[c.Tag] = c.TaskCount
+	}
+	if len(countsKey) != 2 || countsKey["from-key"] != 1 || countsKey["shared"] != 1 {
+		t.Errorf("key A counts mismatch: got %v", countsKey)
+	}
+
+	// Unknown user: empty catalogue.
+	unknownUser := uuid.New()
+	catEmpty, err := database.GetTagCatalogue(ctx, db.TagCatalogueScope{VisibleToUserID: &unknownUser})
+	if err != nil {
+		t.Fatalf("empty catalogue: %v", err)
+	}
+	if len(catEmpty) != 0 {
+		t.Errorf("expected empty catalogue for unknown user, got %v", catEmpty)
 	}
 }

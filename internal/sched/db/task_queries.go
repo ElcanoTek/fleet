@@ -473,14 +473,47 @@ type TagCount struct {
 	TaskCount int    `json:"task_count"`
 }
 
+// TagCatalogueScope scopes the tag catalogue to rows visible to a principal (#1082).
+// A principal without the fleet-wide grant sees only tags on tasks it created:
+// tasks whose created_by is VisibleToUserID, or whose created_by_key_id is
+// VisibleToKeyID. At most one is set per request. Zero-value scope returns the
+// fleet-wide catalogue (unchanged SQL).
+type TagCatalogueScope struct {
+	VisibleToUserID *uuid.UUID
+	VisibleToKeyID  *string
+}
+
 // GetTagCatalogue returns every distinct tag in use with its task count, busiest
-// first (then alphabetical). Drives GET /tasks/tags.
-func (db *Database) GetTagCatalogue(ctx context.Context) ([]TagCount, error) {
-	rows, err := db.conn.QueryContext(ctx, `
+// first (then alphabetical), scoped to the principal's visible rows (#212, #1082).
+// Drives GET /tasks/tags.
+func (db *Database) GetTagCatalogue(ctx context.Context, scope TagCatalogueScope) ([]TagCount, error) {
+	whereClauses := []string{}
+	args := []interface{}{}
+	argIndex := 1
+
+	if scope.VisibleToUserID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("created_by = $%d", argIndex))
+		args = append(args, *scope.VisibleToUserID)
+		argIndex++
+	}
+
+	if scope.VisibleToKeyID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("created_by_key_id = $%d", argIndex))
+		args = append(args, *scope.VisibleToKeyID)
+	}
+
+	whereSQL := ""
+	if len(whereClauses) > 0 {
+		whereSQL = " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	query := fmt.Sprintf(`
 		SELECT tag, COUNT(*) AS task_count
-		FROM tasks, jsonb_array_elements_text(tags) AS tag
+		FROM tasks, jsonb_array_elements_text(tags) AS tag%s
 		GROUP BY tag
-		ORDER BY task_count DESC, tag ASC`)
+		ORDER BY task_count DESC, tag ASC`, whereSQL)
+
+	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

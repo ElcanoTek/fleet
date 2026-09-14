@@ -34,7 +34,9 @@ screen", and a sentence that awkward is usually a defect wearing prose.
 - **`/api/orchestrator/tasks/tags`**, a thin proxy to the existing catalogue
   endpoint. The static `tags` segment wins over the sibling `[taskId]` route,
   so it does not shadow `GET /tasks/{id}` — the same ordering `cmd/fleet/main.go`
-  spells out explicitly for the Go router.
+  spells out explicitly for the Go router. `/tasks/tags` requires `view_tasks`
+  and is scoped by the same #1082 own-rows rule as the task list, verified by
+  `TestTagCatalogueScope` (storage) and `TestTagCatalogueAuthz` (handlers).
 
 Two things underneath had to change:
 
@@ -75,14 +77,18 @@ it appears, without waiting for the refresh.
 
 ## Honest scope
 
-- **The catalogue is deployment-wide; the board is not.** A non-admin sees only
-  their own tasks, so a tag a colleague uses can appear in the dropdown and
-  filter down to nothing. This is the same pre-existing property as the
-  dashboard counters, it is not introduced here, and the guide states it rather
-  than hiding it.
-- **No tag counts in the UI.** The catalogue returns them, but "ops (12)" above
-  a board showing two of them is a number that is wrong for most readers, for
-  the reason above. Names only.
+- **The catalogue is scoped like the board.** The catalogue is scoped exactly
+  like the board (own rows unless the fleet-wide grant), so a non-admin's
+  dropdown offers only tags on their own tasks and a chosen tag never filters
+  down to nothing; for an admin the board and the dropdown are both fleet-wide.
+  The endpoint was global before this change (#212) and was scoped here
+  because the board newly exposes it to every signed-in user: an unscoped
+  catalogue would have let a scoped user learn other principals' tag names and
+  per-tag counts.
+- **No tag counts in the UI.** The catalogue returns per-tag counts, but
+  surfacing numbers in a filter control adds visual noise and would need its
+  own refresh story as tasks change. Counts are deferred rather than rejected;
+  names only.
 - **Not shipped:** tag management from the board (renaming or deleting a tag
   across tasks — retagging is per-task, through the form or
   `POST /tasks/{id}/tags`), and no tag filter on the Upcoming or Sleeping
