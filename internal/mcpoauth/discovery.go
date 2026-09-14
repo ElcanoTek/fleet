@@ -316,9 +316,18 @@ func authServerMetadataCandidates(issuer string) []string {
 
 // fetchAuthServerMetadata fetches the issuer's RFC 8414 / OIDC discovery
 // document from the first candidate location (authServerMetadataCandidates)
-// that parses with both an authorization and a token endpoint. The error names
-// every location tried, so an operator reading a failed Add sees which
-// well-known URLs the vendor 404ed rather than only the last one.
+// that parses with both an authorization and a token endpoint AND passes
+// verifyAuthServer — the issuer it claims is the one the PRM named, and PKCE
+// S256 is offered. Verifying inside the loop matters now that the inserted
+// forms are asked before the appended ones: a vendor whose catch-all answers
+// `/.well-known/oauth-authorization-server/<path>` with its origin-level
+// document (issuer = origin, not the path) would otherwise be taken at its
+// first, wrong word and the valid appended document never asked for, failing
+// an Add that used to work. A candidate that fails verification is recorded
+// and skipped like a 404. The error names every location tried and why each
+// was rejected, so an operator reading a failed Add sees which well-known
+// URLs the vendor 404ed or answered with the wrong document rather than only
+// the last one.
 func fetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, issuer string) (*AuthServerMetadata, error) {
 	issuer = strings.TrimRight(strings.TrimSpace(issuer), "/")
 	if issuer == "" {
@@ -333,6 +342,10 @@ func fetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, issue
 		}
 		if as.TokenEndpoint == "" || as.AuthorizationEndpoint == "" {
 			tried = append(tried, fmt.Sprintf("authorization-server metadata at %s missing token/authorization endpoint", c))
+			continue
+		}
+		if err := verifyAuthServer(issuer, &as); err != nil {
+			tried = append(tried, fmt.Sprintf("authorization-server metadata at %s: %v", c, err))
 			continue
 		}
 		return &as, nil
