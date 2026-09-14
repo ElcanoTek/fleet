@@ -326,6 +326,20 @@ func TestDisclosureRequiredNullableArgumentAcceptsNull(t *testing.T) {
 		`{"anyOf":[{"type":"null"},{"type":["string","null"]}]}`:   true,
 		`{"type":["string","null"],"allOf":[{"enum":["x",null]}]}`: true,
 		`{"type":["string","null"],"allOf":[{"enum":["x"]}]}`:      false,
+		// a construct fleet does not evaluate locally is never grounds to
+		// refuse: the vendor gets the call and decides.
+		`{"$ref":"#/$defs/x"}`:                                                   true,
+		`{"oneOf":[{"$ref":"#/$defs/x"},{"type":"null"}]}`:                       true,
+		`{"oneOf":[{"$ref":"#/$defs/x"},{"type":"string"}]}`:                     true,
+		`{"anyOf":[{"$ref":"#/$defs/x"},{"type":"string"}]}`:                     true,
+		`{"allOf":[{"$ref":"#/$defs/x"},{"type":["string","null"]}]}`:            true,
+		`{"not":{"$ref":"#/$defs/x"}}`:                                           true,
+		`{"if":{"type":"string"},"then":{"minLength":1},"else":{"type":"null"}}`: true,
+		// ...but a sibling that plainly refuses null still decides, and two
+		// arms that plainly admit it still break oneOf.
+		`{"$ref":"#/$defs/x","type":"string"}`:                                        false,
+		`{"oneOf":[{"$ref":"#/$defs/x"},{"type":"null"},{"type":["string","null"]}]}`: false,
+		`{"allOf":[{"$ref":"#/$defs/x"},{"type":"string"}]}`:                          false,
 	} {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(schema), &m); err != nil {

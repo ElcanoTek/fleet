@@ -331,47 +331,115 @@ func missingRequiredArguments(required []string, props map[string]any, args json
 }
 
 // schemaAdmitsNull reports whether a JSON Schema property accepts the JSON
-// null value. JSON Schema keywords apply conjunctively, so null is admitted
-// only when every keyword present accepts it: `type` must be "null" or a list
-// containing it (OpenAPI's `nullable: true` widens `type` the same way); an
-// `enum` must list null and a `const` must be null; at least one `anyOf` arm,
-// exactly one `oneOf` arm, and every `allOf` arm must admit it; a `not`
-// schema must not. A schema that constrains the value with none of those
-// keywords (`{}`, or description-only) accepts anything, null included — and
-// so do the boolean schema `true` and a property with no schema at all —
-// because the refusal must never be stricter than the vendor's own
-// validation. The boolean schema `false` admits nothing.
+// null value — or might. It is the gate on refusing a required argument sent
+// as null, and the refusal must never be stricter than the vendor's own
+// validation, so the question is really "can fleet prove, from the schema
+// alone, that null is invalid?": only a definite no refuses. JSON Schema
+// keywords apply conjunctively, so null is definitely invalid when any
+// keyword present excludes it: `type` neither "null" nor a list containing
+// it (OpenAPI's `nullable: true` widens `type` the same way); an `enum`
+// without null or a `const` that is not null; no `anyOf` arm that admits it,
+// not exactly one `oneOf` arm, an `allOf` arm that excludes it; a `not`
+// schema that admits it. A keyword fleet cannot evaluate locally — `$ref`,
+// `$dynamicRef`, `if`/`then`/`else`, `dependentSchemas` — makes the verdict
+// unknown rather than a yes or a no, and unknown never refuses (so a `oneOf`
+// of a `$ref` arm and a `{type: "null"}` arm is left to the vendor, while
+// two arms that both plainly admit null is still a definite no). A schema
+// that constrains the value with none of those keywords (`{}`, or
+// description-only) accepts anything, null included — and so do the boolean
+// schema `true` and a property with no schema at all. The boolean schema
+// `false` admits nothing.
 func schemaAdmitsNull(schema any) bool {
+	return nullVerdictOf(schema) != nullRefused
+}
+
+// nullVerdict is the three-valued answer behind schemaAdmitsNull.
+type nullVerdict uint8
+
+const (
+	nullRefused  nullVerdict = iota // the schema provably rejects null
+	nullAdmitted                    // the schema provably accepts null
+	nullUnknown                     // the schema uses a construct fleet does not evaluate
+)
+
+// nullVerdictOf evaluates a schema's keywords conjunctively: any keyword that
+// refuses null decides the whole schema; otherwise any keyword whose answer
+// is unknown makes the whole schema unknown; otherwise null is admitted.
+func nullVerdictOf(schema any) nullVerdict {
 	if b, ok := schema.(bool); ok {
-		return b
+		if b {
+			return nullAdmitted
+		}
+		return nullRefused
 	}
 	m, ok := schema.(map[string]any)
 	if !ok {
-		return schema == nil
+		if schema == nil {
+			return nullAdmitted
+		}
+		return nullUnknown
+	}
+	verdict := nullAdmitted
+	fold := func(v nullVerdict) {
+		if v == nullRefused || (v == nullUnknown && verdict == nullAdmitted) {
+			verdict = v
+		}
 	}
 	nullable, _ := m["nullable"].(bool)
 	if t, ok := m["type"]; ok && !nullable && !schemaTypeAdmitsNull(t) {
-		return false
+		return nullRefused
 	}
 	if enum, ok := m["enum"].([]any); ok && !containsNil(enum) {
-		return false
+		return nullRefused
 	}
 	if c, ok := m["const"]; ok && c != nil {
-		return false
+		return nullRefused
 	}
-	if arms, ok := m["anyOf"].([]any); ok && len(arms) > 0 && countAdmittingNull(arms) == 0 {
-		return false
+	for _, key := range []string{"$ref", "$dynamicRef", "if", "then", "else", "dependentSchemas"} {
+		if _, ok := m[key]; ok {
+			fold(nullUnknown)
+		}
 	}
-	if arms, ok := m["oneOf"].([]any); ok && len(arms) > 0 && countAdmittingNull(arms) != 1 {
-		return false
+	if arms, ok := m["anyOf"].([]any); ok && len(arms) > 0 {
+		admitted, unknown := countNullVerdicts(arms)
+		switch {
+		case admitted > 0:
+		case unknown > 0:
+			fold(nullUnknown)
+		default:
+			return nullRefused
+		}
 	}
-	if arms, ok := m["allOf"].([]any); ok && countAdmittingNull(arms) != len(arms) {
-		return false
+	if arms, ok := m["oneOf"].([]any); ok && len(arms) > 0 {
+		admitted, unknown := countNullVerdicts(arms)
+		switch {
+		case admitted > 1: // at least two arms plainly admit null: never exactly one
+			return nullRefused
+		case unknown > 0:
+			fold(nullUnknown)
+		case admitted == 0:
+			return nullRefused
+		}
 	}
-	if n, ok := m["not"]; ok && schemaAdmitsNull(n) {
-		return false
+	if arms, ok := m["allOf"].([]any); ok {
+		for _, arm := range arms {
+			v := nullVerdictOf(arm)
+			if v == nullRefused {
+				return nullRefused
+			}
+			fold(v)
+		}
 	}
-	return true
+	if n, ok := m["not"]; ok {
+		switch nullVerdictOf(n) {
+		case nullAdmitted:
+			return nullRefused
+		case nullUnknown:
+			fold(nullUnknown)
+		case nullRefused:
+		}
+	}
+	return verdict
 }
 
 // schemaTypeAdmitsNull reports whether a JSON Schema `type` value — a single
@@ -399,14 +467,19 @@ func containsNil(list []any) bool {
 	return false
 }
 
-func countAdmittingNull(schemas []any) int {
-	n := 0
+// countNullVerdicts returns how many schemas plainly admit null and how many
+// are unknown; the remainder plainly refuse it.
+func countNullVerdicts(schemas []any) (admitted, unknown int) {
 	for _, s := range schemas {
-		if schemaAdmitsNull(s) {
-			n++
+		switch nullVerdictOf(s) {
+		case nullAdmitted:
+			admitted++
+		case nullUnknown:
+			unknown++
+		case nullRefused:
 		}
 	}
-	return n
+	return admitted, unknown
 }
 
 // oneLine collapses whitespace and clamps a description for the search listing.

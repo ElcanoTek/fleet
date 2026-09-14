@@ -37,9 +37,12 @@ tunable live from Settings → Admin → Feature settings, see
     `type: ["string","null"]` or `nullable: true` admits it unless a sibling
     `enum`, `const` or `not` excludes it; `anyOf` needs one arm that admits
     it, `oneOf` exactly one, `allOf` every one; an unconstrained schema (`{}`
-    or the boolean `true`) admits everything. So the deferred path never
-    refuses a call the direct path would have executed, and never passes a
-    null the vendor's own schema forbids.
+    or the boolean `true`) admits everything. Only a schema that *provably*
+    excludes null refuses: a construct fleet does not evaluate locally
+    (`$ref`, `if`/`then`/`else`, `dependentSchemas`) leaves the verdict
+    unknown, and unknown lets the call through to the vendor. So the deferred
+    path never refuses a call the direct path would have executed, and never
+    passes a null the vendor's own schema plainly forbids.
 
 A deferred `tool_call` routes through the **same `*mcpTool` wrapper** a direct
 call would, so the MCP broker + per-task credential allowlist (#184), the policy
