@@ -74,7 +74,9 @@ is the validation.
   whose live metadata said so on 2026-09-10 — GitHub (measured first: a
   secretless exchange answers `incorrect_client_credentials`, #1006), Slack,
   HubSpot, Zoom, Box, Asana, Docusign, Front, Wrike, Xero, AlloyDB and the
-  eight Google Workspace servers. Left off `amazon-ads` and `doordash`, whose
+  eight Google Workspace servers — and Sage Intacct, whose metadata the
+  2026-09-14 catalog audit read the same way (no registration endpoint, no
+  `none`). Left off `amazon-ads` and `doordash`, whose
   metadata lists `none`, and off five of the six `tenant` entries, whose URL
   cannot be probed without a tenant. Azure DevOps is the sixth: its
   protected-resource metadata is organization-agnostic and names Microsoft
