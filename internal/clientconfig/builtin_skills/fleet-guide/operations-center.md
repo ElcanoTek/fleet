@@ -36,8 +36,14 @@ than it promised, or to none — the difference is your colleagues' work, not a
 bug.
 
 **Failed Today** counts a run that ended in either failure state, `ERROR` or
-`DEAD_LETTERED` (see [Run states](#4-run-states) for the difference), so a zero
-there really does mean nothing failed today.
+`DEAD_LETTERED` (see [Run states](#4-run-states) for the difference) — both, not
+just one of them, so it no longer hides the state most failures actually end in.
+
+Read it as a count of what is **still** failed, though, not a tally of the day.
+Replaying a dead-lettered task returns that row to `PENDING` and clears its
+completion time, so it leaves the count; deleting the task removes it the same
+way. A zero therefore means nothing is sitting failed from today — which is what
+you usually want to know, but it is not the same as nothing having gone wrong.
 
 The clock in the corner shows **Server time** — the wall clock in the zone the
 deployment runs in, which is not necessarily your own and not necessarily UTC.
