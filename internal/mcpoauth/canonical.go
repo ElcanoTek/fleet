@@ -46,9 +46,20 @@ func CanonicalResourceURI(raw string) (string, error) {
 	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
 		port = ""
 	}
+	// Hostname() strips the brackets from an IPv6 literal, so the host and the
+	// port have to be re-joined with them or the boundary between the two
+	// becomes ambiguous: https://[2001:db8::1]:8443 and https://[2001:db8::1:8443]
+	// are different servers that would otherwise canonicalize to the identical
+	// string https://2001:db8::1:8443 — two identities collapsing into one, in
+	// the very function whose job is to keep them apart. A bracketless IPv6
+	// host is also not a URL Go will re-parse, so the old output could not
+	// round-trip.
 	canonHost := host
+	if strings.Contains(canonHost, ":") {
+		canonHost = "[" + canonHost + "]"
+	}
 	if port != "" {
-		canonHost = host + ":" + port
+		canonHost += ":" + port
 	}
 
 	out := url.URL{Scheme: scheme, Host: canonHost, Path: u.Path, RawQuery: u.RawQuery}

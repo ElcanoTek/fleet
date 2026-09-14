@@ -601,7 +601,8 @@ How the invariants hold:
   **escaped** path, so an issuer path of `/%2F` — which `url.Parse` decodes to
   `//` — stays a tenant rather than reading as a bare origin. Origins compare
   canonically throughout (lowercase scheme and host, the scheme's default port
-  dropped), so a PRM or a copy spelling a host in mixed case or with an
+  dropped, an IPv6 literal's brackets kept so the host/port boundary stays
+  unambiguous), so a PRM or a copy spelling a host in mixed case or with an
   explicit `:443` still matches the endpoints it vouches for; paths and
   queries compare exactly. When the token endpoint turns out to be the claimed
   issuer's own, that issuer's document supplies
