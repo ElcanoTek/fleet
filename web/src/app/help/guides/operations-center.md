@@ -30,10 +30,14 @@ Today**, and **Failed Today**. A healthy quiet day reads mostly zeros with a
 green completed count. Each of the four task counters is also a filter — click
 one to narrow the board to exactly those rows.
 
-The clock in the corner shows **Server Time** in UTC. Every timestamp on the
-board is anchored to it, so a task scheduled for the afternoon in your local time
-will show a UTC time here. When in doubt about when something ran, trust the
-server clock.
+The clock in the corner shows **Server time** — the wall clock in the zone the
+deployment runs in, which is not necessarily your own and not necessarily UTC.
+Hover it: the tooltip names that zone, and when new tasks default to a different
+one for scheduling, it names that too. Those are the two zones that decide when
+a recurring task fires; the timestamps in the task rows are something else
+again, rendered in your browser's own zone. So when a schedule and a row seem to
+disagree, they are usually both right and reading different clocks — the
+tooltip is what settles it.
 
 ### The tabs
 
@@ -57,15 +61,17 @@ On the right of every row sit four actions:
 
 | Action | What it does |
 | --- | --- |
-| **Run now** | Queue an immediate run, on top of whatever schedule exists. |
+| **Run now** | Queue an immediate run, on top of whatever schedule exists. Offered on a task that is waiting or finished — not on one that is in flight or paused (see below). |
 | **Edit task** | Open the task for changes. See [Everyday actions](#5-everyday-actions) for what editing means on a finished task. |
 | **Stop this task** | The task will not run again. Its history stays on the board. A deliberate stop is not treated as a failure: nothing retries, nothing alerts. |
 | **Delete** | Removes the task **and its run history** permanently, and frees its name for reuse. Prefer Stop when you simply want something to cease running; delete only what should leave the record. |
 
-A task that is executing right now is the exception: while a run is live it can
-only be stopped. Run-now, edit, and delete are all withheld until it finishes, so
-a second copy can never race the first and a running record can never be erased
-underneath itself.
+Two kinds of row show fewer than four. While a run is **live** it can only be
+stopped: run-now, edit and delete are withheld until it finishes, so a second
+copy can never race the first and a running record can never be erased
+underneath itself. A **paused** run — waiting on your answer, or asleep until its
+wake time — also has no **Run now**, deliberately: what it needs is the answer or
+the wake, not a second copy started alongside it. Stop is offered on both.
 
 ### Finding things
 
@@ -97,10 +103,20 @@ with it.
 | **Title** | The label the whole board shows. It is for people only and never enters the assistant's instructions, so name tasks the way your team talks. When you insert a prompt from the library, the task takes the prompt's name as its starting title, and a task created in conversation takes the name you confirm on its approval card. |
 | **Prompt** | The instructions, pulled from the **prompt library** or pasted in. The library entry is the single source of truth: when a report needs fixing, fix the library prompt, then update the task with the corrected version. Library edits do not reach existing tasks on their own. Avoid hand-editing instructions inside a task. |
 | **Schedule** | Three modes: **Run now**, **Run once** at a date and time, or **Repeat**. Repeat offers a plain-language builder for daily, weekday, and weekly patterns, and an advanced field for anything else. A repeat can also end on its own, under **End repeat**: never, on a date, or after a set number of runs. The form always previews the computed next run; read it before launching. |
-| **Recipients** | The email addresses that receive each run's result. Recipients belong to the task, not the prompt, so the same library prompt can serve different audiences. |
+| **Recipients** | The email addresses that receive each run's result. You set them on the task, not in the library, so the same library prompt can serve different audiences — but the form delivers them by appending an instruction to the end of the task's prompt, which has a consequence worth knowing before you edit one. See the warning below. |
 | **Tools & files** | What the task may reach: mailboxes, connectors, files. Some connections are always on for every run; the rest are selected per task, so new tasks start with your deployment's recommended set and an existing task never silently gains new connections. Files can also be attached directly to the task, for work that runs against a fixed reference like a template or a lookup table. |
-| **Context** | Notes that travel with the task for the people who operate it: why it exists, who owns it, what to do if it fails. These are shown to operators and never enter the assistant's instructions. Alongside them sit **tags** for filtering the board and the task's **persona**, which is left blank for the workspace default unless the task genuinely needs a different one. |
+| **Context** | Notes that travel with the task for the people who operate it: why it exists, who owns it, what to do if it fails. These are shown to operators and never enter the assistant's instructions. Alongside them sit **tags** and the task's **persona**, which is left blank for the workspace default unless the task genuinely needs a different one. Tags are stored with the task and can be filtered on through the API; the board itself filters by status, creator and text, so treat tags as a label for your own grouping rather than a control on this screen. |
 | **Advanced** | Further settings, including the model the task runs on and an option for a recurring task to carry a short summary of its previous run into the next one. The model in particular is worth choosing deliberately: match it to the demands of the job rather than leaving it to chance. |
+
+> **Re-inserting a prompt clears the recipients. Re-add them before saving.**
+> Because recipients are delivered as an instruction appended to the prompt,
+> choosing a prompt from the library replaces the whole prompt text — that
+> instruction with it — and the form's recipient list opens empty when you edit
+> an existing task. So the fix-in-the-library routine below has one extra step:
+> after re-inserting the prompt, **type the recipients back in** before you save,
+> or the next run will produce its report and email it to nobody. Check the
+> recipient field before saving any task you edited, and use **Run now** once
+> afterwards to confirm the mail arrives.
 
 As you fill the form in, a **cost forecast** appears beneath it: the token
 breakdown for the run you are describing and, where the model's pricing is known,
@@ -123,7 +139,7 @@ Every status badge means one of ten things. What each one means, and what to do:
 | `ERROR` | The run failed. If the cause was transient — a hiccup in a connection or a service — it retries by itself with increasing delays. If the cause was deterministic, something that would fail identically every time, it fails once, on purpose, and waits for a person. |
 | `DEAD_LETTERED` | Failed and out of retries, set aside for review. The row keeps its full record. Read the failure, fix the cause, and rerun; see [the next section but one](#6-when-a-run-goes-wrong). |
 | `CANCELLED` | A person stopped it. The record notes who. Deliberate stops never retry or alert. |
-| `PAUSED_AWAITING_INPUT` | The run reached a decision it was not willing to make alone and stopped to ask a question. It holds no resources while it waits. Answer it and it resumes from there; this state is the system working as designed, not a failure. |
+| `PAUSED_AWAITING_INPUT` | The run reached a decision it was not willing to make alone and stopped to ask a question. It holds no resources while it waits. Answer it and it resumes from there; this state is the system working as designed, not a failure. Most deployments let it wait indefinitely, but an operator can set an expiry after which an unanswered run fails — ask yours whether one is set. |
 | `PAUSED_AWAITING_WAKE` | The run put itself to sleep until a set time or an expected event, for example to check back on something later. It wakes on its own; every sleep has a deadline. Sleeping runs also get their own short list on the dashboard, so parked work stays visible without a status filter. |
 
 > **The retry rule in one line.** Transient failures retry themselves;
@@ -161,8 +177,11 @@ actually happened, and changes create new entries.
 
 When a task pauses to ask a question, the question is waiting in its record, and
 a notification goes out. Provide the answer there and the task re-queues and
-continues with your answer in hand. There is no rush: a paused task consumes
-nothing while it waits.
+continues with your answer in hand. A paused task consumes nothing while it
+waits, and by default it waits as long as it takes — but a deployment can set an
+expiry, after which an unanswered run is failed and its question cleared. If
+yours does, an answer left for tomorrow may be an answer left too late; ask your
+administrator whether there is a deadline.
 
 ### Rate a run
 
@@ -206,5 +225,5 @@ Four habits keep a shared board legible as it grows.
 | --- | --- |
 | **Title everything** | A good title says what the job is in your team's words. A task without one falls back to showing its prompt's first line, which is rarely what you want scanning a board. |
 | **One team version** | Each recurring report should exist as one scheduled task with a recipient list, not one task per person. Duplicates mean duplicate emails every morning and split run histories. And since a task's row lives on its creator's board, the team version belongs to whoever will maintain it: teammates receive its results either way, but they cannot see or rerun a row they do not own. |
-| **Fix in the library** | When a report needs a change, change the library prompt, update the task to the corrected version, then **Run now** to confirm. The task is where a prompt runs; the library is where it lives. |
+| **Fix in the library** | When a report needs a change, change the library prompt, update the task to the corrected version, re-enter the task's recipients (re-inserting a prompt clears them — see [What a task is made of](#3-what-a-task-is-made-of)), then **Run now** to confirm. The task is where a prompt runs; the library is where it lives. |
 | **Keep the ledger** | Stop tasks that should no longer run; reserve deletion for things that should leave the record entirely. Six months from now, the history of what ran and how it went is the most useful thing on this screen. |

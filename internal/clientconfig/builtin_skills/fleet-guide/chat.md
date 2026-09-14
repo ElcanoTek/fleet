@@ -473,7 +473,9 @@ it is the whole of your prompt work in one file.
 > was created. If the report needs a fix, fix the library prompt, then re-select
 > it on the task so the task picks up the new version. Editing instructions
 > inside a task instead creates a fork nobody else can see, and the library copy
-> quietly stops being true.
+> quietly stops being true. One catch when you re-select: the task's email
+> recipients ride along inside its prompt, so replacing the prompt clears them.
+> Re-enter them before saving — the Operations Center Guide says where.
 
 ## 10. From chat to a task
 
@@ -551,7 +553,8 @@ so the team's version of a report should be created by whoever will maintain it.
 > **One rule holds on every route.** A task keeps the prompt it was created with.
 > A library edit only reaches a task when the prompt is re-selected on that task.
 > After any change to a library prompt, open the tasks that use it, re-insert the
-> prompt, and **Run now** once to confirm.
+> prompt, **re-enter the recipients** (they live inside the prompt, so inserting
+> a new one clears them), and **Run now** once to confirm the mail arrives.
 
 From here, the **Operations Center Guide** takes over: run states, logs, what to
 do when a run needs attention.

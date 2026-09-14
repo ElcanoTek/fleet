@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { GUIDES, findGuide, readGuide } from "../guideContent";
 import { extractHeadings } from "../headings";
+import { guidePageTitle } from "../metadata";
 import { GuideMarkdown } from "../ui/GuideMarkdown";
 import { GuideNav } from "../ui/GuideNav";
 
@@ -19,7 +20,7 @@ export const dynamicParams = false;
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const guide = findGuide(slug);
-  return { title: guide ? `${guide.title} guide` : "Guides" };
+  return { title: await guidePageTitle(guide ? `${guide.title} guide` : "Guides") };
 }
 
 export default async function GuidePage({ params }: { params: Promise<{ slug: string }> }) {

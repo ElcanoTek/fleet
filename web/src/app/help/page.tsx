@@ -1,12 +1,15 @@
 import Link from "next/link";
 import { GUIDES } from "./guideContent";
+import { guidePageTitle } from "./metadata";
 import { GuideNav } from "./ui/GuideNav";
 
 // /help — the guides index. Two things a reader needs before either guide: the
 // loop the whole product is shaped around, and which guide covers which half of
 // it.
 
-export const metadata = { title: "Guides" };
+export async function generateMetadata() {
+  return { title: await guidePageTitle("Guides") };
+}
 
 // The loop both guides open with, drawn once here: a conversation becomes a
 // saved prompt, the prompt becomes a scheduled task, the task delivers itself.

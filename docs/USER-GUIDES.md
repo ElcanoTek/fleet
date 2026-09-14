@@ -73,12 +73,46 @@ had drifted. Corrected while porting:
 - **Datasets is not admin-only**; SLA, Usage and Adoption are
   (`orchestrator-client.tsx` render-guards exactly those three).
 - **The cost forecast** under the task form was undocumented.
+- **Server time is not UTC.** `ServerClock` renders the deployment's configured
+  zone and names the task-scheduling default in its tooltip when the two differ;
+  task-row timestamps render in the *browser's* zone. The draft asserted one UTC
+  clock for all three, which is exactly the mistake that makes someone read a
+  schedule wrong.
+- **Run now is not on every row.** `RUNNABLE_STATUSES` excludes the two paused
+  states as well as the in-flight ones — a paused run needs its answer or its
+  wake, not a second copy.
+- **Paused runs can expire.** `FLEET_PAUSED_TASK_EXPIRY_MINUTES` is 0 (disabled)
+  by default, but where an operator sets it `ExpirePausedTasks` fails an
+  unanswered run and clears its question. The draft promised "no rush"
+  unconditionally.
+- **Tags do not filter the board.** The API takes `?tag=`, but `TaskFilters`
+  offers only status, creator, scheduled-only and text, so the guide describes
+  tags as stored metadata rather than a control on that screen.
 - **De-branded.** The drafts were written for one deployment ("Elcano · Fleet",
   "your Elcano contact"). fleet is the engine, branding arrives in a bundle, and
   a deployment may be white-labeled — so the guides name no product at all (they
   say "the platform" and "your administrator") and describe deployment-specific
   things — personas, connectors, model names and cost bands — as things a
   deployment supplies.
+
+## A product defect the guides now warn about
+
+Writing the fix-in-the-library routine down surfaced a real bug, and it is
+documented rather than fixed here because fixing it is a change to the task form
+that deserves its own PR:
+
+**Re-inserting a library prompt on a task silently drops its email recipients.**
+`TaskCreateModal` delivers recipients by appending a `CRITICAL ACTION` block to
+the task's prompt (`buildFinalPrompt`), initializes its `emails` state to `[]`
+in edit mode rather than parsing them back out, and `PromptLibrary`'s `onInsert`
+replaces the whole prompt. So the routine both guides recommend — fix the
+library prompt, re-select it on the task, save — produces a task that runs
+correctly and emails its report to nobody, with no warning.
+
+The guides now carry the extra step (re-enter the recipients before saving, then
+**Run now** once to confirm the mail arrives) in all three places that routine
+appears. The real fix is to parse the recipients back out of the prompt when the
+form opens, or to stop storing them in the prompt at all; that is a follow-up.
 
 ## Honest scope
 
@@ -94,6 +128,8 @@ had drifted. Corrected while porting:
 - **No search, no per-section deep links from elsewhere in the app.** The
   contents rail and the browser's own find are what a two-page guide needs. If
   the guides grow, search is the first thing to add.
+- **The recipient bug above is documented, not fixed.** A docs PR is the wrong
+  place to change how the task form round-trips recipients.
 - **Nothing links into the guides contextually yet** — no "what does this mean?"
   affordance next to a status badge or an approval card. That is the obvious
   next step and was deliberately not bundled into this change.
