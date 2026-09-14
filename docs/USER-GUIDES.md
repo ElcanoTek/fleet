@@ -122,24 +122,28 @@ had drifted. Corrected while porting:
   things — personas, connectors, model names and cost bands — as things a
   deployment supplies.
 
-## A product defect the guides now warn about
+## A product defect writing the guides surfaced — since fixed
 
-Writing the fix-in-the-library routine down surfaced a real bug, and it is
-documented rather than fixed here because fixing it is a change to the task form
-that deserves its own PR:
+Worth keeping, because it is the strongest argument for writing user
+documentation at all: describing the fix-in-the-library routine step by step is
+what exposed a bug nobody had noticed from the code.
 
-**Re-inserting a library prompt on a task silently drops its email recipients.**
-`TaskCreateModal` delivers recipients by appending a `CRITICAL ACTION` block to
-the task's prompt (`buildFinalPrompt`), initializes its `emails` state to `[]`
-in edit mode rather than parsing them back out, and `PromptLibrary`'s `onInsert`
-replaces the whole prompt. So the routine both guides recommend — fix the
-library prompt, re-select it on the task, save — produces a task that runs
-correctly and emails its report to nobody, with no warning.
+**Re-inserting a library prompt on a task silently dropped its email
+recipients.** `TaskCreateModal` delivers recipients by appending a
+`CRITICAL ACTION` block to the task's prompt, used to initialize its `emails`
+state to `[]` in edit mode rather than parsing them back out, and
+`PromptLibrary`'s `onInsert` replaces the whole prompt. So the routine both
+guides recommend — fix the library prompt, re-select it on the task, save —
+produced a task that ran correctly and emailed its report to nobody, with no
+warning and nothing in the diff a reviewer would catch.
 
-The guides now carry the extra step (re-enter the recipients before saving, then
-**Run now** once to confirm the mail arrives) in all three places that routine
-appears. The real fix is to parse the recipients back out of the prompt when the
-form opens, or to stop storing them in the prompt at all; that is a follow-up.
+The guides shipped with a warning; the fix followed in its own PR.
+`taskEmailBlock.ts` now round-trips the block — built on the way out, split off
+on the way in — so recipients live in the form's own field and replacing the
+prompt cannot touch them. Parsing is deliberately conservative: a block is only
+removed when rebuilding it from the parsed addresses reproduces the stored text
+byte for byte, so nothing an author hand-wrote is ever absorbed. The guides'
+extra step is gone, and the warning with it.
 
 ## Keeping them true
 

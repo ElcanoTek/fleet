@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { TaskCreateModal, normalizeRunIfTimeout } from "./TaskCreateModal";
 import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
+import { buildPromptWithRecipients } from "./taskEmailBlock";
 
 // Component tests for the redesigned New Task modal: schedule mode segment,
 // launch gating + footer reason, blur validation with the design's error copy,
@@ -349,6 +350,56 @@ const baseEdit: Task = {
   status: "scheduled",
   model: "z-ai/glm-5.2",
 };
+
+describe("TaskCreateModal — edit mode recipients", () => {
+  // The regression: recipients are stored inside the prompt as a CRITICAL
+  // ACTION block, and the form used to open with an empty recipient list. So
+  // the routine the user guides recommend — fix the library prompt, re-select
+  // it on the task, save — replaced the whole prompt, block included, and the
+  // task went on running and emailing its report to nobody.
+  const withRecipients: Task = {
+    ...baseEdit,
+    prompt: buildPromptWithRecipients("Weekly latency report", ["ops@example.com"]),
+  };
+
+  it("shows the author's prompt without the machinery, and the recipients as chips", () => {
+    renderModal({ editTask: withRecipients, onUpdated: vi.fn() });
+
+    const promptBox = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(promptBox.value).toBe("Weekly latency report");
+    expect(promptBox.value).not.toContain("CRITICAL ACTION");
+    expect(screen.getByText("ops@example.com")).toBeInTheDocument();
+  });
+
+  it("keeps the recipients when the prompt is replaced wholesale", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({ editTask: withRecipients, onUpdated: vi.fn() });
+
+    // What inserting a library prompt does: setPrompt over the whole textarea.
+    fireEvent.change(screen.getByLabelText("Prompt"), {
+      target: { value: "The corrected library prompt" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalled());
+    const saved = updateTask.mock.calls[0][1] as { prompt: string };
+    expect(saved.prompt).toContain("The corrected library prompt");
+    expect(saved.prompt).toContain("    - ops@example.com");
+    expect(saved.prompt).not.toContain("Weekly latency report");
+  });
+
+  it("does not re-append the block on an edit that changes nothing else", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({ editTask: withRecipients, onUpdated: vi.fn() });
+
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalled());
+    const saved = updateTask.mock.calls[0][1] as { prompt: string };
+    expect(saved.prompt).toBe(withRecipients.prompt);
+  });
+});
 
 describe("TaskCreateModal — edit mode", () => {
   it("keeps a task's saved connector selection instead of applying new defaults", () => {
