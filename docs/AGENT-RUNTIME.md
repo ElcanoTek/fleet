@@ -586,8 +586,14 @@ How the invariants hold:
   metadata location failed the strict check, and accepts the document when
   each endpoint it names (authorization, token, registration, revocation) is
   either confirmed equal by the claimed issuer's own metadata or, when the
-  resource named a bare host, on that host itself; a path-bearing issuer gets
-  no same-host leg, since other tenants share the host. The validated
+  resource named a bare host, on that host itself. Endpoint URLs compare the
+  way URLs do — scheme and host case-insensitively, path and query exactly —
+  so a "confirmed" endpoint cannot differ from the vouched-for one in casing
+  alone. A path-bearing authorization server (`https://as.example.com/tenantA`)
+  gets neither leg on another tenant's terms: the only document that may vouch
+  for it is its own ORIGIN-level one, the measured Chargebee shape. A sibling
+  tenant is self-consistent too, and accepting it would send the user through
+  the wrong tenant's authorization endpoint. The validated
   document's endpoints are what fleet dials (a proxy's registered clients only
   work with the proxy's endpoints), and its `Issuer` is recorded as the
   identity the vendor asserts. An endpoint belonging to neither party — a copy
@@ -598,8 +604,13 @@ How the invariants hold:
   no `none` method, the two met live registered fleet anyway — one returning
   a secret fleet stores and uses. A server that instead answers RFC 7591's
   `invalid_client_metadata` gets one retry with `client_secret_basic` (or
-  `client_secret_post`) if it lists it; the secret comes back encrypted at
-  rest like any other.
+  `client_secret_post`) if it lists one — and with `client_secret_basic` when
+  it advertises no list at all, which RFC 8414 §2 defines to mean exactly
+  that, the same default the token endpoint already applies. The retry must
+  come back with a `client_secret`: a confidential registration without one
+  cannot authenticate at the token endpoint, so it is refused at add time
+  rather than after a consent screen. The secret comes back encrypted at rest
+  like any other.
 - **Auth0 is asked for `offline_access`, like Entra.** An Auth0 tenant
   (recognized by its proprietary `mfa_challenge_endpoint`, or an
   `*.auth0.com` issuer) issues a refresh token only for that scope, which the

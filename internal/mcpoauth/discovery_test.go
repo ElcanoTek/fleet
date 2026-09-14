@@ -359,8 +359,89 @@ func TestDiscoverRefusesSameHostForPathIssuerWithoutConfirmation(t *testing.T) {
 	tenantB := AuthServerMetadata{Issuer: base + "/tenantB", AuthorizationEndpoint: base + "/tenantB/authorize", TokenEndpoint: base + "/tenantB/token", CodeChallengeMethodsSupported: []string{"S256"}}
 	mux.HandleFunc("/.well-known/oauth-authorization-server/tenantA", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(tenantB) })
 	_, err := fetchAuthServerMetadata(context.Background(), srv.Client(), base+"/tenantA")
-	if err == nil || !strings.Contains(err.Error(), "names a path, so only its issuer may vouch") {
+	if err == nil || !strings.Contains(err.Error(), "only its own origin may vouch") {
 		t.Fatalf("fetch = %v, want tenantB's document refused for tenantA", err)
+	}
+}
+
+// TestDiscoverRefusesConfirmedSiblingTenant is the test above with the one
+// difference that matters: tenantB DOES publish its own metadata, so every
+// endpoint of the document served at tenantA's location is "confirmed by the
+// claimed issuer". Closing the same-origin leg alone would still let that
+// through and send the user to tenantB's authorization endpoint for a resource
+// that named tenantA. A path-bearing authorization server may be vouched for
+// only by its own origin.
+func TestDiscoverRefusesConfirmedSiblingTenant(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	tenantB := AuthServerMetadata{Issuer: base + "/tenantB", AuthorizationEndpoint: base + "/tenantB/authorize", TokenEndpoint: base + "/tenantB/token", CodeChallengeMethodsSupported: []string{"S256"}}
+	mux.HandleFunc("/.well-known/oauth-authorization-server/tenantA", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(tenantB) })
+	// tenantB is a real, self-consistent authorization server.
+	mux.HandleFunc("/.well-known/oauth-authorization-server/tenantB", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(tenantB) })
+	_, err := fetchAuthServerMetadata(context.Background(), srv.Client(), base+"/tenantA")
+	if err == nil || !strings.Contains(err.Error(), "only its own origin may vouch") {
+		t.Fatalf("fetch = %v, want a self-confirmed sibling tenant refused for tenantA", err)
+	}
+}
+
+// TestConfirmProxiedIssuerComparesEndpointPathsExactly: the claimed issuer's
+// own document vouches for /oauth/token and the copy names /oauth/Token. A
+// case-insensitive compare of the whole URL would call those the same endpoint
+// and hand the authorization code to a handler the issuer never vouched for.
+// The claimed issuer is a different host from the one the resource named, so
+// the same-origin leg is shut and confirmedBy is the only way through.
+func TestConfirmProxiedIssuerComparesEndpointPathsExactly(t *testing.T) {
+	issMux := http.NewServeMux()
+	iss := httptest.NewServer(issMux)
+	t.Cleanup(iss.Close)
+	fetchedFrom := "https://mcp.vendor.example"
+	realDoc := AuthServerMetadata{Issuer: iss.URL, AuthorizationEndpoint: iss.URL + "/authorize", TokenEndpoint: iss.URL + "/oauth/token", CodeChallengeMethodsSupported: []string{"S256"}}
+	issMux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(realDoc) })
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		return fetchAuthServerMetadataOpts(context.Background(), iss.Client(), claimed, false)
+	}
+	copyDoc := realDoc
+	copyDoc.TokenEndpoint = iss.URL + "/oauth/Token"
+	if _, err := confirmProxiedIssuer(fetchedFrom, &copyDoc, resolveOwn); err == nil {
+		t.Fatal("confirmProxiedIssuer accepted a token endpoint differing only in path case")
+	}
+	// The same document with the vouched-for spelling is accepted, so the
+	// refusal above is the casing and not something else.
+	if _, err := confirmProxiedIssuer(fetchedFrom, &realDoc, resolveOwn); err != nil {
+		t.Fatalf("confirmProxiedIssuer refused the confirmed document: %v", err)
+	}
+}
+
+// TestFetchAuthServerMetadataTriesEveryMismatchedDocument: an early catch-all
+// location serves an unconfirmable copy naming issuer X, and a later location
+// serves the real proxied document naming the same X. Skipping the second
+// because that issuer was already "seen" would fail an Add that should work.
+// The claimed issuer is a loopback server that publishes nothing, so the
+// confirmation fails deterministically off the network.
+func TestFetchAuthServerMetadataTriesEveryMismatchedDocument(t *testing.T) {
+	silent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	t.Cleanup(silent.Close)
+	claimed := silent.URL
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	// The catch-all copy points its token endpoint at a third host, so nothing
+	// can confirm it.
+	bogus := AuthServerMetadata{Issuer: claimed, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: "https://elsewhere.example/token", CodeChallengeMethodsSupported: []string{"S256"}}
+	// The real proxied document keeps every endpoint on the host the resource
+	// named — the bare-origin leg.
+	good := AuthServerMetadata{Issuer: claimed, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", CodeChallengeMethodsSupported: []string{"S256"}}
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(bogus) })
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(good) })
+	as, err := fetchAuthServerMetadata(context.Background(), srv.Client(), base)
+	if err != nil {
+		t.Fatalf("fetch = %v, want the later confirmable document accepted", err)
+	}
+	if as.TokenEndpoint != base+"/token" {
+		t.Errorf("token endpoint = %q, want the confirmable document's", as.TokenEndpoint)
 	}
 }
 
@@ -1107,6 +1188,77 @@ func TestRegisterDoesNotRetryWithoutCause(t *testing.T) {
 	calls = 0
 	if _, err := Register(context.Background(), srv2.Client(), srv2.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"none", "private_key_jwt"}); err == nil || calls != 1 {
 		t.Fatalf("no confidential method listed: err=%v calls=%d, want one call and the refusal", err, calls)
+	}
+}
+
+// TestRegisterRetriesBasicWhenNoMethodsAdvertised: RFC 8414 §2 defines an
+// omitted token_endpoint_auth_methods_supported as exactly
+// ["client_secret_basic"] — the default basicAuthAllowed and
+// PublicClientAllowed already apply at the token endpoint. A server that
+// publishes no list and then refuses `none` is asking for Basic, so the retry
+// happens rather than the empty list being read as "nothing to retry with".
+func TestRegisterRetriesBasicWhenNoMethodsAdvertised(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req clientRegistrationRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		methods = append(methods, req.TokenEndpointAuthMethod)
+		if req.TokenEndpointAuthMethod == "none" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_client_metadata"})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(ClientRegistration{ClientID: "conf-2", ClientSecret: "s3cr3t"})
+	}))
+	t.Cleanup(srv.Close)
+	reg, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", nil)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if reg.ClientSecret != "s3cr3t" || strings.Join(methods, ",") != "none,client_secret_basic" {
+		t.Errorf("methods = %v reg = %+v, want none then client_secret_basic", methods, reg)
+	}
+}
+
+// TestRegisterRejectsConfidentialRegistrationWithoutSecret: we ask to be a
+// confidential client only because the server just refused a public one, so a
+// registration that comes back with no client_secret cannot authenticate at
+// the token endpoint. Storing it would send the user through a consent screen
+// whose code exchange is bound to fail; the failure belongs here instead.
+func TestRegisterRejectsConfidentialRegistrationWithoutSecret(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req clientRegistrationRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.TokenEndpointAuthMethod == "none" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_client_metadata"})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(ClientRegistration{ClientID: "no-secret"})
+	}))
+	t.Cleanup(srv.Close)
+	_, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"client_secret_basic"})
+	if err == nil || !strings.Contains(err.Error(), "no client_secret") {
+		t.Fatalf("Register = %v, want a secretless confidential registration refused", err)
+	}
+}
+
+// TestRegistrationRejectedErrorKeepsHTTPStatus: encoding/json matches field
+// names case-insensitively, so a response body carrying its own "status" must
+// not overwrite the HTTP one — that would let a 500 be read as a retryable 400.
+func TestRegistrationRejectedErrorKeepsHTTPStatus(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": 400, "error": "invalid_client_metadata"})
+	}))
+	t.Cleanup(srv.Close)
+	_, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"client_secret_basic"})
+	if err == nil || !strings.Contains(err.Error(), "status 500") || calls != 1 {
+		t.Fatalf("Register = %v calls=%d, want the 500 reported as is after one call", err, calls)
 	}
 }
 

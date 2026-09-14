@@ -716,14 +716,37 @@ func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, i
 		}
 		return &as, nil
 	}
+	// One fetch per claimed issuer, shared across the documents that name it:
+	// the confirmation below asks the claimed issuer for its own metadata, and
+	// several candidate locations can name the same one.
+	ownDocs := map[string]*AuthServerMetadata{}
+	ownErrs := map[string]error{}
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		if doc, ok := ownDocs[claimed]; ok {
+			return doc, ownErrs[claimed]
+		}
+		doc, derr := fetchAuthServerMetadataOpts(ctx, httpClient, claimed, false)
+		ownDocs[claimed], ownErrs[claimed] = doc, derr
+		return doc, derr
+	}
 	seen := map[string]bool{}
 	for _, m := range proxied {
-		claimed := strings.ToLower(strings.TrimRight(strings.TrimSpace(m.doc.Issuer), "/"))
-		if seen[claimed] {
+		// Key on the DOCUMENT, not on the issuer it claims. Two candidate
+		// locations can serve different documents under the same issuer — a
+		// catch-all copy that cannot confirm, and the real one at the
+		// issuer-specific location — and keying on the issuer alone would let
+		// the first suppress the second, the same candidate-order trap the
+		// strict loop above exists to avoid.
+		key := strings.Join([]string{
+			strings.ToLower(strings.TrimRight(strings.TrimSpace(m.doc.Issuer), "/")),
+			m.doc.AuthorizationEndpoint, m.doc.TokenEndpoint,
+			m.doc.RegistrationEndpoint, m.doc.RevocationEndpoint,
+		}, "\x00")
+		if seen[key] {
 			continue
 		}
-		seen[claimed] = true
-		confirmed, cerr := confirmProxiedIssuer(ctx, httpClient, issuer, &m.doc)
+		seen[key] = true
+		confirmed, cerr := confirmProxiedIssuer(issuer, &m.doc, resolveOwn)
 		if cerr == nil {
 			return confirmed, nil
 		}
@@ -759,7 +782,7 @@ func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, i
 // belongs to neither party. The validated copy is what fleet then dials (a
 // proxy's endpoints are the ones its registered clients work with); its
 // issuer is recorded as the identity the vendor asserts.
-func confirmProxiedIssuer(ctx context.Context, httpClient *http.Client, fetchedFrom string, copyDoc *AuthServerMetadata) (*AuthServerMetadata, error) {
+func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resolveOwn func(string) (*AuthServerMetadata, error)) (*AuthServerMetadata, error) {
 	claimed := strings.TrimRight(strings.TrimSpace(copyDoc.Issuer), "/")
 	u, err := url.Parse(claimed)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
@@ -779,9 +802,22 @@ func confirmProxiedIssuer(ctx context.Context, httpClient *http.Client, fetchedF
 	// claimed issuer's own document may vouch for an endpoint.
 	fu, ferr := url.Parse(fetchedFrom)
 	bareOrigin := ferr == nil && strings.Trim(fu.Path, "/") == ""
-	own, ownErr := fetchAuthServerMetadataOpts(ctx, httpClient, claimed, false)
+	if !bareOrigin {
+		// Closing the same-origin leg is not enough on its own: a SIBLING
+		// tenant (https://as.example.com/tenantB) publishes a self-consistent
+		// document of its own, so confirmedBy would vouch for it and the user
+		// would be sent through the wrong tenant's authorization endpoint.
+		// The one document a path-bearing URL may be confirmed by is its own
+		// ORIGIN-level one — the measured Chargebee shape, where the origin
+		// answers every path with the document whose issuer IS the origin.
+		origin, oerr := originOf(fetchedFrom)
+		if oerr != nil || !strings.EqualFold(claimed, strings.TrimRight(origin, "/")) {
+			return nil, fmt.Errorf("authorization server %s names a path, so only its own origin may vouch for a document naming another issuer; this one claims %s", fetchedFrom, claimed)
+		}
+	}
+	own, ownErr := resolveOwn(claimed)
 	confirmedBy := func(copyEP, ownEP string) bool {
-		return own != nil && ownEP != "" && strings.EqualFold(strings.TrimRight(copyEP, "/"), strings.TrimRight(ownEP, "/"))
+		return own != nil && ownEP != "" && sameEndpointURL(copyEP, ownEP)
 	}
 	var ownAuthz, ownToken, ownReg, ownRevoke string
 	if own != nil {
@@ -812,6 +848,25 @@ func confirmProxiedIssuer(ctx context.Context, httpClient *http.Client, fetchedF
 	out := *copyDoc
 	out.Issuer = claimed
 	return &out, nil
+}
+
+// sameEndpointURL compares two endpoint URLs the way a URL actually compares:
+// scheme and host are case-insensitive, and everything the server routes on —
+// path, query, fragment — is not. strings.EqualFold over the whole URL would
+// make /oauth/token and /oauth/Token the same endpoint, so a copied document
+// could point a "confirmed" endpoint at a different handler on the claimed
+// issuer's host. A trailing slash on the path is still ignored, as it was.
+func sameEndpointURL(a, b string) bool {
+	au, aerr := url.Parse(strings.TrimSpace(a))
+	bu, berr := url.Parse(strings.TrimSpace(b))
+	if aerr != nil || berr != nil {
+		return false
+	}
+	return strings.EqualFold(au.Scheme, bu.Scheme) &&
+		strings.EqualFold(au.Host, bu.Host) &&
+		strings.TrimRight(au.EscapedPath(), "/") == strings.TrimRight(bu.EscapedPath(), "/") &&
+		au.RawQuery == bu.RawQuery &&
+		au.Fragment == bu.Fragment
 }
 
 // entraTenantTemplate is the literal placeholder Microsoft Entra ID puts in the

@@ -74,6 +74,14 @@ func Register(ctx context.Context, httpClient *http.Client, registrationEndpoint
 	if ferr != nil {
 		return nil, fmt.Errorf("%w; retried as %s: %w", err, fallback, ferr)
 	}
+	if reg.ClientSecret == "" {
+		// We asked to be a confidential client only because this server had
+		// just refused a public one, so a registration that comes back with no
+		// client_secret cannot authenticate at the token endpoint: storing it
+		// would send the user through a consent screen whose code exchange is
+		// bound to fail. Fail here instead, where the reason is readable.
+		return nil, fmt.Errorf("%w; retried as %s and the server registered client %q with no client_secret, which cannot authenticate at the token endpoint", err, fallback, reg.ClientID)
+	}
 	return reg, nil
 }
 
@@ -81,7 +89,10 @@ func Register(ctx context.Context, httpClient *http.Client, registrationEndpoint
 // error body, kept typed so Register can tell "the server refused the auth
 // method" from "the endpoint is broken".
 type registrationRejectedError struct {
-	Status      int
+	// json:"-": the status is the HTTP one, and encoding/json matches field
+	// names case-insensitively — without this, a body carrying its own
+	// "status" would overwrite it and could turn a 500 into a retryable 400.
+	Status      int    `json:"-"`
 	Code        string `json:"error"`
 	Description string `json:"error_description"`
 }
@@ -112,6 +123,14 @@ func (e *registrationRejectedError) aboutAuthMethod() bool {
 // first (the RFC 6749 default), then client_secret_post. "" when the server
 // lists neither — then there is nothing to retry with.
 func confidentialMethodFor(methods []string) string {
+	if len(methods) == 0 {
+		// RFC 8414 §2 defines an omitted token_endpoint_auth_methods_supported
+		// as exactly ["client_secret_basic"] — the default basicAuthAllowed and
+		// PublicClientAllowed already apply at the token endpoint. A server
+		// that publishes no list and then refuses `none` is asking for Basic,
+		// so retry with it rather than giving up on a list that isn't there.
+		return "client_secret_basic"
+	}
 	for _, want := range []string{"client_secret_basic", "client_secret_post"} {
 		for _, m := range methods {
 			if strings.EqualFold(strings.TrimSpace(m), want) {
