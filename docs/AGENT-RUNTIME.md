@@ -523,8 +523,11 @@ How the invariants hold:
   never mutated with per-user secrets, so concurrent users can't cross-pollute.
   Chat and scheduled use the same overlay + refresh path.
 - **One identity, two URLs.** The connection URL is the canonical form of what
-  the user typed — the MCP endpoint fleet dials, the DB key, the encryption
-  AAD and the broker routing name. The RFC 8707 `resource` indicator the
+  the user typed (scheme and host lowercased, default port and fragment
+  dropped, the path kept exactly as typed — a percent-escaped segment such as
+  `/tenant%2Fone/mcp` included, since decoding it would name a different
+  route) — the MCP endpoint fleet dials, the DB key, the encryption AAD and
+  the broker routing name. The RFC 8707 `resource` indicator the
   authorize, exchange and refresh requests carry is what the server's
   protected-resource metadata declared, when it shares that origin
   (`remote_mcp_servers.resource`, '' = same as the URL). They usually
