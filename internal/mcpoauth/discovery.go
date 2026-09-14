@@ -812,7 +812,11 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	// would admit it — and the canonical rebuild below, which keeps scheme,
 	// host and path, would silently drop the "?" and leave an issuer the copy
 	// never asserted, free to be self-confirmed by the origin's document.
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
+	// Hostname(), not Host: "https://:443" parses with a NON-empty Host of
+	// ":443" and an empty hostname, so a Host check admits it and the
+	// canonical rebuild below renders it "https://" — a hostless issuer that
+	// the same-origin leg could then accept without any issuer-owned metadata.
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
 		return nil, fmt.Errorf("claimed issuer %q is not a plain http(s) URL", redactURLUserinfo(copyDoc.Issuer))
 	}
 	// Canonical spelling of the claimed issuer, used from here on. Resolving
@@ -1156,7 +1160,9 @@ func absoluteHTTPEndpoint(raw string) bool {
 	if err != nil {
 		return false
 	}
-	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+	// Hostname(), not Host, for the same reason the claimed-issuer validation
+	// uses it: "https://:443" has a non-empty authority and no host at all.
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != ""
 }
 
 func endpointCarriesUserinfo(raw string) bool {

@@ -934,6 +934,34 @@ func TestConfirmProxiedIssuerRefusesRelativeEndpoint(t *testing.T) {
 	}
 }
 
+// TestConfirmProxiedIssuerRequiresAClaimedHostname: "https://:443" parses with
+// a NON-empty Host of ":443" and no hostname at all, so a Host check admits it
+// and the canonical rebuild renders it "https://" — a hostless issuer the
+// same-origin leg could accept with no issuer-owned metadata behind it.
+// absoluteHTTPEndpoint had the same gap, so both are covered here.
+func TestConfirmProxiedIssuerRequiresAClaimedHostname(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	fetchedFrom := "https://mcp.vendor.example"
+	for _, claimed := range []string{"https://:443", "https://:8443"} {
+		doc := AuthServerMetadata{
+			Issuer:                        claimed,
+			AuthorizationEndpoint:         fetchedFrom + "/authorize",
+			TokenEndpoint:                 fetchedFrom + "/token",
+			CodeChallengeMethodsSupported: []string{"S256"},
+		}
+		if _, err := confirmProxiedIssuer(fetchedFrom, &doc, resolveOwn); err == nil {
+			t.Errorf("claimed issuer %q was accepted despite having no hostname", claimed)
+		}
+	}
+	// The twin: an endpoint with an authority but no hostname is not dialable.
+	if absoluteHTTPEndpoint("https://:443/token") {
+		t.Error("absoluteHTTPEndpoint accepted a hostless endpoint")
+	}
+	if !absoluteHTTPEndpoint("https://as.example/token") {
+		t.Error("absoluteHTTPEndpoint rejected a normal endpoint")
+	}
+}
+
 // TestConfirmProxiedIssuerRefusesForcedEmptyQueryClaim: url.Parse records the
 // bare "?" of "https://issuer.example?" only in ForceQuery, leaving RawQuery
 // empty — so a validation that checks RawQuery alone admits it, and the

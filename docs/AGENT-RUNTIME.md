@@ -590,9 +590,14 @@ How the invariants hold:
   each endpoint it names (authorization, token, registration, revocation) is
   either confirmed equal by the claimed issuer's own metadata or, when the
   resource named a bare host, on that host itself. Endpoint URLs compare the
-  way URLs do — scheme and host case-insensitively, path and query exactly —
-  so a "confirmed" endpoint cannot differ from the vouched-for one in casing
-  alone, and an endpoint embedding userinfo is refused outright — `net/http`
+  way URLs do — scheme and host case-insensitively, path and query
+  byte-for-byte **with one documented exception: a single trailing slash is
+  tolerated**, so `/token` and `/token/` are the same endpoint while `/token//`
+  is not — so a "confirmed" endpoint cannot differ from the vouched-for one in
+  casing alone. An endpoint must also be an absolute `http(s)` URL with a
+  hostname: a relative one parses without error and normalizes to an empty
+  origin, so two of them would confirm each other. An endpoint embedding
+  userinfo is refused outright — `net/http`
   turns URL userinfo into a Basic `Authorization` header when the request sets
   none itself, so confirming one would dial it with authentication fleet never
   chose to send. An authorization server scoped to one tenant — by a path
@@ -611,7 +616,7 @@ How the invariants hold:
   dropped, an IPv6 literal's brackets kept so the host/port boundary stays
   unambiguous), so a PRM or a copy spelling a host in mixed case or with an
   explicit `:443` still matches the endpoints it vouches for; paths and
-  queries compare exactly. When the token endpoint turns out to be the claimed
+  queries compare byte-for-byte, but for that one tolerated trailing slash. When the token endpoint turns out to be the claimed
   issuer's own, that issuer's document supplies
   `token_endpoint_auth_methods_supported` — a copy saying `none` against an
   endpoint whose owner requires a secret would otherwise open a secretless
