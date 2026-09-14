@@ -20,8 +20,29 @@ tunable live from Settings → Admin → Feature settings, see
   gates) behind three bridges:
   - `tool_search {query}` — BM25 keyword search over `{name, description}` →
     top-K names + one-line descriptions;
-  - `tool_describe {name}` — the tool's full description + JSON parameter schema;
-  - `tool_call {name, arguments}` — dispatches to the real tool's `Run`.
+  - `tool_describe {name}` — the tool's full description + its JSON parameter
+    schema as the provider would see it for a direct tool: `type`,
+    `properties` **and `required`**, plus a one-line "Required arguments"
+    summary (the properties map alone was printed until the #1006 catalog
+    audit, and a model could not learn that Stripe's every API tool needs
+    `stripe_context` and `livemode`);
+  - `tool_call {name, arguments}` — dispatches to the real tool's `Run`, after
+    refusing — with the missing names spelled out — a call that omits an
+    argument the tool's schema marks required. The vendor would refuse it
+    too, but its answer reaches the model only as the broker's masked
+    "credential-owner call failed", which reads as a broken credential rather
+    than a fixable call. `required` means *present*: a required argument sent
+    as JSON `null` is refused only when the property's own schema does not
+    admit null. The schema's keywords apply together, as JSON Schema says:
+    `type: ["string","null"]` or `nullable: true` admits it unless a sibling
+    `enum`, `const` or `not` excludes it; `anyOf` needs one arm that admits
+    it, `oneOf` exactly one, `allOf` every one; an unconstrained schema (`{}`
+    or the boolean `true`) admits everything. Only a schema that *provably*
+    excludes null refuses: a construct fleet does not evaluate locally
+    (`$ref`, `if`/`then`/`else`, `dependentSchemas`) leaves the verdict
+    unknown, and unknown lets the call through to the vendor. So the deferred
+    path never refuses a call the direct path would have executed, and never
+    passes a null the vendor's own schema plainly forbids.
 
 A deferred `tool_call` routes through the **same `*mcpTool` wrapper** a direct
 call would, so the MCP broker + per-task credential allowlist (#184), the policy
