@@ -15,11 +15,20 @@ shell never hijacks keys while you are typing: bare-letter shortcuts (`?`, `J`,
 | Shortcut | Action |
 | --- | --- |
 | `Mod` + `K` | Open the search palette |
-| `Mod` + `F` | Open the search palette (suppressed while typing, so the browser's in-page find still works there) |
-| `Mod` + `N` | Start a new conversation |
-| `Mod` + `J` | Focus the message composer |
+| `Mod` + `Shift` + `O` | Start a new conversation |
+| `Shift` + `Esc` | Focus the message composer |
 | `?` | Show the keyboard-shortcut help overlay |
 | `Esc` | Close the search palette, the help overlay, or the sidebar |
+
+**Three chords are deliberately NOT bound**, and this page said otherwise until
+2026-09 — a stale table that then propagated into the user guides before CI-less
+prose was caught in review. `Mod`+`F` stays find-in-page (the natural way to
+search a visible transcript), `Mod`+`N` is reserved by Chrome (a page cannot
+intercept it, so a binding there silently fails *and* opens a window), and
+`Mod`+`J` is downloads. New-conversation and focus-composer use the ChatGPT
+chords above instead, which are the closest muscle memory for an AI-chat app.
+The rationale lives in `chat-experience.tsx`'s shortcut list; this table follows
+it, never the other way round.
 
 ## Conversation list
 
@@ -45,6 +54,9 @@ Pinned-then-Recent. The remaining keys act on the focused row.
 | `Enter` | Send the message |
 | `Mod` + `Enter` | Send the message |
 | `Shift` + `Enter` | Insert a newline |
+
+`scripts/check_shortcuts_doc_test.go` fails when this page, or the user guide's
+own shortcut table, names a chord the app does not bind.
 
 ## Current conversation
 

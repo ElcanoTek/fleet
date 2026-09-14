@@ -136,6 +136,41 @@ The guides now carry the extra step (re-enter the recipients before saving, then
 appears. The real fix is to parse the recipients back out of the prompt when the
 form opens, or to stop storing them in the prompt at all; that is a follow-up.
 
+## Keeping them true
+
+A user guide rots differently from a design note: nobody re-reads it, and when
+it is wrong it does not fail a build — it just tells someone to press a button
+that is not there. Worse here than in most repos, because the same text is what
+the assistant quotes back when a user asks. Three things keep it honest, in
+descending order of reliability.
+
+**1. Mechanical checks, where a claim can be checked.** Prose does not compile,
+but some of it can still be pinned:
+
+| Check | What it prevents |
+| --- | --- |
+| `scripts/check_guides_sync_test.go` | The two copies becoming a fork — the assistant citing a page the user is not reading. |
+| `scripts/check_shortcuts_doc_test.go` | A shortcut table naming a chord the shell does not bind. This one is not hypothetical: `docs/keyboard-shortcuts.md` advertised `Mod`+`F`/`N`/`J` long after the app stopped binding them, and that stale table was copied into the guide in good faith. The authority is the help-overlay catalog in `chat-experience.tsx`. |
+| `web/src/app/help/headings.test.ts` | An in-guide cross-reference pointing at a heading that no longer exists. |
+| `internal/clientconfig/builtin_skills_fleet_guide_test.go` | The skill citing a guide file that moved, and the guides losing the sections the skill's description promises. |
+
+Add a row when a new claim is checkable. The pattern to look for is a guide
+sentence that restates a constant, an enum, or a list the code already owns.
+
+**2. The convention in `AGENTS.md`.** A change to anything a person can see or
+press updates the guide in the same PR, then `make sync-guides`. Two habits make
+that cheap rather than a chore: describe only what shipped, and write "by
+default" for anything an operator can configure — most of what went wrong in
+review was an unqualified absolute, not a wrong fact.
+
+**3. Review.** Both rounds of review on the PR that introduced these guides
+found real inaccuracies the drafts had carried in — a status badge that meant
+something other than what was written, counters that count the deployment while
+the table shows only your own rows, several "always" claims that were
+deployment-configurable. That is the expected yield for a document of this kind,
+and a reason to read a guide diff as carefully as a code diff rather than waving
+it through as "just docs".
+
 ## Honest scope
 
 - **The guides describe fleet as it ships.** A deployment can hide features,

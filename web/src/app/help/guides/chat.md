@@ -108,7 +108,7 @@ The toolbar beneath the message box is a row of icons. Left to right:
 
 | Control | What it does |
 | --- | --- |
-| Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$`. Click to change it. See [Picking the model](#picking-the-model). |
+| Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Persona | A saved working style for the assistant, shown when your deployment ships personas. **Default** is right for nearly everything. |
 | Prompt library | Opens the shared library to insert or save a prompt. See [The prompt library](#9-the-prompt-library). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
@@ -141,8 +141,10 @@ sit at the top of the list. Typically the first is fast and inexpensive — the 
 new conversations start on, and the right choice for pulls, checks, and
 formatting — and the second is stronger, for judgment calls, retrospectives, and
 anything where depth matters more than speed. The rest of the list is marked by
-status (**tested**, **new**, or **experimental**), and every model shows its cost
-band, so you can see what you are about to spend.
+status (**tested**, **new**, or **experimental**), and a model whose pricing the
+deployment knows shows its cost band, so you can see what you are about to
+spend. No band means the price is unknown rather than zero — worth asking about
+before running something long on it.
 
 The assistant will sometimes suggest a switch itself: a card offering **Switch &
 retry** when a question is heavier than the current model handles well, or a
@@ -577,15 +579,17 @@ row below.
 | Reply seems to stop | On a phone that locked, or a laptop that slept, the screen can lose the connection while the assistant keeps working. Refresh the page. If the turn finished, the full reply is there; if it is still running, the stream picks up where it left off. The work was never lost. |
 | Model unavailable | The banner offers **Pick a different model**. Choose one and resend; the conversation keeps its history. |
 | File refused | An attachment over the size limit is refused when you pick it, with the limit shown. Split the file, or trim it to the columns and dates you need. |
-| Connector unavailable | The picker shows **Unavailable** against a connector, or the trail shows a call that returned an error. Check **Settings → Connections** for a sign-in that has lapsed; otherwise bring it to your administrator along with a **Download chat** export, in **Raw data** format with **Include the agent's work** ticked. |
+| Connector unavailable | The picker shows **Unavailable** against a connector, or the trail shows a call that returned an error. Check **Settings → Connections** for a sign-in that has lapsed; otherwise bring it to your administrator along with a **Download chat** export in **Raw data** format — that one always carries the full record, so it offers no options to tick. |
 | Conversation is full | A banner reports the percentage. **Compact conversation**, or start a new one if the topic has moved on. |
 | The answer is wrong | Open the chips in the execution trail and read what actually came back from each source. Then ask: "show me the rows behind that number". Most wrong answers are a wrong source or a misread identifier, and both are visible in the trail. |
 
 Anything you cannot resolve from the transcript goes to your administrator. The
 fastest way to hand it over is **Download chat** from the conversation's `⋮`
-menu, choosing **Raw data** with **Include the agent's work** ticked: that file
-carries the full record, including what every tool returned, so nothing needs
-re-describing.
+menu, choosing **Raw data**: that format always carries the full record,
+including what every tool returned, so nothing needs re-describing and there is
+no option to forget. (**Include the agent's work** is offered on the two
+readable formats, which leave it out by default; Raw data does not show the
+checkbox because it never omits anything.)
 
 ## 12. Working conventions
 
@@ -610,9 +614,8 @@ Linux.
 | Shortcut | Action |
 | --- | --- |
 | `⌘ K` | Open search |
-| `⌘ F` | Open search (suppressed while typing, so the browser's own find still works there) |
-| `⌘ N` | Start a new conversation |
-| `⌘ J` | Focus the composer |
+| `⌘ ⇧ O` | Start a new conversation |
+| `⇧ Esc` | Focus the composer |
 | `Enter` / `Shift Enter` | Send / add a line (or the reverse, if **Send on Enter** is off) |
 | `J` / `K` | Move the focus cursor down / up the conversation list |
 | `Enter` | Open the focused conversation |
@@ -627,3 +630,8 @@ Linux.
 
 Single-letter shortcuts never fire while you are typing in a text field, so they
 cannot interrupt a message.
+
+Three chords you might expect are deliberately left alone, so your browser keeps
+them: `⌘F` stays find-in-page (the natural way to search the transcript in front
+of you), `⌘N` stays new-window, and `⌘J` stays downloads. That is why new
+conversation and focus-composer sit on the two chords above instead.

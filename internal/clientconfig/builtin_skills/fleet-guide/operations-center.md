@@ -26,9 +26,21 @@ to shape a task, and how to respond when a run asks something of you.
 
 Counters summarize the moment: **Agent Slots** (how many runs can execute at
 once), **Active Agents**, **Pending Tasks**, **Running Tasks**, **Completed
-Today**, and **Failed Today**. A healthy quiet day reads mostly zeros with a
-green completed count. Each of the four task counters is also a filter — click
-one to narrow the board to exactly those rows.
+Today**, and **Failed Today**. Each of the four task counters is also a filter —
+click one to narrow the board.
+
+Two things about those numbers are worth knowing before you trust them.
+
+They count the **whole deployment**, while the board below shows only your own
+tasks unless you are an admin. So a non-zero counter can filter down to fewer
+rows than it promised, or to none: the difference is your colleagues' work, not
+a bug.
+
+And **Failed Today counts only runs in `ERROR`** — it does not include
+`DEAD_LETTERED`, which, as [Run states](#4-run-states) explains, is where most
+failures actually end. A quiet-looking zero is therefore not proof of a clean
+day. Filter the board by status, or scan it for the red badge, before you
+conclude nothing went wrong.
 
 The clock in the corner shows **Server time** — the wall clock in the zone the
 deployment runs in, which is not necessarily your own and not necessarily UTC.
@@ -118,12 +130,12 @@ with it.
 > recipient field before saving any task you edited, and use **Run now** once
 > afterwards to confirm the mail arrives.
 
-As you fill the form in, a **cost forecast** appears beneath it: the token
-breakdown for the run you are describing and, where the model's pricing is known,
-a dollar estimate with a range. It warns when the estimate would exceed the
-deployment's cost ceiling. It is advisory — it never blocks the submit — but it
-is the cheapest moment to notice that a daily job is about to be an expensive
-one.
+**Estimate Cost**, beneath the form, produces a **cost forecast** on demand: the
+token breakdown for the run you are describing and, where the model's pricing is
+known, a dollar estimate with a range, plus a warning when the estimate would
+exceed the deployment's cost ceiling. Nothing appears until you press it, and it
+never blocks the submit — but pressing it is the cheapest moment to notice that
+a daily job is about to be an expensive one.
 
 ## 4. Run states
 
@@ -162,7 +174,10 @@ their wake time instead.
 ### Open a task's record
 
 Click any row to open the task's record: the full transcript of what the run did,
-its tool calls and results, token and cost figures, and the final output. The
+its tool calls and results, token and cost figures, and the final output. A task
+that has not run yet has none of that — its record opens on its details and
+**No logs for this task**, and the actions that read a transcript (**Discuss in
+chat**, **Download logs**) wait until there is one. The
 record carries its own action strip, so **Edit**, **Resubmit**, **Delete**,
 **History**, **Discuss in chat**, and **Download logs** are all reachable from
 here without returning to the board. For a **running** task the same view
@@ -235,4 +250,4 @@ Four habits keep a shared board legible as it grows.
 | **Title everything** | A good title says what the job is in your team's words. A task without one falls back to showing its prompt's first line, which is rarely what you want scanning a board. |
 | **One team version** | Each recurring report should exist as one scheduled task with a recipient list, not one task per person. Duplicates mean duplicate emails every morning and split run histories. And since a task's row lives on its creator's board, the team version belongs to whoever will maintain it: teammates receive its results either way, but they cannot see or rerun a row they do not own. |
 | **Fix in the library** | When a report needs a change, change the library prompt, update the task to the corrected version, re-enter the task's recipients (re-inserting a prompt clears them — see [What a task is made of](#3-what-a-task-is-made-of)), then **Run now** to confirm. The task is where a prompt runs; the library is where it lives. |
-| **Keep the ledger** | Stop tasks that should no longer run; reserve deletion for things that should leave the record entirely. Six months from now, the history of what ran and how it went is the most useful thing on this screen. |
+| **Keep the ledger** | Stop tasks that should no longer run; reserve deletion for things that should leave the record entirely — the history of what ran and how it went is the most useful thing on this screen. Do not expect it to last forever, though: deployments prune old run logs on a schedule (by default, terminal runs older than 90 days once a task has more than its ten most recent), so anything you need as a permanent record should be exported rather than left on the board. |
