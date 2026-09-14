@@ -97,9 +97,12 @@ It also filters by **tag**. A task's tags appear as small coloured chips on its
 row; clicking one narrows the board to that tag, and the **Tags** dropdown in
 the filter bar offers every tag on the tasks you can see (your own tasks by
 default; every task if you are an admin or have the view-all grant), including
-tags on tasks not on the current page. Tags stack: each one you add narrows the
-board further, to tasks carrying *all* of them. Remove a tag by clicking its
-chip in the filter bar, or drop everything at once with **Clear filters**.
+tags on tasks not on the current page. A tag just added to a task that is not on
+the current page can take up to five minutes to appear in the dropdown by
+default; tags on the tasks in front of you appear at once. Tags stack: each one
+you add narrows the board further, to tasks carrying *all* of them. Remove a tag
+by clicking its chip in the filter bar, or drop everything at once with **Clear
+filters**.
 
 ### Whose tasks you see
 

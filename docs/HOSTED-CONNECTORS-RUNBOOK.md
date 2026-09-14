@@ -28,7 +28,9 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
 - **`FLEET_MCP_OAUTH_ENCRYPTION_KEY` is the connection.** Tokens, client
   secrets and registration tokens are sealed with it, bound to (owner, URL).
   Lose or rotate it and every hosted connection must be reconnected by its
-  owner. Keep it where the database backups are.
+  owner. Keep `FLEET_MCP_OAUTH_ENCRYPTION_KEY` in a separate access-controlled
+  secret store, never in the same backup set as the database; both artifacts
+  are required for recovery, so document where each lives.
 - **Three shapes of Connect.** *One-click* — the vendor registers fleet as a
   client itself (Notion, Linear, Stripe, Grafana Cloud, Uptime Robot, Plaid,
   Cartesia, Globalping, …): the user clicks Connect and signs in. *Bring your
@@ -99,8 +101,10 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   send `enabled_optional` naming the connection, or nothing hosted mounts and
   the model reports "no MCP tools".
 - **Scheduled tasks** mount every connected connection of the task's owner on
-  its default seat, subject to the overlay ceiling. The overlay caps mounting
-  at `maxOverlayServers = 8` connected servers per user (`maxOverlayServers` in
+  its default seat, subject to the overlay ceiling. Only connections enabled for
+  that user mount; a disabled connection (own or shared seat alike) is omitted
+  silently with no notice to the model. The overlay caps mounting at
+  `maxOverlayServers = 8` connected servers per user (`maxOverlayServers` in
   `internal/agent/remote_mcp_overlay.go`), applied uniformly to chat,
   scheduled runs, and the broker. Selection order follows connection list order
   (`internal/remotemcp/resolver.go`'s `ConnectedServersForUser`: the owner's
@@ -171,6 +175,8 @@ The catalog rules are in [`MCP-CATALOG.md`](MCP-CATALOG.md). Before listing a
 hosted server, run discovery against it (the Connect button does exactly
 that) and record: does it publish protected-resource metadata, does its
 authorization server allow public clients (`none` in
-`token_endpoint_auth_methods_supported`), does it self-register, and does the
-URL you list answer the MCP `initialize` POST with 401 rather than 404. A
-URL that discovers but 404s tool calls is the most common catalog error.
+`token_endpoint_auth_methods_supported`), and does it self-register. For
+OAuth entries, verify that the unauthenticated `initialize` POST answers with
+401 and protected-resource metadata rather than 404; `open` and `api_key`
+entries must complete `initialize` (200) and `tools/list`. A URL that
+discovers but 404s tool calls is the most common catalog error.

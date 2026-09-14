@@ -3163,6 +3163,12 @@ tr.sla-row-fail {
   background: var(--color-surface-2, rgba(255, 255, 255, 0.03));
   overflow: hidden;
 }
+/* The focus ring lives on the <li> because the <li> clips overflow and the
+   card button's outward box-shadow was invisible. :has() scopes it to the
+   button itself, so focusing a tag chip shows only the chip's own ring. */
+.task-cards > li:has(> .task-card:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
 .task-card {
   display: grid;
   gap: 0.45rem;
@@ -3176,7 +3182,6 @@ tr.sla-row-fail {
 }
 .task-card:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
 }
 .task-card-top {
   display: flex;
