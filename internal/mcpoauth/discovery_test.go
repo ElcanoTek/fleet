@@ -728,7 +728,7 @@ func TestDiscoverPRMWithoutResourceIsMalformedNotLegacy(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Discover accepted a PRM without resource via the legacy fallback: %+v", d)
 			}
-			if !strings.Contains(err.Error(), "required resource field is missing or not a valid URI") {
+			if !strings.Contains(err.Error(), "required resource field is missing or not a resource URI fleet can use") {
 				t.Errorf("error must name the malformed document: %v", err)
 			}
 		})

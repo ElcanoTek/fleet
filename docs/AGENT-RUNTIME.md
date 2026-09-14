@@ -563,7 +563,10 @@ How the invariants hold:
   itself advertised on the 401 and then could not serve, a well-known
   location that answered 5xx, timed out or returned malformed JSON, a probe
   that got no answer at all, or a document that names no authorization server
-  *and* lacks a valid RFC 9728 `resource` URI, is an error, never a fallback —
+  *and* lacks a `resource` fleet can canonicalize (absolute, http(s), a host,
+  no userinfo — the same bar every stored resource passes, deliberately looser
+  than RFC 9728's https-only, fragment-free rule so development servers work),
+  is an error, never a fallback —
   that is a modern server failing or misbehaving, not a legacy one. (A
   document that does name an authorization server is handled as before,
   whatever its `resource` says.) The probe reads only status and headers,

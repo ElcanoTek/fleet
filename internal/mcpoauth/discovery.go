@@ -103,8 +103,8 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 			continue
 		}
 		// A document that parses but is unusable — no authorization server
-		// AND no valid RFC 9728 `resource` URI (`{}` and `{"resource":"x"}`
-		// both parse) — is malformed, not absent: a generic JSON catch-all
+		// AND no usable `resource` (`{}` and `{"resource":"x"}` both parse)
+		// — is malformed, not absent: a generic JSON catch-all
 		// at one well-known location must not stop the appended or root
 		// location from being tried, and must never be waved into the
 		// legacy-origin fallback as "names no authorization server".
@@ -197,15 +197,19 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 
 // usablePRM reports whether a fetched Protected Resource Metadata document can
 // drive discovery: it names at least one authorization server, or — for the
-// legacy-origin rule — it carries the `resource` RFC 9728 §2 requires, as a
-// valid resource URI (the same validator every stored resource passes). A
-// document with neither is malformed, and the error says so by location.
+// legacy-origin rule — it carries the `resource` RFC 9728 §2 requires, in a
+// form fleet can canonicalize (CanonicalResourceURI: absolute, http(s), a
+// host, no userinfo — the same validator every stored resource passes). That
+// is deliberately fleet's own bar, not the RFC's full one: the canonicalizer
+// accepts http and drops a fragment so that development and test servers
+// work, and this check inherits exactly that. A document with neither is
+// malformed, and the error says so by location.
 func usablePRM(location string, prm *ProtectedResourceMetadata) error {
 	if len(prm.AuthorizationServers) > 0 {
 		return nil
 	}
 	if _, cerr := CanonicalResourceURI(prm.Resource); cerr != nil {
-		return fmt.Errorf("protected-resource metadata at %s names no authorization_servers and its required resource field is missing or not a valid URI (%w): a malformed document, not a server without metadata", location, cerr)
+		return fmt.Errorf("protected-resource metadata at %s names no authorization_servers and its required resource field is missing or not a resource URI fleet can use (%w): a malformed document, not a server without metadata", location, cerr)
 	}
 	return nil
 }
