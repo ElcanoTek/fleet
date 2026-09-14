@@ -305,32 +305,93 @@ func isTokenChar(c byte) bool {
 	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
 }
 
-// fetchAuthServerMetadata tries the RFC 8414 well-known path and the OIDC
-// discovery path against the issuer, returning the first that parses with a
-// token_endpoint.
+// authServerMetadataCandidates lists the well-known URLs an issuer's metadata
+// may live at, in the order the MCP authorization spec says to try them.
+//
+// For an issuer with no path component there are two: RFC 8414 §3.1's
+// `/.well-known/oauth-authorization-server` and OpenID Connect Discovery's
+// `/.well-known/openid-configuration`, both at the origin.
+//
+// For an issuer WITH a path (https://as.example.com/tenant1) the two specs
+// disagree on where the path goes. RFC 8414 §3.1 INSERTS the well-known
+// segment between host and path
+// (https://as.example.com/.well-known/oauth-authorization-server/tenant1);
+// OIDC Discovery 1.0 §4 APPENDS it
+// (https://as.example.com/tenant1/.well-known/openid-configuration). The MCP
+// spec has clients try RFC 8414 insertion, then OIDC insertion, then OIDC
+// appending. fleet used to try only the two appended forms, which is why
+// Stripe, Datadog, Grafana, Airtable, Monday, Mixpanel, Meta and eight more
+// vendors whose issuer carries a path — and who publish, as the RFC says, at
+// the inserted location only — could not be added at all (#1006 catalog
+// audit). The appended RFC 8414 form is kept last: it is not in either spec
+// but was what fleet asked for first until now, so a vendor that answered it
+// keeps working.
+func authServerMetadataCandidates(issuer string) []string {
+	issuer = strings.TrimRight(strings.TrimSpace(issuer), "/")
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" {
+		return []string{
+			issuer + "/.well-known/oauth-authorization-server",
+			issuer + "/.well-known/openid-configuration",
+		}
+	}
+	origin := u.Scheme + "://" + u.Host
+	// EscapedPath, not Path: url.Parse decodes percent-escapes into Path, so
+	// an issuer path segment carrying %2F or %3F would be re-emitted as a
+	// path separator or a query delimiter and every candidate would name a
+	// different URL than the issuer's own.
+	path := strings.TrimRight(u.EscapedPath(), "/")
+	if path == "" {
+		return []string{
+			origin + "/.well-known/oauth-authorization-server",
+			origin + "/.well-known/openid-configuration",
+		}
+	}
+	return []string{
+		origin + "/.well-known/oauth-authorization-server" + path, // RFC 8414 §3.1, path inserted
+		origin + "/.well-known/openid-configuration" + path,       // OIDC, path inserted (MCP spec order)
+		origin + path + "/.well-known/openid-configuration",       // OIDC Discovery 1.0 §4, path appended
+		origin + path + "/.well-known/oauth-authorization-server", // appended RFC 8414 form: fleet's historical first try
+	}
+}
+
+// fetchAuthServerMetadata fetches the issuer's RFC 8414 / OIDC discovery
+// document from the first candidate location (authServerMetadataCandidates)
+// that parses with both an authorization and a token endpoint AND passes
+// verifyAuthServer — the issuer it claims is the one the PRM named, and PKCE
+// S256 is offered. Verifying inside the loop matters now that the inserted
+// forms are asked before the appended ones: a vendor whose catch-all answers
+// `/.well-known/oauth-authorization-server/<path>` with its origin-level
+// document (issuer = origin, not the path) would otherwise be taken at its
+// first, wrong word and the valid appended document never asked for, failing
+// an Add that used to work. A candidate that fails verification is recorded
+// and skipped like a 404. The error names every location tried and why each
+// was rejected, so an operator reading a failed Add sees which well-known
+// URLs the vendor 404ed or answered with the wrong document rather than only
+// the last one.
 func fetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, issuer string) (*AuthServerMetadata, error) {
 	issuer = strings.TrimRight(strings.TrimSpace(issuer), "/")
 	if issuer == "" {
 		return nil, fmt.Errorf("empty authorization server issuer")
 	}
-	candidates := []string{
-		issuer + "/.well-known/oauth-authorization-server",
-		issuer + "/.well-known/openid-configuration",
-	}
-	var lastErr error
-	for _, c := range candidates {
+	var tried []string
+	for _, c := range authServerMetadataCandidates(issuer) {
 		var as AuthServerMetadata
 		if err := fetchJSON(ctx, httpClient, c, &as); err != nil {
-			lastErr = err
+			tried = append(tried, err.Error())
 			continue
 		}
 		if as.TokenEndpoint == "" || as.AuthorizationEndpoint == "" {
-			lastErr = fmt.Errorf("authorization-server metadata at %s missing token/authorization endpoint", c)
+			tried = append(tried, fmt.Sprintf("authorization-server metadata at %s missing token/authorization endpoint", c))
+			continue
+		}
+		if err := verifyAuthServer(issuer, &as); err != nil {
+			tried = append(tried, fmt.Sprintf("authorization-server metadata at %s: %v", c, err))
 			continue
 		}
 		return &as, nil
 	}
-	return nil, fmt.Errorf("fetch authorization-server metadata for %s: %w", issuer, lastErr)
+	return nil, fmt.Errorf("fetch authorization-server metadata for %s: %s", issuer, strings.Join(tried, "; "))
 }
 
 // entraTenantTemplate is the literal placeholder Microsoft Entra ID puts in the

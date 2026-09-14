@@ -115,6 +115,223 @@ func TestDiscoverFallbackPathAwareWellKnown(t *testing.T) {
 	}
 }
 
+// TestAuthServerMetadataCandidatesOrder pins the MCP-spec order of well-known
+// locations: an issuer without a path has the two origin forms; an issuer
+// with a path tries RFC 8414's inserted form first, then OIDC inserted, then
+// OIDC appended, and last the appended RFC 8414 form fleet historically asked
+// for (#1006 catalog audit: 13 official vendors publish only the inserted
+// form).
+func TestAuthServerMetadataCandidatesOrder(t *testing.T) {
+	got := authServerMetadataCandidates("https://as.example.com/")
+	want := []string{
+		"https://as.example.com/.well-known/oauth-authorization-server",
+		"https://as.example.com/.well-known/openid-configuration",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("no-path candidates = %v, want %v", got, want)
+	}
+	got = authServerMetadataCandidates("https://access.stripe.com/mcp/")
+	want = []string{
+		"https://access.stripe.com/.well-known/oauth-authorization-server/mcp",
+		"https://access.stripe.com/.well-known/openid-configuration/mcp",
+		"https://access.stripe.com/mcp/.well-known/openid-configuration",
+		"https://access.stripe.com/mcp/.well-known/oauth-authorization-server",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("path candidates = %v, want %v", got, want)
+	}
+	// A multi-segment path keeps every segment in place.
+	got = authServerMetadataCandidates("https://mcp.datadoghq.com/v1/mcp")
+	if got[0] != "https://mcp.datadoghq.com/.well-known/oauth-authorization-server/v1/mcp" || got[2] != "https://mcp.datadoghq.com/v1/mcp/.well-known/openid-configuration" {
+		t.Errorf("multi-segment candidates = %v", got)
+	}
+	// Percent-escapes in the issuer path are preserved verbatim: a decoded
+	// %2F would become a path separator and a decoded %3F a query delimiter,
+	// pointing every candidate at a URL the issuer never published.
+	got = authServerMetadataCandidates("https://as.example.com/tenant%2Fone%3Fx/")
+	want = []string{
+		"https://as.example.com/.well-known/oauth-authorization-server/tenant%2Fone%3Fx",
+		"https://as.example.com/.well-known/openid-configuration/tenant%2Fone%3Fx",
+		"https://as.example.com/tenant%2Fone%3Fx/.well-known/openid-configuration",
+		"https://as.example.com/tenant%2Fone%3Fx/.well-known/oauth-authorization-server",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("escaped-path candidates = %v, want %v", got, want)
+	}
+}
+
+// TestDiscoverAuthServerMetadataPathInserted: the issuer carries a path and
+// the vendor publishes its metadata only where RFC 8414 §3.1 says — the
+// well-known segment INSERTED between host and path — 404ing the appended
+// forms fleet used to try. Discovery must succeed, and must ask for the
+// inserted form first.
+func TestDiscoverAuthServerMetadataPathInserted(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	issuer := base + "/tenant1"
+	var order []string
+	record := func(_ http.ResponseWriter, r *http.Request) bool {
+		order = append(order, r.URL.Path)
+		return strings.Contains(r.URL.Path, ".well-known/o")
+	}
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp", AuthorizationServers: []string{issuer}})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server/tenant1", func(w http.ResponseWriter, r *http.Request) {
+		record(w, r)
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{
+			Issuer:                        issuer,
+			AuthorizationEndpoint:         issuer + "/authorize",
+			TokenEndpoint:                 issuer + "/token",
+			CodeChallengeMethodsSupported: []string{"S256"},
+		})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if record(w, r) {
+			http.NotFound(w, r) // every other well-known location 404s
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if d.AS.TokenEndpoint != issuer+"/token" {
+		t.Errorf("token endpoint = %q", d.AS.TokenEndpoint)
+	}
+	if len(order) == 0 || order[0] != "/.well-known/oauth-authorization-server/tenant1" {
+		t.Errorf("first metadata request = %v, want the RFC 8414 inserted form first", order)
+	}
+}
+
+// TestDiscoverAuthServerMetadataPathAppendedStillWorks: a vendor that
+// publishes only the OIDC path-APPENDED document (Entra's
+// organizations/v2.0, GitHub before it moved) keeps working through the
+// fallback order.
+func TestDiscoverAuthServerMetadataPathAppendedStillWorks(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	issuer := base + "/org/v2.0"
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp", AuthorizationServers: []string{issuer}})
+	})
+	mux.HandleFunc("/org/v2.0/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: issuer, AuthorizationEndpoint: issuer + "/authorize", TokenEndpoint: issuer + "/token"})
+	})
+	if _, err := Discover(context.Background(), srv.Client(), base+"/mcp"); err != nil {
+		t.Fatalf("Discover via appended OIDC form: %v", err)
+	}
+}
+
+// TestDiscoverSkipsCandidateThatFailsVerification: the inserted form is now
+// asked first, so a vendor whose catch-all answers it with its ORIGIN-level
+// document (issuer = origin, not the path — the Chargebee shape from the
+// #1006 audit) or with a document lacking PKCE S256 must be skipped, not taken
+// at its first word, and the valid appended document behind it used. Both the
+// mix-up check and the PKCE check run per candidate; the error when every
+// candidate fails names each rejection.
+func TestDiscoverSkipsCandidateThatFailsVerification(t *testing.T) {
+	for name, wrong := range map[string]func(base, issuer string) AuthServerMetadata{
+		"issuer mismatch": func(base, _ string) AuthServerMetadata {
+			return AuthServerMetadata{Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", CodeChallengeMethodsSupported: []string{"S256"}}
+		},
+		"pkce plain only": func(base, issuer string) AuthServerMetadata {
+			return AuthServerMetadata{Issuer: issuer, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", CodeChallengeMethodsSupported: []string{"plain"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			base := srv.URL
+			issuer := base + "/mcp"
+			var order []string
+			mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/.well-known/oauth-protected-resource"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			})
+			mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: issuer, AuthorizationServers: []string{issuer}})
+			})
+			// The catch-all answers the two inserted forms with the wrong document.
+			mux.HandleFunc("/.well-known/oauth-authorization-server/", func(w http.ResponseWriter, r *http.Request) {
+				order = append(order, r.URL.Path)
+				_ = json.NewEncoder(w).Encode(wrong(base, issuer))
+			})
+			mux.HandleFunc("/.well-known/openid-configuration/", func(w http.ResponseWriter, r *http.Request) {
+				order = append(order, r.URL.Path)
+				_ = json.NewEncoder(w).Encode(wrong(base, issuer))
+			})
+			// The appended OIDC form carries the valid, issuer-specific document.
+			mux.HandleFunc("/mcp/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+				order = append(order, r.URL.Path)
+				_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: issuer, AuthorizationEndpoint: issuer + "/authorize", TokenEndpoint: issuer + "/token", CodeChallengeMethodsSupported: []string{"S256"}})
+			})
+			d, err := Discover(context.Background(), srv.Client(), issuer)
+			if err != nil {
+				t.Fatalf("Discover must skip the %s candidate and use the appended document: %v", name, err)
+			}
+			if d.AS.TokenEndpoint != issuer+"/token" {
+				t.Errorf("token endpoint = %q, want the appended document's", d.AS.TokenEndpoint)
+			}
+			if len(order) != 3 || order[2] != "/mcp/.well-known/openid-configuration" {
+				t.Errorf("request order = %v, want both inserted forms rejected then the appended OIDC form", order)
+			}
+		})
+	}
+
+	// Every candidate answers with a mismatched issuer: the error names each
+	// rejection, so the operator sees the vendor's wrong document, not a 404.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: "https://elsewhere.example.com", AuthorizationEndpoint: "https://elsewhere.example.com/a", TokenEndpoint: "https://elsewhere.example.com/t"})
+	}))
+	t.Cleanup(srv.Close)
+	_, err := fetchAuthServerMetadata(context.Background(), srv.Client(), srv.URL+"/tenant1")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Count(err.Error(), "issuer mismatch") != 4 || !strings.Contains(err.Error(), "/.well-known/oauth-authorization-server/tenant1: ") {
+		t.Errorf("error must name each rejected location with its reason: %q", err)
+	}
+}
+
+// TestFetchAuthServerMetadataErrorNamesEveryLocation: when every location
+// 404s the error lists each one, not just the last — the audit's failures
+// read as "openid-configuration: 404" alone and hid that the RFC 8414 form was
+// never asked for.
+func TestFetchAuthServerMetadataErrorNamesEveryLocation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	t.Cleanup(srv.Close)
+	_, err := fetchAuthServerMetadata(context.Background(), srv.Client(), srv.URL+"/tenant1")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{
+		"/.well-known/oauth-authorization-server/tenant1",
+		"/.well-known/openid-configuration/tenant1",
+		"/tenant1/.well-known/openid-configuration",
+		"/tenant1/.well-known/oauth-authorization-server",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err.Error(), want)
+		}
+	}
+}
+
 func TestDiscoverIgnoresCrossOriginPRMResource(t *testing.T) {
 	// A PRM that names a resource on a DIFFERENT origin must NOT rebind the
 	// stored identity — Discover keeps the requested server URL (RFC 9728 §3.3).
