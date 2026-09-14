@@ -934,7 +934,12 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
   /tasks/tags:
     get:
-      summary: List the distinct task tags in use with per-tag task counts (busiest first).
+      summary: >-
+        List the distinct task tags in use with per-tag task counts (busiest
+        first). Visibility is own-rows for principals without a fleet-wide grant
+        (#1082): a non-admin user or scoped API key gets only tags on tasks it
+        created, with counts over those tasks; the admin key, PermissionAdmin
+        carriers, and view_all_logs holders get the fleet-wide catalogue.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":

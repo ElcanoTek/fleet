@@ -109,6 +109,10 @@ jobs:
         if: ${{ !cancelled() && hashFiles('govulncheck.sarif') != '' }}
         with:
           sarif_file: 'govulncheck.sarif'
+          # This lane is the only govulncheck SARIF upload — the ci.yml PR gate
+          # emits none — so a cron-only category is fine: GitHub only flags a
+          # missing configuration when the same tool also reports on PRs (which
+          # is why grype-scheduled.yml shares ci.yml's category, #1502).
           category: 'govulncheck-scheduled'
 
 
