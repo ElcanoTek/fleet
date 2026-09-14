@@ -43,3 +43,13 @@ test("a signed-in user can open the guides from the rail and read a guide", asyn
   await page.getByTestId("nav-to-chat").click();
   await page.waitForURL("**/chat");
 });
+
+// A slug outside the GUIDES table must 404 rather than reach the page — the
+// guides are read from disk by filename, so "no request-supplied string ever
+// becomes a path" is worth holding to rather than trusting.
+test("an unknown guide slug 404s", async ({ page, context }) => {
+  await loginViaCookie(context);
+  await mockChatBoot(page);
+  const response = await page.goto("/help/not-a-guide");
+  expect(response?.status()).toBe(404);
+});

@@ -5,16 +5,20 @@ import { guidePageTitle } from "../metadata";
 import { GuideMarkdown } from "../ui/GuideMarkdown";
 import { GuideNav } from "../ui/GuideNav";
 
-// One guide, rendered. Static: the Markdown is read once at build time and the
-// two pages are pre-rendered, so opening a guide costs a signed-in user nothing
-// but the navigation.
+// One guide, rendered. The root layout is force-dynamic for white-labeling, so
+// this renders per request like every other page in the app — but the Markdown
+// itself is read from disk once per server process (guideContent.ts memoizes
+// it), so serving a guide is a render, never a file read.
 
+// Not for prerendering (see above) — this is the allowlist `dynamicParams`
+// checks a slug against, so /help/anything-else answers 404 (asserted in
+// guides.spec.ts) instead of reaching the page. findGuide() below is the
+// second of the two locks, and the reason no request-supplied string is ever
+// joined onto a path.
 export function generateStaticParams() {
   return GUIDES.map((guide) => ({ slug: guide.slug }));
 }
 
-// Anything outside the GUIDES table is a 404, so the slug never reaches the
-// filesystem.
 export const dynamicParams = false;
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
