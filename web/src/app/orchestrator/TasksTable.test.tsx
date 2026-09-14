@@ -600,6 +600,23 @@ describe("TasksTable tags", () => {
     expect(screen.getByTestId("tasks-clear-filters")).toBeTruthy();
   });
 
+  it("keeps the phone card's chips out of the card button", () => {
+    // A control nested inside a <button> has invalid accessibility semantics
+    // however it is marked up: assistive technology can expose only the outer
+    // "View task" control, or make the tag action ambiguous. Dressing the chip
+    // as a span with role="button" dodges the HTML rule and keeps the problem,
+    // which is what this originally did. They are siblings now.
+    renderTags();
+    const cards = screen.getByTestId("task-cards");
+    const chip = within(cards).getByLabelText("Filter by tag ops");
+    // A real <button>, not a span wearing role="button" — which is what this
+    // originally was, to dodge the nesting rule while keeping the problem.
+    expect(chip.tagName).toBe("BUTTON");
+    expect(chip.closest("button.task-card")).toBeNull();
+    // The card's own control is still there and still a button.
+    expect(within(cards).getByLabelText(/^View task /).tagName).toBe("BUTTON");
+  });
+
   it("renders no chip row for an untagged task", () => {
     renderTags({ tasks: [{ ...tagged, tags: undefined }] });
     expect(screen.queryByLabelText(/^Filter by tag /)).toBeNull();

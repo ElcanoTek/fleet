@@ -504,12 +504,6 @@ export function TasksTable({
                     <span className="task-card-title">{task.title.trim()}</span>
                   ) : null}
                   <span className="task-card-prompt">{truncate((task.prompt ?? "").trim(), 120)}</span>
-                  <TaskTagChips
-                    tags={task.tags}
-                    selected={filters.tags}
-                    onToggle={toggleTag}
-                    insideButton
-                  />
                   <span className="task-card-meta">
                     <code>{task.id.slice(0, 8)}</code>
                     {scheduleLabel(task) !== "-" ? (
@@ -614,6 +608,14 @@ export function TasksTable({
                     ) : null}
                   </span>
                 </button>
+                {/* Outside the card button, not inside it: the card is itself a
+                    <button>, and a control nested in one has invalid semantics
+                    however it is marked up — assistive technology can expose
+                    only the outer "View task" button, or make the tag action
+                    ambiguous. As a sibling each chip is a real button with its
+                    own name. The card's border/background moved to this <li>
+                    so the chips still sit inside the visible card. */}
+                <TaskTagChips tags={task.tags} selected={filters.tags} onToggle={toggleTag} />
               </li>
             );
           })
@@ -676,20 +678,19 @@ export default TasksTable;
 // is for, finding the rest of its group, could not be done. Clicking a chip
 // toggles that tag into the board's filter, which ANDs them server-side.
 //
-// insideButton exists because the phone card is itself a <button> and a nested
-// one is invalid HTML — the same reason the card's Run now control is a span
-// with role="button". The keyboard contract is spelled out by hand there, so
-// it is spelled out here too rather than silently lost.
+// Every chip is a real <button>. The phone card renders these OUTSIDE its own
+// card button rather than within it: a control nested inside a button has
+// invalid accessibility semantics however it is marked up, and dressing a span
+// as role="button" to dodge the HTML rule leaves the same problem — assistive
+// technology can expose only the outer control. Siblings, not children.
 function TaskTagChips({
   tags,
   selected,
   onToggle,
-  insideButton = false,
 }: {
   tags?: string[];
   selected: string[];
   onToggle: (tag: string) => void;
-  insideButton?: boolean;
 }) {
   if (!tags || tags.length === 0) return null;
   return (
@@ -704,28 +705,6 @@ function TaskTagChips({
           e.stopPropagation();
           onToggle(tag);
         };
-        if (insideButton) {
-          return (
-            <span
-              key={tag}
-              role="button"
-              tabIndex={0}
-              className={className}
-              style={labelChipStyle(tag)}
-              aria-pressed={active}
-              aria-label={label}
-              onClick={toggle}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  toggle(e);
-                }
-              }}
-            >
-              {tag}
-            </span>
-          );
-        }
         return (
           <button
             key={tag}
