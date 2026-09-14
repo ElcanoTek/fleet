@@ -33,9 +33,9 @@ salt, and not a credential `/auth/verify` would accept.
 
 | Step | Where | Behaviour |
 |---|---|---|
-| mint | `POST /api/auth/login`, `GET /api/auth/oidc/callback` | read `GET /auth/session-epoch`, stamp the claim into the HMAC cookie; a failed read **refuses the login** rather than minting a cookie the next request would reject |
+| mint | `POST /api/auth/login`, `GET /api/auth/oidc/callback` | password login reads `/auth/session-epoch`; OIDC reads `/auth/external-session-epoch` and stamps issuer+subject+source with its independent claim; either failed read refuses login |
 | serve | `internal/httpapi` `/auth/session-epoch` | on `authMiddleware` alone (like `/auth/verify`) — the mint paths run before a session exists; an unprovisioned address gets the epoch of an empty hash, a real value no account can hold |
-| forward | `chatServerHeaders`, `orchestratorHeaders` | `X-User-Session-Epoch` beside `X-User-Email`, over the same shared-token channel |
+| forward | `chatServerHeaders`, `orchestratorHeaders` | `X-User-Session-Epoch` beside `X-User-Email`; OIDC also forwards source, issuer, and subject over the same shared-token channel |
 | check (chat) | `membershipMiddleware` | compared inside the `GetUser` it already performs — no extra query |
 | check (ops center) | `headerTrustUser` → `checkSessionEpoch` | resolved through a chat-store lookup seam `cmd/fleet` injects; the two planes keep separate databases ([ADR-0005](adr/0005-separate-chat-and-sched-databases.md)), so this is a lookup, never a join — and it costs one chat-DB query per header-trust request |
 | verdict | both backends | `401 {"error":"session_revoked"}` + `X-Session-Revoked: 1`; both Next proxies then delete the cookie (`sessionRevocation.ts`), or the still-valid signature would bounce every visit to `/login` back into a 401 |
@@ -59,10 +59,10 @@ Three rules keep the gate honest in the other direction:
   claim and are refused rather than grandfathered — a claimless cookie is
   precisely what the Go gate admits, so honouring it would leave a 14-day bypass
   of the whole mechanism.
-- **No epoch bump independent of the password.** There is no "sign out my other
-  devices" without a reset, because the epoch *is* a function of the password
-  hash. That lever does not exist today either; adding a `session_epoch` column
-  later is strictly additive.
+- **Password and central epochs are independent.** Fleet password sessions are
+  still revoked by a Fleet password reset. OIDC sessions use the stored
+  issuer+subject generation and are rotated by an idempotent signed central
+  logout event; neither operation logs out the other credential type.
 - **Per account, not per device.** Two devices signed into one account share one
   epoch: a reset ends both (the point), and neither can be ended alone.
 - **The Operations Center bearer login is untouched.** `fleet sched user

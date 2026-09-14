@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  createSessionToken,
+  createOidcSessionToken,
   getRedirectUrl,
   getSessionCookieName,
   isSecureRequest,
   sessionMaxAgeSeconds,
 } from "@/app/lib/auth";
-import { fetchSessionEpoch } from "@/app/lib/chatServer";
+import { fetchExternalSessionEpoch } from "@/app/lib/chatServer";
 import {
   buildRedirectUri,
   decodeJwtClaims,
@@ -84,12 +84,25 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       code,
       redirect_uri: buildRedirectUri(config, request),
       client_id: config.clientId,
-      client_secret: config.clientSecret,
       code_verifier: verifier,
     });
+    const headers = new Headers({
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    });
+    if (issuerDoc.token_endpoint_auth_methods_supported?.includes("client_secret_basic")) {
+      headers.set(
+        "Authorization",
+        `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+      );
+    } else {
+      // Preserve generic providers that advertise no method (or only the
+      // historically supported client_secret_post method).
+      body.set("client_secret", config.clientSecret);
+    }
     const tokenRes = await fetch(tokenEndpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      headers,
       body,
     });
     if (!tokenRes.ok) return fail("oidc_error");
@@ -107,11 +120,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return fail("oidc_domain");
   }
 
-  // The session epoch pins the cookie to the account's current password, so an
-  // admin reset evicts SSO sessions too. An email chat has not provisioned still
-  // gets a well-formed epoch (it just never matches once the account exists), so
-  // the no-access path is unchanged; only an unreachable backend fails here.
-  const epoch = await fetchSessionEpoch(validation.email);
+  // Central identities use their own generation, independent of Fleet's
+  // password hash. Auth back-channel logout rotates this generation without
+  // evicting Fleet-native password sessions for the same email.
+  const epoch = await fetchExternalSessionEpoch(
+    validation.email,
+    issuerDoc.issuer,
+    validation.subject,
+  );
   if (!epoch) return fail("oidc_error");
 
   // Authenticated — mint the standard session cookie and go home.
@@ -119,7 +135,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const secure = isSecureRequest(request);
   res.cookies.set({
     name: getSessionCookieName(),
-    value: await createSessionToken(validation.email, epoch),
+    value: await createOidcSessionToken(
+      validation.email,
+      epoch,
+      issuerDoc.issuer,
+      validation.subject,
+    ),
     httpOnly: true,
     sameSite: "lax",
     secure,

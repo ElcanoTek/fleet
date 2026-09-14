@@ -1,6 +1,9 @@
 package mcpoauth
 
-import "testing"
+import (
+	"net/url"
+	"testing"
+)
 
 func TestCanonicalResourceURI(t *testing.T) {
 	cases := []struct {
@@ -15,6 +18,15 @@ func TestCanonicalResourceURI(t *testing.T) {
 		{"https://mcp.example.com/path/", "https://mcp.example.com/path/"}, // non-root trailing slash preserved
 		{"https://mcp.example.com/mcp#frag", "https://mcp.example.com/mcp"},
 		{"HTTPS://Mcp.Example.com/MCP", "https://mcp.example.com/MCP"}, // path case preserved
+		// An escaped reserved character is a different route from its decoded
+		// form and is kept as typed; a default-encoding escape is normalized.
+		{"https://mcp.example.com/tenant%2Fone/mcp", "https://mcp.example.com/tenant%2Fone/mcp"},
+		{"https://mcp.example.com/a%3Fb/mcp", "https://mcp.example.com/a%3Fb/mcp"},
+		{"https://mcp.example.com/a%23b/mcp", "https://mcp.example.com/a%23b/mcp"},
+		{"https://mcp.example.com/a%20b/mcp", "https://mcp.example.com/a%20b/mcp"},
+		{"https://mcp.example.com/a b/mcp", "https://mcp.example.com/a%20b/mcp"},
+		{"https://mcp.example.com/tenant%2Fone/mcp?tenant=x", "https://mcp.example.com/tenant%2Fone/mcp?tenant=x"},
+		{"https://mcp.example.com/%2F", "https://mcp.example.com/%2F"}, // an escaped slash is not a lone root path
 		// IPv6 literals keep their brackets: Hostname() strips them, and
 		// re-joining host and port without them makes the boundary ambiguous.
 		{"https://[2001:db8::1]/mcp", "https://[2001:db8::1]/mcp"},
@@ -31,6 +43,36 @@ func TestCanonicalResourceURI(t *testing.T) {
 		if got != c.want {
 			t.Errorf("CanonicalResourceURI(%q) = %q, want %q", c.in, got, c.want)
 		}
+		// The canonical form is a fixed point: re-canonicalizing a stored
+		// identity must never change it, or every existing row would drift.
+		if again, err := CanonicalResourceURI(got); err != nil || again != got {
+			t.Errorf("CanonicalResourceURI(%q) is not idempotent: %q, %v", got, again, err)
+		}
+	}
+}
+
+// TestCanonicalResourceURIEscapedSegmentIsDistinct: the whole point of keeping
+// the escape — "/tenant%2Fone/mcp" and "/tenant/one/mcp" are different
+// resources and must have different identities, and the kept escape survives
+// into the request path fleet dials.
+func TestCanonicalResourceURIEscapedSegmentIsDistinct(t *testing.T) {
+	a, err := CanonicalResourceURI("https://mcp.example.com/tenant%2Fone/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := CanonicalResourceURI("https://mcp.example.com/tenant/one/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatalf("escaped and decoded paths canonicalize to the same identity %q", a)
+	}
+	u, err := url.Parse(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.EscapedPath() != "/tenant%2Fone/mcp" {
+		t.Errorf("request path = %q, want the escaped segment preserved", u.EscapedPath())
 	}
 }
 

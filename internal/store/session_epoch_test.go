@@ -44,6 +44,44 @@ func TestSessionEpoch_MovesOnPasswordChange(t *testing.T) {
 	}
 }
 
+func TestExternalSessionEpochIsIndependentAndRevocable(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "u@x.com", "password123"); err != nil {
+		t.Fatal(err)
+	}
+	passwordEpoch, err := s.SessionEpoch(ctx, "u@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalEpoch, err := s.ExternalSessionEpoch(ctx, "https://auth.example.com", "account-123", "u@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if externalEpoch == "" || externalEpoch == passwordEpoch {
+		t.Fatalf("external epoch = %q, password epoch = %q", externalEpoch, passwordEpoch)
+	}
+	stable, err := s.ExternalSessionEpoch(ctx, "https://auth.example.com", "account-123", "u@x.com")
+	if err != nil || stable != externalEpoch {
+		t.Fatalf("stable external epoch = %q, %v", stable, err)
+	}
+	rotated, applied, err := s.RevokeExternalSessions(ctx, "event-123", "https://auth.example.com", "account-123", "u@x.com")
+	if err != nil || rotated == externalEpoch {
+		t.Fatalf("rotated external epoch = %q, %v", rotated, err)
+	}
+	if !applied {
+		t.Fatal("first external revocation was not applied")
+	}
+	duplicate, applied, err := s.RevokeExternalSessions(ctx, "event-123", "https://auth.example.com", "account-123", "u@x.com")
+	if err != nil || applied || duplicate != rotated {
+		t.Fatalf("duplicate revocation epoch=%q applied=%v err=%v", duplicate, applied, err)
+	}
+	passwordAfter, err := s.SessionEpoch(ctx, "u@x.com")
+	if err != nil || passwordAfter != passwordEpoch {
+		t.Fatalf("central revocation changed Fleet password epoch: %q, %v", passwordAfter, err)
+	}
+}
+
 // bcrypt salts every hash, so even a reset to the SAME password rotates the
 // epoch. An operator who resets an account to its existing password during an
 // incident still evicts the attacker.
@@ -223,5 +261,40 @@ func TestSessionEpoch_DistinctPerAccount(t *testing.T) {
 	}
 	if a == b {
 		t.Errorf("two accounts share the epoch %q", a)
+	}
+}
+
+func TestLookupExternalSessionEpochNeverWrites(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "u@x.com", "password123"); err != nil {
+		t.Fatal(err)
+	}
+	// Unknown identity: no row, empty epoch, and still no row afterwards.
+	got, err := s.LookupExternalSessionEpoch(ctx, "https://auth.example.com", "never-logged-in")
+	if err != nil || got != "" {
+		t.Fatalf("lookup of unknown identity = %q, %v", got, err)
+	}
+	var rows int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_auth_epochs`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("request-path lookup created %d epoch rows", rows)
+	}
+	minted, err := s.ExternalSessionEpoch(ctx, "https://auth.example.com", "account-123", "u@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.LookupExternalSessionEpoch(ctx, "https://auth.example.com", "account-123")
+	if err != nil || got != minted {
+		t.Fatalf("lookup after mint = %q, want %q (%v)", got, minted, err)
+	}
+	if _, _, err := s.RevokeExternalSessions(ctx, "event-1", "https://auth.example.com", "account-123", "u@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.LookupExternalSessionEpoch(ctx, "https://auth.example.com", "account-123")
+	if got == minted || got == "" {
+		t.Fatalf("lookup after revoke = %q, want a rotated generation", got)
 	}
 }

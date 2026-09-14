@@ -48,7 +48,7 @@ describe("GET /api/auth/oidc/start", () => {
     expect(loc.searchParams.get("response_type")).toBe("code");
     expect(loc.searchParams.get("client_id")).toBe("client-123");
     expect(loc.searchParams.get("redirect_uri")).toBe("https://chat.example.com/api/auth/oidc/callback");
-    expect(loc.searchParams.get("scope")).toBe("openid email profile");
+    expect(loc.searchParams.get("scope")).toBe("openid email");
     expect(loc.searchParams.get("code_challenge_method")).toBe("S256");
     expect(loc.searchParams.get("code_challenge")).toBeTruthy();
 

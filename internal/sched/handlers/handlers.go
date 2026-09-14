@@ -240,7 +240,8 @@ type Handlers struct {
 	// evicted from chat. Injected by cmd/fleet like the seams above, because the
 	// epoch lives in the chat store's users table (ADR-0005). nil → the claim is
 	// not checked. See session_epoch.go.
-	chatSessionEpoch ChatSessionEpochProvider
+	chatSessionEpoch     ChatSessionEpochProvider
+	externalSessionEpoch ExternalSessionEpochProvider
 
 	// budgetGate enforces per-principal rolling budgets at task-create (#601
 	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil

@@ -33,7 +33,12 @@ flow for a confidential client, and have a successful login **mint the same
 - `GET /api/auth/oidc/callback` — validates `state` against the cookie (CSRF),
   exchanges `code` (+ PKCE verifier + client secret) at the token endpoint,
   validates the ID token's claims, enforces an optional email-domain allowlist,
-  mints `elcano_session`, and 303s home.
+  mints `elcano_session`, and 303s home. OIDC cookies carry source, issuer,
+  subject, and an independent external-session epoch.
+
+- `POST /api/auth/backchannel-logout` verifies Auth's Ed25519 OIDC logout token
+  and rotates the issuer+subject epoch through the internal Go service. Event
+  `jti` values are persisted for idempotency.
 
 Because the session cookie is the existing one, **everything downstream is
 unchanged**: middleware, `getServerSession`, and — critically — the chat-server
@@ -76,8 +81,9 @@ The flow is **disabled** unless `FLEET_OIDC_ISSUER` + `FLEET_OIDC_CLIENT_ID` +
 
 ## Consequences
 
-- SSO is a turnkey ops switch with no Go changes and no new dependencies; the
-  attack surface added is two pre-session route handlers, both bounded by
+- SSO is a turnkey ops switch with a small Go-backed external-session epoch;
+  the attack surface includes the two pre-session browser route handlers plus
+  the signature-authenticated back-channel route, bounded by
   state/nonce/PKCE and a coarse, non-enumerating error vocabulary.
 - Relying on TLS rather than ID-token signature verification is sound only for
   the **code flow with a direct token-endpoint exchange**. If fleet ever adds an

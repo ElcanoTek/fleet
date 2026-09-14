@@ -96,6 +96,49 @@ func TestSessionEpoch_AdminPasswordResetEvictsOutstandingSessions(t *testing.T) 
 	}
 }
 
+func TestExternalEpochRevocationLeavesPasswordSessionAlive(t *testing.T) {
+	s := memberFixture(t, "u@x.com")
+	h := s.Routes()
+
+	body := map[string]string{"event_id": "event-123", "issuer": "https://auth.example.com", "subject": "account-123"}
+	w := do(t, h, http.MethodPost, "/auth/external-session-epoch", body, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("external epoch: status %d body %q", w.Code, w.Body.String())
+	}
+	var epochBody sessionEpochResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &epochBody); err != nil {
+		t.Fatal(err)
+	}
+
+	externalRequest := func(epoch string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/conversations", nil)
+		req.Header.Set("X-Chat-Server-Token", "tok")
+		req.Header.Set("X-User-Email", "u@x.com")
+		req.Header.Set("X-User-Session-Epoch", epoch)
+		req.Header.Set("X-User-Session-Source", "oidc")
+		req.Header.Set("X-External-Issuer", "https://auth.example.com")
+		req.Header.Set("X-External-Subject", "account-123")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	if got := externalRequest(epochBody.SessionEpoch); got.Code != http.StatusOK {
+		t.Fatalf("fresh external session: status %d body %q", got.Code, got.Body.String())
+	}
+	w = do(t, h, http.MethodPost, "/auth/external-session-revoke", body, "u@x.com")
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("external revoke: status %d body %q", w.Code, w.Body.String())
+	}
+	if got := externalRequest(epochBody.SessionEpoch); got.Code != http.StatusUnauthorized {
+		t.Fatalf("stale external session: status %d body %q", got.Code, got.Body.String())
+	}
+
+	passwordEpoch := readEpoch(t, h, "u@x.com")
+	if got := getEpoch(t, h, "/conversations", "u@x.com", passwordEpoch); got.Code != http.StatusOK {
+		t.Fatalf("password session after external revoke: status %d body %q", got.Code, got.Body.String())
+	}
+}
+
 // Every gated route is covered, not just the one above: the check lives in the
 // middleware every one of them shares.
 func TestSessionEpoch_StaleClaimRefusedOnEveryGatedRoute(t *testing.T) {

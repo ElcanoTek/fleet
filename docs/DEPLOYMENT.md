@@ -320,8 +320,12 @@ each piece yourself):
    > **disabled unless `FLEET_OIDC_ISSUER` + `FLEET_OIDC_CLIENT_ID` +
    > `FLEET_OIDC_CLIENT_SECRET` are set** (optional: `FLEET_OIDC_SCOPES`,
    > `FLEET_OIDC_ALLOWED_DOMAINS`, `FLEET_OIDC_BUTTON_LABEL`,
-   > `FLEET_OIDC_REDIRECT_URI`). SSO lives entirely in the Next.js layer — the Go
-   > chat server never speaks OIDC. In every case the chat user-list still gates
+   > `FLEET_OIDC_REDIRECT_URI`). The default scope is `openid email`; discovery's
+   > `client_secret_basic` is honored (including Elcano Auth), with the existing
+   > `client_secret_post` fallback for other providers. Configure Auth's signed
+   > back-channel endpoint as `/api/auth/backchannel-logout`; central OIDC
+   > sessions then use an issuer+subject epoch independent of Fleet passwords.
+   > See [Central Auth integration](features/central-auth-integration.md). In every case the chat user-list still gates
    > **membership** (an authenticated email that isn't provisioned lands on the
    > no-access page), so SSO/magic-link prove *who you are* while the user-list
    > decides *who may use chat*. A stand-alone deploy needs none of this; users
@@ -343,7 +347,10 @@ each piece yourself):
    >   dropped; neither serves client data or spends budget — and
    >   it works even if you reset to the same password (bcrypt re-salts). This is
    >   the incident-response lever for a stolen cookie. Three carve-outs: a
-   >   magic-link (`elcano_auth`) session carries no epoch, so revoke it at the
+   >   central OIDC session carries a separate issuer+subject epoch and is
+   >   revoked by Auth's signed back-channel event without touching the Fleet
+   >   password session; a magic-link (`elcano_auth`) session carries no epoch,
+   >   so revoke it at the
    >   auth service that mints it; an Operations Center **bearer** login (the moc
    >   username/password form) is a separate credential the chat password does not
    >   govern — end it with `fleet sched user del <name>`, because a sched

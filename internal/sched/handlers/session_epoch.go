@@ -29,8 +29,11 @@ import (
 // straight through. Both mirror internal/httpapi's spelling — the two backends
 // are separate packages, but the wire contract with the one proxy is shared.
 const (
-	headerSessionEpoch   = "X-User-Session-Epoch"
-	headerSessionRevoked = "X-Session-Revoked"
+	headerSessionEpoch    = "X-User-Session-Epoch"
+	headerSessionRevoked  = "X-Session-Revoked"
+	headerSessionSource   = "X-User-Session-Source"
+	headerExternalIssuer  = "X-External-Issuer"
+	headerExternalSubject = "X-External-Subject"
 )
 
 // ChatSessionEpochProvider resolves an email's CURRENT chat-plane session epoch
@@ -49,6 +52,12 @@ func (h *Handlers) SetChatSessionEpochProvider(fn ChatSessionEpochProvider) {
 	h.chatSessionEpoch = fn
 }
 
+type ExternalSessionEpochProvider func(ctx context.Context, issuer, subject, email string) (string, error)
+
+func (h *Handlers) SetExternalSessionEpochProvider(fn ExternalSessionEpochProvider) {
+	h.externalSessionEpoch = fn
+}
+
 // checkSessionEpoch gates a header-trust request on its session-epoch claim.
 // Returns false when it has written the response.
 //
@@ -65,10 +74,26 @@ func (h *Handlers) SetChatSessionEpochProvider(fn ChatSessionEpochProvider) {
 // headerTrustUser already takes when the membership lookup itself errors.
 func (h *Handlers) checkSessionEpoch(w http.ResponseWriter, r *http.Request, email string) bool {
 	claim := r.Header.Get(headerSessionEpoch)
-	if claim == "" || h.chatSessionEpoch == nil {
+	if claim == "" {
 		return true
 	}
-	live, err := h.chatSessionEpoch(r.Context(), email)
+	var live string
+	var err error
+	if r.Header.Get(headerSessionSource) == "oidc" {
+		issuer := r.Header.Get(headerExternalIssuer)
+		subject := r.Header.Get(headerExternalSubject)
+		if h.externalSessionEpoch == nil || issuer == "" || subject == "" {
+			w.Header().Set(headerSessionRevoked, "1")
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session_revoked"})
+			return false
+		}
+		live, err = h.externalSessionEpoch(r.Context(), issuer, subject, email)
+	} else {
+		if h.chatSessionEpoch == nil {
+			return true
+		}
+		live, err = h.chatSessionEpoch(r.Context(), email)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Session check failed")
 		return false
