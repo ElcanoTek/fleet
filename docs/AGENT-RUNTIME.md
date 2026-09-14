@@ -552,10 +552,15 @@ How the invariants hold:
   `resource_metadata` pointer from whichever 401 carries one (Uptime Robot
   answers the GET with 404 and points only from the POST). Without a
   pointer it tries RFC 9728 §3.1's path-inserted well-known form, then the
-  path-appended form, then the origin root. When no document exists at all,
-  the MCP spec's backwards-compatibility rule applies: the server's own
+  path-appended form, then the origin root — all built from the URL's path
+  alone, never its query. When no document exists at all, or the document
+  names no authorization server (`authorization_servers` is optional in RFC
+  9728), the MCP spec's backwards-compatibility rule applies: the server's own
   origin is the authorization server, its RFC 8414 / OIDC document is fetched
-  there, and the typed URL is the resource (`Discovered.LegacyOrigin`).
+  there, and the typed URL is the resource (`Discovered.LegacyOrigin`). The
+  probe's `initialize` announces the same protocol revision as fleet's real
+  transport (pinned by a test), and a session it happens to open is
+  terminated before discovery moves on.
   Intercom, Plaid, Cartesia, GoCardless and Square publish only that shape
   and could not be added before (#1006 catalog audit).
 - **Rotation-safe refresh.** Tokens are refreshed under a `SELECT … FOR UPDATE`

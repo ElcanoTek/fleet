@@ -100,7 +100,13 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		return discoverLegacyOrigin(ctx, httpClient, canonicalServerURL, fetchErr)
 	}
 	if len(prm.AuthorizationServers) == 0 {
-		return nil, fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL)
+		// RFC 9728 §2 makes authorization_servers OPTIONAL. A document that
+		// omits it yields no authorization server any more than a missing
+		// document does, so the same backwards-compatibility rule applies:
+		// the MCP server's own origin is the authorization server, still
+		// subject to the issuer check.
+		return discoverLegacyOrigin(ctx, httpClient, canonicalServerURL,
+			fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL))
 	}
 
 	// The canonical identity defaults to the URL the user typed. RFC 9728 §3.3
@@ -145,10 +151,12 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 // there and the resource is the URL the user typed. Intercom, Plaid, Cartesia,
 // GoCardless and Square still publish only this shape (#1006 catalog audit,
 // 2026-09-13) and fleet refused all five with "fetch protected-resource
-// metadata". The origin is the same party the PRM would have named, so no new
+// metadata". A PRM that exists but names no authorization server takes the
+// same path. The origin is the same party the PRM would have named, so no new
 // trust is extended; the issuer check still applies to what it publishes.
-// prmErr is the PRM failure, kept in the error when the fallback fails too so
-// an operator sees both halves of why the server could not be added.
+// prmErr is why the PRM yielded nothing, kept in the error when the fallback
+// fails too so an operator sees both halves of why the server could not be
+// added.
 func discoverLegacyOrigin(ctx context.Context, httpClient *http.Client, canonicalServerURL string, prmErr error) (*Discovered, error) {
 	origin, oerr := originOf(canonicalServerURL)
 	if oerr != nil {
@@ -235,21 +243,48 @@ func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canoni
 		return nil, oerr
 	}
 	root := origin + "/.well-known/oauth-protected-resource"
-	if path := strings.TrimSuffix(strings.TrimPrefix(canonicalServerURL, origin), "/"); path != "" {
+	// The path component only: CanonicalResourceURI keeps a query string
+	// (https://host/mcp?tenant=x is a real shape) and it is not part of where
+	// RFC 9728 §3.1 puts the document, so appending the well-known suffix to
+	// the whole URL would have put it inside the query. EscapedPath keeps a
+	// percent-escaped segment as the issuer spelled it.
+	u, err := url.Parse(canonicalServerURL)
+	if err != nil {
+		return nil, err
+	}
+	if path := strings.TrimSuffix(u.EscapedPath(), "/"); path != "" {
 		return []string{root + path, origin + path + "/.well-known/oauth-protected-resource", root}, nil
 	}
 	return []string{root}, nil
 }
 
+// ProbeProtocolVersion is the MCP protocol revision the discovery probe's
+// initialize announces. It MUST equal the revision fleet's real transport
+// sends (internal/mcp's mcpProtocolVersion), so a server that routes or gates
+// initialization on the offered revision answers the probe exactly as it will
+// answer the connection the probe is validating. This package cannot import
+// internal/mcp (it reaches back here through internal/a2a), so the two are
+// held equal by TestProbeProtocolVersionMatchesTransport in internal/mcp.
+const ProbeProtocolVersion = "2024-11-05"
+
 // initializeProbeBody is the JSON-RPC initialize a real MCP client opens with;
 // an unauthenticated one is what makes a spec-following server answer 401 with
 // its resource_metadata pointer. Nothing in it identifies a user.
-const initializeProbeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fleet","version":"discovery-probe"}}}`
+const initializeProbeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + ProbeProtocolVersion + `","capabilities":{},"clientInfo":{"name":"fleet","version":"discovery-probe"}}}`
+
+// mcpSessionHeader is the Streamable HTTP transport's session header. A server
+// that accepts an unauthenticated initialize may allocate a session and name
+// it here; the probe wanted only the 401's pointer, so it ends any session it
+// opened (the transport's DELETE with the header) rather than leave one per
+// discovery for the vendor to expire.
+const mcpSessionHeader = "Mcp-Session-Id"
 
 // probeResourceMetadataPointer sends one unauthenticated request to the MCP
 // server and returns the resource_metadata URL from a 401's WWW-Authenticate,
 // or "" when the server answered anything else (or not at all). The body is
-// drained and discarded: only the header matters here.
+// drained and discarded: only the header matters here. If the server instead
+// accepted the initialize and opened a session (2xx with Mcp-Session-Id), the
+// session is terminated best-effort before returning.
 func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, serverURL, method, body string) string {
 	// serverURL is the operator-typed MCP URL; CanonicalResourceURI has already
 	// refused a non-http(s) scheme, userinfo and a hostless URL before Discover
@@ -277,10 +312,34 @@ func probeResourceMetadataPointer(ctx context.Context, httpClient *http.Client, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMetadataBytes))
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if sid := strings.TrimSpace(resp.Header.Get(mcpSessionHeader)); sid != "" && body != "" {
+			terminateProbeSession(ctx, httpClient, serverURL, sid)
+		}
+		return ""
+	}
 	if resp.StatusCode != http.StatusUnauthorized {
 		return ""
 	}
 	return parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate"))
+}
+
+// terminateProbeSession sends the Streamable HTTP session-termination DELETE
+// for a session the discovery probe's initialize opened. Best-effort: a
+// server may answer 405 (termination not supported) or anything else, and the
+// probe's outcome does not depend on it.
+func terminateProbeSession(ctx context.Context, httpClient *http.Client, serverURL, sessionID string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, serverURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set(mcpSessionHeader, sessionID)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMetadataBytes))
 }
 
 // parseResourceMetadataURL pulls the resource_metadata parameter (RFC 9728

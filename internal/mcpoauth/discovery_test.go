@@ -490,6 +490,86 @@ func TestLocateResourceMetadataCandidatesOrder(t *testing.T) {
 	if len(got) != 1 || got[0] != srv.URL+"/.well-known/oauth-protected-resource" {
 		t.Errorf("bare-origin candidates = %v", got)
 	}
+	// A query string is part of the canonical URL but not of where the
+	// document lives: every candidate is built from the path alone, and a
+	// percent-escaped segment survives verbatim.
+	got, _ = locateResourceMetadata(context.Background(), srv.Client(), srv.URL+"/tenant%2Fone/mcp?tenant=x")
+	want = []string{
+		srv.URL + "/.well-known/oauth-protected-resource/tenant%2Fone/mcp",
+		srv.URL + "/tenant%2Fone/mcp/.well-known/oauth-protected-resource",
+		srv.URL + "/.well-known/oauth-protected-resource",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("query-scoped candidates = %v, want %v", got, want)
+	}
+}
+
+// TestDiscoverLegacyOriginWhenPRMListsNoAuthorizationServers: RFC 9728 makes
+// authorization_servers optional, and a document that omits it yields no
+// authorization server any more than a missing document does — so the same
+// backwards-compatibility fallback applies, issuer check included.
+func TestDiscoverLegacyOriginWhenPRMListsNoAuthorizationServers(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp"}) // no authorization_servers
+	})
+	legacyASHandlers(mux, base)
+	d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if !d.LegacyOrigin || d.AS.Issuer != base || len(d.PRM.AuthorizationServers) != 1 || d.PRM.AuthorizationServers[0] != base {
+		t.Errorf("want the legacy-origin fallback, got %+v", d)
+	}
+	// ...and with no AS at the origin either, the error says the PRM named none.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/oauth-protected-resource/mcp" {
+			_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: "x"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv2.Close)
+	if _, err := Discover(context.Background(), srv2.Client(), srv2.URL+"/mcp"); err == nil || !strings.Contains(err.Error(), "lists no authorization_servers") || !strings.Contains(err.Error(), "legacy MCP 2025-03-26 fallback") {
+		t.Errorf("error must carry both halves: %v", err)
+	}
+}
+
+// TestProbeTerminatesSessionItOpened: a server that accepts the unauthenticated
+// initialize (200 + Mcp-Session-Id) has allocated a session the probe never
+// wanted; the probe sends the Streamable HTTP DELETE for it and returns no
+// pointer. A GET that happens to carry the header is not a session the probe
+// opened and is left alone.
+func TestProbeTerminatesSessionItOpened(t *testing.T) {
+	var deletes []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			deletes = append(deletes, r.Header.Get("Mcp-Session-Id"))
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.Header().Set("Mcp-Session-Id", "sess-123")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	if got := probeResourceMetadataPointer(context.Background(), srv.Client(), srv.URL+"/mcp", http.MethodPost, initializeProbeBody); got != "" {
+		t.Errorf("a 200 must yield no pointer, got %q", got)
+	}
+	if strings.Join(deletes, ",") != "sess-123" {
+		t.Errorf("session termination DELETEs = %v, want exactly one for sess-123", deletes)
+	}
+	deletes = nil
+	_ = probeResourceMetadataPointer(context.Background(), srv.Client(), srv.URL+"/mcp", http.MethodGet, "")
+	if len(deletes) != 0 {
+		t.Errorf("a GET opened no session and must terminate none: %v", deletes)
+	}
+	if !strings.Contains(initializeProbeBody, `"protocolVersion":"`+ProbeProtocolVersion+`"`) {
+		t.Errorf("probe body does not announce ProbeProtocolVersion: %s", initializeProbeBody)
+	}
 }
 
 func TestDiscoverIgnoresCrossOriginPRMResource(t *testing.T) {
