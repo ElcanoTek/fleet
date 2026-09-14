@@ -336,9 +336,13 @@ func missingRequiredArguments(required []string, props map[string]any, args json
 // naming null, an `anyOf`/`oneOf` arm that admits null, and an `allOf` whose
 // every arm does. A schema that constrains the value with none of those
 // keywords (`{}`, or description-only) accepts anything, null included — and
-// so does a property with no schema at all — because the refusal must never
-// be stricter than the vendor's own validation.
+// so do the boolean schema `true` and a property with no schema at all —
+// because the refusal must never be stricter than the vendor's own
+// validation. The boolean schema `false` admits nothing.
 func schemaAdmitsNull(schema any) bool {
+	if b, ok := schema.(bool); ok {
+		return b
+	}
 	m, ok := schema.(map[string]any)
 	if !ok {
 		return schema == nil
