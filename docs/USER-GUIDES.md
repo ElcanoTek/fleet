@@ -93,9 +93,12 @@ had drifted. Corrected while porting:
   by default, but where an operator sets it `ExpirePausedTasks` fails an
   unanswered run and clears its question. The draft promised "no rush"
   unconditionally.
-- **Tags do not filter the board.** The API takes `?tag=`, but `TaskFilters`
-  offers only status, creator, scheduled-only and text, so the guide describes
-  tags as stored metadata rather than a control on that screen.
+- **Tags did not filter the board.** The API took `?tag=`, but `TaskFilters`
+  offered only status, creator, scheduled-only and text, so the guide described
+  tags as stored metadata rather than a control on that screen. *Since closed:*
+  writing that sentence is what surfaced the gap, and the board now shows tags
+  as chips and filters by them — see [`docs/TASK-TAGS.md`](TASK-TAGS.md). The
+  guide describes the control.
 - **`ERROR` is not where a failure waits for you — `DEAD_LETTERED` is.**
   `handleRunFailure` re-queues a retryable failure (back to `PENDING`, with
   backoff), quarantines a deterministic one on its *first* attempt, and reaches

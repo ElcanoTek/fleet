@@ -14,6 +14,7 @@ const FILTERS: TaskFilters = {
   completedToday: false,
   completedStatus: "",
   createdBy: "",
+  tags: [],
 };
 
 function renderTable(onFilters: TasksTableProps["onFilters"]) {
@@ -487,5 +488,137 @@ describe("TasksTable Clear filters", () => {
   it("is omitted entirely when the parent does not wire it", () => {
     renderFiltered({ ...FILTERS, createdBy: "me" });
     expect(screen.queryByTestId("tasks-clear-filters")).toBeNull();
+  });
+});
+
+// ── Tag filter and tag chips (#212) ──────────────────────────────────────
+// Tags were write-only: the create form accepted them, the API stored them,
+// and no surface on the board ever showed one again — so the thing a tag is
+// for, finding the rest of its group, could not be done from the UI at all.
+describe("TasksTable tags", () => {
+  const tagged: Task = {
+    id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    prompt: "nightly reconciliation",
+    status: "success",
+    tags: ["ops", "billing"],
+  };
+
+  function renderTags(
+    overrides: Partial<TasksTableProps> & { filters?: TaskFilters } = {},
+  ) {
+    const onFilters = vi.fn();
+    render(
+      <TasksTable
+        tasks={[tagged]}
+        total={1}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        tagOptions={["ops", "billing", "urgent"]}
+        onFilters={onFilters}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+        {...overrides}
+      />,
+    );
+    return onFilters;
+  }
+
+  it("shows a task's tags on the board", () => {
+    renderTags();
+    // Table row and phone card both render them (CSS picks one).
+    expect(screen.getAllByLabelText("Filter by tag ops").length).toBe(2);
+    expect(screen.getAllByLabelText("Filter by tag billing").length).toBe(2);
+  });
+
+  it("filters by a tag when its chip is clicked", () => {
+    const onFilters = renderTags();
+    fireEvent.click(screen.getAllByLabelText("Filter by tag ops")[0]);
+    expect(onFilters).toHaveBeenCalledWith({ tags: ["ops"] });
+  });
+
+  it("does not open the log viewer when a chip is clicked", () => {
+    // The row is itself a button; without stopPropagation, filtering by a tag
+    // would also throw the log modal open over the board you just narrowed.
+    const onOpenLogs = vi.fn();
+    renderTags({ onOpenLogs });
+    fireEvent.click(screen.getAllByLabelText("Filter by tag ops")[0]);
+    expect(onOpenLogs).not.toHaveBeenCalled();
+  });
+
+  it("adds to the selection rather than replacing it — tags AND together", () => {
+    const onFilters = renderTags({ filters: { ...FILTERS, tags: ["billing"] } });
+    fireEvent.click(screen.getAllByLabelText("Filter by tag ops")[0]);
+    expect(onFilters).toHaveBeenCalledWith({ tags: ["billing", "ops"] });
+  });
+
+  it("removes a tag when its selected chip is clicked again", () => {
+    const onFilters = renderTags({ filters: { ...FILTERS, tags: ["ops", "billing"] } });
+    fireEvent.click(screen.getAllByLabelText("Stop filtering by tag ops")[0]);
+    expect(onFilters).toHaveBeenCalledWith({ tags: ["billing"] });
+  });
+
+  it("adds a tag chosen from the select", () => {
+    const onFilters = renderTags();
+    fireEvent.change(screen.getByLabelText("Filter by tag"), { target: { value: "urgent" } });
+    expect(onFilters).toHaveBeenCalledWith({ tags: ["urgent"] });
+  });
+
+  it("keeps the select on its placeholder — it adds, it does not hold a value", () => {
+    // Holding the last-added tag would claim the board is filtered by that one
+    // tag when it is filtered by every chip beside it.
+    renderTags({ filters: { ...FILTERS, tags: ["ops"] } });
+    const select = screen.getByLabelText("Filter by tag") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    // An already-selected tag is not offered twice.
+    const offered = [...select.options].map((o) => o.value);
+    expect(offered).not.toContain("ops");
+    expect(offered).toContain("urgent");
+  });
+
+  it("hides the control entirely when nothing is tagged", () => {
+    renderTags({ tasks: [], tagOptions: [] });
+    expect(screen.queryByLabelText("Filter by tag")).toBeNull();
+  });
+
+  it("still shows the control when a tag is selected but the catalogue is empty", () => {
+    // A failed catalogue fetch must not strand an applied filter with no way
+    // to remove it.
+    renderTags({ tasks: [], tagOptions: [], filters: { ...FILTERS, tags: ["ops"] } });
+    expect(screen.getByLabelText("Filter by tag")).toBeTruthy();
+    expect(screen.getByLabelText("Stop filtering by tag ops")).toBeTruthy();
+  });
+
+  it("counts a tag selection as an active filter, so Clear filters appears", () => {
+    // Without this, the only way back to the full board was a page reload.
+    renderTags({
+      tasks: [],
+      filters: { ...FILTERS, tags: ["ops"] },
+      onClearFilters: () => {},
+    });
+    expect(screen.getByTestId("tasks-clear-filters")).toBeTruthy();
+  });
+
+  it("keeps the phone card's chips out of the card button", () => {
+    // A control nested inside a <button> has invalid accessibility semantics
+    // however it is marked up: assistive technology can expose only the outer
+    // "View task" control, or make the tag action ambiguous. Dressing the chip
+    // as a span with role="button" dodges the HTML rule and keeps the problem,
+    // which is what this originally did. They are siblings now.
+    renderTags();
+    const cards = screen.getByTestId("task-cards");
+    const chip = within(cards).getByLabelText("Filter by tag ops");
+    // A real <button>, not a span wearing role="button" — which is what this
+    // originally was, to dodge the nesting rule while keeping the problem.
+    expect(chip.tagName).toBe("BUTTON");
+    expect(chip.closest("button.task-card")).toBeNull();
+    // The card's own control is still there and still a button.
+    expect(within(cards).getByLabelText(/^View task /).tagName).toBe("BUTTON");
+  });
+
+  it("renders no chip row for an untagged task", () => {
+    renderTags({ tasks: [{ ...tagged, tags: undefined }] });
+    expect(screen.queryByLabelText(/^Filter by tag /)).toBeNull();
   });
 });

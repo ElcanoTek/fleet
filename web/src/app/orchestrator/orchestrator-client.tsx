@@ -456,6 +456,7 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   page={dashboard.page}
                   pageSize={dashboard.pageSize}
                   filters={dashboard.filters}
+                  tagOptions={dashboard.tagOptions}
                   onFilters={dashboard.setFilters}
                   onClearFilters={dashboard.clearFilters}
                   onPage={dashboard.setPage}

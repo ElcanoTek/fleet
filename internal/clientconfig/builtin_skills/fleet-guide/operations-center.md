@@ -93,6 +93,17 @@ the wake, not a second copy started alongside it. Stop is offered on both.
 The board filters by **Status** and **Created by**, narrows to **Scheduled
 only**, and searches across title, prompt, and ID.
 
+It also filters by **tag**. A task's tags appear as small coloured chips on its
+row; clicking one narrows the board to that tag, and the **Tags** dropdown in
+the filter bar picks from every tag in use across the deployment — including
+ones no task on the current page carries. Tags stack: each one you add narrows
+the board further, to tasks carrying *all* of them. Remove a tag by clicking
+its chip in the filter bar, or drop everything at once with **Clear filters**.
+
+Like the counters above, the dropdown lists tags from the whole deployment
+while the board shows only your own tasks, so a tag a colleague uses can filter
+down to nothing.
+
 ### Whose tasks you see
 
 The board shows the tasks **you created**. Workspace admins see everyone's, which
@@ -120,7 +131,7 @@ with it.
 | **Schedule** | Three modes: **Run now**, **Run once** at a date and time, or **Repeat**. Repeat offers a plain-language builder for daily, weekday, and weekly patterns, and an advanced field for anything else. A repeat can also end on its own, under **End repeat**: never, on a date, or after a set number of runs. The form always previews the computed next run; read it before launching. |
 | **Recipients** | The email addresses that receive each run's result. You set them here rather than in the library prompt, so the same prompt can serve different audiences, and the form keeps them across an edit — including when you re-insert a different prompt from the library. (They are delivered as an instruction the form writes into the task's prompt for you. That only matters if you drive the API directly: a client that replaces a task's prompt wholesale replaces that instruction too.) |
 | **Tools & files** | What the task may reach: mailboxes, connectors, files. Some connections are always on for every run; the rest are selected per task, so new tasks start with your deployment's recommended set and an existing task never silently gains new connections. Files can also be attached directly to the task, for work that runs against a fixed reference like a template or a lookup table. |
-| **Context** | Notes that travel with the task for the people who operate it: why it exists, who owns it, what to do if it fails. These are shown to operators and never enter the assistant's instructions. Alongside them sit **tags** and the task's **persona**, which is left blank for the workspace default unless the task genuinely needs a different one. Tags are stored with the task and can be filtered on through the API; the board itself filters by status, creator and text, so treat tags as a label for your own grouping rather than a control on this screen. |
+| **Context** | Notes that travel with the task for the people who operate it: why it exists, who owns it, what to do if it fails. These are shown to operators and never enter the assistant's instructions. Alongside them sit **tags** and the task's **persona**, which is left blank for the workspace default unless the task genuinely needs a different one. Tags are how you group related tasks: they show as chips on the board and it filters by them (see [Finding things](#finding-things)), so a tag you give a task here is a way back to the whole group later. |
 | **Advanced** | Further settings, including the model the task runs on and an option for a recurring task to carry a short summary of its previous run into the next one. The model in particular is worth choosing deliberately: match it to the demands of the job rather than leaving it to chance. |
 
 **Estimate Cost**, beneath the form, produces a **cost forecast** on demand: the

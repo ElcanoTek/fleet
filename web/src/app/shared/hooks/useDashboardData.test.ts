@@ -19,11 +19,13 @@ function deferred() {
 
 const statsMock = vi.fn();
 const tasksMock = vi.fn();
+const tagCatalogueMock = vi.fn();
 
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
     stats: () => statsMock(),
     tasks: (qs: string) => tasksMock(qs),
+    tagCatalogue: () => tagCatalogueMock(),
   },
 }));
 
@@ -34,6 +36,10 @@ afterEach(() => {
   taskDeferreds.clear();
   vi.restoreAllMocks();
 });
+
+// The catalogue fetch fires on activation in every test here; default it to an
+// empty list so a test that does not care about tags does not have to.
+tagCatalogueMock.mockResolvedValue([]);
 
 function qOf(qs: string): string {
   return new URLSearchParams(qs).get("q") ?? "";
@@ -173,5 +179,117 @@ describe("useDashboardData paging", () => {
       await result.current.reload();
     });
     expect(result.current.refreshNonce).toBe(2);
+  });
+});
+
+// ── Tag filter (#212) ────────────────────────────────────────────────────
+// Tags AND together server-side, so every selected tag has to reach the
+// request. `tag` is the one repeatable parameter in the query, and the
+// obvious URLSearchParams.set() would have kept only the last of them —
+// silently widening "carrying BOTH of these" to "carrying this one".
+describe("useDashboardData tag filter", () => {
+  function settle() {
+    statsMock.mockResolvedValue({});
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+  }
+
+  it("sends every selected tag, not just the last", async () => {
+    settle();
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tasksMock).toHaveBeenCalled());
+
+    act(() => result.current.setFilters({ tags: ["ops", "urgent"] }));
+    await waitFor(() => {
+      const qs = new URLSearchParams(tasksMock.mock.calls.at(-1)![0] as string);
+      expect(qs.getAll("tag")).toEqual(["ops", "urgent"]);
+    });
+  });
+
+  it("sends no tag parameter when none is selected", async () => {
+    settle();
+    renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tasksMock).toHaveBeenCalled());
+    const qs = new URLSearchParams(tasksMock.mock.calls.at(-1)![0] as string);
+    expect(qs.getAll("tag")).toEqual([]);
+  });
+
+  it("offers the catalogue unioned with the tags on the listed tasks", async () => {
+    statsMock.mockResolvedValue({});
+    // A tag created after the catalogue was fetched: it is on a listed task
+    // but not in the catalogue, and must still be selectable — that union is
+    // what makes fetching the catalogue once per activation safe.
+    tagCatalogueMock.mockResolvedValue([{ tag: "ops", task_count: 4 }]);
+    tasksMock.mockResolvedValue({
+      data: [{ id: "a", prompt: "p", tags: ["ops", "fresh"] }],
+      total: 1,
+    });
+
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(result.current.tagOptions).toContain("fresh"));
+    expect(result.current.tagOptions).toContain("ops");
+    // Catalogue first (busiest first), then whatever the page added.
+    expect(result.current.tagOptions).toEqual(["ops", "fresh"]);
+  });
+
+  it("keeps working when the catalogue fetch fails", async () => {
+    settle();
+    tagCatalogueMock.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tasksMock).toHaveBeenCalled());
+    // No unhandled rejection, no error surfaced to the board: the filter loses
+    // its suggestions, the dashboard keeps working.
+    expect(result.current.tagOptions).toEqual([]);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("clearFilters drops the tags too", async () => {
+    settle();
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tasksMock).toHaveBeenCalled());
+    act(() => result.current.setFilters({ tags: ["ops"] }));
+    await waitFor(() => expect(result.current.filters.tags).toEqual(["ops"]));
+    act(() => result.current.clearFilters());
+    expect(result.current.filters.tags).toEqual([]);
+  });
+});
+
+// The catalogue used to be fetched once per activation. `active` stays true for
+// the whole signed-in session, so a tag created afterwards on a task that is
+// not on the current page never reached the dropdown until a full reload. The
+// fix is a TTL, not a fetch on every reload: the catalogue is a GROUP BY over
+// every task's tag array and paying for it every 30s buys nothing.
+describe("useDashboardData tag catalogue freshness", () => {
+  it("refetches on a reload once the catalogue is stale, and not before", async () => {
+    statsMock.mockResolvedValue({});
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+    tagCatalogueMock.mockResolvedValue([{ tag: "ops", task_count: 1 }]);
+
+    const now = vi.spyOn(Date, "now");
+    let clock = 1_000_000;
+    now.mockImplementation(() => clock);
+
+    const { result } = renderHook(() => useDashboardData(true));
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(1));
+
+    // A reload inside the TTL must not re-fetch it.
+    clock += 60_000;
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(tagCatalogueMock).toHaveBeenCalledTimes(1);
+
+    // Past the TTL, the next reload picks up the new tag.
+    clock += 5 * 60_000;
+    tagCatalogueMock.mockResolvedValue([
+      { tag: "ops", task_count: 1 },
+      { tag: "created-later", task_count: 1 },
+    ]);
+    await act(async () => {
+      await result.current.reload();
+    });
+    await waitFor(() => expect(tagCatalogueMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.tagOptions).toContain("created-later"));
+
+    now.mockRestore();
   });
 });
