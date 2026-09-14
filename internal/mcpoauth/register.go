@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // ClientRegistration is the result of RFC 7591 Dynamic Client Registration: the
@@ -38,20 +40,95 @@ type clientRegistrationRequest struct {
 // Register performs RFC 7591 Dynamic Client Registration against
 // registrationEndpoint. clientName is a human label shown on consent screens;
 // redirectURI is the single, byte-stable callback; scope is the space-delimited
-// set to request. httpClient MUST be the SSRF-safe client in production.
-func Register(ctx context.Context, httpClient *http.Client, registrationEndpoint, clientName, redirectURI, scope string) (*ClientRegistration, error) {
+// set to request; authMethodsSupported is the authorization server's
+// token_endpoint_auth_methods_supported (nil when it advertised none).
+// httpClient MUST be the SSRF-safe client in production.
+//
+// fleet asks to be a public client (token_endpoint_auth_method "none", PKCE
+// protected) first, whatever the metadata says: of the 22 official catalog
+// servers whose metadata lists no "none", the two met live (Uptime Robot,
+// Cartesia) both accepted the request — one returning a secret fleet then
+// stores and uses, one registering a public client outright (#1006 audit). An
+// authorization server that instead REFUSES the method (RFC 7591 §3.2.2
+// invalid_client_metadata) gets one retry asking for a confidential method it
+// does list, client_secret_basic before client_secret_post, so the vendor's
+// stated policy is honored without giving up the public client where it is
+// allowed.
+func Register(ctx context.Context, httpClient *http.Client, registrationEndpoint, clientName, redirectURI, scope string, authMethodsSupported []string) (*ClientRegistration, error) {
 	if registrationEndpoint == "" {
 		return nil, fmt.Errorf("authorization server does not advertise a registration_endpoint (dynamic client registration unsupported)")
 	}
+	reg, err := registerWithMethod(ctx, httpClient, registrationEndpoint, clientName, redirectURI, scope, "none")
+	if err == nil {
+		return reg, nil
+	}
+	var rej *registrationRejectedError
+	if !errors.As(err, &rej) || !rej.aboutAuthMethod() {
+		return nil, err
+	}
+	fallback := confidentialMethodFor(authMethodsSupported)
+	if fallback == "" {
+		return nil, err
+	}
+	reg, ferr := registerWithMethod(ctx, httpClient, registrationEndpoint, clientName, redirectURI, scope, fallback)
+	if ferr != nil {
+		return nil, fmt.Errorf("%w; retried as %s: %w", err, fallback, ferr)
+	}
+	return reg, nil
+}
+
+// registrationRejectedError is a 4xx registration response with the RFC 7591 §3.2.2
+// error body, kept typed so Register can tell "the server refused the auth
+// method" from "the endpoint is broken".
+type registrationRejectedError struct {
+	Status      int
+	Code        string `json:"error"`
+	Description string `json:"error_description"`
+}
+
+func (e *registrationRejectedError) Error() string {
+	if e.Code == "" {
+		return fmt.Sprintf("dynamic client registration failed: status %d", e.Status)
+	}
+	return fmt.Sprintf("dynamic client registration failed: status %d, %s: %s", e.Status, e.Code, e.Description)
+}
+
+// aboutAuthMethod: RFC 7591 §3.2.2 names invalid_client_metadata for a
+// rejected metadata value; a server that spells its objection out names the
+// field or the value instead.
+func (e *registrationRejectedError) aboutAuthMethod() bool {
+	if e.Status != http.StatusBadRequest && e.Status != http.StatusUnprocessableEntity {
+		return false
+	}
+	if strings.EqualFold(e.Code, "invalid_client_metadata") {
+		return true
+	}
+	d := strings.ToLower(e.Description)
+	return strings.Contains(d, "token_endpoint_auth_method") || strings.Contains(d, "auth_method") || strings.Contains(d, "public client")
+}
+
+// confidentialMethodFor picks the confidential client authentication fleet can
+// perform from an authorization server's advertised list: client_secret_basic
+// first (the RFC 6749 default), then client_secret_post. "" when the server
+// lists neither — then there is nothing to retry with.
+func confidentialMethodFor(methods []string) string {
+	for _, want := range []string{"client_secret_basic", "client_secret_post"} {
+		for _, m := range methods {
+			if strings.EqualFold(strings.TrimSpace(m), want) {
+				return want
+			}
+		}
+	}
+	return ""
+}
+
+func registerWithMethod(ctx context.Context, httpClient *http.Client, registrationEndpoint, clientName, redirectURI, scope, method string) (*ClientRegistration, error) {
 	reqBody := clientRegistrationRequest{
-		ClientName:   clientName,
-		RedirectURIs: []string{redirectURI},
-		GrantTypes:   []string{"authorization_code", "refresh_token"},
-		// We are a public client (PKCE-protected) by default — no client secret
-		// to keep. An AS that insists on a confidential client will return one,
-		// which we store encrypted and use via client_secret_basic.
+		ClientName:              clientName,
+		RedirectURIs:            []string{redirectURI},
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		ResponseTypes:           []string{"code"},
-		TokenEndpointAuthMethod: "none",
+		TokenEndpointAuthMethod: method,
 		Scope:                   scope,
 	}
 	payload, err := json.Marshal(reqBody)
@@ -76,7 +153,9 @@ func Register(ctx context.Context, httpClient *http.Client, registrationEndpoint
 		return nil, fmt.Errorf("read registration response: %w", err)
 	}
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("dynamic client registration failed: status %d", resp.StatusCode)
+		rej := &registrationRejectedError{Status: resp.StatusCode}
+		_ = json.Unmarshal(body, rej) // best effort: a non-JSON body leaves Code empty
+		return nil, rej
 	}
 	var reg ClientRegistration
 	if err := json.Unmarshal(body, &reg); err != nil {

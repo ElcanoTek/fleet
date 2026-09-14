@@ -357,7 +357,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		if disco.AS.RegistrationEndpoint == "" {
 			return nil, -1, ErrManualClientRequired
 		}
-		reg, rerr := mcpoauth.Register(ctx, s.httpClient, disco.AS.RegistrationEndpoint, s.cfg.ClientName, s.RedirectURI(), scopes)
+		reg, rerr := mcpoauth.Register(ctx, s.httpClient, disco.AS.RegistrationEndpoint, s.cfg.ClientName, s.RedirectURI(), scopes, disco.AS.TokenEndpointAuthMethodsSupported)
 		if rerr != nil {
 			return nil, -1, fmt.Errorf("dynamic client registration: %w", rerr)
 		}

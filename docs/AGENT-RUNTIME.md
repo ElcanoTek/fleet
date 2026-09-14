@@ -576,6 +576,36 @@ How the invariants hold:
   terminated before discovery moves on.
   Intercom, Plaid, Cartesia, GoCardless and Square publish only that shape
   and could not be added before (#1006 catalog audit).
+- **A document that names another issuer is accepted only when every
+  endpoint in it is vouched for.** Five official vendors (DocuSign,
+  ZoomInfo, Sprout Social, OVHcloud, Chargebee) name the MCP host as the
+  authorization server and serve, from that host, a document whose `issuer`
+  is another URL — a copy of the real server's metadata, a proxy in front of
+  Okta, or a hybrid — so RFC 8414's issuer check refused all five.
+  `mcpoauth.confirmProxiedIssuer` runs only as a last resort, after every
+  metadata location failed the strict check, and accepts the document when
+  each endpoint it names (authorization, token, registration, revocation) is
+  either confirmed equal by the claimed issuer's own metadata or, when the
+  resource named a bare host, on that host itself; a path-bearing issuer gets
+  no same-host leg, since other tenants share the host. The validated
+  document's endpoints are what fleet dials (a proxy's registered clients only
+  work with the proxy's endpoints), and its `Issuer` is recorded as the
+  identity the vendor asserts. An endpoint belonging to neither party — a copy
+  that borrows a real issuer's name but points the token endpoint elsewhere —
+  is still refused (#1006 audit).
+- **Dynamic registration asks to be a public client, and retries once as a
+  confidential one if refused.** Of the official servers whose metadata lists
+  no `none` method, the two met live registered fleet anyway — one returning
+  a secret fleet stores and uses. A server that instead answers RFC 7591's
+  `invalid_client_metadata` gets one retry with `client_secret_basic` (or
+  `client_secret_post`) if it lists it; the secret comes back encrypted at
+  rest like any other.
+- **Auth0 is asked for `offline_access`, like Entra.** An Auth0 tenant
+  (recognized by its proprietary `mfa_challenge_endpoint`, or an
+  `*.auth0.com` issuer) issues a refresh token only for that scope, which the
+  resource's own scope list omits (Checkly). `Discovered.RequestedScopes`
+  appends it when the server advertises it. Not generalized to "advertises
+  `offline_access`": GitHub advertises it and refreshes without it.
 - **Rotation-safe refresh.** Tokens are refreshed under a `SELECT … FOR UPDATE`
   row lock with a post-lock expiry re-check, persisting any rotated (single-use)
   refresh token in the same transaction. A dead refresh token marks the

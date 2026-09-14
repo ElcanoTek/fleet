@@ -54,6 +54,12 @@ type AuthServerMetadata struct {
 	ScopesSupported                   []string `json:"scopes_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	// MFAChallengeEndpoint is Auth0's proprietary metadata field. It is the
+	// reliable marker of an Auth0 tenant behind a custom domain (Checkly's
+	// auth.checklyhq.com publishes it), and Auth0 has one rule the generic
+	// flow needs to know: a refresh token is issued only when `offline_access`
+	// is requested. See RequestedScopes.
+	MFAChallengeEndpoint string `json:"mfa_challenge_endpoint"`
 }
 
 // Discovered bundles everything a caller needs to start an authorization flow.
@@ -175,11 +181,12 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 
 	if as == nil {
 		issuer := strings.TrimSpace(prm.AuthorizationServers[0])
+		// fetchAuthServerMetadata returns only a document that passed
+		// verifyAuthServer for this issuer, or a proxied copy that
+		// confirmProxiedIssuer accepted — re-checking the issuer here would
+		// refuse the second kind.
 		as, err = fetchAuthServerMetadata(ctx, httpClient, issuer)
 		if err != nil {
-			return nil, err
-		}
-		if err := verifyAuthServer(issuer, as); err != nil {
 			return nil, err
 		}
 		// Persist the issuer the PRM named and we verified against, not the
@@ -187,7 +194,9 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		// document says the literal "{tenantid}" template (accepted by
 		// issuerMatches), which is not a URL anyone can dial or key a vendor
 		// clause on.
-		if !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
+		// A confirmed proxied issuer (confirmProxiedIssuer) is the real
+		// authorization server and stays as the document's own spelling.
+		if issuerMatches(issuer, as.Issuer) && !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
 			as.Issuer = issuer
 		}
 	}
@@ -281,10 +290,36 @@ func (d *Discovered) RequestedScopes() []string {
 		scopes = d.AS.ScopesSupported
 	}
 	out := append([]string(nil), scopes...)
-	if isEntraIssuer(d.AS.Issuer) && containsFold(d.AS.ScopesSupported, "offline_access") && !containsFold(out, "offline_access") {
+	// Vendors whose refresh-token contract needs `offline_access` asked for
+	// explicitly, and who advertise it: Microsoft Entra ID (measured on Azure
+	// DevOps) and Auth0 tenants (Checkly, whose PRM lists fifteen checkly:*
+	// scopes and no offline_access; Auth0 documents that refresh tokens are
+	// issued only for that scope). Keyed on metadata markers, never on
+	// "advertises offline_access" alone: GitHub advertises it too and
+	// refreshes without it, and a vendor that validates scopes may refuse an
+	// unrequested one. Other providers with the same rule (Ory's `offline`,
+	// IdentityServer) join here once a live connection has shown the need.
+	if (isEntraIssuer(d.AS.Issuer) || isAuth0Metadata(&d.AS)) && containsFold(d.AS.ScopesSupported, "offline_access") && !containsFold(out, "offline_access") {
 		out = append(out, "offline_access")
 	}
 	return out
+}
+
+// isAuth0Metadata reports whether the authorization server is an Auth0 tenant:
+// the proprietary mfa_challenge_endpoint field, or an *.auth0.com issuer host.
+func isAuth0Metadata(as *AuthServerMetadata) bool {
+	if as == nil {
+		return false
+	}
+	if strings.TrimSpace(as.MFAChallengeEndpoint) != "" {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(as.Issuer))
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Host)
+	return h == "auth0.com" || strings.HasSuffix(h, ".auth0.com")
 }
 
 func containsFold(list []string, want string) bool {
@@ -633,11 +668,35 @@ func authServerMetadataCandidates(issuer string) []string {
 // URLs the vendor 404ed or answered with the wrong document rather than only
 // the last one.
 func fetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, issuer string) (*AuthServerMetadata, error) {
+	return fetchAuthServerMetadataOpts(ctx, httpClient, issuer, true)
+}
+
+// errIssuerMismatch is the verifyAuthServer failure a document earns by naming
+// an issuer other than the URL it was fetched from — the one failure that
+// confirmProxiedIssuer may turn into an acceptance.
+var errIssuerMismatch = errors.New("authorization-server issuer mismatch")
+
+// fetchAuthServerMetadataOpts is fetchAuthServerMetadata with the proxied-issuer
+// confirmation switchable: the confirmation itself fetches the claimed issuer's
+// document with it OFF, so a chain of documents each naming another issuer
+// cannot recurse.
+func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, issuer string, confirmProxied bool) (*AuthServerMetadata, error) {
 	issuer = strings.TrimRight(strings.TrimSpace(issuer), "/")
 	if issuer == "" {
 		return nil, fmt.Errorf("empty authorization server issuer")
 	}
 	var tried []string
+	// Documents that parsed but named another issuer, kept in candidate order
+	// for the last-resort confirmation below. A candidate that passes the
+	// strict check anywhere in the order always wins over a mismatched one
+	// earlier in it: a host whose catch-all answers the inserted forms with
+	// its origin-level document must not have that document taken at its word
+	// while the issuer-specific one waits at the appended location.
+	type mismatched struct {
+		url string
+		doc AuthServerMetadata
+	}
+	var proxied []mismatched
 	for _, c := range authServerMetadataCandidates(issuer) {
 		var as AuthServerMetadata
 		if err := fetchJSON(ctx, httpClient, c, &as); err != nil {
@@ -650,11 +709,109 @@ func fetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, issue
 		}
 		if err := verifyAuthServer(issuer, &as); err != nil {
 			tried = append(tried, fmt.Sprintf("authorization-server metadata at %s: %v", c, err))
+			if confirmProxied && errors.Is(err, errIssuerMismatch) {
+				proxied = append(proxied, mismatched{url: c, doc: as})
+			}
 			continue
 		}
 		return &as, nil
 	}
+	seen := map[string]bool{}
+	for _, m := range proxied {
+		claimed := strings.ToLower(strings.TrimRight(strings.TrimSpace(m.doc.Issuer), "/"))
+		if seen[claimed] {
+			continue
+		}
+		seen[claimed] = true
+		confirmed, cerr := confirmProxiedIssuer(ctx, httpClient, issuer, &m.doc)
+		if cerr == nil {
+			return confirmed, nil
+		}
+		tried = append(tried, fmt.Sprintf("the issuer named by the document at %s did not confirm it: %v", m.url, cerr))
+	}
 	return nil, fmt.Errorf("fetch authorization-server metadata for %s: %s", issuer, strings.Join(tried, "; "))
+}
+
+// confirmProxiedIssuer handles the vendor pattern the #1006 catalog audit met
+// five times: the protected-resource metadata names the MCP host as its
+// authorization server, and that host serves a document whose `issuer` is
+// some other URL. RFC 8414 §3.3 says the issuer must equal the URL the
+// document was fetched from, and fleet enforced exactly that, so none of the
+// five could be added. Three shapes were measured:
+//
+//   - a COPY of the real server's document (DocuSign → account.docusign.com,
+//     Chargebee → its origin): the claimed issuer's own metadata says the same
+//     endpoints;
+//   - a PROXY (ZoomInfo): the issuer string is Okta's, but every endpoint is
+//     on the MCP host itself, which forwards to Okta;
+//   - a HYBRID (Sprout Social; OVHcloud, whose claimed issuer publishes no
+//     metadata at all): authorize/token are the real issuer's, registration is
+//     the MCP host's own addition.
+//
+// The copy is accepted when EVERY endpoint it names is either confirmed by
+// the claimed issuer's own metadata (fetched from the claimed issuer's
+// well-known location, with this confirmation off so documents cannot chain)
+// or on the same origin as the URL the copy was fetched from — the host the
+// protected-resource metadata itself trusted. Neither leg extends trust the
+// plain path lacks: a PRM may name the claimed issuer directly, and the
+// fetched-from host could have published a compliant document with its own
+// endpoints. What both legs refuse is the actual mix-up — an endpoint that
+// belongs to neither party. The validated copy is what fleet then dials (a
+// proxy's endpoints are the ones its registered clients work with); its
+// issuer is recorded as the identity the vendor asserts.
+func confirmProxiedIssuer(ctx context.Context, httpClient *http.Client, fetchedFrom string, copyDoc *AuthServerMetadata) (*AuthServerMetadata, error) {
+	claimed := strings.TrimRight(strings.TrimSpace(copyDoc.Issuer), "/")
+	u, err := url.Parse(claimed)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("claimed issuer %q is not a plain http(s) URL", copyDoc.Issuer)
+	}
+	fetchedFrom = strings.TrimRight(strings.TrimSpace(fetchedFrom), "/")
+	if strings.EqualFold(claimed, fetchedFrom) {
+		return nil, fmt.Errorf("claimed issuer is the fetched URL; nothing to confirm")
+	}
+	if err := verifyPKCE(copyDoc); err != nil {
+		return nil, err
+	}
+	// The same-origin leg is open only when the resource named a bare host
+	// as its authorization server. A path-bearing issuer
+	// (https://as.example.com/tenantA) may share its host with other tenants
+	// whose endpoints are equally "on the same origin"; for those, only the
+	// claimed issuer's own document may vouch for an endpoint.
+	fu, ferr := url.Parse(fetchedFrom)
+	bareOrigin := ferr == nil && strings.Trim(fu.Path, "/") == ""
+	own, ownErr := fetchAuthServerMetadataOpts(ctx, httpClient, claimed, false)
+	confirmedBy := func(copyEP, ownEP string) bool {
+		return own != nil && ownEP != "" && strings.EqualFold(strings.TrimRight(copyEP, "/"), strings.TrimRight(ownEP, "/"))
+	}
+	var ownAuthz, ownToken, ownReg, ownRevoke string
+	if own != nil {
+		ownAuthz, ownToken, ownReg, ownRevoke = own.AuthorizationEndpoint, own.TokenEndpoint, own.RegistrationEndpoint, own.RevocationEndpoint
+	}
+	for _, ep := range []struct{ name, copy, own string }{
+		{"authorization_endpoint", copyDoc.AuthorizationEndpoint, ownAuthz},
+		{"token_endpoint", copyDoc.TokenEndpoint, ownToken},
+		{"registration_endpoint", copyDoc.RegistrationEndpoint, ownReg},
+		{"revocation_endpoint", copyDoc.RevocationEndpoint, ownRevoke},
+	} {
+		if ep.copy == "" {
+			continue
+		}
+		if confirmedBy(ep.copy, ep.own) || (bareOrigin && sameOrigin(ep.copy, fetchedFrom)) {
+			continue
+		}
+		reason := fmt.Sprintf("the claimed issuer's own metadata says %q", ep.own)
+		if own == nil {
+			reason = fmt.Sprintf("the claimed issuer publishes no metadata (%v)", ownErr)
+		}
+		where := "on " + fetchedFrom
+		if !bareOrigin {
+			where = "vouched for by the same-host rule (" + fetchedFrom + " names a path, so only its issuer may vouch)"
+		}
+		return nil, fmt.Errorf("%s %q is neither %s nor confirmed by the claimed issuer %s: %s", ep.name, ep.copy, where, claimed, reason)
+	}
+	out := *copyDoc
+	out.Issuer = claimed
+	return &out, nil
 }
 
 // entraTenantTemplate is the literal placeholder Microsoft Entra ID puts in the
@@ -730,24 +887,24 @@ func verifyAuthServer(expectedIssuer string, as *AuthServerMetadata) error {
 		return fmt.Errorf("authorization-server metadata is missing the required issuer field")
 	}
 	if !issuerMatches(expectedIssuer, as.Issuer) {
-		return fmt.Errorf("authorization-server issuer mismatch: metadata says %q, expected %q", as.Issuer, expectedIssuer)
+		return fmt.Errorf("%w: metadata says %q, expected %q", errIssuerMismatch, as.Issuer, expectedIssuer)
 	}
-	// An empty methods list means the AS didn't advertise; the MCP spec requires
-	// S256, so we proceed assuming S256. A non-empty list that omits S256 is a
-	// hard reject.
-	if len(as.CodeChallengeMethodsSupported) > 0 {
-		ok := false
-		for _, m := range as.CodeChallengeMethodsSupported {
-			if strings.EqualFold(m, "S256") {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return fmt.Errorf("authorization server does not support PKCE S256 (advertises %v)", as.CodeChallengeMethodsSupported)
+	return verifyPKCE(as)
+}
+
+// verifyPKCE: an empty methods list means the AS didn't advertise; the MCP spec
+// requires S256, so we proceed assuming S256. A non-empty list that omits S256
+// is a hard reject.
+func verifyPKCE(as *AuthServerMetadata) error {
+	if len(as.CodeChallengeMethodsSupported) == 0 {
+		return nil
+	}
+	for _, m := range as.CodeChallengeMethodsSupported {
+		if strings.EqualFold(m, "S256") {
+			return nil
 		}
 	}
-	return nil
+	return fmt.Errorf("authorization server does not support PKCE S256 (advertises %v)", as.CodeChallengeMethodsSupported)
 }
 
 // fetchJSON GETs url and decodes a (size-limited) JSON body into out.

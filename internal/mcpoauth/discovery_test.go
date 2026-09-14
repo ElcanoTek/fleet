@@ -298,16 +298,69 @@ func TestDiscoverSkipsCandidateThatFailsVerification(t *testing.T) {
 
 	// Every candidate answers with a mismatched issuer: the error names each
 	// rejection, so the operator sees the vendor's wrong document, not a 404.
+	// The claimed issuer is a loopback server that publishes nothing, so the
+	// last-resort confirmation (confirmProxiedIssuer) fails deterministically
+	// and off the network, and the error names that too.
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	t.Cleanup(elsewhere.Close)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: "https://elsewhere.example.com", AuthorizationEndpoint: "https://elsewhere.example.com/a", TokenEndpoint: "https://elsewhere.example.com/t"})
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{Issuer: elsewhere.URL, AuthorizationEndpoint: elsewhere.URL + "/a", TokenEndpoint: elsewhere.URL + "/t"})
 	}))
 	t.Cleanup(srv.Close)
 	_, err := fetchAuthServerMetadata(context.Background(), srv.Client(), srv.URL+"/tenant1")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	if strings.Count(err.Error(), "issuer mismatch") != 4 || !strings.Contains(err.Error(), "/.well-known/oauth-authorization-server/tenant1: ") {
-		t.Errorf("error must name each rejected location with its reason: %q", err)
+	if strings.Count(err.Error(), "issuer mismatch") != 4 || !strings.Contains(err.Error(), "/.well-known/oauth-authorization-server/tenant1: ") || !strings.Contains(err.Error(), "did not confirm") {
+		t.Errorf("error must name each rejected location with its reason and the failed confirmation: %q", err)
+	}
+}
+
+// TestDiscoverAcceptsOriginDocumentForPathIssuer — the Chargebee shape as it
+// is live: the resource names https://host/mcp as its authorization server,
+// every location for /mcp answers with the ORIGIN's document (issuer
+// https://host), and nothing issuer-specific exists anywhere. The origin's own
+// metadata is that same document, so it confirms itself and is accepted as a
+// last resort — after the strict order found nothing.
+func TestDiscoverAcceptsOriginDocumentForPathIssuer(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	issuer := base + "/mcp"
+	originDoc := AuthServerMetadata{Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", CodeChallengeMethodsSupported: []string{"S256"}}
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+base+`/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: issuer, AuthorizationServers: []string{issuer}})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(originDoc) })
+	mux.HandleFunc("/.well-known/oauth-authorization-server/", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(originDoc) })
+	d, err := Discover(context.Background(), srv.Client(), issuer)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if d.AS.Issuer != base || d.AS.TokenEndpoint != base+"/token" {
+		t.Errorf("AS = %+v, want the origin's self-confirmed document", d.AS)
+	}
+}
+
+// TestDiscoverRefusesSameHostForPathIssuerWithoutConfirmation: for a
+// path-bearing issuer the same-host leg is closed — tenantA's location
+// answering with tenantB's document (endpoints on the shared host, tenantB
+// publishing no metadata of its own) is a mix-up, not a proxy.
+func TestDiscoverRefusesSameHostForPathIssuerWithoutConfirmation(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	tenantB := AuthServerMetadata{Issuer: base + "/tenantB", AuthorizationEndpoint: base + "/tenantB/authorize", TokenEndpoint: base + "/tenantB/token", CodeChallengeMethodsSupported: []string{"S256"}}
+	mux.HandleFunc("/.well-known/oauth-authorization-server/tenantA", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(tenantB) })
+	_, err := fetchAuthServerMetadata(context.Background(), srv.Client(), base+"/tenantA")
+	if err == nil || !strings.Contains(err.Error(), "names a path, so only its issuer may vouch") {
+		t.Fatalf("fetch = %v, want tenantB's document refused for tenantA", err)
 	}
 }
 
@@ -841,6 +894,222 @@ func TestProbeTerminatesSessionItOpened(t *testing.T) {
 	}
 }
 
+// proxiedASServers stands up the DocuSign/ZoomInfo/Sprout shape: the MCP host
+// (proxy) serves PRM naming ITSELF as the authorization server plus a document
+// whose issuer is the second server (realAS). realAS publishes its own
+// document when realUp; tamper lets a test reshape the proxy's copy.
+func proxiedASServers(t *testing.T, tamper func(proxyURL string, copyDoc *AuthServerMetadata), realUp bool) (proxy, realAS *httptest.Server) {
+	t.Helper()
+	realMux := http.NewServeMux()
+	realAS = httptest.NewServer(realMux)
+	t.Cleanup(realAS.Close)
+	realDoc := AuthServerMetadata{
+		Issuer:                        realAS.URL,
+		AuthorizationEndpoint:         realAS.URL + "/oauth2/authorize",
+		TokenEndpoint:                 realAS.URL + "/oauth2/token",
+		RegistrationEndpoint:          realAS.URL + "/oauth2/register",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	realMux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		if !realUp {
+			http.NotFound(w, nil)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(realDoc)
+	})
+	proxyMux := http.NewServeMux()
+	proxy = httptest.NewServer(proxyMux)
+	t.Cleanup(proxy.Close)
+	proxyMux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+proxy.URL+`/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	proxyMux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: proxy.URL + "/mcp", AuthorizationServers: []string{proxy.URL}})
+	})
+	copyDoc := realDoc
+	if tamper != nil {
+		tamper(proxy.URL, &copyDoc)
+	}
+	proxyMux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(copyDoc)
+	})
+	return proxy, realAS
+}
+
+// TestDiscoverAcceptsProxiedIssuerConfirmedByItself — the DocuSign/Chargebee
+// shape: the copy's issuer names realAS and realAS's own document says the
+// same endpoints → accepted, issuer recorded as the one the vendor asserts.
+func TestDiscoverAcceptsProxiedIssuerConfirmedByItself(t *testing.T) {
+	proxy, realAS := proxiedASServers(t, nil, true)
+	d, err := Discover(context.Background(), proxy.Client(), proxy.URL+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if d.AS.Issuer != realAS.URL || d.AS.TokenEndpoint != realAS.URL+"/oauth2/token" || d.AS.RegistrationEndpoint != realAS.URL+"/oauth2/register" {
+		t.Errorf("AS = %+v, want the confirmed document with the claimed issuer", d.AS)
+	}
+	if d.Resource != proxy.URL+"/mcp" {
+		t.Errorf("resource = %q", d.Resource)
+	}
+}
+
+// TestDiscoverAcceptsProxyWithOwnEndpoints — the ZoomInfo shape: the issuer
+// string is the real server's, every endpoint is the MCP host's own; and the
+// OVHcloud shape on top: the claimed issuer publishes nothing at all.
+func TestDiscoverAcceptsProxyWithOwnEndpoints(t *testing.T) {
+	onProxy := func(proxyURL string, c *AuthServerMetadata) {
+		c.AuthorizationEndpoint = proxyURL + "/oauth/authorize"
+		c.TokenEndpoint = proxyURL + "/oauth/token"
+		c.RegistrationEndpoint = proxyURL + "/oauth/register"
+	}
+	for _, realUp := range []bool{true, false} {
+		proxy, realAS := proxiedASServers(t, onProxy, realUp)
+		d, err := Discover(context.Background(), proxy.Client(), proxy.URL+"/mcp")
+		if err != nil {
+			t.Fatalf("realUp=%v Discover: %v", realUp, err)
+		}
+		if d.AS.TokenEndpoint != proxy.URL+"/oauth/token" || d.AS.Issuer != realAS.URL {
+			t.Errorf("realUp=%v AS = %+v, want the proxy's endpoints under the asserted issuer", realUp, d.AS)
+		}
+	}
+}
+
+// TestDiscoverAcceptsHybridProxiedDocument — the Sprout Social shape:
+// authorize/token confirmed by the real issuer, registration added on the MCP
+// host, which the real issuer's own metadata does not list.
+func TestDiscoverAcceptsHybridProxiedDocument(t *testing.T) {
+	proxy, realAS := proxiedASServers(t, func(proxyURL string, c *AuthServerMetadata) {
+		c.RegistrationEndpoint = proxyURL + "/oauth2/v1/register"
+	}, true)
+	d, err := Discover(context.Background(), proxy.Client(), proxy.URL+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if d.AS.TokenEndpoint != realAS.URL+"/oauth2/token" || d.AS.RegistrationEndpoint != proxy.URL+"/oauth2/v1/register" {
+		t.Errorf("AS = %+v", d.AS)
+	}
+}
+
+// TestDiscoverRejectsProxiedCopyWithForeignEndpoint: an endpoint that belongs
+// to neither the claimed issuer nor the MCP host — the mix-up the check
+// exists to refuse — whether the claimed issuer is up or not.
+func TestDiscoverRejectsProxiedCopyWithForeignEndpoint(t *testing.T) {
+	for _, realUp := range []bool{true, false} {
+		proxy, _ := proxiedASServers(t, func(_ string, c *AuthServerMetadata) { c.TokenEndpoint = "https://evil.example.com/token" }, realUp)
+		_, err := Discover(context.Background(), proxy.Client(), proxy.URL+"/mcp")
+		if err == nil || !strings.Contains(err.Error(), "did not confirm") || (realUp && !strings.Contains(err.Error(), "token_endpoint")) {
+			t.Fatalf("realUp=%v Discover = %v, want the copy refused (token_endpoint named when the issuer is up)", realUp, err)
+		}
+	}
+	// An invented registration endpoint on a third host is refused the same way.
+	proxy2, _ := proxiedASServers(t, func(_ string, c *AuthServerMetadata) { c.RegistrationEndpoint = "https://evil.example.com/register" }, true)
+	if _, err := Discover(context.Background(), proxy2.Client(), proxy2.URL+"/mcp"); err == nil || !strings.Contains(err.Error(), "registration_endpoint") {
+		t.Fatalf("Discover = %v, want a registration_endpoint refusal", err)
+	}
+	// A claimed issuer that is not an http(s) URL is never dialed.
+	proxy3, _ := proxiedASServers(t, func(_ string, c *AuthServerMetadata) { c.Issuer = "ftp://files.example.com/as" }, true)
+	if _, err := Discover(context.Background(), proxy3.Client(), proxy3.URL+"/mcp"); err == nil || !strings.Contains(err.Error(), "not a plain http(s) URL") {
+		t.Fatalf("Discover = %v, want the scheme refusal", err)
+	}
+	// A copy that advertises only plain PKCE is refused before any confirmation.
+	proxy4, _ := proxiedASServers(t, func(_ string, c *AuthServerMetadata) { c.CodeChallengeMethodsSupported = []string{"plain"} }, true)
+	if _, err := Discover(context.Background(), proxy4.Client(), proxy4.URL+"/mcp"); err == nil || !strings.Contains(err.Error(), "PKCE S256") {
+		t.Fatalf("Discover = %v, want the PKCE refusal", err)
+	}
+}
+
+// TestRequestedScopesAddsOfflineAccessForAuth0: Checkly's shape — an Auth0
+// tenant behind a custom domain, recognized by mfa_challenge_endpoint, PRM
+// scopes without offline_access, AS advertising it.
+func TestRequestedScopesAddsOfflineAccessForAuth0(t *testing.T) {
+	d := &Discovered{
+		PRM: ProtectedResourceMetadata{ScopesSupported: []string{"checkly:checks:read"}},
+		AS: AuthServerMetadata{
+			Issuer:               "https://auth.checklyhq.com/",
+			ScopesSupported:      []string{"openid", "profile", "offline_access"},
+			MFAChallengeEndpoint: "https://auth.checklyhq.com/mfa/challenge",
+		},
+	}
+	if got := strings.Join(d.RequestedScopes(), " "); got != "checkly:checks:read offline_access" {
+		t.Errorf("auth0 scopes = %q", got)
+	}
+	d.AS.MFAChallengeEndpoint = ""
+	d.AS.Issuer = "https://tenant.eu.auth0.com/"
+	if got := strings.Join(d.RequestedScopes(), " "); got != "checkly:checks:read offline_access" {
+		t.Errorf("auth0.com host scopes = %q", got)
+	}
+	// GitHub advertises openid + offline_access and is neither Entra nor Auth0 → untouched.
+	gh := &Discovered{
+		PRM: ProtectedResourceMetadata{ScopesSupported: []string{"repo", "read:org"}},
+		AS:  AuthServerMetadata{Issuer: "https://github.com/login/oauth", ScopesSupported: []string{"openid", "offline_access"}},
+	}
+	if got := strings.Join(gh.RequestedScopes(), " "); got != "repo read:org" {
+		t.Errorf("github scopes = %q, want untouched", got)
+	}
+}
+
+// TestRegisterRetriesConfidentialWhenPublicClientRefused: the AS answers the
+// "none" registration with RFC 7591 invalid_client_metadata and lists
+// client_secret_post only → one retry as client_secret_post, secret returned.
+func TestRegisterRetriesConfidentialWhenPublicClientRefused(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req clientRegistrationRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		methods = append(methods, req.TokenEndpointAuthMethod)
+		if req.TokenEndpointAuthMethod == "none" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_client_metadata", "error_description": "token_endpoint_auth_method none is not allowed"})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(ClientRegistration{ClientID: "conf-1", ClientSecret: "s3cr3t"})
+	}))
+	t.Cleanup(srv.Close)
+	reg, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"client_secret_post"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if reg.ClientID != "conf-1" || reg.ClientSecret != "s3cr3t" {
+		t.Errorf("registration = %+v", reg)
+	}
+	if strings.Join(methods, ",") != "none,client_secret_post" {
+		t.Errorf("methods tried = %v, want none then client_secret_post", methods)
+	}
+	// Prefers client_secret_basic when both are listed.
+	methods = nil
+	if _, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"client_secret_post", "client_secret_basic"}); err != nil || methods[1] != "client_secret_basic" {
+		t.Errorf("methods = %v err=%v, want basic preferred", methods, err)
+	}
+}
+
+// TestRegisterDoesNotRetryWithoutCause: a refusal that is not about the auth
+// method, or an AS that lists no confidential method, is reported as is —
+// one request, no second registration.
+func TestRegisterDoesNotRetryWithoutCause(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_redirect_uri", "error_description": "redirect_uri not allowed"})
+	}))
+	t.Cleanup(srv.Close)
+	if _, err := Register(context.Background(), srv.Client(), srv.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"client_secret_basic"}); err == nil || !strings.Contains(err.Error(), "invalid_redirect_uri") || calls != 1 {
+		t.Fatalf("unrelated refusal: err=%v calls=%d, want the refusal verbatim after one call", err, calls)
+	}
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_client_metadata"})
+	}))
+	t.Cleanup(srv2.Close)
+	calls = 0
+	if _, err := Register(context.Background(), srv2.Client(), srv2.URL, "fleet", "https://fleet.example.com/cb", "mcp", []string{"none", "private_key_jwt"}); err == nil || calls != 1 {
+		t.Fatalf("no confidential method listed: err=%v calls=%d, want one call and the refusal", err, calls)
+	}
+}
+
 func TestDiscoverIgnoresCrossOriginPRMResource(t *testing.T) {
 	// A PRM that names a resource on a DIFFERENT origin must NOT rebind the
 	// stored identity — Discover keeps the requested server URL (RFC 9728 §3.3).
@@ -1031,7 +1300,7 @@ func TestRegisterDCR(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	reg, err := Register(context.Background(), srv.Client(), srv.URL+"/register", "fleet", "https://fleet.example.com/cb", "mcp:read")
+	reg, err := Register(context.Background(), srv.Client(), srv.URL+"/register", "fleet", "https://fleet.example.com/cb", "mcp:read", nil)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -1043,7 +1312,7 @@ func TestRegisterDCR(t *testing.T) {
 	}
 
 	// No registration endpoint → clear error.
-	if _, err := Register(context.Background(), srv.Client(), "", "fleet", "x", ""); err == nil {
+	if _, err := Register(context.Background(), srv.Client(), "", "fleet", "x", "", nil); err == nil {
 		t.Error("Register accepted an empty registration endpoint")
 	}
 }
