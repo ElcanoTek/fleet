@@ -6,6 +6,7 @@ import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { applyTemplateVars, humanizeVarName, promptableVars } from "@/app/shared/lib/taskTemplates";
 import { validateTaskForm, validateCronExpression, describeEmailError } from "@/app/shared/lib/validation";
 import { isValidEmail } from "@/app/shared/lib/format";
+import { buildPromptWithRecipients, splitPromptRecipients } from "./taskEmailBlock";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { Icon } from "@/app/shared/ui/Icon";
 import { nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
@@ -182,9 +183,15 @@ function taskToFormValues(task: Task | null) {
       scheduledTime = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
   }
+  // Recipients live inside the stored prompt (see taskEmailBlock.ts). Splitting
+  // them back out here is what lets the form treat them as their own field: the
+  // textarea shows the author's text, and replacing it — which is exactly what
+  // inserting a library prompt does — can no longer take the recipients with it.
+  const { basePrompt, recipients } = splitPromptRecipients(task?.prompt ?? "");
   return {
     title: task?.title ?? "",
-    prompt: task?.prompt ?? "",
+    prompt: basePrompt,
+    emails: recipients,
     description: task?.description ?? "",
     tagsInput: (task?.tags ?? []).join(", "),
     persona: task?.persona ?? "",
@@ -360,7 +367,7 @@ export function TaskCreateModal({
   const [tagsInput, setTagsInput] = useState(init.tagsInput);
   const [persona, setPersona] = useState(init.persona);
 
-  const [emails, setEmails] = useState<string[]>([]);
+  const [emails, setEmails] = useState<string[]>(init.emails);
   const [emailInput, setEmailInput] = useState("");
   const [emailError, setEmailError] = useState("");
 
@@ -528,9 +535,11 @@ export function TaskCreateModal({
   // Edit mode compares the live form against the prefilled values (the
   // component remounts per edit target via the parent's key, so `init` is the
   // mount-time truth); create mode keeps its semantic any-field-set check.
-  // Recipients are in the snapshot too: an edit form always starts with none
-  // (the email block lives inside the stored prompt, not as a field), so a
-  // chip added or an address half-typed is a change worth guarding.
+  // Recipients are in the snapshot too. They are stored inside the prompt but
+  // round-trip into their own field (taskEmailBlock.ts), so an edit opens with
+  // the task's real list and `init.emails` is the baseline — comparing against
+  // an empty one would open every recipient-carrying task pre-dirtied. A chip
+  // added or an address half-typed is still a change worth guarding.
   const formSnapshot = JSON.stringify([
     title,
     prompt,
@@ -569,7 +578,7 @@ export function TaskCreateModal({
     init.description,
     init.tagsInput,
     init.persona,
-    [],
+    init.emails,
     "",
     init.scheduleMode,
     init.scheduledDate,
@@ -963,12 +972,8 @@ export function TaskCreateModal({
     return true;
   };
 
-  const buildFinalPrompt = (recipients: string[]): string => {
-    const base = prompt.trim();
-    if (recipients.length === 0) return base;
-    const yaml = recipients.map((e) => `    - ${e}`).join("\n");
-    return `${base}\n\n---\nCRITICAL ACTION\nemail:\n  action: send_report\n  tool: email\n  instruction: "The following action is MANDATORY after completing the core task."\n  description: "Send the full report and findings to the listed recipients."\n  recipients:\n${yaml}\n---`;
-  };
+  const buildFinalPrompt = (recipients: string[]): string =>
+    buildPromptWithRecipients(prompt, recipients);
 
   // buildTaskData assembles the TaskCreate body shared by submit and the cost
   // estimate. Only the active schedule mode's field is sent — Run now sends
