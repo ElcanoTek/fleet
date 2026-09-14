@@ -7,45 +7,55 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// slowPersister wraps the real *store.Store but stalls every InsertTurnEvents,
-// forcing the bounded persistCh to saturate so Emit drops events on the live
-// path — the exact slow-Postgres condition issue #32 guards. failInserts, when
-// set, also makes every InsertTurnEvents FAIL, so even the Finish backfill cannot
-// heal the gap (the genuinely-lossy case).
-type slowPersister struct {
+// gatedPersister wraps the real *store.Store and parks every InsertTurnEvents
+// until the test opens the gate, forcing the bounded persistCh to saturate so
+// Emit drops events on the live path — the exact slow-Postgres condition issue
+// #32 guards.
+//
+// The gate is a barrier, NOT a sleep. An earlier version stalled each insert
+// for a fixed 40ms and hoped the producer outran it; that made the test a race
+// between two clocks, and it lost on a loaded CI runner (the backfill's own 5s
+// per-chunk budget expired, the turn came back lossy, and the -race lane went
+// red on a diff that touched no Go code). Blocking until released makes the
+// drops a structural certainty at any speed: while a flush is parked the
+// persister can absorb at most flushBatchSize + persistChanDepth events, so
+// emitting more than that sum always overflows.
+//
+// failInserts, when set, also makes every InsertTurnEvents FAIL, so even the
+// Finish backfill cannot heal the gap (the genuinely-lossy case).
+type gatedPersister struct {
 	*store.Store
-	delay       time.Duration
+	// gate blocks every insert until closed. Nil means "never block".
+	gate        chan struct{}
 	failInserts bool
-
-	mu          sync.Mutex
-	insertCalls int
 }
 
-func (p *slowPersister) InsertTurnEvents(ctx context.Context, events []store.TurnEvent) error {
-	if p.delay > 0 {
-		time.Sleep(p.delay)
+func (p *gatedPersister) InsertTurnEvents(ctx context.Context, events []store.TurnEvent) error {
+	if p.gate != nil {
+		select {
+		case <-p.gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	p.mu.Lock()
-	p.insertCalls++
-	p.mu.Unlock()
 	if p.failInserts {
 		return errors.New("simulated turn_events insert failure")
 	}
 	return p.Store.InsertTurnEvents(ctx, events)
 }
 
-// TestPersister_BackfillHealsDropsUnderLatency: under DB latency that saturates
-// the persist channel, Finish re-sends the full in-memory snapshot so the
-// persisted ledger ends up gapless (no permanently-dropped events) and the turn
-// is NOT flagged lossy — the heal succeeded. Core acceptance for issue #32.
-func TestPersister_BackfillHealsDropsUnderLatency(t *testing.T) {
+// TestPersister_BackfillHealsDropsUnderBackpressure: when a stalled persister
+// saturates the persist channel and the live path drops events, Finish re-sends
+// the full in-memory snapshot so the persisted ledger ends up gapless (no
+// permanently-dropped events) and the turn is NOT flagged lossy — the heal
+// succeeded. Core acceptance for issue #32.
+func TestPersister_BackfillHealsDropsUnderBackpressure(t *testing.T) {
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -56,26 +66,49 @@ func TestPersister_BackfillHealsDropsUnderLatency(t *testing.T) {
 	defer cancel()
 	buf, turnID, tok, _ := s.registerTurn(conv.ID, cancel)
 
-	ctx, cc := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cc()
-	slow := &slowPersister{Store: s.concreteStore(t), delay: 40 * time.Millisecond}
-	if err := buf.attachPersister(ctx, slow); err != nil {
+	gate := make(chan struct{})
+	stalled := &gatedPersister{Store: s.concreteStore(t), gate: gate}
+	// t.Context(): attachPersister uses ctx only for the CreateTurn round-trip
+	// and does not retain it, so the test's own lifetime is the honest bound —
+	// no invented timeout to outgrow.
+	if err := buf.attachPersister(t.Context(), stalled); err != nil {
 		t.Fatalf("attachPersister: %v", err)
 	}
 
-	// Emit far more than the 512-deep persistCh in a tight loop while the persister
-	// is stalled, so the channel saturates and the live path drops events.
+	// With the persister parked on the gate it can hold at most flushBatchSize
+	// events in its pending batch plus persistChanDepth queued behind them, so
+	// emitting more than that sum drops the remainder on the live path no matter
+	// how the two goroutines interleave. n also spans several backfill chunks.
 	const n = 2000
+	if n <= persistChanDepth+flushBatchSize {
+		t.Fatalf("n = %d must exceed persistChanDepth+flushBatchSize (%d) to guarantee drops",
+			n, persistChanDepth+flushBatchSize)
+	}
 	for i := 1; i < n; i++ {
 		buf.Emit("delta", map[string]any{"i": i})
 	}
 	buf.Emit("turn.completed", map[string]any{}) // event #n; terminal marker
 
+	// Pin the precondition that makes the heal assertions meaningful: the live
+	// path really did drop. Without this the test would quietly decay into
+	// "persist 2000 events happily" if the buffering ever grew enough to absorb
+	// them, and would still pass while testing nothing.
+	buf.mu.Lock()
+	dropped := buf.needsBackfill
+	buf.mu.Unlock()
+	if !dropped {
+		t.Fatal("no event was dropped on the live path: backpressure never happened, so the backfill below has nothing to heal")
+	}
+
+	// Every drop is now recorded (Emit flags needsBackfill synchronously), so the
+	// gate can open: Finish waits on the persister goroutine, which is parked on
+	// it, and the backfill then runs at full speed against an unencumbered DB.
+	close(gate)
+
 	s.finishTurn(conv.ID, tok)
 
 	// The persisted ledger must be the COMPLETE, gapless 1..n — backfill healed
-	// every drop. (If the live path never dropped, this still holds; the assertion
-	// is on completeness, and slowPersister guarantees drops happened.)
+	// every drop that the assertion above proved happened.
 	events, err := s.store.LoadTurnEvents(t.Context(), turnID, 0)
 	if err != nil {
 		t.Fatalf("LoadTurnEvents: %v", err)
@@ -119,13 +152,12 @@ func TestPersister_LossyWhenBackfillFails(t *testing.T) {
 	defer cancel()
 	buf, turnID, tok, _ := s.registerTurn(conv.ID, cancel)
 
-	ctx, cc := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cc()
 	// Every InsertTurnEvents fails: the live flush fails (→ needsBackfill) AND the
 	// Finish backfill fails (→ lossy). FinishTurn itself is a different statement
-	// (delegated to the real store), so the turn still seals.
-	failing := &slowPersister{Store: s.concreteStore(t), failInserts: true}
-	if err := buf.attachPersister(ctx, failing); err != nil {
+	// (delegated to the real store), so the turn still seals. No gate here — this
+	// case needs failures, not backpressure, so nothing blocks.
+	failing := &gatedPersister{Store: s.concreteStore(t), failInserts: true}
+	if err := buf.attachPersister(t.Context(), failing); err != nil {
 		t.Fatalf("attachPersister: %v", err)
 	}
 
