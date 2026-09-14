@@ -19,6 +19,11 @@ FLEET_OIDC_SCOPES=openid email
 AUTH_SIGNING_PUBKEY=<Auth Ed25519 public key>
 ```
 
+Fleet also reads Auth's published `/jwks.json` (cached ten minutes, refreshed
+once when a logout token names an unknown `kid`), so an Auth signing-key
+rotation needs no Fleet env edit. Keep one static key as bootstrap and
+offline fallback.
+
 Register the exact callback and signed logout endpoint on Auth:
 
 ```text
