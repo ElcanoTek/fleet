@@ -120,6 +120,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   guided tenant/API-key/BYO-client add forms, the per-user api_key auth mode):
   [`docs/MCP-CATALOG.md`](MCP-CATALOG.md) +
   [`docs/CONNECTOR-ONBOARDING.md`](CONNECTOR-ONBOARDING.md)
+- **How a remote MCP server's authorization server is discovered** (the chain,
+  what a proxied issuer must prove, tenant scoping, dynamic client
+  registration, the `offline_access` clause):
+  [`docs/MCP-OAUTH-DISCOVERY.md`](MCP-OAUTH-DISCOVERY.md)
 - **Bundle-managed SES/S3 email-report infrastructure:** use the external
   canonical [new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md);
   keep client-specific inventory in the external client bundle.
@@ -220,6 +224,7 @@ above fails otherwise.
 - [`MCP-BROKER-SCOPES.md`](MCP-BROKER-SCOPES.md) — MCP broker scoped sessions
 - [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
 - [`MCP-CATALOG.md`](MCP-CATALOG.md) — The MCP connector directory — trust classes, built-in catalog, provenance
+- [`MCP-OAUTH-DISCOVERY.md`](MCP-OAUTH-DISCOVERY.md) — MCP OAuth discovery — the chain, proxied issuers, tenant scoping, registration, refresh scopes
 - [`MCP-RELOAD.md`](MCP-RELOAD.md) — MCP server hot-reload (#218)
 - [`MCP-TESTING.md`](MCP-TESTING.md) — Testing MCP servers
 - [`MEMORY.md`](MEMORY.md) — User memory: typed, provenanced, reviewable

@@ -579,6 +579,85 @@ How the invariants hold:
   terminated before discovery moves on.
   Intercom, Plaid, Cartesia, GoCardless and Square publish only that shape
   and could not be added before (#1006 catalog audit).
+- **A document that names another issuer is accepted only when every
+  endpoint in it is vouched for.** Five official vendors (DocuSign,
+  ZoomInfo, Sprout Social, OVHcloud, Chargebee) name the MCP host as the
+  authorization server and serve, from that host, a document whose `issuer`
+  is another URL — a copy of the real server's metadata, a proxy in front of
+  Okta, or a hybrid — so RFC 8414's issuer check refused all five.
+  `mcpoauth.confirmProxiedIssuer` runs only as a last resort, after every
+  metadata location failed the strict check, and accepts the document when
+  each endpoint it names (authorization, token, registration, revocation) is
+  either confirmed equal by the claimed issuer's own metadata or, when the
+  resource named a bare host, on that host itself. Endpoint URLs compare the
+  way URLs do — scheme and host case-insensitively, path and query
+  byte-for-byte **with one documented exception: a single trailing slash is
+  tolerated**, so `/token` and `/token/` are the same endpoint while `/token//`
+  is not — so a "confirmed" endpoint cannot differ from the vouched-for one in
+  casing alone. An endpoint must also be an absolute `http(s)` URL with a
+  hostname: a relative one parses without error and normalizes to an empty
+  origin, so two of them would confirm each other. An endpoint embedding
+  userinfo is refused outright — `net/http`
+  turns URL userinfo into a Basic `Authorization` header when the request sets
+  none itself, so confirming one would dial it with authentication fleet never
+  chose to send. An authorization server scoped to one tenant — by a path
+  (`https://as.example.com/tenantA`), a query, a fragment or userinfo — gets
+  neither leg on another tenant's terms: the only document that may vouch for
+  it is its own ORIGIN-level one, the measured Chargebee shape — and only for
+  a PATH-scoped one: the well-known lookup keeps just scheme, host and path, so
+  a query-, fragment- or userinfo-scoped server would have its scoping dropped
+  before any fetch, let an origin document self-confirm, and be silently
+  replaced by the unscoped issuer; those get no fallback at all. A sibling
+  tenant is self-consistent too, and accepting it would send the user through
+  the wrong tenant's authorization endpoint. "Scoped" is read off the
+  **escaped** path, so an issuer path of `/%2F` — which `url.Parse` decodes to
+  `//` — stays a tenant rather than reading as a bare origin. Origins compare
+  canonically throughout (lowercase scheme and host, the scheme's default port
+  dropped, an IPv6 literal's brackets kept so the host/port boundary stays
+  unambiguous), so a PRM or a copy spelling a host in mixed case or with an
+  explicit `:443` still matches the endpoints it vouches for; paths and
+  queries compare byte-for-byte, but for that one tolerated trailing slash. When the token endpoint turns out to be the claimed
+  issuer's own, that issuer's document supplies
+  `token_endpoint_auth_methods_supported` — a copy saying `none` against an
+  endpoint whose owner requires a secret would otherwise open a secretless
+  client — and fills in `scopes_supported` and `mfa_challenge_endpoint` where
+  a trimmed copy left them out, since losing either costs the connection the
+  refresh token the `offline_access` rule below exists to secure. A populated
+  list is never overwritten (a proxy may offer fewer scopes than the issuer
+  behind it), and a proxy's token endpoint is its own, so there the document's
+  own values stand. The validated
+  document's endpoints are what fleet dials (a proxy's registered clients only
+  work with the proxy's endpoints), and its `Issuer` is recorded as the
+  identity the vendor asserts. An endpoint belonging to neither party — a copy
+  that borrows a real issuer's name but points the token endpoint elsewhere —
+  is still refused (#1006 audit).
+- **Dynamic registration asks to be a public client, and retries once as a
+  confidential one if refused.** Of the official servers whose metadata lists
+  no `none` method, the two met live registered fleet anyway — one returning
+  a secret fleet stores and uses. A server that instead answers RFC 7591's
+  `invalid_client_metadata` gets one retry with `client_secret_basic` (or
+  `client_secret_post`) if it lists one — and with `client_secret_basic` when
+  it advertises no list at all, which RFC 8414 §2 defines to mean exactly
+  that, the same default the token endpoint already applies. The retry must
+  come back with a `client_secret`: a confidential registration without one
+  cannot authenticate at the token endpoint, so it is refused at add time
+  rather than after a consent screen. RFC 7591 §3.2.1 also lets the server
+  substitute the metadata it granted, so when the response names an effective
+  `token_endpoint_auth_method` that is what fleet stores for the client — a
+  server advertising both Basic and Post may register this client as post-only,
+  and choosing Basic off the advertised list would 401 every exchange and
+  revocation. A `none` echo does not narrow it, since fleet asks to be public
+  first and a server may echo `none` while returning a secret anyway, and a
+  granted method fleet cannot perform at all (`private_key_jwt`, an mTLS
+  method) is refused at registration rather than falling back to the advertised
+  list and failing the exchange after consent. The secret comes back encrypted
+  at rest like any other.
+- **Auth0 is asked for `offline_access`, like Entra.** An Auth0 tenant
+  (recognized by its proprietary `mfa_challenge_endpoint`, or an
+  `*.auth0.com` issuer) issues a refresh token only for that scope, which the
+  resource's own scope list omits (Checkly). `Discovered.RequestedScopes`
+  appends it when the server advertises it. Not generalized to "advertises
+  `offline_access`": GitHub advertises it and refreshes without it.
 - **Rotation-safe refresh.** Tokens are refreshed under a `SELECT … FOR UPDATE`
   row lock with a post-lock expiry re-check, persisting any rotated (single-use)
   refresh token in the same transaction. A dead refresh token marks the

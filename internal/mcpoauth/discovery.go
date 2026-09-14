@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -54,6 +55,12 @@ type AuthServerMetadata struct {
 	ScopesSupported                   []string `json:"scopes_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	// MFAChallengeEndpoint is Auth0's proprietary metadata field. It is the
+	// reliable marker of an Auth0 tenant behind a custom domain (Checkly's
+	// auth.checklyhq.com publishes it), and Auth0 has one rule the generic
+	// flow needs to know: a refresh token is issued only when `offline_access`
+	// is requested. See RequestedScopes.
+	MFAChallengeEndpoint string `json:"mfa_challenge_endpoint"`
 }
 
 // Discovered bundles everything a caller needs to start an authorization flow.
@@ -175,11 +182,12 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 
 	if as == nil {
 		issuer := strings.TrimSpace(prm.AuthorizationServers[0])
+		// fetchAuthServerMetadata returns only a document that passed
+		// verifyAuthServer for this issuer, or a proxied copy that
+		// confirmProxiedIssuer accepted — re-checking the issuer here would
+		// refuse the second kind.
 		as, err = fetchAuthServerMetadata(ctx, httpClient, issuer)
 		if err != nil {
-			return nil, err
-		}
-		if err := verifyAuthServer(issuer, as); err != nil {
 			return nil, err
 		}
 		// Persist the issuer the PRM named and we verified against, not the
@@ -187,7 +195,9 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		// document says the literal "{tenantid}" template (accepted by
 		// issuerMatches), which is not a URL anyone can dial or key a vendor
 		// clause on.
-		if !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
+		// A confirmed proxied issuer (confirmProxiedIssuer) is the real
+		// authorization server and stays as the document's own spelling.
+		if issuerMatches(issuer, as.Issuer) && !strings.EqualFold(strings.TrimRight(issuer, "/"), strings.TrimRight(as.Issuer, "/")) {
 			as.Issuer = issuer
 		}
 	}
@@ -281,15 +291,52 @@ func (d *Discovered) RequestedScopes() []string {
 		scopes = d.AS.ScopesSupported
 	}
 	out := append([]string(nil), scopes...)
-	if isEntraIssuer(d.AS.Issuer) && containsFold(d.AS.ScopesSupported, "offline_access") && !containsFold(out, "offline_access") {
+	// Vendors whose refresh-token contract needs `offline_access` asked for
+	// explicitly, and who advertise it: Microsoft Entra ID (measured on Azure
+	// DevOps) and Auth0 tenants (Checkly, whose PRM lists fifteen checkly:*
+	// scopes and no offline_access; Auth0 documents that refresh tokens are
+	// issued only for that scope). Keyed on metadata markers, never on
+	// "advertises offline_access" alone: GitHub advertises it too and
+	// refreshes without it, and a vendor that validates scopes may refuse an
+	// unrequested one. Other providers with the same rule (Ory's `offline`,
+	// IdentityServer) join here once a live connection has shown the need.
+	if (isEntraIssuer(d.AS.Issuer) || isAuth0Metadata(&d.AS)) && containsScope(d.AS.ScopesSupported, "offline_access") && !containsScope(out, "offline_access") {
 		out = append(out, "offline_access")
 	}
 	return out
 }
 
-func containsFold(list []string, want string) bool {
+// isAuth0Metadata reports whether the authorization server is an Auth0 tenant:
+// the proprietary mfa_challenge_endpoint field, or an *.auth0.com issuer host.
+func isAuth0Metadata(as *AuthServerMetadata) bool {
+	if as == nil {
+		return false
+	}
+	if strings.TrimSpace(as.MFAChallengeEndpoint) != "" {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(as.Issuer))
+	if err != nil {
+		return false
+	}
+	// Hostname(), not Host: the latter carries any explicit port, so an issuer
+	// written https://tenant.auth0.com:443 would match neither test and the
+	// tenant would go unrecognized — costing it the `offline_access` that is
+	// the whole point of recognizing it.
+	h := strings.ToLower(u.Hostname())
+	return h == "auth0.com" || strings.HasSuffix(h, ".auth0.com")
+}
+
+// containsScope reports whether an OAuth scope list already carries a scope
+// token, compared EXACTLY. RFC 6749 §3.3 makes scope values "space-delimited,
+// case-sensitive strings", so "OFFLINE_ACCESS" is a different scope from
+// "offline_access" — folding them together would both mistake a differently
+// cased token for the advertised one and suppress the append that gives an
+// Entra or Auth0 connection its refresh token. Surrounding whitespace is not
+// part of a token, so it is still trimmed.
+func containsScope(list []string, want string) bool {
 	for _, s := range list {
-		if strings.EqualFold(strings.TrimSpace(s), want) {
+		if strings.TrimSpace(s) == want {
 			return true
 		}
 	}
@@ -633,11 +680,41 @@ func authServerMetadataCandidates(issuer string) []string {
 // URLs the vendor 404ed or answered with the wrong document rather than only
 // the last one.
 func fetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, issuer string) (*AuthServerMetadata, error) {
-	issuer = strings.TrimRight(strings.TrimSpace(issuer), "/")
+	return fetchAuthServerMetadataOpts(ctx, httpClient, issuer, true)
+}
+
+// errIssuerMismatch is the verifyAuthServer failure a document earns by naming
+// an issuer other than the URL it was fetched from — the one failure that
+// confirmProxiedIssuer may turn into an acceptance.
+var errIssuerMismatch = errors.New("authorization-server issuer mismatch")
+
+// fetchAuthServerMetadataOpts is fetchAuthServerMetadata with the proxied-issuer
+// confirmation switchable: the confirmation itself fetches the claimed issuer's
+// document with it OFF, so a chain of documents each naming another issuer
+// cannot recurse.
+func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, issuer string, confirmProxied bool) (*AuthServerMetadata, error) {
+	// The issuer AS WRITTEN, kept for confirmProxiedIssuer: trimming trailing
+	// slashes is right for building candidate locations and for the strict
+	// issuer check, but "https://proxy.example//" trimmed to its bare origin
+	// would hand a tenant-scoped URL the same-origin leg. Confirmation decides
+	// tenant scope, so it must see the spelling the resource actually gave.
+	issuerAsWritten := strings.TrimSpace(issuer)
+	issuer = strings.TrimRight(issuerAsWritten, "/")
 	if issuer == "" {
 		return nil, fmt.Errorf("empty authorization server issuer")
 	}
 	var tried []string
+	// Documents that parsed but named another issuer, kept in candidate order
+	// for the last-resort confirmation below. A candidate that passes the
+	// strict check anywhere in the order always wins over a mismatched one
+	// earlier in it: a host whose catch-all answers the inserted forms with
+	// its origin-level document must not have that document taken at its word
+	// while the issuer-specific one waits at the appended location.
+	type mismatched struct {
+		url string
+		doc AuthServerMetadata
+	}
+	var proxied []mismatched
 	for _, c := range authServerMetadataCandidates(issuer) {
 		var as AuthServerMetadata
 		if err := fetchJSON(ctx, httpClient, c, &as); err != nil {
@@ -650,11 +727,482 @@ func fetchAuthServerMetadata(ctx context.Context, httpClient *http.Client, issue
 		}
 		if err := verifyAuthServer(issuer, &as); err != nil {
 			tried = append(tried, fmt.Sprintf("authorization-server metadata at %s: %v", c, err))
+			if confirmProxied && errors.Is(err, errIssuerMismatch) {
+				proxied = append(proxied, mismatched{url: c, doc: as})
+			}
 			continue
 		}
 		return &as, nil
 	}
+	// One fetch per claimed issuer, shared across the documents that name it:
+	// the confirmation below asks the claimed issuer for its own metadata, and
+	// several candidate locations can name the same one.
+	ownDocs := map[string]*AuthServerMetadata{}
+	ownErrs := map[string]error{}
+	resolveOwn := func(claimed string) (*AuthServerMetadata, error) {
+		if doc, ok := ownDocs[claimed]; ok {
+			return doc, ownErrs[claimed]
+		}
+		doc, derr := fetchAuthServerMetadataOpts(ctx, httpClient, claimed, false)
+		ownDocs[claimed], ownErrs[claimed] = doc, derr
+		return doc, derr
+	}
+	// EVERY mismatched document gets its own confirmation attempt — there is no
+	// dedupe here on purpose. Two candidate locations can serve different
+	// documents under the same issuer (a catch-all copy that cannot confirm,
+	// and the real one at the issuer-specific location), and any key narrower
+	// than "everything confirmation looks at" lets the first suppress the
+	// second — the same candidate-order trap the strict loop above exists to
+	// avoid. Such a key is also a standing liability: an issuer-only key missed
+	// differing endpoints, an endpoint key would still miss
+	// code_challenge_methods_supported, and the next field confirmation learns
+	// to read would silently break it again. The list is at most four
+	// documents, and the fetch a dedupe would have saved is already saved by
+	// resolveOwn, so trying all of them costs nothing.
+	for _, m := range proxied {
+		confirmed, cerr := confirmProxiedIssuer(issuerAsWritten, &m.doc, resolveOwn)
+		if cerr == nil {
+			return confirmed, nil
+		}
+		tried = append(tried, fmt.Sprintf("the issuer named by the document at %s did not confirm it: %v", m.url, cerr))
+	}
 	return nil, fmt.Errorf("fetch authorization-server metadata for %s: %s", issuer, strings.Join(tried, "; "))
+}
+
+// validateClaimedIssuer checks the issuer a proxied copy claims and returns its
+// canonical spelling — the form used for everything downstream.
+//
+// It must be a plain http(s) URL with a hostname and nothing else: no query
+// (RawQuery *or* the bare "?" that url.Parse records only in ForceQuery), no
+// fragment, no userinfo. Each of those would survive the validation and then be
+// dropped by the canonical rebuild, leaving an issuer the copy never asserted
+// for the origin's document to self-confirm. Hostname() rather than Host,
+// because "https://:443" has a non-empty authority and no host at all. Userinfo
+// is refused because the claimed issuer is dialled for its own metadata and
+// net/http would turn it into an Authorization header (see
+// endpointCarriesUserinfo).
+//
+// The returned spelling normalizes the ORIGIN only — lowercase scheme and host,
+// default port dropped — and keeps the path exactly as written, so "//" stays
+// distinct from a bare origin. Normalizing the origin is what lets a copy
+// claiming "https://issuer.example:443" find the document of an issuer that
+// calls itself "https://issuer.example", without touching issuerMatches, which
+// stays the exact-match check on the non-proxied path. The single-trailing-slash
+// tolerance belongs to the comparators, not here.
+//
+// Finally, a claim whose identity would CHANGE under the resolver's own
+// trailing-slash trim is refused: the strict fetch builds its candidate
+// locations from the trimmed form, so such a claim would be answered by a
+// different document entirely.
+func validateClaimedIssuer(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	u, err := url.Parse(trimmed)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
+		return "", fmt.Errorf("claimed issuer %q is not a plain http(s) URL", redactURLUserinfo(raw))
+	}
+	claimed := normalizedOrigin(u) + u.EscapedPath()
+	if !sameIssuerIdentity(claimed, strings.TrimRight(claimed, "/")) {
+		return "", fmt.Errorf("claimed issuer %s cannot be resolved as written — its trailing slashes are a distinct path the well-known lookup drops — so no document can confirm it", redactURLUserinfo(claimed))
+	}
+	return claimed, nil
+}
+
+// resolveConfirmingDocument fetches the claimed issuer's own metadata and
+// verifies the document that comes back really is that issuer's.
+//
+// The strict fetch accepts a document via issuerMatches, which folds case and
+// trims every trailing slash across the WHOLE URL — so asking for ".../tenant"
+// can return a document claiming ".../Tenant" or ".../tenant//", distinct
+// routed tenants whose endpoints would then vouch for the copy. That is the
+// mix-up confirmation exists to refuse, and it is the guarantee the runtime
+// note states, so it is enforced here rather than assumed.
+//
+// Entra's multi-tenant template is the one documented exception the strict
+// check makes — its document says the literal "{tenantid}", which no
+// byte-comparison can match — so it is preserved.
+func resolveConfirmingDocument(claimed string, resolveOwn func(string) (*AuthServerMetadata, error)) (*AuthServerMetadata, error) {
+	own, err := resolveOwn(claimed)
+	if own == nil {
+		return nil, err
+	}
+	if !sameIssuerIdentity(claimed, own.Issuer) &&
+		!strings.Contains(strings.ToLower(own.Issuer), entraTenantTemplate) {
+		return nil, fmt.Errorf("the document at the claimed issuer names %q, a different tenant", redactURLUserinfo(own.Issuer))
+	}
+	return own, nil
+}
+
+// confirmProxiedIssuer handles the vendor pattern the #1006 catalog audit met
+// five times: the protected-resource metadata names the MCP host as its
+// authorization server, and that host serves a document whose `issuer` is
+// some other URL. RFC 8414 §3.3 says the issuer must equal the URL the
+// document was fetched from, and fleet enforced exactly that, so none of the
+// five could be added. Three shapes were measured:
+//
+//   - a COPY of the real server's document (DocuSign → account.docusign.com,
+//     Chargebee → its origin): the claimed issuer's own metadata says the same
+//     endpoints;
+//   - a PROXY (ZoomInfo): the issuer string is Okta's, but every endpoint is
+//     on the MCP host itself, which forwards to Okta;
+//   - a HYBRID (Sprout Social; OVHcloud, whose claimed issuer publishes no
+//     metadata at all): authorize/token are the real issuer's, registration is
+//     the MCP host's own addition.
+//
+// The copy is accepted when EVERY endpoint it names is either confirmed by
+// the claimed issuer's own metadata (fetched from the claimed issuer's
+// well-known location, with this confirmation off so documents cannot chain)
+// or on the same origin as the URL the copy was fetched from — the host the
+// protected-resource metadata itself trusted. Neither leg extends trust the
+// plain path lacks: a PRM may name the claimed issuer directly, and the
+// fetched-from host could have published a compliant document with its own
+// endpoints. What both legs refuse is the actual mix-up — an endpoint that
+// belongs to neither party. The validated copy is what fleet then dials (a
+// proxy's endpoints are the ones its registered clients work with); its
+// issuer is recorded as the identity the vendor asserts.
+func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resolveOwn func(string) (*AuthServerMetadata, error)) (*AuthServerMetadata, error) {
+	claimed, err := validateClaimedIssuer(copyDoc.Issuer)
+	if err != nil {
+		return nil, err
+	}
+	// Parse the authorization-server URL AS WRITTEN. Trimming trailing slashes
+	// first would collapse "https://as.example//" — a distinct routed path —
+	// into the bare origin and hand a tenant-scoped URL the same-origin leg,
+	// the literal-slash twin of the "/%2F" decode trap scopedToOneTenant
+	// exists for.
+	fetchedFrom = strings.TrimSpace(fetchedFrom)
+	fu, ferr := url.Parse(fetchedFrom)
+	if ferr != nil {
+		return nil, fmt.Errorf("authorization server %q is not a URL: %w", redactURLUserinfo(fetchedFrom), ferr)
+	}
+	if sameIssuerIdentity(claimed, fetchedFrom) {
+		return nil, fmt.Errorf("claimed issuer is the fetched URL; nothing to confirm")
+	}
+	if err := verifyPKCE(copyDoc); err != nil {
+		return nil, err
+	}
+	// The same-origin leg is open only when the resource named a BARE host as
+	// its authorization server. A host scoped by anything — a path
+	// (https://as.example.com/tenantA), a query (https://as.example.com?tenant=A),
+	// a fragment, userinfo — may be one tenant among many that share the
+	// origin, and authServerMetadataCandidates keeps only scheme, host and
+	// path, so a query- or fragment-scoped tenant would otherwise be read as
+	// the whole origin and get a leg that admits a sibling's endpoints. For
+	// any of those, only the claimed issuer's own document may vouch.
+	bareOrigin := !scopedToOneTenant(fu)
+	if !bareOrigin {
+		// Closing the same-origin leg is not enough on its own: a SIBLING
+		// tenant (https://as.example.com/tenantB) publishes a self-consistent
+		// document of its own, so confirmedBy would vouch for it and the user
+		// would be sent through the wrong tenant's authorization endpoint.
+		// The one document a scoped URL may be confirmed by is its own
+		// ORIGIN-level one — the measured Chargebee shape, where the origin
+		// answers every path with the document whose issuer IS the origin.
+		// The origin fallback is the PATH-scoped Chargebee shape and nothing
+		// else. authServerMetadataCandidates keeps only scheme, host and path,
+		// so a query-, fragment- or userinfo-scoped URL has its scoping
+		// dropped before any fetch happens: the mismatched document and the
+		// claimed issuer's own metadata then come from the SAME origin-level
+		// well-known location, and the origin's document self-confirms. That
+		// is not an origin vouching for a tenant, it is the tenant silently
+		// disappearing and being replaced by the unscoped issuer — so those
+		// shapes get no fallback at all.
+		if fu.RawQuery != "" || fu.ForceQuery || fu.Fragment != "" || fu.User != nil {
+			return nil, fmt.Errorf("authorization server %s is scoped by something the well-known lookup drops (query, fragment or userinfo), so no document can confirm another issuer for it; this one claims %s", redactURLUserinfo(fetchedFrom), claimed)
+		}
+		if !sameIssuerIdentity(claimed, normalizedOrigin(fu)) {
+			return nil, fmt.Errorf("authorization server %s is scoped to one tenant, so only its own origin may vouch for a document naming another issuer; this one claims %s", redactURLUserinfo(fetchedFrom), claimed)
+		}
+	}
+	own, ownErr := resolveConfirmingDocument(claimed, resolveOwn)
+	confirmedBy := func(copyEP, ownEP string) bool {
+		return own != nil && ownEP != "" && sameEndpointURL(copyEP, ownEP)
+	}
+	// Whether the TOKEN endpoint turned out to be the claimed issuer's own, as
+	// opposed to one of the proxy's. It decides whose
+	// token_endpoint_auth_methods_supported the caller gets; see the end of
+	// this function.
+	tokenIsIssuersOwn := false
+	var ownAuthz, ownToken, ownReg, ownRevoke string
+	if own != nil {
+		ownAuthz, ownToken, ownReg, ownRevoke = own.AuthorizationEndpoint, own.TokenEndpoint, own.RegistrationEndpoint, own.RevocationEndpoint
+	}
+	for _, ep := range []struct{ name, copy, own string }{
+		{"authorization_endpoint", copyDoc.AuthorizationEndpoint, ownAuthz},
+		{"token_endpoint", copyDoc.TokenEndpoint, ownToken},
+		{"registration_endpoint", copyDoc.RegistrationEndpoint, ownReg},
+		{"revocation_endpoint", copyDoc.RevocationEndpoint, ownRevoke},
+	} {
+		if ep.copy == "" {
+			continue
+		}
+		if !absoluteHTTPEndpoint(ep.copy) {
+			return nil, fmt.Errorf("%s %q is not an absolute http(s) URL, so it could never be dialed", ep.name, redactURLUserinfo(ep.copy))
+		}
+		if endpointCarriesUserinfo(ep.copy) {
+			return nil, fmt.Errorf("%s %q embeds userinfo, which would become an Authorization header fleet never chose to send", ep.name, redactURLUserinfo(ep.copy))
+		}
+		if confirmedBy(ep.copy, ep.own) {
+			if ep.name == "token_endpoint" {
+				tokenIsIssuersOwn = true
+			}
+			continue
+		}
+		if bareOrigin && sameEndpointOrigin(ep.copy, fetchedFrom) {
+			continue
+		}
+		// ep.own is redacted too: verifyAuthServer checks the issuer and PKCE,
+		// not endpoint userinfo, so the claimed issuer's OWN document can carry
+		// a credential into this message just as the copy can.
+		reason := fmt.Sprintf("the claimed issuer's own metadata says %q", redactURLUserinfo(ep.own))
+		if own == nil {
+			reason = fmt.Sprintf("the claimed issuer publishes no metadata (%s)", redactErrorUserinfo(ownErr))
+		}
+		where := "on " + redactURLUserinfo(fetchedFrom)
+		if !bareOrigin {
+			where = "vouched for by the same-host rule (" + redactURLUserinfo(fetchedFrom) + " names a path, so only its issuer may vouch)"
+		}
+		return nil, fmt.Errorf("%s %q is neither %s nor confirmed by the claimed issuer %s: %s", ep.name, redactURLUserinfo(ep.copy), where, claimed, reason)
+	}
+	out := *copyDoc
+	out.Issuer = claimed
+	if tokenIsIssuersOwn {
+		// The token endpoint turned out to be the claimed issuer's own, so the
+		// claimed issuer's document — not the copy — is the authority on how
+		// to authenticate there. Callers read
+		// token_endpoint_auth_methods_supported for three decisions
+		// (PublicClientAllowed at add time, the confidential registration
+		// fallback, and Basic vs post at the token endpoint itself), so a copy
+		// that omits the field or advertises "none" against an endpoint whose
+		// owner requires a secret would open a secretless client and fail the
+		// exchange after the consent screen. An omitted list is adopted as
+		// readily as a populated one: RFC 8414 §2 gives it the meaning
+		// "client_secret_basic", which is exactly the claim being made.
+		//
+		// A PROXY's token endpoint is NOT the issuer's (it is confirmed by the
+		// same-origin leg, which does not set this flag), and there the copy's
+		// own list is the correct one and is kept — a proxy's registered
+		// clients authenticate to the proxy.
+		out.TokenEndpointAuthMethodsSupported = own.TokenEndpointAuthMethodsSupported
+		// The same reasoning reaches two fields that describe the ISSUER
+		// rather than how to reach it, and that a trimmed copy may simply
+		// leave out. Both feed RequestedScopes, and losing either costs the
+		// connection its refresh token — the exact failure F6 exists to fix:
+		//   - scopes_supported, where `offline_access` is advertised;
+		//   - mfa_challenge_endpoint, the only marker of an Auth0 tenant
+		//     behind a custom domain (Checkly's auth.checklyhq.com — the
+		//     *.auth0.com host test does not see it).
+		// Filled in only where the copy is SILENT: a copy that names its own
+		// scopes is making a claim about what it accepts, and a proxy may
+		// legitimately offer fewer than the issuer behind it, so a populated
+		// list is never overwritten.
+		if len(out.ScopesSupported) == 0 {
+			out.ScopesSupported = own.ScopesSupported
+		}
+		if strings.TrimSpace(out.MFAChallengeEndpoint) == "" {
+			out.MFAChallengeEndpoint = own.MFAChallengeEndpoint
+		}
+	}
+	return &out, nil
+}
+
+// sameEndpointOrigin reports whether an endpoint sits on the same origin as the
+// URL the resource named as its authorization server, comparing CANONICAL
+// origins. sameOrigin compares raw scheme://host, and url.Parse normalizes
+// neither host case nor the scheme's default port, so a PRM spelling its
+// authorization server "https://MCP.vendor.example" or
+// "https://mcp.vendor.example:443" while its metadata uses the plain form would
+// fail this leg — and with it a legitimate proxy-shaped document that no other
+// leg can accept, since the claimed issuer does not vouch for proxy-local
+// endpoints. CanonicalResourceURI is this package's one canonicalizer
+// (lowercase scheme and host, default port dropped, userinfo refused), so both
+// sides go through it rather than growing a second normalizer here.
+func sameEndpointOrigin(endpoint, namedAuthServer string) bool {
+	eu, eerr := url.Parse(strings.TrimSpace(endpoint))
+	nu, nerr := url.Parse(strings.TrimSpace(namedAuthServer))
+	if eerr != nil || nerr != nil || eu.Host == "" || nu.Host == "" {
+		return false
+	}
+	return normalizedOrigin(eu) == normalizedOrigin(nu)
+}
+
+// sameEndpointURL compares two endpoint URLs the way a URL actually compares:
+// scheme and host are case-insensitive, and everything the server routes on —
+// path, query, fragment — is not. strings.EqualFold over the whole URL would
+// make /oauth/token and /oauth/Token the same endpoint, so a copied document
+// could point a "confirmed" endpoint at a different handler on the claimed
+// issuer's host. A trailing slash on the path is still ignored, as it was.
+func sameEndpointURL(a, b string) bool {
+	au, aerr := url.Parse(strings.TrimSpace(a))
+	bu, berr := url.Parse(strings.TrimSpace(b))
+	if aerr != nil || berr != nil {
+		return false
+	}
+	// Neither a relative URL nor one without a host is an endpoint: they
+	// normalize to the same empty "://" origin and would compare equal to each
+	// other. The caller refuses them by name; refusing here too keeps the
+	// helper honest on its own terms.
+	if !absoluteHTTPEndpoint(a) || !absoluteHTTPEndpoint(b) {
+		return false
+	}
+	// Userinfo is part of an endpoint's identity, and endpointCarriesUserinfo
+	// has already refused it outright — comparing it here keeps this helper
+	// honest on its own terms rather than relying on that caller.
+	if (au.User == nil) != (bu.User == nil) || (au.User != nil && au.User.String() != bu.User.String()) {
+		return false
+	}
+	return normalizedOrigin(au) == normalizedOrigin(bu) &&
+		trimOneTrailingSlash(au.EscapedPath()) == trimOneTrailingSlash(bu.EscapedPath()) &&
+		au.RawQuery == bu.RawQuery &&
+		// ForceQuery is the bare "?" of https://as.example/token? — an empty
+		// RawQuery either way, but Go puts the "?" on the wire, so the two
+		// are different request targets to anything that routes on the raw
+		// target. Two URLs that reach different handlers are not one endpoint.
+		au.ForceQuery == bu.ForceQuery &&
+		au.Fragment == bu.Fragment
+}
+
+// sameIssuerIdentity reports whether two authorization-server URLs name the
+// same thing: canonical origins (so an explicit :443 or a mixed-case host does
+// not split one identity in two), and the routed remainder — escaped path,
+// query, fragment — compared exactly but for a trailing slash. It is the one
+// answer to "are these the same authorization server" inside the confirmation
+// path, so a spelling difference cannot decide whether a document confirms.
+func sameIssuerIdentity(a, b string) bool {
+	au, aerr := url.Parse(strings.TrimSpace(a))
+	bu, berr := url.Parse(strings.TrimSpace(b))
+	if aerr != nil || berr != nil {
+		return false
+	}
+	// Same reason as sameEndpointURL: a relative or hostless URL is not an
+	// authorization server, and two of them would otherwise match.
+	if !absoluteHTTPEndpoint(a) || !absoluteHTTPEndpoint(b) {
+		return false
+	}
+	return normalizedOrigin(au) == normalizedOrigin(bu) &&
+		trimOneTrailingSlash(au.EscapedPath()) == trimOneTrailingSlash(bu.EscapedPath()) &&
+		au.RawQuery == bu.RawQuery &&
+		au.ForceQuery == bu.ForceQuery &&
+		au.Fragment == bu.Fragment
+}
+
+// normalizedOrigin is the case- and default-port-normalized scheme://host of a
+// parsed URL — the half of a URL that RFC 3986 §6.2.2 makes case-insensitive,
+// with the scheme's default port dropped so https://as.example and
+// https://as.example:443 are the one origin they denote. Comparing URL.Host
+// raw fails that pair, which is how a copied document spelling an endpoint
+// with an explicit :443 would miss confirmation by the very issuer that
+// vouches for it. Nothing the server routes on — path, query — passes through
+// here; those are compared exactly by the caller.
+func normalizedOrigin(u *url.URL) string {
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	port := canonicalPort(scheme, u.Port())
+	// Hostname() strips the brackets from an IPv6 literal, so putting the port
+	// back with a bare colon would make https://[2001:db8::1]:8443 and
+	// https://[2001:db8::1:8443] — different network endpoints — normalize to
+	// the same string, and a copied endpoint would read as issuer-confirmed.
+	// The brackets are what keep the host/port boundary unambiguous.
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	return scheme + "://" + host
+}
+
+// trimOneTrailingSlash removes a SINGLE trailing slash — the one spelling
+// difference (https://as.example/token vs .../token/) worth tolerating between
+// two spellings of one endpoint. Trimming every trailing slash would fold
+// "/token//" in with them, and a doubled slash is a path a server may route
+// somewhere else entirely, which is the whole question confirmation answers.
+func trimOneTrailingSlash(path string) string {
+	return strings.TrimSuffix(path, "/")
+}
+
+// redactURLUserinfo replaces any credential embedded in a URL before it is
+// named in an error. These errors surface to operators and logs, and AGENTS.md
+// is explicit that credentials never reach either — refusing a userinfo-bearing
+// URL and then printing the userinfo would leak exactly what the refusal is
+// there to stop.
+func redactURLUserinfo(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if u, err := url.Parse(raw); err == nil {
+		if u.User == nil {
+			return raw
+		}
+		u.User = url.User("redacted")
+		return u.String()
+	}
+	// Unparseable: rather than risk printing a credential, keep only what
+	// follows the last "@".
+	if i := strings.LastIndex(raw, "@"); i >= 0 {
+		return "redacted@" + raw[i+1:]
+	}
+	return raw
+}
+
+// scopedToOneTenant reports whether an authorization-server URL is scoped to a
+// single tenant rather than naming a whole origin — by a path, a query, a
+// fragment or userinfo. Only an ABSENT or literal-root path is bare:
+// url.Parse DECODES percent-escapes into Path, so an issuer whose path is
+// "/%2F" arrives as "//" and would trim away to nothing, reading as a bare
+// origin while RawPath/EscapedPath keep it a distinct routed path — the same
+// decode trap authServerMetadataCandidates already navigates with EscapedPath.
+func scopedToOneTenant(u *url.URL) bool {
+	path := u.EscapedPath()
+	// ForceQuery is the bare "?" of https://as.example? — RawQuery stays empty
+	// while Go still puts the delimiter on the wire, so it is a distinct request
+	// target and candidate construction drops it, exactly like a query.
+	return (path != "" && path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil
+}
+
+// urlUserinfoRe matches the "user:password@" of any URL inside a larger string.
+var urlUserinfoRe = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*://)[^\s/@]*@`)
+
+// redactErrorUserinfo redacts credentials from an error's MESSAGE. The nested
+// errors a metadata fetch produces quote both the locations they tried and the
+// issuer a document claimed, either of which can carry userinfo, and those
+// errors are interpolated into operator-facing discovery failures. Redacting
+// the URL fields one by one cannot reach inside a wrapped error's text, so the
+// whole message is swept.
+func redactErrorUserinfo(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return urlUserinfoRe.ReplaceAllString(err.Error(), "${1}redacted@")
+}
+
+// endpointCarriesUserinfo reports whether an endpoint URL embeds userinfo
+// (https://name:pw@as.example/token). fleet refuses such an endpoint rather
+// than confirming it: net/http turns URL userinfo into a Basic `Authorization`
+// header whenever the request does not set one itself (http.Client.send), so a
+// copied document could bolt credentials of its choosing onto an endpoint the
+// claimed issuer vouched for — unintended authentication on a public-client
+// token exchange or a registration POST. Neither leg may admit it: sameOrigin
+// compares scheme://host and would not notice either. CanonicalResourceURI
+// already refuses userinfo on the resource side, so this matches it.
+// absoluteHTTPEndpoint reports whether an endpoint is a URL fleet could
+// actually dial: absolute, http(s), with a host. A RELATIVE endpoint
+// ("/oauth/token") parses without error and has neither scheme nor host, so
+// normalizedOrigin renders it "://" — and two relative endpoints would then
+// compare equal and confirm each other, after which AddServer would persist an
+// authorization URL the browser refuses as an unsupported scheme and a token
+// endpoint no request can reach.
+func absoluteHTTPEndpoint(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	// Hostname(), not Host, for the same reason the claimed-issuer validation
+	// uses it: "https://:443" has a non-empty authority and no host at all.
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != ""
+}
+
+func endpointCarriesUserinfo(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && u.User != nil
 }
 
 // entraTenantTemplate is the literal placeholder Microsoft Entra ID puts in the
@@ -730,24 +1278,24 @@ func verifyAuthServer(expectedIssuer string, as *AuthServerMetadata) error {
 		return fmt.Errorf("authorization-server metadata is missing the required issuer field")
 	}
 	if !issuerMatches(expectedIssuer, as.Issuer) {
-		return fmt.Errorf("authorization-server issuer mismatch: metadata says %q, expected %q", as.Issuer, expectedIssuer)
+		return fmt.Errorf("%w: metadata says %q, expected %q", errIssuerMismatch, as.Issuer, expectedIssuer)
 	}
-	// An empty methods list means the AS didn't advertise; the MCP spec requires
-	// S256, so we proceed assuming S256. A non-empty list that omits S256 is a
-	// hard reject.
-	if len(as.CodeChallengeMethodsSupported) > 0 {
-		ok := false
-		for _, m := range as.CodeChallengeMethodsSupported {
-			if strings.EqualFold(m, "S256") {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return fmt.Errorf("authorization server does not support PKCE S256 (advertises %v)", as.CodeChallengeMethodsSupported)
+	return verifyPKCE(as)
+}
+
+// verifyPKCE: an empty methods list means the AS didn't advertise; the MCP spec
+// requires S256, so we proceed assuming S256. A non-empty list that omits S256
+// is a hard reject.
+func verifyPKCE(as *AuthServerMetadata) error {
+	if len(as.CodeChallengeMethodsSupported) == 0 {
+		return nil
+	}
+	for _, m := range as.CodeChallengeMethodsSupported {
+		if strings.EqualFold(m, "S256") {
+			return nil
 		}
 	}
-	return nil
+	return fmt.Errorf("authorization server does not support PKCE S256 (advertises %v)", as.CodeChallengeMethodsSupported)
 }
 
 // fetchJSON GETs url and decodes a (size-limited) JSON body into out.

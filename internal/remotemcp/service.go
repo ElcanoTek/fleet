@@ -353,17 +353,28 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	clientID := strings.TrimSpace(in.ClientID)
 	clientSecret := in.ClientSecret
 	regToken := ""
+	// What this client authenticates with at the token endpoint. Defaults to
+	// what the authorization server advertises; dynamic registration may
+	// narrow it to the one method the server granted (below).
+	authMethods := disco.AS.TokenEndpointAuthMethodsSupported
 	if clientID == "" {
 		if disco.AS.RegistrationEndpoint == "" {
 			return nil, -1, ErrManualClientRequired
 		}
-		reg, rerr := mcpoauth.Register(ctx, s.httpClient, disco.AS.RegistrationEndpoint, s.cfg.ClientName, s.RedirectURI(), scopes)
+		reg, rerr := mcpoauth.Register(ctx, s.httpClient, disco.AS.RegistrationEndpoint, s.cfg.ClientName, s.RedirectURI(), scopes, disco.AS.TokenEndpointAuthMethodsSupported)
 		if rerr != nil {
 			return nil, -1, fmt.Errorf("dynamic client registration: %w", rerr)
 		}
 		clientID = reg.ClientID
 		clientSecret = reg.ClientSecret
 		regToken = reg.RegistrationAccessToken
+		// RFC 7591 §3.2.1 lets the server substitute the client metadata it
+		// actually granted, so when it names an effective token-endpoint auth
+		// method, that beats the authorization server's advertised list: a
+		// server may advertise both Basic and Post and still register this
+		// client as post-only, and picking Basic off the list would 401 every
+		// exchange and revocation.
+		authMethods = reg.EffectiveAuthMethods(authMethods)
 	} else if clientSecret == "" && !mcpoauth.PublicClientAllowed(disco.AS.TokenEndpointAuthMethodsSupported) {
 		// A bring-your-own client with no secret can only work against an AS
 		// that accepts public clients; otherwise the exchange after consent is
@@ -397,7 +408,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		RegistrationEndpoint:  disco.AS.RegistrationEndpoint,
 		RevocationEndpoint:    disco.AS.RevocationEndpoint,
 		Scopes:                scopes,
-		AuthMethods:           strings.Join(disco.AS.TokenEndpointAuthMethodsSupported, " "),
+		AuthMethods:           strings.Join(authMethods, " "),
 		ClientID:              clientID,
 		ClientSecret:          clientSecret,
 		RegistrationToken:     regToken,

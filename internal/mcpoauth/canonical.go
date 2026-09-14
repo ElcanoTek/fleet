@@ -3,6 +3,7 @@ package mcpoauth
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -47,14 +48,23 @@ func CanonicalResourceURI(raw string) (string, error) {
 	if host == "" {
 		return "", fmt.Errorf("server URL has no host")
 	}
-	port := u.Port()
-	// Drop the scheme's default port so https://x:443 == https://x.
-	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
-		port = ""
-	}
+	// Drop the scheme's default port so https://x:443 == https://x, comparing
+	// it NUMERICALLY — see canonicalPort.
+	port := canonicalPort(scheme, u.Port())
+	// Hostname() strips the brackets from an IPv6 literal, so the host and the
+	// port have to be re-joined with them or the boundary between the two
+	// becomes ambiguous: https://[2001:db8::1]:8443 and https://[2001:db8::1:8443]
+	// are different servers that would otherwise canonicalize to the identical
+	// string https://2001:db8::1:8443 — two identities collapsing into one, in
+	// the very function whose job is to keep them apart. A bracketless IPv6
+	// host is also not a URL Go will re-parse, so the old output could not
+	// round-trip.
 	canonHost := host
+	if strings.Contains(canonHost, ":") {
+		canonHost = "[" + canonHost + "]"
+	}
 	if port != "" {
-		canonHost = host + ":" + port
+		canonHost += ":" + port
 	}
 
 	// RawPath is set by url.Parse only when the operator's escaping differs
@@ -69,6 +79,30 @@ func CanonicalResourceURI(raw string) (string, error) {
 		out.Path, out.RawPath = "", ""
 	}
 	return out.String(), nil
+}
+
+// canonicalPort returns the port to keep for a scheme: "" when it is the
+// scheme's default, else the port in its numeric form.
+//
+// url.URL.Port() preserves whatever spelling was written, and Go resolves
+// "0443" to 443 when it dials, so comparing the string would make
+// https://as.example:0443 a different identity from https://as.example while
+// both reach the same endpoint — and https://as.example:08443 a different one
+// from https://as.example:8443. Two identities for one server is exactly what
+// this canonicalization exists to prevent. A non-numeric port is left as
+// written rather than guessed at; url.Parse already rejects most of those.
+func canonicalPort(scheme, port string) string {
+	if port == "" {
+		return ""
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 0 {
+		return port
+	}
+	if (scheme == "http" && n == 80) || (scheme == "https" && n == 443) {
+		return ""
+	}
+	return strconv.Itoa(n)
 }
 
 // ValidateServerURL canonicalizes raw and enforces the transport-security

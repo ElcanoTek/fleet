@@ -27,6 +27,12 @@ func TestCanonicalResourceURI(t *testing.T) {
 		{"https://mcp.example.com/a b/mcp", "https://mcp.example.com/a%20b/mcp"},
 		{"https://mcp.example.com/tenant%2Fone/mcp?tenant=x", "https://mcp.example.com/tenant%2Fone/mcp?tenant=x"},
 		{"https://mcp.example.com/%2F", "https://mcp.example.com/%2F"}, // an escaped slash is not a lone root path
+		// IPv6 literals keep their brackets: Hostname() strips them, and
+		// re-joining host and port without them makes the boundary ambiguous.
+		{"https://[2001:db8::1]/mcp", "https://[2001:db8::1]/mcp"},
+		{"https://[2001:DB8::1]:8443/mcp", "https://[2001:db8::1]:8443/mcp"},
+		{"https://[2001:db8::1]:443/mcp", "https://[2001:db8::1]/mcp"}, // default port still dropped
+		{"https://[2001:db8::1:8443]/mcp", "https://[2001:db8::1:8443]/mcp"},
 	}
 	for _, c := range cases {
 		got, err := CanonicalResourceURI(c.in)
@@ -82,6 +88,38 @@ func TestCanonicalResourceURIRejects(t *testing.T) {
 	for _, in := range bad {
 		if _, err := CanonicalResourceURI(in); err == nil {
 			t.Errorf("CanonicalResourceURI(%q) accepted a bad URL", in)
+		}
+	}
+}
+
+// TestCanonicalResourceURIKeepsIPv6IdentitiesApart is the property this
+// function exists for, on the one host form that used to break it. Its doc
+// comment says treating URL-ish strings as interchangeable "is the classic way
+// to leak a bearer to the wrong resource" — and because Hostname() strips an
+// IPv6 literal's brackets, https://[2001:db8::1]:8443 and
+// https://[2001:db8::1:8443] (a different server) both canonicalized to
+// https://2001:db8::1:8443. One canonical string means one DB key, one
+// encryption AAD and one RFC 8707 audience, so the collision pointed two
+// servers at a single identity.
+func TestCanonicalResourceURIKeepsIPv6IdentitiesApart(t *testing.T) {
+	a, aerr := CanonicalResourceURI("https://[2001:db8::1]:8443/mcp")
+	b, berr := CanonicalResourceURI("https://[2001:db8::1:8443]/mcp")
+	if aerr != nil || berr != nil {
+		t.Fatalf("canonicalize: %v / %v", aerr, berr)
+	}
+	if a == b {
+		t.Errorf("two distinct IPv6 servers share one canonical identity: %q", a)
+	}
+	// The canonical form must be a URL that parses back to the same host, or
+	// everything downstream that re-parses the stored identity is broken.
+	for _, canon := range []string{a, b} {
+		round, err := CanonicalResourceURI(canon)
+		if err != nil {
+			t.Errorf("canonical form %q does not re-parse: %v", canon, err)
+			continue
+		}
+		if round != canon {
+			t.Errorf("canonical form %q is not stable: re-canonicalized to %q", canon, round)
 		}
 	}
 }
