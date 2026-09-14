@@ -132,6 +132,8 @@ func (s *Server) Routes() http.Handler {
 	// the Next.js mint paths call it before a session exists, and it must answer
 	// for a not-yet-provisioned email without leaking the user-list.
 	mux.Handle("/auth/session-epoch", auth(http.HandlerFunc(s.handleSessionEpoch)))
+	mux.Handle("/auth/external-session-epoch", auth(http.HandlerFunc(s.handleExternalSessionEpoch)))
+	mux.Handle("/auth/external-session-revoke", auth(http.HandlerFunc(s.handleExternalSessionRevoke)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
 	mux.Handle("/admin/server-stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleServerStats)))))

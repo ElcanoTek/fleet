@@ -29,6 +29,9 @@ const defaultBase = "http://127.0.0.1:8080";
 export type SessionIdentity = {
   email: string;
   epoch?: string;
+  source?: "password" | "oidc" | "elcano";
+  issuer?: string;
+  subject?: string;
 };
 
 export function getChatServerBase() {
@@ -48,6 +51,11 @@ export function chatServerHeaders(user: SessionIdentity, extra?: HeadersInit): H
   h.set("X-Chat-Server-Token", getSharedToken());
   h.set("X-User-Email", user.email);
   if (user.epoch) h.set("X-User-Session-Epoch", user.epoch);
+  if (user.source === "oidc" && user.issuer && user.subject) {
+    h.set("X-User-Session-Source", "oidc");
+    h.set("X-External-Issuer", user.issuer);
+    h.set("X-External-Subject", user.subject);
+  }
   return h;
 }
 
@@ -71,6 +79,42 @@ export async function fetchSessionEpoch(email: string): Promise<string | null> {
   if (!upstream.ok) return null;
   const body = (await upstream.json()) as { session_epoch?: string };
   return body.session_epoch || null;
+}
+
+export async function fetchExternalSessionEpoch(
+  email: string,
+  issuer: string,
+  subject: string,
+): Promise<string | null> {
+  let upstream: Response;
+  try {
+    upstream = await chatServerFetch({ email }, "/auth/external-session-epoch", {
+      method: "POST",
+      body: JSON.stringify({ issuer, subject }),
+    });
+  } catch {
+    return null;
+  }
+  if (!upstream.ok) return null;
+  const body = (await upstream.json()) as { session_epoch?: string };
+  return body.session_epoch || null;
+}
+
+export async function revokeExternalSessions(
+  email: string,
+  eventId: string,
+  issuer: string,
+  subject: string,
+): Promise<boolean> {
+  try {
+    const upstream = await chatServerFetch({ email }, "/auth/external-session-revoke", {
+      method: "POST",
+      body: JSON.stringify({ event_id: eventId, issuer, subject }),
+    });
+    return upstream.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -20,7 +20,7 @@ const textDecoder = new TextDecoder();
 // logout (the elcano path signs out via the auth service) and for the
 // membership entry check (only elcano sessions need it; password users are
 // in the user-list by construction).
-export type SessionSource = "password" | "elcano";
+export type SessionSource = "password" | "oidc" | "elcano";
 
 export type Session = {
   email: string;
@@ -33,12 +33,17 @@ export type Session = {
   // sessions: that cookie is minted by the auth service, which chat cannot add
   // a claim to.
   epoch?: string;
+  issuer?: string;
+  subject?: string;
 };
 
 type SessionPayload = {
   email: string;
   exp: number;
   epoch: string;
+  source?: "password" | "oidc";
+  issuer?: string;
+  subject?: string;
 };
 
 function getSessionSecret() {
@@ -100,6 +105,25 @@ export async function createSessionToken(email: string, epoch: string) {
   return `${encodedPayload}.${signature}`;
 }
 
+export async function createOidcSessionToken(
+  email: string,
+  epoch: string,
+  issuer: string,
+  subject: string,
+) {
+  const payload = JSON.stringify({
+    email: email.toLowerCase(),
+    exp: Math.floor(Date.now() / 1000) + sessionMaxAgeSeconds,
+    epoch,
+    source: "oidc",
+    issuer,
+    subject,
+  } satisfies SessionPayload);
+  const encodedPayload = encodePayload(payload);
+  const signature = await signPayload(encodedPayload);
+  return `${encodedPayload}.${signature}`;
+}
+
 export async function verifySessionToken(token: string | undefined | null) {
   if (!token) {
     return null;
@@ -133,6 +157,12 @@ export async function verifySessionToken(token: string | undefined | null) {
     // would otherwise sail past chat-server's "no claim, admit it" rule for the
     // whole 14 days it was signed for.
     if (!payload.epoch) {
+      return null;
+    }
+    if (payload.source === "oidc" && (!payload.issuer || !payload.subject)) {
+      return null;
+    }
+    if (payload.source && payload.source !== "password" && payload.source !== "oidc") {
       return null;
     }
 
@@ -268,7 +298,16 @@ async function resolveSession(
   elcanoToken: string | undefined | null,
 ): Promise<Session | null> {
   const hmac = await verifySessionToken(hmacToken ?? null);
-  if (hmac) return { email: hmac.email, exp: hmac.exp, epoch: hmac.epoch, source: "password" };
+  if (hmac) {
+    return {
+      email: hmac.email,
+      exp: hmac.exp,
+      epoch: hmac.epoch,
+      source: hmac.source === "oidc" ? "oidc" : "password",
+      issuer: hmac.issuer,
+      subject: hmac.subject,
+    };
+  }
 
   const elcano = await verifyElcanoToken(elcanoToken ?? null);
   if (elcano) return { email: elcano.email, exp: elcano.exp, tenant: elcano.tenant, source: "elcano" };

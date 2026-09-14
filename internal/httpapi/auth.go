@@ -15,6 +15,7 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -40,6 +41,17 @@ import (
 // that this defends are refused by the Next tier outright when the claim is
 // missing (web/src/app/lib/auth.ts#verifySessionToken).
 const headerSessionEpoch = "X-User-Session-Epoch"
+
+const (
+	headerSessionSource   = "X-User-Session-Source"
+	headerExternalIssuer  = "X-External-Issuer"
+	headerExternalSubject = "X-External-Subject"
+)
+
+type externalSessionStore interface {
+	ExternalSessionEpoch(ctx context.Context, issuer, subject, email string) (string, error)
+	RevokeExternalSessions(ctx context.Context, eventID, issuer, subject, email string) (string, bool, error)
+}
 
 type ctxKey string
 
@@ -163,10 +175,26 @@ func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "membership check failed", http.StatusInternalServerError)
 			return
 		}
-		if claim := r.Header.Get(headerSessionEpoch); claim != "" &&
-			subtle.ConstantTimeCompare([]byte(claim), []byte(u.SessionEpoch)) != 1 {
-			writeSessionRevoked(w)
-			return
+		if claim := r.Header.Get(headerSessionEpoch); claim != "" {
+			liveEpoch := u.SessionEpoch
+			if r.Header.Get(headerSessionSource) == "oidc" {
+				externalStore, ok := s.store.(externalSessionStore)
+				issuer := strings.TrimSpace(r.Header.Get(headerExternalIssuer))
+				subject := strings.TrimSpace(r.Header.Get(headerExternalSubject))
+				if !ok || issuer == "" || subject == "" {
+					writeSessionRevoked(w)
+					return
+				}
+				liveEpoch, err = externalStore.ExternalSessionEpoch(ctx, issuer, subject, email)
+				if err != nil {
+					http.Error(w, "session check failed", http.StatusInternalServerError)
+					return
+				}
+			}
+			if subtle.ConstantTimeCompare([]byte(claim), []byte(liveEpoch)) != 1 {
+				writeSessionRevoked(w)
+				return
+			}
 		}
 		ctx = context.WithValue(ctx, ctxKeyRole, u.Role)
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -224,6 +252,61 @@ func (s *Server) handleSessionEpoch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, sessionEpochResponse{SessionEpoch: epoch})
+}
+
+type externalSessionRequest struct {
+	EventID string `json:"event_id"`
+	Issuer  string `json:"issuer"`
+	Subject string `json:"subject"`
+}
+
+func (s *Server) handleExternalSessionEpoch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	externalStore, ok := s.store.(externalSessionStore)
+	if !ok {
+		http.Error(w, "external sessions unavailable", http.StatusNotImplemented)
+		return
+	}
+	var body externalSessionRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	epoch, err := externalStore.ExternalSessionEpoch(
+		r.Context(), body.Issuer, body.Subject, userFromCtx(r.Context()),
+	)
+	if err != nil {
+		http.Error(w, "external session lookup failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, sessionEpochResponse{SessionEpoch: epoch})
+}
+
+func (s *Server) handleExternalSessionRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	externalStore, ok := s.store.(externalSessionStore)
+	if !ok {
+		http.Error(w, "external sessions unavailable", http.StatusNotImplemented)
+		return
+	}
+	var body externalSessionRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if _, _, err := externalStore.RevokeExternalSessions(
+		r.Context(), body.EventID, body.Issuer, body.Subject, userFromCtx(r.Context()),
+	); err != nil {
+		http.Error(w, "external session revocation failed", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // rejectViewerWrites blocks the read-only "viewer" role (#237) from MUTATING a

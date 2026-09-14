@@ -826,6 +826,7 @@ func run() error {
 	// lookup, not the schema. Wired unconditionally: the chat store is open by
 	// the time these handlers exist, and a nil seam would silently stop checking.
 	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
+	h.SetExternalSessionEpochProvider(chatStore.ExternalSessionEpoch)
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.

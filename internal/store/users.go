@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -194,6 +195,90 @@ func (s *Store) SessionEpoch(ctx context.Context, email string) (string, error) 
 		return "", err
 	}
 	return epoch, nil
+}
+
+func newExternalSessionEpoch() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate external session epoch: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+// ExternalSessionEpoch returns the independent generation carried by a Fleet
+// session minted from a central OIDC identity. It deliberately does not use
+// users.password_hash: central logout must not evict Fleet-native password
+// sessions, and a Fleet password change must not alter the external identity.
+func (s *Store) ExternalSessionEpoch(ctx context.Context, issuer, subject, email string) (string, error) {
+	issuer, subject, email = strings.TrimSpace(issuer), strings.TrimSpace(subject), normalizeEmail(email)
+	if issuer == "" || subject == "" || email == "" || len(issuer) > 2048 || len(subject) > 255 {
+		return "", errors.New("issuer, subject, and email are required")
+	}
+	epoch, err := newExternalSessionEpoch()
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().Unix()
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO external_auth_epochs(issuer, subject, email, epoch, created_at, updated_at)
+		VALUES($1, $2, $3, $4, $5, $5)
+		ON CONFLICT(issuer, subject) DO UPDATE SET
+			email = EXCLUDED.email, updated_at = EXCLUDED.updated_at
+		RETURNING epoch`, issuer, subject, email, epoch, now).Scan(&epoch)
+	return epoch, err
+}
+
+// RevokeExternalSessions rotates one central identity's generation. Upserting
+// a tombstone also makes a logout delivered before this Fleet has seen its
+// first login safe: that later login receives the already-rotated generation.
+func (s *Store) RevokeExternalSessions(ctx context.Context, eventID, issuer, subject, email string) (string, bool, error) {
+	eventID = strings.TrimSpace(eventID)
+	issuer, subject, email = strings.TrimSpace(issuer), strings.TrimSpace(subject), normalizeEmail(email)
+	if eventID == "" || issuer == "" || subject == "" || email == "" || len(eventID) > 255 || len(issuer) > 2048 || len(subject) > 255 {
+		return "", false, errors.New("event id, issuer, subject, and email are required")
+	}
+	epoch, err := newExternalSessionEpoch()
+	if err != nil {
+		return "", false, err
+	}
+	now := time.Now().Unix()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO external_logout_events(event_id, issuer, subject, received_at)
+		VALUES($1, $2, $3, $4) ON CONFLICT(event_id) DO NOTHING`, eventID, issuer, subject, now)
+	if err != nil {
+		return "", false, err
+	}
+	applied, _ := result.RowsAffected()
+	if applied == 0 {
+		var storedIssuer, storedSubject string
+		if err := tx.QueryRowContext(ctx, `SELECT issuer, subject FROM external_logout_events WHERE event_id = $1`, eventID).
+			Scan(&storedIssuer, &storedSubject); err != nil {
+			return "", false, err
+		}
+		if storedIssuer != issuer || storedSubject != subject {
+			return "", false, errors.New("logout event identity mismatch")
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT epoch FROM external_auth_epochs WHERE issuer = $1 AND subject = $2`, issuer, subject).
+			Scan(&epoch); err != nil {
+			return "", false, err
+		}
+		return epoch, false, tx.Commit()
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO external_auth_epochs(issuer, subject, email, epoch, created_at, updated_at)
+		VALUES($1, $2, $3, $4, $5, $5)
+		ON CONFLICT(issuer, subject) DO UPDATE SET
+			email = EXCLUDED.email, epoch = EXCLUDED.epoch, updated_at = EXCLUDED.updated_at`,
+		issuer, subject, email, epoch, now)
+	if err != nil {
+		return "", false, err
+	}
+	return epoch, true, tx.Commit()
 }
 
 // ErrTeamExists reports a self-serve team write that would have JOINED an

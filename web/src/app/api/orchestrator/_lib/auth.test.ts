@@ -58,6 +58,25 @@ describe("resolveOrchestratorAuth", () => {
     });
   });
 
+  it("carries central identity metadata to the orchestrator gate", async () => {
+    getServerSessionMock.mockResolvedValue({
+      email: "alice@example.com",
+      exp: 0,
+      source: "oidc",
+      epoch: "external-epoch",
+      issuer: "https://auth.example.com",
+      subject: "account-123",
+    });
+    expect(await resolveOrchestratorAuth(request())).toEqual({
+      kind: "cookie",
+      email: "alice@example.com",
+      epoch: "external-epoch",
+      source: "oidc",
+      issuer: "https://auth.example.com",
+      subject: "account-123",
+    });
+  });
+
   it("prefers an explicit moc bearer token", async () => {
     getServerSessionMock.mockResolvedValue({
       email: "alice@example.com",

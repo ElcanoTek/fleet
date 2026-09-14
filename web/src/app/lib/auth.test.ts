@@ -172,6 +172,22 @@ describe("session epoch claim", () => {
     expect(session).toMatchObject({ email: "dave@x.com", epoch: "abcdef0123456789" });
   });
 
+  it("keeps central OIDC identity metadata distinct from password sessions", async () => {
+    const token = await auth.createOidcSessionToken(
+      "dave@x.com",
+      "external-epoch",
+      "https://auth.example.com",
+      "account-123",
+    );
+    expect(await auth.verifySessionToken(token)).toMatchObject({
+      email: "dave@x.com",
+      epoch: "external-epoch",
+      source: "oidc",
+      issuer: "https://auth.example.com",
+      subject: "account-123",
+    });
+  });
+
   it("refuses a correctly-signed token that carries no epoch claim", async () => {
     const legacy = await mintHmac({ email: "dave@x.com", exp: future });
     expect(await auth.verifySessionToken(legacy)).toBeNull();

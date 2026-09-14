@@ -43,7 +43,14 @@ export function getOrchestratorSharedToken(): string | undefined {
 // is absent for an elcano_auth (magic-link) session, whose cookie the auth
 // service mints and revokes.
 export type OrchestratorAuth =
-  | { kind: "cookie"; email: string; epoch?: string }
+  | {
+      kind: "cookie";
+      email: string;
+      epoch?: string;
+      source?: "password" | "oidc" | "elcano";
+      issuer?: string;
+      subject?: string;
+    }
   | { kind: "bearer"; token: string };
 
 // Build the upstream auth headers from whichever credential the browser
@@ -58,6 +65,11 @@ export function orchestratorHeaders(auth: OrchestratorAuth, extra?: HeadersInit)
     if (token) h.set("X-Orchestrator-Server-Token", token);
     h.set("X-User-Email", auth.email);
     if (auth.epoch) h.set("X-User-Session-Epoch", auth.epoch);
+    if (auth.source === "oidc" && auth.issuer && auth.subject) {
+      h.set("X-User-Session-Source", "oidc");
+      h.set("X-External-Issuer", auth.issuer);
+      h.set("X-External-Subject", auth.subject);
+    }
   }
   return h;
 }
