@@ -1,6 +1,7 @@
 package mcpoauth
 
 import (
+	"errors"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -86,25 +87,33 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 
 	var prm ProtectedResourceMetadata
 	var prmURL string
-	var fetchErr error
+	var fetchErr, operationalErr error
 	for _, candidate := range prmURLs {
 		var got ProtectedResourceMetadata
 		if err := fetchJSON(ctx, httpClient, candidate, &got); err != nil {
 			fetchErr = err
+			if !metadataAbsent(err) {
+				operationalErr = err
+			}
 			continue
 		}
 		prm, prmURL = got, candidate
 		break
 	}
 	if prmURL == "" {
+		// The legacy-origin fallback is for a server that HAS no Protected
+		// Resource Metadata — every location answered 404/410. A server that
+		// told us where its metadata is (RFC 9728 §5.1) and then could not
+		// serve it, or a well-known location that answered 5xx, timed out or
+		// returned malformed JSON, is a modern server having a bad moment;
+		// falling back to its origin would persist a synthesized
+		// configuration the server never published. Surface that failure so
+		// the operator retries.
 		if advertised {
-			// The server told us where its metadata is (RFC 9728 §5.1) and
-			// then could not serve it — a 5xx, malformed JSON, a timeout.
-			// That is a modern server having a bad moment, not a 2025-03-26
-			// server with no metadata; falling back to its origin would
-			// persist a synthesized configuration the server never
-			// published. Surface the failure so the operator retries.
 			return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s: %w", prmURLs[0], fetchErr)
+		}
+		if operationalErr != nil {
+			return nil, fmt.Errorf("fetch protected-resource metadata: %w (not a 404, so the server is not treated as one without metadata; retry, or check the server)", operationalErr)
 		}
 		return discoverLegacyOrigin(ctx, httpClient, canonicalServerURL, fetchErr)
 	}
@@ -674,6 +683,26 @@ func verifyAuthServer(expectedIssuer string, as *AuthServerMetadata) error {
 // guard and its no-redirect policy, and http.Transport would refuse a non-HTTP
 // scheme anyway; the explicit check below is one line and makes that argument
 // airtight rather than dependent on the transport's behavior.
+// httpStatusError is fetchJSON's non-2xx result. It carries the status so a
+// caller can tell "the document is not there" (404/410) from "the server is
+// failing to serve it" (5xx, 429, …): the MCP spec's legacy-origin fallback
+// applies to the first and must never be triggered by the second.
+type httpStatusError struct {
+	URL    string
+	Status int
+}
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("GET %s: status %d", e.URL, e.Status) }
+
+// metadataAbsent reports whether a fetchJSON failure means the document does
+// not exist at that location, as opposed to an operational failure (a 5xx, a
+// timeout, malformed JSON) that a modern server may recover from and that must
+// surface rather than be papered over by a synthesized configuration.
+func metadataAbsent(err error) bool {
+	var se *httpStatusError
+	return errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusGone)
+}
+
 func fetchJSON(ctx context.Context, httpClient *http.Client, url string, out any) error {
 	if err := requireHTTPScheme(url); err != nil {
 		return err
@@ -689,7 +718,7 @@ func fetchJSON(ctx context.Context, httpClient *http.Client, url string, out any
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+		return &httpStatusError{URL: url, Status: resp.StatusCode}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataBytes))
 	if err != nil {

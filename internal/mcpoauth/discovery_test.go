@@ -583,6 +583,46 @@ func TestDiscoverAdvertisedPointerFailureDoesNotFallBack(t *testing.T) {
 	}
 }
 
+// TestDiscoverWellKnownOperationalFailureDoesNotFallBack: the same rule for
+// the guessed well-known locations — a 500, a 429 or malformed JSON at one of
+// them is not "no metadata", so discovery surfaces it instead of taking the
+// legacy-origin fallback, even when the origin would satisfy it. Only when
+// every location answers 404/410 does the fallback apply.
+func TestDiscoverWellKnownOperationalFailureDoesNotFallBack(t *testing.T) {
+	for name, serve := range map[string]func(w http.ResponseWriter){
+		"500":            func(w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) },
+		"429":            func(w http.ResponseWriter) { w.WriteHeader(http.StatusTooManyRequests) },
+		"malformed json": func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"resource": `)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			base := srv.URL
+			mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) { http.NotFound(w, nil) })
+			// The inserted form is failing; the appended and root forms are absent.
+			mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) { serve(w) })
+			legacyASHandlers(mux, base) // the origin WOULD satisfy the legacy fallback
+			d, err := Discover(context.Background(), srv.Client(), base+"/mcp")
+			if err == nil {
+				t.Fatalf("Discover fell back to the origin past an operational failure: %+v", d)
+			}
+			if !strings.Contains(err.Error(), "not a 404") || strings.Contains(err.Error(), "legacy MCP 2025-03-26 fallback") {
+				t.Errorf("error must surface the operational failure and not mention the fallback: %v", err)
+			}
+		})
+	}
+	// 410 Gone is an absence too: the fallback still applies.
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusGone) })
+	legacyASHandlers(mux, srv.URL)
+	if d, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp"); err != nil || !d.LegacyOrigin {
+		t.Errorf("410 at every location must still take the legacy fallback: %v %+v", err, d)
+	}
+}
+
 // TestProbeTerminatesSessionItOpened: a server that accepts the unauthenticated
 // initialize (200 + Mcp-Session-Id) has allocated a session the probe never
 // wanted; the probe sends the Streamable HTTP DELETE for it and returns no
