@@ -295,7 +295,11 @@ func authServerMetadataCandidates(issuer string) []string {
 		}
 	}
 	origin := u.Scheme + "://" + u.Host
-	path := strings.TrimRight(u.Path, "/")
+	// EscapedPath, not Path: url.Parse decodes percent-escapes into Path, so
+	// an issuer path segment carrying %2F or %3F would be re-emitted as a
+	// path separator or a query delimiter and every candidate would name a
+	// different URL than the issuer's own.
+	path := strings.TrimRight(u.EscapedPath(), "/")
 	if path == "" {
 		return []string{
 			origin + "/.well-known/oauth-authorization-server",

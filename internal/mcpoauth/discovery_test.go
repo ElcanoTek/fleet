@@ -145,6 +145,19 @@ func TestAuthServerMetadataCandidatesOrder(t *testing.T) {
 	if got[0] != "https://mcp.datadoghq.com/.well-known/oauth-authorization-server/v1/mcp" || got[2] != "https://mcp.datadoghq.com/v1/mcp/.well-known/openid-configuration" {
 		t.Errorf("multi-segment candidates = %v", got)
 	}
+	// Percent-escapes in the issuer path are preserved verbatim: a decoded
+	// %2F would become a path separator and a decoded %3F a query delimiter,
+	// pointing every candidate at a URL the issuer never published.
+	got = authServerMetadataCandidates("https://as.example.com/tenant%2Fone%3Fx/")
+	want = []string{
+		"https://as.example.com/.well-known/oauth-authorization-server/tenant%2Fone%3Fx",
+		"https://as.example.com/.well-known/openid-configuration/tenant%2Fone%3Fx",
+		"https://as.example.com/tenant%2Fone%3Fx/.well-known/openid-configuration",
+		"https://as.example.com/tenant%2Fone%3Fx/.well-known/oauth-authorization-server",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("escaped-path candidates = %v, want %v", got, want)
+	}
 }
 
 // TestDiscoverAuthServerMetadataPathInserted: the issuer carries a path and
