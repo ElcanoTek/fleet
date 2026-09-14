@@ -267,7 +267,8 @@ func (t *deferredToolCall) Run(ctx context.Context, tc fantasy.ToolCall) (fantas
 	// `stripe_context`/`livemode` 422s sent a model off to tell the user to
 	// reconnect (#1006). Checked here, before the broker and before any
 	// policy or audit record, so the correction costs one model step.
-	if missing := missingRequiredArguments(tool.Info().Required, args); len(missing) > 0 {
+	info := tool.Info()
+	if missing := missingRequiredArguments(info.Required, info.Parameters, args); len(missing) > 0 {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf(
 			"tool_call: %s requires argument(s) it did not receive: %s. Run tool_describe %q for the schema, then call again with every required argument.",
 			name, strings.Join(missing, ", "), name)), nil
@@ -302,11 +303,16 @@ func normalizeDeferredArguments(raw json.RawMessage) (json.RawMessage, error) {
 }
 
 // missingRequiredArguments returns the names in required that args (a JSON
-// object) does not carry, or carries as JSON null — the schema's `required`
-// means present, and a null is what a model emits when it knows the name but
-// not the value. An unparsable object yields nothing: the dispatch path
-// reports that shape on its own.
-func missingRequiredArguments(required []string, args json.RawMessage) []string {
+// object) does not carry. JSON Schema's `required` means present, so a name
+// carried as JSON null is present — unless the property's own schema (looked
+// up in props) does not admit null, in which case the null is what a model
+// emits when it knows the name but not the value, and the vendor would refuse
+// it too. A property whose schema admits null (`type: ["string","null"]`,
+// `nullable: true`, an `anyOf`/`oneOf` arm or `enum` member of null) keeps
+// null as a valid value, so the deferred path never refuses a call the direct
+// path would have executed. An unparsable object yields nothing: the dispatch
+// path reports that shape on its own.
+func missingRequiredArguments(required []string, props map[string]any, args json.RawMessage) []string {
 	if len(required) == 0 {
 		return nil
 	}
@@ -317,11 +323,85 @@ func missingRequiredArguments(required []string, args json.RawMessage) []string 
 	var missing []string
 	for _, name := range required {
 		v, ok := have[name]
-		if !ok || strings.TrimSpace(string(v)) == "null" {
+		if !ok || (strings.TrimSpace(string(v)) == "null" && !schemaAdmitsNull(props[name])) {
 			missing = append(missing, name)
 		}
 	}
 	return missing
+}
+
+// schemaAdmitsNull reports whether a JSON Schema property accepts the JSON
+// null value. It recognises the shapes vendors use: `type: "null"` or a type
+// list containing "null", OpenAPI's `nullable: true`, an `enum` or `const`
+// naming null, an `anyOf`/`oneOf` arm that admits null, and an `allOf` whose
+// every arm does. A schema that constrains the value with none of those
+// keywords (`{}`, or description-only) accepts anything, null included — and
+// so does a property with no schema at all — because the refusal must never
+// be stricter than the vendor's own validation.
+func schemaAdmitsNull(schema any) bool {
+	m, ok := schema.(map[string]any)
+	if !ok {
+		return schema == nil
+	}
+	if b, ok := m["nullable"].(bool); ok && b {
+		return true
+	}
+	constrained := false
+	if t, ok := m["type"]; ok {
+		constrained = true
+		switch t := t.(type) {
+		case string:
+			if t == "null" {
+				return true
+			}
+		case []any:
+			for _, v := range t {
+				if s, ok := v.(string); ok && s == "null" {
+					return true
+				}
+			}
+		}
+	}
+	if enum, ok := m["enum"].([]any); ok {
+		constrained = true
+		for _, v := range enum {
+			if v == nil {
+				return true
+			}
+		}
+	}
+	if c, ok := m["const"]; ok {
+		constrained = true
+		if c == nil {
+			return true
+		}
+	}
+	for _, key := range []string{"anyOf", "oneOf"} {
+		arms, ok := m[key].([]any)
+		if !ok || len(arms) == 0 {
+			continue
+		}
+		constrained = true
+		for _, arm := range arms {
+			if schemaAdmitsNull(arm) {
+				return true
+			}
+		}
+	}
+	if arms, ok := m["allOf"].([]any); ok && len(arms) > 0 {
+		constrained = true
+		all := true
+		for _, arm := range arms {
+			if !schemaAdmitsNull(arm) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return !constrained
 }
 
 // oneLine collapses whitespace and clamps a description for the search listing.

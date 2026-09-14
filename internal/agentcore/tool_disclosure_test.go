@@ -243,12 +243,86 @@ func TestDisclosureDescribeShowsRequiredAndCallEnforcesIt(t *testing.T) {
 		t.Fatalf("complete call must dispatch: %+v (broker %s/%s %s)", ok, broker.lastServer, broker.lastTool, broker.lastArgs)
 	}
 	// optional arguments are never demanded.
-	if m := missingRequiredArguments([]string{"a"}, json.RawMessage(`{"a":1,"b":2}`)); m != nil {
+	if m := missingRequiredArguments([]string{"a"}, nil, json.RawMessage(`{"a":1,"b":2}`)); m != nil {
 		t.Errorf("missing = %v, want none", m)
 	}
 	// an unparsable object is left to the dispatch path to report.
-	if m := missingRequiredArguments([]string{"a"}, json.RawMessage(`{not json`)); m != nil {
+	if m := missingRequiredArguments([]string{"a"}, nil, json.RawMessage(`{not json`)); m != nil {
 		t.Errorf("unparsable args must not be judged here: %v", m)
+	}
+}
+
+// TestDisclosureRequiredNullableArgumentAcceptsNull: JSON Schema's `required`
+// means present, so a required property whose own schema admits null
+// (`type: ["string","null"]`, `nullable: true`, an `anyOf` arm, an `enum`
+// member) must accept an explicit null through the deferred path exactly as
+// the direct path would — catalog size may not change which valid calls
+// execute. Only a null for a property that does NOT admit it is refused.
+func TestDisclosureRequiredNullableArgumentAcceptsNull(t *testing.T) {
+	broker := &fakeBroker{}
+	tool := mcp.ServerTool{ServerName: "crm", Tool: mcp.Tool{
+		Name:        "upsert_contact",
+		Description: "Upsert a contact",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"email":    map[string]interface{}{"type": "string"},
+				"phone":    map[string]interface{}{"type": []interface{}{"string", "null"}},
+				"owner":    map[string]interface{}{"type": "string", "nullable": true},
+				"tier":     map[string]interface{}{"anyOf": []interface{}{map[string]interface{}{"type": "string"}, map[string]interface{}{"type": "null"}}},
+				"source":   map[string]interface{}{"enum": []interface{}{"web", "import", nil}},
+				"unstated": map[string]interface{}{},
+			},
+			"required": []interface{}{"email", "phone", "owner", "tier", "source", "unstated", "undeclared"},
+		},
+	}}
+	reg := newDeferredToolRegistry(mcpToolsFrom([]mcp.ServerTool{tool}, broker))
+	const name = "mcp_crm_upsert_contact"
+
+	// every nullable property null, plus the two whose schema says nothing: dispatches.
+	resp, _ := reg.callTool().Run(context.Background(), fantasy.ToolCall{ID: "tc-1", Input: `{"name":"` + name + `","arguments":{"email":"a@b.c","phone":null,"owner":null,"tier":null,"source":null,"unstated":null,"undeclared":null}}`})
+	if resp.IsError || broker.lastTool != "upsert_contact" {
+		t.Fatalf("nullable required arguments set to null must dispatch: %+v (broker %s)", resp, broker.lastTool)
+	}
+	// the one non-nullable property null: refused, and only it is named.
+	broker.lastTool = ""
+	resp, _ = reg.callTool().Run(context.Background(), fantasy.ToolCall{ID: "tc-2", Input: `{"name":"` + name + `","arguments":{"email":null,"phone":null,"owner":"x","tier":"gold","source":"web","unstated":1,"undeclared":1}}`})
+	if !resp.IsError || !strings.Contains(resp.Content, "email") || strings.Contains(resp.Content, "phone") || broker.lastTool != "" {
+		t.Fatalf("null for a non-nullable required argument must be refused naming only it: %+v (broker %s)", resp, broker.lastTool)
+	}
+	// absent is still missing whatever the schema says about null.
+	resp, _ = reg.callTool().Run(context.Background(), fantasy.ToolCall{ID: "tc-3", Input: `{"name":"` + name + `","arguments":{"email":"a@b.c","owner":null,"tier":null,"source":null,"unstated":null,"undeclared":null}}`})
+	if !resp.IsError || !strings.Contains(resp.Content, "phone") {
+		t.Fatalf("an absent nullable required argument is still missing: %+v", resp)
+	}
+
+	for schema, want := range map[string]bool{
+		`{"type":"string"}`:                                        false,
+		`{"type":"null"}`:                                          true,
+		`{"type":["integer","null"]}`:                              true,
+		`{"nullable":true}`:                                        true,
+		`{"nullable":false,"type":"string"}`:                       false,
+		`{"enum":["a","b"]}`:                                       false,
+		`{"enum":["a",null]}`:                                      true,
+		`{"const":null}`:                                           true,
+		`{"oneOf":[{"type":"string"},{"type":"null"}]}`:            true,
+		`{"anyOf":[{"type":"string"},{"type":"integer"}]}`:         false,
+		`{"allOf":[{"type":["string","null"]},{"minLength":1}]}`:   true,
+		`{"allOf":[{"type":"string"},{"type":["string","null"]}]}`: false,
+		// an unconstrained schema accepts anything, null included.
+		`{}`:                  true,
+		`{"description":"x"}`: true,
+	} {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(schema), &m); err != nil {
+			t.Fatal(err)
+		}
+		if got := schemaAdmitsNull(m); got != want {
+			t.Errorf("schemaAdmitsNull(%s) = %v, want %v", schema, got, want)
+		}
+	}
+	if !schemaAdmitsNull(nil) {
+		t.Error("a property with no schema cannot be judged and must admit null")
 	}
 }
 

@@ -31,7 +31,11 @@ tunable live from Settings → Admin → Feature settings, see
     argument the tool's schema marks required. The vendor would refuse it
     too, but its answer reaches the model only as the broker's masked
     "credential-owner call failed", which reads as a broken credential rather
-    than a fixable call.
+    than a fixable call. `required` means *present*: a required argument sent
+    as JSON `null` is refused only when the property's own schema does not
+    admit null (`type: ["string","null"]`, `nullable: true`, an `anyOf` arm or
+    `enum` member of null all keep it valid), so the deferred path never
+    refuses a call the direct path would have executed.
 
 A deferred `tool_call` routes through the **same `*mcpTool` wrapper** a direct
 call would, so the MCP broker + per-task credential allowlist (#184), the policy
