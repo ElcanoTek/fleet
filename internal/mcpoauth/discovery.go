@@ -685,7 +685,13 @@ var errIssuerMismatch = errors.New("authorization-server issuer mismatch")
 // document with it OFF, so a chain of documents each naming another issuer
 // cannot recurse.
 func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, issuer string, confirmProxied bool) (*AuthServerMetadata, error) {
-	issuer = strings.TrimRight(strings.TrimSpace(issuer), "/")
+	// The issuer AS WRITTEN, kept for confirmProxiedIssuer: trimming trailing
+	// slashes is right for building candidate locations and for the strict
+	// issuer check, but "https://proxy.example//" trimmed to its bare origin
+	// would hand a tenant-scoped URL the same-origin leg. Confirmation decides
+	// tenant scope, so it must see the spelling the resource actually gave.
+	issuerAsWritten := strings.TrimSpace(issuer)
+	issuer = strings.TrimRight(issuerAsWritten, "/")
 	if issuer == "" {
 		return nil, fmt.Errorf("empty authorization server issuer")
 	}
@@ -746,7 +752,7 @@ func fetchAuthServerMetadataOpts(ctx context.Context, httpClient *http.Client, i
 	// documents, and the fetch a dedupe would have saved is already saved by
 	// resolveOwn, so trying all of them costs nothing.
 	for _, m := range proxied {
-		confirmed, cerr := confirmProxiedIssuer(issuer, &m.doc, resolveOwn)
+		confirmed, cerr := confirmProxiedIssuer(issuerAsWritten, &m.doc, resolveOwn)
 		if cerr == nil {
 			return confirmed, nil
 		}
@@ -789,7 +795,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	// and net/http would turn userinfo into an Authorization header on that
 	// request (see endpointCarriesUserinfo).
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-		return nil, fmt.Errorf("claimed issuer %q is not a plain http(s) URL", copyDoc.Issuer)
+		return nil, fmt.Errorf("claimed issuer %q is not a plain http(s) URL", redactURLUserinfo(copyDoc.Issuer))
 	}
 	// Parse the authorization-server URL AS WRITTEN. Trimming trailing slashes
 	// first would collapse "https://as.example//" — a distinct routed path —
@@ -799,7 +805,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 	fetchedFrom = strings.TrimSpace(fetchedFrom)
 	fu, ferr := url.Parse(fetchedFrom)
 	if ferr != nil {
-		return nil, fmt.Errorf("authorization server %q is not a URL: %w", fetchedFrom, ferr)
+		return nil, fmt.Errorf("authorization server %q is not a URL: %w", redactURLUserinfo(fetchedFrom), ferr)
 	}
 	if sameIssuerIdentity(claimed, fetchedFrom) {
 		return nil, fmt.Errorf("claimed issuer is the fetched URL; nothing to confirm")
@@ -825,7 +831,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 		// ORIGIN-level one — the measured Chargebee shape, where the origin
 		// answers every path with the document whose issuer IS the origin.
 		if !sameIssuerIdentity(claimed, normalizedOrigin(fu)) {
-			return nil, fmt.Errorf("authorization server %s is scoped to one tenant, so only its own origin may vouch for a document naming another issuer; this one claims %s", fetchedFrom, claimed)
+			return nil, fmt.Errorf("authorization server %s is scoped to one tenant, so only its own origin may vouch for a document naming another issuer; this one claims %s", redactURLUserinfo(fetchedFrom), claimed)
 		}
 	}
 	own, ownErr := resolveOwn(claimed)
@@ -851,7 +857,7 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 			continue
 		}
 		if endpointCarriesUserinfo(ep.copy) {
-			return nil, fmt.Errorf("%s %q embeds userinfo, which would become an Authorization header fleet never chose to send", ep.name, ep.copy)
+			return nil, fmt.Errorf("%s %q embeds userinfo, which would become an Authorization header fleet never chose to send", ep.name, redactURLUserinfo(ep.copy))
 		}
 		if confirmedBy(ep.copy, ep.own) {
 			if ep.name == "token_endpoint" {
@@ -866,11 +872,11 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 		if own == nil {
 			reason = fmt.Sprintf("the claimed issuer publishes no metadata (%v)", ownErr)
 		}
-		where := "on " + fetchedFrom
+		where := "on " + redactURLUserinfo(fetchedFrom)
 		if !bareOrigin {
-			where = "vouched for by the same-host rule (" + fetchedFrom + " names a path, so only its issuer may vouch)"
+			where = "vouched for by the same-host rule (" + redactURLUserinfo(fetchedFrom) + " names a path, so only its issuer may vouch)"
 		}
-		return nil, fmt.Errorf("%s %q is neither %s nor confirmed by the claimed issuer %s: %s", ep.name, ep.copy, where, claimed, reason)
+		return nil, fmt.Errorf("%s %q is neither %s nor confirmed by the claimed issuer %s: %s", ep.name, redactURLUserinfo(ep.copy), where, claimed, reason)
 	}
 	out := *copyDoc
 	out.Issuer = claimed
@@ -926,12 +932,12 @@ func confirmProxiedIssuer(fetchedFrom string, copyDoc *AuthServerMetadata, resol
 // (lowercase scheme and host, default port dropped, userinfo refused), so both
 // sides go through it rather than growing a second normalizer here.
 func sameEndpointOrigin(endpoint, namedAuthServer string) bool {
-	ce, eerr := CanonicalResourceURI(endpoint)
-	cn, nerr := CanonicalResourceURI(namedAuthServer)
-	if eerr != nil || nerr != nil {
+	eu, eerr := url.Parse(strings.TrimSpace(endpoint))
+	nu, nerr := url.Parse(strings.TrimSpace(namedAuthServer))
+	if eerr != nil || nerr != nil || eu.Host == "" || nu.Host == "" {
 		return false
 	}
-	return sameOrigin(ce, cn)
+	return normalizedOrigin(eu) == normalizedOrigin(nu)
 }
 
 // sameEndpointURL compares two endpoint URLs the way a URL actually compares:
@@ -953,7 +959,7 @@ func sameEndpointURL(a, b string) bool {
 		return false
 	}
 	return normalizedOrigin(au) == normalizedOrigin(bu) &&
-		strings.TrimRight(au.EscapedPath(), "/") == strings.TrimRight(bu.EscapedPath(), "/") &&
+		trimOneTrailingSlash(au.EscapedPath()) == trimOneTrailingSlash(bu.EscapedPath()) &&
 		au.RawQuery == bu.RawQuery &&
 		// ForceQuery is the bare "?" of https://as.example/token? — an empty
 		// RawQuery either way, but Go puts the "?" on the wire, so the two
@@ -976,7 +982,7 @@ func sameIssuerIdentity(a, b string) bool {
 		return false
 	}
 	return normalizedOrigin(au) == normalizedOrigin(bu) &&
-		strings.TrimRight(au.EscapedPath(), "/") == strings.TrimRight(bu.EscapedPath(), "/") &&
+		trimOneTrailingSlash(au.EscapedPath()) == trimOneTrailingSlash(bu.EscapedPath()) &&
 		au.RawQuery == bu.RawQuery &&
 		au.ForceQuery == bu.ForceQuery &&
 		au.Fragment == bu.Fragment
@@ -997,10 +1003,49 @@ func normalizedOrigin(u *url.URL) string {
 	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
 		port = ""
 	}
+	// Hostname() strips the brackets from an IPv6 literal, so putting the port
+	// back with a bare colon would make https://[2001:db8::1]:8443 and
+	// https://[2001:db8::1:8443] — different network endpoints — normalize to
+	// the same string, and a copied endpoint would read as issuer-confirmed.
+	// The brackets are what keep the host/port boundary unambiguous.
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
 	if port != "" {
 		host += ":" + port
 	}
 	return scheme + "://" + host
+}
+
+// trimOneTrailingSlash removes a SINGLE trailing slash — the one spelling
+// difference (https://as.example/token vs .../token/) worth tolerating between
+// two spellings of one endpoint. Trimming every trailing slash would fold
+// "/token//" in with them, and a doubled slash is a path a server may route
+// somewhere else entirely, which is the whole question confirmation answers.
+func trimOneTrailingSlash(path string) string {
+	return strings.TrimSuffix(path, "/")
+}
+
+// redactURLUserinfo replaces any credential embedded in a URL before it is
+// named in an error. These errors surface to operators and logs, and AGENTS.md
+// is explicit that credentials never reach either — refusing a userinfo-bearing
+// URL and then printing the userinfo would leak exactly what the refusal is
+// there to stop.
+func redactURLUserinfo(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if u, err := url.Parse(raw); err == nil {
+		if u.User == nil {
+			return raw
+		}
+		u.User = url.User("redacted")
+		return u.String()
+	}
+	// Unparseable: rather than risk printing a credential, keep only what
+	// follows the last "@".
+	if i := strings.LastIndex(raw, "@"); i >= 0 {
+		return "redacted@" + raw[i+1:]
+	}
+	return raw
 }
 
 // scopedToOneTenant reports whether an authorization-server URL is scoped to a
@@ -1012,7 +1057,10 @@ func normalizedOrigin(u *url.URL) string {
 // decode trap authServerMetadataCandidates already navigates with EscapedPath.
 func scopedToOneTenant(u *url.URL) bool {
 	path := u.EscapedPath()
-	return (path != "" && path != "/") || u.RawQuery != "" || u.Fragment != "" || u.User != nil
+	// ForceQuery is the bare "?" of https://as.example? — RawQuery stays empty
+	// while Go still puts the delimiter on the wire, so it is a distinct request
+	// target and candidate construction drops it, exactly like a query.
+	return (path != "" && path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil
 }
 
 // endpointCarriesUserinfo reports whether an endpoint URL embeds userinfo

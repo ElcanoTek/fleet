@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -734,6 +735,124 @@ func TestIsAuth0MetadataMatchesHostWithExplicitPort(t *testing.T) {
 		if isAuth0Metadata(&AuthServerMetadata{Issuer: issuer}) {
 			t.Errorf("isAuth0Metadata(%q) = true, want a non-Auth0 issuer", issuer)
 		}
+	}
+}
+
+// TestFetchAuthServerMetadataKeepsIssuerSpellingForConfirmation: the scope test
+// lives in confirmProxiedIssuer, but the issuer reaches it through
+// fetchAuthServerMetadataOpts, which trims trailing slashes to build candidate
+// locations. Trimming before confirmation turned "https://host//" back into a
+// bare origin one layer above the fix — so the spelling has to survive the trip.
+func TestFetchAuthServerMetadataKeepsIssuerSpellingForConfirmation(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	// A document claiming another issuer, with endpoints on the host itself:
+	// acceptable ONLY if the named authorization server is a bare origin.
+	doc := AuthServerMetadata{Issuer: "https://as.vendor.example", AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", CodeChallengeMethodsSupported: []string{"S256"}}
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(doc) })
+	if _, err := fetchAuthServerMetadata(context.Background(), srv.Client(), base+"//"); err == nil {
+		t.Fatal("a // authorization server was confirmed on the same-origin leg")
+	}
+	// The bare origin itself is still accepted, so the tightening cost nothing.
+	if _, err := fetchAuthServerMetadata(context.Background(), srv.Client(), base); err != nil {
+		t.Fatalf("bare origin = %v, want the same-origin leg to accept it", err)
+	}
+}
+
+// TestScopedToOneTenantCountsForceQuery: url.Parse("https://as.example?") keeps
+// the delimiter only in ForceQuery, leaving RawQuery empty, so a query-scope
+// test that reads RawQuery alone calls that distinct request target a bare
+// origin — the same gap the endpoint comparer closed for ForceQuery.
+func TestScopedToOneTenantCountsForceQuery(t *testing.T) {
+	scoped := []string{"https://as.example?", "https://as.example/tenant", "https://as.example?tenant=A", "https://as.example//", "https://as.example/#f"}
+	for _, raw := range scoped {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		if !scopedToOneTenant(u) {
+			t.Errorf("scopedToOneTenant(%q) = false, want scoped", raw)
+		}
+	}
+	for _, raw := range []string{"https://as.example", "https://as.example/"} {
+		u, _ := url.Parse(raw)
+		if scopedToOneTenant(u) {
+			t.Errorf("scopedToOneTenant(%q) = true, want a bare origin", raw)
+		}
+	}
+}
+
+// TestNormalizedOriginKeepsIPv6Unambiguous: Hostname() strips an IPv6
+// literal's brackets, so re-joining host and port with a bare colon made
+// https://[2001:db8::1]:8443 and https://[2001:db8::1:8443] — different
+// network endpoints — the same origin, and a copied endpoint would have read
+// as issuer-confirmed.
+func TestNormalizedOriginKeepsIPv6Unambiguous(t *testing.T) {
+	if sameEndpointURL("https://[2001:db8::1]:8443/token", "https://[2001:db8::1:8443]/token") {
+		t.Error("sameEndpointURL collided two distinct IPv6 endpoints")
+	}
+	// The same IPv6 endpoint spelled with and without its default port is
+	// still one endpoint.
+	if !sameEndpointURL("https://[2001:db8::1]/token", "https://[2001:db8::1]:443/token") {
+		t.Error("sameEndpointURL split one IPv6 endpoint over the default port")
+	}
+	if !sameEndpointOrigin("https://[2001:db8::1]:443/token", "https://[2001:db8::1]") {
+		t.Error("sameEndpointOrigin split one IPv6 origin over the default port")
+	}
+	if sameEndpointOrigin("https://[2001:db8::1:8443]/token", "https://[2001:db8::1]:8443") {
+		t.Error("sameEndpointOrigin collided two distinct IPv6 origins")
+	}
+}
+
+// TestSameEndpointURLTrimsOnlyOneTrailingSlash: one trailing slash is a
+// spelling difference worth tolerating; a doubled slash is a path a server may
+// route elsewhere, so it must not fold in with the endpoint the issuer vouched
+// for.
+func TestSameEndpointURLTrimsOnlyOneTrailingSlash(t *testing.T) {
+	if !sameEndpointURL("https://as.example/token", "https://as.example/token/") {
+		t.Error("one tolerated trailing slash should still compare equal")
+	}
+	if sameEndpointURL("https://as.example/token", "https://as.example/token//") {
+		t.Error("sameEndpointURL folded a doubled trailing slash in with /token")
+	}
+}
+
+// TestConfirmProxiedIssuerRedactsUserinfoInErrors: the refusals name the URL
+// they refuse, and these errors reach operators and logs. Printing the very
+// credential the check exists to refuse would break the AGENTS.md invariant
+// that credentials never reach either.
+func TestConfirmProxiedIssuerRedactsUserinfoInErrors(t *testing.T) {
+	resolveOwn := func(string) (*AuthServerMetadata, error) { return nil, errors.New("no metadata") }
+	const secret = "sup3rs3cret"
+	// The claimed issuer carries the credential.
+	bad := AuthServerMetadata{
+		Issuer:                        "https://user:" + secret + "@as.vendor.example",
+		AuthorizationEndpoint:         "https://mcp.vendor.example/authorize",
+		TokenEndpoint:                 "https://mcp.vendor.example/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	_, err := confirmProxiedIssuer("https://mcp.vendor.example", &bad, resolveOwn)
+	if err == nil {
+		t.Fatal("a userinfo-bearing claimed issuer was accepted")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("claimed-issuer refusal leaked the credential: %v", err)
+	}
+	// An endpoint carries the credential.
+	ep := AuthServerMetadata{
+		Issuer:                        "https://as.vendor.example",
+		AuthorizationEndpoint:         "https://mcp.vendor.example/authorize",
+		TokenEndpoint:                 "https://user:" + secret + "@mcp.vendor.example/token",
+		CodeChallengeMethodsSupported: []string{"S256"},
+	}
+	_, err = confirmProxiedIssuer("https://mcp.vendor.example", &ep, resolveOwn)
+	if err == nil {
+		t.Fatal("a userinfo-bearing endpoint was accepted")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("endpoint refusal leaked the credential: %v", err)
 	}
 }
 
