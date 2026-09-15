@@ -986,7 +986,7 @@ is allowed to finish. A verifier error fails **open** (allow finish). So core
 governance — per-tool policy, audit, finish enforcement, MCP credential
 brokering, note staging, usage/cost, **and the end-of-run verifier** — applies to
 every scheduled run. An explicit terminal audit abort skips the extra model
-reviewers and remains a failed result. Conditional no-update branches are
+reviewers and remains a failed result. Conditional task branches are
 verified using bounded structured result evidence, not tool names alone; see
 [Conditional scheduled tasks](CONDITIONAL-TASK-COMPLETION.md).
 

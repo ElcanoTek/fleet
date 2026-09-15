@@ -461,7 +461,7 @@ type confirmAuditInput struct {
 	Reasoning                     string                 `json:"reasoning" description:"Brief conclusion summarizing what was checked."`
 	ArtifactsChecked              []string               `json:"artifacts_checked" description:"Artifact paths reviewed during audit."`
 	WorkflowSectionsChecked       []string               `json:"workflow_sections_checked" description:"Workflow contract sections checked."`
-	CriticalActions               []criticalActionStruct `json:"critical_actions,omitempty" description:"Preferred typed list of {tool, identifier} entries naming each MCP tool this audit unlocks. Use [] for completed read-only or no-update work; it authorizes no mutations. Required when success=true; optional on an abort (success=false), which unlocks nothing."`
+	CriticalActions               []criticalActionStruct `json:"critical_actions,omitempty" description:"Preferred typed list of {tool, identifier} entries naming each MCP tool this audit unlocks. Use [] when completed work has no remaining critical actions; it authorizes no mutations. Required when success=true; optional on an abort (success=false), which unlocks nothing."`
 	CriticalActionsBeingUnblocked []string               `json:"critical_actions_being_unblocked,omitempty" description:"Legacy free-text form (deprecated): each entry MUST contain the literal tool name so the substring matcher can extract a known suffix."`
 	SendContractChecked           bool                   `json:"send_contract_checked" description:"Whether the send/delivery contract was checked."`
 	AttachmentsChecked            []string               `json:"attachments_checked" description:"Attachment paths checked."`

@@ -10,7 +10,7 @@ import (
 )
 
 func TestExecutionRequirementsCopyablePreflight(t *testing.T) {
-	req, err := parseExecutionRequirements("TASK\nEXECUTION REQUIREMENTS (JSON):\n{\"mcp_servers\":[\"reports\"],\"required_tools\":[\"mcp_reports_download\"],\"network\":true,\"model_required\":true,\"mode\":\"managed_data\"}\nRun only once.")
+	req, err := parseExecutionRequirements("TASK\nEXECUTION REQUIREMENTS (JSON):\n{\"mcp_servers\":[\"reports\"],\"required_tools\":[\"mcp_reports_download\"],\"network\":true,\"model_required\":true,\"mode\":\"inventory_check\"}\nRun only once.")
 	if err != nil || req == nil {
 		t.Fatalf("parse: %+v %v", req, err)
 	}

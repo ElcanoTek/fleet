@@ -19,11 +19,9 @@ const executionRequirementsMarker = "EXECUTION REQUIREMENTS (JSON):"
 // Optional, copyable handoff from a prompt producer. Requirements only narrow
 // execution: they never enable network, load credentials, or widen MCP scope.
 type executionRequirements struct {
-	Servers       []string `json:"mcp_servers"`
-	Tools         []string `json:"required_tools"`
-	Network       bool     `json:"network"`
-	ModelRequired bool     `json:"model_required"`
-	Mode          string   `json:"mode"`
+	Servers []string `json:"mcp_servers"`
+	Tools   []string `json:"required_tools"`
+	Network bool     `json:"network"`
 }
 
 var requirementName = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,200}$`)
