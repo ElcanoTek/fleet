@@ -314,8 +314,9 @@ function Field({
 
       {field.type === "text" ? (
         // Controlled inputs render the RAW string: `asText` trims, and a
-        // trimmed re-render swallows the space the user just typed (#3a).
-        // Trimming happens once, in pillToPrompt.
+        // trimmed re-render swallows the space the user just typed, so a
+        // two-word client name could never be entered. Trimming happens once,
+        // in pillToPrompt.
         <input
           type="text"
           className={INPUT_CLASS}

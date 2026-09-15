@@ -178,8 +178,9 @@ function fieldValueText(field: PillField, value: PillFieldValue | undefined): st
  *
  * - When the pill carries a `promptTemplate` STRING, that string is used.
  *   Any `{key}` tokens are interpolated from `values` (a token whose field is
- *   blank is dropped). The template is otherwise returned verbatim — if it has
- *   no tokens, it's sent as-is.
+ *   blank is left in place, so the agent can see what was intended). The
+ *   template is otherwise returned verbatim — if it has no tokens, it's sent
+ *   as-is.
  * - When there is NO template, a neutral fallback is built from the pill title
  *   plus "Label: value" lines for every field the user actually filled.
  *
