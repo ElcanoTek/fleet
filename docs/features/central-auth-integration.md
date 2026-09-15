@@ -16,13 +16,20 @@ FLEET_OIDC_ISSUER=https://auth.example.com
 FLEET_OIDC_CLIENT_ID=fleet-client-id
 FLEET_OIDC_CLIENT_SECRET=<one-time secret from auth app create>
 FLEET_OIDC_SCOPES=openid email
-AUTH_SIGNING_PUBKEY=<Auth Ed25519 public key>
 ```
 
-Fleet also reads Auth's published `/jwks.json` (cached ten minutes, refreshed
-once when a logout token names an unknown `kid`), so an Auth signing-key
-rotation needs no Fleet env edit. Keep one static key as bootstrap and
-offline fallback.
+Do **not** set `AUTH_SIGNING_PUBKEY` on a Fleet that signs in through a
+password-mode Auth. That variable is the switch for the legacy magic-link
+path above: the login page shows "Use Elcano email" whenever it is set, and
+a password-mode Auth never mints the shared `elcano_auth` cookie, so that
+button dead-ends. Fleet verifies Auth's signed back-channel logout tokens
+from Auth's published `/jwks.json` (cached ten minutes, refreshed once when a
+logout token names an unknown `kid`), so a signing-key rotation needs no
+Fleet env edit and no static key is required. The trade-off is that Fleet
+must be able to reach the Auth host when a logout arrives; Auth retries
+failed deliveries for seven days. Set `AUTH_SIGNING_PUBKEY` only where the
+legacy magic-link cookie is actually in use; it then also serves as an
+offline fallback for logout verification.
 
 Register the exact callback and signed logout endpoint on Auth:
 
