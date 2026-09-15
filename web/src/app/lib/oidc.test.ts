@@ -1,18 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  __resetDiscoveryCacheForTest,
-  buildRedirectUri,
-  decodeJwtClaims,
-  discover,
-  emailDomainAllowed,
-  getOidcConfig,
-  oidcEnabled,
-  pkceChallenge,
-  randomUrlSafe,
-  validateIdToken,
-  type DiscoveryDoc,
-  type OidcConfig,
-} from "./oidc";
+import { __resetDiscoveryCacheForTest, buildRedirectUri, decodeJwtClaims, discover, emailDomainAllowed, getOidcConfig, oidcEnabled, pkceChallenge, randomUrlSafe, shouldAutoStartLogin, type DiscoveryDoc, type OidcConfig, validateIdToken } from "./oidc";
 import { NextRequest } from "next/server";
 
 const FULL_ENV = {
@@ -73,6 +60,44 @@ describe("getOidcConfig / oidcEnabled", () => {
   });
 });
 
+describe("FLEET_OIDC_AUTO_START / shouldAutoStartLogin", () => {
+  const original = process.env;
+  beforeEach(() => {
+    process.env = { ...original };
+    process.env.FLEET_OIDC_ISSUER = "https://idp.example.com";
+    process.env.FLEET_OIDC_CLIENT_ID = "client-123";
+    process.env.FLEET_OIDC_CLIENT_SECRET = "secret-xyz";
+  });
+  afterEach(() => {
+    process.env = original;
+  });
+
+  it("is off by default and on for 1/true/yes/on", () => {
+    expect(getOidcConfig()?.autoStart).toBe(false);
+    for (const v of ["1", "true", "YES", " on "]) {
+      process.env.FLEET_OIDC_AUTO_START = v;
+      expect(getOidcConfig()?.autoStart).toBe(true);
+    }
+    process.env.FLEET_OIDC_AUTO_START = "0";
+    expect(getOidcConfig()?.autoStart).toBe(false);
+  });
+
+  it("auto-starts a plain anonymous visit only", () => {
+    process.env.FLEET_OIDC_AUTO_START = "1";
+    const config = getOidcConfig();
+    expect(shouldAutoStartLogin(new URLSearchParams(), config)).toBe(true);
+    // A silent attempt that came back empty must render the card, not loop.
+    expect(shouldAutoStartLogin(new URLSearchParams("sso=none"), config)).toBe(false);
+    // Login errors and the explicit manual page always render the card.
+    expect(shouldAutoStartLogin(new URLSearchParams("e=invalid"), config)).toBe(false);
+    expect(shouldAutoStartLogin(new URLSearchParams("manual=1"), config)).toBe(false);
+    // Off, or OIDC not configured at all: never.
+    process.env.FLEET_OIDC_AUTO_START = "";
+    expect(shouldAutoStartLogin(new URLSearchParams(), getOidcConfig())).toBe(false);
+    expect(shouldAutoStartLogin(new URLSearchParams(), null)).toBe(false);
+  });
+});
+
 describe("emailDomainAllowed", () => {
   it("admits any domain when the allowlist is empty", () => {
     expect(emailDomainAllowed("anyone@whatever.com", [])).toBe(true);
@@ -105,6 +130,7 @@ describe("validateIdToken", () => {
     scopes: "openid email",
     allowedDomains: [],
     buttonLabel: "SSO",
+    autoStart: false,
   };
   const now = 1_000_000;
   const base = {
@@ -195,6 +221,7 @@ describe("buildRedirectUri", () => {
     scopes: "openid",
     allowedDomains: [],
     buttonLabel: "SSO",
+    autoStart: false,
   };
   it("derives the callback from the forwarded host", () => {
     const req = new NextRequest("https://chat.example.com/api/auth/oidc/start", {
