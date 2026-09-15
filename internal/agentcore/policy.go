@@ -159,6 +159,13 @@ func (p *ScheduledPolicy) SetNoteProposer(np NoteProposer) { p.orch.setNotePropo
 // run (docs/SKILLS.md phase 3).
 func (p *ScheduledPolicy) SetSkillProposer(sp SkillProposer) { p.orch.setSkillProposer(sp) }
 
+// AuditAborted reports an explicit terminal abort. Drivers must preserve this
+// failed result, not re-demand the mutations the abort deliberately abandoned.
+func (p *ScheduledPolicy) AuditAborted() bool {
+	aborted, _, _ := p.orch.auditVerdict()
+	return aborted
+}
+
 // Budget exposes this run's current cost/token ceilings and accumulated spend
 // (#175). The spawn_subagent tool reads the PARENT policy's Budget to size a
 // child's sliced ceiling against the parent's REMAINING budget — the parent

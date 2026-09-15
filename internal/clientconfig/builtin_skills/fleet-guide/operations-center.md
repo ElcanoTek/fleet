@@ -134,6 +134,15 @@ with it.
 | **Context** | Notes that travel with the task for the people who operate it: why it exists, who owns it, what to do if it fails. These are shown to operators and never enter the assistant's instructions. Alongside them sit **tags** and the task's **persona**, which is left blank for the workspace default unless the task genuinely needs a different one. Tags are how you group related tasks: they show as chips on the board and it filters by them (see [Finding things](#finding-things)), so a tag you give a task here is a way back to the whole group later. |
 | **Advanced** | Further settings, including the model the task runs on and an option for a recurring task to carry a short summary of its previous run into the next one. The model in particular is worth choosing deliberately: match it to the demands of the job rather than leaving it to chance. |
 
+Some generated prompts include an **EXECUTION REQUIREMENTS (JSON)** block.
+Keep it when copying the prompt. Fleet checks it when the run starts, before
+model execution, and reports missing tools or sandbox network access. It does
+not enable connections or permissions for you. For file uploads, select
+**Allow network egress** in Advanced; the administrator's network policy still
+applies. Working mailbox or connector calls do not prove that shell uploads can
+reach the destination. A required source must still be fetched and checked by
+the running task.
+
 **Estimate Cost**, beneath the form, produces a **cost forecast** on demand: the
 token breakdown for the run you are describing and, where the model's pricing is
 known, a dollar estimate with a range, plus a warning when the estimate would

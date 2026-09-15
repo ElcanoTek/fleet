@@ -659,6 +659,10 @@ func configureRunWorkspace(ctx context.Context, sb *sandbox.Sandbox, wtPath, sha
 // true / unused when lc == nil), the exit-condition result label, and any run
 // error.
 func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt string, lc *models.LoopConfig, wtPath string) (*models.LogSession, bool, string, error) {
+	requirements, err := r.checkTaskRequirements(task)
+	if err != nil {
+		return nil, false, "", err
+	}
 	// Resolve the task's model (falls back to the configured task model).
 	modelSlug := r.cfg.TaskModel
 	if task.Model != nil && strings.TrimSpace(*task.Model) != "" {
@@ -823,9 +827,9 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// Per-user remote (hosted) MCP overlay (#443): wire the task owner's
 	// OAuth-connected servers via the SAME composite mechanism the chat path uses,
 	// so a headless run reaches them without mutating the shared/per-run client.
-	// Best-effort: a server that needs re-auth or whose owner can't be resolved is
-	// skipped, never failing the run.
-	remoteOverlay, err := r.buildTaskRemoteOverlay(ctx, task, mcpBinding.discoveryCatalog())
+	// Optional servers stay best-effort. An explicitly required server missing
+	// from the resulting roster fails preflight before model execution.
+	remoteOverlay, err := r.buildTaskRemoteOverlayChecked(ctx, task, mcpBinding, requirements, nativeTools)
 	if err != nil {
 		return nil, false, "", err
 	}

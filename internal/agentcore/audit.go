@@ -461,7 +461,7 @@ type confirmAuditInput struct {
 	Reasoning                     string                 `json:"reasoning" description:"Brief conclusion summarizing what was checked."`
 	ArtifactsChecked              []string               `json:"artifacts_checked" description:"Artifact paths reviewed during audit."`
 	WorkflowSectionsChecked       []string               `json:"workflow_sections_checked" description:"Workflow contract sections checked."`
-	CriticalActions               []criticalActionStruct `json:"critical_actions,omitempty" description:"Preferred typed list of {tool, identifier} entries naming each MCP tool this audit unlocks. Required when success=true; optional on an abort (success=false), which unlocks nothing."`
+	CriticalActions               []criticalActionStruct `json:"critical_actions,omitempty" description:"Preferred typed list of {tool, identifier} entries naming each MCP tool this audit unlocks. Use [] for completed read-only or no-update work; it authorizes no mutations. Required when success=true; optional on an abort (success=false), which unlocks nothing."`
 	CriticalActionsBeingUnblocked []string               `json:"critical_actions_being_unblocked,omitempty" description:"Legacy free-text form (deprecated): each entry MUST contain the literal tool name so the substring matcher can extract a known suffix."`
 	SendContractChecked           bool                   `json:"send_contract_checked" description:"Whether the send/delivery contract was checked."`
 	AttachmentsChecked            []string               `json:"attachments_checked" description:"Attachment paths checked."`
@@ -482,6 +482,10 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 			argsJSON, _ := json.Marshal(input)
 			var args map[string]any
 			_ = json.Unmarshal(argsJSON, &args)
+			// omitempty drops an explicit empty slice; preserve that no-action declaration.
+			if input.CriticalActions != nil && len(input.CriticalActions) == 0 {
+				args["critical_actions"] = []interface{}{}
+			}
 
 			if err := validateConfirmAuditArgs(args); err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Audit Rejected. %v", err)), nil
@@ -503,7 +507,7 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 				// server/record. registerCommittedActionsTyped adds nothing
 				// when it returns 0, so returning here leaves state ungranted.
 				// An UNTYPED audit keeps the legacy suffix-scoped fallback.
-				typedProvided := len(input.CriticalActions) > 0
+				typedProvided := input.CriticalActions != nil
 				if typedProvided {
 					if registered := orch.registerCommittedActionsTyped(input.CriticalActions); registered == 0 {
 						// Distinguish a MALFORMED critical declaration from an
@@ -512,8 +516,8 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 						// a real tool but failed the full-name requirement —
 						// refuse it so the agent fixes the name rather than
 						// believing the action is unlocked. An entry with no
-						// critical-tool reference at all ("none" — the shape
-						// the schema forces on tasks with no critical work)
+						// critical-tool reference at all (legacy "none"
+						// declarations, or an explicit empty typed list)
 						// declares that nothing needs unlocking: accept the
 						// audit for completion, and let the EMPTY typed gate
 						// below make it authorize nothing (fail closed).
@@ -664,6 +668,13 @@ func criticalActionToolsArg(args map[string]interface{}, key string) []string {
 	return result
 }
 
+// emptyTypedActions distinguishes an explicit no-action audit from an omitted,
+// null, or malformed declaration. It must never unlock the legacy one-shot token.
+func emptyTypedActions(args map[string]interface{}) bool {
+	actions, ok := args["critical_actions"].([]interface{})
+	return ok && len(actions) == 0
+}
+
 func validateConfirmAuditArgs(args map[string]interface{}) error {
 	success, _ := args["success"].(bool)
 	reasoning := strings.TrimSpace(fmt.Sprint(args["reasoning"]))
@@ -689,8 +700,8 @@ func validateConfirmAuditArgs(args map[string]interface{}) error {
 	// observed abort in the field was first rejected on exactly this line —
 	// the model omits the list because it is not unlocking anything — and
 	// only the second attempt landed, after a wasted round trip.
-	if success && len(legacyCriticalActions) == 0 && len(structuredCriticalActions) == 0 {
-		return fmt.Errorf("confirm_audit requires critical_actions (preferred typed list) or critical_actions_being_unblocked (legacy free-text) with at least one action")
+	if success && !emptyTypedActions(args) && len(legacyCriticalActions) == 0 && len(structuredCriticalActions) == 0 {
+		return fmt.Errorf("confirm_audit requires critical_actions (preferred typed list) or critical_actions_being_unblocked (legacy free-text) (use critical_actions=[] when no mutation remains)")
 	}
 	if !sendContractPresent {
 		return fmt.Errorf("confirm_audit requires send_contract_checked")

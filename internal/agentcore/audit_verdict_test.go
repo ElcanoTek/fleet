@@ -62,3 +62,17 @@ func TestWithAuditVerdictStampsTheResult(t *testing.T) {
 		t.Error("stamping the verdict must not disturb the rest of the result")
 	}
 }
+
+func TestScheduledPolicyExposesTerminalAbort(t *testing.T) {
+	p := NewScheduledPolicy(NewLogSession(), 0, 0, 0)
+	if p.AuditAborted() {
+		t.Fatal("fresh policy reported an abort")
+	}
+	resp := confirmAuditAbort(t, p.orch, "Required source inaccessible")
+	if resp.IsError || !p.AuditAborted() {
+		t.Fatalf("terminal abort not exposed: %+v", resp)
+	}
+	if ok, msg := p.CanFinish(0); !ok {
+		t.Fatalf("explicit abort must end enforcement: %v", msg)
+	}
+}

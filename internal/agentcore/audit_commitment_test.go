@@ -664,3 +664,46 @@ func TestConfirmAudit_ConfirmTrailerNamesOutstandingDeclarations(t *testing.T) {
 		t.Fatalf("trailer with nothing outstanding should count the executed call and say finish: %s", resp.Content)
 	}
 }
+
+func TestConfirmAudit_EmptyTypedCompletion(t *testing.T) {
+	for _, outstanding := range []bool{false, true} {
+		t.Run(fmt.Sprint(outstanding), func(t *testing.T) {
+			o := newOrchStateForTest()
+			if outstanding {
+				registerTyped(t, o, criticalActionStruct{Tool: typedCreateToolA})
+			}
+			input := `{"success":true,"reasoning":"Sources checked; no new data","artifacts_checked":["source-check.json"],"workflow_sections_checked":["no-update"],"critical_actions":[],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+			resp, err := buildConfirmAuditTool(o).Run(context.Background(), fantasy.ToolCall{ID: "noop", Name: toolNameConfirmAudit, Input: input})
+			if err != nil || resp.IsError {
+				t.Fatalf("explicit no-action completion rejected: %+v %v", resp, err)
+			}
+			if !o.typedAuditActive {
+				t.Fatal("no-action audit fell back to unbound legacy token")
+			}
+			if blocked, _ := o.checkCriticalTool(typedCreateToolB, "", `{}`); !blocked {
+				t.Fatal("no-action audit authorized a mutation")
+			}
+			if outstanding {
+				if o.allCommitmentsExhausted() {
+					t.Fatal("no-action audit erased previous commitment")
+				}
+				if ok, _ := o.checkFinishEnforcement(); ok {
+					t.Fatal("unfinished mutation incorrectly completed")
+				}
+			} else if ok, msg := o.checkFinishEnforcement(); !ok {
+				t.Fatalf("completed no-op cannot finish: %v", msg)
+			}
+		})
+	}
+}
+
+func TestConfirmAudit_MissingOrNullActionsStillRejected(t *testing.T) {
+	for _, actions := range []string{"", `,"critical_actions":null`} {
+		o := newOrchStateForTest()
+		input := `{"success":true,"reasoning":"checked","artifacts_checked":["report"],"workflow_sections_checked":["verify"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]` + actions + `}`
+		resp, err := buildConfirmAuditTool(o).Run(context.Background(), fantasy.ToolCall{ID: "audit", Name: toolNameConfirmAudit, Input: input})
+		if err != nil || !resp.IsError || o.auditConfirmed {
+			t.Fatalf("undeclared actions accepted: %+v %v", resp, err)
+		}
+	}
+}
