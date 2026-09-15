@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  asInputText,
   asText,
   formInitialValues,
   isPillReady,
@@ -201,7 +202,9 @@ function GeneratedPrompt({ text }: { text: string }) {
       <span className="text-[0.66rem] font-semibold uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
         Prompt preview
       </span>
-      <p className="text-[0.8rem] leading-snug text-[var(--color-text-secondary)]">{text}</p>
+      <p className="whitespace-pre-wrap text-[0.8rem] leading-snug text-[var(--color-text-secondary)]">
+        {text}
+      </p>
     </div>
   );
 }
@@ -235,9 +238,9 @@ function FieldGrid({
 const INPUT_CLASS =
   "w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-bg)] px-2.5 py-2 text-[0.85rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--focus-ring)]";
 
-// text/daterange want the full row; select/number/toggle pair up.
+// text/textarea/daterange want the full row; select/number/toggle pair up.
 function fieldSpansRow(field: PillField): boolean {
-  return field.type === "text" || field.type === "daterange";
+  return field.type === "text" || field.type === "textarea" || field.type === "daterange";
 }
 
 function Field({
@@ -310,11 +313,27 @@ function Field({
       ) : null}
 
       {field.type === "text" ? (
+        // Controlled inputs render the RAW string: `asText` trims, and a
+        // trimmed re-render swallows the space the user just typed (#3a).
+        // Trimming happens once, in pillToPrompt.
         <input
           type="text"
           className={INPUT_CLASS}
           placeholder={field.placeholder}
-          value={asText(value)}
+          value={asInputText(value)}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      ) : null}
+
+      {field.type === "textarea" ? (
+        // Multi-line free text (KPI lists, "anything else I should know").
+        // Same controlled-value handling as the text input; line breaks
+        // survive into the prompt, only the ends are trimmed.
+        <textarea
+          rows={4}
+          className={`${INPUT_CLASS} min-h-[5.5rem] resize-y`}
+          placeholder={field.placeholder}
+          value={asInputText(value)}
           onChange={(e) => onChange(e.target.value)}
         />
       ) : null}
