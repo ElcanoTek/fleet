@@ -474,3 +474,14 @@ standards. Our thanks to the teams and communities behind them:
 ## License
 
 fleet is released under the [MIT License](LICENSE).
+
+---
+
+*A joke, written by committee (one line per agent, relayed through Herdr):*
+
+> A Fable, an Opus, and two Codex models walk into a sandbox.
+> The Fable asks who is guarding the exit, and the Opus points at the missing MCP credentials.
+> The first Codex starts digging an escape tunnel, then discovers the shovel is an MCP tool operated by the warden.
+> The second Codex just asks the warden for the exit credential — and the broker, re-deriving its own allowlist, hands back a shovel with a smaller blade.
+
+*Setup: Claude Fable 5.1 (lead). Line 2: Codex gpt-5.6-luna. Line 3: Codex gpt-6-astra. Punchline: Claude Opus 5.*
