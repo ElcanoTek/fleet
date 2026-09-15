@@ -4,7 +4,7 @@ import {
   createSessionToken,
   getRedirectUrl,
   getSessionCookieName,
-  sessionMaxAgeSeconds,
+  sessionAbsoluteSeconds,
   isSecureRequest,
 } from "@/app/lib/auth";
 import { chatServerFetch, fetchSessionEpoch } from "@/app/lib/chatServer";
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
     httpOnly: true,
     sameSite: "lax",
     secure: isSecureRequest(request),
-    maxAge: sessionMaxAgeSeconds,
+    maxAge: sessionAbsoluteSeconds,
     path: "/",
   });
   return NextResponse.redirect(getRedirectUrl(request, "/"), { status: 303 });

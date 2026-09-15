@@ -19,16 +19,19 @@ function b64url(buf: Buffer): string {
 }
 
 // ── elcano_session: HMAC cookie (password path) ────────────────────────────
-// Mirrors createSessionToken: base64url(JSON{email,exp,epoch}) + "." +
+// Mirrors createSessionToken: base64url(JSON{email,exp,idle,epoch}) + "." +
 // base64url(HMAC-SHA256(secret, payload)).
 //
-// The epoch claim is mandatory — verifySessionToken refuses a token without one
-// — but its VALUE only matters to the Go tier, which this suite mocks away, so
-// any stand-in works here.
+// The epoch and idle claims are mandatory — verifySessionToken refuses a token
+// missing either (ADR-0041, ADR-0064) — but the epoch's VALUE only matters to
+// the Go tier, which this suite mocks away, so any stand-in works here. exp is
+// the one-day absolute deadline and idle the twelve-hour idle deadline.
 export function mintSessionToken(email: string): string {
+  const now = Math.floor(Date.now() / 1000);
   const payload = JSON.stringify({
     email: email.toLowerCase(),
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
+    exp: now + 60 * 60 * 24,
+    idle: now + 60 * 60 * 12,
     epoch: "e2e-session-epoch",
   });
   const encodedPayload = b64url(Buffer.from(payload, "utf8"));

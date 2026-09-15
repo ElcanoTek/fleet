@@ -4,7 +4,7 @@ import {
   getRedirectUrl,
   getSessionCookieName,
   isSecureRequest,
-  sessionMaxAgeSeconds,
+  sessionAbsoluteSeconds,
 } from "@/app/lib/auth";
 import { fetchExternalSessionEpoch } from "@/app/lib/chatServer";
 import {
@@ -144,7 +144,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     httpOnly: true,
     sameSite: "lax",
     secure,
-    maxAge: sessionMaxAgeSeconds,
+    maxAge: sessionAbsoluteSeconds,
     path: "/",
   });
   clearTempCookies(res, secure);

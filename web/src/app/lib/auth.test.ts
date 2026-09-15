@@ -1,4 +1,5 @@
-import { beforeAll, afterEach, describe, expect, it } from "vitest";
+import { beforeAll, afterEach, describe, expect, it, vi } from "vitest";
+import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 // Exercises the auth lib: the Ed25519 verifier (verifyElcanoToken, mirrors
@@ -284,5 +285,168 @@ describe("getRedirectUrl / isSecureRequest — canonical origin vs forwarded hea
     const request = reqTo("http://localhost:3000/chat", { "x-forwarded-proto": "https" });
     expect(auth.getRedirectUrl(request, "/login").toString()).toBe("https://localhost:3000/login");
     expect(auth.isSecureRequest(request)).toBe(true);
+  });
+});
+
+describe("HMAC session lifetimes (ADR-0064: one day absolute, twelve hours idle)", () => {
+  const HOUR = 60 * 60;
+  const T0 = 1_800_000_000; // fixed mint instant, unix seconds
+
+  function decodePayload(token: string) {
+    const body = token.split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(body.padEnd(Math.ceil(body.length / 4) * 4, "="))) as Record<string, unknown>;
+  }
+
+  // signWithSecret mints a token with an arbitrary payload, the way a pre-ADR
+  // build would have, so the tests can present claims the library never emits.
+  async function signWithSecret(payload: object) {
+    const body = toBase64Url(enc.encode(JSON.stringify(payload)));
+    const key = await crypto.subtle.importKey("raw", enc.encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(body)));
+    return `${body}.${toBase64Url(sig)}`;
+  }
+
+  function at(seconds: number) {
+    vi.setSystemTime(seconds * 1000);
+  }
+
+  function requestAndResponse(secure = true) {
+    const request = {
+      headers: new Headers(secure ? { "x-forwarded-proto": "https" } : {}),
+      nextUrl: new URL(secure ? "https://chat.example.com/chat" : "http://localhost:3000/chat"),
+    } as unknown as NextRequest;
+    return { request, response: NextResponse.next() };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("mints exp one day out and idle twelve hours out", async () => {
+    vi.useFakeTimers();
+    at(T0);
+    const payload = decodePayload(await auth.createSessionToken("bob@x.com", "epoch-1"));
+    expect(payload.exp).toBe(T0 + 24 * HOUR);
+    expect(payload.idle).toBe(T0 + 12 * HOUR);
+    expect(auth.sessionAbsoluteSeconds).toBe(24 * HOUR);
+    expect(auth.sessionIdleSeconds).toBe(12 * HOUR);
+  });
+
+  it("refuses a session idle for twelve hours even though its absolute deadline is ahead", async () => {
+    vi.useFakeTimers();
+    at(T0);
+    const token = await auth.createSessionToken("bob@x.com", "epoch-1");
+    at(T0 + 12 * HOUR - 1);
+    expect(await auth.verifySessionToken(token)).not.toBeNull();
+    at(T0 + 12 * HOUR + 1);
+    expect(await auth.verifySessionToken(token)).toBeNull();
+  });
+
+  it("refuses a correctly signed token with no idle claim (pre-ADR cookies are not grandfathered)", async () => {
+    const token = await signWithSecret({ email: "bob@x.com", exp: future, epoch: "epoch-1" });
+    expect(await auth.verifySessionToken(token)).toBeNull();
+    const withIdle = await signWithSecret({ email: "bob@x.com", exp: future, idle: future, epoch: "epoch-1" });
+    expect(await auth.verifySessionToken(withIdle)).not.toBeNull();
+  });
+
+  it("does not re-mint when the last mint is under a minute old", async () => {
+    vi.useFakeTimers();
+    at(T0);
+    const token = await auth.createSessionToken("bob@x.com", "epoch-1");
+    at(T0 + 30);
+    const session = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: token }));
+    const { request, response } = requestAndResponse();
+    expect(await auth.refreshSessionCookie(request, response, session!)).toBeNull();
+    expect(response.cookies.get(auth.getSessionCookieName())).toBeUndefined();
+  });
+
+  it("re-mints after a minute: idle moves forward, exp and every identity claim are copied", async () => {
+    vi.useFakeTimers();
+    at(T0);
+    const token = await auth.createOidcSessionToken("Bob@x.com", "epoch-9", "https://auth.example.com", "sub-1");
+    at(T0 + 61);
+    const session = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: token }));
+    const { request, response } = requestAndResponse();
+    const refreshed = await auth.refreshSessionCookie(request, response, session!);
+    expect(refreshed).not.toBeNull();
+    const payload = decodePayload(refreshed!);
+    expect(payload).toMatchObject({
+      email: "bob@x.com",
+      exp: T0 + 24 * HOUR,
+      idle: T0 + 61 + 12 * HOUR,
+      epoch: "epoch-9",
+      source: "oidc",
+      issuer: "https://auth.example.com",
+      subject: "sub-1",
+    });
+    const cookie = response.cookies.get(auth.getSessionCookieName());
+    expect(cookie?.value).toBe(refreshed);
+    expect(cookie).toMatchObject({ httpOnly: true, sameSite: "lax", secure: true, path: "/" });
+    expect(cookie?.maxAge).toBe(24 * HOUR - 61);
+    expect(await auth.verifySessionToken(refreshed)).toMatchObject({ source: "oidc", subject: "sub-1" });
+  });
+
+  it("activity never extends the absolute deadline", async () => {
+    vi.useFakeTimers();
+    at(T0);
+    let token = await auth.createSessionToken("bob@x.com", "epoch-1");
+    // Touch at 11h (idle -> 23h) and 22h (idle -> capped at exp, 24h).
+    for (const [step, wantIdle] of [
+      [11 * HOUR, T0 + 23 * HOUR],
+      [22 * HOUR, T0 + 24 * HOUR],
+    ] as const) {
+      at(T0 + step);
+      const session = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: token }));
+      expect(session).not.toBeNull();
+      const { request, response } = requestAndResponse();
+      const refreshed = await auth.refreshSessionCookie(request, response, session!);
+      expect(refreshed).not.toBeNull();
+      expect(decodePayload(refreshed!)).toMatchObject({ exp: T0 + 24 * HOUR, idle: wantIdle });
+      token = refreshed!;
+    }
+    at(T0 + 24 * HOUR - 1);
+    expect(await auth.verifySessionToken(token)).not.toBeNull();
+    at(T0 + 24 * HOUR + 1);
+    expect(await auth.verifySessionToken(token)).toBeNull();
+  });
+
+  it("stops re-minting once idle already sits on the absolute deadline", async () => {
+    vi.useFakeTimers();
+    at(T0);
+    const minted = await auth.createSessionToken("bob@x.com", "epoch-1");
+    at(T0 + 11 * HOUR);
+    const first = requestAndResponse();
+    const s1 = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: minted }));
+    const t1 = await auth.refreshSessionCookie(first.request, first.response, s1!);
+    at(T0 + 22 * HOUR + 30 * 60);
+    const second = requestAndResponse();
+    const s2 = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: t1! }));
+    const t2 = await auth.refreshSessionCookie(second.request, second.response, s2!);
+    expect(decodePayload(t2!).idle).toBe(T0 + 24 * HOUR);
+    at(T0 + 22 * HOUR + 35 * 60);
+    const third = requestAndResponse();
+    const s3 = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: t2! }));
+    expect(s3).not.toBeNull();
+    expect(await auth.refreshSessionCookie(third.request, third.response, s3!)).toBeNull();
+    expect(third.response.cookies.get(auth.getSessionCookieName())).toBeUndefined();
+  });
+
+  it("leaves elcano_auth sessions alone: Fleet cannot re-mint the auth service's cookie", async () => {
+    const token = await makeToken(priv, { email: "carol@elcanotek.com", exp: future });
+    const session = await auth.getSessionFromRequest(reqWith({ [auth.getElcanoCookieName()]: token }));
+    const { request, response } = requestAndResponse();
+    expect(await auth.refreshSessionCookie(request, response, session!)).toBeNull();
+    expect(response.cookies.get(auth.getSessionCookieName())).toBeUndefined();
+  });
+
+  it("mints an insecure cookie on a plain-HTTP dev request", async () => {
+    vi.useFakeTimers();
+    at(T0);
+    const token = await auth.createSessionToken("bob@x.com", "epoch-1");
+    at(T0 + 120);
+    const session = await auth.getSessionFromRequest(reqWith({ [auth.getSessionCookieName()]: token }));
+    const { request, response } = requestAndResponse(false);
+    await auth.refreshSessionCookie(request, response, session!);
+    expect(response.cookies.get(auth.getSessionCookieName())?.secure).toBe(false);
   });
 });
