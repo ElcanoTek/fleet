@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  asInputText,
   asText,
   DEFAULT_PILLS,
   formInitialValues,
@@ -43,6 +44,24 @@ const FALLBACK_PILL: ProtocolPill = {
   // no promptTemplate → neutral fallback
 };
 
+// A pill with a multi-line field — the shape the KPI / "additional context"
+// inputs take. Exercises the textarea type end to end through the helpers.
+const TEXTAREA_PILL: ProtocolPill = {
+  id: "wrap",
+  section: "Reporting",
+  type: "form",
+  icon: "layers",
+  title: "End-of-campaign wrap",
+  desc: "Summarize a finished campaign.",
+  cta: "Build wrap",
+  fields: [
+    { key: "client", label: "Client", type: "text", required: true },
+    { key: "kpis", label: "KPIs", type: "textarea", required: true },
+    { key: "context", label: "Context", type: "textarea" },
+  ],
+  promptTemplate: "Wrap {client}.\nKPIs: {kpis}\nContext: {context}",
+};
+
 describe("asText", () => {
   it("trims strings and stringifies numbers, blanks everything else", () => {
     expect(asText("  hi ")).toBe("hi");
@@ -50,6 +69,23 @@ describe("asText", () => {
     expect(asText(true)).toBe("");
     expect(asText({ from: "a", to: "b" })).toBe("");
     expect(asText(undefined)).toBe("");
+  });
+});
+
+describe("asInputText", () => {
+  it("keeps a string exactly as typed — trailing spaces and line breaks included", () => {
+    // The controlled-input view: trimming here is what ate the space between
+    // "Meridian" and "Auto" on every keystroke.
+    expect(asInputText("Meridian ")).toBe("Meridian ");
+    expect(asInputText("  hi ")).toBe("  hi ");
+    expect(asInputText("CTR, goal 0.15%\nCPA, under $40")).toBe("CTR, goal 0.15%\nCPA, under $40");
+  });
+
+  it("falls back to asText for non-string values", () => {
+    expect(asInputText(14)).toBe("14");
+    expect(asInputText(true)).toBe("");
+    expect(asInputText({ from: "a", to: "b" })).toBe("");
+    expect(asInputText(undefined)).toBe("");
   });
 });
 
@@ -62,6 +98,12 @@ describe("formInitialValues", () => {
 
     const t = formInitialValues(TEMPLATE_PILL);
     expect(t.window).toBe("last week"); // explicit default
+  });
+
+  it("starts a textarea blank, like text", () => {
+    const v = formInitialValues(TEXTAREA_PILL);
+    expect(v.kpis).toBe("");
+    expect(v.context).toBe("");
   });
 });
 
@@ -86,6 +128,13 @@ describe("isPillReady", () => {
   it("treats a pill with no required fields as always ready", () => {
     const pill: ProtocolPill = { ...TEMPLATE_PILL, fields: [], promptTemplate: undefined };
     expect(isPillReady(pill, formInitialValues(pill))).toBe(true);
+  });
+
+  it("gates a required textarea on non-whitespace content", () => {
+    const base = { ...formInitialValues(TEXTAREA_PILL), client: "Acme" };
+    expect(isPillReady(TEXTAREA_PILL, base)).toBe(false);
+    expect(isPillReady(TEXTAREA_PILL, { ...base, kpis: " \n " })).toBe(false);
+    expect(isPillReady(TEXTAREA_PILL, { ...base, kpis: "CTR, goal 0.15%" })).toBe(true);
   });
 });
 
@@ -112,6 +161,22 @@ describe("pillToPrompt — string template", () => {
     const pill: ProtocolPill = { ...TEMPLATE_PILL, promptTemplate: "Summarize the attached document." };
     expect(pillToPrompt(pill, {})).toBe("Summarize the attached document.");
   });
+
+  it("trims a text value at assembly time, so a typed trailing space never reaches the prompt", () => {
+    const v = { ...formInitialValues(TEMPLATE_PILL), client: "Meridian Auto " };
+    expect(pillToPrompt(TEMPLATE_PILL, v)).toBe("Build a report for Meridian Auto covering last week.");
+  });
+
+  it("interpolates a textarea value with its interior line breaks intact", () => {
+    const v = {
+      ...formInitialValues(TEXTAREA_PILL),
+      client: "Acme",
+      kpis: "CTR, goal 0.15%\nCPA, conversions / spend, under $40\n",
+    };
+    expect(pillToPrompt(TEXTAREA_PILL, v)).toBe(
+      "Wrap Acme.\nKPIs: CTR, goal 0.15%\nCPA, conversions / spend, under $40\nContext: {context}",
+    );
+  });
 });
 
 describe("pillToPrompt — neutral fallback (no template)", () => {
@@ -134,6 +199,15 @@ describe("pillToPrompt — neutral fallback (no template)", () => {
     expect(out).toBe("End-of-campaign wrap. Build a deck: no.");
     expect(out).not.toContain("Client:");
     expect(out).not.toContain("Flight:");
+  });
+
+  it("renders a textarea as a Label: value line, exactly like text", () => {
+    const pill: ProtocolPill = { ...TEXTAREA_PILL, promptTemplate: undefined };
+    const v = { ...formInitialValues(pill), client: "Acme", kpis: "CTR, goal 0.15%\nCPA, under $40" };
+    const out = pillToPrompt(pill, v);
+    expect(out).toContain("Client: Acme");
+    expect(out).toContain("KPIs: CTR, goal 0.15%\nCPA, under $40");
+    expect(out).not.toContain("Context:"); // blank textarea omitted like a blank text
   });
 });
 

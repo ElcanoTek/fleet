@@ -21,7 +21,7 @@
 //   • Conversation pills (optionalForm) — chat-first; an OPTIONAL form can
 //     point the assistant at specifics, but skipping it just starts the intake.
 
-export type PillFieldType = "text" | "select" | "number" | "daterange" | "toggle";
+export type PillFieldType = "text" | "textarea" | "select" | "number" | "daterange" | "toggle";
 
 export type DateRangeValue = { from: string; to: string };
 
@@ -31,7 +31,7 @@ export interface PillField {
   key: string;
   label: string;
   type: PillFieldType;
-  /** Placeholder for text/number inputs. */
+  /** Placeholder for text/textarea/number inputs. */
   placeholder?: string;
   /** Pre-filled value. Forms are a guide, not a gate — defaults stand in for
    *  anything the user skips. */
@@ -42,7 +42,7 @@ export interface PillField {
   advanced?: boolean;
   /** Block the Run button until this field is filled. */
   required?: boolean;
-  /** Helper text rendered beneath text / select / number fields. */
+  /** Helper text rendered beneath text / textarea / select / number fields. */
   hint?: string;
   /** Minimum for `number`. */
   min?: number;
@@ -77,11 +77,23 @@ export interface ProtocolPill {
 
 // ── value helpers ─────────────────────────────────────────────────────────
 
-/** Trimmed string view of any field value (empty string when blank/unset). */
+/** Trimmed string view of any field value (empty string when blank/unset).
+ *  For prompt assembly and read-only summaries — NOT for a controlled input's
+ *  `value` (see `asInputText`). */
 export function asText(v: PillFieldValue | undefined): string {
   if (typeof v === "string") return v.trim();
   if (typeof v === "number") return String(v);
   return "";
+}
+
+/** Untrimmed string view for a controlled text/textarea input's `value`.
+ *  A controlled input re-renders from state on every keystroke, so trimming
+ *  here would eat the trailing space the user just typed ("Meridian " →
+ *  "Meridian") and make it impossible to type "Meridian Auto". Whitespace is
+ *  trimmed once, at prompt-assembly time, by `asText`/`fieldValueText`. */
+export function asInputText(v: PillFieldValue | undefined): string {
+  if (typeof v === "string") return v;
+  return asText(v);
 }
 
 export function asNumber(v: PillFieldValue | undefined, fallback: number): number {
@@ -146,7 +158,9 @@ export function detailLine(parts: string[]): string {
 }
 
 // Renders a single field's value for a "Label: value" detail line. Daterange
-// and toggle get human-readable forms; everything else uses the trimmed text.
+// and toggle get human-readable forms; everything else (text, textarea, select,
+// number) uses the trimmed text — a textarea keeps its interior line breaks and
+// only loses leading/trailing whitespace.
 function fieldValueText(field: PillField, value: PillFieldValue | undefined): string {
   if (field.type === "toggle") return value ? "yes" : "no";
   if (field.type === "daterange") {
@@ -164,8 +178,9 @@ function fieldValueText(field: PillField, value: PillFieldValue | undefined): st
  *
  * - When the pill carries a `promptTemplate` STRING, that string is used.
  *   Any `{key}` tokens are interpolated from `values` (a token whose field is
- *   blank is dropped). The template is otherwise returned verbatim — if it has
- *   no tokens, it's sent as-is.
+ *   blank is left in place, so the agent can see what was intended). The
+ *   template is otherwise returned verbatim — if it has no tokens, it's sent
+ *   as-is.
  * - When there is NO template, a neutral fallback is built from the pill title
  *   plus "Label: value" lines for every field the user actually filled.
  *
