@@ -9,12 +9,14 @@ import { NextRequest } from "next/server";
 // moc's username/password Bearer token).
 
 const getSessionFromRequestMock = vi.fn();
+const refreshSessionCookieMock = vi.fn();
 const getRedirectUrlMock = vi.fn(
   (_req: unknown, pathname: string) => new URL(`https://chat.elcanotek.com${pathname}`),
 );
 
 vi.mock("@/app/lib/auth", () => ({
   getSessionFromRequest: (...args: unknown[]) => getSessionFromRequestMock(...args),
+  refreshSessionCookie: (...args: unknown[]) => refreshSessionCookieMock(...args),
   getRedirectUrl: (...args: unknown[]) => getRedirectUrlMock(...(args as [unknown, string])),
 }));
 vi.mock("@/app/lib/buildId", () => ({
@@ -32,6 +34,7 @@ describe("proxy", () => {
   beforeEach(() => {
     getSessionFromRequestMock.mockReset();
     getRedirectUrlMock.mockClear();
+    refreshSessionCookieMock.mockReset();
   });
 
   it("redirects an unauthenticated page request to /login", async () => {
@@ -173,6 +176,28 @@ describe("proxy", () => {
       expect(res.headers.get("location")).toBeNull();
     },
   );
+
+  it("touches the session cookie on an authenticated pass-through (ADR-0064 idle limit)", async () => {
+    const session = { email: "a@x.com", exp: 0, idle: 0, epoch: "e", source: "password" };
+    getSessionFromRequestMock.mockResolvedValue(session);
+    const request = req("/api/conversations");
+    const res = await proxy(request);
+    expect(res.status).toBe(200);
+    expect(refreshSessionCookieMock).toHaveBeenCalledTimes(1);
+    expect(refreshSessionCookieMock).toHaveBeenCalledWith(request, res, session);
+  });
+
+  it("does not touch the cookie on redirects, 401s, public or bearer-only requests", async () => {
+    getSessionFromRequestMock.mockResolvedValue(null);
+    await proxy(req("/chat"));
+    await proxy(req("/api/conversations"));
+    await proxy(req("/login"));
+    await proxy(req("/api/orchestrator/tasks", { authorization: "Bearer moc-token" }));
+    getSessionFromRequestMock.mockResolvedValue({ email: "a@x.com", exp: 0, source: "password" });
+    await proxy(req("/login"));
+    await proxy(req("/shared/abc"));
+    expect(refreshSessionCookieMock).not.toHaveBeenCalled();
+  });
 
   it("stamps the CSP on redirect and 401 responses too", async () => {
     getSessionFromRequestMock.mockResolvedValue(null);

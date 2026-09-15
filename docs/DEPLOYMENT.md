@@ -331,8 +331,9 @@ each piece yourself):
    > decides *who may use chat*. A stand-alone deploy needs none of this; users
    > just log in with email + password.
    >
-   > **Ending a session.** The cookie is a stateless HMAC valid for 14 days, so
-   > there is nothing to delete server-side — revocation works by invalidating
+   > **Ending a session.** The cookie is a stateless HMAC that lives at most one
+   > day and lapses after twelve idle hours ([ADR-0064](adr/0064-application-session-lifetimes.md)),
+   > so there is nothing to delete server-side — revocation works by invalidating
    > what the cookie *claims* (the design and its carve-outs:
    > [`SESSION-EPOCH.md`](SESSION-EPOCH.md)). Three levers, narrowest first:
    > - **One account** — reset its password (Settings → Admin → "Users & roles",
