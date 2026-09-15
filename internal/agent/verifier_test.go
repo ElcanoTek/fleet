@@ -24,6 +24,9 @@ func TestToolResultLooksFailed(t *testing.T) {
 		// guard will never allow (the demand/refuse deadlock of #1153's era).
 		{"duplicate send suppressed", "Duplicate send_email suppressed: an identical payload was already sent successfully by this run, so this send is complete.", false},
 		{"duplicate send suppressed behind error prefix", "[tool error] Duplicate send_email suppressed: an identical payload was already sent successfully by this run.", false},
+		{"unsuccessful JSON", `{"success":false}`, true},
+		{"failed preflight", `{"ok":false}`, true},
+		{"incomplete staging is a valid call", `{"complete":false}`, false},
 		{"plain success text", "Email queued successfully", false},
 		{"status success json", `{"status":"success","message_id":"abc"}`, false},
 		{"json without status", `{"rows": 12, "summary": "ok"}`, false},

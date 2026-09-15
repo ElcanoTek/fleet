@@ -513,6 +513,9 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	if ok, msgs := p.inner.CanFinish(round); !ok {
 		return false, msgs
 	}
+	if p.inner.AuditAborted() {
+		return true, nil
+	}
 	ctx := p.runCtx
 	if ctx == nil {
 		ctx = context.Background()

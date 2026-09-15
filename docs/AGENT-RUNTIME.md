@@ -985,7 +985,10 @@ required actions, which the loop turns into a final enforcement round before it
 is allowed to finish. A verifier error fails **open** (allow finish). So core
 governance — per-tool policy, audit, finish enforcement, MCP credential
 brokering, note staging, usage/cost, **and the end-of-run verifier** — applies to
-every scheduled run; a run never silently finishes unverified.
+every scheduled run. An explicit terminal audit abort skips the extra model
+reviewers and remains a failed result. Conditional task branches are
+verified using bounded structured result evidence, not tool names alone; see
+[Conditional scheduled tasks](CONDITIONAL-TASK-COMPLETION.md).
 
 The verifier's own spend does not debit the run's cost/token ceilings (it is a
 host-side extra around the loop), but it is recorded per call in the session

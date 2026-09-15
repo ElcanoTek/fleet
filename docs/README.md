@@ -199,6 +199,7 @@ above fails otherwise.
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
 - [`CONFIG-RELOAD.md`](CONFIG-RELOAD.md) — Config hot-reload (#286)
+- [`CONDITIONAL-TASK-COMPLETION.md`](CONDITIONAL-TASK-COMPLETION.md) — Conditional scheduled tasks
 - [`CONNECTION-SHARING.md`](CONNECTION-SHARING.md) — Sharing a remote MCP connection
 - [`CONNECTOR-ONBOARDING.md`](CONNECTOR-ONBOARDING.md) — Connector-directory onboarding — guided setup, API keys, BYO OAuth clients
 - [`CONNECTOR-PREFS.md`](CONNECTOR-PREFS.md) — Unified connector enablement — availability, selection, binding
