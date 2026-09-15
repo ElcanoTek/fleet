@@ -39,6 +39,7 @@ More: [screenshots of every surface](docs/screenshots/).
 - [Repository layout](#repository-layout) · [The client-config bundle](#the-client-config-bundle) · [No lock-in](#no-lock-in-your-agent-ip-is-portable) · [Development](#development)
 - [Deploy](#deploy) · [Operating fleet](#operating-fleet) · [Documentation](#documentation)
 - [Built by Elcano](#built-by-elcano-commercial-support) · [Contributing](#contributing) · [License](#license)
+- [A joke](#a-joke)
 
 ## Why fleet
 
@@ -418,6 +419,10 @@ config bundle, and platform improvements land here, in the open.
 
 [elcanotek.com](https://elcanotek.com) ·
 [hello@elcanotek.com](mailto:hello@elcanotek.com)
+
+## A joke
+
+> fleet agents think outside the box, then execute inside the sandbox.
 
 ## Contributing
 
