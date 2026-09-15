@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import LoginCard from "./login-card";
 
+// next/navigation's redirect() throws a framework-internal signal; stand in a
+// throw we can assert on so the auto-start tests below see the target URL.
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn((url: string) => {
+    throw new Error(`REDIRECT:${url}`);
+  }),
+}));
+
 // The "Use Elcano email" button is the only visible surface of the Elcano
 // magic-link path. White-labelled deploys leave AUTH_SIGNING_PUBKEY unset, and
 // the card must then show *only* the password form — no Elcano-branded button,
@@ -147,9 +155,47 @@ describe("LoginPage — server-side wiring", () => {
 
   afterEach(() => {
     delete process.env.AUTH_SIGNING_PUBKEY;
+    for (const key of Object.keys(process.env)) if (key.startsWith("FLEET_OIDC_")) delete process.env[key];
     globalThis.fetch = originalFetch;
     cleanup();
     vi.resetModules();
+  });
+
+  function enableOidc(autoStart: boolean) {
+    process.env.FLEET_OIDC_ISSUER = "https://idp.example.com";
+    process.env.FLEET_OIDC_CLIENT_ID = "client-123";
+    process.env.FLEET_OIDC_CLIENT_SECRET = "secret-xyz";
+    process.env.FLEET_OIDC_AUTO_START = autoStart ? "1" : "";
+  }
+
+  it("auto-starts a silent SSO attempt on a plain visit when FLEET_OIDC_AUTO_START is set", async () => {
+    enableOidc(true);
+    stubMeta(null, false);
+    const { default: LoginPage } = await import("./page");
+    await expect(LoginPage({ searchParams: Promise.resolve({}) })).rejects.toThrow(
+      "REDIRECT:/api/auth/oidc/start?silent=1",
+    );
+  });
+
+  it("renders the card with both options after a silent attempt found no session, and for ?manual / ?e", async () => {
+    enableOidc(true);
+    stubMeta(null, false);
+    const { default: LoginPage } = await import("./page");
+    for (const query of [{ sso: "none" }, { manual: "1" }, { e: "invalid" }]) {
+      cleanup();
+      render(await LoginPage({ searchParams: Promise.resolve(query) }));
+      expect(screen.getByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    }
+  });
+
+  it("never auto-starts when the flag is off, even with OIDC configured", async () => {
+    enableOidc(false);
+    stubMeta(null, false);
+    const { default: LoginPage } = await import("./page");
+    render(await LoginPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 
   function stubMeta(body: unknown, ok = true) {

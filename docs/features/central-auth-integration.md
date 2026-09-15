@@ -31,6 +31,16 @@ failed deliveries for seven days. Set `AUTH_SIGNING_PUBKEY` only where the
 legacy magic-link cookie is actually in use; it then also serves as an
 offline fallback for logout verification.
 
+With `FLEET_OIDC_AUTO_START=1`, an anonymous visit to `/login` first sends the
+browser to Auth with `prompt=none`. A browser that already holds an Auth
+session comes back with a code and lands in Fleet without a click; one that
+does not is returned with `error=login_required` and Fleet shows its normal
+login card, SSO button and password form both present, with no error banner.
+`/login?manual=1` always shows the card, and a page carrying `?e=` (a login
+error) never auto-starts, so the local admin password stays one URL away when
+Auth is unreachable. Auth supports `prompt=none` from `1521760`+; an older Auth
+ignores it and shows its own login form instead.
+
 Register the exact callback and signed logout endpoint on Auth:
 
 ```text

@@ -41,6 +41,11 @@ export type OidcConfig = {
   // redirectUri pins the callback URL when set (must match the IdP
   // registration). When unset it is derived from the request host.
   redirectUri?: string;
+  // autoStart: an anonymous visit to /login first tries SSO silently
+  // (prompt=none). A browser that already has a central session lands in
+  // Fleet without a click; one that does not is sent back to the login page
+  // with both options showing. FLEET_OIDC_AUTO_START=1.
+  autoStart: boolean;
 };
 
 // getOidcConfig reads FLEET_OIDC_* at request time and returns null unless the
@@ -59,8 +64,26 @@ export function getOidcConfig(): OidcConfig | null {
     .filter(Boolean);
   const buttonLabel = (process.env.FLEET_OIDC_BUTTON_LABEL ?? "").trim() || "Sign in with SSO";
   const redirectUri = process.env.FLEET_OIDC_REDIRECT_URI?.trim() || undefined;
+  const autoStart = ["1", "true", "yes", "on"].includes((process.env.FLEET_OIDC_AUTO_START ?? "").trim().toLowerCase());
 
-  return { issuer, clientId, clientSecret, scopes, allowedDomains, buttonLabel, redirectUri };
+  return { issuer, clientId, clientSecret, scopes, allowedDomains, buttonLabel, redirectUri, autoStart };
+}
+
+// SILENT_SSO_RESULT is the /login query the callback sets when a silent
+// (prompt=none) attempt found no central session: show the page, no banner.
+export const SILENT_SSO_RESULT = "sso=none";
+
+// shouldAutoStartLogin decides whether an anonymous /login visit should be
+// redirected into a silent SSO attempt instead of rendering the card. Never
+// when auto-start is off, when the page is showing a login error (`?e=`),
+// when a silent attempt just came back empty (`?sso=none`), or when the
+// visitor asked for the manual page (`?manual=1`), so the password form is
+// always one URL away and a failed attempt cannot loop.
+export function shouldAutoStartLogin(params: URLSearchParams, config: OidcConfig | null): boolean {
+  if (!config?.autoStart) return false;
+  if (params.has("e") || params.has("manual")) return false;
+  if (params.get("sso") === "none") return false;
+  return true;
 }
 
 // oidcEnabled is the single gate the login page + middleware consult. Resolving

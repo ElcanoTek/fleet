@@ -63,6 +63,28 @@ describe("GET /api/auth/oidc/start", () => {
     expect(res.cookies.get("fleet_oidc_state")?.httpOnly).toBe(true);
   });
 
+  it("adds prompt=none only for a silent start", async () => {
+    process.env.FLEET_OIDC_ISSUER = "https://idp.example.com";
+    process.env.FLEET_OIDC_CLIENT_ID = "client-123";
+    process.env.FLEET_OIDC_CLIENT_SECRET = "secret-xyz";
+
+    const plain = await GET(startReq());
+    expect(new URL(plain.headers.get("location")!).searchParams.get("prompt")).toBeNull();
+
+    const silent = await GET(
+      new NextRequest("https://chat.example.com/api/auth/oidc/start?silent=1", {
+        headers: { "x-forwarded-host": "chat.example.com", "x-forwarded-proto": "https" },
+      }),
+    );
+    expect(silent.status).toBe(303);
+    const url = new URL(silent.headers.get("location")!);
+    expect(url.searchParams.get("prompt")).toBe("none");
+    // Everything else about the request is unchanged: the callback can treat
+    // login_required as "no session" and any code as a normal login.
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(silent.cookies.get("fleet_oidc_state")?.value).toBeTruthy();
+  });
+
   it("bounces with oidc_error when discovery fails", async () => {
     process.env.FLEET_OIDC_ISSUER = "https://idp.example.com";
     process.env.FLEET_OIDC_CLIENT_ID = "client-123";

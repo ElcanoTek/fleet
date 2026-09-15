@@ -1,5 +1,6 @@
+import { redirect } from "next/navigation";
 import { getAuthSigningPubkey } from "@/app/lib/auth";
-import { getOidcConfig } from "@/app/lib/oidc";
+import { getOidcConfig, shouldAutoStartLogin } from "@/app/lib/oidc";
 import { getServerBranding } from "@/app/lib/serverBranding";
 import LoginCard from "./login-card";
 
@@ -16,11 +17,26 @@ export const dynamic = "force-dynamic";
 // build-time flag) keeps the toggle a pure ops switch: the "Use Elcano email"
 // button appears only where the magic-link path is actually configured, so a
 // white-labelled deploy that never sets the key shows only the password form.
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+} = {}) {
   // OIDC (#240) is resolved server-side at request time too (same rationale as
   // the Elcano-email flag above): the SSO button appears only where FLEET_OIDC_*
   // is actually configured, with the operator-chosen label.
   const oidc = getOidcConfig();
+  // FLEET_OIDC_AUTO_START: try SSO silently before showing the card. The
+  // callback returns to /login?sso=none when there is no central session, and
+  // any `?e=` or `?manual=1` also renders the card, so the password form stays
+  // reachable and a failed attempt cannot loop.
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(searchParams ? await searchParams : {})) {
+    for (const v of Array.isArray(value) ? value : value === undefined ? [] : [value]) params.append(key, v);
+  }
+  if (shouldAutoStartLogin(params, oidc)) {
+    redirect("/api/auth/oidc/start?silent=1");
+  }
   // The bundle's login copy (#892). This server component is the right place for
   // it: it already resolves runtime state the client card cannot see, and
   // /brand/meta is token-gated + identity-less precisely so the pre-auth shell

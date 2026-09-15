@@ -24,6 +24,11 @@ export const runtime = "nodejs";
  *
  * Disabled (no FLEET_OIDC_* config) or a broken discovery doc bounces back to
  * the password login with an error rather than trapping the user.
+ *
+ * `?silent=1` adds prompt=none (OIDC Core 3.1.2.1): the IdP signs the browser
+ * in only if it already has a session there and otherwise returns
+ * error=login_required to the callback, which shows the login page quietly.
+ * The login page uses this for FLEET_OIDC_AUTO_START.
  */
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const config = getOidcConfig();
@@ -54,6 +59,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   authUrl.searchParams.set("nonce", nonce);
   authUrl.searchParams.set("code_challenge", challenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
+  if (request.nextUrl.searchParams.get("silent") === "1") {
+    authUrl.searchParams.set("prompt", "none");
+  }
 
   const res = NextResponse.redirect(authUrl.toString(), { status: 303 });
   const secure = isSecureRequest(request);

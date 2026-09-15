@@ -16,6 +16,7 @@ import {
   OIDC_NONCE_COOKIE,
   OIDC_STATE_COOKIE,
   OIDC_VERIFIER_COOKIE,
+  SILENT_SSO_RESULT,
   validateIdToken,
 } from "@/app/lib/oidc";
 
@@ -51,7 +52,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   };
 
   const params = request.nextUrl.searchParams;
-  if (params.get("error")) {
+  const idpError = params.get("error");
+  if (idpError === "login_required" || idpError === "interaction_required") {
+    // A silent attempt (prompt=none, see /start?silent=1) found no usable
+    // central session. That is not a failure to report: show the login page
+    // with both options and no banner, and do not auto-start again from it.
+    const res = NextResponse.redirect(getRedirectUrl(request, `/login?${SILENT_SSO_RESULT}`), { status: 303 });
+    clearTempCookies(res, isSecureRequest(request));
+    return res;
+  }
+  if (idpError) {
     // The user declined consent, or the IdP rejected the request.
     return fail("oidc_denied");
   }
