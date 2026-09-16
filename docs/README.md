@@ -198,8 +198,9 @@ above fails otherwise.
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
-- [`CONFIG-RELOAD.md`](CONFIG-RELOAD.md) — Config hot-reload (#286)
+- [`COMPLETED-STEP-RECOVERY.md`](COMPLETED-STEP-RECOVERY.md) — Provider recovery after completed tool steps and preservation of verifier evidence.
 - [`CONDITIONAL-TASK-COMPLETION.md`](CONDITIONAL-TASK-COMPLETION.md) — Conditional scheduled tasks
+- [`CONFIG-RELOAD.md`](CONFIG-RELOAD.md) — Config hot-reload (#286)
 - [`CONNECTION-SHARING.md`](CONNECTION-SHARING.md) — Sharing a remote MCP connection
 - [`CONNECTOR-ONBOARDING.md`](CONNECTOR-ONBOARDING.md) — Connector-directory onboarding — guided setup, API keys, BYO OAuth clients
 - [`CONNECTOR-PREFS.md`](CONNECTOR-PREFS.md) — Unified connector enablement — availability, selection, binding

@@ -60,38 +60,48 @@ func decodeVerifierJSON(raw string) map[string]any {
 }
 
 func (p *verifierProjection) collect(value map[string]any, path string, depth int) {
-	if depth > verifierEvidenceDepth {
-		return
+	// Breadth-first keeps enclosing status/version fields ahead of deep profiles.
+	// Selection remains structural and independent of application field names.
+	type node struct {
+		value map[string]any
+		path  string
+		depth int
 	}
-	keys := make([]string, 0, len(value))
-	for key := range value {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if p.visits >= verifierEvidenceVisits || len(p.fields) >= verifierEvidenceFields {
-			return
-		}
-		p.visits++
-		if !verifierFieldKey.MatchString(key) || verifierPrivate.MatchString(key) {
+	queue := []node{{value, path, depth}}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current.depth > verifierEvidenceDepth {
 			continue
 		}
-		v := value[key]
-		switch nested := v.(type) {
-		case map[string]any:
-			p.collect(nested, path+key+".", depth+1)
-		case []any:
-			// MCP has a standard text-content wrapper. Other arrays are data
-			// payloads; they never become a second bulk channel to the verifier.
-			if key == "content" && len(nested) == 1 {
-				if block, ok := nested[0].(map[string]any); ok && block["type"] == "text" {
-					if text, ok := block["text"].(string); ok {
-						p.collect(decodeVerifierJSON(text), path+key+".", depth+1)
+		keys := make([]string, 0, len(current.value))
+		for key := range current.value {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if p.visits >= verifierEvidenceVisits || len(p.fields) >= verifierEvidenceFields {
+				return
+			}
+			p.visits++
+			if !verifierFieldKey.MatchString(key) || verifierPrivate.MatchString(key) {
+				continue
+			}
+			v := current.value[key]
+			switch nested := v.(type) {
+			case map[string]any:
+				queue = append(queue, node{nested, current.path + key + ".", current.depth + 1})
+			case []any:
+				if key == "content" && len(nested) == 1 {
+					if block, ok := nested[0].(map[string]any); ok && block["type"] == "text" {
+						if text, ok := block["text"].(string); ok {
+							queue = append(queue, node{decodeVerifierJSON(text), current.path + key + ".", current.depth + 1})
+						}
 					}
 				}
+			default:
+				p.add(current.path+key, v)
 			}
-		default:
-			p.add(path+key, v)
 		}
 	}
 }

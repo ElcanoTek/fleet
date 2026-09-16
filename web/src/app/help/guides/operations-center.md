@@ -244,6 +244,13 @@ retried, the record keeps each attempt; a picker in the log view switches betwee
 the latest transcript and superseded ones, so an earlier failure is never papered
 over by a later retry.
 
+A failed run may already have completed an external action. Check the tool
+results before rerunning it. Provider recovery can continue after a completed
+tool step while retaining its results; it stops if a tool began in the failed
+step and its outcome cannot safely be replayed. The completion verifier, when a
+fallback model is configured, checks repairs up to three times. Unresolved or
+unavailable verification does not count as success.
+
 **4 · Ask about it.** **Discuss in chat** opens a conversation seeded with the
 run's record, so you can ask questions in plain language: why a figure moved, why
 a section is empty, what a step did. Interrogating the run beats re-reading it.

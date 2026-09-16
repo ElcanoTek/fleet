@@ -567,27 +567,28 @@ func carryRoundMessages(result *fantasy.AgentResult) []fantasy.Message {
 	}
 	var out []fantasy.Message
 	for _, step := range result.Steps {
-		for _, msg := range step.Messages {
-			if msg.Role != fantasy.MessageRoleAssistant {
-				out = append(out, msg)
+		out = append(out, messagesForReplay(step.Messages)...)
+	}
+	return out
+}
+
+// Replay keeps tool evidence while dropping provider-specific reasoning blocks.
+// Copy content slices so a later reducer cannot mutate the original transcript.
+func messagesForReplay(messages []fantasy.Message) []fantasy.Message {
+	out := make([]fantasy.Message, 0, len(messages))
+	for _, msg := range messages {
+		parts := make([]fantasy.MessagePart, 0, len(msg.Content))
+		for _, part := range msg.Content {
+			if _, isReasoning := part.(fantasy.ReasoningPart); isReasoning && msg.Role == fantasy.MessageRoleAssistant {
 				continue
 			}
-			parts := make([]fantasy.MessagePart, 0, len(msg.Content))
-			for _, p := range msg.Content {
-				if _, isReasoning := p.(fantasy.ReasoningPart); isReasoning {
-					continue
-				}
-				parts = append(parts, p)
-			}
-			// An assistant message that was ONLY reasoning has nothing the
-			// next round can use; dropping it keeps the carried sequence
-			// provider-valid.
-			if len(parts) == 0 {
-				continue
-			}
-			msg.Content = parts
-			out = append(out, msg)
+			parts = append(parts, part)
 		}
+		if msg.Role == fantasy.MessageRoleAssistant && len(parts) == 0 {
+			continue
+		}
+		msg.Content = parts
+		out = append(out, msg)
 	}
 	return out
 }
@@ -653,6 +654,30 @@ type roundState struct {
 	// activeModelSlug is the model this round actually streams with (differs
 	// from engine.model after a fallback swap).
 	activeModelSlug string
+	// Captured before a provider step, after steering. Earlier tool steps are
+	// complete at this point; any new tool event invalidates this checkpoint.
+	recoveryMessages []fantasy.Message
+	recoveryMark     sinkMark
+	recoverySteps    int
+	priorSteps       int
+	systemPrefix     int
+}
+
+func (r *roundState) checkpointStep(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+	r.recoveryMessages = messagesForReplay(opts.Messages[r.systemPrefix:])
+	r.recoveryMark = r.sink.mark()
+	r.recoverySteps = opts.StepNumber
+	return ctx, fantasy.PrepareStepResult{}, nil
+}
+
+func (r *roundState) canResume(class streamErrorClass, attempt sinkMark) bool {
+	if r.recoverySteps == 0 || r.recoveryMark.toolEvents != r.sink.toolEventCount() ||
+		r.recoveryMark.failedToolResults != attempt.failedToolResults {
+		return false
+	}
+	// Failed tool results can represent a partially executed mutation (including
+	// contained panics). Keep the existing conservative suppression for those.
+	return class == streamErrorRetryExhausted || class == streamErrorStreamBlip || class == streamErrorContextTooLarge
 }
 
 func newRoundState(e *engine, orch *orchestrationState, maxTokens int64) *roundState {
@@ -750,6 +775,10 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	watchdog := newFirstChunkWatchdog(providerFirstChunkTimeout, cancelStream)
 	defer watchdog.stop()
 	markFirst := watchdog.markFirst
+	stepLimit := r.engine.maxIterations
+	if stepLimit > 0 {
+		stepLimit -= r.priorSteps
+	}
 	// Sentry breadcrumb (#193): the LLM request trail so a captured exception's
 	// event shows which model the agent was driving immediately before the
 	// crash. The prompt itself is NEVER attached — only the model slug. No-op
@@ -761,7 +790,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		Temperature:     &temp,
 		ProviderOptions: r.engine.providerOptions(modelSlug),
 		MaxRetries:      &maxRetries,
-		StopWhen:        stepStopConditions(r.engine.maxIterations),
+		StopWhen:        stepStopConditions(stepLimit),
 		// Fantasy's inner backoff-and-retry, surfaced two ways: turn.retry to
 		// the Observer (the web client's inline "retrying" badge; journal
 		// recovery resets accumulated text on it) and the engine's session-log
@@ -821,11 +850,20 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			return nil
 		},
 		PrepareStep: budgetGuardedStep(r.orch, chainPrepareStepFunctions(
+			func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+				// Fantasy prepends its system message on each Agent.Stream call.
+				// Strip only that added prefix when resuming, never caller history.
+				if opts.StepNumber == 0 && len(opts.Messages) == len(messages)+1 && opts.Messages[0].Role == fantasy.MessageRoleSystem {
+					r.systemPrefix = 1
+				}
+				return ctx, fantasy.PrepareStepResult{}, nil
+			},
 			// Steering (#785) runs before the reducers so an injected user
 			// message is budget-accounted and cache-marked like any other
 			// history — and never observed by a provider before its durable
 			// queued->injected flip landed. nil-safe (nil when no source).
 			steeringStep(r.engine.steerSource, &r.engine.steerState, sink),
+			r.checkpointStep,
 			// Budget wind-down (#990) appends its request-local wrap-up notice
 			// after steering (so a steer lands before it) and before the
 			// reducers + cache markers, which must see the final slice. The

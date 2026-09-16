@@ -102,6 +102,9 @@ const toolResultMaxStreamBytes = 4000
 type streamSink struct {
 	observer    Observer
 	attribution panicAttribution
+	// The durable tool transcript is written before the UI preview is truncated.
+	// Verifiers must never reconstruct evidence from a display fragment.
+	logSession *LogSession
 
 	mu sync.Mutex
 	// entries is the ordered accumulation of this run's reasoning / text /
@@ -117,7 +120,8 @@ type streamSink struct {
 	// whether a failed stream attempt may be re-driven: text/reasoning output is
 	// regenerable, an executed tool is not (re-driving the round could repeat
 	// its side effect). See streamRoundWithResilience.
-	toolEvents int
+	toolEvents        int
+	failedToolResults int
 }
 
 func newStreamSink(obs Observer, attribution ...panicAttribution) *streamSink {
@@ -208,6 +212,7 @@ func (s *streamSink) onReasoningEnd(id, content string) {
 
 // onToolCall forwards + records an assistant tool call.
 func (s *streamSink) onToolCall(id, name, input string) {
+	input = toolRedactor().Redact(input)
 	s.mu.Lock()
 	s.toolEvents++
 	s.entries = append(s.entries, RunEntry{
@@ -215,6 +220,9 @@ func (s *streamSink) onToolCall(id, name, input string) {
 		ToolCallID: id, ToolName: name, ToolInput: input,
 	})
 	s.mu.Unlock()
+	if s.logSession != nil {
+		s.logSession.AddToolCall(id, name, input)
+	}
 	s.emit("tool.call", map[string]any{evtFieldID: id, evtFieldName: name, evtFieldInput: input})
 }
 
@@ -229,11 +237,17 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	text = toolRedactor().Redact(text)
 	s.mu.Lock()
 	s.toolEvents++
+	if isErr {
+		s.failedToolResults++
+	}
 	s.entries = append(s.entries, RunEntry{
 		Role: roleTool, Type: "tool_result",
 		ToolCallID: id, ToolName: name, Text: text, IsErr: isErr,
 	})
 	s.mu.Unlock()
+	if s.logSession != nil {
+		s.logSession.AddToolResult(id, name, text, isErr)
+	}
 	s.emit("tool.result", map[string]any{
 		evtFieldID:    id,
 		evtFieldName:  name,
@@ -260,9 +274,10 @@ func (s *streamSink) toolEventCount() int {
 // its output would be appended AFTER the failed attempt's partial text,
 // duplicating it in both the persisted history and the final answer.
 type sinkMark struct {
-	entries    int
-	finalText  int
-	toolEvents int
+	entries           int
+	finalText         int
+	toolEvents        int
+	failedToolResults int
 }
 
 // mark snapshots the current accumulation point. Nil-safe (zero mark).
@@ -272,7 +287,7 @@ func (s *streamSink) mark() sinkMark {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return sinkMark{entries: len(s.entries), finalText: s.finalText.Len(), toolEvents: s.toolEvents}
+	return sinkMark{entries: len(s.entries), finalText: s.finalText.Len(), toolEvents: s.toolEvents, failedToolResults: s.failedToolResults}
 }
 
 // rollbackTo discards everything accumulated after the mark: partial entries,
@@ -298,6 +313,7 @@ func (s *streamSink) rollbackTo(m sinkMark) {
 		s.finalText.WriteString(kept)
 	}
 	s.toolEvents = m.toolEvents
+	s.failedToolResults = m.failedToolResults
 	clear(s.reasoningBufs)
 }
 

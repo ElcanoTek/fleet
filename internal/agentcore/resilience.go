@@ -163,14 +163,9 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 
 	var retryErr *fantasy.RetryError
 	var providerErr *fantasy.ProviderError
-	if errors.As(err, &retryErr) {
-		errors.As(err, &providerErr)
-		if providerErr != nil && providerErr.IsContextTooLarge() {
-			return streamErrorContextTooLarge, providerErr
-		}
-		return streamErrorRetryExhausted, providerErr
-	}
-	if errors.As(err, &providerErr) {
+	errors.As(err, &providerErr)
+	providerErr = normalizeStreamProviderError(providerErr)
+	if providerErr != nil {
 		if providerErr.IsContextTooLarge() {
 			return streamErrorContextTooLarge, providerErr
 		}
@@ -178,6 +173,9 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 			return streamErrorRetryExhausted, providerErr
 		}
 		return streamErrorFatal, providerErr
+	}
+	if errors.As(err, &retryErr) {
+		return streamErrorRetryExhausted, nil
 	}
 	if sse := parseSSEStreamError(err); sse != nil {
 		if sse.IsContextTooLarge() {
@@ -190,6 +188,11 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 	}
 	if h2 := parseHTTP2StreamError(err); h2 != nil {
 		return streamErrorStreamBlip, h2
+	}
+	// Older adapters exposed only this exact in-band provider failure. Bound
+	// recovery as an opaque stream failure; never assign an invented HTTP code.
+	if strings.TrimSpace(err.Error()) == "stream error: Provider returned error" {
+		return streamErrorStreamBlip, &fantasy.ProviderError{Title: "stream error", Message: "Provider returned error", Cause: err, TransientError: true}
 	}
 	return streamErrorFatal, nil
 }
@@ -496,6 +499,7 @@ func (e *engine) streamRoundWithResilience(
 	forceCompactedThisRound := false
 	streamBlipRetryUsed := false
 	var lastErr error
+	completedSteps := 0
 
 	// Runaway-compaction backstop (#598): when the last maxConsecutiveCompactions
 	// rounds EACH needed a force-compaction (with no compaction-free round in
@@ -532,6 +536,7 @@ func (e *engine) streamRoundWithResilience(
 		attemptMark := sink.mark()
 		rs := newRoundState(e, orch, maxTokens)
 		rs.sink = sink
+		rs.priorSteps = completedSteps
 		result, err := rs.stream(ctx, currentAgent, activeModel, messages)
 
 		if err == nil {
@@ -570,22 +575,18 @@ func (e *engine) streamRoundWithResilience(
 		lastErr = err
 
 		class, providerErr := classifyStreamError(err)
-		// Never repeat a tool side effect: once THIS attempt has executed a tool
-		// (a tool_call/tool_result became observable), neither the in-place retry
-		// nor a fallback swap can safely re-drive the round — the re-driven round
-		// restarts from its input messages, so the model could re-issue the
-		// executed calls and repeat their side effects. Text/reasoning-only
-		// output is regenerable: rollbackAttempt below discards the partial and
-		// the attempt is re-driven from scratch, so nothing is spliced across
-		// providers and nothing re-executes (ADR-0035; the previous any-semantic-
-		// event gate dead-lettered every long round whose provider hiccuped
-		// mid-answer, with the fallback model configured but never consulted).
-		// Context-too-large is gated too: it typically fires MID-round, right
-		// after a large tool result balloons the next request — exactly the
-		// committed-side-effect case. The compact-and-re-drive below restarts
-		// the round from its input messages, so the model could re-issue the
-		// executed call. (ADR-0035's "no partial exists to roll back" holds
-		// only for rounds with no tool events.)
+		e.logProviderFailure(activeModel, class, providerErr)
+		// Resume from a completed step, not from the round's original input.
+		// A call/result observed after the checkpoint makes the failed step
+		// unsafe to replay, even if a matching result happened to arrive.
+		if rs.canResume(class, attemptMark) {
+			messages = rs.recoveryMessages
+			attemptMark = rs.recoveryMark
+			completedSteps += rs.recoverySteps
+		}
+		// Never replay a tool step lacking a safe completed-step checkpoint.
+		// This also gates context compaction: restarting from older input would
+		// lose the completed results and invite duplicate writes (ADR-0065).
 		if sink.toolEventCount() > attemptMark.toolEvents &&
 			(class == streamErrorRetryExhausted || class == streamErrorStreamBlip ||
 				class == streamErrorContextTooLarge) {
@@ -680,8 +681,27 @@ func (e *engine) streamRoundWithResilience(
 			rollbackAttempt()
 			continue
 		case streamErrorFatal:
-			return streamRoundOutcome{}, fmt.Errorf("fantasy agent error: %w", err)
+			return streamRoundOutcome{}, fatalProviderError(err, providerErr)
 		}
 	}
 	return streamRoundOutcome{}, fmt.Errorf("fantasy agent error after %d recovery attempts: %w", recoveryLimit, lastErr)
+}
+
+func fatalProviderError(err error, providerErr *fantasy.ProviderError) error {
+	if providerErr != nil {
+		return fmt.Errorf("fantasy agent error (provider_status=%d, retryable=false): %w", providerErr.StatusCode, err)
+	}
+	return fmt.Errorf("fantasy agent error: %w", err)
+}
+
+func (e *engine) logProviderFailure(model fantasy.LanguageModel, class streamErrorClass, providerErr *fantasy.ProviderError) {
+	if e == nil || e.logSession == nil || providerErr == nil {
+		return
+	}
+	// Keep classification in exported logs even when recovery is suppressed.
+	// Raw response bodies/headers can contain credentials and are never emitted.
+	note := fmt.Sprintf("[provider-failure] model=%s status=%d class=%s msg=%q", model.Model(), providerErr.StatusCode, class,
+		summarizeForLog(toolRedactor().Redact(providerErr.Message), 300))
+	msgType := messageTypeSystemRetry
+	e.logSession.AddMessageWithMetadata(roleUser, note, nil, nil, &msgType, nil, nil, "")
 }
