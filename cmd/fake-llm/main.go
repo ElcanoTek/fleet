@@ -61,6 +61,10 @@ func registerLiveScenarios(s *fakellm.Server) {
 	//   turn 0 → run_python (real sandbox compute),
 	//   turn 1 → confirm_audit (clears the enforcement gate),
 	//   turn 2 → final report text.
+	// The independent completion verifier uses Generate (non-streaming), so
+	// script its JSON verdict separately. Invalid verdicts now fail closed;
+	// replaying the worker script previously hid this gap in the live fixture.
+	completionVerdict := fakellm.TextStep(`{"missing_actions":[],"reasoning":"Scripted completion verdict for the live fixture."}`)
 	confirmAuditArgs := `{` +
 		`"success":true,` +
 		`"reasoning":"Computed and verified the scheduled result in the sandbox.",` +
@@ -72,7 +76,7 @@ func registerLiveScenarios(s *fakellm.Server) {
 		`"attachments_checked":[],` +
 		`"remaining_risks":[]` +
 		`}`
-	s.Scenario("sched-task", fakellm.Scenario{Steps: []fakellm.Step{
+	s.Scenario("sched-task", fakellm.Scenario{NonStreaming: &completionVerdict, Steps: []fakellm.Step{
 		fakellm.PythonStep("call_sched_py_1", "print('SCHED_TASK_OK', sum(range(10)))"),
 		fakellm.ToolStep(fakellm.ToolCall{ID: "call_sched_audit_1", Name: "confirm_audit", Arguments: confirmAuditArgs}),
 		fakellm.TextStep("Scheduled task done: SCHED_TASK_OK 45."),
@@ -100,7 +104,7 @@ func registerLiveScenarios(s *fakellm.Server) {
 		`"attachments_checked":[],` +
 		`"remaining_risks":[]` +
 		`}`
-	s.Scenario("tck-complete", fakellm.Scenario{Steps: []fakellm.Step{
+	s.Scenario("tck-complete", fakellm.Scenario{NonStreaming: &completionVerdict, Steps: []fakellm.Step{
 		fakellm.ToolStep(fakellm.ToolCall{ID: "call_tck_audit", Name: "confirm_audit", Arguments: tckAuditArgs}),
 		fakellm.TextStep("TCK task complete."),
 	}})
@@ -116,7 +120,7 @@ func registerLiveScenarios(s *fakellm.Server) {
 	// static (fakellm has no templating), which is why the real remote task
 	// id from turn 1 is not polled here — the wait/status happy paths are
 	// covered by internal/mcp's tests against a fake peer.
-	s.Scenario("a2a-delegate", fakellm.Scenario{Steps: []fakellm.Step{
+	s.Scenario("a2a-delegate", fakellm.Scenario{NonStreaming: &completionVerdict, Steps: []fakellm.Step{
 		fakellm.ToolStep(fakellm.ToolCall{ID: "call_a2a_send", Name: "mcp__a2a_self_send",
 			Arguments: `{"message":"Loopback delegation probe. [[scenario:a2a-delegate]]"}`}),
 		fakellm.ToolStep(fakellm.ToolCall{ID: "call_a2a_status", Name: "mcp__a2a_self_status",
@@ -134,11 +138,11 @@ func registerLiveScenarios(s *fakellm.Server) {
 	// variants really produce output.txt in the sandbox and publish it — the
 	// empty final text keeps the file as artifacts[0], which is the slot the
 	// test asserts on.
-	s.Scenario("tck-artifact-text", fakellm.Scenario{Steps: []fakellm.Step{
+	s.Scenario("tck-artifact-text", fakellm.Scenario{NonStreaming: &completionVerdict, Steps: []fakellm.Step{
 		fakellm.ToolStep(fakellm.ToolCall{ID: "call_tck_at_audit", Name: "confirm_audit", Arguments: tckAuditArgs}),
 		fakellm.TextStep("Generated text content"),
 	}})
-	s.Scenario("tck-artifact-file", fakellm.Scenario{Steps: []fakellm.Step{
+	s.Scenario("tck-artifact-file", fakellm.Scenario{NonStreaming: &completionVerdict, Steps: []fakellm.Step{
 		// One turn for create+publish (tools run in order within a turn):
 		// the TCK inspects the BLOCKING send's response, so the run must
 		// finish inside the unary wait — every saved round trip counts.
