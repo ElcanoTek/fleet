@@ -137,6 +137,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   [`docs/MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md) (the #1006 status
   table, the per-entry catalog audit and the #986 inventory of every
   built-in entry)
+- **What checks the built-in MCP directory automatically** (the nightly
+  dead-link lint and the credential-less handshake against every open entry,
+  and how to arm an api_key fixture):
+  [`docs/MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md)
 - **Bundle-managed SES/S3 email-report infrastructure:** use the external
   canonical [new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md);
   keep client-specific inventory in the external client bundle.
@@ -245,6 +249,7 @@ above fails otherwise.
 - [`MAINTENANCE.md`](MAINTENANCE.md) — Reclamation, disk backpressure, and stuck-task backstops
 - [`MCP-BROKER-SCOPES.md`](MCP-BROKER-SCOPES.md) — MCP broker scoped sessions
 - [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
+- [`MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md) — Nightly MCP catalog smoke — dead links and live handshakes for the built-in directory
 - [`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md) — Hosted MCP connector status — the #1006 OAuth pack and the catalog audit
 - [`MCP-CATALOG.md`](MCP-CATALOG.md) — The MCP connector directory — trust classes, built-in catalog, provenance
 - [`MCP-OAUTH-DISCOVERY.md`](MCP-OAUTH-DISCOVERY.md) — MCP OAuth discovery — the chain, proxied issuers, tenant scoping, registration, refresh scopes

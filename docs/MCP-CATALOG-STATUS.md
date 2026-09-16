@@ -106,7 +106,7 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | F15 | 19 api_key entries also publish OAuth protected-resource metadata on the 401 (`resource_metadata` pointer): Braintrust, Brevo, Buffer, Censys, Coda, fal.ai, Fireflies, Instantly, Kong Konnect, Mollie, Paddle, PagerDuty, Parallel, Raygun, Razorpay, Tavily, Upsun, Vultr, Whop | observation — each could become a one-click `auth: oauth` entry after a live add; not changed |
 | C10 | Composio's documented tenant URL (`…/v3/mcp/{SERVER_ID}?user_id={USER_ID}`) answers 307 to `…/v3/mcp/{SERVER_ID}/mcp?user_id=…` for a made-up id; fleet refuses redirects, so Connect would fail at discovery if a real id redirects the same way | open — verify with a real Composio server id before changing the URL |
 | C11 | Synter Ads (community, hidden by default) lists `https://syntermedia.ai/mcp`, which serves the vendor's HTML page to an MCP initialize | open — the only **dead-suspect** entry; hide or fix once the vendor documents a real endpoint |
-| V4 | `docs_url` answers a non-2xx to a plain GET from the audit box for Coda (403) and Leonardo.Ai (500); ZoomInfo's is a real 404 (already noted) | Coda/Leonardo look like bot walls, re-check from a browser; ZoomInfo needs a new link |
+| V4 | `docs_url` answers a non-2xx to a plain GET from the audit box for Coda (403) and Leonardo.Ai (500); ZoomInfo's was a real 404 | Coda/Leonardo look like bot walls, re-check from a browser; ZoomInfo's link replaced with the vendor's current page (the docs moved to its GTM AI rebrand, `docs.gtm.ai`) alongside the nightly smoke |
 
 ### The remaining 57 entries (2026-09-16)
 
@@ -458,4 +458,4 @@ not probeable 31 · not probeable from the audit box 1.
 | zenhub | api_key | official | productivity |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (21 tools listed; the key is checked only at tools/call) (F14) |
 | zerodha-kite | open | official | finance |  | yes | 2026-09-14 probe | open ✓ (initialize 200) | `login` tool session lives only within the calling turn; does not persist across turns and cannot authenticate in scheduled runs |
 | zoom | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
-| zoominfo | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); docs_url 404 |
+| zoominfo | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); docs_url was 404 — replaced with the vendor's current page on `docs.gtm.ai` (ZoomInfo's GTM AI rebrand) |
