@@ -497,6 +497,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// events to the Observer and accumulates the run history. Shared across
 	// rounds so a multi-round scheduled run builds one coherent transcript.
 	sink := newStreamSink(deps.Observer, panicAttribution)
+	sink.logSession = logSession
 	// Auxiliary model-call metering (#1118). Two seams, both capability
 	// closures over usageOrch (the state itself never escapes Run), so every
 	// model call an aux path makes on behalf of this run lands in the SAME

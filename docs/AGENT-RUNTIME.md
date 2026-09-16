@@ -755,8 +755,8 @@ the round continues instead of aborting the stream. Logs, Sentry, and
 `panic_events` receive only an opaque incident id, a value-free panic class,
 and non-content tool/run attribution; the recovered value and stack are
 discarded before telemetry. The model sees only the incident id and a
-**possibly executed** marker, and ADR-0035 blocks in-round provider re-drive
-once a tool ran.
+**possibly executed** marker. Failed tool results continue to suppress in-round
+provider re-drive under ADR-0035/ADR-0065, even after the step finished.
 
 Invocation-local phase state attributes policy/output failures and marks a
 `RecordToolResult` attempt before calling it. Before-call, execution, and output
@@ -981,8 +981,11 @@ Scheduled runs layer an extra host-side LLM re-check on top of the shared
 audit/finish enforcement. When the scheduled policy clears a run, the
 `runEndOfRunVerifier` runs on fleet's fallback model (host-side creds — the
 verifier's model call is just another host LLM call) and returns any missing
-required actions, which the loop turns into a final enforcement round before it
-is allowed to finish. A verifier error fails **open** (allow finish). So core
+required actions, which the loop turns into a repair round before it
+is allowed to finish. Repairs are checked again, up to three verifier calls in
+total. A verifier error keeps completion blocked; exhausting checks requests an
+explicit abort rather than allowing success. Tool evidence is read from complete
+redacted records, before UI preview truncation. So core
 governance — per-tool policy, audit, finish enforcement, MCP credential
 brokering, note staging, usage/cost, **and the end-of-run verifier** — applies to
 every scheduled run. An explicit terminal audit abort skips the extra model

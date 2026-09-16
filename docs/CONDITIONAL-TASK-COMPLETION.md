@@ -24,9 +24,17 @@ The evidence projection is structural rather than an application field list:
   256 visited entries and four nested object levels. Sorting makes selection
   deterministic. Unsupported, malformed or omitted evidence remains unknown.
 
-The verifier remains a model-based check with its existing bounded invocation,
-metering and fail-open error behavior, not a deterministic proof of a business
-workflow. Task authors and external bundles own those workflow contracts.
+The core records complete, redacted tool results before making the 4,000-byte
+UI preview. The verifier reads that transcript, not the preview. Its projection
+visits enclosing scalar fields before deeper profiles so a large nested profile
+does not crowd out the enclosing outcome/version fields.
+
+The verifier remains a model-based check, not deterministic proof of a business
+workflow. It runs at most three times: the initial check and two repair reviews.
+Missing actions or a malformed/failed verifier response keep completion blocked;
+exhaustion requests an explicit abort and never grants success. The existing
+enforcement round cap stops a model that refuses to abort. Each call is metered
+in auxiliary usage. Task authors and bundles still own workflow contracts.
 
 An explicit `confirm_audit(success=true, critical_actions=[])` now records
 completion without inventing a future mutation. It activates the
@@ -68,7 +76,6 @@ protocols remain in external config bundles; Fleet does not import or depend on
 a producer application. This does not edit existing tasks or add a scheduling
 UI/import API. Regenerate producer prompts to gain the prerequisite check.
 Existing recurrence, retry and sandbox permissions are unchanged.
-Provider errors remain governed by the existing typed status/SSE retry classifier;
-a generic provider-error string without status is insufficient evidence to retry
-an external mutation. Provider adapter diagnostics and customer source-grain
-migrations are separate changes, not silently bundled into this fix.
+Provider recovery is described in [completed-step recovery](COMPLETED-STEP-RECOVERY.md).
+It never blindly retries an external mutation. Customer source-grain migrations
+remain outside the generic engine.

@@ -137,6 +137,19 @@ describe("GET /api/auth/oidc/callback", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it("returns quietly to the login card when a silent attempt finds no central session", async () => {
+    stubFetch(idToken());
+    for (const error of ["login_required", "interaction_required"]) {
+      const res = await GET(callbackReq({ error, state: "the-state" }, GOOD_COOKIES));
+      expect(res.status).toBe(303);
+      // No `e=` banner code: the card renders with both options and, because
+      // of `sso=none`, does not auto-start another silent attempt.
+      expect(res.headers.get("location")).toBe("https://chat.example.com/login?sso=none");
+      expect(res.cookies.get("fleet_oidc_state")?.maxAge).toBe(0);
+      expect(res.cookies.get("elcano_session")).toBeUndefined();
+    }
+  });
+
   it("surfaces a provider error param", async () => {
     stubFetch(idToken());
     const res = await GET(callbackReq({ error: "access_denied", state: "the-state" }, GOOD_COOKIES));

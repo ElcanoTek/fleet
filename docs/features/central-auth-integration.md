@@ -16,13 +16,39 @@ FLEET_OIDC_ISSUER=https://auth.example.com
 FLEET_OIDC_CLIENT_ID=fleet-client-id
 FLEET_OIDC_CLIENT_SECRET=<one-time secret from auth app create>
 FLEET_OIDC_SCOPES=openid email
-AUTH_SIGNING_PUBKEY=<Auth Ed25519 public key>
 ```
 
-Fleet also reads Auth's published `/jwks.json` (cached ten minutes, refreshed
-once when a logout token names an unknown `kid`), so an Auth signing-key
-rotation needs no Fleet env edit. Keep one static key as bootstrap and
-offline fallback.
+Do **not** set `AUTH_SIGNING_PUBKEY` on a Fleet that signs in through a
+password-mode Auth. That variable is the switch for the legacy magic-link
+path above: the login page shows "Use Elcano email" whenever it is set, and
+a password-mode Auth never mints the shared `elcano_auth` cookie, so that
+button dead-ends. Fleet verifies Auth's signed back-channel logout tokens
+from Auth's published `/jwks.json` (cached ten minutes, refreshed once when a
+logout token names an unknown `kid`), so a signing-key rotation needs no
+Fleet env edit and no static key is required. The trade-off is that Fleet
+must be able to reach the Auth host when a logout arrives; Auth retries
+failed deliveries for seven days. Set `AUTH_SIGNING_PUBKEY` only where the
+legacy magic-link cookie is actually in use; it then also serves as an
+offline fallback for logout verification.
+
+With `FLEET_OIDC_AUTO_START=1`, an anonymous visit to `/login` first sends the
+browser to Auth with `prompt=none`. A browser that already holds an Auth
+session comes back with a code and lands in Fleet without a click; one that
+does not is returned with `error=login_required` and Fleet shows its normal
+login card, SSO button and password form both present, with no error banner.
+`/login?manual=1` always shows the card, and a page carrying `?e=` (a login
+error) never auto-starts, so the local admin password stays one URL away when
+Auth is unreachable. Auth supports `prompt=none` from `1521760`+; an older Auth
+ignores it and shows its own login form instead.
+
+Logging out of Fleet ends the central session too. `POST /api/auth/logout`
+clears Fleet's cookies as before and, when the session was minted through
+central OIDC, sends the browser to `<FLEET_OIDC_ISSUER>/logout?client_id=…`
+(Auth's RP-initiated logout). Auth revokes every central session of the
+account, fans a back-channel logout out to every registered application, and
+lands on its own login page. Without that step the very next visit would sign
+the user back in silently. Password-sourced Fleet sessions keep landing on
+`/login`.
 
 Register the exact callback and signed logout endpoint on Auth:
 

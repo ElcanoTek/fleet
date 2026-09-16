@@ -2,6 +2,11 @@
 
 Status: accepted (supersedes the suppression clause of ADR-0033)
 
+The round-wide suppression rule below is narrowed by
+[ADR-0065](0065-completed-step-stream-recovery.md): completed provider steps may
+be retained as a recovery checkpoint; tools begun in the failing step still
+suppress recovery.
+
 ## Context
 
 ADR-0033 suppressed all in-run recovery — the in-place stream-blip retry that

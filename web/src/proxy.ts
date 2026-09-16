@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getRedirectUrl, getSessionFromRequest } from "@/app/lib/auth";
+import { getRedirectUrl, getSessionFromRequest, refreshSessionCookie } from "@/app/lib/auth";
 import { BUILD_ID_HEADER, currentBuildId } from "@/app/lib/buildId";
 
 // ONE gate for the unified frontend. It protects BOTH views — /chat/* and
@@ -163,7 +163,14 @@ export async function proxy(request: NextRequest) {
     return decorate(NextResponse.redirect(getRedirectUrl(request, "/login")), pathname);
   }
 
-  return decorate(NextResponse.next(), pathname);
+  const res = decorate(NextResponse.next(), pathname);
+  // Activity keeps an HMAC session alive: re-mint the cookie with a later idle
+  // deadline when the last mint is over a minute old (ADR-0064). Bearer-only
+  // and elcano_auth requests have nothing Fleet can refresh.
+  if (session) {
+    await refreshSessionCookie(request, res, session);
+  }
+  return res;
 }
 
 export const config = {

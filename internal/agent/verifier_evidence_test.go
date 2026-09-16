@@ -82,6 +82,18 @@ func TestVerifierEvidenceCapsAndInvalidInput(t *testing.T) {
 	}
 }
 
+func TestVerifierEvidenceKeepsEnvelopeBeforeDeepProfile(t *testing.T) {
+	profile := map[string]any{}
+	for i := 0; i < 80; i++ {
+		profile[fmt.Sprintf("metric_%03d", i)] = i
+	}
+	raw, _ := json.Marshal(map[string]any{"a_profile": map[string]any{"totals": profile}, "revision": 91, "state": "live", "envelope": map[string]any{"unchanged": true}})
+	got := verifierEvidence(string(raw))
+	if got["revision"] != json.Number("91") || got["state"] != "live" || got["envelope.unchanged"] != true {
+		t.Fatalf("deep profile displaced enclosing evidence: %#v", got)
+	}
+}
+
 func TestBuildToolExecSummarySeparatesIntentFromOutcome(t *testing.T) {
 	id := "check"
 	session := NewLogSession()

@@ -381,8 +381,8 @@ func (s scheduledInput) Prompt(_ context.Context) (string, []fantasy.Message, st
 }
 
 // scheduledObserver writes run events into the JSON session log. Text
-// deltas accumulate into the assistant message at round end; tool calls/results
-// and enforcement nudges are appended as structured LogMessages.
+// deltas accumulate into the assistant message at round end. The core writes
+// complete tool records directly; this observer only sees their UI previews.
 type scheduledObserver struct {
 	session *LogSession
 }
@@ -400,21 +400,6 @@ func (o *scheduledObserver) Observe(eventType string, payload map[string]any) {
 	case "text":
 		if msg, ok := payload["text"].(string); ok && msg != "" {
 			o.session.AddMessage(roleAssistant, msg, nil, nil)
-		}
-	case "tool.call":
-		id, _ := payload["id"].(string)
-		name, _ := payload["name"].(string)
-		input, _ := payload["input"].(string)
-		if id != "" && name != "" {
-			o.session.AddToolCall(id, name, input)
-		}
-	case "tool.result":
-		id, _ := payload["id"].(string)
-		name, _ := payload["name"].(string)
-		text, _ := payload["text"].(string)
-		isErr, _ := payload["is_err"].(bool)
-		if id != "" {
-			o.session.AddToolResult(id, name, text, isErr)
 		}
 	}
 }
@@ -472,22 +457,16 @@ func (a *Agent) runObserver(ctx context.Context) agentcore.Observer {
 	return composeObserver(ctx, base)
 }
 
-// scheduledPolicy layers two host-side finish gates onto agentcore.ScheduledPolicy,
-// in order: the end-of-run verifier, then the "phone a friend" super-LLM review
-// (part of #175). agentcore's audit/finish enforcement gates finishing first;
-// once those clear, the verifier runs ONCE and any missing deliverables it
-// reports are injected as one more enforcement round; once THAT clears, the
-// phone-a-friend review (when enabled) runs ONCE and any material issues it
-// reports are injected as one more enforcement round. Each gate flips a "done"
-// flag after running so it never re-gates — the loop always terminates. Both are
-// the same shape: a one-time host-side LLM re-check feeding back through the SAME
-// CanFinish enforcement-round channel, so no second governance path is created.
+// scheduledPolicy layers a bounded completion verifier and optional one-time
+// quality review onto the shared audit/finish enforcement. Failed verification
+// permits repair rounds but never grants completion merely by exhausting checks.
 type scheduledPolicy struct {
-	inner    *agentcore.ScheduledPolicy
-	agent    *Agent
-	task     string
-	verified bool
-	reviewed bool
+	inner                *agentcore.ScheduledPolicy
+	agent                *Agent
+	task                 string
+	verified             bool
+	verificationAttempts int
+	reviewed             bool
 	// runCtx is the run's context, captured at build time so the end-of-run
 	// verifier's and phone-a-friend reviewer's model calls honor the run's
 	// deadline/cancellation (CanFinish itself takes no ctx). Falls back to
@@ -504,8 +483,8 @@ func (p *scheduledPolicy) RecordToolResult(toolName, rawInput, resultText string
 }
 
 // CanFinish first defers to the audit/finish enforcement. When that clears, it
-// runs the end-of-run verifier once (missing actions become a final enforcement
-// round) and then the phone-a-friend review once (material issues become a final
+// runs the end-of-run verifier until a clean verdict or the bounded review cap
+// (missing actions become repair rounds) and then the phone-a-friend review once (material issues become a final
 // enforcement round). Each gate requires its model — the verifier the fallback
 // model, the review the reviewer model — and is skipped when its model is absent;
 // the review gate is additionally skipped unless phoneAFriendEnabled.
@@ -523,17 +502,22 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 
 	// Gate 1: end-of-run verifier (completeness re-check).
 	if !p.verified && p.agent != nil && p.agent.fallbackModel != nil {
-		p.verified = true
+		if p.verificationAttempts >= maxCompletionVerifications {
+			return false, []string{"Completion verification remains unresolved after the bounded repair attempts. Do not report success. Call confirm_audit(success=false, user_visible_summary=...) with the unresolved findings to abort explicitly."}
+		}
+		p.verificationAttempts++
 		records := buildToolExecSummary(p.agent.logSession)
 		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, records)
 		if err != nil {
-			log.Printf("verifier skipped: %v", err)
+			log.Printf("verifier failed: %v", err)
+			return false, []string{"Completion verification could not produce a valid verdict. A successful audit alone does not clear this check. Finish only after verification succeeds, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly."}
 		} else if len(missing) > 0 {
 			return false, []string{fmt.Sprintf(
 				"End-of-run verification found unfinished required actions: %v. "+
 					"Complete each one now, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
 				missing)}
 		}
+		p.verified = true
 	}
 
 	// Gate 2: phone-a-friend super-LLM review (quality re-check, part of #175).

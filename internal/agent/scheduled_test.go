@@ -247,7 +247,7 @@ func TestExecute_CancelledRunIsAnError(t *testing.T) {
 	}
 }
 
-func TestScheduledObserverPersistsToolCallAndErrorResult(t *testing.T) {
+func TestScheduledObserverDoesNotPersistToolPreviews(t *testing.T) {
 	session := NewLogSession()
 	observer := &scheduledObserver{session: session}
 
@@ -259,15 +259,8 @@ func TestScheduledObserverPersistsToolCallAndErrorResult(t *testing.T) {
 	})
 
 	msgs := session.SnapshotMessages()
-	if len(msgs) != 2 {
-		t.Fatalf("persisted messages = %d, want call + result", len(msgs))
-	}
-	if len(msgs[0].ToolCalls) != 1 || msgs[0].ToolCalls[0].Name != "tool_call" {
-		t.Fatalf("tool call not preserved: %+v", msgs[0])
-	}
-	if msgs[1].Role != roleTool || msgs[1].ToolCallID == nil || *msgs[1].ToolCallID != "call-1" ||
-		msgs[1].ToolName != "tool_call" || !msgs[1].IsError {
-		t.Fatalf("tool error result not preserved: %+v", msgs[1])
+	if len(msgs) != 0 {
+		t.Fatalf("UI previews duplicated the core transcript: %+v", msgs)
 	}
 }
 

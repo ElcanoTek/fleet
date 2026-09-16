@@ -12,7 +12,21 @@ import type { NextRequest } from "next/server";
 // Either valid cookie is a session; the membership check is enforced
 // downstream by chat-server (403 not_a_member) for elcano_auth users.
 const sessionCookieName = "elcano_session";
-export const sessionMaxAgeSeconds = 60 * 60 * 24 * 14;
+// Session lifetimes (ADR-0064). The Fleet session is an APPLICATION session in
+// the Elcano two-layer model: while the user's central Auth session (30 days)
+// is live, an expired Fleet session costs them only a redirect through the
+// OIDC handoff, so these limits bound a stolen cookie and force a daily
+// re-check of the account rather than deciding how often people log in.
+// One day absolute, twelve hours idle is the convention for every Elcano
+// application session (Explorer and Lens use the same numbers).
+export const sessionAbsoluteSeconds = 60 * 60 * 24;
+export const sessionIdleSeconds = 60 * 60 * 12;
+// A request re-mints the cookie (pushing the idle deadline out) only when the
+// previous mint is more than this old, so a page's burst of requests costs one
+// Set-Cookie instead of one per request. The idle limit therefore behaves as
+// "twelve hours minus at most one minute", never longer. One minute is the
+// Elcano convention; keep it a constant, not a setting.
+export const sessionTouchSeconds = 60;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
@@ -35,11 +49,19 @@ export type Session = {
   epoch?: string;
   issuer?: string;
   subject?: string;
+  // idle is the HMAC cookie's idle deadline (unix seconds); refreshSessionCookie
+  // pushes it out on activity. Absent for elcano sessions, which Fleet cannot
+  // re-mint.
+  idle?: number;
 };
 
 type SessionPayload = {
   email: string;
+  // exp is the absolute deadline: fixed at mint, never extended by activity.
   exp: number;
+  // idle is the idle deadline: min(now + sessionIdleSeconds, exp), moved
+  // forward by refreshSessionCookie while the user stays active.
+  idle: number;
   epoch: string;
   source?: "password" | "oidc";
   issuer?: string;
@@ -91,18 +113,28 @@ async function signPayload(payload: string) {
   return bytesToBase64Url(new Uint8Array(signature));
 }
 
+async function signSessionPayload(payload: SessionPayload) {
+  const encodedPayload = encodePayload(JSON.stringify(payload));
+  const signature = await signPayload(encodedPayload);
+  return `${encodedPayload}.${signature}`;
+}
+
+// freshDeadlines returns the exp/idle pair for a session minted now. The idle
+// deadline never passes the absolute one.
+function freshDeadlines(nowSeconds: number) {
+  const exp = nowSeconds + sessionAbsoluteSeconds;
+  return { exp, idle: Math.min(nowSeconds + sessionIdleSeconds, exp) };
+}
+
 // createSessionToken mints the HMAC cookie. `epoch` is the account's current
 // chat-server session epoch (fetchSessionEpoch) and is mandatory: a cookie
 // without it is refused by verifySessionToken below, so no mint path may skip it.
 export async function createSessionToken(email: string, epoch: string) {
-  const payload = JSON.stringify({
+  return signSessionPayload({
     email: email.toLowerCase(),
-    exp: Math.floor(Date.now() / 1000) + sessionMaxAgeSeconds,
+    ...freshDeadlines(Math.floor(Date.now() / 1000)),
     epoch,
-  } satisfies SessionPayload);
-  const encodedPayload = encodePayload(payload);
-  const signature = await signPayload(encodedPayload);
-  return `${encodedPayload}.${signature}`;
+  });
 }
 
 export async function createOidcSessionToken(
@@ -111,17 +143,57 @@ export async function createOidcSessionToken(
   issuer: string,
   subject: string,
 ) {
-  const payload = JSON.stringify({
+  return signSessionPayload({
     email: email.toLowerCase(),
-    exp: Math.floor(Date.now() / 1000) + sessionMaxAgeSeconds,
+    ...freshDeadlines(Math.floor(Date.now() / 1000)),
     epoch,
     source: "oidc",
     issuer,
     subject,
-  } satisfies SessionPayload);
-  const encodedPayload = encodePayload(payload);
-  const signature = await signPayload(encodedPayload);
-  return `${encodedPayload}.${signature}`;
+  });
+}
+
+// refreshSessionCookie implements the idle limit for the HMAC cookie. A
+// stateless cookie has no server-side last_seen_at to touch, so "activity"
+// is recorded by re-minting the cookie with a later idle deadline. It is
+// called by the request proxy on every authenticated pass-through and does
+// nothing unless the session is an HMAC one whose idle deadline can move by
+// at least sessionTouchSeconds; the absolute deadline is copied, never
+// extended. Returns the new token when a cookie was set, for tests.
+export async function refreshSessionCookie(
+  request: NextRequest,
+  response: NextResponse,
+  session: Session,
+): Promise<string | null> {
+  if (session.source === "elcano" || session.idle === undefined || !session.epoch) {
+    return null;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const idle = Math.min(now + sessionIdleSeconds, session.exp);
+  if (idle - session.idle < sessionTouchSeconds) {
+    return null;
+  }
+  const token = await signSessionPayload({
+    email: session.email,
+    exp: session.exp,
+    idle,
+    epoch: session.epoch,
+    ...(session.source === "oidc"
+      ? { source: "oidc" as const, issuer: session.issuer, subject: session.subject }
+      : {}),
+  });
+  response.cookies.set({
+    name: sessionCookieName,
+    value: token,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isSecureRequest(request),
+    // The browser drops the cookie at the absolute deadline even if the idle
+    // deadline inside it is later; the server enforces both regardless.
+    maxAge: session.exp - now,
+    path: "/",
+  });
+  return token;
 }
 
 export async function verifySessionToken(token: string | undefined | null) {
@@ -148,7 +220,16 @@ export async function verifySessionToken(token: string | undefined | null) {
     }
 
     const payload = JSON.parse(decodePayload(encodedPayload)) as SessionPayload;
-    if (!payload.email || payload.exp * 1000 < Date.now()) {
+    const now = Date.now();
+    if (!payload.email || typeof payload.exp !== "number" || payload.exp * 1000 < now) {
+      return null;
+    }
+    // No idle claim means the cookie predates the idle limit (ADR-0064) and was
+    // signed for fourteen days flat. It is not grandfathered: honouring it would
+    // keep every pre-deploy cookie alive for the rest of those fourteen days.
+    // Users with a live central Auth session are signed back in by the OIDC
+    // handoff without a prompt; password users log in once more.
+    if (typeof payload.idle !== "number" || payload.idle * 1000 < now) {
       return null;
     }
     // No epoch claim means the cookie predates per-user session revocation, and
@@ -306,6 +387,7 @@ async function resolveSession(
       source: hmac.source === "oidc" ? "oidc" : "password",
       issuer: hmac.issuer,
       subject: hmac.subject,
+      idle: hmac.idle,
     };
   }
 

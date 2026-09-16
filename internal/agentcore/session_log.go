@@ -11,9 +11,10 @@ import (
 // Session log (lifted from cutlass session_log.go).
 //
 // The structured JSON session log is the scheduled mode's "captain's-log"
-// observer substrate (Observer.Observe writes through it) and the accumulator
+// transcript substrate (the core records full tool results; observers add text)
+// and the accumulator
 // the resilience/orchestration layers report token + cost usage into. The chat
-// (interactive) Observer streams SSE instead and uses only the usage counters.
+// (interactive) Observer streams SSE; the core also retains its tool records.
 // The full file-write / truncation machinery is a P3 Observer concern; what
 // lives here is the in-memory model + the redaction helper the parity tests and
 // the retry logger exercise.

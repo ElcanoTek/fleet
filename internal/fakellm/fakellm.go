@@ -100,6 +100,10 @@ type Step struct {
 // Scenario is an ordered list of steps, one per model turn.
 type Scenario struct {
 	Steps []Step
+	// NonStreaming optionally scripts auxiliary Generate calls separately from
+	// the streaming worker conversation. Reviewers receive a fresh transcript
+	// carrying the same scenario marker, but must not restart its tool loop.
+	NonStreaming *Step
 }
 
 // scenarioMarker matches "[[scenario:NAME]]" in a prompt. NAME is any run of
@@ -275,6 +279,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	turn := assistantTurns(req.Messages)
 	step := stepForTurn(sc, turn)
+	if !req.Stream && sc.NonStreaming != nil {
+		step = *sc.NonStreaming
+	}
 
 	switch step.Kind {
 	case StepStatus:
