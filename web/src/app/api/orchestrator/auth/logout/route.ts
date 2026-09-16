@@ -6,8 +6,11 @@ export const runtime = "nodejs";
 
 // POST /api/orchestrator/auth/logout → orchestrator POST /auth/logout
 //
-// Clears the shared httpOnly elcano_auth cookie (JS can't) so the user is
-// signed out of all Elcano services. POST so the Origin CSRF check applies.
+// Ends the orchestrator's own server-side state for this user. It does NOT
+// sign the user out of Fleet or of central Auth: that is /api/auth/logout,
+// which every surface (the Operations Center included) submits as a
+// top-level form after this best-effort call (shared/signOut.ts). POST so
+// the Origin CSRF check applies.
 export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
