@@ -35,12 +35,19 @@ describe("POST /api/auth/logout", () => {
     process.env = originalEnv;
   });
 
-  it("clears both cookies and redirects to chat's /login", async () => {
+  it("clears both cookies and redirects to chat's manual /login", async () => {
     process.env.AUTH_COOKIE_DOMAIN = "elcanotek.com";
     const res = await POST(postReq("https://chat.elcanotek.com"));
 
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login");
+    // ?manual=1: the card with both options and no silent SSO attempt, so a
+    // logout cannot be undone by auto-start while an Auth cookie exists.
+    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login?manual=1");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    // An in-flight SSO transaction is abandoned too.
+    for (const name of ["fleet_oidc_state", "fleet_oidc_nonce", "fleet_oidc_verifier"]) {
+      expect(cleared(res, name)).toHaveLength(1);
+    }
 
     // chat's own HMAC cookie, host-only (no domain).
     const session = cleared(res, "elcano_session");
@@ -87,7 +94,7 @@ describe("POST /api/auth/logout", () => {
     const res = await POST(postReq("https://chat.elcanotek.com", token));
 
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login");
+    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login?manual=1");
   });
 
   it("sends only the host-only elcano_auth deletion when AUTH_COOKIE_DOMAIN is unset (dev)", async () => {

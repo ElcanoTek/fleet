@@ -8,7 +8,7 @@ import {
   verifySessionToken,
 } from "@/app/lib/auth";
 import { verifyOrigin } from "@/app/lib/csrf";
-import { getOidcConfig } from "@/app/lib/oidc";
+import { getOidcConfig, OIDC_NONCE_COOKIE, OIDC_STATE_COOKIE, OIDC_VERIFIER_COOKIE } from "@/app/lib/oidc";
 
 /**
  * POST /api/auth/logout
@@ -32,8 +32,12 @@ import { getOidcConfig } from "@/app/lib/oidc";
  * do nothing. For those sessions the browser is sent to the provider's
  * RP-initiated logout (`<issuer>/logout?client_id=<ours>`), which on Elcano
  * Auth ends the central session, fans a back-channel logout out to every
- * application, and lands on Auth's login page. Password sessions have no
- * central session and keep landing on /login.
+ * application, and lands on Auth's login page. Every other case (password
+ * session, no or unverifiable cookie) lands on /login?manual=1: the card with
+ * both options, and no silent SSO attempt, so a logout can never be undone by
+ * auto-start while an Auth cookie happens to exist. The in-progress OIDC
+ * transaction cookies are cleared too, so a callback still in flight cannot
+ * mint a fresh session after the user asked to leave.
  */
 export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
@@ -41,13 +45,16 @@ export async function POST(request: NextRequest) {
 
   const session = await verifySessionToken(request.cookies.get(getSessionCookieName())?.value);
   const oidc = getOidcConfig();
-  const landing =
-    session?.source === "oidc" && oidc
-      ? `${oidc.issuer}/logout?client_id=${encodeURIComponent(oidc.clientId)}`
-      : getRedirectUrl(request, "/login");
+  let landing: URL | string = getRedirectUrl(request, "/login?manual=1");
+  if (session?.source === "oidc" && oidc) {
+    const endSession = new URL("/logout", oidc.issuer);
+    endSession.searchParams.set("client_id", oidc.clientId);
+    landing = endSession.toString();
+  }
 
   const secure = isSecureRequest(request);
   const res = NextResponse.redirect(landing, { status: 303 });
+  res.headers.set("Cache-Control", "no-store");
 
   const attrs = `Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
   res.headers.append("Set-Cookie", `${getSessionCookieName()}=; ${attrs}`);
@@ -68,6 +75,9 @@ export async function POST(request: NextRequest) {
     );
   }
   res.headers.append("Set-Cookie", `${getElcanoCookieName()}=; ${attrs}`);
+  for (const name of [OIDC_STATE_COOKIE, OIDC_NONCE_COOKIE, OIDC_VERIFIER_COOKIE]) {
+    res.headers.append("Set-Cookie", `${name}=; ${attrs}`);
+  }
 
   return res;
 }
