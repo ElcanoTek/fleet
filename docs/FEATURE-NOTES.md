@@ -13,6 +13,22 @@ what/why that becomes the release notes (there is no changelog file, ADR-0061).
 Only add a bullet here if the feature is too small for its own page — and never
 add feature notes back into `AGENTS.md`.
 
+- **Protocol-pill `textarea` field + the controlled-input trimming fix**: the
+  chat empty-state quick-start cards (`empty_state.cards[]` in a bundle
+  manifest, rendered by `web/src/app/chat/ui/EmptyStatePrompts.tsx` from the
+  `ProtocolPill` shape in `protocolPills.ts`) gained a sixth field type,
+  `textarea` — a full-row, four-line box for free text such as a KPI list or
+  "anything else I should know"; `pillToPrompt` treats it exactly like `text`
+  (interior line breaks survive into the prompt, only the ends are trimmed),
+  and the Prompt Preview now keeps line breaks. The field types are `text`,
+  `textarea`, `select`, `number`, `daterange`, `toggle`; there is no
+  repeatable-row type and no validation beyond `required`. Fix shipped with
+  it: the text input rendered `asText(value)`, which **trims**, so a
+  controlled re-render swallowed the trailing space on every keystroke and a
+  two-word client name could not be typed. Inputs now render the raw string
+  (`asInputText`) and trimming happens once, at prompt assembly. The `number`
+  input was checked and is unaffected (its stored value is a number or the
+  empty string, never a padded string).
 - **Operations connector defaults (#1333)**: new task forms now seed their
   visible MCP selection from the catalog's `enabled` flags, matching Chat while
   preserving saved selections on edit. See

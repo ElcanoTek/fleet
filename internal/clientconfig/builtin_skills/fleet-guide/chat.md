@@ -30,6 +30,11 @@ off**: the same conversation, once it is right, runs there on a schedule and
 delivers itself, and you only look in when something needs you. The skills are
 the same in both places; only your role changes.
 
+Quick-start cards in a new chat can collect a few inputs before starting work.
+Text fields keep spaces as you type; larger text boxes accept several lines.
+The prompt preview preserves those line breaks so you can check what will be
+sent before pressing the card's run button.
+
 ### What happens when you ask
 
 The assistant does the work rather than describing it. It has a private working
