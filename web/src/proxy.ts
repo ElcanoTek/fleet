@@ -89,8 +89,12 @@ const publicApiPaths = new Set([
 // Allowing the issuer's origin is the whole fix; a missing or malformed
 // issuer keeps the strict policy.
 function formAction(): string {
+  // Same "is OIDC on" rule as getOidcConfig: issuer, client id and secret all
+  // present. A stale or partial environment must not widen the policy.
   const issuer = (process.env.FLEET_OIDC_ISSUER ?? "").trim();
-  if (!issuer) return "'self'";
+  const clientId = (process.env.FLEET_OIDC_CLIENT_ID ?? "").trim();
+  const clientSecret = (process.env.FLEET_OIDC_CLIENT_SECRET ?? "").trim();
+  if (!issuer || !clientId || !clientSecret) return "'self'";
   try {
     const u = new URL(issuer);
     if (u.protocol !== "https:" && u.protocol !== "http:") return "'self'";
