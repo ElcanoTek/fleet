@@ -15,8 +15,7 @@ export default function NoAccessPage() {
         </h1>
         <p className="mt-2 text-[0.875rem] text-[var(--color-text-secondary)]">
           You&rsquo;re signed in, but this account hasn&rsquo;t been added to
-          this workspace yet. Ask an administrator to add you, then sign in
-          again.
+          this workspace yet. Ask an administrator to add you, then try again.
         </p>
 
         <Link

@@ -322,6 +322,14 @@ function OrchestratorInner({
                 for the Operations Center. Ask an administrator to provision
                 your account.
               </p>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                data-testid="orchestrator-no-access-signout"
+                onClick={() => void signOutAfter(session.logout())}
+              >
+                Sign out
+              </button>
             </div>
           </div>
         ) : (
