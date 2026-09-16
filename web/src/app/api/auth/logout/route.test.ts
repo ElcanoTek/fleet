@@ -3,10 +3,11 @@ import { NextRequest } from "next/server";
 import { createOidcSessionToken, createSessionToken } from "@/app/lib/auth";
 
 // Logout clears BOTH session cookies (elcano_session + the shared elcano_auth)
-// and returns the user to chat's own /login — not the auth service. Deletions
-// are RAW appended Set-Cookie headers (a name-keyed cookie store would
-// collapse the two elcano_auth variants into one), so the tests read
-// getSetCookie() rather than mocking next/headers.
+// and then lands on Fleet's own /login?manual=1 without central Auth, or on
+// central Auth's RP-initiated logout whenever it is configured (whatever the
+// Fleet session's source). Deletions are RAW appended Set-Cookie headers (a
+// name-keyed cookie store would collapse the two elcano_auth variants into
+// one), so the tests read getSetCookie() rather than mocking next/headers.
 
 import { POST } from "./route";
 
@@ -158,6 +159,8 @@ describe("POST /api/auth/logout", () => {
       ]) {
         expect(cleared(res, name)).toHaveLength(1);
       }
+      // The shared legacy cookie goes too (both shapes with a cookie domain).
+      expect(cleared(res, "elcano_auth").length).toBeGreaterThanOrEqual(1);
     },
   );
 
