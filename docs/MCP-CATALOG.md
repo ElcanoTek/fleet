@@ -278,7 +278,12 @@ connection, both are **validated at add time with a real MCP handshake**
 stored: a rejected key or unreachable URL fails the add with an actionable
 error and the guided form keeps the typed values, while a successful add
 confirms with the observed tool count. Rotation validates the new key the
-same way and keeps the old key on rejection.
+same way and keeps the old key on rejection. The check proves the key only
+where the vendor checks it at the handshake: 25 of the 51 built-in api_key
+vendors answer `initialize` and `tools/list` to any bearer and reject a bad
+key at the first tool call instead, so for those a successful add proves
+reachability, not the key (F14 in
+[`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md)).
 
 ### Self-hosted entries
 

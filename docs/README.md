@@ -128,7 +128,8 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   vendor needs before Connect works, how to read a failure, and which vendors
   were verified live: [`docs/HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) +
   [`docs/MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md) (the #1006 status
-  table and the per-entry catalog audit)
+  table, the per-entry catalog audit and the #986 inventory of every
+  built-in entry)
 - **Bundle-managed SES/S3 email-report infrastructure:** use the external
   canonical [new-client email-report runbook](https://github.com/ElcanoTek/ses-s3-setup/blob/main/docs/NEW-CLIENT-EMAIL-SETUP.md);
   keep client-specific inventory in the external client bundle.

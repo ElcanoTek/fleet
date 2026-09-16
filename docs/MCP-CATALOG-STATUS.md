@@ -8,7 +8,9 @@ token refresh, a sign-out — and **discovery probes**, which run fleet's own
 `mcpoauth.Discover` and add-time guards against a vendor's published metadata
 without logging in. A probe proves a server can be *added*; only a live run
 proves it *works*. Dates are when the row was last verified; a row is not
-re-verified by later releases.
+re-verified by later releases. The appendix is the #986 Phase 1 inventory:
+every one of the 288 built-in entries with its auth, provenance, category,
+Featured flag, whether CI could exercise it, and when it was last verified.
 
 Everything below was run against a local rig: one fleet process with the
 Postgres pair, the web tier on `http://localhost:3200`, real OpenRouter
@@ -100,242 +102,360 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | V1 | 25 entries publish no scopes anywhere | live add needed per vendor |
 | V2 | GoCardless, Adobe, Square, Wrike answer 403 to every unauthenticated request from the audit network | re-probe from another network before calling them broken |
 | V3 | 22 tenant entries have a placeholder in the hostname and cannot be probed | expected |
+| F14 | fleet's add-time validation of an api_key connection (initialize + tools/list) **passes an invalid key** at 25 of the 51 built-in api_key vendors — they check the key only at the first tools/call, so a wrong key is saved with a "connected, N tools" confirmation and fails in the first turn | open, not started — Phase 2 candidate: follow tools/list with one cheap read-only call where a vendor documents one, or say on the card that the check proved reachability |
+| F15 | 19 api_key entries also publish OAuth protected-resource metadata on the 401 (`resource_metadata` pointer): Braintrust, Brevo, Buffer, Censys, Coda, fal.ai, Fireflies, Instantly, Kong Konnect, Mollie, Paddle, PagerDuty, Parallel, Raygun, Razorpay, Tavily, Upsun, Vultr, Whop | observation — each could become a one-click `auth: oauth` entry after a live add; not changed |
+| C10 | Composio's documented tenant URL (`…/v3/mcp/{SERVER_ID}?user_id={USER_ID}`) answers 307 to `…/v3/mcp/{SERVER_ID}/mcp?user_id=…` for a made-up id; fleet refuses redirects, so Connect would fail at discovery if a real id redirects the same way | open — verify with a real Composio server id before changing the URL |
+| C11 | Synter Ads (community, hidden by default) lists `https://syntermedia.ai/mcp`, which serves the vendor's HTML page to an MCP initialize | open — the only **dead-suspect** entry; hide or fix once the vendor documents a real endpoint |
+| V4 | `docs_url` answers a non-2xx to a plain GET from the audit box for Coda (403) and Leonardo.Ai (500); ZoomInfo's is a real 404 (already noted) | Coda/Leonardo look like bot walls, re-check from a browser; ZoomInfo needs a new link |
 
+### The remaining 57 entries (2026-09-16)
 
-## Appendix — every official OAuth, tenant and open entry, probed 2026-09-14
+The 2026-09-14 probe covered the official OAuth, tenant and open entries. The
+other 57 — 51 `api_key`, the four third-party platforms (Composio, Make,
+Smithery, Zapier) and the two community self-hosted templates — were swept
+on 2026-09-16 to complete the inventory below. An api_key entry has no
+discovery to run, so each was asked three things: an MCP `initialize`
+without any key; the same with an obviously invalid key attached exactly the
+way fleet attaches a real one (`Authorization: Bearer <key>` by default, the
+raw key under the entry's `api_key_header`, or the entry's `api_key_query`
+parameter); and fleet's own add-time validation — the same code path Connect
+runs, `initialize` + `tools/list` over the SSRF-safe client — with that
+invalid key. The third-party OAuth entries went through `mcpoauth.Discover`
+like the official ones; `docs_url` was fetched for all 57.
 
-Probe = fleet's `mcpoauth.Discover` plus the add-time guards, run against the catalog as of #1495 with the code in `main` plus #1488. "discovery ✓" means Connect would reach the vendor's consent screen; it says nothing about tool calls. A tenant entry whose hostname carries a `{placeholder}` cannot be probed without a customer's value; tenant hostnames in the table (e.g. `<tenant>`) are placeholders for the probe tenant. Counts — discovery ✓: 177 · tenant: 31 · open ✓: 12 · discovery ✗: 7 · open: 3 · not probeable from the audit box: 1.
+Results: every one of the 51 api_key endpoints is alive and speaks MCP,
+except Synter Ads, whose URL serves an HTML page (C11). 26 vendors reject the
+invalid key at the handshake (HTTP 401/403/400, or a JSON-RPC error that
+fleet surfaces), so a mistyped key fails the add with the vendor's message,
+as `docs/MCP-CATALOG.md` describes. **25 do not** (F14): they answer
+`initialize` and `tools/list` to any bearer, so fleet's add-time check saves
+the wrong key with a "connected, N tools" confirmation and the failure
+surfaces only at the first tool call. 19 of the 51 also advertise OAuth
+protected-resource metadata (F15) and could be one-click entries. Zapier and
+Make discover cleanly (Make lists no `none` auth method and publishes no
+scopes — V1; #1488's confidential retry covers the registration). Smithery's
+authorization server lives at its origin and is found once a real `{server}`
+is filled in; Composio's documented URL redirects (C10). The two self-hosted
+templates have a placeholder hostname and cannot be probed. No api_key entry
+is missing a `setup_hint` or `setup_url`.
 
-| entry | auth | probe verdict | client shape | issuer | notes |
-|---|---|---|---|---|---|
-| adobe-creativity | oauth | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) | — |  |  |
-| ahrefs | oauth | discovery ✓ | self-registering, secret | https://api.ahrefs.com/ | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| airbyte | oauth | discovery ✓ | self-registering, secret | https://mcp.airbyte.ai/ | AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
-| airtable | oauth | discovery ✓ | self-registering, public client ok | https://airtable.com/oauth2/v1 |  |
-| airwallex | oauth | discovery ✓ | self-registering, secret | https://mcp.airwallex.com/mcp | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| aiven | oauth | discovery ✓ | self-registering, public client ok | https://api.aiven.io |  |
-| alchemy | oauth | discovery ✓ | self-registering, secret | https://auth.alchemy.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
-| algolia | oauth | discovery ✓ | self-registering, public client ok | https://dashboard.algolia.com |  |
-| alloydb | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| alpha-vantage | oauth | discovery ✓ | self-registering, public client ok | https://mcp.alphavantage.co |  |
-| amazon-ads | oauth | discovery ✓ | manual client, public client ok | https://lwa.amazon.com |  |
-| amplitude | oauth | discovery ✓ | self-registering, public client ok | https://mcp.amplitude.com | advertises `offline_access`; refresh unverified |
-| apify | oauth | discovery ✓ | self-registering, public client ok | https://console-backend.apify.com |  |
-| apollo-io | oauth | discovery ✓ | self-registering, public client ok | https://mcp.apollo.io |  |
-| asana | oauth | discovery ✓ | manual client, secret | https://app.asana.com |  |
-| atlassian | oauth | discovery ✓ | self-registering, public client ok | https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3 |  |
-| attio | oauth | discovery ✓ | self-registering, public client ok | https://app.attio.com |  |
-| audioscrape | oauth | discovery ✓ | self-registering, public client ok | https://mcp.audioscrape.com |  |
-| avalara-avatax | oauth | discovery ✓ | self-registering, secret | https://identity.avalara.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified |
-| aws-knowledge | open | open ✓ (initialize 200) | n/a |  |  |
-| aws-mcp | oauth | discovery ✓ | self-registering, public client ok | https://us-east-1.oauth.signin.aws | no scopes published (V1) |
-| axiom | oauth | discovery ✓ | self-registering, public client ok | https://authorization.axiom.co |  |
-| azure-devops | tenant | discovery ✓ | manual client, secret | https://login.microsoftonline.com/organizations/v2.0 |  |
-| better-stack | oauth | discovery ✓ | self-registering, public client ok | https://betterstack.com |  |
-| black-forest-labs | oauth | discovery ✓ | self-registering, public client ok | https://uhjidycotobjggwyjdww.supabase.co/auth/v1 | advertises `offline_access`; refresh unverified |
-| box | oauth | discovery ✓ | manual client, secret | https://api.box.com | no scopes published (V1) |
-| brex | oauth | discovery ✓ | self-registering, public client ok | https://api.brex.com |  |
-| bright-data | tenant | discovery ✓ | self-registering, public client ok | https://brightdata.com |  |
-| browserstack | oauth | discovery ✓ | self-registering, public client ok | https://mcp.browserstack.com/ |  |
-| bugsnag | oauth | discovery ✗ — fetch protected-resource metadata the server advertised at http://bugsnag.mcp.smartbear.co | — |  |  |
-| buildkite | oauth | discovery ✓ | self-registering, public client ok | https://mcp.buildkite.com |  |
-| cal-com | oauth | discovery ✓ | self-registering, public client ok | https://mcp.cal.com | no scopes published (V1) |
-| calendly | oauth | discovery ✓ | self-registering, public client ok | https://calendly.com/ |  |
-| canva | oauth | discovery ✓ | self-registering, public client ok | https://mcp.canva.com |  |
-| cartesia | oauth | discovery ✓ | self-registering, secret | https://mcp.cartesia.ai/ | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| chargebee | tenant | discovery ✓ | manual client, public client ok | https://app.chargebee.com |  |
-| checkly | oauth | discovery ✓ | self-registering, public client ok | https://auth.checklyhq.com/ |  |
-| checkout-com | oauth | discovery ✓ | self-registering, secret | https://access.mcp.checkout.com/payment-operations | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| chromatic | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| chronosphere | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| clickhouse | oauth | discovery ✓ | self-registering, public client ok | https://mcp.clickhouse.cloud |  |
-| clickup | oauth | discovery ✓ | self-registering, public client ok | https://mcp.clickup.com |  |
-| close | oauth | discovery ✓ | self-registering, public client ok | https://api.close.com |  |
-| cloudflare | oauth | discovery ✓ | self-registering, public client ok | https://mcp.cloudflare.com | no scopes published (V1) |
-| cloudflare-docs | open | open ✓ (initialize 200) | n/a |  |  |
-| cloudinary | oauth | discovery ✓ | self-registering, public client ok | https://asset-management.mcp.cloudinary.com |  |
-| cockroachdb | oauth | discovery ✓ | self-registering, public client ok | https://cockroachlabs.cloud/mcp |  |
-| coingecko | open | open ✓ (initialize 200) | n/a |  |  |
-| contentful | oauth | discovery ✓ | self-registering, public client ok | https://mcp.contentful.com | no scopes published (V1) |
-| context7 | open | open ✓ (initialize 200) | n/a |  |  |
-| coralogix | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| craft | oauth | discovery ✓ | self-registering, public client ok | https://mcp.craft.do/my/auth | no scopes published (V1) |
-| cube | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| customer-io | oauth | discovery ✓ | self-registering, public client ok | https://mcp.customer.io |  |
-| databricks | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| datadog | oauth | discovery ✓ | self-registering, public client ok | https://mcp.datadoghq.com/v1/mcp |  |
-| dbt | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| deepwiki | open | open ✓ (initialize 200) | n/a |  |  |
-| digitalocean | oauth | discovery ✓ | self-registering, public client ok | https://cloud.digitalocean.com | no scopes published (V1) |
-| docusign | oauth | discovery ✓ | manual client, secret | https://account.docusign.com |  |
-| doordash | oauth | discovery ✓ | manual client, public client ok | https://identity.doordash.com |  |
-| dropbox | oauth | discovery ✓ | self-registering, public client ok | https://www.dropbox.com |  |
-| dune | oauth | discovery ✓ | self-registering, public client ok | https://dune.com/oauth/mcp |  |
-| dynatrace | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| egnyte | oauth | discovery ✓ | self-registering, secret | https://mcp-oauth.egnyte.com/egnyte-connect | AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
-| elastic-agent-builder | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| expensify | oauth | discovery ✓ | self-registering, public client ok | https://www.expensify.com |  |
-| expo | oauth | discovery ✓ | self-registering, public client ok | https://mcp.expo.dev |  |
-| fellow | oauth | discovery ✓ | self-registering, public client ok | https://fellow.app |  |
-| fibery | oauth | discovery ✓ | self-registering, public client ok | https://mcp.fibery.io/ |  |
-| figma | oauth | discovery ✓ | self-registering, secret | https://api.figma.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| financial-datasets | oauth | discovery ✓ | self-registering, public client ok | https://mcp.financialdatasets.ai |  |
-| freshdesk | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| front | oauth | discovery ✓ | manual client, secret | https://app.frontapp.com |  |
-| gamma | oauth | discovery ✓ | self-registering, public client ok | https://auth.gamma.app |  |
-| github | oauth | discovery ✓ | manual client, secret | https://github.com/login/oauth |  |
-| gitlab | oauth | discovery ✓ | self-registering, secret | https://gitlab.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| globalping | oauth | discovery ✓ | self-registering, public client ok | https://mcp.globalping.dev |  |
-| gocardless | oauth | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) | — |  |  |
-| google-calendar | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| google-chat | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| google-cloud | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| google-docs | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| google-drive | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| google-gemini-agent-platform | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| google-gmail | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| google-people | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| google-sheets | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| google-slides | oauth | discovery ✓ | manual client, secret | https://accounts.google.com |  |
-| gorgias | oauth | discovery ✓ | self-registering, public client ok | https://mcp.gorgias.com/ |  |
-| grafana-cloud | oauth | discovery ✓ | self-registering, public client ok | https://mcp.grafana.com/mcp |  |
-| grain | oauth | discovery ✓ | self-registering, public client ok | https://api.grain.com | no scopes published (V1) |
-| gram | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| granola | oauth | discovery ✓ | self-registering, public client ok | https://mcp-auth.granola.ai | advertises `offline_access`; refresh unverified |
-| guru | oauth | discovery ✓ | self-registering, public client ok | https://mcp.api.getguru.com |  |
-| harness | oauth | discovery ✓ | self-registering, secret | https://id.harness.io/idp/realms/HarnessIDP | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| heroku | oauth | discovery ✓ | self-registering, secret | https://mcp.heroku.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| hex | oauth | discovery ✓ | self-registering, public client ok | https://auth.app.hex.tech |  |
-| heygen | oauth | discovery ✓ | self-registering, public client ok | https://api2.heygen.com |  |
-| honeycomb | oauth | discovery ✓ | self-registering, public client ok | https://ui.honeycomb.io |  |
-| hootsuite | oauth | discovery ✓ | self-registering, public client ok | https://platform.hootsuite.com |  |
-| hootsuite-lumen | oauth | discovery ✓ | self-registering, public client ok | https://app.talkwalker.com/app/ |  |
-| hootsuite-nest | oauth | discovery ✓ | self-registering, public client ok | https://platform.hootsuite.com |  |
-| hubspot | oauth | discovery ✓ | manual client, secret | https://mcp.hubspot.com | no scopes published (V1) |
-| hugging-face | oauth | discovery ✓ | self-registering, secret | https://huggingface.co | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| ideogram | oauth | discovery ✓ | self-registering, secret | https://mcp.ideogram.ai/ | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| incident-io | oauth | discovery ✓ | self-registering, public client ok | https://mcp.incident.io/mcp | no scopes published (V1) |
-| intercom | oauth | discovery ✗ — 401 at a metadata location; skipped by decision | — |  |  |
-| jetbrains-youtrack | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| jotform | oauth | discovery ✓ | self-registering, public client ok | https://oauth2.jotform.com |  |
-| kiwi-flights | open | open ✓ (initialize 200) | n/a |  |  |
-| klaviyo | oauth | discovery ✓ | self-registering, public client ok | https://mcp.klaviyo.com | no scopes published (V1) |
-| lambdatest | oauth | discovery ✓ | self-registering, public client ok | https://auth.lambdatest.com | no scopes published (V1) |
-| langsmith | oauth | discovery ✓ | self-registering, public client ok | https://api.smith.langchain.com | no scopes published (V1) |
-| lemlist | oauth | discovery ✓ | self-registering, public client ok | https://app.lemlist.com |  |
-| linear | oauth | discovery ✓ | self-registering, public client ok | https://mcp.linear.app |  |
-| looker | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| lusha | oauth | discovery ✓ | self-registering, secret | https://auth.lusha.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| magnific-freepik | oauth | discovery ✓ | self-registering, public client ok | https://auth.magnific.com/realms/mcp | advertises `offline_access`; refresh unverified |
-| mailerlite | oauth | discovery ✓ | self-registering, public client ok | https://mcp.mailerlite.com | no scopes published (V1) |
-| mapbox | oauth | discovery ✓ | self-registering, public client ok | https://mcp.mapbox.com |  |
-| mercado-libre | oauth | discovery ✓ | self-registering, public client ok | https://mcp.mercadolibre.com/mcp |  |
-| mercado-pago | oauth | discovery ✓ | self-registering, public client ok | https://mcp.mercadopago.com/mcp |  |
-| mercury | oauth | discovery ✓ | self-registering, public client ok | https://mcp.mercury.com/ |  |
-| messari | oauth | discovery ✓ | self-registering, public client ok | https://mcp.messari.io | no scopes published (V1) |
-| meta-ads | oauth | discovery ✓ | self-registering, public client ok | https://www.facebook.com/ads |  |
-| metabase | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| microsoft-dataverse | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| microsoft-learn | open | open ✓ (initialize 200) | n/a |  |  |
-| microsoft-workiq-calendar | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| microsoft-workiq-mail | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| microsoft-workiq-sharepoint | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| microsoft-workiq-teams | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| miro | oauth | discovery ✓ | self-registering, secret | https://mcp.miro.com/ | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| mixpanel | oauth | discovery ✓ | self-registering, public client ok | https://mcp.mixpanel.com/mcp |  |
-| monday | oauth | discovery ✓ | self-registering, secret | https://auth.monday.com/mcp | AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
-| motherduck | oauth | discovery ✓ | self-registering, public client ok | https://mcp-auth.motherduck.com |  |
-| mux | oauth | discovery ✓ | self-registering, public client ok | https://auth.mux.com |  |
-| neon | oauth | discovery ✓ | self-registering, public client ok | https://mcp.neon.tech |  |
-| netlify | oauth | discovery ✓ | self-registering, public client ok | https://netlify-mcp.netlify.app/ |  |
-| netsuite | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| new-relic | oauth | discovery ✓ | self-registering, public client ok | https://oauth2.service.newrelic.com |  |
-| notion | oauth | discovery ✓ | self-registering, public client ok | https://mcp.notion.com |  |
-| octagon | oauth | discovery ✓ | self-registering, public client ok | https://login.octagonai.co |  |
-| omni | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| openai-developer-docs | open | open ✓ (initialize 200) | n/a |  |  |
-| openrouter | oauth | discovery ✓ | self-registering, public client ok | https://mcp.openrouter.ai | no scopes published (V1) |
-| oracle-autonomous-db | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| orca-security | oauth | discovery ✓ | self-registering, public client ok | https://auth.orcasecurity.io | no scopes published (V1) |
-| otter-ai | oauth | discovery ✓ | self-registering, public client ok | https://otter.ai |  |
-| outreach | oauth | discovery ✓ | self-registering, secret | https://api.outreach.io | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| ovhcloud | oauth | discovery ✓ | self-registering, secret | https://mcp.eu.ovhcloud.com/oauth-proxy | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| parallel-search | open | open ✓ (initialize 200) | n/a |  |  |
-| paypal | oauth | discovery ✓ | self-registering, public client ok | https://mcp.paypal.com |  |
-| pika | oauth | discovery ✓ | self-registering, public client ok | https://ecyvlzfbufloietjsmtj.supabase.co/auth/v1 |  |
-| pinecone-assistant | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| pipedrive | oauth | discovery ✓ | self-registering, secret | https://oauth.pipedrive.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| plaid | oauth | discovery ✗ — 401 at a metadata location; skipped by decision | — |  |  |
-| plain | oauth | discovery ✓ | self-registering, public client ok | https://signin.auth.plain.com |  |
-| plane | oauth | discovery ✓ | self-registering, secret | https://mcp.plane.so/http | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| planetscale | oauth | discovery ✓ | self-registering, secret | https://api.planetscale.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| polar | oauth | discovery ✓ | self-registering, public client ok | https://api.polar.sh |  |
-| posthog | oauth | discovery ✓ | self-registering, public client ok | https://oauth.posthog.com |  |
-| postman | oauth | discovery ✓ | self-registering, public client ok | https://mcp.postman.com | no scopes published (V1) |
-| preset | oauth | discovery ✓ | self-registering, public client ok | https://api.superset.sh |  |
-| prisma | oauth | discovery ✓ | self-registering, public client ok | https://auth.prisma.io |  |
-| pulumi | oauth | discovery ✓ | self-registering, public client ok | https://mcp.ai.pulumi.com |  |
-| pydantic-logfire | oauth | discovery ✓ | self-registering, public client ok | https://logfire-us.pydantic.dev |  |
-| pylon | oauth | discovery ✓ | self-registering, public client ok | https://o.auth.usepylon.com |  |
-| railway | oauth | discovery ✓ | self-registering, public client ok | https://backboard.railway.com |  |
-| ramp | oauth | discovery ✓ | self-registering, public client ok | https://mcp.ramp.com |  |
-| read-ai | oauth | discovery ✓ | self-registering, public client ok | https://authn.read.ai/ |  |
-| recraft | oauth | discovery ✓ | self-registering, public client ok | https://mcp.recraft.ai |  |
-| render | oauth | not probeable from the audit box (its resolver maps the host to 127.0.0.1; public DNS is fine) | — |  |  |
-| replicate | oauth | discovery ✓ | self-registering, public client ok | https://mcp.replicate.com | no scopes published (V1) |
-| replit | oauth | discovery ✓ | self-registering, public client ok | https://replit.com/oidc |  |
-| rootly | oauth | discovery ✓ | self-registering, public client ok | https://rootly.com |  |
-| runpod | oauth | discovery ✓ | self-registering, public client ok | https://mcp.getrunpod.io | no scopes published (V1) |
-| runway | oauth | discovery ✓ | self-registering, public client ok | https://mcp.runwayml.com |  |
-| sage-intacct | oauth | discovery ✓ | manual client, secret | https://mcp.intacct.com |  |
-| salesforce | tenant | discovery ✓ | self-registering, secret | https://login.salesforce.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified |
-| sanity | oauth | discovery ✓ | self-registering, public client ok | https://mcp.sanity.io |  |
-| scrapfly | open | open — key in the URL; probe used a bogus key (answered 401) | n/a |  |  |
-| scrapingbee | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| semaphore | oauth | discovery ✓ | self-registering, public client ok | https://mcp.semaphoreci.com/mcp/oauth |  |
-| semgrep | oauth | discovery ✓ | self-registering, public client ok | https://login.semgrep.dev |  |
-| semrush | oauth | discovery ✓ | self-registering, public client ok | https://oauth.semrush.com | advertises `offline_access`; refresh unverified |
-| sentry | oauth | discovery ✓ | self-registering, public client ok | https://mcp.sentry.dev |  |
-| servicenow | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| shopify-storefront | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| shortcut | oauth | discovery ✓ | self-registering, public client ok | https://api.app.shortcut.com |  |
-| signoz | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| slack | oauth | discovery ✓ | manual client, secret | https://mcp.slack.com |  |
-| slite | oauth | discovery ✓ | self-registering, public client ok | https://slite.com/api/mcp/oauth |  |
-| smartlead | open | open — key in the URL; probe used a bogus key (answered 404) | n/a |  |  |
-| snowflake | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| socket | oauth | discovery ✓ | self-registering, public client ok | https://api.socket.dev |  |
-| sourcegraph | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| spacelift | tenant | discovery ✓ | self-registering, public client ok | https://<tenant>.app.spacelift.io |  |
-| sprout-social | oauth | discovery ✓ | self-registering, secret | https://identity.sproutsocial.com/oauth2/84e39c75-d770-45d9- | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| square | oauth | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) | — |  |  |
-| stainless | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| stripe | oauth | discovery ✓ | self-registering, public client ok | https://access.stripe.com/mcp |  |
-| supabase | oauth | discovery ✓ | self-registering, secret | https://api.supabase.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| superhuman-mail | oauth | discovery ✓ | self-registering, public client ok | https://mcp.auth.mail.superhuman.com |  |
-| surveymonkey | oauth | discovery ✓ | self-registering, secret | https://mcp.surveymonkey.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| teamwork | oauth | discovery ✓ | self-registering, public client ok | https://teamwork.com |  |
-| thirdweb | open | open — key in the URL; probe used a bogus key (answered 401) | n/a |  |  |
-| ticktick | oauth | discovery ✓ | self-registering, public client ok | https://ticktick.com |  |
-| tigris | oauth | discovery ✓ | self-registering, public client ok | https://mcp.storage.dev |  |
-| tinybird | tenant | tenant — not probeable without a real tenant value | — |  |  |
-| todoist | oauth | discovery ✓ | self-registering, public client ok | https://todoist.com |  |
-| trello | oauth | discovery ✓ | self-registering, public client ok | https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3 |  |
-| twelve-data | oauth | discovery ✓ | self-registering, secret | https://mcp.twelvedata.com/ | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| twilio | open | open ✓ (initialize 200) | n/a |  |  |
-| typeform | oauth | discovery ✓ | self-registering, public client ok | https://api.typeform.com | advertises `offline_access`; refresh unverified |
-| upstox | oauth | discovery ✓ | self-registering, public client ok | https://mcp.upstox.com | no scopes published (V1) |
-| uptime-robot | oauth | discovery ✓ | self-registering, secret | https://mcp.uptimerobot.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| val-town | oauth | discovery ✓ | self-registering, public client ok | https://www.val.town/oauth |  |
-| vercel | oauth | discovery ✓ | self-registering, secret | https://vercel.com | AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified |
-| vimeo | oauth | discovery ✓ | self-registering, public client ok | https://mcp.vimeo.com/ |  |
-| webflow | oauth | discovery ✓ | self-registering, public client ok | https://mcp.webflow.com | no scopes published (V1) |
-| wix | oauth | discovery ✓ | self-registering, public client ok | https://mcp.wix.com |  |
-| wiz | oauth | discovery ✓ | self-registering, public client ok | https://mcp.app.wiz.io |  |
-| wordpress-com | oauth | discovery ✓ | self-registering, public client ok | https://public-api.wordpress.com |  |
-| wrike | oauth | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) | — |  |  |
-| x-docs | open | open ✓ (initialize 200) | n/a |  |  |
-| xero | oauth | discovery ✓ | manual client, secret | https://identity.xero.com |  |
-| zerodha-kite | open | open ✓ (initialize 200) | n/a |  | `login` tool session lives only within the calling turn; does not persist across turns and cannot authenticate in scheduled runs |
-| zoom | oauth | discovery ✓ | manual client, secret | https://zoom.us |  |
-| zoominfo | oauth | discovery ✓ | self-registering, secret | https://okta-login.zoominfo.com/oauth2/default | AS lists no `none`; fleet asks `none`, retries confidential (#1488); docs_url 404 |
+## Appendix — the inventory: every built-in entry (#986 Phase 1)
+
+All 288 entries of `internal/clientconfig/builtin_remote_catalog.yaml` as of
+`main` on 2026-09-16, one row each, sorted by name. Columns follow the plan in
+#986: **featured** (★) is the Featured-shelf flag; **can CI hit?** says what
+an automated smoke (Phase 2) could do with the entry without a human —
+`yes` the endpoint answers `initialize` with no credentials (open); `key-fixture`
+it needs a vendor key held as a CI secret (every api_key entry, plus the three
+open entries that carry the key in the URL) — no such fixture exists yet;
+`oauth-manual` the browser consent step cannot run in CI; `tenant` the URL has
+a `{placeholder}` only a customer can fill; `dead-suspect` the endpoint does
+not speak MCP. **last verified** is `live` for a real account on the rig (the
+table at the top), `probe` for a credential-less check — the 2026-09-14
+discovery probe (fleet's `mcpoauth.Discover` plus the add-time guards, run on
+`main` plus #1488 and #1495; "discovery ✓" means Connect would reach the
+vendor's consent screen and says nothing about tool calls) or the 2026-09-16
+handshake sweep described above — and `—` when nothing could be checked
+(31 tenant entries with a placeholder in the hostname, the two self-hosted
+templates, and Render, whose hostname resolves to 127.0.0.1 on the audit box
+while public DNS is fine). A row is not re-verified by later releases.
+
+Counts — can CI hit?: yes 12 · key-fixture 53 · oauth-manual 182 · tenant 40 ·
+dead-suspect 1. Auth: oauth 182 · tenant 40 · api_key 51 · open 15.
+Provenance: official 280 · third_party 5 · community 3. Featured: 20. Last
+verified: live 12 · probe 2026-09-14 187 · probe 2026-09-16 55 · not probeable
+34. Of the 2026-09-14 probe: discovery ✓ 177 · discovery ✗ 7 (four answer
+403 to everything from the audit network, Plaid and Intercom are skipped by
+decision, Bugsnag is F12) · open ✓ 12 · open with a key in the URL 3 · tenant
+not probeable 31 · not probeable from the audit box 1.
+
+| entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
+|---|---|---|---|---|---|---|---|---|
+| adobe-creativity | oauth | official | design-media | ★ | oauth-manual | 2026-09-14 probe | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) |  |
+| ahrefs | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| airbyte | oauth | official | data-analytics |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
+| airtable | oauth | official | productivity | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| airwallex | oauth | official | commerce-payments |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| aiven | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| alchemy | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
+| algolia | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| alloydb | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| alpha-vantage | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| amazon-ads | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, public client ok |
+| amplitude | oauth | official | data-analytics |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; advertises `offline_access`; refresh unverified |
+| apify | oauth | official | web-search |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| apollo-io | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| asana | oauth | official | productivity | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| atlassian | oauth | official | productivity | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| attio | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| audioscrape | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| avalara-avatax | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified |
+| aws-knowledge | open | official | knowledge-docs |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| aws-mcp | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| axiom | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| azure-devops | tenant | official | cloud-infrastructure |  | tenant | 2026-09-13 live | live PASS; discovery ✓ | manual client, secret |
+| better-stack | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| black-forest-labs | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; advertises `offline_access`; refresh unverified |
+| box | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret; no scopes published (V1) |
+| braintrust | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (43 tools listed; the key is checked only at tools/call) (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| brevo | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| brex | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| bright-data | tenant | official | web-search |  | tenant | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| browserbase | api_key | official | web-search | ★ | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (6 tools listed; the key is checked only at tools/call) (F14) |
+| browserstack | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| buffer | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| bugcrowd | api_key | official | security |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
+| bugsnag | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✗ — fetch protected-resource metadata the server advertised at http://bugsnag.mcp.smartbear.co |  |
+| buildkite | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| cal-com | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| calendly | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| canva | oauth | official | design-media | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| cartesia | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 live | live ✗ 404 on the old URL; corrected in #1501, not re-run; discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| cast-ai | api_key | official | cloud-infrastructure |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (JSON-RPC error on the initialize reply) |
+| censys | api_key | official | security |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (22 tools listed; the key is checked only at tools/call) (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| chargebee | tenant | official | commerce-payments |  | tenant | 2026-09-14 probe | discovery ✓ | manual client, public client ok |
+| checkly | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| checkout-com | oauth | official | commerce-payments |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| chroma-package-search | api_key | official | databases |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14) |
+| chromatic | tenant | official | development |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| chronosphere | tenant | official | observability |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| clickhouse | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| clickup | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| close | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| cloudflare | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| cloudflare-docs | open | official | knowledge-docs |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| cloudinary | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| cockroachdb | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| coda | api_key | official | productivity |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | docs_url answers 403 to a plain GET (bot wall?); add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| coingecko | open | official | finance |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| coinmarketcap | api_key | official | finance |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (14 tools listed; the key is checked only at tools/call) (F14) |
+| composio | tenant | third_party | automation |  | tenant | 2026-09-16 probe | not probeable — `{placeholder}` in the URL; origin answers | with placeholder values substituted, the documented URL 307-redirects to `/v3/mcp/{SERVER_ID}/mcp?user_id={USER_ID}`; fleet refuses redirects — verify with a real server id (C10) |
+| confluent | api_key | official | data-analytics |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
+| contentful | oauth | official | knowledge-docs |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| context7 | open | official | development |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| coralogix | tenant | official | observability |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| craft | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| crisp | api_key | official | customer-support |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (26 tools listed; the key is checked only at tools/call) (F14) |
+| cube | tenant | official | data-analytics |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| customer-io | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| databricks | tenant | official | data-analytics |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| datadog | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| dbt | tenant | official | data-analytics |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| deepwiki | open | official | development |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| devin | api_key | official | development |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (22 tools listed; the key is checked only at tools/call) (F14) |
+| digitalocean | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| docusign | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| doordash | oauth | official | travel-local |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, public client ok |
+| dropbox | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| dune | oauth | official | data-analytics |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| dynatrace | tenant | official | observability |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| egnyte | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
+| elastic-agent-builder | tenant | official | observability |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| etherscan | api_key | official | finance |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (21 tools listed; the key is checked only at tools/call) (F14) |
+| exa | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (2 tools listed; the key is checked only at tools/call) (F14) |
+| expensify | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| expo | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| fal-ai | api_key | official | ai-ml |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| fellow | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| fibery | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| figma | oauth | official | design-media | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| financial-datasets | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| firecrawl | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14) |
+| fireflies | api_key | official | communication |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 403 with a bogus key | add-time check rejects a bogus key (HTTP 403); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| firefly | api_key | official | cloud-infrastructure |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (JSON-RPC error on the initialize reply) |
+| freshdesk | tenant | official | customer-support |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| front | oauth | official | customer-support |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| galileo | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (9 tools listed; the key is checked only at tools/call) (F14) |
+| gamma | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| github | oauth | official | development | ★ | oauth-manual | 2026-09-10 live | live PASS; discovery ✓ | manual client, secret |
+| gitlab | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| globalping | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| gocardless | oauth | official | commerce-payments |  | oauth-manual | 2026-09-14 probe | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) |  |
+| google-calendar | oauth | official | productivity | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-chat | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-cloud | tenant | official | cloud-infrastructure |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| google-docs | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-drive | oauth | official | productivity | ★ | oauth-manual | 2026-09-10 live | live — tool call BLOCKED by vendor (Developer Preview); discovery ✓ | manual client, secret |
+| google-gemini-agent-platform | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-gmail | oauth | official | communication | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-maps | api_key | official | travel-local |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (5 tools listed; the key is checked only at tools/call) (F14) |
+| google-people | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-sheets | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-slides | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-workspace-self-hosted | tenant | community | productivity |  | tenant | — | not probeable — `{placeholder}` in the URL |  |
+| gorgias | oauth | official | customer-support |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| grafana-cloud | oauth | official | observability |  | oauth-manual | 2026-09-14 live | live PASS (connect + tools); discovery ✓ | self-registering, public client ok |
+| grain | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| gram | tenant | official | development |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| granola | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; advertises `offline_access`; refresh unverified |
+| greptile | api_key | official | development |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (21 tools listed; the key is checked only at tools/call) (F14) |
+| guru | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| harness | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| heroku | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| hex | oauth | official | data-analytics |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| heygen | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| honeycomb | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| hootsuite | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| hootsuite-lumen | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| hootsuite-nest | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| hubspot | oauth | official | crm-sales | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret; no scopes published (V1) |
+| hugging-face | oauth | official | ai-ml | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| ideogram | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| incident-io | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| instantly | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (202 tools listed; the key is checked only at tools/call) (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| intercom | oauth | official | customer-support |  | oauth-manual | 2026-09-14 probe | discovery ✗ — 401 at a metadata location; skipped by decision |  |
+| jetbrains-youtrack | tenant | official | development |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| jina | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (22 tools listed; the key is checked only at tools/call) (F14) |
+| jotform | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| kiwi-flights | open | official | travel-local |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| klaviyo | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| kong-konnect | api_key | official | development |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| lambdatest | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| langfuse | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
+| langsmith | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| lemlist | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| leonardo-ai | api_key | official | ai-ml |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | docs_url answers 500 to a plain GET (bot wall?); **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14) |
+| linear | oauth | official | productivity | ★ | oauth-manual | 2026-09-09 live | live PASS; discovery ✓ | self-registering, public client ok |
+| linkup | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (4 tools listed; the key is checked only at tools/call) (F14) |
+| looker | tenant | official | data-analytics |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| lusha | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| magnific-freepik | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; advertises `offline_access`; refresh unverified |
+| mailchimp-mandrill | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | add-time check rejects a bogus key (JSON-RPC error on the initialize reply) |
+| mailerlite | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| make | oauth | third_party | automation |  | oauth-manual | 2026-09-16 probe | discovery ✓ | self-registering, secret |
+| mapbox | oauth | official | travel-local |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| mercado-libre | oauth | official | commerce-payments |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| mercado-pago | oauth | official | commerce-payments |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| mercury | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| messari | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| meta-ads | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| metabase | tenant | official | data-analytics |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| microsoft-365-self-hosted | tenant | community | productivity |  | tenant | — | not probeable — `{placeholder}` in the URL |  |
+| microsoft-dataverse | tenant | official | crm-sales |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| microsoft-learn | open | official | knowledge-docs |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| microsoft-workiq-calendar | tenant | official | productivity |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| microsoft-workiq-mail | tenant | official | communication |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| microsoft-workiq-sharepoint | tenant | official | productivity |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| microsoft-workiq-teams | tenant | official | communication |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| miro | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| mixpanel | oauth | official | data-analytics |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| mollie | api_key | official | commerce-payments |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| monday | oauth | official | productivity | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
+| motherduck | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| mux | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| nansen | api_key | official | finance |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (46 tools listed; the key is checked only at tools/call) (F14) |
+| neon | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| netlify | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| netsuite | tenant | official | finance |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| new-relic | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| notion | oauth | official | productivity | ★ | oauth-manual | 2026-09-14 live | live PASS (sharing 2026-09-14); discovery ✓ | self-registering, public client ok |
+| octagon | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| omni | tenant | official | data-analytics |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| openai-developer-docs | open | official | ai-ml |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| openrouter | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| oracle-autonomous-db | tenant | official | cloud-infrastructure |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| orca-security | oauth | official | security |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| otter-ai | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| outreach | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| ovhcloud | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| paddle | api_key | official | commerce-payments |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| pagerduty | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| parallel-search | open | official | web-search |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| parallel-task | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (4 tools listed; the key is checked only at tools/call) (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| paypal | oauth | official | commerce-payments | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| pika | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| pinecone-assistant | tenant | official | databases |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| pipedream | api_key | third_party | automation |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (JSON-RPC error on the initialize reply) |
+| pipedrive | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| plaid | oauth | official | finance |  | oauth-manual | 2026-09-14 live | live PASS on the 09-14 rig build; discovery ✗ — 401 at a metadata location; skipped by decision |  |
+| plain | oauth | official | customer-support |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| plane | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| planetscale | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| polar | oauth | official | commerce-payments |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| posthog | oauth | official | data-analytics |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| postman | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| preset | oauth | official | data-analytics |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| prisma | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| pulumi | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| pydantic-logfire | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| pylon | oauth | official | customer-support |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| railway | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| ramp | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| raygun | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| razorpay | api_key | official | commerce-payments |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| read-ai | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| recraft | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| render | oauth | official | cloud-infrastructure |  | oauth-manual | — | not probeable from the audit box (its resolver maps the host to 127.0.0.1; public DNS is fine) |  |
+| replicate | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| replit | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| retell-ai | api_key | official | ai-ml |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14) |
+| rootly | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| runpod | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| runway | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| sage-intacct | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| saleor | api_key | official | commerce-payments |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (8 tools listed; the key is checked only at tools/call) (F14) |
+| salesforce | tenant | official | crm-sales |  | tenant | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified |
+| sanity | oauth | official | knowledge-docs |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| scrapfly | open | official | web-search |  | key-fixture | 2026-09-14 probe | open — key in the URL; probe used a bogus key (answered 401) |  |
+| scrapingbee | tenant | official | web-search |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| semaphore | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| semgrep | oauth | official | security |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| semrush | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; advertises `offline_access`; refresh unverified |
+| sentry | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| servicenow | tenant | official | customer-support |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| shopify-storefront | tenant | official | commerce-payments |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| shortcut | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| signoz | tenant | official | observability |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| similarweb | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
+| slack | oauth | official | communication | ★ | oauth-manual | 2026-09-10 live | live PASS with caveats; discovery ✓ | manual client, secret |
+| slite | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| smartlead | open | official | marketing-social |  | key-fixture | 2026-09-14 probe | open — key in the URL; probe used a bogus key (answered 404) |  |
+| smartsheet | api_key | official | productivity |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
+| smithery | tenant | third_party | automation |  | tenant | 2026-09-16 probe | not probeable — `{placeholder}` in the URL; origin answers | authorization server found at the origin: https://auth.smithery.ai/{server} |
+| snowflake | tenant | official | databases |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| socket | oauth | official | security |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| sourcegraph | tenant | official | development |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| spacelift | tenant | official | cloud-infrastructure |  | tenant | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| sprout-social | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| square | oauth | official | commerce-payments |  | oauth-manual | 2026-09-14 probe | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) |  |
+| stainless | tenant | official | development |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| stripe | oauth | official | commerce-payments | ★ | oauth-manual | 2026-09-14 live | live PASS (connect + tools); discovery ✓ | self-registering, public client ok |
+| supabase | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| superhuman-mail | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| surveymonkey | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| synter-ads | api_key | community | marketing-social |  | dead-suspect | 2026-09-16 probe | endpoint ✗ — the URL serves an HTML page, not an MCP endpoint (dead-suspect) |  |
+| tavily | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| teamwork | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| tenable | api_key | official | security |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 400 with a bogus key | add-time check rejects a bogus key (HTTP 400) |
+| thirdweb | open | official | finance |  | key-fixture | 2026-09-14 probe | open — key in the URL; probe used a bogus key (answered 401) |  |
+| ticktick | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| tigris | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| tinybird | tenant | official | databases |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| todoist | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| trello | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| twelve-data | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| twilio | open | official | communication |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| typeform | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; advertises `offline_access`; refresh unverified |
+| upstox | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| upsun | api_key | official | cloud-infrastructure |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (19 tools listed; the key is checked only at tools/call) (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| uptime-robot | oauth | official | observability |  | oauth-manual | 2026-09-14 live | live PASS (connect + tools); discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
+| val-town | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| vapi | api_key | official | ai-ml |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
+| vercel | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified |
+| victoriametrics-cloud | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (24 tools listed; the key is checked only at tools/call) (F14) |
+| vimeo | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| vultr | api_key | official | cloud-infrastructure |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| wandb | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (30 tools listed; the key is checked only at tools/call) (F14) |
+| webflow | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| whop | api_key | official | commerce-payments |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| wix | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| wiz | oauth | official | security |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| wordpress-com | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| wrike | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) |  |
+| x-docs | open | official | knowledge-docs |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
+| xero | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| zapier | oauth | third_party | automation | ★ | oauth-manual | 2026-09-16 probe | discovery ✓ | self-registering, public client ok |
+| zenhub | api_key | official | productivity |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (21 tools listed; the key is checked only at tools/call) (F14) |
+| zerodha-kite | open | official | finance |  | yes | 2026-09-14 probe | open ✓ (initialize 200) | `login` tool session lives only within the calling turn; does not persist across turns and cannot authenticate in scheduled runs |
+| zoom | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| zoominfo | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); docs_url 404 |
