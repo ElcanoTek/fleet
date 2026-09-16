@@ -5,8 +5,10 @@ import {
   getRedirectUrl,
   getSessionCookieName,
   isSecureRequest,
+  verifySessionToken,
 } from "@/app/lib/auth";
 import { verifyOrigin } from "@/app/lib/csrf";
+import { getOidcConfig } from "@/app/lib/oidc";
 
 /**
  * POST /api/auth/logout
@@ -22,13 +24,30 @@ import { verifyOrigin } from "@/app/lib/csrf";
  * cookie lives on the shared parent domain (AUTH_COOKIE_DOMAIN) that chat's
  * host belongs to — and deleting the shared cookie signs the user out of the
  * other Elcano services too, which is the expected meaning of "log out".
+ *
+ * A session minted through central OIDC (source "oidc") also has a live
+ * session on the identity provider behind it. Clearing Fleet's cookie alone
+ * would leave that in place, and with FLEET_OIDC_AUTO_START the next visit
+ * would silently sign the user straight back in, so "log out" would appear to
+ * do nothing. For those sessions the browser is sent to the provider's
+ * RP-initiated logout (`<issuer>/logout?client_id=<ours>`), which on Elcano
+ * Auth ends the central session, fans a back-channel logout out to every
+ * application, and lands on Auth's login page. Password sessions have no
+ * central session and keep landing on /login.
  */
 export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
 
+  const session = await verifySessionToken(request.cookies.get(getSessionCookieName())?.value);
+  const oidc = getOidcConfig();
+  const landing =
+    session?.source === "oidc" && oidc
+      ? `${oidc.issuer}/logout?client_id=${encodeURIComponent(oidc.clientId)}`
+      : getRedirectUrl(request, "/login");
+
   const secure = isSecureRequest(request);
-  const res = NextResponse.redirect(getRedirectUrl(request, "/login"), { status: 303 });
+  const res = NextResponse.redirect(landing, { status: 303 });
 
   const attrs = `Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
   res.headers.append("Set-Cookie", `${getSessionCookieName()}=; ${attrs}`);

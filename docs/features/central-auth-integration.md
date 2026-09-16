@@ -41,6 +41,15 @@ error) never auto-starts, so the local admin password stays one URL away when
 Auth is unreachable. Auth supports `prompt=none` from `1521760`+; an older Auth
 ignores it and shows its own login form instead.
 
+Logging out of Fleet ends the central session too. `POST /api/auth/logout`
+clears Fleet's cookies as before and, when the session was minted through
+central OIDC, sends the browser to `<FLEET_OIDC_ISSUER>/logout?client_id=…`
+(Auth's RP-initiated logout). Auth revokes every central session of the
+account, fans a back-channel logout out to every registered application, and
+lands on its own login page. Without that step the very next visit would sign
+the user back in silently. Password-sourced Fleet sessions keep landing on
+`/login`.
+
 Register the exact callback and signed logout endpoint on Auth:
 
 ```text
