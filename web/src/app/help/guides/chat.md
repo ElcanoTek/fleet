@@ -119,6 +119,11 @@ The toolbar beneath the message box is a row of icons. Left to right:
 
 ## 3. Getting good answers
 
+If a provider fails after a completed tool step, the assistant can continue
+with that step's results through bounded recovery. A tool begun during the failed
+step still stops recovery to avoid repeating an uncertain action. Check the
+execution trail before manually repeating a request that ended with an error.
+
 Brief the assistant the way you would brief a capable colleague: say what you
 want, name what it should use, and react to what comes back. The quality of the
 answer follows the quality of the ask, and a few habits raise it every time.

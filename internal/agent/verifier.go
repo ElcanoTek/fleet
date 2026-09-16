@@ -26,6 +26,9 @@ const verifierTimeout = 2 * time.Minute
 
 const verifierMaxTaskChars = 12000
 
+// Initial review plus at most two repair reviews. Exhaustion never grants success.
+const maxCompletionVerifications = 3
+
 type verifierResult struct {
 	Missing   []string `json:"missing_actions"`
 	Reasoning string   `json:"reasoning"`
@@ -220,6 +223,9 @@ func parseVerifierResult(raw string) (verifierResult, error) {
 	var result verifierResult
 	if err := json.Unmarshal([]byte(candidate), &result); err != nil {
 		return verifierResult{}, err
+	}
+	if result.Missing == nil {
+		return verifierResult{}, fmt.Errorf("missing_actions must be an explicit array")
 	}
 	cleaned := result.Missing[:0]
 	for _, m := range result.Missing {
