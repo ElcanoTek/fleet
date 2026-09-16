@@ -5,10 +5,14 @@ import {
   getRedirectUrl,
   getSessionCookieName,
   isSecureRequest,
-  verifySessionToken,
 } from "@/app/lib/auth";
 import { verifyOrigin } from "@/app/lib/csrf";
-import { getOidcConfig, OIDC_NONCE_COOKIE, OIDC_STATE_COOKIE, OIDC_VERIFIER_COOKIE } from "@/app/lib/oidc";
+import {
+  getOidcConfig,
+  OIDC_NONCE_COOKIE,
+  OIDC_STATE_COOKIE,
+  OIDC_VERIFIER_COOKIE,
+} from "@/app/lib/oidc";
 
 /**
  * POST /api/auth/logout
@@ -25,28 +29,33 @@ import { getOidcConfig, OIDC_NONCE_COOKIE, OIDC_STATE_COOKIE, OIDC_VERIFIER_COOK
  * host belongs to — and deleting the shared cookie signs the user out of the
  * other Elcano services too, which is the expected meaning of "log out".
  *
- * A session minted through central OIDC (source "oidc") also has a live
- * session on the identity provider behind it. Clearing Fleet's cookie alone
- * would leave that in place, and with FLEET_OIDC_AUTO_START the next visit
- * would silently sign the user straight back in, so "log out" would appear to
- * do nothing. For those sessions the browser is sent to the provider's
- * RP-initiated logout (`<issuer>/logout?client_id=<ours>`), which on Elcano
- * Auth ends the central session, fans a back-channel logout out to every
- * application, and lands on Auth's login page. Every other case (password
- * session, no or unverifiable cookie) lands on /login?manual=1: the card with
- * both options, and no silent SSO attempt, so a logout can never be undone by
- * auto-start while an Auth cookie happens to exist. The in-progress OIDC
- * transaction cookies are cleared too, so a callback still in flight cannot
- * mint a fresh session after the user asked to leave.
+ * When central Auth is configured, the browser is then sent to the provider's
+ * RP-initiated logout (`<issuer>/logout?client_id=<ours>`) whatever kind of
+ * Fleet session it held — OIDC, password, or none at all. Fleet cannot see
+ * Auth's host-only cookie, so it cannot know whether this browser also holds
+ * a central session; a person who signed in to Fleet with the break-glass
+ * password AND separately at Auth expects one Sign out to end both. Only a
+ * top-level navigation can present that cookie to Auth, which ends every
+ * central session of the account (all devices, the owner's policy), fans a
+ * back-channel logout out to every application, clears its cookies and lands
+ * on its signed-out page; with no central session it lands on the same page
+ * with nothing to end. A deployment without central Auth (or with a malformed
+ * issuer) lands on /login?manual=1: the card with both options and no silent
+ * SSO attempt. The in-progress OIDC transaction cookies are cleared too, so a
+ * callback still in flight cannot mint a fresh session after the user asked
+ * to leave.
+ *
+ * The reverse direction is narrower on purpose: Auth's back-channel logout
+ * rotates the external epoch and so ends Fleet sessions that came from Auth,
+ * but leaves Fleet's own password sessions alone (break-glass isolation).
  */
 export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);
   if (!csrf.ok) return csrf.response;
 
-  const session = await verifySessionToken(request.cookies.get(getSessionCookieName())?.value);
   const oidc = getOidcConfig();
   let landing: URL | string = getRedirectUrl(request, "/login?manual=1");
-  if (session?.source === "oidc" && oidc) {
+  if (oidc) {
     // getOidcConfig only checks the issuer is non-empty; a malformed value
     // must not turn logout into a 500 that leaves every cookie in place.
     try {
@@ -81,7 +90,11 @@ export async function POST(request: NextRequest) {
     );
   }
   res.headers.append("Set-Cookie", `${getElcanoCookieName()}=; ${attrs}`);
-  for (const name of [OIDC_STATE_COOKIE, OIDC_NONCE_COOKIE, OIDC_VERIFIER_COOKIE]) {
+  for (const name of [
+    OIDC_STATE_COOKIE,
+    OIDC_NONCE_COOKIE,
+    OIDC_VERIFIER_COOKIE,
+  ]) {
     res.headers.append("Set-Cookie", `${name}=; ${attrs}`);
   }
 

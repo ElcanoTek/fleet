@@ -42,13 +42,22 @@ Auth is unreachable. Auth supports `prompt=none` from `1521760`+; an older Auth
 ignores it and shows its own login form instead.
 
 Logging out of Fleet ends the central session too. `POST /api/auth/logout`
-clears Fleet's cookies as before and, when the session was minted through
-central OIDC, sends the browser to `<FLEET_OIDC_ISSUER>/logout?client_id=…`
-(Auth's RP-initiated logout). Auth revokes every central session of the
-account, fans a back-channel logout out to every registered application, and
-lands on its own login page. Without that step the very next visit would sign
-the user back in silently. Password-sourced Fleet sessions keep landing on
-`/login`.
+clears Fleet's cookies as before and, whenever central Auth is configured,
+sends the browser to `<FLEET_OIDC_ISSUER>/logout?client_id=…` (Auth's
+RP-initiated logout) whatever kind of Fleet session it held: one minted
+through Auth, one from the break-glass password, or none. Fleet cannot see
+Auth's host-only cookie, so it cannot tell whether this browser also holds a
+central session, and a person who signed in both ways expects one Sign out to
+end both. Auth revokes every central session of the account (all devices),
+fans a back-channel logout out to every registered application, and lands on
+its own signed-out page; with no central session it lands there with nothing
+to end. Without that step the very next visit would sign the user back in
+silently. Only a deployment without central Auth lands on `/login?manual=1`.
+
+The reverse direction is narrower on purpose: Auth's back-channel logout
+(from Auth's own Sign out, Explorer or Lens) ends Fleet sessions that came
+from Auth, but a Fleet session from the break-glass password stays valid.
+That isolation is what makes the password a break-glass path.
 
 Register the exact callback and signed logout endpoint on Auth:
 
