@@ -16,22 +16,13 @@
 // "Operations Center"/"Back to chat" pills); pages now own only their
 // .set-section content.
 
+import { signOut } from "@/app/shared/signOut";
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { SetNav } from "./SetNav";
-
-// signOut posts the logout form (same semantics as the chat surface: the
-// browser navigates to /api/auth/logout, clearing the session cookie).
-function signOut() {
-  const form = document.createElement("form");
-  form.method = "post";
-  form.action = "/api/auth/logout";
-  document.body.appendChild(form);
-  form.submit();
-}
 
 export default function SettingsLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();

@@ -1,5 +1,6 @@
 "use client";
 
+import { signOutAfter } from "@/app/shared/signOut";
 import { useRef, useState } from "react";
 import { orchestratorApi, type Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
@@ -63,7 +64,14 @@ function OrchestratorSlimHeader() {
 
 // Top-level dashboard tabs. "tasks" is the legacy Recent Tasks view; the
 // admin-only entries (sla/usage/adoption) are render-guarded below.
-const DASH_TABS = ["tasks", "upcoming", "sla", "datasets", "usage", "adoption"] as const;
+const DASH_TABS = [
+  "tasks",
+  "upcoming",
+  "sla",
+  "datasets",
+  "usage",
+  "adoption",
+] as const;
 type DashTab = (typeof DASH_TABS)[number];
 
 // initialDashboardTab honors a ?tab= deep link (e.g. /orchestrator?tab=adoption,
@@ -76,10 +84,16 @@ type DashTab = (typeof DASH_TABS)[number];
 function initialDashboardTab(): DashTab {
   if (typeof window === "undefined") return "tasks";
   const want = new URLSearchParams(window.location.search).get("tab");
-  return want && (DASH_TABS as readonly string[]).includes(want) ? (want as DashTab) : "tasks";
+  return want && (DASH_TABS as readonly string[]).includes(want)
+    ? (want as DashTab)
+    : "tasks";
 }
 
-function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: boolean }) {
+function OrchestratorInner({
+  magicLinkLoginEnabled,
+}: {
+  magicLinkLoginEnabled: boolean;
+}) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
   const { servers, loading: serversLoading } = useMcpServers(session.signedIn);
@@ -94,7 +108,9 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   // modal stayed in Live activity with no way to the transcript short of
   // closing and reopening. Falls back to the snapshot for a row the current
   // page no longer lists (a filter change, a deleted row).
-  const liveLogTask = logTask ? (dashboard.tasks.find((t) => t.id === logTask.id) ?? logTask) : null;
+  const liveLogTask = logTask
+    ? (dashboard.tasks.find((t) => t.id === logTask.id) ?? logTask)
+    : null;
   // "Run now" (#1019): the task awaiting the kick-off confirm, and the in-flight
   // guard that keeps a double-click from submitting two runs.
   const [runNowTask, setRunNowTask] = useState<Task | null>(null);
@@ -125,7 +141,10 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
     setRunNowBusy(true);
     try {
       const created = await orchestratorApi.rerunTask(task.id);
-      showToast(`Started run ${created.id.slice(0, 8)}… from this task`, "success");
+      showToast(
+        `Started run ${created.id.slice(0, 8)}… from this task`,
+        "success",
+      );
       setRunNowTask(null);
       void dashboard.reload();
     } catch (err) {
@@ -149,7 +168,10 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
       setStopTask(null);
       void dashboard.reload();
     } catch (err) {
-      showToast(`Stop failed: ${err instanceof Error ? err.message : "unknown error"}`, "error");
+      showToast(
+        `Stop failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
     } finally {
       setStopBusy(false);
     }
@@ -165,7 +187,10 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
       setLogTask((current) => (current?.id === task.id ? null : current));
       void dashboard.reload();
     } catch (err) {
-      showToast(`Delete failed: ${err instanceof Error ? err.message : "unknown error"}`, "error");
+      showToast(
+        `Delete failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
     } finally {
       setDeleteBusy(false);
     }
@@ -180,7 +205,10 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   // selected while the tasks view rendered underneath it. (session.role, not
   // isAdmin: that alias is declared further down.)
   const effectiveTab: DashTab =
-    session.role !== "admin" && (tab === "sla" || tab === "usage" || tab === "adoption") ? "tasks" : tab;
+    session.role !== "admin" &&
+    (tab === "sla" || tab === "usage" || tab === "adoption")
+      ? "tasks"
+      : tab;
   const tabsRef = useRef<HTMLDivElement | null>(null);
   // switchTab pins the tab row to the top of the scroll container when the
   // user had scrolled: the new tab then starts at its beginning instead of
@@ -206,7 +234,8 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
       const scroller = bar?.closest(".overflow-y-auto");
       if (!bar || !(scroller instanceof HTMLElement)) return;
       if (scroller.scrollTop <= 1) return; // already at the top — don't move
-      const delta = bar.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      const delta =
+        bar.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
       scroller.scrollTop = Math.max(0, scroller.scrollTop + delta - 8);
     });
   };
@@ -249,14 +278,23 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
     return (
       <div className="container">
         <OrchestratorSlimHeader />
-        <div className="auth-section" role="region" aria-label="Server unreachable">
+        <div
+          className="auth-section"
+          role="region"
+          aria-label="Server unreachable"
+        >
           <div className="auth-fields stack-form">
             <h2>Can&apos;t reach the server</h2>
             <p className="caption" data-testid="orchestrator-unreachable">
-              The Operations Center backend didn&apos;t answer — it may be restarting. Your
-              sign-in state is untouched; try again in a moment.
+              The Operations Center backend didn&apos;t answer — it may be
+              restarting. Your sign-in state is untouched; try again in a
+              moment.
             </p>
-            <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => window.location.reload()}
+            >
               Retry
             </button>
           </div>
@@ -280,8 +318,9 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
             <div className="auth-fields stack-form">
               <h2>No access</h2>
               <p className="caption" data-testid="orchestrator-no-access">
-                You&apos;re signed in, but that identity isn&apos;t provisioned for the
-                Operations Center. Ask an administrator to provision your account.
+                You&apos;re signed in, but that identity isn&apos;t provisioned
+                for the Operations Center. Ask an administrator to provision
+                your account.
               </p>
             </div>
           </div>
@@ -309,22 +348,31 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
         collapse={railCollapse}
         account={{
           email: session.username ?? "",
-          onSignOut: () => void session.logout(),
+          // Clear the orchestrator's own state best-effort, then sign out
+          // the same way every other surface does: a top-level POST that
+          // ends Fleet's session and, for central-Auth sessions, Auth's too.
+          onSignOut: () => void signOutAfter(session.logout()),
         }}
       >
-        <div className={railCollapse.collapsed ? "sm:flex sm:justify-center" : ""}>
+        <div
+          className={railCollapse.collapsed ? "sm:flex sm:justify-center" : ""}
+        >
           <button
             type="button"
             data-testid="new-task-btn"
             className={[
               "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-status-success-border)] hover:bg-[var(--color-status-success-bg)]",
-              railCollapse.collapsed ? "sm:size-10 sm:w-10 sm:gap-0 sm:p-0" : "",
+              railCollapse.collapsed
+                ? "sm:size-10 sm:w-10 sm:gap-0 sm:p-0"
+                : "",
             ].join(" ")}
             data-tip={railCollapse.collapsed ? "New task" : undefined}
             onClick={() => setTaskModalOpen(true)}
           >
             <Icon name="plus" className="size-4" />
-            <span className={railCollapse.collapsed ? "sm:hidden" : ""}>New task</span>
+            <span className={railCollapse.collapsed ? "sm:hidden" : ""}>
+              New task
+            </span>
           </button>
         </div>
       </NavRail>
@@ -350,11 +398,18 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="container">
-            <div className="dashboard-content visible" data-testid="orchestrator-dashboard">
+            <div
+              className="dashboard-content visible"
+              data-testid="orchestrator-dashboard"
+            >
               <div className="dashboard-status-row">
                 <ServerClock />
               </div>
-              <StatsGrid stats={dashboard.stats} activeFilter={statFilter} onFilter={applyStatFilter} />
+              <StatsGrid
+                stats={dashboard.stats}
+                activeFilter={statFilter}
+                onFilter={applyStatFilter}
+              />
 
               <div
                 className="dashboard-tabs"
@@ -437,47 +492,50 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
                   collapses under the scroll position — the browser clamps to
                   the top, which reads as a jarring jump on phones. */}
               <div className="dashboard-tab-panel">
-              {tab === "datasets" ? (
-                <DatasetsPanel />
-              ) : tab === "upcoming" ? (
-                <UpcomingPanel />
-              ) : tab === "sla" && isAdmin ? (
-                <SLAReportPanel />
-              ) : tab === "usage" && isAdmin ? (
-                <UsagePanel />
-              ) : tab === "adoption" && isAdmin ? (
-                <AdoptionPanel />
-              ) : (
-                <>
-                  <SleepingTasks onOpen={setLogTask} refreshKey={dashboard.refreshNonce} />
-                  <TasksTable
-                  tasks={dashboard.tasks}
-                  total={dashboard.total}
-                  page={dashboard.page}
-                  pageSize={dashboard.pageSize}
-                  filters={dashboard.filters}
-                  tagOptions={dashboard.tagOptions}
-                  onFilters={dashboard.setFilters}
-                  onClearFilters={dashboard.clearFilters}
-                  onPage={dashboard.setPage}
-                  onPageSize={dashboard.setPageSize}
-                  onOpenLogs={setLogTask}
-                  loading={dashboard.loading}
-                  error={dashboard.error}
-                  onRetry={() => void dashboard.reload()}
-                  onEdit={setEditTask}
-                  onRunNow={setRunNowTask}
-                  onStop={setStopTask}
-                  onDelete={setDeleteTask}
-                />
-                {/* Only the task list auto-refreshes (useDashboardData); the
+                {tab === "datasets" ? (
+                  <DatasetsPanel />
+                ) : tab === "upcoming" ? (
+                  <UpcomingPanel />
+                ) : tab === "sla" && isAdmin ? (
+                  <SLAReportPanel />
+                ) : tab === "usage" && isAdmin ? (
+                  <UsagePanel />
+                ) : tab === "adoption" && isAdmin ? (
+                  <AdoptionPanel />
+                ) : (
+                  <>
+                    <SleepingTasks
+                      onOpen={setLogTask}
+                      refreshKey={dashboard.refreshNonce}
+                    />
+                    <TasksTable
+                      tasks={dashboard.tasks}
+                      total={dashboard.total}
+                      page={dashboard.page}
+                      pageSize={dashboard.pageSize}
+                      filters={dashboard.filters}
+                      tagOptions={dashboard.tagOptions}
+                      onFilters={dashboard.setFilters}
+                      onClearFilters={dashboard.clearFilters}
+                      onPage={dashboard.setPage}
+                      onPageSize={dashboard.setPageSize}
+                      onOpenLogs={setLogTask}
+                      loading={dashboard.loading}
+                      error={dashboard.error}
+                      onRetry={() => void dashboard.reload()}
+                      onEdit={setEditTask}
+                      onRunNow={setRunNowTask}
+                      onStop={setStopTask}
+                      onDelete={setDeleteTask}
+                    />
+                    {/* Only the task list auto-refreshes (useDashboardData); the
                     other tabs fetch once and carry their own Refresh button,
                     so the note is true only here. */}
-                <p className="refresh-note">
-                  Auto-refresh every {dashboard.refreshSeconds} seconds
-                </p>
-                </>
-              )}
+                    <p className="refresh-note">
+                      Auto-refresh every {dashboard.refreshSeconds} seconds
+                    </p>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -554,7 +612,9 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
         message={
           deleteTask
             ? `Permanently delete "${taskRunLabel(deleteTask)}" and its run history? This cannot be undone.${
-                deleteTask.name ? ` The name "${deleteTask.name}" becomes available again.` : ""
+                deleteTask.name
+                  ? ` The name "${deleteTask.name}" becomes available again.`
+                  : ""
               }`
             : ""
         }
@@ -570,7 +630,11 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
       <LogViewer
         task={liveLogTask}
         onClose={() => setLogTask(null)}
-        canStop={isAdmin || (!!session.username && logTask?.created_by_username === session.username)}
+        canStop={
+          isAdmin ||
+          (!!session.username &&
+            logTask?.created_by_username === session.username)
+        }
         onResubmitted={() => void dashboard.reload()}
         onEdit={(t) => {
           setLogTask(null);
@@ -583,7 +647,11 @@ function OrchestratorInner({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: b
   );
 }
 
-export function OrchestratorClient({ magicLinkLoginEnabled }: { magicLinkLoginEnabled: boolean }) {
+export function OrchestratorClient({
+  magicLinkLoginEnabled,
+}: {
+  magicLinkLoginEnabled: boolean;
+}) {
   return (
     <ToastProvider>
       <OrchestratorInner magicLinkLoginEnabled={magicLinkLoginEnabled} />

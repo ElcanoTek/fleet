@@ -11,6 +11,7 @@
 // setStates were moved off the synchronous render path (lazy init,
 // derive-in-render, handler-side resets, or a deferred microtask). Keep this
 // component clean — prefer those patterns over re-adding a rule disable.
+import { signOut } from "@/app/shared/signOut";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deriveConversationTitle } from "@/app/lib/title";
 import {
@@ -57,7 +58,7 @@ import {
   enabledOptionalMcpServerNames,
   reconcileMcpSelection,
 } from "./mcpSelection";
-import { classifyBootstrapFailure } from "./bootstrapFailure";
+import { bootstrapFailureDestination } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
@@ -75,10 +76,7 @@ import { ConversationSidebar } from "./ConversationSidebar";
 import { SavePromptDialog } from "./SavePromptDialog";
 import { ShareDialog } from "./ShareDialog";
 import { TeamChatViewer } from "./TeamChatViewer";
-import {
-  DownloadChatDialog,
-  type DownloadOptions,
-} from "./DownloadChatDialog";
+import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
@@ -730,7 +728,9 @@ export function ChatExperience({
   // knowledge-graph view.
   // "team" is the project's Team learnings, shown only while the open chat is
   // in a project (Item D4) — members manage them without leaving the chat.
-  const [memoryView, setMemoryView] = useState<"list" | "graph" | "team">("list");
+  const [memoryView, setMemoryView] = useState<"list" | "graph" | "team">(
+    "list",
+  );
   // Promotion of a personal memory into a project's team learnings (Item D5).
   // Non-null = the picker is open for this memory id (only when more than one
   // team-shared project is a candidate; with exactly one we just move it).
@@ -1365,7 +1365,13 @@ export function ChatExperience({
         knownProjectIds:
           projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined,
       }),
-    [conversations, filteredConversations, filterLabels, sidebarQuery, projects],
+    [
+      conversations,
+      filteredConversations,
+      filterLabels,
+      sidebarQuery,
+      projects,
+    ],
   );
 
   // With no query, show "default" + "advanced" + the top-ranked list. As
@@ -2167,7 +2173,9 @@ export function ChatExperience({
         const attachAt = new Map<number, Approval[]>();
         let orphaned: Approval[] = [];
         for (const card of approvalCards) {
-          const idx = card.toolCallId ? messageForCall.get(card.toolCallId) : undefined;
+          const idx = card.toolCallId
+            ? messageForCall.get(card.toolCallId)
+            : undefined;
           const target = idx ?? (lastAssistantIdx >= 0 ? lastAssistantIdx : -1);
           if (target >= 0) {
             attachAt.set(target, [...(attachAt.get(target) ?? []), card]);
@@ -2190,7 +2198,10 @@ export function ChatExperience({
             ],
           };
         }
-        if (orphaned.length > 0 || (memoryCards.length > 0 && lastAssistantIdx < 0)) {
+        if (
+          orphaned.length > 0 ||
+          (memoryCards.length > 0 && lastAssistantIdx < 0)
+        ) {
           // No assistant message exists yet — park the cards on a
           // placeholder so they still have somewhere to live.
           next.push({
@@ -2399,8 +2410,10 @@ export function ChatExperience({
   };
 
   // bulkPatchConversations targets the current multi-select set.
-  const bulkPatchConversations = (changes: { pinned?: boolean; labels?: string[] }) =>
-    patchConversationIds(Array.from(selectedIds), changes);
+  const bulkPatchConversations = (changes: {
+    pinned?: boolean;
+    labels?: string[];
+  }) => patchConversationIds(Array.from(selectedIds), changes);
 
   // setConversationLabels replaces a single conversation's label set. The bulk
   // endpoint replaces (not appends), so the rail computes the next full set
@@ -2411,13 +2424,6 @@ export function ChatExperience({
 
   // signOut posts the logout form (preserving the prior <form> POST semantics:
   // the browser navigates to /api/auth/logout, clearing the session cookie).
-  const signOut = () => {
-    const form = document.createElement("form");
-    form.method = "post";
-    form.action = "/api/auth/logout";
-    document.body.appendChild(form);
-    form.submit();
-  };
 
   const deleteConversationById = async (
     conversationId: string,
@@ -2805,7 +2811,8 @@ export function ChatExperience({
       const counts: Record<string, number> = {};
       for (const c of data.conversations ?? []) {
         if (!c.project_id) continue;
-        if (mine && (c.user_email ?? "").trim().toLowerCase() === mine) continue;
+        if (mine && (c.user_email ?? "").trim().toLowerCase() === mine)
+          continue;
         counts[c.project_id] = (counts[c.project_id] ?? 0) + 1;
       }
       setTeamSharedChatCounts(counts);
@@ -2843,7 +2850,9 @@ export function ChatExperience({
     const p = activeConversation?.project_id
       ? projects.find((x) => x.id === activeConversation.project_id)
       : undefined;
-    return p ? { id: p.id, name: p.name, teamShared: Boolean(p.team_id) } : null;
+    return p
+      ? { id: p.id, name: p.name, teamShared: Boolean(p.team_id) }
+      : null;
   })();
 
   // The memory modal's live tab. memoryView survives closing the modal and
@@ -3191,7 +3200,11 @@ export function ChatExperience({
       conversation: conv,
       projectID,
       target: target
-        ? { id: target.id, name: target.name, teamShared: Boolean(target.team_id) }
+        ? {
+            id: target.id,
+            name: target.name,
+            teamShared: Boolean(target.team_id),
+          }
         : null,
       // The audience is the team the chat is stamped with; the caller's own
       // team is the closest name this surface holds for it.
@@ -3355,15 +3368,17 @@ export function ChatExperience({
         await refreshConversations();
       } else {
         // Trust the STORED state, not what we asked for.
-        const stored = (await response.json().catch(() => null)) as
-          | { team_visible?: boolean }
-          | null;
+        const stored = (await response.json().catch(() => null)) as {
+          team_visible?: boolean;
+        } | null;
         if (stored && stored.team_visible !== visible) {
           await refreshConversations();
         }
       }
     } catch {
-      setShareError("Couldn't reach the server — the chat's team sharing is unchanged.");
+      setShareError(
+        "Couldn't reach the server — the chat's team sharing is unchanged.",
+      );
       await refreshConversations();
     } finally {
       setShareBusy(false);
@@ -4293,11 +4308,9 @@ export function ChatExperience({
             return;
           }
           if (!sessionResponse.ok) {
-            if (
-              classifyBootstrapFailure(sessionResponse.status) ===
-              "unauthenticated"
-            ) {
-              window.location.href = "/login";
+            const dest = bootstrapFailureDestination(sessionResponse.status);
+            if (dest) {
+              window.location.replace(dest);
             } else if (!cancelled) {
               setBackendUnreachable(true);
             }
@@ -4320,11 +4333,11 @@ export function ChatExperience({
           return;
         }
         if (!conversationsResponse.ok) {
-          if (
-            classifyBootstrapFailure(conversationsResponse.status) ===
-            "unauthenticated"
-          ) {
-            window.location.href = "/login";
+          const dest = bootstrapFailureDestination(
+            conversationsResponse.status,
+          );
+          if (dest) {
+            window.location.replace(dest);
           } else if (!cancelled) {
             setBackendUnreachable(true);
           }
@@ -4372,11 +4385,9 @@ export function ChatExperience({
         if (!sessionResponse.ok) {
           // A backend-down status is NOT a sign-out — treat it like the
           // transient failures below and keep the cached transcript.
-          if (
-            classifyBootstrapFailure(sessionResponse.status) ===
-            "unauthenticated"
-          ) {
-            window.location.href = "/login";
+          const dest = bootstrapFailureDestination(sessionResponse.status);
+          if (dest) {
+            window.location.replace(dest);
           }
           return;
         }
@@ -4653,8 +4664,8 @@ export function ChatExperience({
               {countDeletedByDeleteAllUnpinned(conversations) === 1
                 ? ""
                 : "s"}{" "}
-              will be removed. Pinned chats — and chats filed in a project —
-              are kept. This cannot be undone.
+              will be removed. Pinned chats — and chats filed in a project — are
+              kept. This cannot be undone.
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -4724,7 +4735,9 @@ export function ChatExperience({
               // togglePin flips the current value, so a chat that is already
               // pinned is left alone.
               void (async () => {
-                if (!(await applyMoveToProject(req.conversationId, req.projectID)))
+                if (
+                  !(await applyMoveToProject(req.conversationId, req.projectID))
+                )
                   return;
                 const conv = conversations.find(
                   (c) => c.id === req.conversationId,
@@ -4791,8 +4804,8 @@ export function ChatExperience({
               Move to team learnings
             </h2>
             <p className="mb-3 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
-              Pick the project this belongs to. It leaves your personal
-              memory and every member of that project sees it.
+              Pick the project this belongs to. It leaves your personal memory
+              and every member of that project sees it.
             </p>
             <div className="grid gap-1">
               {teamSharedProjects.map((p) => (
@@ -4871,23 +4884,23 @@ export function ChatExperience({
                 // activeMemoryView.
                 const active = activeMemoryView;
                 return (
-                <button
-                  key={view}
-                  type="button"
-                  aria-current={active === view ? "true" : undefined}
-                  className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
-                    active === view
-                      ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
-                      : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                  }`}
-                  onClick={() => setMemoryView(view)}
-                >
-                  {view === "list"
-                    ? "My memory"
-                    : view === "graph"
-                      ? "Graph"
-                      : "Team learnings"}
-                </button>
+                  <button
+                    key={view}
+                    type="button"
+                    aria-current={active === view ? "true" : undefined}
+                    className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
+                      active === view
+                        ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
+                        : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                    }`}
+                    onClick={() => setMemoryView(view)}
+                  >
+                    {view === "list"
+                      ? "My memory"
+                      : view === "graph"
+                        ? "Graph"
+                        : "Team learnings"}
+                  </button>
                 );
               })}
             </div>
@@ -5132,9 +5145,8 @@ export function ChatExperience({
             <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
               Long conversations get expensive and can hit the model&apos;s
               context window. Compacting replaces earlier turns with a short
-              summary so the next turn stays affordable and fits. The
-              originals collapse below a banner — you can expand them again
-              anytime.
+              summary so the next turn stays affordable and fits. The originals
+              collapse below a banner — you can expand them again anytime.
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -5173,9 +5185,10 @@ export function ChatExperience({
               projects.find(
                 (p) =>
                   p.id ===
-                  ((conversations.find((c) => c.id === shareDialog.id) ??
-                    archivedConversations.find((c) => c.id === shareDialog.id))
-                    ?.project_id ?? ""),
+                  ((
+                    conversations.find((c) => c.id === shareDialog.id) ??
+                    archivedConversations.find((c) => c.id === shareDialog.id)
+                  )?.project_id ?? ""),
               ) ?? null
             }
             myTeam={myTeam}
@@ -5246,8 +5259,7 @@ export function ChatExperience({
               </h2>
               <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
                 Are you sure you want to delete{" "}
-                <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>
-                ?
+                <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>?
               </p>
             </div>
 
@@ -5452,7 +5464,9 @@ export function ChatExperience({
                 )
               }
               onBack={() => setProjectHome(null)}
-              onOpenTeamChat={(conversationId) => setTeamChatView(conversationId)}
+              onOpenTeamChat={(conversationId) =>
+                setTeamChatView(conversationId)
+              }
               onOpenChat={(conversationId) => {
                 setProjectHome(null);
                 void loadConversation(conversationId);

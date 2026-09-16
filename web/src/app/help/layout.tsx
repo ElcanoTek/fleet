@@ -9,20 +9,11 @@
 // The rail renders with neither Chat nor the Operations Center active
 // (activeView="help"), the same way Settings does.
 
+import { signOut } from "@/app/shared/signOut";
 import { useEffect, useState, type ReactNode } from "react";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
-
-// signOut posts the logout form — the same semantics as the chat and settings
-// surfaces (the browser navigates to /api/auth/logout, clearing the cookie).
-function signOut() {
-  const form = document.createElement("form");
-  form.method = "post";
-  form.action = "/api/auth/logout";
-  document.body.appendChild(form);
-  form.submit();
-}
 
 export default function HelpLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
