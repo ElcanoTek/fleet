@@ -193,45 +193,82 @@ describe("proxy", () => {
   // the user is signed straight back in by auto-start (fleet.omcvic.com,
   // 2026-09-16). Unset or malformed issuers keep the strict policy.
   describe("form-action and the OIDC issuer", () => {
-    const original = process.env.FLEET_OIDC_ISSUER;
-    afterEach(() => {
-      if (original === undefined) delete process.env.FLEET_OIDC_ISSUER;
-      else process.env.FLEET_OIDC_ISSUER = original;
-    });
-
-    it("allows the issuer origin when central Auth is configured", async () => {
-      process.env.FLEET_OIDC_ISSUER = "https://auth.example.com/";
-      getSessionFromRequestMock.mockResolvedValue({
-        email: "a@x.com",
-        exp: 0,
-        source: "oidc",
-      });
+    const KEYS = [
+      "FLEET_OIDC_ISSUER",
+      "FLEET_OIDC_CLIENT_ID",
+      "FLEET_OIDC_CLIENT_SECRET",
+    ] as const;
+    const original = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+    const configure = (issuer: string | undefined, complete = true) => {
+      for (const k of KEYS) delete process.env[k];
+      if (issuer !== undefined) process.env.FLEET_OIDC_ISSUER = issuer;
+      if (complete) {
+        process.env.FLEET_OIDC_CLIENT_ID = "fleet";
+        process.env.FLEET_OIDC_CLIENT_SECRET = "s";
+      }
+    };
+    const formAction = async () => {
       const csp =
         (await proxy(req("/chat"))).headers.get("content-security-policy") ??
         "";
-      expect(csp).toContain("form-action 'self' https://auth.example.com;");
-      // Only the origin: no path, no trailing slash leaking into the directive.
-      expect(csp).not.toContain("auth.example.com/");
+      return csp.split("; ").find((d) => d.startsWith("form-action "));
+    };
+    afterEach(() => {
+      for (const k of KEYS) {
+        if (original[k] === undefined) delete process.env[k];
+        else process.env[k] = original[k]!;
+      }
     });
 
-    it("stays 'self' only when the issuer is unset or malformed", async () => {
+    it.each([
+      [
+        "https://auth.example.com/",
+        "form-action 'self' https://auth.example.com",
+      ],
+      [
+        "https://auth.example.com/tenant/x",
+        "form-action 'self' https://auth.example.com",
+      ],
+      [
+        "https://auth.example.com:8443/",
+        "form-action 'self' https://auth.example.com:8443",
+      ],
+      ["http://localhost:9000", "form-action 'self' http://localhost:9000"],
+    ])(
+      "allows only the issuer origin when central Auth is configured (%s)",
+      async (issuer, want) => {
+        getSessionFromRequestMock.mockResolvedValue({
+          email: "a@x.com",
+          exp: 0,
+          source: "oidc",
+        });
+        configure(issuer);
+        expect(await formAction()).toBe(want);
+      },
+    );
+
+    it.each([
+      ["unset", undefined],
+      ["not a URL", "not a url"],
+      ["non-http scheme", "javascript:alert(1)"],
+    ])("stays 'self' when the issuer is %s", async (_label, issuer) => {
       getSessionFromRequestMock.mockResolvedValue({
         email: "a@x.com",
         exp: 0,
         source: "elcano",
       });
-      delete process.env.FLEET_OIDC_ISSUER;
-      expect(
-        (await proxy(req("/chat"))).headers.get("content-security-policy"),
-      ).toContain("form-action 'self';");
-      process.env.FLEET_OIDC_ISSUER = "not a url";
-      expect(
-        (await proxy(req("/chat"))).headers.get("content-security-policy"),
-      ).toContain("form-action 'self';");
-      process.env.FLEET_OIDC_ISSUER = "javascript:alert(1)";
-      expect(
-        (await proxy(req("/chat"))).headers.get("content-security-policy"),
-      ).toContain("form-action 'self';");
+      configure(issuer);
+      expect(await formAction()).toBe("form-action 'self'");
+    });
+
+    it("stays 'self' when OIDC is only partially configured (issuer without client id/secret)", async () => {
+      getSessionFromRequestMock.mockResolvedValue({
+        email: "a@x.com",
+        exp: 0,
+        source: "elcano",
+      });
+      configure("https://auth.example.com/", false);
+      expect(await formAction()).toBe("form-action 'self'");
     });
   });
 
