@@ -47,9 +47,15 @@ export async function POST(request: NextRequest) {
   const oidc = getOidcConfig();
   let landing: URL | string = getRedirectUrl(request, "/login?manual=1");
   if (session?.source === "oidc" && oidc) {
-    const endSession = new URL("/logout", oidc.issuer);
-    endSession.searchParams.set("client_id", oidc.clientId);
-    landing = endSession.toString();
+    // getOidcConfig only checks the issuer is non-empty; a malformed value
+    // must not turn logout into a 500 that leaves every cookie in place.
+    try {
+      const endSession = new URL("/logout", oidc.issuer);
+      endSession.searchParams.set("client_id", oidc.clientId);
+      landing = endSession.toString();
+    } catch {
+      landing = getRedirectUrl(request, "/login?manual=1");
+    }
   }
 
   const secure = isSecureRequest(request);

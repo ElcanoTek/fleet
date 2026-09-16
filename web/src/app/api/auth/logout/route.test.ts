@@ -84,6 +84,20 @@ describe("POST /api/auth/logout", () => {
     expect(cleared(res, "elcano_session")).toHaveLength(1);
   });
 
+  it("still clears the cookies and lands locally when the OIDC issuer is malformed", async () => {
+    process.env.APP_SESSION_SECRET = "test-session-secret-please-ignore";
+    process.env.FLEET_OIDC_ISSUER = "not a url";
+    process.env.FLEET_OIDC_CLIENT_ID = "fleet";
+    process.env.FLEET_OIDC_CLIENT_SECRET = "secret-xyz";
+    const token = await createOidcSessionToken("alice@example.com", "epoch-1", "https://auth.example.com", "account-1");
+
+    const res = await POST(postReq("https://chat.elcanotek.com", token));
+
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login?manual=1");
+    expect(cleared(res, "elcano_session")).toHaveLength(1);
+  });
+
   it("keeps a password session on Fleet's own /login, even with OIDC configured", async () => {
     process.env.APP_SESSION_SECRET = "test-session-secret-please-ignore";
     process.env.FLEET_OIDC_ISSUER = "https://auth.example.com";
