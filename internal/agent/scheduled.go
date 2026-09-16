@@ -466,6 +466,7 @@ type scheduledPolicy struct {
 	task                 string
 	verified             bool
 	verificationAttempts int
+	terminalErr          error
 	reviewed             bool
 	// runCtx is the run's context, captured at build time so the end-of-run
 	// verifier's and phone-a-friend reviewer's model calls honor the run's
@@ -489,6 +490,9 @@ func (p *scheduledPolicy) RecordToolResult(toolName, rawInput, resultText string
 // model, the review the reviewer model — and is skipped when its model is absent;
 // the review gate is additionally skipped unless phoneAFriendEnabled.
 func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
+	if p.terminalErr != nil {
+		return false, nil
+	}
 	if ok, msgs := p.inner.CanFinish(round); !ok {
 		return false, msgs
 	}
@@ -502,20 +506,14 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 
 	// Gate 1: end-of-run verifier (completeness re-check).
 	if !p.verified && p.agent != nil && p.agent.fallbackModel != nil {
-		if p.verificationAttempts >= maxCompletionVerifications {
-			return false, []string{"Completion verification remains unresolved after the bounded repair attempts. Do not report success. Call confirm_audit(success=false, user_visible_summary=...) with the unresolved findings to abort explicitly."}
-		}
 		p.verificationAttempts++
 		records := buildToolExecSummary(p.agent.logSession)
 		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, records)
 		if err != nil {
 			log.Printf("verifier failed: %v", err)
-			return false, []string{"Completion verification could not produce a valid verdict. A successful audit alone does not clear this check. Finish only after verification succeeds, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly."}
+			return p.verificationFailed("Completion verification could not produce a valid verdict: " + err.Error())
 		} else if len(missing) > 0 {
-			return false, []string{fmt.Sprintf(
-				"End-of-run verification found unfinished required actions: %v. "+
-					"Complete each one now, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
-				missing)}
+			return p.verificationFailed(fmt.Sprintf("End-of-run verification found unresolved required actions: %v", missing))
 		}
 		p.verified = true
 	}
@@ -542,6 +540,20 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 
 	return true, nil
 }
+
+func (p *scheduledPolicy) verificationFailed(detail string) (bool, []string) {
+	if p.verificationAttempts >= maxCompletionVerifications {
+		// This is a host verification failure, not a model audit abort. In
+		// particular, an exhausted review must not loop against the audit guard
+		// that refuses aborts after all committed actions have executed.
+		p.terminalErr = fmt.Errorf("%w after %d checks: %s. Completed external actions have not been rolled back; inspect their results before rerunning",
+			agentcore.ErrCompletionUnverified, p.verificationAttempts, detail)
+		return false, nil
+	}
+	return false, []string{detail + " Check the existing tool evidence and complete genuinely missing work. Do not repeat successful external actions merely to supply evidence; use read-only verification instead. Completion will be checked again."}
+}
+
+func (p *scheduledPolicy) TerminalError() error { return p.terminalErr }
 
 // Unwrap exposes the inner ScheduledPolicy so agentcore's loop can reach the
 // orchestration state (usage accounting) and bind the confirm_audit tool —
@@ -799,19 +811,13 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 
 	res, err := agentcore.Run(ctx, agentcore.ModeScheduled, cfg, deps)
 	if err != nil {
-		// Round-cap exhaustion is the one hard-error path that hands back real
-		// work: agentcore carries the accumulated transcript + usage on the
-		// Result (#1125), and this driver is the only mode that can reach the
-		// cap. Returning here without persisting it dropped up to 20 rounds of
-		// paid assistant text out of the session log — the tool calls, the
-		// enforcement nudges and the token/cost counters were already written
-		// live by the observer and the orchestration accounting, so the
-		// final-text half was the only thing an operator could not see (#1271).
-		// The run still FAILED: nothing below changes the error, so failure
-		// classification (FailureTerminal), retries and notifications are
-		// exactly as before — only transcript visibility improves.
+		// Completion/round-cap failures carry accumulated partial work. Tool
+		// results and usage are already logged live; preserve the assistant
+		// text too, explicitly marked unverified, without changing the error.
 		if errors.Is(err, agentcore.ErrMaxEnforcementRounds) {
 			persistRoundCapPartial(a.logSession, res)
+		} else if errors.Is(err, agentcore.ErrCompletionUnverified) {
+			persistUnverifiedPartial(a.logSession, res)
 		}
 		return err
 	}
@@ -837,6 +843,19 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 // replay, not an authorization or classification signal.
 const messageTypeRoundCapTruncated = "round_cap_truncated"
 
+func persistUnverifiedPartial(session *LogSession, res agentcore.Result) {
+	if session == nil {
+		return
+	}
+	t := "completion_unverified"
+	session.AddMessageWithMetadata(roleUser, fmt.Sprintf(
+		"[unverified] Completion checks exhausted after %d rounds; the run failed verification. %d critical actions completed. External effects have not been rolled back. Any assistant text below is partial work, not a verified completion.",
+		res.Rounds, res.CriticalActionsExecuted), nil, nil, &t, nil, nil, "")
+	if text := strings.TrimSpace(res.FinalText); text != "" {
+		session.AddMessageWithMetadata(roleAssistant, text, nil, nil, &t, nil, nil, "")
+	}
+}
+
 // persistRoundCapPartial writes a round-cap-exhausted run's carried partial
 // work into the session log. Two records, in reading order:
 //
@@ -857,9 +876,9 @@ func persistRoundCapPartial(session *LogSession, res agentcore.Result) {
 		return
 	}
 	text := strings.TrimSpace(res.FinalText)
-	tail := "The partial work below is what those rounds produced; the run FAILED and published nothing."
+	tail := "The partial work below is what those rounds produced; the run FAILED. Completed external actions have not been rolled back."
 	if text == "" {
-		tail = "Those rounds produced no assistant text (tool work only); the run FAILED and published nothing."
+		tail = "Those rounds produced no assistant text (tool work only); the run FAILED. Completed external actions have not been rolled back."
 	}
 	t := messageTypeRoundCapTruncated
 	session.AddMessageWithMetadata(roleUser, fmt.Sprintf(

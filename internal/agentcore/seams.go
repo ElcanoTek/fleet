@@ -114,6 +114,14 @@ type Policy interface {
 	CanFinish(round int) (ok bool, enforcementMsgs []string)
 }
 
+// TerminalPolicy optionally reports a host-decided terminal failure after
+// CanFinish. It cannot grant completion or authorize a tool. Run preserves the
+// partial transcript and side-effect ledger and stops without another model
+// turn, rather than asking a model to terminate an already exhausted check.
+type TerminalPolicy interface {
+	TerminalError() error
+}
+
 // Note is the minimal injection shape for the admin-curated knowledge base
 // (the full model lives in internal/sched). It carries only what the prompt
 // assembly needs.

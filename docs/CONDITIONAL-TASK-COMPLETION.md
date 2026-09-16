@@ -16,12 +16,18 @@ The evidence projection is structural rather than an application field list:
 
 - It accepts JSON objects and the standard MCP text-content wrapper, recursively
   retaining short identifier strings, exact numbers, booleans and nulls under
-  their original field paths. Arbitrary wrapper and field names work alike.
+  JSON Pointer field paths. Literal dots stay in the key, so `/totals/rows.revenue`
+  cannot collide with `/totals/rows/revenue`. Arbitrary wrapper and field names
+  work alike. Short scalar arrays (including empty lists and date bounds) remain
+  whole; arrays of objects and oversized arrays are omitted.
 - The existing shared secret scrubber runs before extraction. Credential-bearing
-  subtrees, prose, URLs and bulk arrays are omitted. No tool-result text becomes
-  a verifier instruction or an authorization grant.
-- Input is limited to 1 MiB; each projection is capped at 4 KiB, 32 fields,
-  256 visited entries and four nested object levels. Sorting makes selection
+  subtrees (including dotted credential keys), prose, URLs and bulk arrays are
+  omitted. Separate `arguments_omitted` and `result_omitted` flags expose
+  omissions. No tool-result text becomes a verifier instruction or an
+  authorization grant.
+- Input is limited to 1 MiB; each projection is capped at 4 KiB, 64 fields,
+  256 visited entries and eight nested object levels. Scalar arrays are limited
+  to 32 elements and share the same byte cap. Sorting makes selection
   deterministic. Unsupported, malformed or omitted evidence remains unknown.
 
 The core records complete, redacted tool results before making the 4,000-byte
@@ -32,8 +38,15 @@ does not crowd out the enclosing outcome/version fields.
 The verifier remains a model-based check, not deterministic proof of a business
 workflow. It runs at most three times: the initial check and two repair reviews.
 Missing actions or a malformed/failed verifier response keep completion blocked;
-exhaustion requests an explicit abort and never grants success. The existing
-enforcement round cap stops a model that refuses to abort. Each call is metered
+the third unsuccessful check returns `ErrCompletionUnverified` directly through
+the governed core, preserving partial work, usage and the completed-action count.
+It does not ask the model to abort or run more tools: an audit abort may be
+refused after all committed writes succeeded. A verifier failure remains a
+terminal failure under the existing retry policy, never a successful completion.
+Its transcript records `completion_unverified` and explains that completed
+external actions have not been rolled back. The verifier and repair instructions
+request read-only checks when evidence of an existing action is missing, rather
+than asking for that successful mutation again. Each call is metered
 in auxiliary usage. Task authors and bundles still own workflow contracts.
 
 An explicit `confirm_audit(success=true, critical_actions=[])` now records
@@ -76,6 +89,8 @@ protocols remain in external config bundles; Fleet does not import or depend on
 a producer application. This does not edit existing tasks or add a scheduling
 UI/import API. Regenerate producer prompts to gain the prerequisite check.
 Existing recurrence, retry and sandbox permissions are unchanged.
+Existing dead-letter records are not rewritten, and deploying this fix does not
+replay them. Check completed tool results before rerunning a failed task.
 Provider recovery is described in [completed-step recovery](COMPLETED-STEP-RECOVERY.md).
 It never blindly retries an external mutation. Customer source-grain migrations
 remain outside the generic engine.

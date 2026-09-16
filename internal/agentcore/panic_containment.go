@@ -405,5 +405,10 @@ func callPolicyCanFinish(policy Policy, round int, attribution panicAttribution)
 		}
 	}()
 	ok, messages = policy.CanFinish(round)
+	if terminal, supported := policy.(TerminalPolicy); supported {
+		if err := terminal.TerminalError(); err != nil {
+			return false, nil, err
+		}
+	}
 	return ok, messages, nil
 }

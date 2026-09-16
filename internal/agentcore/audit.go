@@ -375,17 +375,17 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 // learned it happened, so a run that printed ABORTED_WITH_FLAGS and called
 // confirm_audit(success=false) landed as status: success.
 //
-// executedCritical counts critical tools the run actually ran. Zero means the
-// run touched nothing outside itself, which for a daily refresh is a real,
-// healthy, and repeatable outcome — and the one an operator most needs to see
-// repeated, because N of them in a row means the upstream is dead.
+// executedCritical counts successful critical calls, including those audited
+// before their first attempt. The pending/completed list only tracks calls
+// that were initially blocked. Zero does not rule out effects from tools the
+// bundle did not declare critical.
 func (o *orchestrationState) auditVerdict() (aborted bool, summary string, executedCritical int) {
 	if o == nil {
 		return false, "", 0
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.auditTerminalFailure, o.auditSummary, len(o.completedCriticalActions)
+	return o.auditTerminalFailure, o.auditSummary, o.criticalExecutedCount
 }
 
 func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {

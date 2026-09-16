@@ -36,6 +36,8 @@ func TestClassifyFailure(t *testing.T) {
 		// never cleared in 20 rounds, so another attempt spends another window
 		// to reach the same place — terminal, never retried by default.
 		{agentcore.ErrMaxEnforcementRounds, models.FailureTerminal},
+		{agentcore.ErrCompletionUnverified, models.FailureTerminal},
+		{fmt.Errorf("%w: verifier timed out after a completed write", agentcore.ErrCompletionUnverified), models.FailureTerminal},
 		{fmt.Errorf("%w (20) exceeded without task completion", agentcore.ErrMaxEnforcementRounds), models.FailureTerminal},
 	}
 	for _, c := range cases {

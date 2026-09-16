@@ -983,8 +983,11 @@ audit/finish enforcement. When the scheduled policy clears a run, the
 verifier's model call is just another host LLM call) and returns any missing
 required actions, which the loop turns into a repair round before it
 is allowed to finish. Repairs are checked again, up to three verifier calls in
-total. A verifier error keeps completion blocked; exhausting checks requests an
-explicit abort rather than allowing success. Tool evidence is read from complete
+total. A verifier error keeps completion blocked; the third unsuccessful check
+returns `ErrCompletionUnverified` through the core without asking the model to
+abort. Partial work and completed critical actions remain recorded, and the
+transcript identifies the verification failure without claiming external actions
+were rolled back. Tool evidence is read from complete
 redacted records, before UI preview truncation. So core
 governance — per-tool policy, audit, finish enforcement, MCP credential
 brokering, note staging, usage/cost, **and the end-of-run verifier** — applies to
