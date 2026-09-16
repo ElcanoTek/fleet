@@ -17,17 +17,18 @@ import {
 /**
  * POST /api/auth/logout
  *
- * Clears BOTH session cookies and returns the user to chat's own /login page:
- *   - elcano_session — chat's HMAC password cookie (host-only).
- *   - elcano_auth     — the shared Ed25519 cookie minted by the auth service.
+ * The one sign-out for every Fleet surface. It always clears BOTH session
+ * cookies:
+ *   - elcano_session — Fleet's HMAC cookie (host-only; password or OIDC).
+ *   - elcano_auth     — the shared Ed25519 cookie minted by the legacy
+ *                       magic-link auth service.
  *
- * We clear elcano_auth here (rather than bouncing through auth/logout) for two
- * reasons: the user should land back on chat's login, not auth's; and if we
- * left elcano_auth in place, an Elcano-email user would be logged straight back
- * in by the middleware and never see /login. chat can delete it because the
- * cookie lives on the shared parent domain (AUTH_COOKIE_DOMAIN) that chat's
- * host belongs to — and deleting the shared cookie signs the user out of the
- * other Elcano services too, which is the expected meaning of "log out".
+ * elcano_auth is cleared here because leaving it in place would let the
+ * middleware sign an Elcano-email user straight back in. Fleet can delete it
+ * because the cookie lives on the shared parent domain (AUTH_COOKIE_DOMAIN)
+ * that Fleet's host belongs to, and deleting the shared cookie signs the user
+ * out of the other legacy Elcano services too. Where the browser lands next
+ * depends on whether central Auth is configured, below.
  *
  * When central Auth is configured, the browser is then sent to the provider's
  * RP-initiated logout (`<issuer>/logout?client_id=<ours>`) whatever kind of
