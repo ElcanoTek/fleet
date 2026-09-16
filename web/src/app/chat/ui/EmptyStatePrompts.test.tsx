@@ -211,7 +211,7 @@ describe("ProtocolPillForm — textarea field", () => {
   it("accepts multiple lines and carries them into the preview and the prompt", () => {
     const onRun = vi.fn();
     renderForm(TEXTAREA_PILL, { onRun });
-    const multi = "CTR, goal 0.15%\nCPA, conversions / spend, under $40\nUnallocated conversions, report separately";
+    const multi = "CTR, goal 0.15%\nCPA, spend / conversions, under $40\nUnallocated conversions, report separately";
 
     fireEvent.change(screen.getByLabelText(/client name/i), { target: { value: "Meridian Auto" } });
     const box = screen.getByLabelText(/kpis and goals/i);
