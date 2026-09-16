@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getRedirectUrl, getSessionFromRequest, refreshSessionCookie } from "@/app/lib/auth";
+import {
+  getRedirectUrl,
+  getSessionFromRequest,
+  refreshSessionCookie,
+} from "@/app/lib/auth";
 import { BUILD_ID_HEADER, currentBuildId } from "@/app/lib/buildId";
 
 // ONE gate for the unified frontend. It protects BOTH views — /chat/* and
@@ -73,6 +77,33 @@ const publicApiPaths = new Set([
 //     so pinning img-src/style-src/font-src/connect-src to 'self' (+ data:)
 //     closes the exfil channel while same-origin workspace images, inline
 //     styles, and all markdown text still render.
+// formAction is where a form on a Fleet page may be submitted to — and, in
+// Chromium, where a redirect that follows such a submission may land. The
+// sign-out button is a form POST to /api/auth/logout; for a session that came
+// from central Auth that route answers with a 303 to the provider's
+// RP-initiated logout on the Auth origin. With "form-action 'self'" alone the
+// browser cancels that cross-origin hop (a CSP violation, not an error the
+// page can see), Fleet's cookie is already gone, the next 401 sends the user
+// to bare /login, and FLEET_OIDC_AUTO_START signs them straight back in — so
+// "log out" looks like it did nothing while the central session lives on.
+// Allowing the issuer's origin is the whole fix; a missing or malformed
+// issuer keeps the strict policy.
+function formAction(): string {
+  // Same "is OIDC on" rule as getOidcConfig: issuer, client id and secret all
+  // present. A stale or partial environment must not widen the policy.
+  const issuer = (process.env.FLEET_OIDC_ISSUER ?? "").trim();
+  const clientId = (process.env.FLEET_OIDC_CLIENT_ID ?? "").trim();
+  const clientSecret = (process.env.FLEET_OIDC_CLIENT_SECRET ?? "").trim();
+  if (!issuer || !clientId || !clientSecret) return "'self'";
+  try {
+    const u = new URL(issuer);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return "'self'";
+    return `'self' ${u.origin}`;
+  } catch {
+    return "'self'";
+  }
+}
+
 function contentSecurityPolicy(pathname: string): string {
   const dev = process.env.NODE_ENV === "development";
   const shared = pathname.startsWith("/shared/");
@@ -87,7 +118,7 @@ function contentSecurityPolicy(pathname: string): string {
     "frame-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
-    "form-action 'self'",
+    `form-action ${formAction()}`,
     "frame-ancestors 'none'",
     "worker-src 'self' blob:",
   ].join("; ");
@@ -101,7 +132,10 @@ function decorate(res: NextResponse, pathname: string): NextResponse {
   res.headers.set("X-Frame-Options", "DENY");
   res.headers.set("X-Content-Type-Options", "nosniff");
   res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  res.headers.set(
+    "Strict-Transport-Security",
+    "max-age=31536000; includeSubDomains",
+  );
   return res;
 }
 
@@ -143,7 +177,10 @@ export async function proxy(request: NextRequest) {
 
   if (publicPaths.has(pathname)) {
     if (session) {
-      return decorate(NextResponse.redirect(getRedirectUrl(request, "/chat")), pathname);
+      return decorate(
+        NextResponse.redirect(getRedirectUrl(request, "/chat")),
+        pathname,
+      );
     }
     return decorate(NextResponse.next(), pathname);
   }
@@ -157,10 +194,16 @@ export async function proxy(request: NextRequest) {
   // the real authorization.
   if (!session && !hasBearer(request)) {
     if (pathname.startsWith("/api/")) {
-      return decorate(NextResponse.json({ error: "Unauthorized" }, { status: 401 }), pathname);
+      return decorate(
+        NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+        pathname,
+      );
     }
 
-    return decorate(NextResponse.redirect(getRedirectUrl(request, "/login")), pathname);
+    return decorate(
+      NextResponse.redirect(getRedirectUrl(request, "/login")),
+      pathname,
+    );
   }
 
   const res = decorate(NextResponse.next(), pathname);
