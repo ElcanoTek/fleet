@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 // Middleware is the ONE request-time gate for the unified frontend. It must:
@@ -11,13 +11,17 @@ import { NextRequest } from "next/server";
 const getSessionFromRequestMock = vi.fn();
 const refreshSessionCookieMock = vi.fn();
 const getRedirectUrlMock = vi.fn(
-  (_req: unknown, pathname: string) => new URL(`https://chat.elcanotek.com${pathname}`),
+  (_req: unknown, pathname: string) =>
+    new URL(`https://chat.elcanotek.com${pathname}`),
 );
 
 vi.mock("@/app/lib/auth", () => ({
-  getSessionFromRequest: (...args: unknown[]) => getSessionFromRequestMock(...args),
-  refreshSessionCookie: (...args: unknown[]) => refreshSessionCookieMock(...args),
-  getRedirectUrl: (...args: unknown[]) => getRedirectUrlMock(...(args as [unknown, string])),
+  getSessionFromRequest: (...args: unknown[]) =>
+    getSessionFromRequestMock(...args),
+  refreshSessionCookie: (...args: unknown[]) =>
+    refreshSessionCookieMock(...args),
+  getRedirectUrl: (...args: unknown[]) =>
+    getRedirectUrlMock(...(args as [unknown, string])),
 }));
 vi.mock("@/app/lib/buildId", () => ({
   BUILD_ID_HEADER: "x-build-id",
@@ -41,7 +45,9 @@ describe("proxy", () => {
     getSessionFromRequestMock.mockResolvedValue(null);
     const res = await proxy(req("/"));
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login");
+    expect(res.headers.get("location")).toBe(
+      "https://chat.elcanotek.com/login",
+    );
   });
 
   it("401s an unauthenticated /api request (no redirect loop)", async () => {
@@ -51,14 +57,22 @@ describe("proxy", () => {
   });
 
   it("lets an authenticated request through (either cookie)", async () => {
-    getSessionFromRequestMock.mockResolvedValue({ email: "a@x.com", exp: 0, source: "elcano" });
+    getSessionFromRequestMock.mockResolvedValue({
+      email: "a@x.com",
+      exp: 0,
+      source: "elcano",
+    });
     const res = await proxy(req("/"));
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
   });
 
   it("bounces an already-authenticated user away from /login to /chat", async () => {
-    getSessionFromRequestMock.mockResolvedValue({ email: "a@x.com", exp: 0, source: "password" });
+    getSessionFromRequestMock.mockResolvedValue({
+      email: "a@x.com",
+      exp: 0,
+      source: "password",
+    });
     const res = await proxy(req("/login"));
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/chat");
@@ -91,18 +105,26 @@ describe("proxy", () => {
     getSessionFromRequestMock.mockResolvedValue(null);
     const res = await proxy(req("/chat"));
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login");
+    expect(res.headers.get("location")).toBe(
+      "https://chat.elcanotek.com/login",
+    );
   });
 
   it("gates /orchestrator/* with the SAME session check (no separate gate)", async () => {
     getSessionFromRequestMock.mockResolvedValue(null);
     const res = await proxy(req("/orchestrator"));
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe("https://chat.elcanotek.com/login");
+    expect(res.headers.get("location")).toBe(
+      "https://chat.elcanotek.com/login",
+    );
   });
 
   it("admits an elcano_auth session to /orchestrator without re-login", async () => {
-    getSessionFromRequestMock.mockResolvedValue({ email: "a@x.com", exp: 0, source: "elcano" });
+    getSessionFromRequestMock.mockResolvedValue({
+      email: "a@x.com",
+      exp: 0,
+      source: "elcano",
+    });
     const res = await proxy(req("/orchestrator"));
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
@@ -111,7 +133,9 @@ describe("proxy", () => {
   // ── BOTH login paths resolve ────────────────────────────────────────────
   it("admits a request carrying a moc Bearer token (no cookie)", async () => {
     getSessionFromRequestMock.mockResolvedValue(null);
-    const res = await proxy(req("/orchestrator", { authorization: "Bearer moc-token-123" }));
+    const res = await proxy(
+      req("/orchestrator", { authorization: "Bearer moc-token-123" }),
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
   });
@@ -151,12 +175,64 @@ describe("proxy", () => {
   });
 
   it("carries the baseline CSP on authenticated pages (external https images allowed)", async () => {
-    getSessionFromRequestMock.mockResolvedValue({ email: "a@x.com", exp: 0, source: "elcano" });
+    getSessionFromRequestMock.mockResolvedValue({
+      email: "a@x.com",
+      exp: 0,
+      source: "elcano",
+    });
     const res = await proxy(req("/chat"));
     const csp = res.headers.get("content-security-policy") ?? "";
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("img-src 'self' data: blob: https:");
     expect(csp).toContain("frame-ancestors 'none'");
+  });
+
+  // Sign-out is a form POST whose 303 lands on central Auth's RP-initiated
+  // logout. Chromium checks form-action against that redirect too, so the
+  // issuer origin must be allowed or the browser silently cancels the hop and
+  // the user is signed straight back in by auto-start (fleet.omcvic.com,
+  // 2026-09-16). Unset or malformed issuers keep the strict policy.
+  describe("form-action and the OIDC issuer", () => {
+    const original = process.env.FLEET_OIDC_ISSUER;
+    afterEach(() => {
+      if (original === undefined) delete process.env.FLEET_OIDC_ISSUER;
+      else process.env.FLEET_OIDC_ISSUER = original;
+    });
+
+    it("allows the issuer origin when central Auth is configured", async () => {
+      process.env.FLEET_OIDC_ISSUER = "https://auth.example.com/";
+      getSessionFromRequestMock.mockResolvedValue({
+        email: "a@x.com",
+        exp: 0,
+        source: "oidc",
+      });
+      const csp =
+        (await proxy(req("/chat"))).headers.get("content-security-policy") ??
+        "";
+      expect(csp).toContain("form-action 'self' https://auth.example.com;");
+      // Only the origin: no path, no trailing slash leaking into the directive.
+      expect(csp).not.toContain("auth.example.com/");
+    });
+
+    it("stays 'self' only when the issuer is unset or malformed", async () => {
+      getSessionFromRequestMock.mockResolvedValue({
+        email: "a@x.com",
+        exp: 0,
+        source: "elcano",
+      });
+      delete process.env.FLEET_OIDC_ISSUER;
+      expect(
+        (await proxy(req("/chat"))).headers.get("content-security-policy"),
+      ).toContain("form-action 'self';");
+      process.env.FLEET_OIDC_ISSUER = "not a url";
+      expect(
+        (await proxy(req("/chat"))).headers.get("content-security-policy"),
+      ).toContain("form-action 'self';");
+      process.env.FLEET_OIDC_ISSUER = "javascript:alert(1)";
+      expect(
+        (await proxy(req("/chat"))).headers.get("content-security-policy"),
+      ).toContain("form-action 'self';");
+    });
   });
 
   // Regression: the root layout links /api/theme as a render-blocking
@@ -178,13 +254,23 @@ describe("proxy", () => {
   );
 
   it("touches the session cookie on an authenticated pass-through (ADR-0064 idle limit)", async () => {
-    const session = { email: "a@x.com", exp: 0, idle: 0, epoch: "e", source: "password" };
+    const session = {
+      email: "a@x.com",
+      exp: 0,
+      idle: 0,
+      epoch: "e",
+      source: "password",
+    };
     getSessionFromRequestMock.mockResolvedValue(session);
     const request = req("/api/conversations");
     const res = await proxy(request);
     expect(res.status).toBe(200);
     expect(refreshSessionCookieMock).toHaveBeenCalledTimes(1);
-    expect(refreshSessionCookieMock).toHaveBeenCalledWith(request, res, session);
+    expect(refreshSessionCookieMock).toHaveBeenCalledWith(
+      request,
+      res,
+      session,
+    );
   });
 
   it("does not touch the cookie on redirects, 401s, public or bearer-only requests", async () => {
@@ -192,8 +278,14 @@ describe("proxy", () => {
     await proxy(req("/chat"));
     await proxy(req("/api/conversations"));
     await proxy(req("/login"));
-    await proxy(req("/api/orchestrator/tasks", { authorization: "Bearer moc-token" }));
-    getSessionFromRequestMock.mockResolvedValue({ email: "a@x.com", exp: 0, source: "password" });
+    await proxy(
+      req("/api/orchestrator/tasks", { authorization: "Bearer moc-token" }),
+    );
+    getSessionFromRequestMock.mockResolvedValue({
+      email: "a@x.com",
+      exp: 0,
+      source: "password",
+    });
     await proxy(req("/login"));
     await proxy(req("/shared/abc"));
     expect(refreshSessionCookieMock).not.toHaveBeenCalled();
@@ -202,8 +294,12 @@ describe("proxy", () => {
   it("stamps the CSP on redirect and 401 responses too", async () => {
     getSessionFromRequestMock.mockResolvedValue(null);
     const redirect = await proxy(req("/chat"));
-    expect(redirect.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(redirect.headers.get("content-security-policy")).toContain(
+      "default-src 'self'",
+    );
     const denied = await proxy(req("/api/conversations"));
-    expect(denied.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(denied.headers.get("content-security-policy")).toContain(
+      "default-src 'self'",
+    );
   });
 });
