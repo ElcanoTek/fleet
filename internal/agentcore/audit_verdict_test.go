@@ -17,7 +17,7 @@ func TestAuditVerdictSurvivesTheRun(t *testing.T) {
 
 	orch.auditTerminalFailure = true
 	orch.auditSummary = "page unchanged; no file-backed update tool available"
-	orch.completedCriticalActions = []string{"mcp_pages_update_page_data"}
+	orch.criticalExecutedCount = 1
 	aborted, summary, executed := orch.auditVerdict()
 	if !aborted {
 		t.Error("a terminal audit failure must be visible to the driver")

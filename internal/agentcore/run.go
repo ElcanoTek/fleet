@@ -254,10 +254,9 @@ type Result struct {
 	// AuditSummary is the agent's own user_visible_summary from that audit: why
 	// it aborted, in its words. Empty unless AuditAborted.
 	AuditSummary string
-	// CriticalActionsExecuted counts the audit-gated (mutating) tools the run
-	// actually ran. Zero means the run changed nothing outside itself — a real
-	// and healthy outcome for a scheduled refresh whose source had nothing new,
-	// and one an operator needs to be able to see repeat.
+	// CriticalActionsExecuted counts successful audit-gated tool calls, including
+	// calls audited before their first attempt. It does not count effects from
+	// tools the bundle did not declare critical or infer their absence.
 	CriticalActionsExecuted int
 }
 
@@ -296,6 +295,10 @@ var ErrAuditAborted = errors.New("run aborted by its own self-audit")
 // The wrapped message is unchanged too ("max enforcement rounds (N) exceeded
 // without task completion") — operators and log greps still match it.
 var ErrMaxEnforcementRounds = errors.New("max enforcement rounds")
+
+// ErrCompletionUnverified means the bounded completion checks exhausted their
+// repair reviews. It is a failure, even if some external actions succeeded.
+var ErrCompletionUnverified = errors.New("completion verification unresolved")
 
 // RunUsage is the accumulated token + cost accounting for a run. It follows the
 // LogSession token convention: PromptTokens INCLUDES cache reads, CachedTokens
@@ -594,7 +597,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 
 		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, panicAttribution)
 		if policyErr != nil {
-			return Result{}, policyErr
+			res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round+1)
+			res.Cancelled = false
+			return withAuditVerdict(res, usageOrch), policyErr
 		}
 		if canFinish {
 			// Interactive-only finalize hook (leaked-tool-call / forced summary).
@@ -700,7 +705,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// round-cap-truncated, before it returns the error (#1271).
 	res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, maxEnforcementRounds)
 	res.Cancelled = false
-	return res, fmt.Errorf("%w (%d) exceeded without task completion", ErrMaxEnforcementRounds, maxEnforcementRounds)
+	return withAuditVerdict(res, usageOrch), fmt.Errorf("%w (%d) exceeded without task completion", ErrMaxEnforcementRounds, maxEnforcementRounds)
 }
 
 // runCompletion carries the last ordinary round into the single terminal
@@ -803,10 +808,10 @@ func completeRun(ctx context.Context, in runCompletion) (Result, error) {
 	}, in.orchestration), nil
 }
 
-// withAuditVerdict stamps a finished run's Result with what its own self-audit
-// concluded. Applied at every completeRun exit so the structured-output failure
-// path carries it too: a run can abort AND fail its output contract, and the
-// abort is the more informative of the two.
+// withAuditVerdict stamps completed and verification/round-cap failure results
+// with the audit verdict and successful critical-call count. Every completeRun
+// exit applies it too: a run can abort AND fail its output contract, and the
+// audit abort is the more informative of the two.
 func withAuditVerdict(res Result, orch *orchestrationState) Result {
 	res.AuditAborted, res.AuditSummary, res.CriticalActionsExecuted = orch.auditVerdict()
 	return res
