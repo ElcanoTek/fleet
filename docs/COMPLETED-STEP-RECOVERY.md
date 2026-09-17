@@ -20,11 +20,16 @@ normal context/budget/governance checks run again on the resumed input.
 
 The provider adapter can retain a numeric HTTP code in an SSE error body while
 losing its retry classification. Fleet recovers that code/type from the structured
-body without logging it. Explicit 400/401 errors stay terminal; 429/5xx errors
+body without logging it. Explicit 401/402 (credential/billing) errors stay
+terminal; any other explicit 4xx is a per-request rejection that promotes a
+configured fallback model once, from the last safe checkpoint, and is otherwise
+terminal ([ADR-0067](adr/0067-fallback-on-provider-rejection.md)); 429/5xx errors
 follow the bounded recovery ladder. The exact opaque `stream error: Provider
 returned error` can also use bounded recovery without inventing an HTTP status.
 Other unclassified errors stay terminal. Terminal provider errors include the
-available status in their error description. Exported logs retain the model,
+available status in their error description and, when a gateway relayed an
+upstream failure, the upstream provider name, error type, provider code and a
+redacted, bounded raw message read from `error.metadata`. Exported logs retain the model,
 classification, available status (zero means unknown), and a bounded redacted
 message; raw provider response bodies are not logged. This does not change `max_retries`,
 network permissions, fallback configuration or any connector contract.

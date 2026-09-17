@@ -2,7 +2,10 @@
 
 Status: accepted; suppression clause superseded by
 [ADR-0035](0035-side-effect-gated-stream-recovery.md) (recovery after stream
-commitment is gated on tool side effects, not on any semantic event)
+commitment is gated on tool side effects, not on any semantic event);
+promotion clause narrowed by
+[ADR-0067](0067-fallback-on-provider-rejection.md) (a per-request 4xx
+rejection also promotes `fallback_model`, from a safe checkpoint)
 
 ## Context
 

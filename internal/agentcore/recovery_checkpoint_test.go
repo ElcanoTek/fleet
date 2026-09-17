@@ -126,7 +126,8 @@ func TestProviderStreamStatusClassification(t *testing.T) {
 		status int
 	}{
 		{`503`, streamErrorRetryExhausted, 503}, {`"429"`, streamErrorRetryExhausted, 429},
-		{`401`, streamErrorFatal, 401}, {`400`, streamErrorFatal, 400},
+		{`401`, streamErrorFatal, 401}, {`402`, streamErrorFatal, 402},
+		{`400`, streamErrorProviderRejected, 400}, {`403`, streamErrorProviderRejected, 403},
 		{`"invalid_api_key"`, streamErrorFatal, 0}, {`"server_error"`, streamErrorRetryExhausted, 0},
 	} {
 		t.Run(tc.code, func(t *testing.T) {

@@ -677,7 +677,8 @@ func (r *roundState) canResume(class streamErrorClass, attempt sinkMark) bool {
 	}
 	// Failed tool results can represent a partially executed mutation (including
 	// contained panics). Keep the existing conservative suppression for those.
-	return class == streamErrorRetryExhausted || class == streamErrorStreamBlip || class == streamErrorContextTooLarge
+	return class == streamErrorRetryExhausted || class == streamErrorStreamBlip ||
+		class == streamErrorContextTooLarge || class == streamErrorProviderRejected
 }
 
 func newRoundState(e *engine, orch *orchestrationState, maxTokens int64) *roundState {
