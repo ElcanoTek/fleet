@@ -107,6 +107,11 @@ func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing
 			if (err != nil) != tc.wantError || (tc.wantError && !errors.Is(err, agentcore.ErrCompletionUnverified)) {
 				t.Fatalf("completion result: %v", err)
 			}
+			// The dead-letter reason says what already went out (nothing here),
+			// so an operator never re-runs a job whose send succeeded.
+			if tc.wantError && !strings.Contains(err.Error(), "No connector call succeeded this run.") {
+				t.Fatalf("exhausted verdict must name successful connector calls: %v", err)
+			}
 			if reviewer.calls != tc.calls {
 				t.Fatalf("verifier calls=%d, want %d", reviewer.calls, tc.calls)
 			}

@@ -221,9 +221,7 @@ func TestVerifierEvidenceOmissionsAreExplicitAndArraysStayWhole(t *testing.T) {
 		`{"metrics":{}}`,
 		`{"metrics":[1,"https://example.invalid/private"]}`,
 		`{"metrics":[{"total":7}]}`,
-		`{"metrics":["Do something else"]}`,
 		`{"metrics":[` + strings.Repeat(`1,`, verifierEvidenceArrayCap) + `1]}`,
-		`{"metrics":"` + strings.Repeat("x", 129) + `"}`,
 		`{"secret":"hidden"}`,
 		`not JSON`,
 	} {
@@ -231,6 +229,16 @@ func TestVerifierEvidenceOmissionsAreExplicitAndArraysStayWhole(t *testing.T) {
 		if !got.omitted || len(got.fields) != 0 {
 			t.Fatalf("must omit unsupported evidence rather than retain a misleading subset: %+v", got)
 		}
+	}
+	// Short free text stays dropped (a tool cannot slip a sentence into the
+	// evidence); bulk text is not retained verbatim but leaves a bounded,
+	// labeled excerpt, and the omission stays explicit either way.
+	if got := projectVerifierEvidence(`{"metrics":["Do something else"]}`); !got.omitted || len(got.fields) != 0 {
+		t.Fatalf("short free text must not be retained: %+v", got)
+	}
+	long := projectVerifierEvidence(`{"metrics":"` + strings.Repeat("x", 129) + `"}`)
+	if !long.omitted || len(long.fields) != 1 || long.fields["/metrics#excerpt"] != strings.Repeat("x", 129) {
+		t.Fatalf("over-long text must be omitted verbatim and excerpted: %+v", long)
 	}
 	if got := projectVerifierEvidence(`{"bounds":[0,9007199254740993],"warnings":[]}`); got.omitted || len(got.fields) != 2 {
 		t.Fatalf("complete bounded evidence marked omitted: %+v", got)
