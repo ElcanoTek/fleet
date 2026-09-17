@@ -919,6 +919,7 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 	}
 
 	child := NewAgent(Options{
+		AuditProtocolRef: a.auditProtocolRef,
 		Config:           a.config,
 		Model:            model,
 		FallbackModel:    a.fallbackModel,

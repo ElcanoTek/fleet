@@ -37,6 +37,11 @@ func NewInteractivePolicy(maxCostUSD float64, maxTotalTokens int, approvalSink A
 
 func (p *InteractivePolicy) orchestration() *orchestrationState { return p.orch }
 
+// SetAuditProtocolRef names the bundle's self-audit protocol (workspace-relative,
+// e.g. "protocols/self-audit.md") in the audit guidance texts, or "" when the
+// bundle ships none so the texts never send the model after a missing file.
+func (p *InteractivePolicy) SetAuditProtocolRef(ref string) { p.orch.setAuditProtocolRef(ref) }
+
 // SetNoteProposer wires the admin-notes proposer (propose_note) for this run.
 // Available in both modes (the agent-notes wiki is global, unlike user
 // memories which stay interactive-only).
@@ -151,6 +156,12 @@ func NewDelegatedPolicy(logSession *LogSession, maxIterations int, maxCostUSD fl
 }
 
 func (p *ScheduledPolicy) orchestration() *orchestrationState { return p.orch }
+
+// SetAuditProtocolRef names the bundle's self-audit protocol (workspace-relative,
+// e.g. "protocols/self-audit.md") in the finish nudge and the BLOCKED /
+// rejection texts, or "" when the bundle ships none so the texts never send the
+// model after a missing file.
+func (p *ScheduledPolicy) SetAuditProtocolRef(ref string) { p.orch.setAuditProtocolRef(ref) }
 
 // SetNoteProposer wires the admin-notes proposer (propose_note) for this run.
 func (p *ScheduledPolicy) SetNoteProposer(np NoteProposer) { p.orch.setNoteProposer(np) }

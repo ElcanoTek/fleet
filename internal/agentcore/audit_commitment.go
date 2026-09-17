@@ -492,7 +492,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		if suffix == "" || tool == suffix {
 			log.Printf("WARNING: dropping typed critical_action %q — not a full server-qualified MCP tool name "+
 				"(a bare suffix would wildcard across every server sharing it). Copy the literal tool name "+
-				"verbatim, e.g. \"mcp_myserver_create_record\". See protocols/self-audit.md.", tool)
+				"verbatim, e.g. \"mcp_myserver_create_record\".%s", tool, o.auditProtocolClause())
 			continue
 		}
 		// First entry that will register → this audit is ACCEPTED, so wipe the
@@ -600,7 +600,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 	if len(actions) > 0 && registered == 0 {
 		log.Printf("WARNING: confirm_audit supplied %d typed critical_actions but NONE resolved to a full "+
 			"server-qualified critical tool — the audit will be REFUSED (fail closed). Use the literal MCP tool "+
-			"name in each entry's `tool` field. See protocols/self-audit.md.", len(actions))
+			"name in each entry's `tool` field.%s", len(actions), o.auditProtocolClause())
 	}
 	return registered
 }

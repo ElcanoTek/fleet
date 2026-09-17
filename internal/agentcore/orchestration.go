@@ -31,6 +31,15 @@ import (
 // the wording of the loop-guard noun and which checks gate finishing — is
 // expressed via config fields and the Policy seam (see policy.go), not a fork.
 type orchestrationState struct {
+	// auditProtocolRef is the workspace-relative path of the bundle's self-audit
+	// protocol, named in the finish nudge and the BLOCKED / rejection texts so
+	// the model reads it before confirm_audit. "" means the bundle ships no such
+	// file (drivers set it from the real filesystem); the texts then ask for
+	// the audit without pointing at a file that does not exist — a fallback
+	// model that took "read protocols/self-audit.md" literally, found nothing,
+	// and aborted a finished report is the case this closes.
+	auditProtocolRef string
+
 	mu sync.Mutex
 
 	// ── audit gating (scheduled) ──
@@ -259,8 +268,43 @@ type MemoryProposer interface {
 // approval hooks via the setters below. The trailing int param is retained for
 // that signature parity only — the real iteration cap flows via the engine
 // (RunConfig.MaxIterations), so the value passed here is ignored.
+// defaultAuditProtocolRef is the conventional location of a bundle's self-audit
+// protocol. Kept as the default so embedders and tests that never call
+// setAuditProtocolRef keep today's wording; the drivers override it from the
+// filesystem.
+const defaultAuditProtocolRef = "protocols/self-audit.md"
+
+// setAuditProtocolRef records the self-audit protocol path the audit texts
+// should name; "" when the bundle ships none. Callers hold no lock: set once at
+// construction, read under o.mu by the enforcement paths.
+func (o *orchestrationState) setAuditProtocolRef(ref string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.auditProtocolRef = strings.TrimSpace(ref)
+}
+
+// auditProtocolClause is the " See <ref>." suffix for guidance texts, or ""
+// when no protocol file exists. Callers must hold o.mu.
+func (o *orchestrationState) auditProtocolClause() string {
+	if o.auditProtocolRef == "" {
+		return ""
+	}
+	return " See " + o.auditProtocolRef + "."
+}
+
+// auditInstruction is the "read the protocol and audit" imperative used by the
+// finish nudge and the BLOCKED text, phrased without a file when none exists.
+// Callers must hold o.mu.
+func (o *orchestrationState) auditInstruction() string {
+	if o.auditProtocolRef == "" {
+		return "audit the current state against every requirement of the original task"
+	}
+	return "read " + o.auditProtocolRef + " and audit the current state against every requirement of the original task"
+}
+
 func newOrchestrationState(logSession *LogSession, _ int) *orchestrationState {
 	return &orchestrationState{
+		auditProtocolRef:            defaultAuditProtocolRef,
 		sentEmailFingerprints:       make(map[string]struct{}),
 		committedCriticalActions:    make(map[string]int),
 		approvedDealIDs:             make(map[string]map[string]bool),

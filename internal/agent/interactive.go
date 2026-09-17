@@ -106,6 +106,10 @@ type TurnConfig struct {
 	// wired in interactive mode too (the notes wiki is global). The user-memory
 	// propose_memory path is unchanged. Nil leaves propose_note "not wired".
 	NoteProposer agentcore.NoteProposer
+	// AuditProtocolRef is the workspace-relative self-audit protocol path the
+	// audit guidance names (AuditProtocolRef(protocolsDir)); "" when the bundle
+	// ships none.
+	AuditProtocolRef string
 
 	// SkillProposer stages agent-drafted personal skills (propose_skill) for
 	// the turn's user to review (docs/SKILLS.md phase 3). Registered in
@@ -159,6 +163,7 @@ func (m messagesInput) Prompt(_ context.Context) (string, []fantasy.Message, str
 // enforcement covers both surfaces.
 func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
 	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, tc.ApprovalStager, tc.MemoryProposer)
+	policy.SetAuditProtocolRef(tc.AuditProtocolRef)
 	// propose_note as a single agentcore-boundary guarantee: register the tool iff
 	// a NoteProposer is wired, so the advertised tool, the gate, and the actual
 	// roster stay in lockstep.
@@ -246,6 +251,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 // child's relabeled progress events onto it (nil is fine: no forwarding).
 func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy, obs agentcore.Observer) *Agent {
 	host := NewAgent(Options{
+		AuditProtocolRef: tc.AuditProtocolRef,
 		Config:           tc.Config,
 		Model:            tc.Model,
 		FallbackModel:    tc.FallbackModel,

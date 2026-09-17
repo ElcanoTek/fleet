@@ -1805,11 +1805,14 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		ApprovalStager:  in.ApprovalStager,
 		MemoryProposer:  in.MemoryProposer,
 		NoteProposer:    m.noteProposer,
-		SkillProposer:   in.SkillProposer,
-		HealthRegistry:  m.health,
-		ThinkingConfig:  in.ThinkingConfig,
-		TurnJournal:     in.TurnJournal,
-		SteerSource:     in.SteerSource,
+		// The finish nudge / BLOCKED texts name protocols/self-audit.md only when
+		// this bundle actually ships it.
+		AuditProtocolRef: AuditProtocolRef(m.protocolsDir),
+		SkillProposer:    in.SkillProposer,
+		HealthRegistry:   m.health,
+		ThinkingConfig:   in.ThinkingConfig,
+		TurnJournal:      in.TurnJournal,
+		SteerSource:      in.SteerSource,
 		// Governed sub-agents in interactive chat (#1043): the fleet-wide flag
 		// (default true; Admin → Features / FLEET_SUBAGENTS_ENABLED is the kill
 		// switch) is the only chat gate — there is no per-conversation column.
