@@ -21,6 +21,12 @@ func (h *Handlers) SetSystemPromptProvider(p func(persona string) string) {
 	h.systemPromptForPersona = p
 }
 
+// SetModelCatalogResolver wires the active manager's routing-aware catalog ID
+// lookup. It performs no inference and stays current after provider hot swaps.
+func (h *Handlers) SetModelCatalogResolver(resolve func(string) string) {
+	h.catalogModelSlug = resolve
+}
+
 // SetPersonaCatalog wires the list of persona names loadable from the client
 // bundle (#720), read live per call so a bundle hot-reload is reflected without
 // a restart. cmd/fleet injects a closure over the bundle's personas dir; nil
@@ -93,7 +99,17 @@ func (h *Handlers) forecastTask(tc *models.TaskCreate) agentcore.CostForecast {
 		maxIter = *tc.MaxIterations
 	}
 
-	return agentcore.ForecastCost(model, systemToks, toolToks, promptToks, maxIter, h.maxCostUSD())
+	ceiling := h.maxCostUSD()
+	forecast := agentcore.ForecastCost(model, systemToks, toolToks, promptToks, maxIter, ceiling)
+	if !forecast.PricingKnown && h.catalogModelSlug != nil {
+		if catalogSlug := h.catalogModelSlug(model); catalogSlug != model {
+			forecast = agentcore.ForecastCost(catalogSlug, systemToks, toolToks, promptToks, maxIter, ceiling)
+			// Pricing uses the catalog ID, but the task still runs on the route
+			// its author chose. Keep that identity in the API response.
+			forecast.Model = model
+		}
+	}
+	return forecast
 }
 
 // estimateTaskToolCount returns the number of MCP tool definitions that will be

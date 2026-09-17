@@ -137,6 +137,13 @@ with it.
 The model picker includes the deployment's configured **Workspace** models and
 filters public-catalog suggestions against the active provider routes once they
 load. Choose the provider-prefixed workspace entry when using a direct provider.
+If a direct provider takes precedence over OpenRouter, the picker also offers
+confirmed public-catalog models through explicit OpenRouter routes such as
+`router/openai/gpt-4o`, where `router` is the deployment's configured provider
+name. Pick that labeled **Workspace** row to deliberately use OpenRouter.
+Its known catalog price remains available to **Estimate Cost**, including the
+cost-ceiling warning. An unavailable custom default is not converted into an
+OpenRouter model; choose an available model instead.
 Saved task model values are not rewritten when provider configuration changes;
 review the model in **Advanced** if a run reports that no provider serves it.
 

@@ -200,6 +200,9 @@ type Handlers struct {
 	// counts only the task prompt + tool schemas (the system-prompt token line
 	// reads 0). See estimate.go.
 	systemPromptForPersona func(persona string) string
+	// catalogModelSlug reads the active provider table for advisory forecasts.
+	// Only OpenRouter routes may borrow an underlying public-catalog price.
+	catalogModelSlug func(string) string
 
 	// personaCatalog returns the persona names currently loadable from the
 	// client bundle (basenames of personas/*.yaml, without the extension).

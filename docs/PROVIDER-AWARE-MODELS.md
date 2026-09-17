@@ -21,6 +21,15 @@ repair `no configured provider serves model` failures.
 - Both pickers filter recommendations and public catalog rows against the
   active table. Native catch-alls do not make arbitrary OpenRouter catalog
   models available; explicit routes and listed gateway model identifiers work.
+  When a native catch-all shadows an OpenRouter catch-all, the pickers offer
+  explicit `<openrouter-provider>/<catalog-slug>` alternatives instead.
+  Only confirmed public-catalog rows acquire such alternatives; private/stale
+  tier seeds are not reinterpreted as OpenRouter model identifiers. Catalog
+  outages do not synthesize alternative routes from unconfirmed fallback seeds.
+  Explicit OpenRouter selections retain their catalog display name, prices and
+  context metadata in chat. Task forecasts resolve the underlying catalog ID
+  through the active provider table while retaining the selected route in the
+  response; native or unknown provider prefixes are never stripped for pricing.
 - Workspace discovery and task-picker caches expire after 30 seconds. Chat
   refreshes discovery when opening/closing the picker; task pickers refresh on
   opening. This is a bounded browser cache, not background polling.

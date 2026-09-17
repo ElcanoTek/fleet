@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -112,5 +113,31 @@ func TestEstimateTaskToolCountNoProvider(t *testing.T) {
 	h := &Handlers{}
 	if n := h.estimateTaskToolCount(&models.TaskCreate{}); n != 0 {
 		t.Fatalf("tool count = %d, want 0 with no provider", n)
+	}
+}
+
+func TestForecastTaskExplicitOpenRouterRoute(t *testing.T) {
+	resolver, err := agentcore.NewModelResolverWithProviders([]agentcore.ProviderConfig{
+		{Name: "native", Type: agentcore.ProviderTypeOpenAI, APIKey: "test-native"},
+		{Name: "router", Type: agentcore.ProviderTypeOpenRouter, APIKey: "test-router"},
+	}, agentcore.DefaultProviderHeaders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &Handlers{config: Config{DefaultMaxIterations: 7, MaxCostUSD: 0.01}}
+	h.SetModelCatalogResolver(resolver.CatalogModelSlug)
+	plain := h.forecastTask(&models.TaskCreate{Model: strptr("openai/gpt-4o"), Prompt: "hello"})
+	routed := h.forecastTask(&models.TaskCreate{Model: strptr("router/openai/gpt-4o"), Prompt: "hello"})
+	if !routed.PricingKnown || routed.EstimatedTotalCostUSD == nil || plain.EstimatedTotalCostUSD == nil {
+		t.Fatalf("lost known catalog pricing: %+v", routed)
+	}
+	if routed.Model != "router/openai/gpt-4o" || *routed.EstimatedTotalCostUSD != *plain.EstimatedTotalCostUSD || !routed.WouldHitCeiling {
+		t.Fatalf("routed forecast lost identity, price or ceiling warning: %+v", routed)
+	}
+	for _, slug := range []string{"native/openai/gpt-4o", "unknown/openai/gpt-4o", "router/vendor/unknown-model"} {
+		fc := h.forecastTask(&models.TaskCreate{Model: &slug, Prompt: "hello"})
+		if fc.PricingKnown || fc.Model != slug {
+			t.Fatalf("borrowed unrelated pricing for %q: %+v", slug, fc)
+		}
 	}
 }

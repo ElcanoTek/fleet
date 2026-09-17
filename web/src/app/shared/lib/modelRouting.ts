@@ -28,3 +28,26 @@ export function modelIsAvailable(slug: string, providers: ModelRouting, catalog 
 export function unavailableModelMessage(slug: string): string {
   return `Model "${slug}" is not available through this workspace's configured providers. Choose a workspace model in the model picker, or ask an admin to configure its provider in Settings → Admin → Model providers.`;
 }
+
+// A native catch-all can shadow a later OpenRouter catch-all. Keep those models
+// browsable by explicitly pinning the route rather than sending an OpenRouter
+// slug to the native backend. Listed/non-shadowed routes retain their identity.
+export function catalogModelRoutes(slug: string, providers: ModelRouting, publicCatalog: boolean): Array<{ slug: string; provider?: string }> {
+  if (modelIsAvailable(slug, providers, true)) return [{ slug }];
+  // A tier seed can be a private or stale native route. Never reinterpret it
+  // as an OpenRouter model without evidence from the public catalog.
+  if (!publicCatalog) return [];
+  return (providers ?? [])
+    .filter((p) => p.type === "openrouter" && p.catch_all)
+    .map((p) => ({ slug: `${p.name}/${slug}`, provider: p.name }));
+}
+
+// Only a configured OpenRouter prefix can be removed for catalog metadata.
+// Never assign OpenRouter prices/context limits to a similarly named native
+// model or custom gateway just because its identifier contains a slash.
+export function catalogModelSlug(slug: string, providers: ModelRouting): string {
+  const value = slug.trim();
+  const slash = value.indexOf("/");
+  const provider = providers?.find((p) => p.name === value.slice(0, slash));
+  return slash > 0 && provider?.type === "openrouter" ? value.slice(slash + 1) : value;
+}

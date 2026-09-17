@@ -41,3 +41,14 @@ func (r *ModelResolver) CheckModelRoute(slug string) (ProviderType, error) {
 	}
 	return p.Type, nil
 }
+
+// CatalogModelSlug returns the underlying OpenRouter catalog identifier for a
+// routed model. Native/gateway routes keep their identity: stripping a prefix
+// from those would borrow another provider's price or context metadata.
+func (r *ModelResolver) CatalogModelSlug(slug string) string {
+	p, model, err := selectProvider(r.providers, strings.TrimSpace(slug))
+	if err == nil && p.Type == ProviderTypeOpenRouter {
+		return model
+	}
+	return slug
+}
