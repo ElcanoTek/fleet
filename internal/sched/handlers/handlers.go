@@ -69,6 +69,10 @@ type Config struct {
 	DefaultTaskModel     string
 	MaxCostUSD           float64
 	DefaultMaxIterations int
+	// LiveMaxCostUSD, when set, supplies the ceiling per request so an admin
+	// override (Settings → Features → max_cost_usd) or an env reload is
+	// reflected in the forecast; nil falls back to the boot-time MaxCostUSD.
+	LiveMaxCostUSD func() float64
 
 	// Sliding-window rate limits for the high-cost orchestrator endpoints
 	// (POST /tasks, POST /upload), enforced by SchedRateLimitMiddleware.

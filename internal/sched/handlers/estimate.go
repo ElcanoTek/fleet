@@ -93,7 +93,7 @@ func (h *Handlers) forecastTask(tc *models.TaskCreate) agentcore.CostForecast {
 		maxIter = *tc.MaxIterations
 	}
 
-	return agentcore.ForecastCost(model, systemToks, toolToks, promptToks, maxIter, h.config.MaxCostUSD)
+	return agentcore.ForecastCost(model, systemToks, toolToks, promptToks, maxIter, h.maxCostUSD())
 }
 
 // estimateTaskToolCount returns the number of MCP tool definitions that will be
@@ -128,4 +128,14 @@ func (h *Handlers) estimateTaskToolCount(tc *models.TaskCreate) int {
 		}
 	}
 	return total
+}
+
+// maxCostUSD is the per-run cost ceiling the forecast projects against: the
+// live value (admin override or reloaded env) when the deployment wired one,
+// else the boot-time snapshot.
+func (h *Handlers) maxCostUSD() float64 {
+	if h.config.LiveMaxCostUSD != nil {
+		return h.config.LiveMaxCostUSD()
+	}
+	return h.config.MaxCostUSD
 }

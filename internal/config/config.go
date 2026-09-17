@@ -745,7 +745,12 @@ type Config struct {
 	OpenRouterAPIKey string
 	MaxIterations    int
 	MaxCostUSD       float64
-	MaxTotalTokens   int
+	// adminMaxCostUSD is the Settings → Admin → Features override of the
+	// per-run cost ceiling (`max_cost_usd`); nil = no override, the env-derived
+	// MaxCostUSD serves. Read through LiveMaxCostUSD, written through
+	// SetMaxCostUSDOverride under the reload mutex, never from the env.
+	adminMaxCostUSD *float64
+	MaxTotalTokens  int
 	// DefaultThinkingBudgetTokens is the global fallback Claude extended-thinking
 	// budget (#220, FLEET_DEFAULT_THINKING_BUDGET_TOKENS). 0 (default) = thinking
 	// off unless a conversation opts in. A non-zero value enables thinking for

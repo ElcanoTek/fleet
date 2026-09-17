@@ -125,3 +125,21 @@ func TestPIIRedactorState(t *testing.T) {
 		t.Errorf("seeded redactor = %T, want an observe-mode PatternRedactor", seeded.current)
 	}
 }
+
+// applyFloatOverride: a default (override=false) clears the override so the
+// env/reload value serves; an override pins the parsed value; garbage is a
+// wiring error surfaced to the admin.
+func TestApplyFloatOverride(t *testing.T) {
+	var got float64
+	var set bool
+	apply := applyFloatOverride(func(v float64, override bool) { got, set = v, override })
+	if err := apply("8.5", true); err != nil || !set || got != 8.5 {
+		t.Fatalf("override: err=%v set=%v got=%v", err, set, got)
+	}
+	if err := apply("50", false); err != nil || set {
+		t.Fatalf("default must clear the override: err=%v set=%v", err, set)
+	}
+	if err := apply("eight", true); err == nil {
+		t.Fatal("non-numeric override must be rejected")
+	}
+}

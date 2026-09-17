@@ -63,6 +63,7 @@ needs a restart, ever.
 | `guardrail_url` | http(s) URL (or empty) | `FLEET_GUARDRAIL_URL` | Prompt-injection detector endpoint |
 | `tool_disclosure_threshold` | int 1–100000 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | Roster size that triggers BM25 tool disclosure ([TOOL-DISCLOSURE.md](TOOL-DISCLOSURE.md)) |
 | `max_tool_output_bytes` | int 1024–128 KiB, or 0 = 64 KiB default | `FLEET_MAX_TOOL_OUTPUT_BYTES` | Operational per-tool result cap inside the non-disableable 128 KiB model-visible boundary ([TOOL-OUTPUT-BOUNDARY.md](TOOL-OUTPUT-BOUNDARY.md)) |
+| `max_cost_usd` | decimal 1–100000 (cents allowed), or 0 = no ceiling | `FLEET_MAX_COST_USD` | Per-run cost ceiling every chat turn and scheduled run is bounded by (`cost_ceiling` dead letters); read at the start of each run. The override is a separate value from the env field, so `FLEET_MAX_COST_USD` and the env-file reload keep working and serve again on Reset |
 | `approval_timeout_seconds` | int 60–86400 | `FLEET_APPROVAL_TIMEOUT_SECONDS` | Default-deny window for pending approval cards; read at stager construction, so an edit governs the next staged card ([AGENT-RUNTIME.md](AGENT-RUNTIME.md), [APPROVAL-CARDS.md](APPROVAL-CARDS.md)) |
 | `phone_a_friend_enabled` | bool | `FLEET_PHONE_A_FRIEND_ENABLED` | One-time super-LLM review of scheduled runs ([AGENT-RUNTIME.md](AGENT-RUNTIME.md)) |
 | `subagents_enabled` | bool | `FLEET_SUBAGENTS_ENABLED` | Fleet-wide **kill switch** for sub-agent delegation — default **on** (#1043); composes AND with per-task `allow_delegation` ([SUBAGENTS.md](SUBAGENTS.md)) |
@@ -101,12 +102,14 @@ knob. These deliberately did **not** move into the panel:
   migration 036). It is a separate slice from this registry because it holds
   secrets. VAPID keys (Web Push) stay env-only — deployment identity material
   bound at boot.
-- **Already hot-reloadable ceilings** — `FLEET_MAX_COST_USD`,
-  `FLEET_MAX_TOTAL_TOKENS`, `FLEET_MAX_ITERATIONS`, temperatures ride the
-  existing env-file reload ([CONFIG-RELOAD.md](CONFIG-RELOAD.md), SIGUSR2 /
-  `POST /admin/reload-config`). Folding them into the panel is a candidate
-  follow-on but was kept out of this slice to avoid two write paths to the
-  same fields.
+- **The other hot-reloadable ceilings** — `FLEET_MAX_TOTAL_TOKENS`,
+  `FLEET_MAX_ITERATIONS`, temperatures ride the existing env-file reload
+  ([CONFIG-RELOAD.md](CONFIG-RELOAD.md), SIGUSR2 / `POST /admin/reload-config`).
+  The cost ceiling joined the panel as `max_cost_usd` without creating a
+  second write path to the reloadable field: the admin value is stored
+  separately and merely takes precedence while set (`config.LiveMaxCostUSD`),
+  so a reload still records the env value and serves it again on Reset. The
+  remaining ceilings can follow the same shape when someone needs them.
 - **Fine-grained tuning** — sub-agent depth/children/budget-fraction, model
   slug overrides (`FLEET_PHONE_A_FRIEND_MODEL`, `FLEET_MEMORY_MODEL`,
   `FLEET_ERROR_ANALYSIS_MODEL`), compaction thresholds, task-memory caps.

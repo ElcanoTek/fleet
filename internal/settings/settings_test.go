@@ -56,6 +56,7 @@ func testDefaults() map[string]string {
 		"tool_disclosure_threshold":         "128",
 		"max_tool_output_bytes":             "65536",
 		"approval_timeout_seconds":          "3600",
+		"max_cost_usd":                      "50",
 		"phone_a_friend_enabled":            "false",
 		"subagents_enabled":                 "true",
 		"default_model":                     "google/gemini-3.8-flash",
@@ -177,6 +178,18 @@ func TestValidate(t *testing.T) {
 		{"default_model", "openai/", "", true},                                                  // empty model half
 		{"default_model", "openai/gpt 5", "", true},                                             // internal whitespace
 		{"advanced_model", strings.Repeat("a", 100) + "/" + strings.Repeat("b", 101), "", true}, // over 200 chars
+		// KindFloat (the per-run cost ceiling): cents allowed and rounded, 0 =
+		// unlimited, whole-dollar bounds, nothing non-numeric.
+		{"max_cost_usd", "8.5", "8.5", false},
+		{"max_cost_usd", " 12 ", "12", false},
+		{"max_cost_usd", "8.505", "8.51", false},
+		{"max_cost_usd", "0", "0", false},
+		{"max_cost_usd", "0.50", "", true}, // below Min and not exactly 0
+		{"max_cost_usd", "100000", "100000", false},
+		{"max_cost_usd", "100000.01", "", true},
+		{"max_cost_usd", "-1", "", true},
+		{"max_cost_usd", "NaN", "", true},
+		{"max_cost_usd", "eight", "", true},
 	}
 	for _, c := range cases {
 		got, err := Validate(spec(c.key), c.in)
@@ -357,9 +370,9 @@ func TestRegistryShape(t *testing.T) {
 			if len(s.Enum) < 2 {
 				t.Errorf("%s: enum needs options", s.Key)
 			}
-		case KindInt:
+		case KindInt, KindFloat:
 			if s.Min <= 0 || s.Max <= s.Min {
-				t.Errorf("%s: int bounds unset or inverted", s.Key)
+				t.Errorf("%s: numeric bounds unset or inverted", s.Key)
 			}
 		case KindBool, KindURL, KindModel:
 		default:

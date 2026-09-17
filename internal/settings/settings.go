@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -58,6 +59,10 @@ const (
 	// case-sensitive upstream); the one shape rule is a "/" separating two
 	// non-empty halves with no whitespace, which every routable slug has.
 	KindModel Kind = "model"
+	// KindFloat is a decimal number (a dollar amount); Min/Max bound it as
+	// whole units, MinZeroOK admits exactly 0 for "unlimited". Values are
+	// rounded to two decimals on write.
+	KindFloat Kind = "float"
 )
 
 // Spec declares one admin-configurable setting: its stable key (DB + API), its
@@ -68,8 +73,9 @@ type Spec struct {
 	Key  string   `json:"key"`
 	Kind Kind     `json:"kind"`
 	Enum []string `json:"enum,omitempty"` // legal values when Kind == KindEnum
-	// Min/Max bound KindInt values (inclusive). MinZeroOK additionally admits
-	// exactly 0 below Min for "0 = disabled/unlimited" semantics.
+	// Min/Max bound KindInt and KindFloat values (inclusive). MinZeroOK
+	// additionally admits exactly 0 below Min for "0 = disabled/unlimited"
+	// semantics.
 	Min       int  `json:"min,omitempty"`
 	Max       int  `json:"max,omitempty"`
 	MinZeroOK bool `json:"min_zero_ok,omitempty"`
@@ -119,6 +125,14 @@ func Registry() []Spec {
 		// turn, so an edit governs the next staged card without a restart.
 		{Key: "approval_timeout_seconds", Kind: KindInt, Min: 60, Max: 86400,
 			EnvVar: "FLEET_APPROVAL_TIMEOUT_SECONDS"},
+		// The per-run cost ceiling every chat turn and scheduled run is bounded
+		// by (agentcore checkCeilings). Live: every consumer reads
+		// config.LiveMaxCostUSD per run. The override is a separate value from
+		// the env-derived field, so FLEET_MAX_COST_USD and the env-file reload
+		// keep working and take over again on Reset. 0 = no ceiling; whole
+		// dollars for the bounds, cents allowed in the value.
+		{Key: "max_cost_usd", Kind: KindFloat, Min: 1, Max: 100000, MinZeroOK: true,
+			EnvVar: "FLEET_MAX_COST_USD"},
 		{Key: "phone_a_friend_enabled", Kind: KindBool,
 			EnvVar: "FLEET_PHONE_A_FRIEND_ENABLED"},
 		{Key: "subagents_enabled", Kind: KindBool,
@@ -196,6 +210,23 @@ func Validate(spec Spec, value string) (string, error) {
 			return "", fmt.Errorf("%s: want a model slug like provider/model (a %q separating two non-empty halves), got %q", spec.Key, "/", value)
 		}
 		return v, nil
+	case KindFloat:
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return "", fmt.Errorf("%s: invalid number %q", spec.Key, value)
+		}
+		f = math.Round(f*100) / 100
+		if f == 0 && spec.MinZeroOK {
+			return "0", nil
+		}
+		if f < float64(spec.Min) || f > float64(spec.Max) {
+			bounds := fmt.Sprintf("between %d and %d", spec.Min, spec.Max)
+			if spec.MinZeroOK {
+				bounds += " (or exactly 0)"
+			}
+			return "", fmt.Errorf("%s: %v is out of range (must be %s)", spec.Key, f, bounds)
+		}
+		return strconv.FormatFloat(f, 'f', -1, 64), nil
 	case KindInt:
 		n, err := strconv.Atoi(v)
 		if err != nil {
