@@ -245,6 +245,54 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 	return ids, true
 }
 
+// recordIDPlaceholders are the strings a model writes when an action names no
+// record at all ("deal_id": "n/a" on a send_email audit). None of them can ever
+// identify a real record, so binding a commitment to one produces an
+// obligation no call can discharge: the real send is BLOCKED for lacking record
+// "n/a", the BLOCKED text tells the model to re-declare, the re-declaration
+// registers a second (unbound) commitment that the send then discharges, and
+// the "n/a" one wedges finish enforcement — the 2026-09-17 Reklaim health-scan
+// run ended as a failed audit over an email that had already gone out.
+// Compared lowercased after trimming.
+var recordIDPlaceholders = map[string]bool{
+	"n/a": true, "na": true, "n.a.": true, "n.a": true,
+	"none": true, "null": true, "nil": true,
+	"-": true, "—": true, "–": true,
+	"not applicable": true, "not_applicable": true, "not-applicable": true, "notapplicable": true,
+}
+
+// isRecordIDPlaceholder reports whether a normalized record id is one of the
+// no-record placeholders above.
+func isRecordIDPlaceholder(id string) bool {
+	return recordIDPlaceholders[strings.ToLower(strings.TrimSpace(id))]
+}
+
+// declaredDealID normalizes a typed entry's single deal_id: trimmed, and ""
+// for a placeholder, so the commitment registers UNBOUND (any single call of
+// that tool may ride and discharge it) instead of bound to a record that does
+// not exist.
+func declaredDealID(raw string) string {
+	id := strings.TrimSpace(raw)
+	if isRecordIDPlaceholder(id) {
+		return ""
+	}
+	return id
+}
+
+// declaredDealIDs normalizes a typed entry's deal_ids batch: trimmed, empty
+// and placeholder entries dropped. An all-placeholder list yields nil, which
+// registers the entry as a single unbound action rather than a batch bound to
+// records that cannot be named.
+func declaredDealIDs(raw []string) []string {
+	var ids []string
+	for _, r := range raw {
+		if id := declaredDealID(r); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // normalizeDealID renders a record id to the canonical string used for
 // approval matching. With UseNumber decoding (unmarshalArgs), JSON numbers
 // arrive as json.Number and render via their exact literal text so large
@@ -254,6 +302,12 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 func normalizeDealID(v any) string {
 	switch x := v.(type) {
 	case string:
+		// A call carrying "deal_id": "n/a" names no record: it may ride an
+		// unbound commitment but never a record-bound one (allowsDeal fails
+		// closed on ""), exactly as if the key were absent.
+		if isRecordIDPlaceholder(x) {
+			return ""
+		}
 		return strings.TrimSpace(x)
 	case json.Number:
 		// Fold an integral value to its canonical integer form so the three
@@ -450,18 +504,26 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// Fresh audit envelope for this suffix → clear any per-record
 		// discharge ledger left over from a prior batch on the same suffix.
 		delete(o.dischargedDeals, suffix)
-		n := len(a.DealIDs)
+		// Placeholder record ids ("n/a", "none", …) name no record: the entry
+		// registers unbound rather than bound to an id no call can carry.
+		dealIDs := declaredDealIDs(a.DealIDs)
+		dealID := declaredDealID(a.DealID)
+		if len(dealIDs) == 0 && len(a.DealIDs) > 0 || dealID == "" && strings.TrimSpace(a.DealID) != "" {
+			log.Printf("Enforcement: typed critical_action %q declared a placeholder record id (deal_id=%q deal_ids=%v); "+
+				"registering it as an unbound action — omit deal_id for actions that name no record", tool, a.DealID, a.DealIDs)
+		}
+		n := len(dealIDs)
 		if n == 0 {
 			n = 1
 		}
 		o.committedCriticalActions[suffix] += n
 		registered += n
-		if len(a.DealIDs) > 0 {
+		if len(dealIDs) > 0 {
 			if o.approvedDealIDs[suffix] == nil {
 				o.approvedDealIDs[suffix] = make(map[string]bool)
 			}
-			for _, id := range a.DealIDs {
-				o.approvedDealIDs[suffix][strings.TrimSpace(id)] = true
+			for _, id := range dealIDs {
+				o.approvedDealIDs[suffix][id] = true
 			}
 			if a.ValuesDigest != "" {
 				o.approvedDigest[suffix] = strings.ToLower(strings.TrimSpace(a.ValuesDigest))
@@ -472,15 +534,15 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			suffix:    suffix,
 			remaining: n,
 		}
-		if len(a.DealIDs) > 0 {
-			tc.dealIDs = make(map[string]bool, len(a.DealIDs))
-			tc.discharged = make(map[string]bool, len(a.DealIDs))
-			for _, id := range a.DealIDs {
-				tc.dealIDs[strings.TrimSpace(id)] = true
+		if len(dealIDs) > 0 {
+			tc.dealIDs = make(map[string]bool, len(dealIDs))
+			tc.discharged = make(map[string]bool, len(dealIDs))
+			for _, id := range dealIDs {
+				tc.dealIDs[id] = true
 			}
 			tc.digest = strings.ToLower(strings.TrimSpace(a.ValuesDigest))
-		} else if id := strings.TrimSpace(a.DealID); id != "" {
-			tc.dealID = id
+		} else if dealID != "" {
+			tc.dealID = dealID
 		}
 		// Supersede any OUTSTANDING prior-envelope commitment with the SAME
 		// full tool name AND SAME record-set. A re-audit that corrects the
