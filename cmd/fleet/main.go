@@ -172,6 +172,11 @@ func main() {
 			log.Fatalf("fleet: %v", err)
 		}
 	default: // invokeAdmin
+		// The admin CLI builds tasks through models.NewTask in a process that
+		// never runs handlers.New, so install the deployment retry default
+		// here too (#1538); otherwise an imported task would get 0 retries
+		// where the same request through the API gets the configured default.
+		schedmodels.SetDefaultMaxRetries(config.TaskDefaultMaxRetriesFromEnv())
 		os.Exit(admincli.Run(argv))
 	}
 }
@@ -783,6 +788,7 @@ func run() error {
 		MaxCostUSD:           cfg.MaxCostUSD,
 		LiveMaxCostUSD:       cfg.LiveMaxCostUSD,
 		DefaultMaxIterations: cfg.MaxIterations,
+		DefaultMaxRetries:    cfg.TaskDefaultMaxRetries,
 		// Per-task sandbox-limit ceilings (#205): validateSandboxLimits rejects an
 		// override above these. 0 = no ceiling.
 		SandboxMemoryMaxMB: cfg.SandboxMemoryMaxMB,

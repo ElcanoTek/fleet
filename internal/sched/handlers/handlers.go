@@ -69,6 +69,11 @@ type Config struct {
 	DefaultTaskModel     string
 	MaxCostUSD           float64
 	DefaultMaxIterations int
+	// DefaultMaxRetries is the deployment default a task gets when its create
+	// request omits max_retries (#1538, FLEET_TASK_DEFAULT_MAX_RETRIES). It is
+	// applied by models.NewTask through models.SetDefaultMaxRetries, which
+	// New installs so every NewTask caller in the process agrees.
+	DefaultMaxRetries int
 	// LiveMaxCostUSD, when set, supplies the ceiling per request so an admin
 	// override (Settings → Features → max_cost_usd) or an env reload is
 	// reflected in the forecast; nil falls back to the boot-time MaxCostUSD.
@@ -421,6 +426,10 @@ func (rl *rateLimiter) Allow(ip string) bool {
 // 60/min, 500/day, 200/min-global defaults when reading the env, so a zero here
 // means an operator (or test) explicitly disabled it.
 func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers {
+	// One process-wide default for every models.NewTask caller (#1538): the
+	// HTTP create path here, batch, import, trigger runs and the admin CLI
+	// all construct tasks through it.
+	models.SetDefaultMaxRetries(cfg.DefaultMaxRetries)
 	return &Handlers{
 		config:           cfg,
 		storage:          store,

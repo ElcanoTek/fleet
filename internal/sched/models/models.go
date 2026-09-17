@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -955,7 +956,9 @@ type TaskCreate struct {
 	// and validated at create/edit. nil/empty = untagged.
 	Tags []string `json:"tags,omitempty"`
 	// MaxRetries is the number of ADDITIONAL whole-task attempts after the first
-	// when a run fails cleanly with a transient error. 0 (default) = no retries.
+	// when a run fails cleanly with a transient error. nil = the deployment
+	// default (DefaultMaxRetries, from FLEET_TASK_DEFAULT_MAX_RETRIES; 1 unless
+	// configured); an explicit 0 = no retries.
 	MaxRetries *int `json:"max_retries,omitempty"`
 	// RetryPolicy customizes retry backoff + which failure classes retry (#201).
 	// nil = legacy policy (transient-only, 30s→10m exponential). See RetryPolicy.
@@ -1373,6 +1376,25 @@ func (tc TaskCreate) DelegationAllowed() bool {
 // (e.g. TaskCreate.AllowDelegation) from a concrete task's stored value.
 func BoolPtr(v bool) *bool { return &v }
 
+// defaultMaxRetries is the deployment-wide MaxRetries a task gets when its
+// create request omits max_retries (#1538). Set once at boot from
+// FLEET_TASK_DEFAULT_MAX_RETRIES via SetDefaultMaxRetries; a process that never
+// sets it (tests, embedders) keeps the historical 0. It lives here rather than
+// on a threaded parameter because NewTask has ten callers (handlers, batch,
+// import/export, triggers, admin CLI) that must all agree on one value.
+var defaultMaxRetries atomic.Int32
+
+// SetDefaultMaxRetries installs the deployment default applied by NewTask when
+// max_retries is omitted; values outside 0–10 are clamped to that range (the
+// same bounds validateTaskLimits enforces on the per-task field).
+func SetDefaultMaxRetries(n int) {
+	defaultMaxRetries.Store(int32(min(max(n, 0), 10)))
+}
+
+// DefaultMaxRetries reports the deployment default NewTask applies when
+// max_retries is omitted.
+func DefaultMaxRetries() int { return int(defaultMaxRetries.Load()) }
+
 func NewTask(tc TaskCreate) *Task {
 	triggerType := tc.TriggerType
 	if triggerType == "" {
@@ -1442,7 +1464,7 @@ func NewTask(tc TaskCreate) *Task {
 		Files:                      tc.Files,
 		FileNames:                  tc.FileNames,
 		Tags:                       tc.Tags,
-		MaxRetries:                 derefOr(tc.MaxRetries, 0),
+		MaxRetries:                 derefOr(tc.MaxRetries, DefaultMaxRetries()),
 		RetryPolicy:                tc.RetryPolicy,
 		TriggerType:                triggerType,
 		AllowTaskCreation:          tc.AllowTaskCreation,
@@ -1809,11 +1831,13 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 // results, created_by, timestamps, dead-letter, lineage) are dropped so an
 // export envelope carries only the configuration needed to recreate the task.
 func TaskToExportRecord(t *Task) TaskExportRecord {
-	// MaxRetries is an int on Task (0 = no retries) but a *int on the export
-	// record. Preserve a non-zero value; drop 0 (omitempty) so the default
-	// round-trips as "unset" rather than a redundant explicit zero.
+	// MaxRetries is an int on Task but a *int on the export record. Drop only
+	// the value equal to the deployment default (omitempty) so it round-trips
+	// as "unset" and follows the default on import; any other value — including
+	// an explicit 0 when the default is higher — is preserved verbatim, or a
+	// task deliberately pinned to "no retries" would come back with one (#1538).
 	var maxRetries *int
-	if t.MaxRetries != 0 {
+	if t.MaxRetries != DefaultMaxRetries() {
 		v := t.MaxRetries
 		maxRetries = &v
 	}
