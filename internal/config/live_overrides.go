@@ -153,3 +153,41 @@ func (c *Config) LiveContextHandlesEnabled() bool {
 func (c *Config) SetContextHandlesEnabled(v bool) {
 	c.setLive(func() { c.ContextHandlesEnabled = v })
 }
+
+// SetMaxCostUSDOverride installs (override=true) or clears (override=false)
+// the admin override of the per-run cost ceiling. The env-derived MaxCostUSD
+// field is left alone, so FLEET_MAX_COST_USD and the #286 env-file reload keep
+// working exactly as before and take effect again the moment the override is
+// cleared — the "two write paths to the same field" the first admin-settings
+// slice avoided never exist: the override is a separate value that
+// LiveMaxCostUSD prefers while set.
+func (c *Config) SetMaxCostUSDOverride(v float64, override bool) {
+	c.setLive(func() {
+		if !override {
+			c.adminMaxCostUSD = nil
+			return
+		}
+		value := v
+		c.adminMaxCostUSD = &value
+	})
+}
+
+// MaxCostUSDOverride reports the admin override of the per-run cost ceiling
+// and whether one is set.
+func (c *Config) MaxCostUSDOverride() (float64, bool) {
+	var v float64
+	var ok bool
+	read := func() {
+		if c.adminMaxCostUSD != nil {
+			v, ok = *c.adminMaxCostUSD, true
+		}
+	}
+	if c.reload == nil {
+		read()
+		return v, ok
+	}
+	c.reload.mu.RLock()
+	defer c.reload.mu.RUnlock()
+	read()
+	return v, ok
+}

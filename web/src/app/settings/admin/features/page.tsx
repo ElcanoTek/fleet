@@ -44,7 +44,7 @@ import { AdminGateFallback } from "../../AdminGateFallback";
 
 type ResolvedSetting = {
   key: string;
-  kind: "bool" | "int" | "enum" | "url" | "model";
+  kind: "bool" | "int" | "float" | "enum" | "url" | "model";
   enum?: string[];
   min?: number;
   max?: number;
@@ -111,6 +111,12 @@ const META: Record<string, SettingMeta> = {
       "Cap any single tool result before it enters the context window. Oversized structured output stays valid and points to governed workspace recovery when available; binary is never inlined.",
     unitHint: "bytes — 0 uses 64 KiB; hard max 128 KiB",
   },
+  max_cost_usd: {
+    label: "Per-run cost ceiling",
+    description:
+      "The most one chat turn or one scheduled run may spend before Fleet stops it (the run then dead-letters as cost_ceiling). Applies to every task on this deployment; read at the start of each run, so an edit governs the next run without a restart. Overrides FLEET_MAX_COST_USD until Reset, after which the env value (and env-file reloads) serve again.",
+    unitHint: "USD — 1 to 100000, cents allowed; 0 = no ceiling",
+  },
   approval_timeout_seconds: {
     label: "Approval timeout",
     description:
@@ -175,6 +181,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
       "tool_disclosure_threshold",
       "max_tool_output_bytes",
       "approval_timeout_seconds",
+      "max_cost_usd",
       "phone_a_friend_enabled",
       "subagents_enabled",
     ],
@@ -673,7 +680,8 @@ function IntControl({
       <span className="flex flex-wrap items-center gap-[0.45rem]">
         <input
           type="number"
-          inputMode="numeric"
+          inputMode={setting.kind === "float" ? "decimal" : "numeric"}
+          step={setting.kind === "float" ? "0.01" : undefined}
           value={value}
           min={setting.min_zero_ok ? 0 : setting.min}
           max={setting.max}

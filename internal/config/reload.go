@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -129,15 +130,23 @@ func (rs *reloadState) envExcluded(name string) bool {
 	return true
 }
 
-// LiveMaxCostUSD returns the per-run cost ceiling, hot-reload-safe. A nil reload
-// state (a Config built directly in a test, not via Load) reads the field
-// directly — such a Config is never concurrently reloaded.
+// LiveMaxCostUSD returns the effective per-run cost ceiling: the admin
+// override when one is set (Settings → Admin → Features, `max_cost_usd`),
+// else the env-derived, hot-reloadable FLEET_MAX_COST_USD. A nil reload state
+// (a Config built directly in a test, not via Load) reads unguarded — such a
+// Config is never concurrently reloaded.
 func (c *Config) LiveMaxCostUSD() float64 {
 	if c.reload == nil {
+		if c.adminMaxCostUSD != nil {
+			return *c.adminMaxCostUSD
+		}
 		return c.MaxCostUSD
 	}
 	c.reload.mu.RLock()
 	defer c.reload.mu.RUnlock()
+	if c.adminMaxCostUSD != nil {
+		return *c.adminMaxCostUSD
+	}
 	return c.MaxCostUSD
 }
 
@@ -286,7 +295,15 @@ func (c *Config) Reload(envFile string) (ReloadResult, error) {
 // parse + range rules come from the shared envKnobs registry (knobs.go), so a
 // value boot would reject is exactly the value reload rejects (#1119).
 func (c *Config) applyReloadableLocked(result *ReloadResult) {
-	reloadFleetFloat(result, "MAX_COST_USD", c.MaxCostUSD, func(v float64) { c.MaxCostUSD = v })
+	reloadFleetFloat(result, "MAX_COST_USD", c.MaxCostUSD, func(v float64) {
+		c.MaxCostUSD = v
+		if c.adminMaxCostUSD != nil {
+			// The env value is recorded (Reset in the admin panel reverts to
+			// it) but the admin override stays in effect until it is cleared.
+			log.Printf("Config reload: FLEET_MAX_COST_USD=%v recorded, but the admin override max_cost_usd=%v remains in effect",
+				v, *c.adminMaxCostUSD)
+		}
+	})
 	reloadFleetInt(result, "MAX_TOTAL_TOKENS", c.MaxTotalTokens, func(v int) { c.MaxTotalTokens = v })
 	reloadFleetInt(result, "MAX_ITERATIONS", c.MaxIterations, func(v int) { c.MaxIterations = v })
 	// One temperature knob covers interactive and scheduled sampling (#1079);

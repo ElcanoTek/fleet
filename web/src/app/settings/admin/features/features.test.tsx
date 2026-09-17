@@ -21,7 +21,7 @@ vi.mock("../../useIsAdmin", () => ({
 
 type Resolved = {
   key: string;
-  kind: "bool" | "int" | "enum" | "url" | "model";
+  kind: "bool" | "int" | "float" | "enum" | "url" | "model";
   enum?: string[];
   min?: number;
   max?: number;
@@ -62,6 +62,18 @@ const THRESHOLD: Resolved = {
   value: "128",
   source: "default",
   default: "128",
+};
+
+const COST_CEILING: Resolved = {
+  key: "max_cost_usd",
+  kind: "float",
+  min: 1,
+  max: 100000,
+  min_zero_ok: true,
+  env_var: "FLEET_MAX_COST_USD",
+  value: "50",
+  source: "default",
+  default: "50",
 };
 
 const DEFAULT_TIER: Resolved = {
@@ -186,6 +198,31 @@ describe("FeaturesAdminPage", () => {
     await waitFor(() => expect(screen.getByText("Server default")).toBeInTheDocument());
     const del = fetchMock.mock.calls.find(([, i]) => i?.method === "DELETE");
     expect(del?.[0]).toBe("/api/admin/settings/tool_disclosure_threshold");
+  });
+
+  // The per-run cost ceiling is a decimal: the field accepts cents, saves only
+  // on explicit Save, and Reset reverts to the env-derived default.
+  it("saves a decimal cost ceiling only on explicit Save", async () => {
+    const fetchMock = mockFetch([COST_CEILING], (url, init) => {
+      if (init.method === "PUT" && url.includes("max_cost_usd")) {
+        return { status: 200, body: { ...COST_CEILING, value: "8.5", source: "admin" } };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+    const input = await screen.findByTestId("input-max_cost_usd");
+    expect(input).toHaveAttribute("step", "0.01");
+    expect(input).toHaveAttribute("inputmode", "decimal");
+    expect(input).toHaveAttribute("min", "0");
+    expect(screen.queryByTestId("save-max_cost_usd")).toBeNull();
+    fireEvent.change(input, { target: { value: "8.5" } });
+    expect(fetchMock.mock.calls.filter(([, i]) => i?.method === "PUT")).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("save-max_cost_usd"));
+    await waitFor(() => expect(input).toHaveValue(8.5));
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+    expect(put?.[0]).toBe("/api/admin/settings/max_cost_usd");
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "8.5" });
   });
 
   // Model tiers (#1187): the row renders the combobox picker, saves only on

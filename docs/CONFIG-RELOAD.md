@@ -88,7 +88,7 @@ effect on the next turn or task:
 
 | Env var (FLEET_ / CHAT_ / CUTLASS_) | Field | Bound |
 |---|---|---|
-| `FLEET_MAX_COST_USD` | per-run cost ceiling (USD) | `>= 0` |
+| `FLEET_MAX_COST_USD` | per-run cost ceiling (USD); an admin override set in Settings → Features (`max_cost_usd`) takes precedence while set — the reload still records the env value and it serves again on Reset | `>= 0` |
 | `FLEET_MAX_TOTAL_TOKENS` | per-run token ceiling | `>= 0` |
 | `FLEET_MAX_ITERATIONS` | per-turn iteration ceiling | `1`–`10000` |
 | `FLEET_TEMPERATURE` | sampling temperature (interactive turns and scheduled tasks share the one knob) | `>= 0` |

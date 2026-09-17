@@ -43,6 +43,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"tool_disclosure_threshold":         strconv.Itoa(agentcore.EnvToolDisclosureThreshold()),
 		"max_tool_output_bytes":             strconv.Itoa(agentcore.EnvMaxToolOutputBytes()),
 		"approval_timeout_seconds":          strconv.Itoa(cfg.ApprovalTimeoutSeconds),
+		"max_cost_usd":                      strconv.FormatFloat(cfg.MaxCostUSD, 'f', -1, 64),
 		"phone_a_friend_enabled":            strconv.FormatBool(cfg.PhoneAFriendEnabled),
 		"subagents_enabled":                 strconv.FormatBool(cfg.SubagentsEnabled),
 		"default_model":                     defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
@@ -75,9 +76,13 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		// as "revert to the compiled-in constant", so even an empty default can
 		// never blank a tier. /client-config re-reads the holders per request,
 		// which is what makes the web side live.
-		"default_model":                     applyModelTier(agentcore.SetDefaultModel),
-		"advanced_model":                    applyModelTier(agentcore.SetAdvancedModel),
-		"approval_timeout_seconds":          applyIntSetting(cfg.SetApprovalTimeoutSeconds),
+		"default_model":            applyModelTier(agentcore.SetDefaultModel),
+		"advanced_model":           applyModelTier(agentcore.SetAdvancedModel),
+		"approval_timeout_seconds": applyIntSetting(cfg.SetApprovalTimeoutSeconds),
+		// The cost ceiling is ALSO in the #286 env-reload set, so its override
+		// is a separate value (config.SetMaxCostUSDOverride): a default
+		// (override=false) clears it and the env/reload value serves again.
+		"max_cost_usd":                      applyFloatOverride(cfg.SetMaxCostUSDOverride),
 		"phone_a_friend_enabled":            applyBoolSetting(cfg.SetPhoneAFriendEnabled),
 		"subagents_enabled":                 applyBoolSetting(cfg.SetSubagentsEnabled),
 		"memory_autoindex_enabled":          applyBoolSetting(cfg.SetMemoryAutoIndexEnabled),
@@ -296,6 +301,25 @@ func applyIntSetting(set func(int)) settings.ApplyFunc {
 			return fmt.Errorf("not an integer: %q", value)
 		}
 		set(n)
+		return nil
+	}
+}
+
+// applyFloatOverride adapts a config override setter to an ApplyFunc for a
+// decimal setting that ALSO participates in the env-file reload: a default
+// (override=false) clears the override so the env-derived value — including
+// later reloads — serves; an override pins the effective value until Reset.
+func applyFloatOverride(set func(v float64, override bool)) settings.ApplyFunc {
+	return func(value string, override bool) error {
+		if !override {
+			set(0, false)
+			return nil
+		}
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("not a number: %q", value)
+		}
+		set(f, true)
 		return nil
 	}
 }
