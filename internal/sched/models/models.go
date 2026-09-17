@@ -16,7 +16,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -1381,28 +1381,37 @@ func BoolPtr(v bool) *bool { return &v }
 // FLEET_TASK_DEFAULT_MAX_RETRIES via SetDefaultMaxRetries; a process that never
 // sets it (tests, embedders) keeps the historical 0. It lives here rather than
 // on a threaded parameter because NewTask has ten callers (handlers, batch,
-// import/export, triggers, admin CLI) that must all agree on one value.
-var defaultMaxRetries atomic.Int32
+// import/export, triggers, admin CLI) that must all agree on one value. A
+// plain int under a mutex, not a fixed-width atomic: the value is written
+// once and read per create, and a narrowing conversion here is exactly what
+// CodeQL's go/incorrect-integer-conversion would (rightly) refuse to prove safe.
+var (
+	defaultMaxRetriesMu sync.RWMutex
+	defaultMaxRetries   int
+)
 
 // SetDefaultMaxRetries installs the deployment default applied by NewTask when
 // max_retries is omitted; values outside 0–10 are clamped to that range (the
 // same bounds validateTaskLimits enforces on the per-task field).
 func SetDefaultMaxRetries(n int) {
-	// Explicit bound checks rather than min/max: CodeQL's range analysis
-	// (go/incorrect-integer-conversion) proves the int32 narrowing safe from
-	// these but not from the builtins.
 	if n < 0 {
 		n = 0
 	}
 	if n > 10 {
 		n = 10
 	}
-	defaultMaxRetries.Store(int32(n))
+	defaultMaxRetriesMu.Lock()
+	defaultMaxRetries = n
+	defaultMaxRetriesMu.Unlock()
 }
 
 // DefaultMaxRetries reports the deployment default NewTask applies when
 // max_retries is omitted.
-func DefaultMaxRetries() int { return int(defaultMaxRetries.Load()) }
+func DefaultMaxRetries() int {
+	defaultMaxRetriesMu.RLock()
+	defer defaultMaxRetriesMu.RUnlock()
+	return defaultMaxRetries
+}
 
 func NewTask(tc TaskCreate) *Task {
 	triggerType := tc.TriggerType
