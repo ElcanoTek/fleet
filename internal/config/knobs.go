@@ -356,6 +356,13 @@ var envKnobs = []envKnob{
 	// 1 disables in practice (the hard ceiling fires first at 100%).
 	{key: "FLEET_BUDGET_WINDDOWN_FRACTION", fleet: true, kind: kindFloat,
 		scope: scopeExternal, readBy: "internal/agentcore (budget wind-down notice)"},
+	// First-chunk watchdog (#1537): base deadline (default 30 s, floor 5 s
+	// applied by the consumer) and cap (default 180 s, never below the base)
+	// for the prompt-scaled wait on a provider's first streamed event.
+	{key: "FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", fleet: true, kind: kindFloat, min: bound(0),
+		scope: scopeExternal, readBy: "internal/agentcore (provider first-chunk watchdog)"},
+	{key: "FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", fleet: true, kind: kindFloat, min: bound(0),
+		scope: scopeExternal, readBy: "internal/agentcore (provider first-chunk watchdog)"},
 	// The three agentcore kill-switches are read with strconv.ParseBool, so
 	// they take its narrower token set (see kindStrconvBool).
 	{key: "FLEET_DISABLE_PROMPT_CACHE", fleet: true, kind: kindStrconvBool,

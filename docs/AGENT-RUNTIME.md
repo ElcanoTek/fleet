@@ -183,6 +183,19 @@ in practice (the hard ceiling fires first). The point: a run that would
 otherwise be cut off mid-thought at the ceiling gets a budgeted chance to
 finish cleanly and report a useful partial result.
 
+**Provider first-chunk watchdog scales with the prompt (#1537).** A provider
+that accepts a request but streams nothing is cut off and treated as a
+stream blip (one same-model retry, then the fallback swap). The deadline used
+to be a flat 30 s, which a ~115K-token prompt on a slower provider can
+legitimately exceed while it is still processing the prompt — two such
+timeouts in a row swapped a run to its fallback model in its audit tail. The
+wait is now `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` (default **30**,
+floor 5) plus **2 s per 10K prompt tokens** of the previous step's input,
+capped at `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` (default **180**,
+never below the base). When the watchdog fires, the `[stream-blip-retry]`
+log line and the `turn.retry` event carry `first_chunk_timeout` and
+`prompt_tokens`, so the correlation is visible in an exported log.
+
 **Auxiliary model calls are metered too (#1118).** Model calls fleet makes on
 a run's behalf but outside the main step loop follow one rule — visible or
 counted, never invisible: the compaction summarizer and the model-invocable
