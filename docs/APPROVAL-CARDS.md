@@ -48,6 +48,21 @@ informational form: muted border, title "… · ran without asking", no buttons,
 and the persisted record text — including the bundle-authored undo hint — as
 its body. It never masquerades as a past human approval.
 
+## The schedule card names the task's connectors
+
+A task scheduled from chat — by the agent's `schedule_task` call or by
+promote-to-task — inherits the conversation's connector selection
+([ADR-0068](adr/0068-chat-scheduled-tasks-inherit-connectors.md)). The stager
+snapshots the opted-in optional servers (with their seats) and the user's
+hosted connections into the staged args as `connectors`, plus the bundle's
+available always-on servers as `always_on_connectors`; the summary exposes both
+and a `no_connectors` flag. The card renders a `Connectors:` line, or
+`always-on only (…)` when nothing was selected but the bundle binds servers
+anyway, and a warning box when the task would run with no connector at all —
+the failure that used to surface only as a self-audit abort on the first run.
+The chat confirmation after approval repeats the connector list. Cards staged
+before the snapshot existed carry no keys and render the warning.
+
 ## Resolved cards survive reload
 
 The conversation GET used to return only *pending* approvals, so every

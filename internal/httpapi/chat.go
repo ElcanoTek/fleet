@@ -716,6 +716,7 @@ func (s *Server) runTurnAsync(
 			autoApproveInTest:    s.cfg.AutoApproveInTest,
 			push:                 s.push,
 			bg:                   &s.background,
+			taskConnectors:       s.chatTaskConnectorsFor(user, conv.ID),
 		},
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,

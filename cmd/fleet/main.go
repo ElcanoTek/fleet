@@ -2809,6 +2809,15 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 			tc.MaxIterations = &iters
 		}
 		tc.ThinkingBudgetTokens = req.ThinkingBudgetTokens
+		// The conversation's connector selection travels with the task
+		// (ADR-0068): a scheduled run binds only its saved mcp_selection plus
+		// the bundle's always-on servers, so without this a chat-created task
+		// in an all-optional bundle ran with no connectors at all.
+		for _, c := range req.Connectors {
+			if server := strings.TrimSpace(c.Server); server != "" {
+				tc.MCPSelection = append(tc.MCPSelection, schedmodels.MCPChoice{Server: server, Account: strings.TrimSpace(c.Account)})
+			}
+		}
 		// Tag chat-originated tasks for provenance so an operator can tell at a
 		// glance the task was created from a conversation rather than the API/CLI.
 		// EnqueueTask does NOT run the handler's tag normalization, so we apply the

@@ -921,6 +921,19 @@ function ScheduleTaskCard({
     s.recurring && typeof s.runs_per_month === "number"
       ? `≈ ${s.runs_per_month >= 1000 ? "1000+" : s.runs_per_month} run${s.runs_per_month === 1 ? "" : "s"} / month`
       : null;
+  // Connectors the task inherits from this chat (ADR-0068). A scheduled run
+  // binds only its saved connectors plus the bundle's always-on ones, so a
+  // task with neither runs without email, mailbox or data feeds — say so
+  // before Approve, not in a failed run's log.
+  const connectors = Array.isArray(s.connectors) ? s.connectors : [];
+  const alwaysOn = Array.isArray(s.always_on_connectors) ? s.always_on_connectors : [];
+  const connectorsLine =
+    connectors.length > 0
+      ? connectors.join(", ")
+      : alwaysOn.length > 0
+        ? `always-on only (${alwaysOn.join(", ")})`
+        : null;
+  const noConnectors = s.no_connectors === true || (connectors.length === 0 && alwaysOn.length === 0);
 
   const statusStyle: React.CSSProperties =
     approval.status === "approved"
@@ -981,7 +994,27 @@ function ScheduleTaskCard({
             egress allowed
           </div>
         ) : null}
+        {connectorsLine ? (
+          <div data-testid="schedule-connectors">
+            <span className="text-[var(--color-text-muted)]">Connectors: </span>
+            {connectorsLine}
+          </div>
+        ) : null}
       </div>
+
+      {noConnectors ? (
+        <div
+          data-testid="schedule-no-connectors"
+          role="note"
+          className="mt-2 rounded-md border border-[var(--color-warning-border,var(--color-border-strong))] px-2 py-1.5 text-[0.75rem] text-[var(--color-warning,var(--color-text-primary))]"
+        >
+          <span aria-hidden>⚠️ </span>
+          <span className="font-medium">No connectors.</span> This task will run without any email,
+          mailbox or data connectors, so it cannot send or fetch anything. Turn the connectors it
+          needs on in this chat&apos;s Tools menu and schedule again, or add them to the task in the
+          Operations Center after approving.
+        </div>
+      ) : null}
 
       {editing && approval.status === "pending" ? (
         <div className="mt-2 grid gap-2">

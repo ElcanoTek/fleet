@@ -238,6 +238,10 @@ type TaskScheduleRequest struct {
 	// nil = inherit the deployment default, 0 = off, >0 = this task's budget.
 	ThinkingBudgetTokens *int
 	Tags                 []string
+	// Connectors is the conversation's connector selection the task inherits
+	// (ADR-0068); it maps to TaskCreate.MCPSelection. Empty creates a task
+	// that binds only the bundle's always-on servers, exactly as before.
+	Connectors []TaskConnector
 	// RequestedBy is the approving chat user's email — the principal the
 	// per-user rolling budget gate (#601 part 2) checks before the task is
 	// created, so scheduling from chat cannot bypass a budget that would refuse
