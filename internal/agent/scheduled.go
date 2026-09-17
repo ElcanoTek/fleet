@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -511,9 +512,9 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, records)
 		if err != nil {
 			log.Printf("verifier failed: %v", err)
-			return p.verificationFailed("Completion verification could not produce a valid verdict: " + err.Error())
+			return p.verificationFailed("Completion verification could not produce a valid verdict: "+err.Error(), records)
 		} else if len(missing) > 0 {
-			return p.verificationFailed(fmt.Sprintf("End-of-run verification found unresolved required actions: %v", missing))
+			return p.verificationFailed(fmt.Sprintf("End-of-run verification found unresolved required actions: %v", missing), records)
 		}
 		p.verified = true
 	}
@@ -541,16 +542,49 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	return true, nil
 }
 
-func (p *scheduledPolicy) verificationFailed(detail string) (bool, []string) {
+func (p *scheduledPolicy) verificationFailed(detail string, records []toolExecRecord) (bool, []string) {
 	if p.verificationAttempts >= maxCompletionVerifications {
 		// This is a host verification failure, not a model audit abort. In
 		// particular, an exhausted review must not loop against the audit guard
-		// that refuses aborts after all committed actions have executed.
-		p.terminalErr = fmt.Errorf("%w after %d checks: %s. Completed external actions have not been rolled back; inspect their results before rerunning",
-			agentcore.ErrCompletionUnverified, p.verificationAttempts, detail)
+		// that refuses aborts after all committed actions have executed. The
+		// dead-letter reason names the connector calls that DID succeed, so an
+		// operator reading it knows what already went out before rerunning —
+		// the verifier's own list may still ask for one of them again.
+		p.terminalErr = fmt.Errorf("%w after %d checks: %s. Completed external actions have not been rolled back; inspect their results before rerunning. %s",
+			agentcore.ErrCompletionUnverified, p.verificationAttempts, detail, successfulConnectorCalls(records))
 		return false, nil
 	}
 	return false, []string{detail + " Check the existing tool evidence and complete genuinely missing work. Do not repeat successful external actions merely to supply evidence; use read-only verification instead. Completion will be checked again."}
+}
+
+// successfulConnectorCalls renders the connector (mcp_*) calls that succeeded
+// this run, with counts, for the exhausted-verification reason. Bounded to a
+// handful of names; the transcript keeps the full record.
+func successfulConnectorCalls(records []toolExecRecord) string {
+	const maxNames = 8
+	counts := make(map[string]int)
+	for _, r := range records {
+		if r.Succeeded && strings.HasPrefix(r.Name, "mcp_") {
+			counts[r.Name]++
+		}
+	}
+	if len(counts) == 0 {
+		return "No connector call succeeded this run."
+	}
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for i, name := range names {
+		if i == maxNames {
+			parts = append(parts, fmt.Sprintf("and %d more", len(names)-maxNames))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s ×%d", name, counts[name]))
+	}
+	return "Successful connector calls this run: " + strings.Join(parts, ", ") + "."
 }
 
 func (p *scheduledPolicy) TerminalError() error { return p.terminalErr }

@@ -15,16 +15,27 @@ For long tasks, truncation retains the opening identity and closing stop rules.
 The evidence projection is structural rather than an application field list:
 
 - It accepts JSON objects and the standard MCP text-content wrapper, recursively
-  retaining short identifier strings, exact numbers, booleans and nulls under
-  JSON Pointer field paths. Literal dots stay in the key, so `/totals/rows.revenue`
+  retaining short identifier-like strings (ids, statuses, dates, e-mail
+  addresses), exact numbers, booleans and nulls under JSON Pointer field
+  paths. Literal dots stay in the key, so `/totals/rows.revenue`
   cannot collide with `/totals/rows/revenue`. Arbitrary wrapper and field names
   work alike. Short scalar arrays (including empty lists and date bounds) remain
   whole; arrays of objects and oversized arrays are omitted.
 - The existing shared secret scrubber runs before extraction. Credential-bearing
-  subtrees (including dotted credential keys), prose, URLs and bulk arrays are
-  omitted. Separate `arguments_omitted` and `result_omitted` flags expose
-  omissions. No tool-result text becomes a verifier instruction or an
-  authorization grant.
+  subtrees (including dotted credential keys), short free text, URLs and bulk
+  arrays are omitted. Bulk text — multi-line or over the scalar limit: what
+  `run_python` or `bash` printed, a file body — is not retained verbatim; in a
+  tool RESULT, at most two bounded excerpts per projection (head … tail, URLs
+  replaced, at most 600 characters) are recorded under `<path>#excerpt`, so a
+  read-only check the model ran is visible to the verifier instead of
+  vanishing. Arguments never carry excerpts: they are requested intent, not
+  proof, and an emailed body or a script source would only be noise. Separate `arguments_omitted` and
+  `result_omitted` flags expose omissions. No tool-result text becomes a
+  verifier instruction or an authorization grant; the verifier is told excerpts
+  are the tool's own output.
+- A connector call made through the `tool_call` bridge is recorded under the
+  connector tool's own name with its own arguments and `wrapper: "tool_call"`,
+  not as a `tool_call` record whose real target is buried in the arguments.
 - Input is limited to 1 MiB; each projection is capped at 4 KiB, 64 fields,
   256 visited entries and eight nested object levels. Scalar arrays are limited
   to 32 elements and share the same byte cap. Sorting makes selection
@@ -44,7 +55,9 @@ It does not ask the model to abort or run more tools: an audit abort may be
 refused after all committed writes succeeded. A verifier failure remains a
 terminal failure under the existing retry policy, never a successful completion.
 Its transcript records `completion_unverified` and explains that completed
-external actions have not been rolled back. The verifier and repair instructions
+external actions have not been rolled back; the dead-letter reason also names
+the connector calls that succeeded this run (or says none did), so an operator
+reading it knows what already went out before rerunning. The verifier and repair instructions
 request read-only checks when evidence of an existing action is missing, rather
 than asking for that successful mutation again. Each call is metered
 in auxiliary usage. Task authors and bundles still own workflow contracts.
