@@ -48,6 +48,8 @@ export type Task = {
   model?: string;
   fallback_model?: string;
   max_iterations?: number | null;
+  max_cost_usd?: number | null;
+  max_total_tokens?: number | null;
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
   allow_network?: boolean;
@@ -100,6 +102,8 @@ export type TaskCreate = {
   model?: string;
   fallback_model?: string;
   max_iterations?: number;
+  max_cost_usd?: number;
+  max_total_tokens?: number;
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
   allow_network?: boolean;
@@ -313,6 +317,8 @@ export type TaskTemplateTask = {
   model?: string;
   fallback_model?: string;
   max_iterations?: number;
+  max_cost_usd?: number;
+  max_total_tokens?: number;
   max_retries?: number;
   recurrence?: string;
   timezone?: string;

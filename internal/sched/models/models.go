@@ -905,12 +905,20 @@ type TaskCreate struct {
 	// occurrence of a recurring task, every re-run and every clone keeps it,
 	// whereas Name must be cleared on each copy to avoid colliding with the row
 	// it was copied from. Not injected into the agent prompt.
-	Title         string       `json:"title,omitempty"`
-	Prompt        string       `json:"prompt"`
-	Model         *string      `json:"model,omitempty"`
-	FallbackModel *string      `json:"fallback_model,omitempty"`
-	MaxIterations *int         `json:"max_iterations,omitempty"`
-	MCPSelection  MCPSelection `json:"mcp_selection,omitempty"`
+	Title         string  `json:"title,omitempty"`
+	Prompt        string  `json:"prompt"`
+	Model         *string `json:"model,omitempty"`
+	FallbackModel *string `json:"fallback_model,omitempty"`
+	MaxIterations *int    `json:"max_iterations,omitempty"`
+	// MaxCostUSD / MaxTotalTokens are this task's own per-run ceilings (#1533):
+	// nil = inherit the deployment ceiling (FLEET_MAX_COST_USD /
+	// FLEET_MAX_TOTAL_TOKENS or the admin settings); a value replaces it for
+	// this task's runs. Anyone may lower a task's ceiling; a value ABOVE the
+	// deployment ceiling needs admin permission (the same authority as editing
+	// the deployment ceiling). Enforced through the one checkCeilings path.
+	MaxCostUSD     *float64     `json:"max_cost_usd,omitempty"`
+	MaxTotalTokens *int         `json:"max_total_tokens,omitempty"`
+	MCPSelection   MCPSelection `json:"mcp_selection,omitempty"`
 	// CredentialAllowlist restricts which (server, account) pairs this task may
 	// call. nil inherits global (current behaviour); set an explicit list to
 	// enforce least-privilege credential scoping. See CredentialAllowlist.
@@ -1090,12 +1098,16 @@ type Task struct {
 	// untitled (clients fall back to the prompt's first line). Unlike Name it is
 	// NOT unique and IS carried onto every occurrence / re-run / clone, so all
 	// the runs of one job share it. See TaskCreate.Title.
-	Title         string       `json:"title,omitempty"`
-	Prompt        string       `json:"prompt"`
-	Model         *string      `json:"model,omitempty"`
-	FallbackModel *string      `json:"fallback_model,omitempty"`
-	MaxIterations *int         `json:"max_iterations,omitempty"`
-	MCPSelection  MCPSelection `json:"mcp_selection"`
+	Title         string  `json:"title,omitempty"`
+	Prompt        string  `json:"prompt"`
+	Model         *string `json:"model,omitempty"`
+	FallbackModel *string `json:"fallback_model,omitempty"`
+	MaxIterations *int    `json:"max_iterations,omitempty"`
+	// MaxCostUSD / MaxTotalTokens: this task's own per-run ceilings (#1533);
+	// nil = inherit the deployment ceiling. See TaskCreate.
+	MaxCostUSD     *float64     `json:"max_cost_usd,omitempty"`
+	MaxTotalTokens *int         `json:"max_total_tokens,omitempty"`
+	MCPSelection   MCPSelection `json:"mcp_selection"`
 	// CredentialAllowlist restricts which (server, account) pairs this task may
 	// call. nil = inherit global. See TaskCreate.CredentialAllowlist.
 	CredentialAllowlist CredentialAllowlist `json:"credential_allowlist"`
@@ -1457,6 +1469,8 @@ func NewTask(tc TaskCreate) *Task {
 		Model:                      tc.Model,
 		FallbackModel:              tc.FallbackModel,
 		MaxIterations:              tc.MaxIterations,
+		MaxCostUSD:                 tc.MaxCostUSD,
+		MaxTotalTokens:             tc.MaxTotalTokens,
 		MCPSelection:               tc.MCPSelection,
 		CredentialAllowlist:        tc.CredentialAllowlist,
 		LoopConfig:                 tc.LoopConfig,
@@ -1593,6 +1607,8 @@ func TaskToCreate(t *Task) TaskCreate {
 		Model:                  t.Model,
 		FallbackModel:          t.FallbackModel,
 		MaxIterations:          t.MaxIterations,
+		MaxCostUSD:             t.MaxCostUSD,
+		MaxTotalTokens:         t.MaxTotalTokens,
 		MCPSelection:           t.MCPSelection,
 		CredentialAllowlist:    t.CredentialAllowlist,
 		LoopConfig:             t.LoopConfig,
@@ -1670,6 +1686,8 @@ type TaskExportRecord struct {
 	Model                  *string             `json:"model,omitempty"                      yaml:"model,omitempty"`
 	FallbackModel          *string             `json:"fallback_model,omitempty"             yaml:"fallback_model,omitempty"`
 	MaxIterations          *int                `json:"max_iterations,omitempty"             yaml:"max_iterations,omitempty"`
+	MaxCostUSD             *float64            `json:"max_cost_usd,omitempty"               yaml:"max_cost_usd,omitempty"`
+	MaxTotalTokens         *int                `json:"max_total_tokens,omitempty"           yaml:"max_total_tokens,omitempty"`
 	MCPSelection           MCPSelection        `json:"mcp_selection,omitempty"              yaml:"mcp_selection,omitempty"`
 	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist,omitempty" yaml:"credential_allowlist,omitempty"`
 	LoopConfig             *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
@@ -1801,6 +1819,8 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		Model:                      rec.Model,
 		FallbackModel:              rec.FallbackModel,
 		MaxIterations:              rec.MaxIterations,
+		MaxCostUSD:                 rec.MaxCostUSD,
+		MaxTotalTokens:             rec.MaxTotalTokens,
 		MCPSelection:               rec.MCPSelection,
 		CredentialAllowlist:        rec.CredentialAllowlist,
 		LoopConfig:                 rec.LoopConfig,
@@ -1866,6 +1886,8 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		Model:                      t.Model,
 		FallbackModel:              t.FallbackModel,
 		MaxIterations:              t.MaxIterations,
+		MaxCostUSD:                 t.MaxCostUSD,
+		MaxTotalTokens:             t.MaxTotalTokens,
 		MCPSelection:               t.MCPSelection,
 		CredentialAllowlist:        t.CredentialAllowlist,
 		LoopConfig:                 t.LoopConfig,
@@ -1950,6 +1972,8 @@ func OverlayTaskDefinition(task *Task, tc TaskCreate) error {
 	task.Model = tc.Model
 	task.FallbackModel = tc.FallbackModel
 	task.MaxIterations = tc.MaxIterations
+	task.MaxCostUSD = tc.MaxCostUSD
+	task.MaxTotalTokens = tc.MaxTotalTokens
 	task.MCPSelection = tc.MCPSelection
 	task.CredentialAllowlist = tc.CredentialAllowlist
 	task.LoopConfig = tc.LoopConfig

@@ -181,9 +181,14 @@ type Options struct {
 	SystemPrompt     string
 	Persona          string
 	MaxIterations    int
-	Sandbox          *sandbox.Sandbox
-	LogFile          string
-	OutputSchema     json.RawMessage
+	// MaxCostUSD / MaxTotalTokens are the TASK's own per-run ceilings (#1533):
+	// 0 = inherit the deployment ceiling; >0 replaces it for this run through
+	// the same checkCeilings path a spawned child's sliced budget uses.
+	MaxCostUSD     float64
+	MaxTotalTokens int
+	Sandbox        *sandbox.Sandbox
+	LogFile        string
+	OutputSchema   json.RawMessage
 
 	// NotesProvider supplies the admin-curated knowledge base appended to the
 	// system prompt at run start (both modes inject the same notes). Nil = none.
@@ -324,38 +329,40 @@ func NewAgent(opts Options) *Agent {
 		maxIter = 500
 	}
 	a := &Agent{
-		config:              opts.Config,
-		model:               opts.Model,
-		fallbackModel:       opts.FallbackModel,
-		fallbackModels:      append([]fantasy.LanguageModel(nil), opts.FallbackModels...),
-		mcpClient:           opts.MCPClient,
-		mcpBroker:           opts.MCPBroker,
-		mcpCatalog:          cloneScheduledMCPCatalog(opts.MCPCatalog),
-		mcpToolAllowlist:    opts.MCPToolAllowlist,
-		overlay:             opts.Overlay,
-		nativeTools:         opts.NativeTools,
-		systemPrompt:        opts.SystemPrompt,
-		persona:             opts.Persona,
-		maxIterations:       maxIter,
-		logSession:          NewLogSession(),
-		sb:                  opts.Sandbox,
-		loadedServers:       make(map[string]bool),
-		logFile:             opts.LogFile,
-		notesProvider:       opts.NotesProvider,
-		noteProposer:        opts.NoteProposer,
-		skillProposer:       opts.SkillProposer,
-		taskMemory:          opts.TaskMemory,
-		learnedInstruction:  opts.LearnedInstruction,
-		taskID:              opts.TaskID,
-		taskMemoryConfig:    opts.TaskMemoryConfig,
-		credentialAllowlist: opts.CredentialAllowlist,
-		thinkingBudget:      opts.ThinkingBudget,
-		personaPolicy:       opts.PersonaPolicy,
-		auditProtocolRef:    opts.AuditProtocolRef,
-		outputSchema:        append(json.RawMessage(nil), opts.OutputSchema...),
-		phoneAFriendEnabled: opts.PhoneAFriendEnabled,
-		reviewerModel:       opts.ReviewerModel,
-		subagent:            newSubagentConfig(opts.Subagent),
+		config:               opts.Config,
+		model:                opts.Model,
+		fallbackModel:        opts.FallbackModel,
+		fallbackModels:       append([]fantasy.LanguageModel(nil), opts.FallbackModels...),
+		mcpClient:            opts.MCPClient,
+		mcpBroker:            opts.MCPBroker,
+		mcpCatalog:           cloneScheduledMCPCatalog(opts.MCPCatalog),
+		mcpToolAllowlist:     opts.MCPToolAllowlist,
+		overlay:              opts.Overlay,
+		nativeTools:          opts.NativeTools,
+		systemPrompt:         opts.SystemPrompt,
+		persona:              opts.Persona,
+		maxIterations:        maxIter,
+		costCeilingOverride:  opts.MaxCostUSD,
+		tokenCeilingOverride: opts.MaxTotalTokens,
+		logSession:           NewLogSession(),
+		sb:                   opts.Sandbox,
+		loadedServers:        make(map[string]bool),
+		logFile:              opts.LogFile,
+		notesProvider:        opts.NotesProvider,
+		noteProposer:         opts.NoteProposer,
+		skillProposer:        opts.SkillProposer,
+		taskMemory:           opts.TaskMemory,
+		learnedInstruction:   opts.LearnedInstruction,
+		taskID:               opts.TaskID,
+		taskMemoryConfig:     opts.TaskMemoryConfig,
+		credentialAllowlist:  opts.CredentialAllowlist,
+		thinkingBudget:       opts.ThinkingBudget,
+		personaPolicy:        opts.PersonaPolicy,
+		auditProtocolRef:     opts.AuditProtocolRef,
+		outputSchema:         append(json.RawMessage(nil), opts.OutputSchema...),
+		phoneAFriendEnabled:  opts.PhoneAFriendEnabled,
+		reviewerModel:        opts.ReviewerModel,
+		subagent:             newSubagentConfig(opts.Subagent),
 	}
 	// The parent task id labels any sub-agent this run spawns (#264 traceability).
 	// A child inherits this same value (buildChild), so every descendant's session
@@ -678,7 +685,9 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	// config ceiling so the child's own agentcore.Run enforces the slice through
 	// the SAME checkCeilings the parent uses — the child cannot outspend its slice,
 	// and (because its spend is charged back to the parent) the collective spend of
-	// all children cannot breach the parent ceiling.
+	// all children cannot breach the parent ceiling. A task's own max_cost_usd /
+	// max_total_tokens (#1533) arrive through the same fields (Options), so a
+	// per-task ceiling is enforced by exactly this path and nothing else.
 	if a.costCeilingOverride > 0 {
 		maxCostUSD = a.costCeilingOverride
 	}

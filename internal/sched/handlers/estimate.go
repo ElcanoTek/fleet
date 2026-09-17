@@ -99,7 +99,12 @@ func (h *Handlers) forecastTask(tc *models.TaskCreate) agentcore.CostForecast {
 		maxIter = *tc.MaxIterations
 	}
 
+	// The forecast is bounded by the ceiling the run will actually enforce: the
+	// task's own max_cost_usd when it carries one (#1533), else the deployment's.
 	ceiling := h.maxCostUSD()
+	if tc.MaxCostUSD != nil && *tc.MaxCostUSD > 0 {
+		ceiling = *tc.MaxCostUSD
+	}
 	forecast := agentcore.ForecastCost(model, systemToks, toolToks, promptToks, maxIter, ceiling)
 	if !forecast.PricingKnown && h.catalogModelSlug != nil {
 		if catalogSlug := h.catalogModelSlug(model); catalogSlug != model {
@@ -154,4 +159,13 @@ func (h *Handlers) maxCostUSD() float64 {
 		return h.config.LiveMaxCostUSD()
 	}
 	return h.config.MaxCostUSD
+}
+
+// maxTotalTokens is the deployment uncached-token ceiling (0 = unlimited /
+// unknown when the live reader is not wired).
+func (h *Handlers) maxTotalTokens() int {
+	if h.config.LiveMaxTotalTokens != nil {
+		return h.config.LiveMaxTotalTokens()
+	}
+	return 0
 }

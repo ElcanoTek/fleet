@@ -938,6 +938,8 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		SystemPrompt:     taskSystemPrompt,
 		Persona:          taskPersona,
 		MaxIterations:    maxIter,
+		MaxCostUSD:       derefFloat(task.MaxCostUSD),
+		MaxTotalTokens:   derefInt(task.MaxTotalTokens),
 		Sandbox:          sb,
 		NotesProvider:    r.notesProvider,
 		NoteProposer:     r.noteProposer,
@@ -1735,4 +1737,20 @@ func renderUserSkillsSection(docs []UserSkillDoc) string {
 		fmt.Fprintf(&b, "\n(%d more skill(s) were omitted for space.)\n", dropped)
 	}
 	return b.String()
+}
+
+// derefFloat / derefInt read an optional per-task ceiling (#1533): nil → 0,
+// which the agent treats as "inherit the deployment ceiling".
+func derefFloat(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

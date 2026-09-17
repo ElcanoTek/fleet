@@ -215,6 +215,7 @@ function taskToFormValues(task: Task | null) {
     fallbackModel: task?.fallback_model || DEFAULT_FALLBACK_MODEL,
     maxIterations:
       typeof task?.max_iterations === "number" ? String(task.max_iterations) : "",
+    maxCostUSD: typeof task?.max_cost_usd === "number" ? String(task.max_cost_usd) : "",
     captainsLog: Boolean(task?.instruction_self_improve),
     allowNetwork: Boolean(task?.allow_network),
     // Sub-agent delegation (#1043) defaults ON: a fresh form starts true, and an
@@ -390,6 +391,7 @@ export function TaskCreateModal({
   const [model, setModel] = useState(init.model);
   const [fallbackModel, setFallbackModel] = useState(init.fallbackModel);
   const [maxIterations, setMaxIterations] = useState(init.maxIterations);
+  const [maxCostUSD, setMaxCostUSD] = useState(init.maxCostUSD);
   const [captainsLog, setCaptainsLog] = useState(init.captainsLog);
   const [allowNetwork, setAllowNetwork] = useState(init.allowNetwork);
   const [allowDelegation, setAllowDelegation] = useState(init.allowDelegation);
@@ -521,6 +523,7 @@ export function TaskCreateModal({
     model !== DEFAULT_PRIMARY_MODEL ||
     fallbackModel !== DEFAULT_FALLBACK_MODEL ||
     maxIterations.trim() !== "" ||
+    maxCostUSD.trim() !== "" ||
     expectedDuration.trim() !== "" ||
     thinkingBudget.trim() !== "" ||
     sandboxMemory.trim() !== "" ||
@@ -558,6 +561,7 @@ export function TaskCreateModal({
     model,
     fallbackModel,
     maxIterations,
+    maxCostUSD,
     captainsLog,
     allowNetwork,
     allowDelegation,
@@ -590,6 +594,7 @@ export function TaskCreateModal({
     init.model,
     init.fallbackModel,
     init.maxIterations,
+    init.maxCostUSD,
     init.captainsLog,
     init.allowNetwork,
     init.allowDelegation,
@@ -636,6 +641,7 @@ export function TaskCreateModal({
     setModel(DEFAULT_PRIMARY_MODEL);
     setFallbackModel(DEFAULT_FALLBACK_MODEL);
     setMaxIterations("");
+    setMaxCostUSD("");
     setCaptainsLog(false);
     setAllowNetwork(false);
     setAllowDelegation(true);
@@ -756,6 +762,7 @@ export function TaskCreateModal({
         : "",
     );
     setMaxIterations(typeof t.max_iterations === "number" ? String(t.max_iterations) : "");
+    setMaxCostUSD(typeof t.max_cost_usd === "number" ? String(t.max_cost_usd) : "");
     if (t.description || t.tags?.length || t.persona) setContextOpen(true);
     if (
       t.persona ||
@@ -866,6 +873,7 @@ export function TaskCreateModal({
     model !== DEFAULT_PRIMARY_MODEL,
     fallbackModel !== DEFAULT_FALLBACK_MODEL,
     maxIterations.trim() !== "",
+    maxCostUSD.trim() !== "",
     expectedDuration.trim() !== "",
     thinkingBudget.trim() !== "",
     sandboxMemory.trim() !== "",
@@ -992,6 +1000,7 @@ export function TaskCreateModal({
     if (model) taskData.model = model;
     if (fallbackModel) taskData.fallback_model = fallbackModel;
     if (maxIterations.trim()) taskData.max_iterations = Number.parseInt(maxIterations, 10);
+    if (maxCostUSD.trim()) taskData.max_cost_usd = Number.parseFloat(maxCostUSD);
     if (captainsLog) taskData.instruction_self_improve = true;
     if (allowNetwork) taskData.allow_network = true;
     // Delegation defaults ON server-side (#1043): omit when on, send the
@@ -1055,6 +1064,7 @@ export function TaskCreateModal({
       model,
       fallback_model: fallbackModel,
       max_iterations: maxIterations,
+      max_cost_usd: maxCostUSD,
       recurrence: scheduleMode === "repeat" ? recurrence : "",
       scheduled_for: scheduleMode === "once" ? scheduledFor : "",
     });
@@ -1081,6 +1091,7 @@ export function TaskCreateModal({
     model: "taskModelInput",
     fallback_model: "taskFallbackModelInput",
     max_iterations: "taskMaxIterations",
+    max_cost_usd: "taskMaxCostUSD",
     run_if: "runIfCommandInput",
   };
 
@@ -1106,6 +1117,7 @@ export function TaskCreateModal({
     model,
     fallbackModel,
     maxIterations,
+    maxCostUSD,
   ]);
   const estimateStale = forecast != null && estimateKey !== currentEstimateKey;
 
@@ -2184,6 +2196,33 @@ export function TaskCreateModal({
                           data-testid="error-max-iterations"
                         >
                           {errors.max_iterations}
+                        </div>
+                      ) : null}
+                      <label className="task-limit-label" htmlFor="taskMaxCostUSD">
+                        Max cost (USD)
+                      </label>
+                      <input
+                        id="taskMaxCostUSD"
+                        type="number"
+                        min={0.01}
+                        max={100000}
+                        step={0.01}
+                        inputMode="decimal"
+                        placeholder="deployment ceiling"
+                        aria-describedby="max-cost-help"
+                        value={maxCostUSD}
+                        onChange={(e) => setMaxCostUSD(e.target.value)}
+                      />
+                      <span className="task-limit-help" id="max-cost-help">
+                        This task&apos;s own per-run ceiling. Blank = the deployment ceiling; above it needs
+                        admin.
+                      </span>
+                      {errors.max_cost_usd ? (
+                        <div
+                          className="validation-error task-limits-error"
+                          data-testid="error-max-cost-usd"
+                        >
+                          {errors.max_cost_usd}
                         </div>
                       ) : null}
                       <label className="task-limit-label" htmlFor="taskExpectedDuration">

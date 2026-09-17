@@ -7,6 +7,7 @@ import {
   describeEmailError,
   validatePrompt,
   validateModel,
+  validateMaxCostUSD,
   validateMaxIterations,
   validateFile,
   validateScheduledTime,
@@ -102,6 +103,23 @@ describe("validateMaxIterations", () => {
     expect(validateMaxIterations("0").valid).toBe(false);
     expect(validateMaxIterations("abc").valid).toBe(false);
     expect(validateMaxIterations("").valid).toBe(true);
+  });
+});
+
+describe("validateMaxCostUSD", () => {
+  it("accepts a blank (inherit) or a positive dollar amount up to cents", () => {
+    expect(validateMaxCostUSD("").valid).toBe(true);
+    expect(validateMaxCostUSD(undefined).valid).toBe(true);
+    expect(validateMaxCostUSD("12").valid).toBe(true);
+    expect(validateMaxCostUSD("12.50").valid).toBe(true);
+    expect(validateMaxCostUSD("0.01").valid).toBe(true);
+  });
+  it("rejects zero (it would read as unlimited), negatives, non-numbers and absurd values", () => {
+    expect(validateMaxCostUSD("0").valid).toBe(false);
+    expect(validateMaxCostUSD("-3").valid).toBe(false);
+    expect(validateMaxCostUSD("ten").valid).toBe(false);
+    expect(validateMaxCostUSD("1.234").valid).toBe(false);
+    expect(validateMaxCostUSD("100001").valid).toBe(false);
   });
 });
 

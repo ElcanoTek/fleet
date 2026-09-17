@@ -57,6 +57,8 @@ type taskScanBuf struct {
 	model                  sql.NullString
 	fallbackModel          sql.NullString
 	maxIterations          sql.NullInt64
+	maxCostUSD             sql.NullFloat64
+	maxTotalTokens         sql.NullInt64
 	mcpSelection           sql.NullString
 	priority               int
 	instructionSelfImprove bool
@@ -251,6 +253,34 @@ var taskColumnRegistry = []taskColumn{
 			if b.maxIterations.Valid {
 				value := int(b.maxIterations.Int64)
 				t.MaxIterations = &value
+			}
+		},
+	},
+	{
+		name: "max_cost_usd",
+		read: true, insert: true, upsert: true, txUpdate: true, export: true,
+		// Per-task run cost ceiling (#1533, migration 070): NULL = inherit the
+		// deployment ceiling. A definition field like max_iterations.
+		value: func(t *models.Task) any { return t.MaxCostUSD },
+		dest:  func(b *taskScanBuf) any { return &b.maxCostUSD },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.maxCostUSD.Valid {
+				value := b.maxCostUSD.Float64
+				t.MaxCostUSD = &value
+			}
+		},
+	},
+	{
+		name: "max_total_tokens",
+		read: true, insert: true, upsert: true, txUpdate: true, export: true,
+		// Per-task uncached-token ceiling (#1533, migration 070): NULL =
+		// inherit the deployment ceiling.
+		value: func(t *models.Task) any { return t.MaxTotalTokens },
+		dest:  func(b *taskScanBuf) any { return &b.maxTotalTokens },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.maxTotalTokens.Valid {
+				value := int(b.maxTotalTokens.Int64)
+				t.MaxTotalTokens = &value
 			}
 		},
 	},
