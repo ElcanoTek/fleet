@@ -1388,7 +1388,16 @@ var defaultMaxRetries atomic.Int32
 // max_retries is omitted; values outside 0–10 are clamped to that range (the
 // same bounds validateTaskLimits enforces on the per-task field).
 func SetDefaultMaxRetries(n int) {
-	defaultMaxRetries.Store(int32(min(max(n, 0), 10)))
+	// Explicit bound checks rather than min/max: CodeQL's range analysis
+	// (go/incorrect-integer-conversion) proves the int32 narrowing safe from
+	// these but not from the builtins.
+	if n < 0 {
+		n = 0
+	}
+	if n > 10 {
+		n = 10
+	}
+	defaultMaxRetries.Store(int32(n))
 }
 
 // DefaultMaxRetries reports the deployment default NewTask applies when
