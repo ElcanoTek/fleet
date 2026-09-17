@@ -144,6 +144,11 @@ func run(argv []string, progName string) error {
 		return err
 	}
 	cfg.WorkspaceRoot = wsDir
+	// The minted one-shot directory IS this run's private workspace, so the
+	// per-job nesting scheduled runs get under a shared root (#1543,
+	// <root>/tasks/<lineage>/) would only push the seeded symlinks one level
+	// below where the sandbox works. Use the root directly.
+	cfg.ScheduledSharedWorkspace = true
 	fmt.Fprintf(os.Stderr, "%s: workspace=%s\n", progName, wsDir)
 
 	// Register the same two file-tool confinement globals the serve boot does
