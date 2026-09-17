@@ -120,7 +120,9 @@ export default function LoginCard({
         <h1 className="font-heading mb-2 text-[1.75rem] leading-[1.2] font-bold tracking-[-0.01em] text-[var(--color-text-primary)]">
           {title}
         </h1>
-        <p className="mb-6 text-[var(--color-text-muted)]">{tagline}</p>
+        <p className="mb-6 text-[1rem] leading-[1.5] text-[var(--color-text-muted)]">
+          {tagline}
+        </p>
 
         {loginError ? (
           <div
