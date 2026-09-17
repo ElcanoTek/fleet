@@ -922,6 +922,7 @@ func run() error {
 	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the
 	// exact system prompt a real run would send. Read-only; never dispatches.
 	h.SetSystemPromptProvider(taskRunner.SystemPromptForPersona)
+	h.SetModelCatalogResolver(mgr.CatalogModelSlug)
 	// Wire the persona catalog (#720) so the task-create paths can reject an
 	// unknown persona with a 400 listing the valid names, instead of silently
 	// dispatching on the global default. Reads the bundle's personas dir live

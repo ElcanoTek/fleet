@@ -38,3 +38,13 @@ export function catalogModelRoutes(slug: string, providers: ModelRouting): Array
     .filter((p) => p.type === "openrouter" && p.catch_all)
     .map((p) => ({ slug: `${p.name}/${slug}`, provider: p.name }));
 }
+
+// Only a configured OpenRouter prefix can be removed for catalog metadata.
+// Never assign OpenRouter prices/context limits to a similarly named native
+// model or custom gateway just because its identifier contains a slash.
+export function catalogModelSlug(slug: string, providers: ModelRouting): string {
+  const value = slug.trim();
+  const slash = value.indexOf("/");
+  const provider = providers?.find((p) => p.name === value.slice(0, slash));
+  return slash > 0 && provider?.type === "openrouter" ? value.slice(slash + 1) : value;
+}

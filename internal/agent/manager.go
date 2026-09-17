@@ -1163,6 +1163,10 @@ func (m *Manager) CheckModelRoute(slug string) (agentcore.ProviderType, error) {
 	return m.modelResolver().CheckModelRoute(slug)
 }
 
+func (m *Manager) CatalogModelSlug(slug string) string {
+	return m.modelResolver().CatalogModelSlug(slug)
+}
+
 func (m *Manager) ResolveWithFallback(ctx context.Context, slug string) (fantasy.LanguageModel, fantasy.LanguageModel, error) {
 	return m.modelResolver().ResolveWithFallback(ctx, slug)
 }

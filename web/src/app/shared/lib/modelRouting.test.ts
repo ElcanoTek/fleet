@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { catalogModelRoutes, modelIsAvailable, type ModelProvider } from "./modelRouting";
+import { catalogModelRoutes, catalogModelSlug, modelIsAvailable, type ModelProvider } from "./modelRouting";
 
 const direct: ModelProvider = { name: "direct", type: "openai", models: ["gpt-4o"], catch_all: false };
 const router: ModelProvider = { name: "router", type: "openrouter", models: [], catch_all: true };
@@ -38,5 +38,13 @@ describe("provider-aware model choices", () => {
       { slug: `backup/${slug}`, provider: "backup" },
     ]);
     expect(catalogModelRoutes(slug, [router, native])).toEqual([{ slug }]);
+  });
+
+  it("resolves metadata only through configured OpenRouter prefixes", () => {
+    const slug = "google/gemini-3.8-flash";
+    expect(catalogModelSlug(`router/${slug}`, [direct, router])).toBe(slug);
+    expect(catalogModelSlug(`direct/${slug}`, [direct, router])).toBe(`direct/${slug}`);
+    expect(catalogModelSlug(`unknown/${slug}`, [router])).toBe(`unknown/${slug}`);
+    expect(catalogModelSlug(slug, [router])).toBe(slug);
   });
 });

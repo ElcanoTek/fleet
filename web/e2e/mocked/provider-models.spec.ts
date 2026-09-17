@@ -60,7 +60,8 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
     models: [],
   } }));
   await page.route("**/api/model-catalog", (route) => route.fulfill({ json: {
-    models: [{ slug: "google/gemini-3.8-flash", name: "Gemini" }],
+    models: [{ slug: "google/gemini-3.8-flash", name: "Gemini", context_length: 100000,
+      price_prompt: 0.000003, price_completion: 0.000015 }],
   } }));
   let sent = "";
   await page.route("**/api/chat", (route) => {
@@ -68,7 +69,7 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
     return fulfillSse(route, [
       { event: "conversation", data: { id: "router-chat", model: sent, persona: "default" } },
       { event: "text.delta", data: { text: "Explicit OpenRouter route selected." } },
-      { event: "turn.completed", data: { model: sent } },
+      { event: "turn.completed", data: { model: sent, prompt_tokens: 10000, prompt_tokens_last_step: 10000 } },
     ]);
   });
   await page.goto("/chat");
@@ -80,4 +81,7 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
   await composer.press("Enter");
   await expect(page.getByText("Explicit OpenRouter route selected.")).toBeVisible();
   expect(sent).toBe("router/google/gemini-3.8-flash");
+  await expect(page.getByTestId("composer-model-label-full")).toHaveText("router: Gemini");
+  await expect(page.locator("button[aria-haspopup='listbox']").first().locator(".model-cost")).toHaveAttribute("data-cost-tier", "3");
+  await expect(page.getByRole("button", { name: "Context 10% full — click to compact" })).toBeVisible();
 });

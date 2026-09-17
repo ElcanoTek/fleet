@@ -23,6 +23,10 @@ repair `no configured provider serves model` failures.
   models available; explicit routes and listed gateway model identifiers work.
   When a native catch-all shadows an OpenRouter catch-all, the pickers offer
   explicit `<openrouter-provider>/<catalog-slug>` alternatives instead.
+  Explicit OpenRouter selections retain their catalog display name, prices and
+  context metadata in chat. Task forecasts resolve the underlying catalog ID
+  through the active provider table while retaining the selected route in the
+  response; native or unknown provider prefixes are never stripped for pricing.
 - Workspace discovery and task-picker caches expire after 30 seconds. Chat
   refreshes discovery when opening/closing the picker; task pickers refresh on
   opening. This is a bounded browser cache, not background polling.

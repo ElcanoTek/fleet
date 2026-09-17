@@ -79,7 +79,7 @@ import { TeamChatViewer } from "./TeamChatViewer";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
-import { catalogModelRoutes, modelIsAvailable, unavailableModelMessage, type ModelRouting } from "@/app/shared/lib/modelRouting";
+import { catalogModelRoutes, catalogModelSlug, modelIsAvailable, unavailableModelMessage, type ModelRouting } from "@/app/shared/lib/modelRouting";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
@@ -1048,14 +1048,13 @@ export function ChatExperience({
     }
     return 0;
   }, [messages]);
-  const contextLength = useMemo(() => {
-    const slug = selectedModel.trim();
-    if (!slug) return undefined;
-    return (
-      catalogModels.find((m) => m.slug === slug)?.contextLength ??
-      workspaceModels.find((m) => m.slug === slug)?.contextLength
-    );
-  }, [catalogModels, workspaceModels, selectedModel]);
+  const selectedCatalogSlug = catalogModelSlug(selectedModel, modelRouting);
+  const selectedCatalogModel = useMemo(() =>
+    catalogModels.find((m) => m.slug === selectedCatalogSlug) ??
+    rankedModels.find((m) => m.slug === selectedCatalogSlug),
+  [catalogModels, rankedModels, selectedCatalogSlug]);
+  const contextLength = selectedCatalogModel?.contextLength ??
+    workspaceModels.find((m) => m.slug === selectedModel.trim())?.contextLength;
   // Display label for the model chip: tier alias ("default"/"advanced") >
   // catalog/ranked display name > the raw slug (or in-progress typed text).
   // Keeps the chip showing the same string as the model's menu row rather
@@ -1065,27 +1064,23 @@ export function ChatExperience({
     if (alias !== selectedModel) return alias;
     const slug = selectedModel.trim();
     if (!slug) return selectedModel;
-    const known =
-      catalogModels.find((m) => m.slug === slug) ??
-      rankedModels.find((m) => m.slug === slug) ??
-      workspaceModels.find((m) => m.slug === slug);
+    if (selectedCatalogModel && selectedCatalogSlug !== slug) {
+      return `${slug.slice(0, slug.indexOf("/"))}: ${selectedCatalogModel.name}`;
+    }
+    const known = selectedCatalogModel ?? workspaceModels.find((m) => m.slug === slug);
     return known?.name ?? selectedModel;
-  }, [selectedModel, catalogModels, rankedModels, workspaceModels]);
+  }, [selectedModel, selectedCatalogModel, selectedCatalogSlug, workspaceModels]);
   // Prices for the currently selected slug, feeding the cost indicator on the
   // composer's model chip. Unknown slugs (a half-typed custom slug, a
   // workspace-provider model) resolve to null and the chip shows no tier.
   const selectedModelPrices = useMemo<ModelPrices | null>(() => {
-    const slug = selectedModel.trim();
-    if (!slug) return null;
-    const known =
-      catalogModels.find((m) => m.slug === slug) ??
-      rankedModels.find((m) => m.slug === slug);
+    const known = selectedCatalogModel;
     if (!known) return null;
     return {
       pricePrompt: known.pricePrompt,
       priceCompletion: known.priceCompletion,
     };
-  }, [selectedModel, catalogModels, rankedModels]);
+  }, [selectedCatalogModel]);
   const contextUsage = useMemo<ContextUsage | null>(
     () =>
       computeContextUsage({
