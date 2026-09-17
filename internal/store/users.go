@@ -57,8 +57,12 @@ const sessionEpochBytes = 8
 //
 // The empty hash is a legitimate input — it is what Store.SessionEpoch reports
 // for an email with no row.
-func sessionEpochFor(passwordHash, sessionSalt string) string {
-	sum := sha256.Sum256([]byte(passwordHash + sessionSalt))
+//
+// The input is the stored bcrypt digest (already salted, cost-factored and
+// one-way), never the password: this is a fingerprint of the credential
+// record for change detection, not a password hash.
+func sessionEpochFor(bcryptDigest, sessionSalt string) string {
+	sum := sha256.Sum256([]byte(bcryptDigest + sessionSalt))
 	return hex.EncodeToString(sum[:sessionEpochBytes])
 }
 

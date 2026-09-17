@@ -164,8 +164,8 @@ func TestSessionEpoch_MovesWhenPasswordIsReusedVerbatim(t *testing.T) {
 	}
 }
 
-// Nothing but a password write may move the epoch, or routine admin edits would
-// log people out.
+// Routine admin edits (role, team) must not move the epoch, or they would log
+// people out. Only a password write and a central logout (the session salt) may.
 func TestSessionEpoch_SurvivesRoleAndTeamEdits(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

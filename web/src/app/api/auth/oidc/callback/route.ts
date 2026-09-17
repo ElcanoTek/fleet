@@ -42,11 +42,17 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const config = getOidcConfig();
   if (!config) {
-    return NextResponse.redirect(getRedirectUrl(request, "/login?e=oidc_unavailable"), { status: 303 });
+    return NextResponse.redirect(
+      getRedirectUrl(request, "/login?e=oidc_unavailable"),
+      { status: 303 },
+    );
   }
 
   const fail = (code: string) => {
-    const res = NextResponse.redirect(getRedirectUrl(request, `/login?e=${code}`), { status: 303 });
+    const res = NextResponse.redirect(
+      getRedirectUrl(request, `/login?e=${code}`),
+      { status: 303 },
+    );
     clearTempCookies(res, isSecureRequest(request));
     return res;
   };
@@ -57,7 +63,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // A silent attempt (prompt=none, see /start?silent=1) found no usable
     // central session. That is not a failure to report: show the login page
     // with both options and no banner, and do not auto-start again from it.
-    const res = NextResponse.redirect(getRedirectUrl(request, `/login?${SILENT_SSO_RESULT}`), { status: 303 });
+    const res = NextResponse.redirect(
+      getRedirectUrl(request, `/login?${SILENT_SSO_RESULT}`),
+      { status: 303 },
+    );
     clearTempCookies(res, isSecureRequest(request));
     return res;
   }
@@ -72,7 +81,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const nonce = request.cookies.get(OIDC_NONCE_COOKIE)?.value;
   const verifier = request.cookies.get(OIDC_VERIFIER_COOKIE)?.value;
 
-  if (!code || !state || !cookieState || !nonce || !verifier) return fail("oidc_error");
+  if (!code || !state || !cookieState || !nonce || !verifier)
+    return fail("oidc_error");
   // Constant work is unnecessary here (state is our own random value, not a
   // secret tied to a user); a direct compare is the CSRF gate.
   if (state !== cookieState) return fail("oidc_error");
@@ -100,7 +110,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",
     });
-    if (issuerDoc.token_endpoint_auth_methods_supported?.includes("client_secret_basic")) {
+    if (
+      issuerDoc.token_endpoint_auth_methods_supported?.includes(
+        "client_secret_basic",
+      )
+    ) {
       headers.set(
         "Authorization",
         `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
@@ -123,16 +137,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return fail("oidc_error");
   }
 
-  const validation = validateIdToken(decodeJwtClaims(idToken), config, issuerDoc, nonce);
+  const validation = validateIdToken(
+    decodeJwtClaims(idToken),
+    config,
+    issuerDoc,
+    nonce,
+  );
   if (!validation.ok) return fail("oidc_error");
 
   if (!emailDomainAllowed(validation.email, config.allowedDomains)) {
     return fail("oidc_domain");
   }
 
-  // Central identities use their own generation, independent of Fleet's
-  // password hash. Auth back-channel logout rotates this generation without
-  // evicting Fleet-native password sessions for the same email.
+  // Central identities use their own generation, separate from Fleet's
+  // password hash so a Fleet password change does not disturb them. Auth's
+  // back-channel logout rotates this generation and, since migration 060,
+  // the account's password session salt too: one central sign-out ends every
+  // Fleet session of the account.
   const epoch = await fetchExternalSessionEpoch(
     validation.email,
     issuerDoc.issuer,
@@ -141,7 +162,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (!epoch) return fail("oidc_error");
 
   // Authenticated — mint the standard session cookie and go home.
-  const res = NextResponse.redirect(getRedirectUrl(request, "/"), { status: 303 });
+  const res = NextResponse.redirect(getRedirectUrl(request, "/"), {
+    status: 303,
+  });
   const secure = isSecureRequest(request);
   res.cookies.set({
     name: getSessionCookieName(),
@@ -162,7 +185,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 function clearTempCookies(res: NextResponse, secure: boolean) {
-  for (const name of [OIDC_STATE_COOKIE, OIDC_NONCE_COOKIE, OIDC_VERIFIER_COOKIE]) {
-    res.cookies.set({ name, value: "", httpOnly: true, sameSite: "lax", secure, maxAge: 0, path: "/" });
+  for (const name of [
+    OIDC_STATE_COOKIE,
+    OIDC_NONCE_COOKIE,
+    OIDC_VERIFIER_COOKIE,
+  ]) {
+    res.cookies.set({
+      name,
+      value: "",
+      httpOnly: true,
+      sameSite: "lax",
+      secure,
+      maxAge: 0,
+      path: "/",
+    });
   }
 }

@@ -73,10 +73,12 @@ advertises it, as Auth does. Providers that do not advertise that method keep
 the existing `client_secret_post` fallback.
 
 Central sessions carry a separate Postgres-backed epoch keyed by OIDC issuer
-and subject. A signed back-channel logout rotates only that epoch. Tokens must
-carry `exp` (Auth signs a fresh `iat`/`exp` per delivery attempt). Duplicate
-events are idempotent by JWT `jti`; Fleet-native password sessions and the
-legacy magic-link route are not revoked or disabled. Every Fleet data request
+and subject. A signed back-channel logout rotates that epoch AND the account's
+password session salt (migration 060), so Fleet-native password sessions for
+the same email end as well; the legacy magic-link route is untouched (revoke
+those at the auth service that mints them). Tokens must carry `exp` (Auth
+signs a fresh `iat`/`exp` per delivery attempt). Duplicate events are
+idempotent by JWT `jti`. Every Fleet data request
 for an OIDC session forwards the signed cookie's issuer, subject, and epoch to
 both Go planes, which compare it with the live chat-store generation using a
 read-only lookup; the generation row is created once, at login mint, and a

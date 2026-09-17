@@ -10,13 +10,16 @@ design. The operator-facing summary of the three revocation levers lives in
 
 ## The value
 
-`store.User.SessionEpoch` is the first 8 bytes of `SHA-256(password_hash)`, hex
-encoded (16 chars). It is **derived, not stored**: bcrypt re-salts on every
-write, so every password path moves the epoch with no bump call to remember
-(the admin reset endpoint, `fleet chat user passwd`, `fleet admin add` on an
-existing address, the legacy importer), a reset to the *same* password still
-rotates it, and there is no migration, no backfill, and no window where a new
-column exists but is empty.
+`store.User.SessionEpoch` is the first 8 bytes of
+`SHA-256(password_hash || session_salt)`, hex encoded (16 chars). It is
+**derived**: bcrypt re-salts on every write, so every password path moves the
+epoch with no bump call to remember (the admin reset endpoint, `fleet chat user
+passwd`, `fleet admin add` on an existing address, the legacy importer), and a
+reset to the *same* password still rotates it. `users.session_salt` (migration
+060, default `''`) is the one other writer: a central Auth sign-out delivered
+over the back-channel rotates it so the account's Fleet password sessions end
+too, without a password change. The empty default keeps the pre-060 value
+byte-identical, so that migration signed nobody out.
 
 Reads derive it in SQL (`sessionEpochExpr`), so `password_hash` never leaves
 Postgres on the request path — `GetUser` runs on every authenticated request and
@@ -59,10 +62,12 @@ Three rules keep the gate honest in the other direction:
   claim and are refused rather than grandfathered — a claimless cookie is
   precisely what the Go gate admits, so honouring it would leave a 14-day bypass
   of the whole mechanism.
-- **Password and central epochs are independent.** Fleet password sessions are
-  still revoked by a Fleet password reset. OIDC sessions use the stored
-  issuer+subject generation and are rotated by an idempotent signed central
-  logout event; neither operation logs out the other credential type.
+- **Password and central epochs relate one way.** A Fleet password reset
+  rotates only the password epoch; OIDC sessions keep their stored
+  issuer+subject generation. A signed central logout event (idempotent by
+  `jti`) rotates that generation AND the account's `session_salt`, so it ends
+  the account's Fleet password sessions too: "signed out of every app" means
+  every app. The break-glass password remains a way to sign in afterwards.
 - **Per account, not per device.** Two devices signed into one account share one
   epoch: a reset ends both (the point), and neither can be ended alone.
 - **The Operations Center bearer login is untouched.** `fleet sched user

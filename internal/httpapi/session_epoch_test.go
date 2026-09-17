@@ -96,9 +96,17 @@ func TestSessionEpoch_AdminPasswordResetEvictsOutstandingSessions(t *testing.T) 
 	}
 }
 
-func TestExternalEpochRevocationLeavesPasswordSessionAlive(t *testing.T) {
+// A central sign-out ends every Fleet session of the account: the OIDC
+// session whose external epoch rotates, and a password session minted before
+// the event (its epoch moves via users.session_salt). A password session
+// minted afterwards carries the new epoch and works.
+func TestExternalEpochRevocationEndsPasswordSessionsToo(t *testing.T) {
 	s := memberFixture(t, "u@x.com")
 	h := s.Routes()
+	passwordBefore := readEpoch(t, h, "u@x.com")
+	if got := getEpoch(t, h, "/conversations", "u@x.com", passwordBefore); got.Code != http.StatusOK {
+		t.Fatalf("password session before external revoke: status %d body %q", got.Code, got.Body.String())
+	}
 
 	body := map[string]string{"event_id": "event-123", "issuer": "https://auth.example.com", "subject": "account-123"}
 	w := do(t, h, http.MethodPost, "/auth/external-session-epoch", body, "u@x.com")
@@ -133,9 +141,15 @@ func TestExternalEpochRevocationLeavesPasswordSessionAlive(t *testing.T) {
 		t.Fatalf("stale external session: status %d body %q", got.Code, got.Body.String())
 	}
 
-	passwordEpoch := readEpoch(t, h, "u@x.com")
-	if got := getEpoch(t, h, "/conversations", "u@x.com", passwordEpoch); got.Code != http.StatusOK {
-		t.Fatalf("password session after external revoke: status %d body %q", got.Code, got.Body.String())
+	if got := getEpoch(t, h, "/conversations", "u@x.com", passwordBefore); got.Code != http.StatusUnauthorized {
+		t.Fatalf("pre-revocation password session survived a central sign-out: status %d body %q", got.Code, got.Body.String())
+	}
+	passwordAfter := readEpoch(t, h, "u@x.com")
+	if passwordAfter == passwordBefore {
+		t.Fatal("password epoch did not move on central sign-out")
+	}
+	if got := getEpoch(t, h, "/conversations", "u@x.com", passwordAfter); got.Code != http.StatusOK {
+		t.Fatalf("fresh password session after external revoke: status %d body %q", got.Code, got.Body.String())
 	}
 }
 
