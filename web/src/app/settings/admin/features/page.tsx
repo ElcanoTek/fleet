@@ -117,6 +117,12 @@ const META: Record<string, SettingMeta> = {
       "The most one chat turn or one scheduled run may spend before Fleet stops it (the run then dead-letters as cost_ceiling). Applies to every task on this deployment; read at the start of each run, so an edit governs the next run without a restart. Overrides FLEET_MAX_COST_USD until Reset, after which the env value (and env-file reloads) serve again.",
     unitHint: "USD — 1 to 100000, cents allowed; 0 = no ceiling",
   },
+  max_total_tokens: {
+    label: "Per-run token ceiling",
+    description:
+      "The most uncached tokens (prompt minus cache hits, plus output) one chat turn or one scheduled run may consume before Fleet stops it. Models with a low cache-hit rate trip this long before the cost ceiling: a 100-turn run that caches 12% of its prompt burns roughly three times the uncached tokens of the same run at 65%. Read at the start of each run; overrides FLEET_MAX_TOTAL_TOKENS until Reset.",
+    unitHint: "tokens — 10000 to 1000000000; default 10000000; 0 = no ceiling",
+  },
   approval_timeout_seconds: {
     label: "Approval timeout",
     description:
@@ -182,6 +188,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
       "max_tool_output_bytes",
       "approval_timeout_seconds",
       "max_cost_usd",
+      "max_total_tokens",
       "phone_a_friend_enabled",
       "subagents_enabled",
     ],

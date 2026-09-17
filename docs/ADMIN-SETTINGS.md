@@ -64,6 +64,7 @@ needs a restart, ever.
 | `tool_disclosure_threshold` | int 1–100000 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | Roster size that triggers BM25 tool disclosure ([TOOL-DISCLOSURE.md](TOOL-DISCLOSURE.md)) |
 | `max_tool_output_bytes` | int 1024–128 KiB, or 0 = 64 KiB default | `FLEET_MAX_TOOL_OUTPUT_BYTES` | Operational per-tool result cap inside the non-disableable 128 KiB model-visible boundary ([TOOL-OUTPUT-BOUNDARY.md](TOOL-OUTPUT-BOUNDARY.md)) |
 | `max_cost_usd` | decimal 1–100000 (cents allowed), or 0 = no ceiling | `FLEET_MAX_COST_USD` | Per-run cost ceiling every chat turn and scheduled run is bounded by (`cost_ceiling` dead letters); read at the start of each run. The override is a separate value from the env field, so `FLEET_MAX_COST_USD` and the env-file reload keep working and serve again on Reset |
+| `max_total_tokens` | int 10000–1000000000, or 0 = no ceiling | `FLEET_MAX_TOTAL_TOKENS` | Per-run **uncached**-token ceiling (prompt − cached + completion), the second bound `checkCeilings` enforces; a low-cache-hit model trips it long before the cost ceiling. Same override shape as `max_cost_usd` (`config.LiveMaxTotalTokens`) |
 | `approval_timeout_seconds` | int 60–86400 | `FLEET_APPROVAL_TIMEOUT_SECONDS` | Default-deny window for pending approval cards; read at stager construction, so an edit governs the next staged card ([AGENT-RUNTIME.md](AGENT-RUNTIME.md), [APPROVAL-CARDS.md](APPROVAL-CARDS.md)) |
 | `phone_a_friend_enabled` | bool | `FLEET_PHONE_A_FRIEND_ENABLED` | One-time super-LLM review of scheduled runs ([AGENT-RUNTIME.md](AGENT-RUNTIME.md)) |
 | `subagents_enabled` | bool | `FLEET_SUBAGENTS_ENABLED` | Fleet-wide **kill switch** for sub-agent delegation — default **on** (#1043); composes AND with per-task `allow_delegation` ([SUBAGENTS.md](SUBAGENTS.md)) |
@@ -102,14 +103,15 @@ knob. These deliberately did **not** move into the panel:
   migration 036). It is a separate slice from this registry because it holds
   secrets. VAPID keys (Web Push) stay env-only — deployment identity material
   bound at boot.
-- **The other hot-reloadable ceilings** — `FLEET_MAX_TOTAL_TOKENS`,
-  `FLEET_MAX_ITERATIONS`, temperatures ride the existing env-file reload
+- **The other hot-reloadable knobs** — `FLEET_MAX_ITERATIONS` and the
+  temperatures ride the existing env-file reload
   ([CONFIG-RELOAD.md](CONFIG-RELOAD.md), SIGUSR2 / `POST /admin/reload-config`).
-  The cost ceiling joined the panel as `max_cost_usd` without creating a
-  second write path to the reloadable field: the admin value is stored
-  separately and merely takes precedence while set (`config.LiveMaxCostUSD`),
-  so a reload still records the env value and serves it again on Reset. The
-  remaining ceilings can follow the same shape when someone needs them.
+  The two run ceilings joined the panel as `max_cost_usd` and
+  `max_total_tokens` without creating a second write path to the reloadable
+  fields: the admin value is stored separately and merely takes precedence
+  while set (`config.LiveMaxCostUSD` / `config.LiveMaxTotalTokens`), so a
+  reload still records the env value and serves it again on Reset. The
+  remaining knobs can follow the same shape when someone needs them.
 - **Fine-grained tuning** — sub-agent depth/children/budget-fraction, model
   slug overrides (`FLEET_PHONE_A_FRIEND_MODEL`, `FLEET_MEMORY_MODEL`,
   `FLEET_ERROR_ANALYSIS_MODEL`), compaction thresholds, task-memory caps.

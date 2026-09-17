@@ -133,6 +133,15 @@ func Registry() []Spec {
 		// dollars for the bounds, cents allowed in the value.
 		{Key: "max_cost_usd", Kind: KindFloat, Min: 1, Max: 100000, MinZeroOK: true,
 			EnvVar: "FLEET_MAX_COST_USD"},
+		// The per-run UNCACHED-token ceiling (prompt − cached + completion), the
+		// second bound checkCeilings enforces and the one a low-cache-hit model
+		// trips first: a 100-turn run at 12% cache hits the 10M default long
+		// before the cost ceiling, while the same run at 65% cache never does.
+		// Same override shape as max_cost_usd: config.LiveMaxTotalTokens
+		// prefers the admin value while set; FLEET_MAX_TOTAL_TOKENS and the
+		// env-file reload keep working and serve again on Reset. 0 = no ceiling.
+		{Key: "max_total_tokens", Kind: KindInt, Min: 10000, Max: 1000000000, MinZeroOK: true,
+			EnvVar: "FLEET_MAX_TOTAL_TOKENS"},
 		{Key: "phone_a_friend_enabled", Kind: KindBool,
 			EnvVar: "FLEET_PHONE_A_FRIEND_ENABLED"},
 		{Key: "subagents_enabled", Kind: KindBool,

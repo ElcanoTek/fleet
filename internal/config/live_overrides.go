@@ -191,3 +191,39 @@ func (c *Config) MaxCostUSDOverride() (float64, bool) {
 	read()
 	return v, ok
 }
+
+// SetMaxTotalTokensOverride installs (override=true) or clears
+// (override=false) the admin override of the per-run uncached-token ceiling.
+// Same contract as SetMaxCostUSDOverride: the env-derived MaxTotalTokens is
+// left alone, so FLEET_MAX_TOTAL_TOKENS and the env-file reload keep working
+// and serve again the moment the override is cleared.
+func (c *Config) SetMaxTotalTokensOverride(v int, override bool) {
+	c.setLive(func() {
+		if !override {
+			c.adminMaxTotalTokens = nil
+			return
+		}
+		value := v
+		c.adminMaxTotalTokens = &value
+	})
+}
+
+// MaxTotalTokensOverride reports the admin override of the per-run
+// uncached-token ceiling and whether one is set.
+func (c *Config) MaxTotalTokensOverride() (int, bool) {
+	var v int
+	var ok bool
+	read := func() {
+		if c.adminMaxTotalTokens != nil {
+			v, ok = *c.adminMaxTotalTokens, true
+		}
+	}
+	if c.reload == nil {
+		read()
+		return v, ok
+	}
+	c.reload.mu.RLock()
+	defer c.reload.mu.RUnlock()
+	read()
+	return v, ok
+}

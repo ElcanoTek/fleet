@@ -143,3 +143,18 @@ func TestApplyFloatOverride(t *testing.T) {
 		t.Fatal("non-numeric override must be rejected")
 	}
 }
+
+func TestApplyIntOverride(t *testing.T) {
+	var got int
+	var set bool
+	apply := applyIntOverride(func(v int, override bool) { got, set = v, override })
+	if err := apply("2500000", true); err != nil || !set || got != 2500000 {
+		t.Fatalf("override: err=%v set=%v got=%v", err, set, got)
+	}
+	if err := apply("10000000", false); err != nil || set {
+		t.Fatalf("default must clear the override: err=%v set=%v", err, set)
+	}
+	if err := apply("2.5e6", true); err == nil {
+		t.Fatal("non-integer override must be rejected")
+	}
+}
