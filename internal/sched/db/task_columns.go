@@ -86,6 +86,7 @@ type taskScanBuf struct {
 	tags                   sql.NullString
 	retryPolicy            sql.NullString
 	sourceTaskID           sql.NullString
+	lineageID              sql.NullString
 	persona                sql.NullString
 	workspacePath          sql.NullString
 	allowTaskCreation      bool
@@ -533,6 +534,27 @@ var taskColumnRegistry = []taskColumn{
 		value:  func(t *models.Task) any { return marshalRetryPolicy(t.RetryPolicy) },
 		dest:   func(b *taskScanBuf) any { return &b.retryPolicy },
 		assign: func(b *taskScanBuf, t *models.Task) { t.RetryPolicy = unmarshalRetryPolicy(b.retryPolicy) },
+	},
+	{
+		name: "lineage_id",
+		read: true, insert: true, upsert: true, txUpdate: true,
+		// Job lineage (migration 069, #1543): the key every run of one job —
+		// occurrences, re-runs, clones — shares, and so the name of the job's
+		// working directory under the workspace root. Carried by the
+		// TaskToCreate clone recipe; a task created fresh is its own lineage.
+		// Written on every definition write so it can never drift to NULL.
+		noExport: "per-deployment workspace key (#1543): a re-imported definition starts its own lineage on the import target",
+		value:    func(t *models.Task) any { return t.WorkspaceLineage().String() },
+		dest:     func(b *taskScanBuf) any { return &b.lineageID },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.lineageID.Valid && b.lineageID.String != "" {
+				if lid, perr := uuid.Parse(b.lineageID.String); perr == nil {
+					t.LineageID = lid
+					return
+				}
+			}
+			t.LineageID = t.ID // pre-069 row: its own lineage
+		},
 	},
 	{
 		name: "source_task_id",

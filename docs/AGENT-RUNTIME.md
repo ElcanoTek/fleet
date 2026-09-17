@@ -1235,7 +1235,34 @@ model slug; empty means the child inherits the parent's model. See
 A scheduled task with a `worktree_config` (#180) runs each occurrence in its own
 git **worktree + branch**, so two tasks targeting the same repository can't
 corrupt each other's working tree (dirty files, colliding checkouts). A task with
-no `worktree_config` shares the workspace root, unchanged.
+no `worktree_config` works in its **own per-job directory** under the workspace
+root (below); it does not get a git checkout.
+
+### Per-job workspaces (#1543)
+
+Every non-worktree scheduled run used to work directly in the shared workspace
+root — one directory holding every job's and every client's leftovers. In the
+field that meant ~80 root entries, other jobs' scripts that later runs picked up
+and executed, another job's `render_email.log` naming recipients this task never
+had, and stale status files that the end-of-run audit then treated as evidence
+about *this* run and aborted on.
+
+A run now works in `<workspace-root>/tasks/<lineage_id>/`. `lineage_id` is the
+key every run of one **job** shares: a task created fresh is its own lineage,
+and the clone recipe carries it to recurrence occurrences, re-runs and clones —
+so a daily job still finds its own previous downloads and nobody else's. The
+directory is created on first use under the root the sandbox already
+bind-mounts (no mount changes), the supporting-doc symlinks (`protocols/`,
+`skills/`, `shared/`, …) are seeded into it exactly as they were into the root,
+the file browser and `publish_artifact` see it as the run's workspace
+(`workspace_path`), and the per-run MCP directories (`mcp-runs/`) and the
+reserved `${FLEET_WORKSPACE_ROOT}` token are unaffected (the per-job directory
+is under the root, so a connector allowlisting the root still reads it).
+
+`FLEET_SCHEDULED_SHARED_WORKSPACE=1` restores the shared root for every job
+(the pre-#1543 behaviour). A job that must start from another job's output
+should say so in its prompt and read it by path; the shared root is not a
+working directory any more. See ADR-0069.
 
 ```json
 {
