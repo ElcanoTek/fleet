@@ -39,6 +39,13 @@ func TestCheckBudgetWindDown(t *testing.T) {
 		!strings.Contains(notice, "$8.00 of the $10.00 cost ceiling") {
 		t.Fatalf("notice missing spend detail: %q", notice)
 	}
+	// The carve-out: outstanding critical actions are named as NOT new work,
+	// so a model with the deliverable built but unsent completes the send
+	// instead of aborting on "do not start new substantive work".
+	if notice := st.windDownNotice(); !strings.Contains(notice, "critical actions") ||
+		!strings.Contains(notice, "NOT new work") || !strings.Contains(notice, "complete them now") {
+		t.Fatalf("notice must exempt outstanding critical actions: %q", notice)
+	}
 
 	// Token ceiling path (uncached tokens: prompt - cached + completion).
 	tok := newOrchestrationState(nil, 0)
