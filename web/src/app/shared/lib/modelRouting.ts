@@ -28,3 +28,13 @@ export function modelIsAvailable(slug: string, providers: ModelRouting, catalog 
 export function unavailableModelMessage(slug: string): string {
   return `Model "${slug}" is not available through this workspace's configured providers. Choose a workspace model in the model picker, or ask an admin to configure its provider in Settings → Admin → Model providers.`;
 }
+
+// A native catch-all can shadow a later OpenRouter catch-all. Keep those models
+// browsable by explicitly pinning the route rather than sending an OpenRouter
+// slug to the native backend. Listed/non-shadowed routes retain their identity.
+export function catalogModelRoutes(slug: string, providers: ModelRouting): Array<{ slug: string; provider?: string }> {
+  if (modelIsAvailable(slug, providers, true)) return [{ slug }];
+  return (providers ?? [])
+    .filter((p) => p.type === "openrouter" && p.catch_all)
+    .map((p) => ({ slug: `${p.name}/${slug}`, provider: p.name }));
+}

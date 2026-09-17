@@ -112,6 +112,25 @@ describe("loadModels (fetch + fallback)", () => {
     expect((await loadModels()).map((m) => m.id)).toEqual(["bundle-openai/gpt-4o-mini"]);
   });
 
+  it("keeps a shadowed OpenRouter catalog browsable through explicit routes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => String(url).includes("llm-provider-models") ? {
+        routing_known: true,
+        providers: [
+          { name: "native", type: "openai", models: [], catch_all: true },
+          { name: "router", type: "openrouter", models: [], catch_all: true },
+        ],
+        models: [],
+      } : { models: [{ slug: "google/gemini-3.8-flash", name: "Gemini" }] },
+    })));
+    const models = await loadModels();
+    expect(models.some((m) => m.id === "google/gemini-3.8-flash")).toBe(false);
+    expect(models.find((m) => m.id === "router/google/gemini-3.8-flash")).toMatchObject({
+      workspace: true, recommended: false,
+    });
+  });
+
   it("merges seeds with the proxied catalog", async () => {
     vi.stubGlobal(
       "fetch",

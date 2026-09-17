@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { modelIsAvailable, type ModelProvider } from "./modelRouting";
+import { catalogModelRoutes, modelIsAvailable, type ModelProvider } from "./modelRouting";
 
 const direct: ModelProvider = { name: "direct", type: "openai", models: ["gpt-4o"], catch_all: false };
 const router: ModelProvider = { name: "router", type: "openrouter", models: [], catch_all: true };
@@ -27,5 +27,16 @@ describe("provider-aware model choices", () => {
     expect(modelIsAvailable("google/gemini-3.8-flash", [direct, router], true)).toBe(true);
     expect(modelIsAvailable("google/gemini-3.8-flash", [], true)).toBe(false);
     expect(modelIsAvailable("google/gemini-3.8-flash", null, true)).toBe(true);
+  });
+
+  it("offers explicit routes through each shadowed OpenRouter catch-all", () => {
+    const native = { ...direct, models: [], catch_all: true };
+    const slug = "google/gemini-3.8-flash";
+    expect(catalogModelRoutes(slug, [native])).toEqual([]);
+    expect(catalogModelRoutes(slug, [native, router, { ...router, name: "backup" }])).toEqual([
+      { slug: `router/${slug}`, provider: "router" },
+      { slug: `backup/${slug}`, provider: "backup" },
+    ]);
+    expect(catalogModelRoutes(slug, [router, native])).toEqual([{ slug }]);
   });
 });

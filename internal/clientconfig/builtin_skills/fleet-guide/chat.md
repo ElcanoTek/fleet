@@ -165,6 +165,9 @@ model**, pick an available workspace model, then retry. Fleet does not silently
 switch an existing conversation to another provider. Admins can fix the provider
 configuration under **Settings → Admin → Model providers**, and set the default
 and stronger model under **Settings → Admin → Features → Model tiers**.
+If a direct provider takes precedence over OpenRouter, available OpenRouter
+choices are labeled with their configured provider name and use an explicit
+provider-prefixed route.
 
 The assistant will sometimes suggest a switch itself: a card offering **Switch &
 retry** when a question is heavier than the current model handles well, or a
