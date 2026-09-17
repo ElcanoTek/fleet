@@ -751,6 +751,11 @@ type Config struct {
 	// SetMaxCostUSDOverride under the reload mutex, never from the env.
 	adminMaxCostUSD *float64
 	MaxTotalTokens  int
+	// adminMaxTotalTokens is the Settings → Admin → Features override of the
+	// per-run uncached-token ceiling (`max_total_tokens`); nil = no override,
+	// the env-derived MaxTotalTokens serves. Read through LiveMaxTotalTokens,
+	// written through SetMaxTotalTokensOverride under the reload mutex.
+	adminMaxTotalTokens *int
 	// DefaultThinkingBudgetTokens is the global fallback Claude extended-thinking
 	// budget (#220, FLEET_DEFAULT_THINKING_BUDGET_TOKENS). 0 (default) = thinking
 	// off unless a conversation opts in. A non-zero value enables thinking for

@@ -150,13 +150,22 @@ func (c *Config) LiveMaxCostUSD() float64 {
 	return c.MaxCostUSD
 }
 
-// LiveMaxTotalTokens returns the per-run token ceiling, hot-reload-safe.
+// LiveMaxTotalTokens returns the effective per-run uncached-token ceiling:
+// the admin override when one is set (Settings → Admin → Features,
+// `max_total_tokens`), else the env-derived, hot-reloadable
+// FLEET_MAX_TOTAL_TOKENS. Same precedence shape as LiveMaxCostUSD.
 func (c *Config) LiveMaxTotalTokens() int {
 	if c.reload == nil {
+		if c.adminMaxTotalTokens != nil {
+			return *c.adminMaxTotalTokens
+		}
 		return c.MaxTotalTokens
 	}
 	c.reload.mu.RLock()
 	defer c.reload.mu.RUnlock()
+	if c.adminMaxTotalTokens != nil {
+		return *c.adminMaxTotalTokens
+	}
 	return c.MaxTotalTokens
 }
 
@@ -304,7 +313,13 @@ func (c *Config) applyReloadableLocked(result *ReloadResult) {
 				v, *c.adminMaxCostUSD)
 		}
 	})
-	reloadFleetInt(result, "MAX_TOTAL_TOKENS", c.MaxTotalTokens, func(v int) { c.MaxTotalTokens = v })
+	reloadFleetInt(result, "MAX_TOTAL_TOKENS", c.MaxTotalTokens, func(v int) {
+		c.MaxTotalTokens = v
+		if c.adminMaxTotalTokens != nil {
+			log.Printf("Config reload: FLEET_MAX_TOTAL_TOKENS=%d recorded, but the admin override max_total_tokens=%d remains in effect",
+				v, *c.adminMaxTotalTokens)
+		}
+	})
 	reloadFleetInt(result, "MAX_ITERATIONS", c.MaxIterations, func(v int) { c.MaxIterations = v })
 	// One temperature knob covers interactive and scheduled sampling (#1079);
 	// the FLEET_/CHAT_/CUTLASS_ chain still picks up a legacy CUTLASS_TEMPERATURE

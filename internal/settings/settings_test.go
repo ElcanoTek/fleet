@@ -57,6 +57,7 @@ func testDefaults() map[string]string {
 		"max_tool_output_bytes":             "65536",
 		"approval_timeout_seconds":          "3600",
 		"max_cost_usd":                      "50",
+		"max_total_tokens":                  "10000000",
 		"phone_a_friend_enabled":            "false",
 		"subagents_enabled":                 "true",
 		"default_model":                     "google/gemini-3.8-flash",

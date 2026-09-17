@@ -44,6 +44,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"max_tool_output_bytes":             strconv.Itoa(agentcore.EnvMaxToolOutputBytes()),
 		"approval_timeout_seconds":          strconv.Itoa(cfg.ApprovalTimeoutSeconds),
 		"max_cost_usd":                      strconv.FormatFloat(cfg.MaxCostUSD, 'f', -1, 64),
+		"max_total_tokens":                  strconv.Itoa(cfg.MaxTotalTokens),
 		"phone_a_friend_enabled":            strconv.FormatBool(cfg.PhoneAFriendEnabled),
 		"subagents_enabled":                 strconv.FormatBool(cfg.SubagentsEnabled),
 		"default_model":                     defaultModelTier(cfg.DefaultModel, agentcore.DefaultCoreModel),
@@ -83,6 +84,7 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		// is a separate value (config.SetMaxCostUSDOverride): a default
 		// (override=false) clears it and the env/reload value serves again.
 		"max_cost_usd":                      applyFloatOverride(cfg.SetMaxCostUSDOverride),
+		"max_total_tokens":                  applyIntOverride(cfg.SetMaxTotalTokensOverride),
 		"phone_a_friend_enabled":            applyBoolSetting(cfg.SetPhoneAFriendEnabled),
 		"subagents_enabled":                 applyBoolSetting(cfg.SetSubagentsEnabled),
 		"memory_autoindex_enabled":          applyBoolSetting(cfg.SetMemoryAutoIndexEnabled),
@@ -301,6 +303,24 @@ func applyIntSetting(set func(int)) settings.ApplyFunc {
 			return fmt.Errorf("not an integer: %q", value)
 		}
 		set(n)
+		return nil
+	}
+}
+
+// applyIntOverride is applyFloatOverride for an integer ceiling that ALSO
+// rides the env-file reload (max_total_tokens): default clears the override,
+// an override pins the effective value until Reset.
+func applyIntOverride(set func(v int, override bool)) settings.ApplyFunc {
+	return func(value string, override bool) error {
+		if !override {
+			set(0, false)
+			return nil
+		}
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("not an integer: %q", value)
+		}
+		set(n, true)
 		return nil
 	}
 }
