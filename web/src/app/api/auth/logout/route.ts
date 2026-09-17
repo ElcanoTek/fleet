@@ -46,9 +46,9 @@ import {
  * callback still in flight cannot mint a fresh session after the user asked
  * to leave.
  *
- * The reverse direction is narrower on purpose: Auth's back-channel logout
- * rotates the external epoch and so ends Fleet sessions that came from Auth,
- * but leaves Fleet's own password sessions alone (break-glass isolation).
+ * The reverse direction ends everything too: Auth's back-channel logout
+ * rotates the external epoch and the account's password session salt, so
+ * Fleet sessions from Auth and from the break-glass password both end.
  */
 export async function POST(request: NextRequest) {
   const csrf = verifyOrigin(request);

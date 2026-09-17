@@ -29,7 +29,11 @@ longer sufficient.
 
 - The epoch is derived from the account's stored bcrypt hash
   (`hex(sha256(password_hash)[:8])`), so every password write moves it and no
-  write path has to remember to bump anything.
+  write path has to remember to bump anything. *Amended 2026-09-17:* the
+  derivation is now `hex(sha256(password_hash || session_salt)[:8])`, where
+  `users.session_salt` (migration 060, default `''`) is rotated by a central
+  Auth sign-out so it ends Fleet password sessions too. The empty default kept
+  every existing epoch identical; see `docs/SESSION-EPOCH.md`.
 - Both mint paths read it from `GET /auth/session-epoch` and stamp it into the
   cookie; a failed read refuses the login rather than minting a cookie the next
   request would reject.
@@ -70,9 +74,10 @@ longer sufficient.
   grandfathering claimless cookies.
 - The web tier hard-depends on a chat-server serving `/auth/session-epoch`:
   version skew or a restarting backend is a login outage, not a degraded login.
-- The epoch cannot be bumped independently of the password, so "sign out my
-  other devices" still does not exist. Adding a `session_epoch` column later is
-  strictly additive.
+- ~~The epoch cannot be bumped independently of the password~~ *Amended
+  2026-09-17:* it can, via `users.session_salt`, which the central-logout
+  receiver rotates; a general "sign out my other devices" control could reuse
+  it but has not been built.
 - The Operations Center pays one chat-DB lookup per header-trust request; the
   chat plane pays nothing (the comparison rides an existing query).
 - Remaining carve-outs are written down in [`../SESSION-EPOCH.md`](../SESSION-EPOCH.md):
@@ -84,7 +89,9 @@ longer sufficient.
 - **A `session_epoch` column bumped on password change.** Rejected for v1: it
   needs a migration plus a backfill, and every password path has to remember to
   bump it — the derived value cannot be forgotten. It buys an
-  independent-of-password bump, which nothing asks for yet.
+  independent-of-password bump, which nothing asked for at the time. (The 2026
+  amendment took the middle road: the hash still drives password changes, and a
+  salt with an empty default supplies the independent bump with no backfill.)
 - **A server-side session store (revocation list).** Rejected: it replaces a
   stateless cookie with a per-request store lookup and a new expiry/GC surface,
   to solve a problem one derived claim already solves.

@@ -327,7 +327,8 @@ each piece yourself):
    > `client_secret_basic` is honored (including Elcano Auth), with the existing
    > `client_secret_post` fallback for other providers. Configure Auth's signed
    > back-channel endpoint as `/api/auth/backchannel-logout`; central OIDC
-   > sessions then use an issuer+subject epoch independent of Fleet passwords.
+   > sessions then use an issuer+subject epoch, and a central sign-out also
+   > ends the account's Fleet password sessions.
    > See [Central Auth integration](features/central-auth-integration.md). In every case the chat user-list still gates
    > **membership** (an authenticated email that isn't provisioned lands on the
    > no-access page), so SSO/magic-link prove *who you are* while the user-list
@@ -350,10 +351,11 @@ each piece yourself):
    >   some other call trips the 401, which is when the browser's cookie is
    >   dropped; neither serves client data or spends budget — and
    >   it works even if you reset to the same password (bcrypt re-salts). This is
-   >   the incident-response lever for a stolen cookie. Three carve-outs: a
-   >   central OIDC session carries a separate issuer+subject epoch and is
-   >   revoked by Auth's signed back-channel event without touching the Fleet
-   >   password session; a magic-link (`elcano_auth`) session carries no epoch,
+   >   the incident-response lever for a stolen cookie. Three notes: a central
+   > OIDC session carries a separate issuer+subject epoch that a Fleet password
+   > reset does not move (revoke it at Auth, whose signed back-channel event
+   > rotates that epoch AND ends the account's Fleet password sessions); a
+   > magic-link (`elcano_auth`) session carries no epoch,
    >   so revoke it at the
    >   auth service that mints it; an Operations Center **bearer** login (the moc
    >   username/password form) is a separate credential the chat password does not

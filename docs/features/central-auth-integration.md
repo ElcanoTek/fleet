@@ -54,10 +54,12 @@ its own signed-out page; with no central session it lands there with nothing
 to end. Without that step the very next visit would sign the user back in
 silently. Only a deployment without central Auth lands on `/login?manual=1`.
 
-The reverse direction is narrower on purpose: Auth's back-channel logout
-(from Auth's own Sign out, Explorer or Lens) ends Fleet sessions that came
-from Auth, but a Fleet session from the break-glass password stays valid.
-That isolation is what makes the password a break-glass path.
+The reverse direction ends everything too: Auth's back-channel logout (from
+Auth's own Sign out, Explorer or Lens) rotates both the external epoch and the
+account's password session salt, so Fleet sessions that came from Auth AND a
+Fleet session from the break-glass password end within seconds. The
+break-glass password itself keeps working (it is a way to sign in, not a
+session that survives a sign-out), so it remains available when Auth is down.
 
 Register the exact callback and signed logout endpoint on Auth:
 
@@ -71,10 +73,12 @@ advertises it, as Auth does. Providers that do not advertise that method keep
 the existing `client_secret_post` fallback.
 
 Central sessions carry a separate Postgres-backed epoch keyed by OIDC issuer
-and subject. A signed back-channel logout rotates only that epoch. Tokens must
-carry `exp` (Auth signs a fresh `iat`/`exp` per delivery attempt). Duplicate
-events are idempotent by JWT `jti`; Fleet-native password sessions and the
-legacy magic-link route are not revoked or disabled. Every Fleet data request
+and subject. A signed back-channel logout rotates that epoch AND the account's
+password session salt (migration 060), so Fleet-native password sessions for
+the same email end as well; the legacy magic-link route is untouched (revoke
+those at the auth service that mints them). Tokens must carry `exp` (Auth
+signs a fresh `iat`/`exp` per delivery attempt). Duplicate events are
+idempotent by JWT `jti`. Every Fleet data request
 for an OIDC session forwards the signed cookie's issuer, subject, and epoch to
 both Go planes, which compare it with the live chat-store generation using a
 read-only lookup; the generation row is created once, at login mint, and a
