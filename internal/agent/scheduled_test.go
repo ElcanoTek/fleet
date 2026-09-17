@@ -386,3 +386,47 @@ func TestExecute_RoundCapPersistsPartialTranscript(t *testing.T) {
 		t.Error("the round-cap failure must still write its [fatal] transcript line")
 	}
 }
+
+// A cost-ceiling stop used to be reported as "run stopped … without finishing
+// the task" whether the run had produced nothing or had executed every declared
+// critical action and written its summary (Reklaim health scan 6bd0c212: SES
+// accepted the email, artifact published, summary written, then the ceiling —
+// and the DLQ said the task never finished). The reason now carries the facts
+// an operator needs to tell those two runs apart (#1532).
+func TestScheduledTerminalErrorBudgetStopCarriesFacts(t *testing.T) {
+	landed := scheduledTerminalError(context.Background(), agentcore.Result{
+		StoppedByBudget:         true,
+		Cancelled:               true,
+		FinalText:               "Report emailed; 142 campaigns summarised.",
+		CriticalActionsExecuted: 1,
+		Usage:                   agentcore.RunUsage{CostUSD: 8.2862},
+	})
+	if !errors.Is(landed, agentcore.ErrCostCeilingExceeded) {
+		t.Fatalf("budget stop returned %v, want ErrCostCeilingExceeded", landed)
+	}
+	msg := landed.Error()
+	for _, want := range []string{"$8.2862", "1 critical action(s) completed", "no declared critical action is outstanding", "deliverable most likely landed", "had written its final summary", "end-of-run checks did not run", "not been rolled back"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("reason %q should contain %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "without finishing the task") {
+		t.Errorf("reason %q must not claim the task never finished when every declared action executed", msg)
+	}
+
+	owed := scheduledTerminalError(context.Background(), agentcore.Result{
+		StoppedByBudget:            true,
+		Cancelled:                  true,
+		CriticalActionsExecuted:    1,
+		CriticalActionsOutstanding: []string{"mcp_ses_outbound_send_email (record n/a)"},
+		Usage:                      agentcore.RunUsage{CostUSD: 3},
+	})
+	if msg := owed.Error(); !strings.Contains(msg, "still outstanding: mcp_ses_outbound_send_email (record n/a)") || strings.Contains(msg, "most likely landed") {
+		t.Errorf("reason %q should name the outstanding commitment and not claim the deliverable landed", msg)
+	}
+
+	nothing := scheduledTerminalError(context.Background(), agentcore.Result{StoppedByBudget: true, Cancelled: true})
+	if msg := nothing.Error(); !strings.Contains(msg, "0 critical action(s) completed") || strings.Contains(msg, "most likely landed") || strings.Contains(msg, "final summary") {
+		t.Errorf("reason %q for a run that produced nothing must say so plainly", msg)
+	}
+}

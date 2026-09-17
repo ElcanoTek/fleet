@@ -3,7 +3,10 @@
 
 package agentcore
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // checkFinishEnforcement returns (true, nil) on a terminal audit failure — an
 // aborting agent is deliberately ALLOWED to finish rather than trapped in a
@@ -74,5 +77,32 @@ func TestScheduledPolicyExposesTerminalAbort(t *testing.T) {
 	}
 	if ok, msg := p.CanFinish(0); !ok {
 		t.Fatalf("explicit abort must end enforcement: %v", msg)
+	}
+}
+
+// outstandingCriticalActions is what the cost-ceiling dead-letter reason
+// reports (#1532): the typed commitments still owed (with their record
+// binding) plus audited calls that were blocked and never retried; nil for a
+// run with nothing declared, and safe on the interactive path's nil state.
+func TestOutstandingCriticalActionsRendersWhatIsStillOwed(t *testing.T) {
+	var nilOrch *orchestrationState
+	if got := nilOrch.outstandingCriticalActions(); got != nil {
+		t.Fatalf("nil state = %v, want nil", got)
+	}
+	o := newOrchStateForTest()
+	if got := o.outstandingCriticalActions(); len(got) != 0 {
+		t.Fatalf("fresh state = %v, want nothing outstanding", got)
+	}
+	registerTyped(t, o, criticalActionStruct{Tool: typedCreateToolA})
+	o.mu.Lock()
+	o.pendingCriticalActions = append(o.pendingCriticalActions, pendingCriticalAction{toolName: "mcp_ses_outbound_send_email", argsHash: "h1"})
+	o.mu.Unlock()
+	got := o.outstandingCriticalActions()
+	joined := strings.Join(got, " | ")
+	if !strings.Contains(joined, typedCreateToolA) {
+		t.Errorf("outstanding %v should name the typed commitment %q", got, typedCreateToolA)
+	}
+	if !strings.Contains(joined, "mcp_ses_outbound_send_email (audited, never executed)") {
+		t.Errorf("outstanding %v should name the audited-but-unexecuted call", got)
 	}
 }

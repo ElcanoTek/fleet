@@ -388,6 +388,27 @@ func (o *orchestrationState) auditVerdict() (aborted bool, summary string, execu
 	return o.auditTerminalFailure, o.auditSummary, o.criticalExecutedCount
 }
 
+// outstandingCriticalActions renders every declared critical action the run
+// still owes: typed commitments with their record binding, legacy headroom,
+// and audited calls that were blocked and never retried. It exists for the
+// exits that pre-empt the finish gates (a cost/token ceiling): an empty list
+// means every declared action executed — the deliverable most likely landed
+// and only the end-of-run checks were skipped — which an operator reading the
+// dead-letter reason must be able to tell apart from a run that spent the
+// money and produced nothing (#1532).
+func (o *orchestrationState) outstandingCriticalActions() []string {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := o.outstandingCommitmentSummary()
+	for _, p := range o.pendingCriticalActions {
+		out = append(out, p.toolName+" (audited, never executed)")
+	}
+	return out
+}
+
 func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
