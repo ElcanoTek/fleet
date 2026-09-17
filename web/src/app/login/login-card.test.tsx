@@ -22,6 +22,7 @@ vi.mock("next/navigation", () => ({
 const DEFAULT_COPY = {
   title: "Welcome aboard.",
   tagline: "Sign in to your workspace and pick up where you left off.",
+  appName: "Fleet",
 };
 
 describe("LoginCard — Elcano-email button gating", () => {
@@ -37,7 +38,9 @@ describe("LoginCard — Elcano-email button gating", () => {
     render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
     expect(screen.getByText("Welcome aboard.")).toBeInTheDocument();
     expect(
-      screen.getByText("Sign in to your workspace and pick up where you left off."),
+      screen.getByText(
+        "Sign in to your workspace and pick up where you left off.",
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Elcano workspace/i)).toBeNull();
   });
@@ -49,10 +52,13 @@ describe("LoginCard — Elcano-email button gating", () => {
         magicLinkLoginEnabled={false}
         title="Reklaim what's yours."
         tagline="Sign in and pick up where you left off."
+        appName="Fleet"
       />,
     );
     expect(screen.getByText("Reklaim what's yours.")).toBeInTheDocument();
-    expect(screen.getByText("Sign in and pick up where you left off.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Sign in and pick up where you left off."),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Welcome aboard.")).toBeNull();
   });
 
@@ -93,22 +99,31 @@ describe("LoginCard — OIDC SSO button gating", () => {
   });
 
   it("omits the SSO button when disabled", () => {
-    render(<LoginCard magicLinkLoginEnabled={false} oidcEnabled={false} {...DEFAULT_COPY} />);
+    render(
+      <LoginCard
+        magicLinkLoginEnabled={false}
+        oidcEnabled={false}
+        {...DEFAULT_COPY}
+      />,
+    );
     expect(screen.queryByRole("link", { name: /sign in with/i })).toBeNull();
   });
 
   it("renders both secondary buttons when both paths are enabled", () => {
     render(
-      <LoginCard magicLinkLoginEnabled oidcEnabled oidcLabel="Sign in with SSO" {...DEFAULT_COPY} />,
+      <LoginCard
+        magicLinkLoginEnabled
+        oidcEnabled
+        oidcLabel="Sign in with SSO"
+        {...DEFAULT_COPY}
+      />,
     );
-    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
-      "href",
-      "/api/auth/oidc/start",
-    );
-    expect(screen.getByRole("link", { name: "Use Elcano email" })).toHaveAttribute(
-      "href",
-      "/api/auth/elcano-login",
-    );
+    expect(
+      screen.getByRole("link", { name: "Sign in with SSO" }),
+    ).toHaveAttribute("href", "/api/auth/oidc/start");
+    expect(
+      screen.getByRole("link", { name: "Use Elcano email" }),
+    ).toHaveAttribute("href", "/api/auth/elcano-login");
   });
 });
 
@@ -126,7 +141,9 @@ describe("LoginCard — ?e= error rendering", () => {
     window.history.replaceState(null, "", "/login?e=throttled");
     render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
     expect(
-      await screen.findByText("Too many sign-in attempts. Try again in a minute."),
+      await screen.findByText(
+        "Too many sign-in attempts. Try again in a minute.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -134,7 +151,9 @@ describe("LoginCard — ?e= error rendering", () => {
     window.history.replaceState(null, "", "/login?e=server");
     render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
     expect(
-      await screen.findByText("The chat server isn't reachable right now. Try again in a moment."),
+      await screen.findByText(
+        "The chat server isn't reachable right now. Try again in a moment.",
+      ),
     ).toBeInTheDocument();
   });
 });
@@ -155,7 +174,8 @@ describe("LoginPage — server-side wiring", () => {
 
   afterEach(() => {
     delete process.env.AUTH_SIGNING_PUBKEY;
-    for (const key of Object.keys(process.env)) if (key.startsWith("FLEET_OIDC_")) delete process.env[key];
+    for (const key of Object.keys(process.env))
+      if (key.startsWith("FLEET_OIDC_")) delete process.env[key];
     globalThis.fetch = originalFetch;
     cleanup();
     vi.resetModules();
@@ -172,9 +192,9 @@ describe("LoginPage — server-side wiring", () => {
     enableOidc(true);
     stubMeta(null, false);
     const { default: LoginPage } = await import("./page");
-    await expect(LoginPage({ searchParams: Promise.resolve({}) })).rejects.toThrow(
-      "REDIRECT:/api/auth/oidc/start?silent=1",
-    );
+    await expect(
+      LoginPage({ searchParams: Promise.resolve({}) }),
+    ).rejects.toThrow("REDIRECT:/api/auth/oidc/start?silent=1");
   });
 
   it("renders the card with both options after a silent attempt found no session, and for ?manual / ?e", async () => {
@@ -184,8 +204,12 @@ describe("LoginPage — server-side wiring", () => {
     for (const query of [{ sso: "none" }, { manual: "1" }, { e: "invalid" }]) {
       cleanup();
       render(await LoginPage({ searchParams: Promise.resolve(query) }));
-      expect(screen.getByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: "Sign in with SSO" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Sign in" }),
+      ).toBeInTheDocument();
     }
   });
 
@@ -194,7 +218,9 @@ describe("LoginPage — server-side wiring", () => {
     stubMeta(null, false);
     const { default: LoginPage } = await import("./page");
     render(await LoginPage({ searchParams: Promise.resolve({}) }));
-    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Sign in with SSO" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 
@@ -210,7 +236,9 @@ describe("LoginPage — server-side wiring", () => {
     stubMeta(null, false);
     const { default: LoginPage } = await import("./page");
     render(await LoginPage());
-    expect(screen.getByRole("link", { name: "Use Elcano email" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Use Elcano email" }),
+    ).toBeInTheDocument();
   });
 
   it("passes magicLinkLoginEnabled=false when AUTH_SIGNING_PUBKEY is unset", async () => {
@@ -230,7 +258,9 @@ describe("LoginPage — server-side wiring", () => {
     const { default: LoginPage } = await import("./page");
     render(await LoginPage());
     expect(screen.getByText("Reklaim what's yours.")).toBeInTheDocument();
-    expect(screen.getByText("Sign in and pick up where you left off.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Sign in and pick up where you left off."),
+    ).toBeInTheDocument();
   });
 
   // The login page is the one page a locked-out operator must be able to reach.
@@ -242,5 +272,73 @@ describe("LoginPage — server-side wiring", () => {
     render(await LoginPage());
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.getByText("Welcome aboard.")).toBeInTheDocument();
+  });
+});
+
+// The card is Auth's sign-in card (auth/internal/httpapi/templates.go): mark,
+// wordmark, title, tagline, labelled fields, one primary action, secondary
+// sign-ins under a divider, footer note. These pin the anatomy so the two
+// pages cannot drift apart again.
+describe("LoginCard — matches Auth's sign-in card", () => {
+  afterEach(cleanup);
+
+  it("renders the bundle mark and the wordmark above the title", () => {
+    render(
+      <LoginCard
+        magicLinkLoginEnabled={false}
+        oidcEnabled
+        oidcLabel="Sign in with Omnicom SSO"
+        {...DEFAULT_COPY}
+        appName="OMNICOM"
+      />,
+    );
+    const img = document.querySelector("img");
+    expect(img?.getAttribute("src")).toBe("/api/brand/logo");
+    expect(screen.getByText("OMNICOM")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Welcome aboard." }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Email")).toHaveAttribute("type", "email");
+    expect(screen.getByLabelText("Password")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    expect(screen.getByRole("button", { name: "Sign in" })).toHaveAttribute(
+      "type",
+      "submit",
+    );
+    expect(
+      screen.getByRole("link", { name: "Sign in with Omnicom SSO" }),
+    ).toHaveAttribute("href", "/api/auth/oidc/start");
+    expect(
+      screen.getByText("Accounts are created by an administrator."),
+    ).toBeInTheDocument();
+    // Load-bearing attributes the restyle must never lose.
+    const form = screen
+      .getByRole("button", { name: "Sign in" })
+      .closest("form")!;
+    expect(form.getAttribute("action")).toBe("/api/auth/login");
+    expect(form.getAttribute("method")).toBe("post");
+    const email = screen.getByLabelText("Email");
+    expect(email).toHaveAttribute("name", "email");
+    expect(email).toHaveAttribute("autocomplete", "email");
+    expect(email).toBeRequired();
+    const password = screen.getByLabelText("Password");
+    expect(password).toHaveAttribute("name", "password");
+    expect(password).toHaveAttribute("autocomplete", "current-password");
+    expect(password).toBeRequired();
+    expect(img?.getAttribute("alt")).toBe("");
+  });
+
+  it("shows the sign-in error in an alert like Auth's", async () => {
+    window.history.replaceState(null, "", "/login?e=invalid");
+    try {
+      render(<LoginCard magicLinkLoginEnabled={false} {...DEFAULT_COPY} />);
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Invalid email or password.",
+      );
+    } finally {
+      window.history.replaceState(null, "", "/login");
+    }
   });
 });

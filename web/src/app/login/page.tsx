@@ -31,8 +31,15 @@ export default async function LoginPage({
   // any `?e=` or `?manual=1` also renders the card, so the password form stays
   // reachable and a failed attempt cannot loop.
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(searchParams ? await searchParams : {})) {
-    for (const v of Array.isArray(value) ? value : value === undefined ? [] : [value]) params.append(key, v);
+  for (const [key, value] of Object.entries(
+    searchParams ? await searchParams : {},
+  )) {
+    for (const v of Array.isArray(value)
+      ? value
+      : value === undefined
+        ? []
+        : [value])
+      params.append(key, v);
   }
   if (shouldAutoStartLogin(params, oidc)) {
     redirect("/api/auth/oidc/start?silent=1");
@@ -51,6 +58,7 @@ export default async function LoginPage({
       oidcLabel={oidc?.buttonLabel ?? "Sign in with SSO"}
       title={branding.loginTitle}
       tagline={branding.loginTagline}
+      appName={branding.appName}
     />
   );
 }

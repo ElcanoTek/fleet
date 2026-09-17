@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 
@@ -10,17 +11,21 @@ function errorCodeToMessage(code: string | null): string | null {
   if (!code) return null;
   if (code === "invalid") return "Invalid email or password.";
   if (code === "missing") return "Please enter both email and password.";
-  if (code === "server") return "The chat server isn't reachable right now. Try again in a moment.";
+  if (code === "server")
+    return "The chat server isn't reachable right now. Try again in a moment.";
   // "in a minute" matches the verify endpoint's Retry-After: 60
   // (internal/httpapi/auth_verify.go).
-  if (code === "throttled") return "Too many sign-in attempts. Try again in a minute.";
+  if (code === "throttled")
+    return "Too many sign-in attempts. Try again in a minute.";
   if (code === "elcano_unavailable")
     return "Elcano email sign-in isn't available right now. Use your email and password.";
   if (code === "oidc_unavailable")
     return "Single sign-on isn't available right now. Use your email and password.";
   if (code === "oidc_denied") return "Single sign-on was cancelled.";
-  if (code === "oidc_domain") return "Your account's email domain isn't allowed to sign in here.";
-  if (code === "oidc_error") return "Single sign-on failed. Try again, or use your email and password.";
+  if (code === "oidc_domain")
+    return "Your account's email domain isn't allowed to sign in here.";
+  if (code === "oidc_error")
+    return "Single sign-on failed. Try again, or use your email and password.";
   return "Could not sign in.";
 }
 
@@ -44,12 +49,15 @@ export default function LoginCard({
   oidcLabel = "Sign in with SSO",
   title,
   tagline,
+  appName,
 }: {
   magicLinkLoginEnabled: boolean;
   oidcEnabled?: boolean;
   oidcLabel?: string;
   title: string;
   tagline: string;
+  /** The bundle's app_name, rendered as the small uppercase wordmark above the title. */
+  appName: string;
 }) {
   const [loginError, setLoginError] = useState<string | null>(null);
 
@@ -73,62 +81,83 @@ export default function LoginCard({
     };
   }, []);
 
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-[var(--gradient-bg-home-signature)] px-6 py-10">
-      <div className="w-full max-w-sm rounded-[1.5rem] border border-[var(--color-border)] bg-[var(--composer-surface)] p-6 shadow-[var(--composer-shadow)]">
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div className="grid gap-2">
-            <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">{title}</h1>
-            <p className="text-[0.875rem] text-[var(--color-text-secondary)]">{tagline}</p>
-          </div>
+  const secondary =
+    "flex min-h-11 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-2.5 text-sm font-bold text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]";
+  const field =
+    "block min-h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[var(--color-text-primary)] outline-none transition hover:border-[var(--color-primary)] focus-visible:border-[var(--color-primary)] focus-visible:[box-shadow:var(--focus-ring)]";
+  const label =
+    "mb-2 block text-[0.8125rem] font-bold text-[var(--color-text-secondary)]";
 
-          <ThemeToggle className="inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]" />
+  // The primary action uses Auth's button gradient (primary → primary_hover)
+  // rather than Fleet's app-wide --gradient-action-primary (primary →
+  // secondary), so the two sign-in buttons are identical; the app's own
+  // buttons are untouched.
+  // The card is Auth's sign-in card, term for term (auth/internal/httpapi/
+  // templates.go: loginHTML + componentCSS): the bundle mark, the wordmark,
+  // the title and tagline, labelled fields on surface_1, one full-width
+  // primary action, then the secondary sign-in(s) under an "or" divider. Same
+  // tokens, same gradients, so a person moving between Auth and Fleet sees
+  // one design. The theme toggle sits at the page corner as it does on Auth.
+  return (
+    <main className="flex min-h-screen bg-[var(--gradient-bg-home-signature)] px-6 py-10">
+      <ThemeToggle className="fixed top-5 right-5 inline-flex size-10 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]" />
+      <div className="m-auto w-full max-w-[25rem] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--gradient-surface-card)] p-10 shadow-[var(--shadow-lg)]">
+        {/* unoptimized for the same reason as the rail's mark (NavRail.tsx): the
+            bundle mark is served at /api/brand/logo with no extension, and an
+            SVG through next/image's optimizer renders broken. */}
+        <Image
+          src="/api/brand/logo"
+          alt=""
+          width={36}
+          height={36}
+          priority
+          unoptimized
+          className="mb-4 block h-9 w-auto max-w-[12rem]"
+        />
+        <div className="mb-5 text-[0.75rem] font-bold tracking-[0.14em] text-[var(--color-text-muted)] uppercase">
+          {appName}
         </div>
+        <h1 className="font-heading mb-2 text-[1.75rem] leading-[1.2] font-bold tracking-[-0.01em] text-[var(--color-text-primary)]">
+          {title}
+        </h1>
+        <p className="mb-6 text-[var(--color-text-muted)]">{tagline}</p>
 
         {loginError ? (
-          <div className="mb-4 rounded-xl border border-[var(--color-danger-strong)] bg-[color-mix(in_srgb,var(--color-danger-strong)_14%,transparent)] px-3 py-2 text-[0.8125rem] text-[var(--color-danger-soft)]">
+          <div
+            role="alert"
+            className="mb-5 rounded-[var(--radius-md)] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_14%,transparent)] px-3 py-3 text-[0.8125rem] text-[var(--color-danger)]"
+          >
             {loginError}
           </div>
         ) : null}
 
-        {/* Both inputs carry `w-full min-w-0` deliberately. An <input> has an
-            intrinsic width (its `size`, 20 chars by default) and a grid item's
-            default `min-width: auto` feeds that intrinsic width into the track
-            as its minimum contribution, so the label's `auto` track — and then
-            the form's — grew to fit the input rather than the card. On desktop
-            the 13px body font kept that intrinsic width under the card's inner
-            width so nothing showed; on touch devices globals.css forces form
-            controls to 16px (the iOS focus-zoom guard) and the fields and the
-            Sign in button ran off the right edge of the card. `min-w-0` lets
-            the track shrink to the card; `w-full` fills it. */}
-        <form action="/api/auth/login" method="post" className="grid gap-4">
-          <label htmlFor="email" className="grid gap-1.5 text-[0.8125rem] text-[var(--color-text-secondary)]">
+        <form action="/api/auth/login" method="post">
+          <label htmlFor="email" className={label}>
             Email
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              className="w-full min-w-0 rounded-xl border border-[var(--color-border)] bg-transparent px-3 py-2.5 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-            />
           </label>
-
-          <label htmlFor="password" className="grid gap-1.5 text-[0.8125rem] text-[var(--color-text-secondary)]">
+          <input
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            placeholder="you@example.com"
+            className={`${field} mb-4`}
+          />
+          <label htmlFor="password" className={label}>
             Password
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              className="w-full min-w-0 rounded-xl border border-[var(--color-border)] bg-transparent px-3 py-2.5 text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-            />
           </label>
-
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            required
+            className={field}
+          />
           <button
             type="submit"
-            className="mt-2 rounded-xl bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-[var(--color-on-primary)] transition hover:opacity-90"
+            className="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-[var(--radius-md)] bg-[linear-gradient(140deg,var(--color-primary),var(--color-primary-hover))] px-4 py-3 font-bold text-[var(--color-on-primary)] transition hover:brightness-[1.08] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] active:translate-y-px"
           >
             Sign in
           </button>
@@ -136,7 +165,7 @@ export default function LoginCard({
 
         {magicLinkLoginEnabled || oidcEnabled ? (
           <>
-            <div className="my-5 flex items-center gap-3 text-[0.6875rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+            <div className="my-5 flex items-center gap-3 text-[0.6875rem] tracking-wide text-[var(--color-text-muted)] uppercase">
               <span className="h-px flex-1 bg-[var(--color-border)]" />
               or
               <span className="h-px flex-1 bg-[var(--color-border)]" />
@@ -160,25 +189,23 @@ export default function LoginCard({
             <div className="grid gap-3">
               {oidcEnabled ? (
                 // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/oidc/start is a route handler that 303s to the IdP and sets PKCE cookies, not a Next page.
-                <a
-                  href="/api/auth/oidc/start"
-                  className="flex items-center justify-center rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
-                >
+                <a href="/api/auth/oidc/start" className={secondary}>
                   {oidcLabel}
                 </a>
               ) : null}
               {magicLinkLoginEnabled ? (
                 // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/elcano-login is a route handler that 303s to the auth service, not a Next page.
-                <a
-                  href="/api/auth/elcano-login"
-                  className="flex items-center justify-center rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
-                >
+                <a href="/api/auth/elcano-login" className={secondary}>
                   Use Elcano email
                 </a>
               ) : null}
             </div>
           </>
         ) : null}
+
+        <p className="mt-6 text-center text-[0.8125rem] text-[var(--color-text-muted)]">
+          Accounts are created by an administrator.
+        </p>
       </div>
     </main>
   );
