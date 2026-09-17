@@ -501,7 +501,7 @@ mcp_servers:
 			t.Errorf("EnvVarNames = %v, want %q", names, want)
 		}
 	}
-	if slices.Contains(names, "FLEET_WORKSPACE") || slices.Contains(names, "FLEET_TASK_ID") {
+	if slices.Contains(names, "FLEET_WORKSPACE") || slices.Contains(names, "FLEET_WORKSPACE_ROOT") || slices.Contains(names, "FLEET_TASK_ID") {
 		t.Errorf("EnvVarNames = %v, must exclude reserved runtime tokens", names)
 	}
 }

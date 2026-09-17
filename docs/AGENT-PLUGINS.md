@@ -227,7 +227,7 @@ plugin's MCP servers run in the control-plane pod like every manifest server.
   a plugin server that needs a brokered secret is a manifest `mcp_servers[]`
   entry, not a plugin entry.
 - **Fleet's own spawn-time tokens are still substituted.** A plugin env value
-  containing `${FLEET_WORKSPACE}` or `${FLEET_TASK_ID}` is rewritten at spawn
+  containing `${FLEET_WORKSPACE}`, `${FLEET_WORKSPACE_ROOT}` or `${FLEET_TASK_ID}` is rewritten at spawn
   exactly like a manifest server's (docs/MCP-BUNDLE-ENV.md). The spec says a
   client "MUST NOT perform any other placeholder or environment-variable
   expansion"; this is a documented, narrow deviation rather than a second

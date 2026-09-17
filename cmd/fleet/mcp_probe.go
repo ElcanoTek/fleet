@@ -273,6 +273,7 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		// Probes have no task identity: drop ${FLEET_TASK_ID}-bearing keys like
 		// the boot-time shared spawn does, so the probe env matches production.
 		env = agentcore.ExpandTaskIDEnv(env, "")
+		env = agentcore.ExpandWorkspaceRootEnv(env)
 		addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env,
 			agentcore.StdioCwd(spec.Dir, spec.DirPinned, shared))
 	default:

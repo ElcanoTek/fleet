@@ -361,6 +361,8 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 			// rather than hand the connector a literal placeholder. Only the
 			// scheduled per-run path resolves the token to a real ID.
 			env = agentcore.ExpandTaskIDEnv(env, "")
+			// ${FLEET_WORKSPACE_ROOT}: always resolvable, never dropped.
+			env = agentcore.ExpandWorkspaceRootEnv(env)
 			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env,
 				agentcore.StdioCwd(spec.Dir, spec.DirPinned, shared))
 		default:
