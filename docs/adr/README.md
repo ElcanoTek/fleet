@@ -76,3 +76,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0065](0065-completed-step-stream-recovery.md) | Resume provider failures from completed steps | Accepted; narrows ADR-0035 |
 | [0066](0066-mcp-workspace-file-arguments.md) | Hash-bound sandbox workspace references for MCP binary arguments | Accepted |
 | [0067](0067-fallback-on-provider-rejection.md) | A per-request 4xx provider rejection promotes the configured fallback model from a safe checkpoint; the relayed upstream cause is named in logs and dead-letter reasons | Accepted; narrows ADR-0033 |
+| [0068](0068-chat-scheduled-tasks-inherit-connectors.md) | A task scheduled from chat inherits the conversation's connector selection; the card names it and warns when there is none | Accepted; amends ADR-0052 |

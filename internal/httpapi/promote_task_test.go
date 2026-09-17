@@ -66,6 +66,11 @@ func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv := seedConv(t, s, user)
+	// The conversation had two connectors on when it was promoted (ADR-0068):
+	// the promoted task must inherit exactly those.
+	if err := s.store.SetOptionalMCPServers(context.Background(), user, conv.ID, []string{"gamma", "tavily"}); err != nil {
+		t.Fatalf("SetOptionalMCPServers: %v", err)
+	}
 	s.agent = &fakeTurnEngine{recurringProposal: &agent.RecurringTaskProposal{
 		Name:      "Daily failed-task report",
 		Prompt:    "Report scheduled tasks that failed in the last 24h.",
@@ -94,6 +99,13 @@ func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 	if params.Cron != "0 9 * * *" {
 		t.Errorf("staged cron = %q, want the synthesized value", params.Cron)
 	}
+	var staged scheduleTaskStagedArgs
+	if err := json.Unmarshal([]byte(appr.ArgsJSON), &staged); err != nil {
+		t.Fatalf("staged args: %v", err)
+	}
+	if !staged.ConnectorsResolved || len(staged.Connectors) != 2 || staged.Connectors[0].Server != "gamma" || staged.Connectors[1].Server != "tavily" {
+		t.Errorf("promoted task did not inherit the conversation's connectors: %+v", staged)
+	}
 
 	var body struct {
 		Approval  map[string]any `json:"approval"`
@@ -101,6 +113,11 @@ func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
+	}
+	if summary, _ := body.Approval["summary"].(map[string]any); summary == nil || summary["no_connectors"] != false {
+		t.Errorf("card summary must name the inherited connectors, got %v", body.Approval["summary"])
+	} else if labels, _ := summary["connectors"].([]any); len(labels) != 2 {
+		t.Errorf("card connectors = %v", summary["connectors"])
 	}
 	if body.Approval["approval_id"] != appr.ID {
 		t.Errorf("response approval_id = %v, want %q", body.Approval["approval_id"], appr.ID)

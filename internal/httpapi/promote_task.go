@@ -113,6 +113,9 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 		// moment to review.
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
 		globalTimeoutSeconds: promoteApprovalTimeoutSeconds,
+		// The promoted task inherits this conversation's connectors (ADR-0068)
+		// the same way an agent-staged schedule_task does.
+		taskConnectors: s.chatTaskConnectorsFor(user, convID),
 	}
 	if _, err := stager.Stage("schedule_task", "", string(rawInput)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

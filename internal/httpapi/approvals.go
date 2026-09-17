@@ -91,6 +91,11 @@ type approvalStager struct {
 	// tests that construct a stager directly): the send then runs untracked, which
 	// is the pre-existing behavior and touches no store.
 	bg *backgroundTracker
+	// taskConnectors resolves the conversation's live connector selection when
+	// a schedule_task card is staged (ADR-0068), so the scheduled task inherits
+	// the connectors chat was running with. nil stages the card without a
+	// snapshot (tests, legacy construction).
+	taskConnectors func(context.Context) (chatTaskConnectors, error)
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -324,6 +329,17 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 				return "", err
 			}
 		}
+	}
+
+	// A scheduled task inherits this conversation's connectors (ADR-0068): snap
+	// them into the staged args now so the card shows exactly what the task
+	// will be able to reach and the approval creates exactly that.
+	if toolName == tools.ScheduleTaskToolName {
+		enriched, err := a.attachTaskConnectors(rawInput)
+		if err != nil {
+			return "", err
+		}
+		rawInput = enriched
 	}
 
 	// Supersede any older pending approvals for this same tool in this
@@ -777,7 +793,7 @@ func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 // recurring tasks so the user can gauge frequency before approving. Pure display
 // — the underlying approval row keeps the full args for the create call.
 func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
-	var p tools.ScheduleTaskParams
+	var p scheduleTaskStagedArgs
 	if err := json.Unmarshal([]byte(rawInput), &p); err != nil {
 		return map[string]any{"tool": toolName, "raw": rawInput}
 	}
@@ -799,6 +815,13 @@ func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
 		"model":         strings.TrimSpace(p.Model),
 		"allow_network": p.AllowNetwork,
 		"tags":          p.Tags,
+		// Connectors the task inherits from this conversation (ADR-0068), the
+		// always-on servers every run binds anyway, and the flag the card turns
+		// into a warning: approving as-is schedules a task that can reach no
+		// connector at all.
+		"connectors":           connectorLabels(p.Connectors),
+		"always_on_connectors": append([]string{}, p.AlwaysOnConnectors...),
+		"no_connectors":        len(connectorLabels(p.Connectors)) == 0 && len(p.AlwaysOnConnectors) == 0,
 	}
 	cron := strings.TrimSpace(p.Cron)
 	switch {
@@ -2047,7 +2070,7 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 	if s.scheduleTask == nil {
 		return "", errors.New("scheduling from chat is not configured on this server")
 	}
-	var p tools.ScheduleTaskParams
+	var p scheduleTaskStagedArgs
 	if err := json.Unmarshal([]byte(approval.ArgsJSON), &p); err != nil {
 		return "", fmt.Errorf("parse schedule_task args: %w", err)
 	}
@@ -2077,6 +2100,9 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 		AllowNetwork:         p.AllowNetwork,
 		ThinkingBudgetTokens: p.ThinkingBudgetTokens,
 		Tags:                 p.Tags,
+		// The connectors this conversation had enabled when the card was staged
+		// (ADR-0068) — the card showed them, the task gets them.
+		Connectors: p.Connectors,
 		// The approving user is the budget principal for this create (#601
 		// part 2) — the seam refuses when their rolling budget is exhausted.
 		RequestedBy: approval.UserEmail,
@@ -2110,6 +2136,8 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 	if !res.NextRun.IsZero() {
 		fmt.Fprintf(&b, "Next run: %s\n", res.NextRun.Format(time.RFC3339))
 	}
+	b.WriteString(describeTaskConnectors(p.Connectors, p.AlwaysOnConnectors))
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "Task id: %s (status: %s)\n", res.ID, res.Status)
 	if link := s.orchestratorTaskLink(); link != "" {
 		fmt.Fprintf(&b, "View / manage it in the Operations Center: %s", link)

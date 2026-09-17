@@ -192,3 +192,59 @@ func assertChatTaskTitle(t *testing.T, store *storage.Storage, taskID, wantTitle
 		t.Errorf("chat-confirmed label leaked into unique definition name = %q", createdFromChat.Name)
 	}
 }
+
+// TestTaskSchedulerProvider_CarriesConnectors pins ADR-0068 at the seam: the
+// conversation's connector selection becomes the task's mcp_selection verbatim
+// (blank servers dropped), so the scheduled run binds the same connectors the
+// chat had. Gated on DATABASE_URL like the budget test above.
+func TestTaskSchedulerProvider_CarriesConnectors(t *testing.T) {
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping DB-backed test")
+	}
+	store := storage.New()
+	if err := store.Initialize(filepath.Join(t.TempDir(), "test.db"), storage.DefaultPoolConfig()); err != nil {
+		if strings.Contains(err.Error(), "connection refused") {
+			t.Skipf("database unavailable: %v", err)
+		}
+		t.Fatalf("storage init: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	for _, q := range []string{"DELETE FROM budgets", "DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
+		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
+			t.Fatalf("cleanup %q: %v", q, err)
+		}
+	}
+	provider := taskSchedulerProvider(store, budget.New(budget.Config{Store: store, Now: time.Now}), "test/model")
+
+	res, err := provider(ctx, httpapi.TaskScheduleRequest{
+		Prompt:      "health scan with connectors",
+		RequestedBy: "bob@example.com",
+		Connectors:  []httpapi.TaskConnector{{Server: "email"}, {Server: "magnite_mcp", Account: "reklaim"}, {Server: " "}},
+	})
+	if err != nil {
+		t.Fatalf("schedule_task: %v", err)
+	}
+	created, err := store.GetTask(uuid.MustParse(res.ID))
+	if err != nil || created == nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	want := schedmodels.MCPSelection{{Server: "email"}, {Server: "magnite_mcp", Account: "reklaim"}}
+	if len(created.MCPSelection) != len(want) {
+		t.Fatalf("mcp_selection = %+v, want %+v", created.MCPSelection, want)
+	}
+	for i := range want {
+		if created.MCPSelection[i] != want[i] {
+			t.Fatalf("mcp_selection[%d] = %+v, want %+v", i, created.MCPSelection[i], want[i])
+		}
+	}
+
+	// No connectors still creates the task: an always-on-only run is legitimate.
+	bare, err := provider(ctx, httpapi.TaskScheduleRequest{Prompt: "no connectors", RequestedBy: "bob@example.com"})
+	if err != nil {
+		t.Fatalf("schedule_task without connectors: %v", err)
+	}
+	if created, err := store.GetTask(uuid.MustParse(bare.ID)); err != nil || len(created.MCPSelection) != 0 {
+		t.Fatalf("bare task mcp_selection = %+v err=%v", created.MCPSelection, err)
+	}
+}

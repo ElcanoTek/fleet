@@ -315,6 +315,18 @@ export type Approval = {
     allow_network?: boolean;
     /** Task tags. */
     tags?: string[];
+    /**
+     * Connectors the task inherits from this conversation (ADR-0068), as
+     * "server" / "server (account)" labels. Empty when none were enabled.
+     */
+    connectors?: string[];
+    /** Bundle connectors every scheduled run binds regardless of selection. */
+    always_on_connectors?: string[];
+    /**
+     * True when connectors and always_on_connectors are both empty: approving
+     * as-is schedules a task that can reach no connector at all.
+     */
+    no_connectors?: boolean;
 
     // generic critical tools (anything without a tailored card, e.g. a
     // bundle-declared pages deploy): top-level arguments as display rows,

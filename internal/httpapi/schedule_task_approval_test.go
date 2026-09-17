@@ -33,11 +33,22 @@ func TestRunStagedScheduleTask(t *testing.T) {
 
 	approval := &store.Approval{
 		ToolName: "schedule_task",
-		ArgsJSON: `{"name":"Weekly report","prompt":"Summarize the week's PRs","cron":"0 9 * * MON","model":"x","allow_network":true,"tags":["reports"]}`,
+		ArgsJSON: `{"name":"Weekly report","prompt":"Summarize the week's PRs","cron":"0 9 * * MON","model":"x","allow_network":true,"tags":["reports"],` +
+			`"connectors":[{"server":"email"},{"server":"magnite_mcp","account":"reklaim"}],"connectors_resolved":true}`,
 	}
 	text, err := s.runStagedScheduleTask(context.Background(), approval, nil)
 	if err != nil {
 		t.Fatalf("runStagedScheduleTask error: %v", err)
+	}
+
+	// The conversation's connector snapshot reaches the seam (ADR-0068) and the
+	// confirmation names it.
+	if len(got.Connectors) != 2 || got.Connectors[0] != (TaskConnector{Server: "email"}) ||
+		got.Connectors[1] != (TaskConnector{Server: "magnite_mcp", Account: "reklaim"}) {
+		t.Fatalf("connectors not mapped: %+v", got.Connectors)
+	}
+	if !strings.Contains(text, "Connectors: email, magnite_mcp (reklaim)") {
+		t.Errorf("confirmation missing the connector line:\n%s", text)
 	}
 
 	// The request was mapped faithfully.
@@ -169,6 +180,35 @@ func TestSummarizeScheduleTaskInput(t *testing.T) {
 	got = summarizeScheduleTaskInput("schedule_task", `{"prompt":"now"}`)
 	if got["run_immediately"] != true {
 		t.Errorf("expected run_immediately=true, got %+v", got)
+	}
+
+	// Connector snapshot (ADR-0068): labels for the card, always-on for
+	// context, and the no-connector flag only when both are empty.
+	got = summarizeScheduleTaskInput("schedule_task",
+		`{"prompt":"scan","cron":"0 9 * * *","connectors":[{"server":"email"},{"server":"gamma","account":"work"}],"always_on_connectors":["mailbox"],"connectors_resolved":true}`)
+	if labels, _ := got["connectors"].([]string); len(labels) != 2 || labels[0] != "email" || labels[1] != "gamma (work)" {
+		t.Errorf("connectors = %v", got["connectors"])
+	}
+	if ao, _ := got["always_on_connectors"].([]string); len(ao) != 1 || ao[0] != "mailbox" {
+		t.Errorf("always_on_connectors = %v", got["always_on_connectors"])
+	}
+	if got["no_connectors"] != false {
+		t.Errorf("no_connectors = %v, want false", got["no_connectors"])
+	}
+	got = summarizeScheduleTaskInput("schedule_task", `{"prompt":"scan","cron":"0 9 * * *","connectors":[],"always_on_connectors":["mailbox"],"connectors_resolved":true}`)
+	if got["no_connectors"] != false {
+		t.Errorf("always-on only must not warn: %+v", got)
+	}
+	// A legacy row (no snapshot) and an all-optional bundle with nothing
+	// enabled both warn: that task really has no connectors.
+	for _, raw := range []string{`{"prompt":"scan","cron":"0 9 * * *"}`, `{"prompt":"scan","cron":"0 9 * * *","connectors":[],"connectors_resolved":true}`} {
+		got = summarizeScheduleTaskInput("schedule_task", raw)
+		if got["no_connectors"] != true {
+			t.Errorf("no_connectors = %v for %s, want true", got["no_connectors"], raw)
+		}
+		if labels, _ := got["connectors"].([]string); len(labels) != 0 {
+			t.Errorf("connectors = %v for %s, want empty", labels, raw)
+		}
 	}
 }
 
