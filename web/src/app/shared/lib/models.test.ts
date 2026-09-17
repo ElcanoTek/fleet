@@ -96,6 +96,22 @@ describe("loadModels (fetch + fallback)", () => {
     _resetModelCacheForTests();
   });
 
+  it("offers only the bundle's native models and refreshes after a provider edit", async () => {
+    let model = "gpt-4o";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => String(url).includes("llm-provider-models") ? {
+        routing_known: true,
+        providers: [{ name: "bundle-openai", type: "openai", models: [model], catch_all: false }],
+        models: [{ id: `bundle-openai/${model}`, name: model }],
+      } : { models: [{ slug: "google/gemini-3.8-flash", name: "Gemini" }, { slug: "openai/gpt-4o", name: "GPT" }] },
+    })));
+    expect((await loadModels()).map((m) => m.id)).toEqual(["bundle-openai/gpt-4o"]);
+    model = "gpt-4o-mini";
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+    expect((await loadModels()).map((m) => m.id)).toEqual(["bundle-openai/gpt-4o-mini"]);
+  });
+
   it("merges seeds with the proxied catalog", async () => {
     vi.stubGlobal(
       "fetch",

@@ -134,6 +134,12 @@ with it.
 | **Context** | Notes that travel with the task for the people who operate it: why it exists, who owns it, what to do if it fails. These are shown to operators and never enter the assistant's instructions. Alongside them sit **tags** and the task's **persona**, which is left blank for the workspace default unless the task genuinely needs a different one. Tags are how you group related tasks: they show as chips on the board and it filters by them (see [Finding things](#finding-things)), so a tag you give a task here is a way back to the whole group later. |
 | **Advanced** | Further settings, including the model the task runs on and an option for a recurring task to carry a short summary of its previous run into the next one. The model in particular is worth choosing deliberately: match it to the demands of the job rather than leaving it to chance. |
 
+The model picker includes the deployment's configured **Workspace** models and
+filters public-catalog suggestions against the active provider routes once they
+load. Choose the provider-prefixed workspace entry when using a direct provider.
+Saved task model values are not rewritten when provider configuration changes;
+review the model in **Advanced** if a run reports that no provider serves it.
+
 Some generated prompts include an **EXECUTION REQUIREMENTS (JSON)** block.
 Keep it when copying the prompt. Fleet checks it when the run starts, before
 model execution, and reports missing tools or sandbox network access. It does

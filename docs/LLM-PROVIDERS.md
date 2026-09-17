@@ -17,7 +17,7 @@ configured from the client bundle's `providers:` block.
   `internal/store/llm_providers.go`.
 - **API** (chat server): admin-gated CRUD at `/admin/llm-providers[/{id}]`
   (same `adminMiddleware` as the rest of `/admin/*`), plus a member-level
-  `GET /llm-provider-models` that returns enabled providers' model slugs for
+  `GET /llm-provider-models` that returns active providers' model slugs for
   the picker. Web proxies under `/api/admin/llm-providers` and
   `/api/llm-provider-models`.
 - **Routing table**: at boot and after every admin edit, the resolver's table
@@ -43,13 +43,19 @@ configured from the client bundle's `providers:` block.
   all-or-nothing: a table that fails eager construction leaves the current one
   serving, and a DB overlay that fails at **boot** degrades to the bundle/env
   table with a loud log — a bad row can never take the box down.
-- **Model picker**: enabled providers' listed models are unioned into BOTH
+- **Model picker**: the active resolver's listed models are unioned into BOTH
   pickers — the task form (`web/src/app/shared/lib/models.ts`) and the chat
   composer (`chat-experience.tsx`) — as `<provider>/<model>` entries with a
   "Workspace"/"workspace" badge, ahead of the OpenRouter catalog. Explicit
   prefix routing means a picked entry resolves through its provider even when
   slugs overlap. The shared loader lives in
   `web/src/app/shared/lib/workspaceModels.ts`.
+  Discovery includes bundle/env providers and successfully applied admin
+  overlays; it does not advertise a DB edit whose resolver rebuild failed.
+  Recommendations and OpenRouter catalog rows are filtered against that table.
+  A native catch-all is not treated as an OpenRouter gateway for suggestions.
+  Saved selections are preserved, with a repair prompt in chat when unavailable.
+  See [provider-aware model selection](PROVIDER-AWARE-MODELS.md).
 - **Catch-all expansion via catwalk**: `GET /llm-provider-models` also returns
   the enabled provider roster (`providers: [{name, type, catch_all}]`, no
   secrets). For catch-all rows of type `anthropic` or `openai` the web tier

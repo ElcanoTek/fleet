@@ -9,7 +9,8 @@
 // used to silently strand the picker on its two seed models.
 
 import { currentTierModels } from "@/app/lib/modelAliases";
-import { loadWorkspaceModels, _resetWorkspaceModelCacheForTests } from "./workspaceModels";
+import { loadWorkspaceModelCatalog, _resetWorkspaceModelCacheForTests } from "./workspaceModels";
+import { modelIsAvailable } from "./modelRouting";
 
 export type PickerModel = {
   id: string;
@@ -178,21 +179,22 @@ async function fetchCatalogModels(): Promise<PickerModel[]> {
 }
 
 let cachedModels: PickerModel[] | null = null;
+let cachedAt = 0;
 let inflight: Promise<PickerModel[]> | null = null;
 
 // Returns the merged (workspace + seed + OpenRouter-catalog) list, fetched
-// once and cached. Workspace-provider models come first so an
+// with a short cache. Workspace-provider models come first so an
 // admin-configured model is immediately visible in browse mode; either fetch
 // failing degrades to the rest of the list, and the seeds alone are the floor.
 export async function loadModels(): Promise<PickerModel[]> {
-  if (cachedModels) return cachedModels;
+  if (cachedModels && Date.now() - cachedAt < 30_000) return cachedModels;
   if (inflight) return inflight;
   inflight = (async () => {
-    const [workspaceRaw, fetched] = await Promise.all([
-      loadWorkspaceModels(),
+    const [catalog, fetched] = await Promise.all([
+      loadWorkspaceModelCatalog(),
       fetchCatalogModels().catch(() => [] as PickerModel[]),
     ]);
-    const workspace: PickerModel[] = workspaceRaw.map((m) => ({
+    const workspace: PickerModel[] = catalog.models.map((m) => ({
       id: m.id,
       name: m.name,
       recommended: false,
@@ -203,7 +205,8 @@ export async function loadModels(): Promise<PickerModel[]> {
       fetched.length > 0
         ? dedupeAndOrder(enrichFromCatalog(seedModels(), fetched), fetched)
         : seedModels();
-    cachedModels = dedupeAndOrder(workspace, base);
+    cachedModels = dedupeAndOrder(workspace, base.filter((m) => modelIsAvailable(m.id, catalog.routing, true)));
+    cachedAt = Date.now();
     inflight = null;
     return cachedModels;
   })();
