@@ -194,6 +194,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Observer:             obs,
 		Policy:               policy,
 		Executor:             NewSandboxExecutor(tc.Sandbox),
+		ReadWorkspaceFile:    tools.WorkspaceFileReader(tc.Sandbox),
 		Model:                tc.Model,
 		FallbackModel:        tc.FallbackModel,
 		FallbackModels:       tc.FallbackModels,

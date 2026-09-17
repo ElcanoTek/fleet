@@ -120,6 +120,8 @@ type Deps struct {
 	// Executor runs sandboxed code (passed through to NativeTools by the driver;
 	// held here so the loop can surface it to the finalize hook).
 	Executor Executor
+	// ReadWorkspaceFile binds MCP binary argument references to the active sandbox.
+	ReadWorkspaceFile func(context.Context, string, int64) ([]byte, error)
 
 	// Model + FallbackModel are the resolved fantasy language models.
 	Model         fantasy.LanguageModel
@@ -411,12 +413,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// allowlist also governs the deferrable MCP set BEFORE the disclosure
 		// decision (#570) — the roster-level pass in buildTools below cannot see
 		// a tool that deferred behind the tool_search/tool_call bridges.
-		personaName:      cfg.PersonaName,
-		personaPolicy:    cfg.PersonaPolicy,
-		observer:         deps.Observer,
-		panicAttribution: panicAttribution,
-		hooks:            hooks,
-		journal:          deps.TurnJournal,
+		personaName:       cfg.PersonaName,
+		personaPolicy:     cfg.PersonaPolicy,
+		observer:          deps.Observer,
+		panicAttribution:  panicAttribution,
+		hooks:             hooks,
+		journal:           deps.TurnJournal,
+		readWorkspaceFile: deps.ReadWorkspaceFile,
 	}
 
 	mcpClient := deps.MCPClient

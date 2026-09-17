@@ -293,3 +293,5 @@ above fails otherwise.
 - [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md) — Web-tier shutdown — why `systemctl restart fleet-web` was dumping core
 - [`WEBHOOK-SIGNING.md`](WEBHOOK-SIGNING.md) — Webhook signing (verifying fleet's outbound webhooks)
 - [`WEBHOOKS.md`](WEBHOOKS.md) — Webhook-triggered conversations (#268)
+
+- [MCP workspace files](MCP-WORKSPACE-FILES.md) — send exact sandbox file chunks through annotated MCP binary arguments.
