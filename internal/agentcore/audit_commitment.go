@@ -60,6 +60,57 @@ type typedCommitment struct {
 	// remaining is the outstanding count: 1 for single actions,
 	// len(dealIDs) for batch entries.
 	remaining int
+	// initial is remaining at registration; remaining == initial means no
+	// call has ever discharged any unit of this commitment (#1535).
+	initial int
+	// refusedRecords holds the record id of every same-tool call this
+	// commitment's binding REFUSED while the call ended up BLOCKED ("" for a
+	// record-less call). A later re-audit of the same tool that declares one
+	// of those records — the binding the model actually tried — supersedes
+	// this commitment when nothing has executed under it (#1535).
+	refusedRecords map[string]bool
+}
+
+// neverExecuted reports whether nothing has ever discharged any unit of this
+// commitment.
+func (c *typedCommitment) neverExecuted() bool {
+	return c.remaining == c.initial && len(c.discharged) == 0
+}
+
+// noteRefused records that a same-tool call carrying dealID ("" = none) was
+// refused by this commitment's binding and the call was BLOCKED overall.
+func (c *typedCommitment) noteRefused(dealIDs ...string) {
+	if c.refusedRecords == nil {
+		c.refusedRecords = make(map[string]bool, len(dealIDs))
+	}
+	for _, id := range dealIDs {
+		c.refusedRecords[id] = true
+	}
+}
+
+// correctsRefusal reports whether fresh (a re-audit of the same tool)
+// declares exactly the binding a call refused by this commitment carried:
+// the correction loop the BLOCKED guidance prescribes. Only such a
+// re-declaration may supersede a differently-bound commitment, and only one
+// nothing has executed under — a legitimately pending obligation that no
+// call ever collided with is never retired by a re-audit (#1535).
+func (c *typedCommitment) correctsRefusal(fresh *typedCommitment) bool {
+	if !c.neverExecuted() || len(c.refusedRecords) == 0 {
+		return false
+	}
+	switch {
+	case len(fresh.dealIDs) > 0:
+		for id := range fresh.dealIDs {
+			if c.refusedRecords[id] {
+				return true
+			}
+		}
+		return false
+	case fresh.dealID != "":
+		return c.refusedRecords[fresh.dealID]
+	default:
+		return c.refusedRecords[""]
+	}
 }
 
 // nameMatches reports whether an executed toolName satisfies this
@@ -533,6 +584,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			tool:      tool, // always full server-qualified (fail-closed above)
 			suffix:    suffix,
 			remaining: n,
+			initial:   n,
 		}
 		if len(dealIDs) > 0 {
 			tc.dealIDs = make(map[string]bool, len(dealIDs))
@@ -572,12 +624,28 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// unbound same-tool commitments at once; and a record-bound prior
 		// commitment is never retired by an unbound re-audit (or vice versa),
 		// so the two shapes cannot cannibalise each other.
+		//
+		// Third shape (#1535): a prior-envelope commitment for the SAME full
+		// tool whose binding REFUSED a call that was then BLOCKED, when the
+		// re-audit declares the binding that refused call carried and
+		// nothing has ever executed under the stale entry. Field case: the
+		// audit bound a send to a record it could never carry ("n/a"), the
+		// record-less send was BLOCKED and told to re-audit, the re-audit
+		// named no record, the same-shape rule above did not retire the stale
+		// entry, and the ledger showed both — the send discharged the fresh
+		// one and the stale one wedged finish enforcement until the model
+		// aborted a run whose email had gone out. That re-declaration is the
+		// correction the BLOCKED guidance prescribes, not a second obligation.
+		// Anything else keeps the strict same-shape rule: a differently-bound
+		// commitment no call ever collided with is a legitimately pending
+		// obligation, and retiring it would let the run finish without it.
 		for i := 0; i < preExisting; i++ {
 			old := o.typedCommitments[i]
-			if old.remaining <= 0 || old.tool != tc.tool || old.hasDealBinding() != tc.hasDealBinding() {
+			if old.remaining <= 0 || old.tool != tc.tool {
 				continue
 			}
-			if tc.hasDealBinding() && !old.sameDealSet(tc) {
+			sameShape := old.hasDealBinding() == tc.hasDealBinding() && (!tc.hasDealBinding() || old.sameDealSet(tc))
+			if !sameShape && !old.correctsRefusal(tc) {
 				continue
 			}
 			if o.committedCriticalActions[old.suffix] >= old.remaining {
@@ -586,7 +654,10 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 				o.committedCriticalActions[old.suffix] = 0
 			}
 			shape := "same tool+record-set"
-			if !tc.hasDealBinding() {
+			switch {
+			case !sameShape:
+				shape = "same tool, re-declared with the binding the earlier declaration refused; nothing executed under it"
+			case !tc.hasDealBinding():
 				shape = "same unbound tool"
 			}
 			log.Printf("Enforcement: superseded stale commitment %q on re-audit (%s); "+
@@ -771,12 +842,17 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 	singleID := callDealID(rawInput)
 	digest := valuesDigestArg(rawInput)
 
+	// Same-tool commitments whose binding refused this call. Noted only if
+	// the call ends BLOCKED (no commitment authorized it): a re-audit of the
+	// same tool declaring the refused binding may then supersede them (#1535).
+	var refusedBy []*typedCommitment
 	for _, c := range o.typedCommitments {
 		if c.remaining <= 0 || !c.nameMatches(toolName) {
 			continue
 		}
 		if isBatch {
 			if len(c.dealIDs) == 0 {
+				refusedBy = append(refusedBy, c)
 				continue // a batch call needs a batch-bound commitment
 			}
 			covered := true
@@ -787,6 +863,7 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 				}
 			}
 			if !covered || (c.digest != "" && digest != c.digest) {
+				refusedBy = append(refusedBy, c)
 				continue
 			}
 			return true, ""
@@ -813,10 +890,19 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		if c.allowsDeal(singleID) {
 			return true, ""
 		}
+		refusedBy = append(refusedBy, c)
 	}
 
 	if !isBatch && o.legacySuffixAuthorized(criticalSuffixFor(toolName)) {
 		return true, ""
+	}
+
+	refused := []string{singleID}
+	if isBatch {
+		refused = batchIDs
+	}
+	for _, c := range refusedBy {
+		c.noteRefused(refused...)
 	}
 
 	target := ""
@@ -832,7 +918,9 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		"approval is bound to the exact tool name (server and client-variant prefix included) and its declared "+
 		"record id(s) — a call on a different MCP server, a different client variant, or a different record "+
 		"cannot ride this audit. Outstanding: %s. Execute the committed action(s) exactly as declared; if this "+
-		"call is genuinely required, re-run confirm_audit declaring it in typed critical_actions (tool + deal_id), "+
+		"call is genuinely required, re-run confirm_audit declaring it in typed critical_actions (tool + deal_id) — "+
+		"a re-audit of the same tool with the binding this call carried supersedes the declaration that refused it, "+
+		"provided nothing has executed under that declaration, so the stale entry will not stack — "+
 		"or abort via confirm_audit(success=false, user_visible_summary=...).",
 		toolName, target, strings.Join(o.outstandingCommitmentSummary(), "; "))
 }
