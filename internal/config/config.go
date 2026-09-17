@@ -179,6 +179,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_MAX_ITERATIONS":                           true,
 	"FLEET_MAX_COST_USD":                             true,
 	"FLEET_MAX_TOTAL_TOKENS":                         true,
+	"FLEET_TASK_DEFAULT_MAX_RETRIES":                 true,
 	"FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS":     true,
 	"FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS": true,
 	"FLEET_TEMPERATURE":                              true,
@@ -746,7 +747,14 @@ type Config struct {
 	// ── LLM (shared) ──
 	OpenRouterAPIKey string
 	MaxIterations    int
-	MaxCostUSD       float64
+	// TaskDefaultMaxRetries is the deployment-wide max_retries applied to a
+	// scheduled task whose create request omits it (#1538,
+	// FLEET_TASK_DEFAULT_MAX_RETRIES, default 1): one bounded whole-task retry
+	// for the transient failure class, so a provider outage or a suppressed
+	// failover is retried without anyone remembering to set it per task. An
+	// explicit per-task value always wins; the class policy is unchanged.
+	TaskDefaultMaxRetries int
+	MaxCostUSD            float64
 	// adminMaxCostUSD is the Settings → Admin → Features override of the
 	// per-run cost ceiling (`max_cost_usd`); nil = no override, the env-derived
 	// MaxCostUSD serves. Read through LiveMaxCostUSD, written through
@@ -1587,10 +1595,11 @@ func Load(envFile string) (*Config, error) {
 		},
 
 		// ── LLM (shared) ──
-		OpenRouterAPIKey: stripQuotes(os.Getenv("OPENROUTER_API_KEY")),
-		MaxIterations:    lp.getenvFleetInt("MAX_ITERATIONS", 300),
-		MaxCostUSD:       lp.getenvFleetFloat("MAX_COST_USD", 50.0),
-		MaxTotalTokens:   lp.getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
+		OpenRouterAPIKey:      stripQuotes(os.Getenv("OPENROUTER_API_KEY")),
+		MaxIterations:         lp.getenvFleetInt("MAX_ITERATIONS", 300),
+		TaskDefaultMaxRetries: lp.getenvFleetInt("TASK_DEFAULT_MAX_RETRIES", 1),
+		MaxCostUSD:            lp.getenvFleetFloat("MAX_COST_USD", 50.0),
+		MaxTotalTokens:        lp.getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
 
 		DefaultThinkingBudgetTokens: lp.getenvFleetInt("DEFAULT_THINKING_BUDGET_TOKENS", 0),
 
@@ -1967,6 +1976,9 @@ func (c *Config) ValidateScheduled() error {
 		errs = append(errs, "OPENROUTER_API_KEY should start with 'sk-or-'")
 	}
 
+	if c.TaskDefaultMaxRetries < 0 || c.TaskDefaultMaxRetries > 10 {
+		errs = append(errs, fmt.Sprintf("TASK_DEFAULT_MAX_RETRIES must be between 0 and 10 (got %d)", c.TaskDefaultMaxRetries))
+	}
 	if c.MaxIterations < 1 || c.MaxIterations > 10000 {
 		errs = append(errs, fmt.Sprintf("MAX_ITERATIONS must be between 1 and 10000 (got %d)", c.MaxIterations))
 	}
@@ -2387,4 +2399,14 @@ func normalizeBudgetFraction(f float64) float64 {
 		return 1.0
 	}
 	return f
+}
+
+// TaskDefaultMaxRetriesFromEnv resolves FLEET_TASK_DEFAULT_MAX_RETRIES (and its
+// CHAT_/CUTLASS_ aliases) without a full Load, clamped to the per-task 0–10
+// bounds. The admin CLI constructs tasks (import, batch) in a process that
+// never calls Load, and it must apply the same deployment default the server
+// does (#1538).
+func TaskDefaultMaxRetriesFromEnv() int {
+	lp := &loadParser{}
+	return min(max(lp.getenvFleetInt("TASK_DEFAULT_MAX_RETRIES", 1), 0), 10)
 }

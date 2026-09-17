@@ -178,6 +178,9 @@ var envKnobs = []envKnob{
 	// min 1: a zero tick would spin the due-task scan; "as fast as possible"
 	// is 1s, and the production default (30s) lives at the getenv site.
 	{key: "FLEET_SCHED_TICK_SECONDS", fleet: true, kind: kindInt, min: bound(1)},
+	// Deployment default for a task's max_retries when the create request
+	// omits it (#1538); same 0–10 bounds as the per-task field.
+	{key: "FLEET_TASK_DEFAULT_MAX_RETRIES", fleet: true, kind: kindInt, min: bound(0), max: bound(10)},
 
 	// ── LLM (shared) ── bounds on the four hot-reloadable ceilings match
 	// reload.go, so boot and reload agree (#1119).

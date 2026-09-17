@@ -230,7 +230,7 @@ components:
         tags: { type: array, items: { type: string }, description: "User-defined labels for organizing/filtering tasks (#212): lowercase alphanumeric plus '-'/'.', ≤64 chars each, ≤20 per task (normalized at create)." }
         timezone: { type: string, description: "IANA timezone name (e.g. America/New_York) recurrence is evaluated in. Empty falls back to the server default (then UTC) at create time; the stored scheduled_for instant is always UTC." }
         description: { type: string, description: "Optional operator documentation (Markdown: why the task exists, runbook, owner). Never injected into agent prompts; capped at 10000 characters." }
-        max_retries: { type: integer, description: "ADDITIONAL whole-task attempts after the first when a run fails with a retryable class (0 = no retries, the default)." }
+        max_retries: { type: integer, description: "ADDITIONAL whole-task attempts after the first when a run fails with a retryable class. Omitted = the deployment default (FLEET_TASK_DEFAULT_MAX_RETRIES, 1 unless configured); an explicit 0 = no retries." }
         retry_policy:
           type: object
           description: >-
