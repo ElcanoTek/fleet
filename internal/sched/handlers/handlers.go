@@ -612,6 +612,9 @@ func (h *Handlers) createTaskGoverned(ctx context.Context, creator taskCreator, 
 type rerunLineage struct {
 	sourceID    uuid.UUID
 	sourceRunIf *models.RunIf
+	// sourceLineage is the source job's lineage: the copy joins it so a re-run
+	// or clone works in the same per-job directory (#1543).
+	sourceLineage uuid.UUID
 }
 
 // createTaskGovernedFrom is createTaskGoverned with an optional rerun lineage.
@@ -651,6 +654,9 @@ func (h *Handlers) createTaskGovernedFrom(ctx context.Context, creator taskCreat
 	if lineage != nil {
 		sourceID := lineage.sourceID
 		task.SourceTaskID = &sourceID
+		if lineage.sourceLineage != uuid.Nil {
+			task.LineageID = lineage.sourceLineage
+		}
 	}
 
 	// Per-key priority ceiling (#230): a scoped key capped at max_priority may not
@@ -2333,7 +2339,7 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 	// expose run_if and priority, so a private path here was a weaker route
 	// around every gate POST /tasks enforces.
 	newTask, err := h.createTaskGovernedFrom(r.Context(), creatorFromPrincipal(p), tc,
-		&rerunLineage{sourceID: source.ID, sourceRunIf: source.RunIf})
+		&rerunLineage{sourceID: source.ID, sourceRunIf: source.RunIf, sourceLineage: source.WorkspaceLineage()})
 	if err != nil {
 		var refusal *createRefusalError
 		if errors.As(err, &refusal) {

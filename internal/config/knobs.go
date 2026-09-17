@@ -181,6 +181,9 @@ var envKnobs = []envKnob{
 	// Deployment default for a task's max_retries when the create request
 	// omits it (#1538); same 0–10 bounds as the per-task field.
 	{key: "FLEET_TASK_DEFAULT_MAX_RETRIES", fleet: true, kind: kindInt, min: bound(0), max: bound(10)},
+	// Kill switch for per-job scheduled workspaces (#1543): on, every
+	// non-worktree scheduled run works in the shared root as before.
+	{key: "FLEET_SCHEDULED_SHARED_WORKSPACE", fleet: true, kind: kindBool},
 
 	// ── LLM (shared) ── bounds on the four hot-reloadable ceilings match
 	// reload.go, so boot and reload agree (#1119).

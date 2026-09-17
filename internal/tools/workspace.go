@@ -104,6 +104,24 @@ func SharedFilesDir(workspaceRoot string) string {
 	return dir
 }
 
+// TaskWorkspacesDirName is the single path segment under the workspace root
+// that holds the per-job scheduled workspaces (#1543): `tasks/<lineage_id>/`.
+const TaskWorkspacesDirName = "tasks"
+
+// TaskWorkspaceDir returns the working directory for a scheduled job:
+// <root>/tasks/<lineageID>. lineageID is a task UUID used as ONE path segment:
+// an empty value, anything filepath.IsLocal rejects (absolute, ".."), or a
+// value carrying a separator falls back to the root rather than escaping or
+// nesting under it. IsLocal is the barrier CodeQL's path-injection query
+// recognizes; the separator check keeps the "one segment" contract that
+// IsLocal alone does not (it accepts "a/b").
+func TaskWorkspaceDir(root, lineageID string) string {
+	if lineageID == "" || !filepath.IsLocal(lineageID) || strings.ContainsAny(lineageID, `/\`) {
+		return root
+	}
+	return filepath.Join(root, TaskWorkspacesDirName, lineageID)
+}
+
 // WorkspaceDirForConversation returns the absolute-or-relative path to
 // the per-conversation workspace root. Resolution order:
 //   - $FLEET_WORKSPACE_ROOT/<convID> (or legacy $CHAT_WORKSPACE_ROOT)

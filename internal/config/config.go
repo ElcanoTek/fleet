@@ -224,6 +224,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_DISABLE_PROMPT_CACHE":            true,
 	"FLEET_DISABLE_OPENROUTER_MODELS":       true,
 	"FLEET_SCHEDULED_AUTO_COMPACT":          true,
+	"FLEET_SCHEDULED_SHARED_WORKSPACE":      true,
 	"FLEET_MODEL_CACHE_TTL_MINUTES":         true,
 	"FLEET_RETRY_MAX_ATTEMPTS":              true,
 	"FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD": true,
@@ -756,6 +757,12 @@ type Config struct {
 	// explicit per-task value always wins; the class policy is unchanged.
 	TaskDefaultMaxRetries int
 	MaxCostUSD            float64
+	// ScheduledSharedWorkspace restores the pre-#1543 behaviour in which every
+	// non-worktree scheduled run works directly in the shared workspace root
+	// (FLEET_SCHEDULED_SHARED_WORKSPACE=1). Off by default: each job gets
+	// <root>/tasks/<lineage_id>/ so one job's leftovers never feed another's
+	// reasoning or audit.
+	ScheduledSharedWorkspace bool
 	// adminMaxCostUSD is the Settings → Admin → Features override of the
 	// per-run cost ceiling (`max_cost_usd`); nil = no override, the env-derived
 	// MaxCostUSD serves. Read through LiveMaxCostUSD, written through
@@ -1596,11 +1603,12 @@ func Load(envFile string) (*Config, error) {
 		},
 
 		// ── LLM (shared) ──
-		OpenRouterAPIKey:      stripQuotes(os.Getenv("OPENROUTER_API_KEY")),
-		MaxIterations:         lp.getenvFleetInt("MAX_ITERATIONS", 300),
-		TaskDefaultMaxRetries: lp.getenvFleetInt("TASK_DEFAULT_MAX_RETRIES", 1),
-		MaxCostUSD:            lp.getenvFleetFloat("MAX_COST_USD", 50.0),
-		MaxTotalTokens:        lp.getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
+		OpenRouterAPIKey:         stripQuotes(os.Getenv("OPENROUTER_API_KEY")),
+		MaxIterations:            lp.getenvFleetInt("MAX_ITERATIONS", 300),
+		TaskDefaultMaxRetries:    lp.getenvFleetInt("TASK_DEFAULT_MAX_RETRIES", 1),
+		MaxCostUSD:               lp.getenvFleetFloat("MAX_COST_USD", 50.0),
+		MaxTotalTokens:           lp.getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
+		ScheduledSharedWorkspace: lp.getenvFleetBool("SCHEDULED_SHARED_WORKSPACE", false),
 
 		DefaultThinkingBudgetTokens: lp.getenvFleetInt("DEFAULT_THINKING_BUDGET_TOKENS", 0),
 

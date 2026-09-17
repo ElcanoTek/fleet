@@ -65,4 +65,4 @@ internal/store/push_subscriptions_test.go:generic-api-key:50
 
 # knobs.go registry row: the flagged "secret" is the env-knob NAME
 # FLEET_A2A_UNARY_WAIT_SECONDS (generic-api-key entropy false positive).
-internal/config/knobs.go:generic-api-key:267
+internal/config/knobs.go:generic-api-key:270

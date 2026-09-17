@@ -521,13 +521,14 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	}
 
 	// Record the effective per-run workspace path for the file browser (#287): the
-	// per-run git worktree subdir when isolation is enabled, otherwise the shared
-	// workspace root the sandbox bind-mounts. Reported once, before the agent runs;
-	// the reporter (installed by the runner pool) persists it to the task row. A
-	// nil reporter (tests / cutlass one-shot) makes this a no-op.
+	// per-run git worktree subdir when isolation is enabled, otherwise the job's
+	// own directory under the workspace root the sandbox bind-mounts (#1543).
+	// Reported once, before the agent runs; the reporter (installed by the
+	// runner pool) persists it to the task row. A nil reporter (tests / cutlass
+	// one-shot) makes this a no-op.
 	effectiveWorkspace := wtPath
 	if effectiveWorkspace == "" {
-		effectiveWorkspace = r.workspaceRoot()
+		effectiveWorkspace = r.taskWorkspaceDir(task)
 	}
 	if abs, aerr := filepath.Abs(effectiveWorkspace); aerr == nil {
 		effectiveWorkspace = abs
@@ -604,6 +605,35 @@ func (r *Runner) workspaceRoot() string {
 		return abs
 	}
 	return "workspace"
+}
+
+// taskWorkspaceDir returns the working directory a non-worktree scheduled run
+// gets (#1543): <root>/tasks/<lineage_id>/ — one directory per JOB, shared by
+// every recurrence occurrence, re-run and clone of that job and by nothing
+// else, so a daily job still finds its own previous downloads and never
+// another job's leftovers. Before this every such run worked in the shared
+// root: ~80 entries from every job and client on the box, other jobs' scripts
+// that later runs picked up and executed, stale status files the end-of-run
+// audit then treated as evidence about THIS run. The directory sits under the
+// root the sandbox already bind-mounts, so no mount changes; the supporting-doc
+// symlinks are seeded into it exactly as they were into the root, and the
+// per-run MCP dirs (mcp-runs/) stay where they are. FLEET_SCHEDULED_SHARED_
+// WORKSPACE=1 restores the shared root. A directory that cannot be created
+// falls back to the root with a log line rather than failing the run.
+func (r *Runner) taskWorkspaceDir(task *models.Task) string {
+	root := r.workspaceRoot()
+	if task == nil || (r.cfg != nil && r.cfg.ScheduledSharedWorkspace) {
+		return root
+	}
+	dir := tools.TaskWorkspaceDir(root, task.WorkspaceLineage().String())
+	if dir == root {
+		return root
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		log.Printf("scheduled task %s: could not create per-job workspace %s (falling back to the shared root): %v", task.ID, dir, err)
+		return root
+	}
+	return dir
 }
 
 // configureRunWorkspace binds every sandbox and in-process file resolver to

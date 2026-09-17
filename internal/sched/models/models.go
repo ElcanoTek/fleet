@@ -971,6 +971,10 @@ type TaskCreate struct {
 	// RetryPolicy customizes retry backoff + which failure classes retry (#201).
 	// nil = legacy policy (transient-only, 30s→10m exponential). See RetryPolicy.
 	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
+	// LineageID is server-side only (never decoded from a request): the
+	// TaskToCreate clone recipe sets it so a recurrence occurrence, re-run or
+	// clone joins the source job's lineage (#1543). nil = a fresh job.
+	LineageID *uuid.UUID `json:"-"`
 	// AllowNetwork lets THIS scheduled task's bash/run_python execution sandbox
 	// keep outbound egress. The default (false) seals the sandbox with
 	// --network=none, matching the interactive lockdown path; egress is an
@@ -1246,6 +1250,15 @@ type Task struct {
 	// non-recurring tasks and for the first occurrence. Persisted; immutable
 	// lineage stamped at spawn, never exported, not settable by clients.
 	PreviousOccurrenceID *uuid.UUID `json:"previous_occurrence_id,omitempty"`
+	// LineageID is the key every run of one JOB shares — recurrence occurrences,
+	// re-runs and clones all carry the original task's id here — and so the name
+	// of the job's working directory under the workspace root
+	// (<root>/tasks/<lineage_id>/, #1543). A task created fresh is its own
+	// lineage (LineageID == ID). Persisted; carried by TaskToCreate; not
+	// settable by clients; never exported. Read through WorkspaceLineage, which
+	// treats the zero value (a Task built in code without the constructor) as
+	// "own lineage".
+	LineageID uuid.UUID `json:"lineage_id"`
 	// NextRunAtLocal is ScheduledFor rendered in Timezone (RFC3339 with offset),
 	// populated at query time for display so callers need no client-side tz math.
 	// Not persisted; nil when the task has no scheduled_for.
@@ -1425,6 +1438,19 @@ func DefaultMaxRetries() int {
 	return defaultMaxRetries
 }
 
+// WorkspaceLineage is the job lineage this task belongs to: LineageID when
+// set, else the task's own id (a Task assembled without NewTask, or a row read
+// from before migration 069). It names the job's working directory (#1543).
+func (t *Task) WorkspaceLineage() uuid.UUID {
+	if t == nil {
+		return uuid.Nil
+	}
+	if t.LineageID != uuid.Nil {
+		return t.LineageID
+	}
+	return t.ID
+}
+
 func NewTask(tc TaskCreate) *Task {
 	triggerType := tc.TriggerType
 	if triggerType == "" {
@@ -1461,8 +1487,16 @@ func NewTask(tc TaskCreate) *Task {
 		}
 	}
 
+	// Lineage (#1543): a fresh job is its own lineage; a copy joins its source's.
+	id := uuid.New()
+	lineage := id
+	if tc.LineageID != nil && *tc.LineageID != uuid.Nil {
+		lineage = *tc.LineageID
+	}
+
 	return &Task{
-		ID:                         uuid.New(),
+		ID:                         id,
+		LineageID:                  lineage,
 		Name:                       tc.Name,
 		Title:                      tc.Title,
 		Prompt:                     tc.Prompt,
@@ -1598,8 +1632,12 @@ type BatchTaskResult struct {
 // AttemptCount, lease, results, SourceTaskID) are intentionally NOT carried.
 func TaskToCreate(t *Task) TaskCreate {
 	maxRetries := t.MaxRetries
+	lineage := t.WorkspaceLineage()
 	return TaskCreate{
-		Name: t.Name,
+		// Every run of one job shares the job's lineage — and its working
+		// directory (#1543).
+		LineageID: &lineage,
+		Name:      t.Name,
 		// Title IS carried (unlike Name, which every copy path must clear): all
 		// the runs of one job — occurrences, re-runs, clones — share its title.
 		Title:                  t.Title,
