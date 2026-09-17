@@ -58,13 +58,21 @@ trap. It is also what `playwright.config.ts` launches as the live `webServer`.
 | `E2E_SCHED_USERNAME` | `e2e` | seeded orchestrator (sched) admin user. |
 | `FLEET_SERVER_TOKEN` / `ADMIN_API_KEY` / `APP_SESSION_SECRET` / `AUTH_SIGNING_PUBKEY` | throwaway test values | shared secrets; never real. |
 | `E2E_CANARY` | `0` | `1` swaps the fake for a REAL model (see the canary note below). |
+| `CANARY_MODEL` | empty (Fleet default) | Optional OpenRouter slug override in canary mode; sets the chat default as well as title/task models. |
 
 ## Canary (NOT a PR gate)
 
-`e2e/canary/sandbox-smoke.spec.ts` runs the same stack against a **real cheap
+`e2e/canary/sandbox-smoke.spec.ts` runs the same stack against **Fleet's default
 OpenRouter model** instead of the fake (`E2E_CANARY=1`, needs a real
 `OPENROUTER_API_KEY`). It is a drift detector run nightly/manually by the
 `e2e-canary` workflow, which **skips cleanly** when the key secret is absent.
+
+Leave the workflow's `model` input (or local `CANARY_MODEL`) blank to follow
+Fleet's default automatically. Locally, `FLEET_DEFAULT_MODEL` is honored when
+no canary override is supplied. With neither set, Fleet resolves its built-in
+default; the harness carries no model-version fallback. An explicit override
+sets `FLEET_DEFAULT_MODEL`, so it controls the conversation actually tested.
+Failure artifacts contain the Playwright HTML report, not backend logs.
 
 ## Determinism measures
 

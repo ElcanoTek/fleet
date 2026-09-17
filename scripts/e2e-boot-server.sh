@@ -76,13 +76,14 @@ APP_SESSION_SECRET="${APP_SESSION_SECRET:-e2e-session-secret-0123456789abcdef}"
 # shape-valid pubkey works. Not used in any deployment.
 AUTH_SIGNING_PUBKEY="${AUTH_SIGNING_PUBKEY:-P8Lyn/xy8bS2SWcnPkg2kKiGBctyJZdEMMzNEixh0As=}"
 E2E_ENV_FILE="${E2E_ENV_FILE:-$REPO_ROOT/web/.e2e-live.env}"
-# CANARY MODE (E2E_CANARY=1): use the REAL OpenRouter + a real cheap model
+# CANARY MODE (E2E_CANARY=1): use REAL OpenRouter + Fleet's default model
 # instead of the fake LLM. This is the drift canary — it spends a few credits to
 # prove fleet still works against a genuine provider. In canary mode we keep the
 # operator's OPENROUTER_API_KEY and do NOT set OPENROUTER_BASE_URL (so the real
 # upstream is used) and do NOT start the fake. Everything else is identical.
 E2E_CANARY="${E2E_CANARY:-0}"
-CANARY_MODEL="${CANARY_MODEL:-openai/gpt-5.2}"
+# Empty delegates model selection to Fleet; no separately maintained canary slug.
+CANARY_MODEL="${CANARY_MODEL:-}"
 # Fake-LLM mode key: must be non-empty + sk-or-* for fleet's scheduled-mode
 # validation; the FAKE llm ignores it. NEVER a real key — the live suite must
 # not spend credits.
@@ -378,12 +379,14 @@ start_fleet() {
   mkdir -p "$DATA_DIR" "$WORKSPACE_DIR"
   # LLM wiring: fake by default (deterministic, free); REAL OpenRouter in canary.
   local llm_key llm_base default_model
+  local chat_model="${FLEET_DEFAULT_MODEL:-}"
   if [[ "$E2E_CANARY" == "1" ]]; then
     [[ -n "${OPENROUTER_API_KEY:-}" ]] || die "canary mode requires a real OPENROUTER_API_KEY in env"
     llm_key="$OPENROUTER_API_KEY"
     llm_base=""  # empty → fleet uses the hardcoded upstream OpenRouter URL
-    default_model="$CANARY_MODEL"
-    log "fleet: booting chat :$CHAT_PORT + orchestrator :$ORCH_PORT (LLM → REAL OpenRouter, model=$CANARY_MODEL)"
+    default_model="${CANARY_MODEL:-$chat_model}"
+    chat_model="$default_model"
+    log "fleet: booting chat :$CHAT_PORT + orchestrator :$ORCH_PORT (LLM → REAL OpenRouter, model=${chat_model:-Fleet default})"
   else
     llm_key="$FAKE_OPENROUTER_KEY"
     llm_base="http://$FAKE_LLM_ADDR"
@@ -406,6 +409,7 @@ start_fleet() {
   FLEET_SERVER_TOKEN="$FLEET_SERVER_TOKEN" \
   ADMIN_API_KEY="$ADMIN_API_KEY" \
   AUTH_SIGNING_PUBKEY="$AUTH_SIGNING_PUBKEY" \
+  FLEET_DEFAULT_MODEL="$chat_model" \
   FLEET_TITLE_MODEL="$default_model" \
   CUTLASS_TASK_MODEL="$default_model" \
   FLEET_TIMEZONE="UTC" \
