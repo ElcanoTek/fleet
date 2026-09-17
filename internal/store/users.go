@@ -76,7 +76,7 @@ func sessionEpochFor(bcryptDigest, sessionSalt string) string {
 //
 // users.session_salt (migration 060) is folded in so the epoch can be rotated
 // without a password change: a central sign-out delivered over the back-channel
-// must end the account's Fleet password sessions too. It defaults to ”, which
+// must end the account's Fleet password sessions too. It defaults to '', which
 // leaves the historical sha256(password_hash) value untouched.
 var sessionEpochExpr = fmt.Sprintf(
 	`encode(substring(sha256(convert_to(password_hash || session_salt, 'UTF8')) FROM 1 FOR %d), 'hex')`,

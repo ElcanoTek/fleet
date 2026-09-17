@@ -126,7 +126,7 @@ func TestRevokeExternalSessionsWithoutFleetUser(t *testing.T) {
 	}
 }
 
-// The default ” salt keeps the historical derivation byte-for-byte, so the
+// The default '' salt keeps the historical derivation byte-for-byte, so the
 // migration that added users.session_salt signs nobody out.
 func TestSessionEpochDefaultSaltIsBackwardCompatible(t *testing.T) {
 	const hash = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
