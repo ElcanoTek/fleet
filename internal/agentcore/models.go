@@ -206,6 +206,26 @@ func budgetWindDownFraction(p EnvPrefix) float64 {
 	)
 }
 
+// defaultContextResendBudgetTokens is the cost-aware compaction trigger for
+// SCHEDULED runs (#1534): the prompt a run resends on every provider call is
+// compacted once it exceeds this many tokens, independent of the model's
+// context window. A 1M-window model never reaches the window-pressure
+// threshold in a 100-turn run, yet every one of those turns pays for the whole
+// transcript again — the Reklaim health scan resent ~115K tokens per call for
+// ~100 calls at an 11% cache-hit rate. 0 disables the trigger.
+const defaultContextResendBudgetTokens = 80_000
+
+// contextResendBudgetTokens resolves FLEET_CONTEXT_RESEND_BUDGET_TOKENS (with
+// the CHAT_/CUTLASS_ aliases): 0 disables, a negative or unparseable value
+// falls back to the default.
+func contextResendBudgetTokens(p EnvPrefix) int {
+	v := p.lookupFloatDefault("CONTEXT_RESEND_BUDGET_TOKENS", float64(defaultContextResendBudgetTokens))
+	if v < 0 {
+		return defaultContextResendBudgetTokens
+	}
+	return int(v)
+}
+
 // clampFraction returns v when it lies in (0,1]; otherwise def. A misconfigured
 // threshold must not silently compact every round (≤0) or never fire (>1).
 func clampFraction(v, def float64) float64 {

@@ -350,6 +350,10 @@ var envKnobs = []envKnob{
 		scope: scopeExternal, readBy: "internal/agentcore (model-output boundary)"},
 	{key: "FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD", fleet: true, kind: kindFloat,
 		scope: scopeExternal, readBy: "internal/agentcore (context pressure)"},
+	// Cost-aware compaction for scheduled runs (#1534): the per-call resent
+	// prompt budget in tokens; 0 disables. Read lazily per check in agentcore.
+	{key: "FLEET_CONTEXT_RESEND_BUDGET_TOKENS", fleet: true, kind: kindInt, min: bound(0),
+		scope: scopeExternal, readBy: "internal/agentcore (cost-aware context compaction)"},
 	{key: "FLEET_CONTEXT_COMPACTION_THRESHOLD", fleet: true, kind: kindFloat,
 		scope: scopeExternal, readBy: "internal/agentcore (context compaction)"},
 	// Clamped by the consumer to (0,1] like the two context thresholds above;

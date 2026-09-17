@@ -62,6 +62,11 @@ const (
 	evtFieldPct           = "pct"
 	evtFieldRemovedTurns  = "removed_turns"
 	evtFieldSummaryTokens = "summary_tokens"
+	// evtFieldTrigger names why a compaction fired: "window" (context-window
+	// pressure) or "resend_budget" (the cost-aware per-call prompt budget,
+	// #1534); evtFieldResendBudget carries that budget in tokens.
+	evtFieldTrigger      = "trigger"
+	evtFieldResendBudget = "resend_budget_tokens"
 )
 
 // Context-window pressure SSE event names (#209). Emitted from the enforcement

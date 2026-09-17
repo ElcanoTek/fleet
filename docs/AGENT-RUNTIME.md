@@ -330,6 +330,7 @@ after a `context_length_exceeded` error:
 |---|---|---|
 | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | `0.75` | Emit a `fleet.context_pressure` SSE event (the chat UI shows a non-blocking "conversation is N% full" banner). |
 | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | `0.90` | Proactively summarize the **oldest half** of the history (pinned head + recent half kept verbatim) and emit `fleet.context_compacted`. |
+| `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | `80000` | **Scheduled runs only** (#1534). Compact the same way once the prompt resent on every call exceeds this many tokens, whatever the model's window; `0` disables. |
 
 Both honor the usual `CHAT_`/`CUTLASS_` prefix aliases, and a value outside
 `(0,1]` falls back to its default. The size signal is the **per-call** input
@@ -347,6 +348,23 @@ operator sets `FLEET_SCHEDULED_AUTO_COMPACT=1`. The summary uses the driver's
 placeholder — the same hook the reactive `context_length_exceeded` recovery path
 already uses, so a proactive compaction does not count toward the consecutive-
 compaction cap that guards against compaction loops.
+
+**Cost-aware trigger for scheduled runs (#1534).** Window pressure is a safety
+rule, not a cost rule: a 1M-window model never reaches 90% in a 100-turn run,
+yet every one of those turns resends the whole transcript and pays for it (the
+Reklaim health scan resent ~115K tokens per call for ~100 calls at an 11%
+cache-hit rate — $8 a run, mostly re-reading its own history). In
+`ModeScheduled` the run loop therefore also compacts — the same oldest-half
+summary, the same governed summarizer — once the resent prompt exceeds
+`FLEET_CONTEXT_RESEND_BUDGET_TOKENS` (default 80K; `0` disables). This trigger
+is a cost control and is **not** behind `FLEET_SCHEDULED_AUTO_COMPACT`, which
+guards the window-pressure path; interactive chats are untouched (a chat's
+history is the user's to keep). The `fleet.context_compacted` event and the
+`[context_compacted]` session breadcrumb carry `trigger=resend_budget` with the
+measured size and the budget. The other cost lever is per result: the
+`max_tool_output_bytes` admin setting bounds how much of any single tool result
+enters the context (default 64 KiB); a job that keeps rendering 40 KB documents
+into `return_vars` is better served by a 16 KiB ceiling and file references.
 
 **The summary call is governed (#1118).** The summarizer fires exactly when a
 run is already large, so its own model call meters into the run's usage/cost

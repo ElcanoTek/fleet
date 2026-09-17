@@ -498,15 +498,48 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	if activeModel == nil || e.logSession == nil {
 		return out
 	}
-	window := contextWindowForActiveModel(activeModel)
-	if window <= 0 {
-		return out
-	}
 	used := e.logSession.LastStepPromptTokens
 	if used <= 0 {
 		used = estimateMessagesTokens(messages)
 	}
 	if used <= 0 {
+		return out
+	}
+
+	// Cost-aware trigger (#1534), SCHEDULED runs only (the driver-supplied
+	// requireCompactionOptIn is what marks a scheduled engine): the prompt a
+	// run resends on every call is compacted once it exceeds the resend budget,
+	// whatever the model's window. It is a cost control, not a safety valve, so
+	// it is NOT behind the SCHEDULED_AUTO_COMPACT opt-in — that opt-in guards
+	// the window-pressure path, which a large-window model never reaches while
+	// every call still pays for the whole transcript. Interactive runs keep the
+	// window-pressure rule only: a chat's history is the user's to keep.
+	if e.requireCompactionOptIn {
+		if budget := contextResendBudgetTokens(e.envPrefix); budget > 0 && used >= budget {
+			pressure := map[string]any{evtFieldUsedTokens: used, evtFieldResendBudget: budget, evtFieldTrigger: "resend_budget"}
+			if res := e.proactiveCompact(ctx, messages); res.compacted {
+				out.messages = res.messages
+				out.warned = false
+				e.logSession.AddMessage(roleUser, fmt.Sprintf(
+					"[context_compacted] trigger=resend_budget used=%d budget=%d removed_turns=%d — the resent prompt exceeded %s_CONTEXT_RESEND_BUDGET_TOKENS; the oldest half of the history was summarized to cut per-call cost",
+					used, budget, res.removedTurns, e.envPrefix.normalize()), nil, nil)
+				sink.emit(evtContextCompacted, map[string]any{
+					evtFieldRemovedTurns:  res.removedTurns,
+					evtFieldSummaryTokens: res.summaryTokens,
+					evtFieldTrigger:       "resend_budget",
+					evtFieldUsedTokens:    used,
+					evtFieldResendBudget:  budget,
+				})
+				return out
+			} else if !out.warned {
+				sink.emit(evtContextPressure, pressure)
+				out.warned = true
+			}
+		}
+	}
+
+	window := contextWindowForActiveModel(activeModel)
+	if window <= 0 {
 		return out
 	}
 
@@ -531,6 +564,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 			sink.emit(evtContextCompacted, map[string]any{
 				evtFieldRemovedTurns:  res.removedTurns,
 				evtFieldSummaryTokens: res.summaryTokens,
+				evtFieldTrigger:       "window",
 			})
 		} else if !out.warned {
 			// Nothing compactible (e.g. one enormous message: head + a single

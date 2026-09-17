@@ -327,6 +327,11 @@ func finishableScheduledPolicy(session *LogSession) *ScheduledPolicy {
 // warns (event + a session-log breadcrumb) and leaves the history intact unless
 // the operator opts in.
 func TestRun_ContextPressure_ScheduledWarnsOnlyWithoutFlag(t *testing.T) {
+	// This pins the WINDOW-pressure contract. The cost-aware resend-budget
+	// trigger (#1534) is default-on for scheduled runs and would compact this
+	// ~96K-token history on its own; disable it so the assertion stays about
+	// the opt-in. Its own behaviour is pinned in resend_budget_compaction_test.go.
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
 	model := newStopModel("ctx209-sched-warn")
 	obs := &captureObserver{}
 	session := NewLogSession()
