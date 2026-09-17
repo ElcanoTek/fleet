@@ -451,11 +451,25 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 	}
 
 	if missing := o.unexecutedCommitments(); len(missing) > 0 {
-		log.Printf("Enforcement: %d committed critical action(s) not yet executed: %v. Rejecting finish.", len(missing), missing)
+		outstanding := o.outstandingCommitmentSummary()
+		log.Printf("Enforcement: %d committed critical action(s) not yet executed: %v. Rejecting finish.", len(missing), outstanding)
+		if o.typedAuditActive && len(outstanding) > 0 {
+			// A typed declaration carries the full tool name and its record
+			// binding; the nudge used to name the bare suffix and the
+			// deprecated legacy field, so neither the model nor a reader of
+			// the log could see WHICH commitment was owed — "[send_email]"
+			// for a commitment bound to record "n/a" hid the phantom that
+			// cost Reklaim run 6bd0c212 its finish (#1536).
+			return false, []string{fmt.Sprintf(
+				"You declared these actions in your audit's critical_actions but have not successfully executed them: %s. "+
+					"Execute each outstanding action now — the tool and its record binding must match the declaration — "+
+					"or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
+				strings.Join(outstanding, "; "))}
+		}
 		return false, []string{fmt.Sprintf(
-			"You declared %v in your audit's critical_actions_being_unblocked but have not successfully executed them. "+
+			"You declared %v in your audit's %s but have not successfully executed them. "+
 				"Execute each declared action now, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
-			missing)}
+			missing, criticalActionsBeingUnblockedField)}
 	}
 
 	return true, nil
