@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setModelTiers, _resetModelTiersForTests } from "@/app/lib/modelAliases";
 import {
   compactModelLabel,
   filterModels,
@@ -94,6 +95,7 @@ describe("loadModels (fetch + fallback)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     _resetModelCacheForTests();
+    _resetModelTiersForTests();
   });
 
   it("offers only the bundle's native models and refreshes after a provider edit", async () => {
@@ -113,6 +115,7 @@ describe("loadModels (fetch + fallback)", () => {
   });
 
   it("keeps a shadowed OpenRouter catalog browsable through explicit routes", async () => {
+    setModelTiers({ default_model: "local/llama3.2" });
     vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
       ok: true,
       json: async () => String(url).includes("llm-provider-models") ? {
@@ -126,6 +129,7 @@ describe("loadModels (fetch + fallback)", () => {
     })));
     const models = await loadModels();
     expect(models.some((m) => m.id === "google/gemini-3.8-flash")).toBe(false);
+    expect(models.some((m) => m.id.includes("local/llama3.2"))).toBe(false);
     expect(models.find((m) => m.id === "router/google/gemini-3.8-flash")).toMatchObject({
       workspace: true, recommended: false,
     });

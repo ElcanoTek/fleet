@@ -205,7 +205,8 @@ export async function loadModels(): Promise<PickerModel[]> {
       fetched.length > 0
         ? dedupeAndOrder(enrichFromCatalog(seedModels(), fetched), fetched)
         : seedModels();
-    const routed = base.flatMap((model) => catalogModelRoutes(model.id, catalog.routing).map((route) => ({
+    const publicCatalog = new Set(fetched.map((model) => model.id));
+    const routed = base.flatMap((model) => catalogModelRoutes(model.id, catalog.routing, publicCatalog.has(model.id)).map((route) => ({
       ...model,
       id: route.slug,
       name: route.provider ? `${route.provider}: ${model.name}` : model.name,

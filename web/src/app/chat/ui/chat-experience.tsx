@@ -1415,8 +1415,9 @@ export function ChatExperience({
       ...pricesFor(slug),
     }));
     const defaults = tierModels.filter((model) => modelIsAvailable(model.slug, modelRouting, true));
+    const publicCatalog = new Set([...catalogModels, ...rankedModels].map((model) => model.slug));
     const catalogChoices = (models: RankedModel[]): RankedModel[] => models.flatMap((model) =>
-      catalogModelRoutes(model.slug, modelRouting).map((route) => ({
+      catalogModelRoutes(model.slug, modelRouting, publicCatalog.has(model.slug)).map((route) => ({
         ...model,
         slug: route.slug,
         name: route.provider ? `${route.provider}: ${model.name}` : model.name,

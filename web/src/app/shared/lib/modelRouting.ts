@@ -32,8 +32,11 @@ export function unavailableModelMessage(slug: string): string {
 // A native catch-all can shadow a later OpenRouter catch-all. Keep those models
 // browsable by explicitly pinning the route rather than sending an OpenRouter
 // slug to the native backend. Listed/non-shadowed routes retain their identity.
-export function catalogModelRoutes(slug: string, providers: ModelRouting): Array<{ slug: string; provider?: string }> {
+export function catalogModelRoutes(slug: string, providers: ModelRouting, publicCatalog: boolean): Array<{ slug: string; provider?: string }> {
   if (modelIsAvailable(slug, providers, true)) return [{ slug }];
+  // A tier seed can be a private or stale native route. Never reinterpret it
+  // as an OpenRouter model without evidence from the public catalog.
+  if (!publicCatalog) return [];
   return (providers ?? [])
     .filter((p) => p.type === "openrouter" && p.catch_all)
     .map((p) => ({ slug: `${p.name}/${slug}`, provider: p.name }));

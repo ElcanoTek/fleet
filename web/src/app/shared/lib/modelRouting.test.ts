@@ -32,12 +32,14 @@ describe("provider-aware model choices", () => {
   it("offers explicit routes through each shadowed OpenRouter catch-all", () => {
     const native = { ...direct, models: [], catch_all: true };
     const slug = "google/gemini-3.8-flash";
-    expect(catalogModelRoutes(slug, [native])).toEqual([]);
-    expect(catalogModelRoutes(slug, [native, router, { ...router, name: "backup" }])).toEqual([
+    expect(catalogModelRoutes(slug, [native], true)).toEqual([]);
+    expect(catalogModelRoutes(slug, [native, router, { ...router, name: "backup" }], true)).toEqual([
       { slug: `router/${slug}`, provider: "router" },
       { slug: `backup/${slug}`, provider: "backup" },
     ]);
-    expect(catalogModelRoutes(slug, [router, native])).toEqual([{ slug }]);
+    expect(catalogModelRoutes(slug, [router, native], true)).toEqual([{ slug }]);
+    expect(catalogModelRoutes("local/llama3.2", [native, router], false)).toEqual([]);
+    expect(catalogModelRoutes("direct/private-model", [native, router], false)).toEqual([{ slug: "direct/private-model" }]);
   });
 
   it("resolves metadata only through configured OpenRouter prefixes", () => {
