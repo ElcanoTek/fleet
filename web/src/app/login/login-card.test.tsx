@@ -313,6 +313,21 @@ describe("LoginCard — matches Auth's sign-in card", () => {
     expect(
       screen.getByText("Accounts are created by an administrator."),
     ).toBeInTheDocument();
+    // Load-bearing attributes the restyle must never lose.
+    const form = screen
+      .getByRole("button", { name: "Sign in" })
+      .closest("form")!;
+    expect(form.getAttribute("action")).toBe("/api/auth/login");
+    expect(form.getAttribute("method")).toBe("post");
+    const email = screen.getByLabelText("Email");
+    expect(email).toHaveAttribute("name", "email");
+    expect(email).toHaveAttribute("autocomplete", "email");
+    expect(email).toBeRequired();
+    const password = screen.getByLabelText("Password");
+    expect(password).toHaveAttribute("name", "password");
+    expect(password).toHaveAttribute("autocomplete", "current-password");
+    expect(password).toBeRequired();
+    expect(img?.getAttribute("alt")).toBe("");
   });
 
   it("shows the sign-in error in an alert like Auth's", async () => {
