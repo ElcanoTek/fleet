@@ -54,10 +54,12 @@ its own signed-out page; with no central session it lands there with nothing
 to end. Without that step the very next visit would sign the user back in
 silently. Only a deployment without central Auth lands on `/login?manual=1`.
 
-The reverse direction is narrower on purpose: Auth's back-channel logout
-(from Auth's own Sign out, Explorer or Lens) ends Fleet sessions that came
-from Auth, but a Fleet session from the break-glass password stays valid.
-That isolation is what makes the password a break-glass path.
+The reverse direction ends everything too: Auth's back-channel logout (from
+Auth's own Sign out, Explorer or Lens) rotates both the external epoch and the
+account's password session salt, so Fleet sessions that came from Auth AND a
+Fleet session from the break-glass password end within seconds. The
+break-glass password itself keeps working (it is a way to sign in, not a
+session that survives a sign-out), so it remains available when Auth is down.
 
 Register the exact callback and signed logout endpoint on Auth:
 

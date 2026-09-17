@@ -57,8 +57,8 @@ const sessionEpochBytes = 8
 //
 // The empty hash is a legitimate input — it is what Store.SessionEpoch reports
 // for an email with no row.
-func sessionEpochFor(passwordHash string) string {
-	sum := sha256.Sum256([]byte(passwordHash))
+func sessionEpochFor(passwordHash, sessionSalt string) string {
+	sum := sha256.Sum256([]byte(passwordHash + sessionSalt))
 	return hex.EncodeToString(sum[:sessionEpochBytes])
 }
 
@@ -69,8 +69,13 @@ func sessionEpochFor(passwordHash string) string {
 // a credential through the request path. The two derivations are the same digest
 // over the same bytes and MUST stay byte-identical — TestSessionEpochSQLMatchesGo
 // pins that over the inputs a users row can hold.
+//
+// users.session_salt (migration 060) is folded in so the epoch can be rotated
+// without a password change: a central sign-out delivered over the back-channel
+// must end the account's Fleet password sessions too. It defaults to ”, which
+// leaves the historical sha256(password_hash) value untouched.
 var sessionEpochExpr = fmt.Sprintf(
-	`encode(substring(sha256(convert_to(password_hash, 'UTF8')) FROM 1 FOR %d), 'hex')`,
+	`encode(substring(sha256(convert_to(password_hash || session_salt, 'UTF8')) FROM 1 FOR %d), 'hex')`,
 	sessionEpochBytes)
 
 // userColumns is the read projection behind every *User: the row's own columns
@@ -146,7 +151,7 @@ func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*U
 	return &User{
 		Email:        email,
 		Role:         RoleMember,
-		SessionEpoch: sessionEpochFor(string(hash)),
+		SessionEpoch: sessionEpochFor(string(hash), ""),
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
@@ -189,7 +194,7 @@ func (s *Store) SessionEpoch(ctx context.Context, email string) (string, error) 
 	err := s.db.QueryRowContext(ctx,
 		`SELECT `+sessionEpochExpr+` FROM users WHERE email = $1`, email).Scan(&epoch)
 	if errors.Is(err, sql.ErrNoRows) {
-		return sessionEpochFor(""), nil
+		return sessionEpochFor("", ""), nil
 	}
 	if err != nil {
 		return "", err
@@ -206,9 +211,11 @@ func newExternalSessionEpoch() (string, error) {
 }
 
 // ExternalSessionEpoch returns the independent generation carried by a Fleet
-// session minted from a central OIDC identity. It deliberately does not use
-// users.password_hash: central logout must not evict Fleet-native password
-// sessions, and a Fleet password change must not alter the external identity.
+// session minted from a central OIDC identity. It is separate from the
+// password epoch so that a Fleet password change does not alter the external
+// identity; the other direction is deliberate too: a central logout rotates
+// this AND the account's password session salt (RevokeExternalSessions), so
+// "sign out anywhere" ends every Fleet session, break-glass included.
 func (s *Store) ExternalSessionEpoch(ctx context.Context, issuer, subject, email string) (string, error) {
 	issuer, subject, email = strings.TrimSpace(issuer), strings.TrimSpace(subject), normalizeEmail(email)
 	if issuer == "" || subject == "" || email == "" || len(issuer) > 2048 || len(subject) > 255 {
@@ -251,9 +258,16 @@ func (s *Store) LookupExternalSessionEpoch(ctx context.Context, issuer, subject 
 // tokens expire minutes after signing, so a week is generous.
 const externalLogoutEventRetention = 7 * 24 * time.Hour
 
-// RevokeExternalSessions rotates one central identity's generation. Upserting
-// a tombstone also makes a logout delivered before this Fleet has seen its
-// first login safe: that later login receives the already-rotated generation.
+// RevokeExternalSessions handles one central (Auth) logout for an identity:
+// it rotates the external generation AND the password session salt of the
+// account with that email, in one transaction, so both the sessions that came
+// from Auth and any break-glass password session end together — Auth's
+// signed-out page promises that every app is being signed out. Upserting a
+// tombstone also makes a logout delivered before this Fleet has seen its first
+// login safe: that later login receives the already-rotated generation. A
+// duplicate event (same jti) changes nothing, so a retried delivery cannot
+// evict a session established after the first one was honoured. An email with
+// no Fleet user row simply has no password sessions to end.
 func (s *Store) RevokeExternalSessions(ctx context.Context, eventID, issuer, subject, email string) (string, bool, error) {
 	eventID = strings.TrimSpace(eventID)
 	issuer, subject, email = strings.TrimSpace(issuer), strings.TrimSpace(subject), normalizeEmail(email)
@@ -303,6 +317,14 @@ func (s *Store) RevokeExternalSessions(ctx context.Context, eventID, issuer, sub
 			email = EXCLUDED.email, epoch = EXCLUDED.epoch, updated_at = EXCLUDED.updated_at`,
 		issuer, subject, email, epoch, now)
 	if err != nil {
+		return "", false, err
+	}
+	salt, err := newExternalSessionEpoch()
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE users SET session_salt = $2, updated_at = $3 WHERE email = $1`, email, salt, now); err != nil {
 		return "", false, err
 	}
 	return epoch, true, tx.Commit()

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 )
 
@@ -76,9 +78,64 @@ func TestExternalSessionEpochIsIndependentAndRevocable(t *testing.T) {
 	if err != nil || applied || duplicate != rotated {
 		t.Fatalf("duplicate revocation epoch=%q applied=%v err=%v", duplicate, applied, err)
 	}
+	// A central sign-out ends the account's Fleet password sessions too: the
+	// password epoch moves (via users.session_salt) without a password change.
 	passwordAfter, err := s.SessionEpoch(ctx, "u@x.com")
-	if err != nil || passwordAfter != passwordEpoch {
-		t.Fatalf("central revocation changed Fleet password epoch: %q, %v", passwordAfter, err)
+	if err != nil || passwordAfter == passwordEpoch {
+		t.Fatalf("central revocation left the Fleet password epoch in place: %q, %v", passwordAfter, err)
+	}
+	// The password itself still works, and the new epoch is what a fresh
+	// password login would be minted with.
+	if err := s.VerifyUser(ctx, "u@x.com", "password123"); err != nil {
+		t.Fatalf("password rejected after central revocation: %v", err)
+	}
+	// A replayed delivery (same jti) does not evict sessions minted since.
+	if _, _, err := s.RevokeExternalSessions(ctx, "event-123", "https://auth.example.com", "account-123", "u@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.SessionEpoch(ctx, "u@x.com"); again != passwordAfter {
+		t.Fatalf("duplicate event rotated the password epoch again: %q → %q", passwordAfter, again)
+	}
+	// A different event does.
+	if _, applied, err := s.RevokeExternalSessions(ctx, "event-456", "https://auth.example.com", "account-123", "u@x.com"); err != nil || !applied {
+		t.Fatalf("second event: applied=%v err=%v", applied, err)
+	}
+	if third, _ := s.SessionEpoch(ctx, "u@x.com"); third == passwordAfter {
+		t.Fatal("a new logout event did not rotate the password epoch")
+	}
+	// A password change afterwards still moves it.
+	if err := s.UpdatePassword(ctx, "u@x.com", "rotated99"); err != nil {
+		t.Fatal(err)
+	}
+	if fourth, _ := s.SessionEpoch(ctx, "u@x.com"); fourth == passwordAfter {
+		t.Fatal("password change after a central logout did not move the epoch")
+	}
+}
+
+// A central logout for an email with no Fleet user row (Auth admits people
+// Fleet has not provisioned) must still rotate the external epoch and not fail.
+func TestRevokeExternalSessionsWithoutFleetUser(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	epoch, applied, err := s.RevokeExternalSessions(ctx, "event-789", "https://auth.example.com", "account-789", "ghost@x.com")
+	if err != nil || !applied || epoch == "" {
+		t.Fatalf("epoch=%q applied=%v err=%v", epoch, applied, err)
+	}
+	if looked, _ := s.LookupExternalSessionEpoch(ctx, "https://auth.example.com", "account-789"); looked != epoch {
+		t.Fatalf("tombstone epoch = %q, want %q", looked, epoch)
+	}
+}
+
+// The default ” salt keeps the historical derivation byte-for-byte, so the
+// migration that added users.session_salt signs nobody out.
+func TestSessionEpochDefaultSaltIsBackwardCompatible(t *testing.T) {
+	const hash = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	sum := sha256.Sum256([]byte(hash))
+	if got, want := sessionEpochFor(hash, ""), hex.EncodeToString(sum[:sessionEpochBytes]); got != want {
+		t.Fatalf("epoch with empty salt = %q, want historical %q", got, want)
+	}
+	if sessionEpochFor(hash, "salt") == sessionEpochFor(hash, "") {
+		t.Fatal("salt did not change the epoch")
 	}
 }
 
@@ -210,10 +267,10 @@ func TestSessionEpochSQLMatchesGo(t *testing.T) {
 	} {
 		var got string
 		if err := s.db.QueryRowContext(ctx,
-			`SELECT `+sessionEpochExpr+` FROM (SELECT $1::text AS password_hash) AS h`, hash).Scan(&got); err != nil {
+			`SELECT `+sessionEpochExpr+` FROM (SELECT $1::text AS password_hash, ''::text AS session_salt) AS h`, hash).Scan(&got); err != nil {
 			t.Fatalf("SQL derivation for %q: %v", hash, err)
 		}
-		if want := sessionEpochFor(hash); got != want {
+		if want := sessionEpochFor(hash, ""); got != want {
 			t.Errorf("epoch for %q: SQL %q, Go %q", hash, got, want)
 		}
 	}
@@ -229,7 +286,7 @@ func TestSessionEpochSQLMatchesGo(t *testing.T) {
 		`SELECT password_hash FROM users WHERE email = $1`, "u@x.com").Scan(&stored); err != nil {
 		t.Fatalf("read password_hash: %v", err)
 	}
-	if want := sessionEpochFor(stored); created.SessionEpoch != want {
+	if want := sessionEpochFor(stored, ""); created.SessionEpoch != want {
 		t.Errorf("CreateUser epoch = %q, want %q", created.SessionEpoch, want)
 	}
 	got, err := s.GetUser(ctx, "u@x.com")
