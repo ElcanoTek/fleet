@@ -10,7 +10,7 @@ There are three lanes, each a separate Playwright project selected by env in
 | --- | --- | --- | --- | --- | --- |
 | **mocked** (default) | `e2e/mocked/` | the real Next app | every `/api/*` call is route-intercepted by Playwright | — | ✅ PR gate (`playwright` job, every PR into `main`) |
 | **live** | `e2e/live/` | the *fully real* stack — Postgres, both Go listeners, SSE, scheduler/worker pool, rootless-Podman sandbox | **real** | faked by `cmd/fake-llm` over `OPENROUTER_BASE_URL` | ✅ PR gate (`e2e-live` job, every PR into `main`) |
-| **canary** | `e2e/canary/` | the same real stack | **real** | **real** cheap OpenRouter model | ❌ nightly/manual, secret-gated, never a PR gate |
+| **canary** | `e2e/canary/` | the same real stack | **real** | **real** Fleet default OpenRouter model | ❌ nightly/manual, secret-gated, never a PR gate |
 
 ```bash
 cd web

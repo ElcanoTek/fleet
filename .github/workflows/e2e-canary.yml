@@ -1,6 +1,6 @@
 name: E2E canary (real model)
 
-# A NON-BLOCKING drift canary: runs the live stack against a REAL cheap
+# A NON-BLOCKING drift canary: runs the live stack against Fleet's default
 # OpenRouter model (not the fake LLM) to catch upstream/provider drift the
 # deterministic e2e-live job can't see. It is NEVER a PR gate — it runs on a
 # nightly schedule and on manual dispatch only.
@@ -18,9 +18,8 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'OpenRouter model slug to canary against'
+        description: 'OpenRouter model override (blank uses Fleet default)'
         required: false
-        default: 'openai/gpt-5.2'
 
 permissions:
   contents: read
@@ -143,9 +142,9 @@ jobs:
           E2E_CANARY: '1'
           E2E_PROD: '1'
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CANARY_MODEL: ${{ github.event.inputs.model || 'openai/gpt-5.2' }}
+          CANARY_MODEL: ${{ inputs.model }}
           FLEET_SANDBOX_IMAGE: ${{ steps.sandbox.outputs.image }}
-        run: npx playwright test --project=canary --reporter=list
+        run: npx playwright test --project=canary --reporter=list,html
 
       - name: Upload canary report on failure
         # Playwright report ONLY — deliberately not `.e2e-run/logs/`.

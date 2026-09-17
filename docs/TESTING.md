@@ -51,7 +51,7 @@ fix this doc (and the `make` targets) to match.
 | Web lint/test/build | `web` | oxlint + `tsc --noEmit` + vitest + `next build` | `make ci-web` |
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
 | Playwright (live) | `e2e-live` | Real stack + rootless-Podman sandbox, fake LLM | `npm run test:e2e:live` |
-| Playwright (canary) | `canary` (nightly) | Real cheap OpenRouter model, drift detection | `npm run test:e2e:canary` |
+| Playwright (canary) | `canary` (nightly) | Fleet default OpenRouter model, drift detection | `npm run test:e2e:canary` |
 
 The fast PR-gate subset (everything except the browser/sandbox e2e lanes) is one
 command: `make ci-local`.
@@ -668,11 +668,21 @@ the sandbox image it builds from `config/default/sandbox/Containerfile`).
 ## Web e2e (Playwright, canary, real model) — nightly, `e2e-canary.yml`
 
 A **non-blocking** drift canary, never a PR gate. It boots the same live stack
-but swaps the fake LLM for a real, cheap OpenRouter model to catch
+but swaps the fake LLM for Fleet's default OpenRouter model to catch
 upstream/provider drift the deterministic `e2e-live` lane cannot see. It runs on
 a nightly schedule and on manual dispatch, and is secret-gated: without the
 `OPENROUTER_API_KEY` repo secret it skips cleanly (green), never failing for a
 missing secret.
+
+The workflow's optional `model` input (locally, `CANARY_MODEL`) overrides the
+chat default via `FLEET_DEFAULT_MODEL`, as well as the title/task models.
+Leaving it blank delegates to Fleet's own default resolution, so model updates
+need no canary edit. Local `FLEET_DEFAULT_MODEL` overrides are honored too.
+The failure upload includes the Playwright HTML report; backend logs remain
+excluded. This does not prevent genuine upstream provider outages: the
+2026-09-16 failure reported repeated provider failures for the actual chat
+model, Gemini 3.8 Flash, despite the old harness logging GPT-5.2 (which only
+configured title/task models). Subsequent runs passed before this correction.
 
 To run it locally you supply a real key (this **does** spend on OpenRouter):
 
