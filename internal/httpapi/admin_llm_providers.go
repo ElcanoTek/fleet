@@ -227,6 +227,35 @@ func (s *Server) handleLLMProviderModels(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Production reads the active resolver, not the database's desired state.
+	// The fallback below preserves the store-only seam used by mock engines.
+	if engine, ok := s.agent.(interface {
+		ModelProviders() []agentcore.ModelProviderInfo
+		CheckModelRoute(string) (agentcore.ProviderType, error)
+	}); ok {
+		if r.URL.Query().Has("slug") {
+			slug := strings.TrimSpace(r.URL.Query().Get("slug"))
+			kind, err := engine.CheckModelRoute(slug)
+			if err != nil {
+				writeJSON(w, map[string]any{"allowed": false, "slug": slug, "reason": "provider_unavailable", "message": err.Error()})
+				return
+			}
+			writeJSON(w, map[string]any{"allowed": true, "slug": slug, "provider_type": kind})
+			return
+		}
+		providers := engine.ModelProviders()
+		models := []map[string]string{}
+		for _, p := range providers {
+			for _, model := range p.Models {
+				models = append(models, map[string]string{
+					"id": p.Name + "/" + model, "name": p.Name + ": " + model,
+					"provider": p.Name, "type": string(p.Type),
+				})
+			}
+		}
+		writeJSON(w, map[string]any{"models": models, "providers": providers, "routing_known": true})
+		return
+	}
 	providers, err := s.store.ListLLMProviders(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

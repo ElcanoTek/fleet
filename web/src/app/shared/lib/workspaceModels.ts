@@ -1,6 +1,6 @@
 // Workspace-provider models for the model pickers (chat + task form).
 //
-// Admin-configured providers (Settings → Admin → Model providers) contribute
+// Active bundle/env and admin-configured providers contribute
 // pickable models two ways:
 //   1. Providers with an explicit models list — the Go /llm-provider-models
 //      read returns one "<provider>/<model>" slug per listed model.
@@ -13,6 +13,8 @@
 // Both fetches are same-origin session calls; any failure degrades to an
 // empty list so the pickers are never blocked on this module.
 
+import { type ModelRouting } from "./modelRouting";
+
 export type WorkspaceModel = {
   // The slug to send as the turn/task model: "<provider>/<model>".
   id: string;
@@ -21,8 +23,9 @@ export type WorkspaceModel = {
 };
 
 type ProviderModelsResponse = {
+  routing_known?: boolean;
   models?: Array<{ id?: unknown; name?: unknown }>;
-  providers?: Array<{ name?: unknown; type?: unknown; catch_all?: unknown }>;
+  providers?: Array<{ name?: unknown; type?: unknown; catch_all?: unknown; models?: unknown }>;
 };
 
 type CatwalkResponse = {
@@ -39,12 +42,15 @@ type CatwalkResponse = {
 // no public catalog can know that.
 const CATWALK_EXPANDABLE_TYPES = new Set(["anthropic", "openai"]);
 
-let cachedModels: WorkspaceModel[] | null = null;
-let inflight: Promise<WorkspaceModel[]> | null = null;
+export type WorkspaceModelCatalog = { models: WorkspaceModel[]; routing: ModelRouting };
+
+let cachedCatalog: WorkspaceModelCatalog | null = null;
+let cachedAt = 0;
+let inflight: Promise<WorkspaceModelCatalog> | null = null;
 
 async function fetchJSON<T>(url: string): Promise<T | null> {
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
     if (!response.ok) return null;
     return (await response.json()) as T;
   } catch {
@@ -52,9 +58,17 @@ async function fetchJSON<T>(url: string): Promise<T | null> {
   }
 }
 
-async function fetchWorkspaceModelsOnce(): Promise<WorkspaceModel[]> {
+async function fetchWorkspaceModelsOnce(): Promise<WorkspaceModelCatalog> {
   const payload = await fetchJSON<ProviderModelsResponse>("/api/llm-provider-models");
-  if (!payload) return [];
+  if (!payload) return { models: [], routing: null };
+
+  const routing: ModelRouting = payload.routing_known === true
+    ? (Array.isArray(payload.providers) ? payload.providers : []).map((p) => ({
+        name: String(p.name ?? ""), type: String(p.type ?? ""),
+        catch_all: p.catch_all === true,
+        models: Array.isArray(p.models) ? p.models.filter((m): m is string => typeof m === "string") : [],
+      }))
+    : null;
 
   const out: WorkspaceModel[] = [];
   const seen = new Set<string>();
@@ -100,18 +114,21 @@ async function fetchWorkspaceModelsOnce(): Promise<WorkspaceModel[]> {
       }
     }
   }
-  return out;
+  return { models: out, routing };
 }
 
-// Returns the workspace-provider model list, fetched once per page load and
-// cached. Never rejects — failures resolve to [].
-export async function loadWorkspaceModels(): Promise<WorkspaceModel[]> {
-  if (cachedModels) return cachedModels;
+// Short-lived cache: opening a picker after an admin edit refreshes the active
+// table. Failed reads are not cached for the lifetime of the browser session.
+export async function loadWorkspaceModelCatalog(): Promise<WorkspaceModelCatalog> {
+  if (cachedCatalog && Date.now() - cachedAt < 30_000) return cachedCatalog;
   if (inflight) return inflight;
   inflight = fetchWorkspaceModelsOnce()
-    .then((models) => {
-      cachedModels = models;
-      return models;
+    .then((catalog) => {
+      if (catalog.routing !== null || catalog.models.length > 0) {
+        cachedCatalog = catalog;
+        cachedAt = Date.now();
+      }
+      return catalog;
     })
     .finally(() => {
       inflight = null;
@@ -121,6 +138,7 @@ export async function loadWorkspaceModels(): Promise<WorkspaceModel[]> {
 
 // Test seam: clears the module cache between cases.
 export function _resetWorkspaceModelCacheForTests() {
-  cachedModels = null;
+  cachedCatalog = null;
+  cachedAt = 0;
   inflight = null;
 }

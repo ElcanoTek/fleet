@@ -78,7 +78,8 @@ import { ShareDialog } from "./ShareDialog";
 import { TeamChatViewer } from "./TeamChatViewer";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
-import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
+import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
+import { modelIsAvailable, unavailableModelMessage, type ModelRouting } from "@/app/shared/lib/modelRouting";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
@@ -617,8 +618,8 @@ export function ChatExperience({
   // cards, fetched from the member-gated /api/client-config so the UI is
   // client-agnostic. Falls back to neutral defaults on error / while loading.
   const { branding, pills, models: workspaceModelTiers } = useClientConfig();
-  // selectedModel is the OpenRouter slug for the active conversation. Empty
-  // means "use the server-configured primary." It can be edited mid-chat;
+  // selectedModel is the routed model slug for the active conversation.
+  // Every turn requires a non-empty choice. It can be edited mid-chat;
   // submitPrompt forwards the current value with every turn so the backend
   // persists changes against the conversation row. The two tier slots
   // (default = fast tier, advanced = strong tier) live in ../lib/modelAliases
@@ -651,23 +652,29 @@ export function ChatExperience({
   }, [workspaceModelTiers, activeConversationId]);
   const [rankedModels, setRankedModels] = useState<RankedModel[]>([]);
   const [catalogModels, setCatalogModels] = useState<RankedModel[]>([]);
-  // Admin-configured workspace-provider models (Settings → Admin → Model
-  // providers), "<provider>/<model>" slugs. Loaded once on mount via the
+  // Active workspace-provider models, "<provider>/<model>" slugs. Loaded via the
   // shared lib (which also expands catch-all anthropic/openai providers from
   // the catwalk catalog); empty when none are configured or the fetch fails.
   const [workspaceModels, setWorkspaceModels] = useState<RankedModel[]>([]);
+  const [modelRouting, setModelRouting] = useState<ModelRouting>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [personaPickerOpen, setPersonaPickerOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState<string>("");
   const [isLoadingRankedModels, setIsLoadingRankedModels] = useState(false);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
-  // modelError is set when the custom slug in the model input is rejected
-  // by /api/model-check (currently: completion price > $30/M). When set,
+  // modelError includes local routing and /api/model-check rejections. When set,
   // submitPrompt refuses to send and the composer shows the error.
-  const [modelError, setModelError] = useState<{
+  const [checkedModelError, setModelError] = useState<{
+    slug: string;
     message: string;
     modelsUrl: string;
   } | null>(null);
+  // Keep saved selections visible instead of silently changing the provider of
+  // an existing conversation. The user repairs it by picking a workspace row.
+  const modelError = !modelIsAvailable(selectedModel, modelRouting,
+    currentTierModels().some((tier) => tier.slug === selectedModel))
+    ? { message: unavailableModelMessage(selectedModel), modelsUrl: "/settings/admin/providers" }
+    : checkedModelError?.slug === selectedModel.trim() ? checkedModelError : null;
   // Optional MCP servers the user can toggle on per-conversation. The
   // MCPServerInfo shape is declared at module scope (and exported) so the
   // extracted Composer can type its prop against it.
@@ -1404,10 +1411,13 @@ export function ChatExperience({
         priceCompletion: hit.priceCompletion,
       };
     };
-    const defaults: RankedModel[] = currentTierModels().map((tier) => ({
-      slug: tier.slug,
-      name: tier.label,
-      ...pricesFor(tier.slug),
+    const tierSlugs = workspaceModelTiers
+      ? [workspaceModelTiers.defaultModel, workspaceModelTiers.advancedModel]
+      : currentTierModels().map((tier) => tier.slug);
+    const defaults: RankedModel[] = tierSlugs.filter((slug) => modelIsAvailable(slug, modelRouting, true)).map((slug) => ({
+      slug,
+      name: labelForModel(slug),
+      ...pricesFor(slug),
     }));
 
     // Lockdown chats are pinned to the operator-configured allow-list.
@@ -1422,6 +1432,7 @@ export function ChatExperience({
       const seen = new Set<string>();
       const out: RankedModel[] = [];
       for (const slug of allowed) {
+        if (!modelIsAvailable(slug, modelRouting)) continue;
         if (seen.has(slug)) continue;
         seen.add(slug);
         const aliased = defaults.find((d) => d.slug === slug);
@@ -1444,6 +1455,7 @@ export function ChatExperience({
       const seen = new Set<string>();
       const out: RankedModel[] = [];
       for (const m of [...defaults, ...workspaceModels, ...rankedModels]) {
+        if (!modelIsAvailable(m.slug, modelRouting, !m.workspace)) continue;
         if (seen.has(m.slug)) continue;
         seen.add(m.slug);
         out.push(m);
@@ -1464,6 +1476,7 @@ export function ChatExperience({
       }
     }
     for (const model of source) {
+      if (!modelIsAvailable(model.slug, modelRouting, true)) continue;
       if (seen.has(model.slug)) continue;
       if (!matchesQuery(model)) continue;
       seen.add(model.slug);
@@ -1475,6 +1488,8 @@ export function ChatExperience({
     rankedModels,
     catalogModels,
     workspaceModels,
+    modelRouting,
+    workspaceModelTiers,
     modelSearchQuery,
     isLockdown,
     serverConfig.lockdownAllowedModels,
@@ -1575,13 +1590,12 @@ export function ChatExperience({
   // changes. Debounced so a burst of commits (a row pick, then a typed slug a
   // moment later) costs one request; the picker's search text is a draft that
   // never reaches selectedModel until Enter or a row pick, so this does not
-  // fire per keystroke. We only block submission when the backend is certain
-  // a slug is over budget — unknown/new slugs or network failures keep the
-  // previous error cleared so legitimate choices aren't false-positived.
+  // fire per keystroke. A definite routing/catalog rejection blocks submission;
+  // a failed check is unknown, not evidence that the chosen route is invalid.
   useEffect(() => {
     const slug = selectedModel.trim();
-    if (!slug || slug === currentDefaultModel()) {
-      // Default / empty slug: drop any stale over-budget error. Deferred
+    if (!slug) {
+      // Empty slug: drop any stale remote validation error. Deferred
       // to a microtask so the clear lands outside the effect's synchronous
       // phase (no cascading render off the effect body); a guard cancels
       // it if the slug changes again before the microtask runs.
@@ -1604,7 +1618,7 @@ export function ChatExperience({
           },
         );
         if (!res.ok) {
-          setModelError(null);
+          if (!controller.signal.aborted) setModelError(null);
           return;
         }
         const data = (await res.json()) as {
@@ -1613,8 +1627,10 @@ export function ChatExperience({
           message?: string;
           models_url?: string;
         };
+        if (controller.signal.aborted) return;
         if (data.allowed === false && data.message) {
           setModelError({
+            slug,
             message: data.message,
             modelsUrl: data.models_url ?? "https://openrouter.ai/models",
           });
@@ -1632,7 +1648,7 @@ export function ChatExperience({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [selectedModel]);
+  }, [selectedModel, modelRouting]);
 
   // loadMcpServerCatalog fetches Optional connector controls plus locked
   // always-on status for the given conversation. Safe to call repeatedly —
@@ -4044,15 +4060,14 @@ export function ChatExperience({
     };
   }, [loadCatalogModels]);
 
-  // Load the workspace-provider models once on mount so the picker's browse
-  // view and the chip label can resolve them. The shared lib caches per page
-  // load and never rejects (failures resolve to []), so this is cheap and
-  // safe to fire unconditionally.
+  // Load on mount and picker transitions so an admin edit can repair a stale
+  // selection without reloading the chat. The shared loader has a short TTL.
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
-      void loadWorkspaceModels().then((models) => {
-        if (cancelled || models.length === 0) return;
+      void loadWorkspaceModelCatalog().then(({ models, routing }) => {
+        if (cancelled) return;
+        setModelRouting(routing);
         setWorkspaceModels(
           models.map((m) => ({
             slug: m.id,
@@ -4066,7 +4081,7 @@ export function ChatExperience({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [modelPickerOpen]);
 
   // Refresh the active conversation when the tab/window becomes visible
   // again. The server now keeps generating after the SSE connection
@@ -5616,9 +5631,12 @@ export function ChatExperience({
                     rel="noreferrer noopener"
                     className="underline"
                   >
-                    Browse affordable models
+                    {modelError.modelsUrl.startsWith("/") ? "Provider settings" : "Browse models"}
                   </a>
-                  .
+                  {" · "}
+                  <button type="button" className="underline" onClick={() => setModelPickerOpen(true)}>
+                    Choose a model
+                  </button>
                 </div>
               ) : null}
               {activeConversationId ? (

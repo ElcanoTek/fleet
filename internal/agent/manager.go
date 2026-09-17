@@ -1154,6 +1154,15 @@ func (m *Manager) Resolve(ctx context.Context, slug string) (fantasy.LanguageMod
 	return m.modelResolver().Resolve(ctx, slug)
 }
 
+// ModelProviders exposes only public metadata from the currently serving table.
+func (m *Manager) ModelProviders() []agentcore.ModelProviderInfo {
+	return m.modelResolver().ModelProviders()
+}
+
+func (m *Manager) CheckModelRoute(slug string) (agentcore.ProviderType, error) {
+	return m.modelResolver().CheckModelRoute(slug)
+}
+
 func (m *Manager) ResolveWithFallback(ctx context.Context, slug string) (fantasy.LanguageModel, fantasy.LanguageModel, error) {
 	return m.modelResolver().ResolveWithFallback(ctx, slug)
 }
@@ -1678,6 +1687,12 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, err
 	}
 	defer release()
+
+	// Reject stale/unconfigured selections before provisioning a sandbox or MCP
+	// scope. No provider call is needed to explain how to repair the selection.
+	if _, err := m.CheckModelRoute(in.Model); err != nil {
+		return nil, fmt.Errorf("resolve model: %w", err)
+	}
 
 	sb, sbCleanup, err := m.takeTurnSandbox(ctx, in.Lockdown, in.ConversationID)
 	if err != nil {

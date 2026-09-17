@@ -156,6 +156,16 @@ deployment knows shows its cost band, so you can see what you are about to
 spend. No band means the price is unknown rather than zero — worth asking about
 before running something long on it.
 
+The picker uses your workspace's active model providers, including providers
+configured by the deployment. **Workspace** models route directly through their
+named provider. Recommended and public-catalog choices that the workspace cannot
+route are hidden once provider information loads. A saved conversation or default
+that is no longer available stays visible with an explanation: use **Choose a
+model**, pick an available workspace model, then retry. Fleet does not silently
+switch an existing conversation to another provider. Admins can fix the provider
+configuration under **Settings → Admin → Model providers**, and set the default
+and stronger model under **Settings → Admin → Features → Model tiers**.
+
 The assistant will sometimes suggest a switch itself: a card offering **Switch &
 retry** when a question is heavier than the current model handles well, or a
 one-line banner when you attach a large spreadsheet to the fast model. Both are

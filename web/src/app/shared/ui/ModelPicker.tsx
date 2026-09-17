@@ -129,7 +129,7 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
       {open ? (
         <div id={listboxId} className="model-picker-dropdown" role="listbox">
           {loading ? (
-            <div className="model-picker-loading">Loading models from OpenRouter…</div>
+            <div className="model-picker-loading">Loading workspace models…</div>
           ) : visible.length === 0 ? (
             <div className="model-picker-empty">
               No matching models — type a custom slug to use it.

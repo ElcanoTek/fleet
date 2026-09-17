@@ -253,6 +253,7 @@ above fails otherwise.
 - [`PROJECTS.md`](PROJECTS.md) — Projects / Spaces: shared team workspaces
 - [`PROMPT-CACHE-CONTRACT.md`](PROMPT-CACHE-CONTRACT.md) — Prompt-cache prefix-stability contract (#507)
 - [`PROMPT-LIBRARY.md`](PROMPT-LIBRARY.md) — Hybrid prompt library
+- [`PROVIDER-AWARE-MODELS.md`](PROVIDER-AWARE-MODELS.md) — Active-provider model discovery, picker filtering, and unavailable-selection recovery
 - [`PROVIDERS.md`](PROVIDERS.md) — Multi-provider LLM configuration (#289)
 - [`PUSH-NOTIFICATIONS.md`](PUSH-NOTIFICATIONS.md) — Browser push notifications (Web Push)
 - [`RECURRENCE-END.md`](RECURRENCE-END.md) — Recurrence end conditions + horizon-based Upcoming projection
