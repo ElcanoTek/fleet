@@ -441,7 +441,13 @@ func (o *orchestrationState) checkBudgetWindDown(fraction float64) budgetWindDow
 }
 
 // windDownNotice renders the request-local wrap-up message for an active
-// wind-down state. Wording adapted from Prime Agent's goal budget wind-down.
+// wind-down state. Wording adapted from Prime Agent's goal budget wind-down,
+// with one fleet-specific carve-out: outstanding critical actions (the task's
+// mandatory send, a recorded commitment) are named as NOT new work. Without
+// it a model that crosses the threshold with the deliverable built but not
+// yet sent reads "do not start new substantive work" as "skip the send" and
+// aborts a run whose only remaining step was the one that mattered (Reklaim
+// health scan d0deafce, 2026-09-17: report published, email never sent).
 // budgetWindDownNoticePrefix is the exact leading substring of every wind-down
 // notice. The prompt-cache step matches on it to keep the notice out of the
 // rolling recency breakpoints: the notice is request-local, appended fresh
@@ -470,7 +476,9 @@ func (st budgetWindDownState) windDownNotice() string {
 	}
 	return fmt.Sprintf(
 		budgetWindDownNoticePrefix+" this run has used %s. Do not start new substantive work. "+
-			"Finish or checkpoint what is in progress and wrap up soon with: progress made, remaining work, blockers, and a concrete next step. "+
+			"Declared critical actions that are still outstanding — the task's mandatory actions and any commitment you recorded in confirm_audit — are NOT new work: "+
+			"complete them now, before anything else, because a deliverable that is finished but never delivered is a failed run. "+
+			"Then wrap up soon with: progress made, remaining work, blockers, and a concrete next step. "+
 			"The run is hard-stopped at the ceiling.",
 		strings.Join(parts, " and "))
 }
