@@ -21,10 +21,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tanstack/react-virtual": "^3.14.12",
+    "@tanstack/react-virtual": "^3.14.13",
     "next": "16.3.5",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
     "remark-gfm": "^4.0.1"
