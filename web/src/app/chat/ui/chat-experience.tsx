@@ -79,7 +79,7 @@ import { TeamChatViewer } from "./TeamChatViewer";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
-import { modelIsAvailable, unavailableModelMessage, type ModelRouting } from "@/app/shared/lib/modelRouting";
+import { catalogModelRoutes, modelIsAvailable, unavailableModelMessage, type ModelRouting } from "@/app/shared/lib/modelRouting";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
@@ -1414,11 +1414,20 @@ export function ChatExperience({
     const tierSlugs = workspaceModelTiers
       ? [workspaceModelTiers.defaultModel, workspaceModelTiers.advancedModel]
       : currentTierModels().map((tier) => tier.slug);
-    const defaults: RankedModel[] = tierSlugs.filter((slug) => modelIsAvailable(slug, modelRouting, true)).map((slug) => ({
+    const tierModels: RankedModel[] = tierSlugs.map((slug) => ({
       slug,
       name: labelForModel(slug),
       ...pricesFor(slug),
     }));
+    const defaults = tierModels.filter((model) => modelIsAvailable(model.slug, modelRouting, true));
+    const catalogChoices = (models: RankedModel[]): RankedModel[] => models.flatMap((model) =>
+      catalogModelRoutes(model.slug, modelRouting).map((route) => ({
+        ...model,
+        slug: route.slug,
+        name: route.provider ? `${route.provider}: ${model.name}` : model.name,
+        workspace: !!route.provider,
+      })),
+    );
 
     // Lockdown chats are pinned to the operator-configured allow-list.
     // Build a fixed list that mirrors that allow-list (default first,
@@ -1454,7 +1463,7 @@ export function ChatExperience({
       // rankings), then the ranked list.
       const seen = new Set<string>();
       const out: RankedModel[] = [];
-      for (const m of [...defaults, ...workspaceModels, ...rankedModels]) {
+      for (const m of [...defaults, ...workspaceModels, ...catalogChoices([...tierModels, ...rankedModels])]) {
         if (!modelIsAvailable(m.slug, modelRouting, !m.workspace)) continue;
         if (seen.has(m.slug)) continue;
         seen.add(m.slug);
@@ -1462,13 +1471,13 @@ export function ChatExperience({
       }
       return out;
     }
-    const source = catalogModels.length > 0 ? catalogModels : rankedModels;
+    const source = catalogChoices(catalogModels.length > 0 ? catalogModels : rankedModels);
     const matchesQuery = (m: RankedModel) =>
       m.slug.toLowerCase().includes(query) ||
       m.name.toLowerCase().includes(query);
     const seen = new Set<string>();
     const matches: RankedModel[] = [];
-    for (const d of [...defaults, ...workspaceModels]) {
+    for (const d of [...defaults, ...workspaceModels, ...catalogChoices(tierModels)]) {
       if (seen.has(d.slug)) continue;
       if (matchesQuery(d)) {
         seen.add(d.slug);

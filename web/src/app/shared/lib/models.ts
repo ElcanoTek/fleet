@@ -10,7 +10,7 @@
 
 import { currentTierModels } from "@/app/lib/modelAliases";
 import { loadWorkspaceModelCatalog, _resetWorkspaceModelCacheForTests } from "./workspaceModels";
-import { modelIsAvailable } from "./modelRouting";
+import { catalogModelRoutes } from "./modelRouting";
 
 export type PickerModel = {
   id: string;
@@ -205,7 +205,14 @@ export async function loadModels(): Promise<PickerModel[]> {
       fetched.length > 0
         ? dedupeAndOrder(enrichFromCatalog(seedModels(), fetched), fetched)
         : seedModels();
-    cachedModels = dedupeAndOrder(workspace, base.filter((m) => modelIsAvailable(m.id, catalog.routing, true)));
+    const routed = base.flatMap((model) => catalogModelRoutes(model.id, catalog.routing).map((route) => ({
+      ...model,
+      id: route.slug,
+      name: route.provider ? `${route.provider}: ${model.name}` : model.name,
+      // An explicit alternate route isn't the configured recommended tier.
+      ...(route.provider ? { recommended: false, workspace: true } : {}),
+    })));
+    cachedModels = dedupeAndOrder(workspace, routed);
     cachedAt = Date.now();
     inflight = null;
     return cachedModels;

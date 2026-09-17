@@ -47,3 +47,37 @@ test("native-only chat repairs an unavailable default and retries with the newly
   await expect(page.getByText("Retried through the selected workspace provider.")).toBeVisible();
   expect(sent).toEqual(["bundle-openai/gpt-4o", "bundle-openai/gpt-4o-mini"]);
 });
+
+test("a shadowed OpenRouter catch-all stays browsable and sends an explicit route", async ({ page, context }) => {
+  await loginViaCookie(context);
+  await mockChatBoot(page);
+  await page.route("**/api/llm-provider-models", (route) => route.fulfill({ json: {
+    routing_known: true,
+    providers: [
+      { name: "native", type: "openai", models: [], catch_all: true },
+      { name: "router", type: "openrouter", models: [], catch_all: true },
+    ],
+    models: [],
+  } }));
+  await page.route("**/api/model-catalog", (route) => route.fulfill({ json: {
+    models: [{ slug: "google/gemini-3.8-flash", name: "Gemini" }],
+  } }));
+  let sent = "";
+  await page.route("**/api/chat", (route) => {
+    sent = route.request().postDataJSON().model;
+    return fulfillSse(route, [
+      { event: "conversation", data: { id: "router-chat", model: sent, persona: "default" } },
+      { event: "text.delta", data: { text: "Explicit OpenRouter route selected." } },
+      { event: "turn.completed", data: { model: sent } },
+    ]);
+  });
+  await page.goto("/chat");
+  await page.getByRole("button", { name: "Choose a model", exact: true }).click();
+  const list = page.locator("#composer-model-listbox");
+  await list.getByRole("option", { name: /router:.*Gemini/ }).click();
+  const composer = page.getByRole("textbox").first();
+  await composer.fill("Check the model route");
+  await composer.press("Enter");
+  await expect(page.getByText("Explicit OpenRouter route selected.")).toBeVisible();
+  expect(sent).toBe("router/google/gemini-3.8-flash");
+});
