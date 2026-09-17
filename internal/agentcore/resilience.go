@@ -126,6 +126,10 @@ const (
 	streamErrorContextTooLarge
 	streamErrorRetryExhausted
 	streamErrorStreamBlip
+	// streamErrorProviderRejected is a non-retryable 4xx the provider returned
+	// for THIS request/model pair (ADR-0067): not credentials or billing, so a
+	// configured fallback model may still accept the same work.
+	streamErrorProviderRejected
 	streamErrorFatal
 )
 
@@ -141,6 +145,8 @@ func (c streamErrorClass) String() string {
 		return "retry_exhausted"
 	case streamErrorStreamBlip:
 		return "stream_blip"
+	case streamErrorProviderRejected:
+		return "provider_rejected"
 	case streamErrorFatal:
 		return "fatal"
 	default:
@@ -172,6 +178,9 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		if providerErr.IsRetryable() {
 			return streamErrorRetryExhausted, providerErr
 		}
+		if isProviderRejection(providerErr) {
+			return streamErrorProviderRejected, providerErr
+		}
 		return streamErrorFatal, providerErr
 	}
 	if errors.As(err, &retryErr) {
@@ -184,6 +193,9 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		if sse.IsRetryable() {
 			return streamErrorStreamBlip, sse
 		}
+		if isProviderRejection(sse) {
+			return streamErrorProviderRejected, sse
+		}
 		return streamErrorFatal, sse
 	}
 	if h2 := parseHTTP2StreamError(err); h2 != nil {
@@ -195,6 +207,23 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		return streamErrorStreamBlip, &fantasy.ProviderError{Title: "stream error", Message: "Provider returned error", Cause: err, TransientError: true}
 	}
 	return streamErrorFatal, nil
+}
+
+// isProviderRejection reports whether a non-retryable provider error is a
+// per-request rejection (ADR-0067): an explicit 4xx that is NOT a credential
+// (401, or the adapter's AuthError flag) or billing (402) failure. A gateway
+// such as OpenRouter relays the upstream provider's 4xx verbatim as
+// "Provider returned error", so the same request may well succeed on the
+// configured fallback model; a key- or credit-level failure would not.
+func isProviderRejection(providerErr *fantasy.ProviderError) bool {
+	if providerErr == nil || providerErr.AuthError {
+		return false
+	}
+	switch providerErr.StatusCode {
+	case http.StatusUnauthorized, http.StatusPaymentRequired:
+		return false
+	}
+	return providerErr.StatusCode >= http.StatusBadRequest && providerErr.StatusCode < http.StatusInternalServerError
 }
 
 // sseStreamErrorPrefix is the fragment the charm openai-go SSE decoder produces
@@ -587,9 +616,7 @@ func (e *engine) streamRoundWithResilience(
 		// Never replay a tool step lacking a safe completed-step checkpoint.
 		// This also gates context compaction: restarting from older input would
 		// lose the completed results and invite duplicate writes (ADR-0065).
-		if sink.toolEventCount() > attemptMark.toolEvents &&
-			(class == streamErrorRetryExhausted || class == streamErrorStreamBlip ||
-				class == streamErrorContextTooLarge) {
+		if committedSideEffectsBlockRecovery(sink, attemptMark, class) {
 			return streamRoundOutcome{}, fmt.Errorf("%w: %w", ErrCommittedSideEffects, err)
 		}
 		// Safe to re-drive (no tool side effects past the mark): drop the failed
@@ -604,16 +631,7 @@ func (e *engine) streamRoundWithResilience(
 			sink.rollbackTo(attemptMark)
 			messages = dropTrailingAssistant(messages)
 		}
-		// Feed genuine provider failures into the circuit breaker (#267) so error
-		// frequency accumulates across runs. Cancellation, the cost ceiling, and
-		// prompt-too-large are not provider-health signals, so they don't count.
-		if e != nil {
-			switch class {
-			case streamErrorRetryExhausted, streamErrorStreamBlip, streamErrorFatal:
-				e.healthRegistry.RecordError(activeModel.Model(), streamErrorDesc(providerErr))
-			default:
-			}
-		}
+		e.recordProviderHealthFailure(activeModel, class, providerErr)
 		switch class {
 		case streamErrorNone:
 			return streamRoundOutcome{}, fmt.Errorf("unexpected stream state (class=none): %w", err)
@@ -680,6 +698,22 @@ func (e *engine) streamRoundWithResilience(
 			swappedToFallback = true
 			rollbackAttempt()
 			continue
+		case streamErrorProviderRejected:
+			// A 4xx the provider returned for this model may not bind the
+			// fallback (ADR-0067). Promote it once, only from a safe point:
+			// no tool event since the (possibly resumed) checkpoint, so the
+			// fallback re-drives without replaying executed calls. Otherwise
+			// the rejection stays terminal exactly as before.
+			if !e.canPromoteOnRejection(sink, attemptMark, activeModel, swappedToFallback) {
+				return streamRoundOutcome{}, fatalProviderError(err, providerErr)
+			}
+			e.logFallbackSwap(class, providerErr)
+			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
+			activeModel = e.takeFallback()
+			currentAgent = buildAgent(activeModel)
+			swappedToFallback = true
+			rollbackAttempt()
+			continue
 		case streamErrorFatal:
 			return streamRoundOutcome{}, fatalProviderError(err, providerErr)
 		}
@@ -688,10 +722,54 @@ func (e *engine) streamRoundWithResilience(
 }
 
 func fatalProviderError(err error, providerErr *fantasy.ProviderError) error {
-	if providerErr != nil {
-		return fmt.Errorf("fantasy agent error (provider_status=%d, retryable=false): %w", providerErr.StatusCode, err)
+	if providerErr == nil {
+		return fmt.Errorf("fantasy agent error: %w", err)
 	}
-	return fmt.Errorf("fantasy agent error: %w", err)
+	// Name the upstream cause when the gateway relayed one (OpenRouter's
+	// "Provider returned error" is otherwise opaque in the dead-letter reason).
+	if detail := providerErrorUpstreamDetail(providerErr); detail != "" {
+		return fmt.Errorf("fantasy agent error (provider_status=%d, retryable=false, %s): %w", providerErr.StatusCode, detail, err)
+	}
+	return fmt.Errorf("fantasy agent error (provider_status=%d, retryable=false): %w", providerErr.StatusCode, err)
+}
+
+// committedSideEffectsBlockRecovery reports whether a transient-class failure
+// must NOT be re-driven: a tool event landed after the (possibly resumed)
+// attempt mark, so restarting from the round's input could replay an executed
+// call (ADR-0035 / ADR-0065). A provider rejection is gated separately in
+// canPromoteOnRejection so that its unsafe case stays terminal, not transient.
+func committedSideEffectsBlockRecovery(sink *streamSink, attemptMark sinkMark, class streamErrorClass) bool {
+	if sink.toolEventCount() <= attemptMark.toolEvents {
+		return false
+	}
+	return class == streamErrorRetryExhausted || class == streamErrorStreamBlip || class == streamErrorContextTooLarge
+}
+
+// recordProviderHealthFailure feeds genuine provider failures into the circuit
+// breaker (#267) so error frequency accumulates across runs. Cancellation, the
+// cost ceiling, and prompt-too-large are not provider-health signals, so they
+// don't count.
+func (e *engine) recordProviderHealthFailure(activeModel fantasy.LanguageModel, class streamErrorClass, providerErr *fantasy.ProviderError) {
+	if e == nil {
+		return
+	}
+	switch class {
+	case streamErrorRetryExhausted, streamErrorStreamBlip, streamErrorProviderRejected, streamErrorFatal:
+		e.healthRegistry.RecordError(activeModel.Model(), streamErrorDesc(providerErr))
+	default:
+	}
+}
+
+// canPromoteOnRejection decides whether a provider rejection may swap to the
+// configured fallback (ADR-0067): a fallback must exist and differ from the
+// active model, and no tool event may have landed since attemptMark (which
+// the caller has already advanced to a completed-step checkpoint when one
+// applied), so the fallback's re-drive cannot replay an executed call.
+func (e *engine) canPromoteOnRejection(sink *streamSink, attemptMark sinkMark, activeModel fantasy.LanguageModel, swappedToFallback bool) bool {
+	if sink.toolEventCount() > attemptMark.toolEvents {
+		return false
+	}
+	return canSwapFallback(e, activeModel, swappedToFallback)
 }
 
 func (e *engine) logProviderFailure(model fantasy.LanguageModel, class streamErrorClass, providerErr *fantasy.ProviderError) {
@@ -702,6 +780,9 @@ func (e *engine) logProviderFailure(model fantasy.LanguageModel, class streamErr
 	// Raw response bodies/headers can contain credentials and are never emitted.
 	note := fmt.Sprintf("[provider-failure] model=%s status=%d class=%s msg=%q", model.Model(), providerErr.StatusCode, class,
 		summarizeForLog(toolRedactor().Redact(providerErr.Message), 300))
+	if detail := providerErrorUpstreamDetail(providerErr); detail != "" {
+		note += " " + detail
+	}
 	msgType := messageTypeSystemRetry
 	e.logSession.AddMessageWithMetadata(roleUser, note, nil, nil, &msgType, nil, nil, "")
 }

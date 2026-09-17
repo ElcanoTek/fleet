@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -49,10 +50,14 @@ func TestClassifyStreamError(t *testing.T) {
 			&fantasy.ProviderError{ContextTooLargeErr: true},
 		}}, streamErrorContextTooLarge},
 
-		{"400 is fatal", &fantasy.ProviderError{StatusCode: http.StatusBadRequest, Message: "bad req"}, streamErrorFatal},
+		// ADR-0067: a per-request 4xx is a provider rejection (fallback-eligible);
+		// credential (401 / AuthError) and billing (402) failures stay fatal.
+		{"400 is a rejection", &fantasy.ProviderError{StatusCode: http.StatusBadRequest, Message: "bad req"}, streamErrorProviderRejected},
 		{"401 is fatal", &fantasy.ProviderError{StatusCode: http.StatusUnauthorized, Message: "bad key"}, streamErrorFatal},
-		{"403 is fatal", &fantasy.ProviderError{StatusCode: http.StatusForbidden, Message: "forbidden"}, streamErrorFatal},
-		{"404 is fatal", &fantasy.ProviderError{StatusCode: http.StatusNotFound, Message: "no model"}, streamErrorFatal},
+		{"402 is fatal", &fantasy.ProviderError{StatusCode: http.StatusPaymentRequired, Message: "no credits"}, streamErrorFatal},
+		{"403 is a rejection", &fantasy.ProviderError{StatusCode: http.StatusForbidden, Message: "forbidden"}, streamErrorProviderRejected},
+		{"404 is a rejection", &fantasy.ProviderError{StatusCode: http.StatusNotFound, Message: "no model"}, streamErrorProviderRejected},
+		{"flagged auth failure is fatal", &fantasy.ProviderError{StatusCode: http.StatusBadRequest, AuthError: true, Message: "token expired"}, streamErrorFatal},
 		{"plain error is fatal", errors.New("boom"), streamErrorFatal},
 
 		{
@@ -82,9 +87,9 @@ func TestClassifyStreamError(t *testing.T) {
 			streamErrorStreamBlip,
 		},
 		{
-			"sse mid-stream 400 is fatal",
+			"sse mid-stream 400 is a rejection",
 			errors.New(`received error while streaming: {"code":400,"message":"bad prompt"}`),
-			streamErrorFatal,
+			streamErrorProviderRejected,
 		},
 		{
 			"sse mid-stream unparseable body defaults retryable",
@@ -585,13 +590,16 @@ func TestCrossProviderSameModelFailover(t *testing.T) {
 	}
 }
 
+// A credential failure (401) is fatal for every model behind the same key, so
+// it must never promote the fallback. (A per-request 4xx rejection is the
+// separate provider_rejected class — see provider_rejection_test.go.)
 func TestStreamRoundFatalPropagates(t *testing.T) {
 	primary := &namedMockModel{
 		mockModel: mockModel{
 			streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 				return nil, &fantasy.ProviderError{
-					StatusCode: http.StatusBadRequest,
-					Message:    "your prompt is invalid",
+					StatusCode: http.StatusUnauthorized,
+					Message:    "invalid api key",
 				}
 			},
 		},
@@ -622,7 +630,10 @@ func TestStreamRoundFatalPropagates(t *testing.T) {
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err == nil {
-		t.Fatal("expected error for fatal 400, got nil")
+		t.Fatal("expected error for fatal 401, got nil")
+	}
+	if !strings.Contains(err.Error(), "provider_status=401, retryable=false") {
+		t.Errorf("error = %v, want the terminal provider status named", err)
 	}
 	if atomic.LoadInt32(&fallbackCalls) != 0 {
 		t.Errorf("fallback was called %d times on fatal error; expected no swap", fallbackCalls)
