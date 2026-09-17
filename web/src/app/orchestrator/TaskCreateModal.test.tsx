@@ -579,6 +579,35 @@ describe("TaskCreateModal — edit mode", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("sends a per-task cost ceiling and restores a stored one (#1533)", async () => {
+    createTask.mockResolvedValue({ id: "t-cost" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Expensive scan" } });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText("Max cost (USD)"), { target: { value: "12.50" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({ max_cost_usd: 12.5 });
+    // A blank field never sends the key: the task inherits the deployment ceiling.
+    expect(createTask.mock.calls[0][0]).not.toHaveProperty("max_total_tokens");
+  });
+
+  it("rejects a zero cost ceiling inline (it would read as unlimited)", () => {
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText("Max cost (USD)"), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    expect(screen.getByTestId("error-max-cost-usd")).toHaveTextContent(/above 0/);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it("restores a stored per-task cost ceiling into the editor", () => {
+    renderModal({ editTask: { ...baseEdit, max_cost_usd: 8 }, onUpdated: vi.fn() });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    expect(screen.getByLabelText("Max cost (USD)")).toHaveValue(8);
+  });
+
   it("restores a stored thinking budget and guards unsaved changes to it", () => {
     const { onClose } = renderModal({
       editTask: { ...baseEdit, thinking_budget_tokens: 4096 }, onUpdated: vi.fn(),

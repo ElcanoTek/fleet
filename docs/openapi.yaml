@@ -211,6 +211,8 @@ components:
         model: { type: string }
         fallback_model: { type: string }
         max_iterations: { type: integer }
+        max_cost_usd: { type: number, description: "This task's own per-run cost ceiling in USD (#1533). Omit to inherit the deployment ceiling; a value above the deployment ceiling requires admin permission." }
+        max_total_tokens: { type: integer, description: "This task's own per-run uncached-token ceiling (#1533). Omit to inherit the deployment ceiling; a value above it requires admin permission." }
         mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
         credential_allowlist:
           type: array
@@ -279,6 +281,8 @@ components:
         model: { type: string }
         fallback_model: { type: string }
         max_iterations: { type: integer }
+        max_cost_usd: { type: number, nullable: true }
+        max_total_tokens: { type: integer, nullable: true }
         mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
         priority: { type: integer }
         allow_network: { type: boolean, description: "Whether this task's execution sandbox is allowed outbound network egress (default false = sealed)." }

@@ -166,6 +166,24 @@ export function validateModel(model: unknown): ValidationResult {
   return { valid: true, message: "" };
 }
 
+// Per-task run cost ceiling (#1533): blank = inherit the deployment ceiling; a
+// value must be a real bound — the server refuses 0 (it would read as
+// "unlimited") and anything above 100000. Whether a value may EXCEED the
+// deployment ceiling is a permission question the server answers (admin).
+export function validateMaxCostUSD(value: unknown): ValidationResult {
+  if (value === null || value === undefined) return { valid: true, message: "" };
+  const trimmed = String(value).trim();
+  if (trimmed === "") return { valid: true, message: "" };
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
+    return { valid: false, message: "Max cost must be a dollar amount (up to cents)" };
+  }
+  const parsed = Number.parseFloat(trimmed);
+  if (!(parsed > 0) || parsed > 100000) {
+    return { valid: false, message: "Max cost must be above 0 and at most 100000" };
+  }
+  return { valid: true, message: "" };
+}
+
 export function validateMaxIterations(value: unknown): ValidationResult {
   if (value === null || value === undefined) return { valid: true, message: "" };
   const trimmed = String(value).trim();
@@ -269,6 +287,7 @@ export type TaskFormValues = {
   model?: string;
   fallback_model?: string;
   max_iterations?: string;
+  max_cost_usd?: string;
   recurrence?: string;
   scheduled_for?: string;
 };
@@ -289,6 +308,9 @@ export function validateTaskForm(values: TaskFormValues): { valid: boolean; erro
 
   const maxIter = validateMaxIterations(values.max_iterations);
   if (!maxIter.valid) errors.max_iterations = maxIter.message;
+
+  const maxCost = validateMaxCostUSD(values.max_cost_usd);
+  if (!maxCost.valid) errors.max_cost_usd = maxCost.message;
 
   const cron = validateCronExpression(values.recurrence);
   if (!cron.valid) errors.recurrence = cron.message;

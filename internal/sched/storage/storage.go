@@ -847,6 +847,8 @@ type TaskEdit struct {
 	Model                  *string
 	FallbackModel          *string
 	MaxIterations          *int
+	MaxCostUSD             *float64
+	MaxTotalTokens         *int
 	MCPSelection           models.MCPSelection
 	Priority               int
 	InstructionSelfImprove bool
@@ -1016,6 +1018,8 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.Model = edit.Model
 	task.FallbackModel = edit.FallbackModel
 	task.MaxIterations = edit.MaxIterations
+	task.MaxCostUSD = edit.MaxCostUSD
+	task.MaxTotalTokens = edit.MaxTotalTokens
 	if edit.SetMCPSelection {
 		task.MCPSelection = edit.MCPSelection
 	}

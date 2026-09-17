@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -73,6 +74,9 @@ type Config struct {
 	// override (Settings → Features → max_cost_usd) or an env reload is
 	// reflected in the forecast; nil falls back to the boot-time MaxCostUSD.
 	LiveMaxCostUSD func() float64
+	// LiveMaxTotalTokens is the deployment uncached-token ceiling read live;
+	// the per-task max_total_tokens privilege boundary compares against it.
+	LiveMaxTotalTokens func() int
 
 	// Sliding-window rate limits for the high-cost orchestrator endpoints
 	// (POST /tasks, POST /upload), enforced by SchedRateLimitMiddleware.
@@ -615,6 +619,9 @@ func (h *Handlers) createTaskGovernedFrom(ctx context.Context, creator taskCreat
 	if err := h.validateTaskCreate(&tc); err != nil {
 		return nil, &createRefusalError{status: http.StatusBadRequest, detail: err.Error()}
 	}
+	if msg := h.requireAdminForCeilingsAboveDeployment(creator.hasAdminPermission, &tc); msg != "" {
+		return nil, &createRefusalError{status: http.StatusForbidden, detail: msg}
+	}
 	if lineage == nil {
 		if msg := requireAdminForRunIf(creator.hasAdminPermission, tc.RunIf); msg != "" {
 			return nil, &createRefusalError{status: http.StatusForbidden, detail: msg}
@@ -706,6 +713,30 @@ func (h *Handlers) QueueStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// requireAdminForCeilingsAboveDeployment is the privilege boundary of the
+// per-task run ceilings (#1533): anyone who may create or edit a task may LOWER
+// its cost / token ceiling below the deployment's, but a value ABOVE the
+// deployment ceiling is the same decision as raising the deployment ceiling
+// and needs the same authority (admin). An unlimited deployment ceiling (0)
+// bounds nothing, so any per-task value is a lowering. Returns the refusal
+// message, or "" when the payload is admissible.
+func (h *Handlers) requireAdminForCeilingsAboveDeployment(isAdmin bool, tc *models.TaskCreate) string {
+	if isAdmin || tc == nil {
+		return ""
+	}
+	if tc.MaxCostUSD != nil {
+		if ceiling := h.maxCostUSD(); ceiling > 0 && *tc.MaxCostUSD > ceiling {
+			return fmt.Sprintf("max_cost_usd: %.2f is above the deployment ceiling of %.2f; only an admin may raise a task above it", *tc.MaxCostUSD, ceiling)
+		}
+	}
+	if tc.MaxTotalTokens != nil {
+		if ceiling := h.maxTotalTokens(); ceiling > 0 && *tc.MaxTotalTokens > ceiling {
+			return fmt.Sprintf("max_total_tokens: %d is above the deployment ceiling of %d; only an admin may raise a task above it", *tc.MaxTotalTokens, ceiling)
+		}
+	}
+	return ""
+}
+
 // validateTaskLimits bounds the per-task numeric ceilings. max_retries is
 // bounded because an unbounded value, combined with the 10-minute backoff cap,
 // would let a deterministically-failing task re-queue forever and hold a
@@ -716,6 +747,15 @@ func validateTaskLimits(tc *models.TaskCreate) error {
 	}
 	if tc.MaxRetries != nil && (*tc.MaxRetries < 0 || *tc.MaxRetries > 10) {
 		return fmt.Errorf("max_retries must be between 0 and 10")
+	}
+	// Per-task run ceilings (#1533): nil = inherit the deployment ceiling. A
+	// value must be a real bound — 0 would read as "unlimited" in checkCeilings,
+	// which is exactly the escape a per-task field must not offer.
+	if tc.MaxCostUSD != nil && (*tc.MaxCostUSD <= 0 || *tc.MaxCostUSD > 100000 || math.IsNaN(*tc.MaxCostUSD) || math.IsInf(*tc.MaxCostUSD, 0)) {
+		return fmt.Errorf("max_cost_usd must be greater than 0 and at most 100000 (omit to inherit the deployment ceiling)")
+	}
+	if tc.MaxTotalTokens != nil && (*tc.MaxTotalTokens < 1000 || *tc.MaxTotalTokens > 1000000000) {
+		return fmt.Errorf("max_total_tokens must be between 1000 and 1000000000 (omit to inherit the deployment ceiling)")
 	}
 	// Per-task thinking override (#220): nil = inherit; 0 = off; >0 = budget
 	// (clamped to the provider bounds at run time). A negative value is nonsense.
@@ -1897,6 +1937,10 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// admin-permission principal's payload is authoritative (SetRunIf below),
 	// so an admin edit that changes or removes the gate actually persists.
 	canAuthorRunIf := p.hasPermission(models.PermissionAdmin)
+	if msg := h.requireAdminForCeilingsAboveDeployment(canAuthorRunIf, &tc); msg != "" {
+		writeError(w, http.StatusForbidden, msg)
+		return
+	}
 	runIfChanged := !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized())
 	if !canAuthorRunIf && runIfChanged {
 		writeError(w, http.StatusForbidden, "run_if: a host-side pre-run gate can only be changed by an admin")
@@ -1957,6 +2001,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		Model:                  tc.Model,
 		FallbackModel:          tc.FallbackModel,
 		MaxIterations:          tc.MaxIterations,
+		MaxCostUSD:             tc.MaxCostUSD,
+		MaxTotalTokens:         tc.MaxTotalTokens,
 		MCPSelection:           tc.MCPSelection,
 		SetMCPSelection:        tc.MCPSelection != nil,
 		CredentialAllowlist:    tc.CredentialAllowlist,
@@ -2160,13 +2206,15 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 // taskRerunOverrides is the optional subset of fields a re-run / clone may change
 // vs the source task (#270). Pointer fields → nil means "inherit from source".
 type taskRerunOverrides struct {
-	Prompt          *string `json:"prompt,omitempty"`
-	Model           *string `json:"model,omitempty"`
-	FallbackModel   *string `json:"fallback_model,omitempty"`
-	MaxIterations   *int    `json:"max_iterations,omitempty"`
-	Priority        *int    `json:"priority,omitempty"`
-	AllowNetwork    *bool   `json:"allow_network,omitempty"`
-	AllowDelegation *bool   `json:"allow_delegation,omitempty"`
+	Prompt          *string  `json:"prompt,omitempty"`
+	Model           *string  `json:"model,omitempty"`
+	FallbackModel   *string  `json:"fallback_model,omitempty"`
+	MaxIterations   *int     `json:"max_iterations,omitempty"`
+	MaxCostUSD      *float64 `json:"max_cost_usd,omitempty"`
+	MaxTotalTokens  *int     `json:"max_total_tokens,omitempty"`
+	Priority        *int     `json:"priority,omitempty"`
+	AllowNetwork    *bool    `json:"allow_network,omitempty"`
+	AllowDelegation *bool    `json:"allow_delegation,omitempty"`
 	// ThinkingBudgetTokens per-task thinking override (#220). Present sets it;
 	// a negative value clears back to inherit-global; absent leaves it.
 	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty"`
@@ -2359,6 +2407,12 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) error {
 	}
 	if o.MaxIterations != nil {
 		tc.MaxIterations = o.MaxIterations
+	}
+	if o.MaxCostUSD != nil {
+		tc.MaxCostUSD = o.MaxCostUSD
+	}
+	if o.MaxTotalTokens != nil {
+		tc.MaxTotalTokens = o.MaxTotalTokens
 	}
 	if o.Priority != nil {
 		tc.Priority = *o.Priority

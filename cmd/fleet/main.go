@@ -782,6 +782,7 @@ func run() error {
 		DefaultTaskModel:     cfg.TaskModel,
 		MaxCostUSD:           cfg.MaxCostUSD,
 		LiveMaxCostUSD:       cfg.LiveMaxCostUSD,
+		LiveMaxTotalTokens:   cfg.LiveMaxTotalTokens,
 		DefaultMaxIterations: cfg.MaxIterations,
 		// Per-task sandbox-limit ceilings (#205): validateSandboxLimits rejects an
 		// override above these. 0 = no ceiling.
