@@ -129,12 +129,12 @@ func TestStreamRoundEmitsTurnRetryOnFallbackSwap(t *testing.T) {
 // The payload builder honors the documented RetryEventPayload shape and is
 // nil-safe on both the sink and the provider error.
 func TestEmitTurnRetryPayload(t *testing.T) {
-	emitTurnRetry(nil, nil, time.Second) // must not panic
+	emitTurnRetry(nil, nil, time.Second, nil) // must not panic
 
 	rec := &retryEventRecorder{}
 	sink := newStreamSink(rec)
-	emitTurnRetry(sink, nil, 1500*time.Millisecond)
-	emitTurnRetry(sink, &fantasy.ProviderError{StatusCode: 429, Message: "slow down"}, 2*time.Second)
+	emitTurnRetry(sink, nil, 1500*time.Millisecond, nil)
+	emitTurnRetry(sink, &fantasy.ProviderError{StatusCode: 429, Message: "slow down"}, 2*time.Second, nil)
 
 	retries := rec.retries()
 	if len(retries) != 2 {

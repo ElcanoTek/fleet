@@ -409,6 +409,18 @@ type budgetWindDownState struct {
 	maxTokens    int
 }
 
+// lastStepInputTokens reports the prompt size of the most recent provider
+// call (0 before the first), the estimate the first-chunk watchdog scales
+// its deadline by (#1537). Nil-safe for the interactive path.
+func (o *orchestrationState) lastStepInputTokens() int {
+	if o == nil {
+		return 0
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.LastStepInputTokens
+}
+
 // checkBudgetWindDown evaluates the soft budget threshold (#990): once spend
 // reaches fraction × ceiling (cost or uncached tokens, the same math as
 // checkCeilings), every subsequent provider call gets a request-local wrap-up

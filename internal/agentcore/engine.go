@@ -773,7 +773,11 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	// is disarmed and the original context remains authoritative.
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
-	watchdog := newFirstChunkWatchdog(providerFirstChunkTimeout, cancelStream)
+	// The deadline scales with the prompt (#1537): the previous step's input
+	// token count is the best available estimate of this call's prompt size.
+	promptTokens := r.orch.lastStepInputTokens()
+	firstChunkTimeout := firstChunkTimeoutFor(r.engine.envPrefix, promptTokens)
+	watchdog := newFirstChunkWatchdog(firstChunkTimeout, cancelStream)
 	defer watchdog.stop()
 	markFirst := watchdog.markFirst
 	stepLimit := r.engine.maxIterations
@@ -797,7 +801,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		// recovery resets accumulated text on it) and the engine's session-log
 		// mirror (newRetryLogger).
 		OnRetry: func(providerErr *fantasy.ProviderError, delay time.Duration) {
-			emitTurnRetry(sink, providerErr, delay)
+			emitTurnRetry(sink, providerErr, delay, nil)
 			if cb := r.engine.onRetry; cb != nil {
 				cb(providerErr, delay)
 			}
@@ -887,7 +891,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		)),
 	})
 	if err != nil && watchdog.timedOut() && ctx.Err() == nil {
-		return nil, fmt.Errorf("%w after %s: %w", ErrFirstChunkTimeout, providerFirstChunkTimeout, err)
+		return nil, &firstChunkTimeoutError{timeout: firstChunkTimeout, promptTokens: promptTokens, cause: err}
 	}
 	return result, err
 }

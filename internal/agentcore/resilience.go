@@ -71,9 +71,86 @@ const (
 	// aliases, so the lifted test's t.Setenv keeps working.
 	retryMaxAttemptsEnv = "CUTLASS_RETRY_MAX_ATTEMPTS"
 	// maxInnerEscalations caps how many outer-loop recoveries per round.
-	maxInnerEscalations       = 3
-	providerFirstChunkTimeout = 30 * time.Second
+	maxInnerEscalations = 3
+
+	// First-chunk watchdog (#1537). A provider that accepts the request but
+	// produces no semantic event within the timeout is treated as a stream
+	// blip. The base was a flat 30 s; a ~115K-token prompt on a slower
+	// provider legitimately takes longer to start streaming, and two such
+	// timeouts in a row swapped a run to its fallback model in the audit
+	// tail. The timeout now grows with the prompt: base + 2 s per 10K prompt
+	// tokens (the previous step's input size), capped. Both ends are knobs:
+	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS (default 30, floor 5) and
+	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS (default 180, never
+	// below the base).
+	defaultFirstChunkTimeout      = 30 * time.Second
+	minFirstChunkTimeout          = 5 * time.Second
+	firstChunkTimeoutPer10KTokens = 2 * time.Second
+	defaultFirstChunkTimeoutMax   = 180 * time.Second
+	firstChunkTimeoutBaseEnv      = "PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS"
+	firstChunkTimeoutMaxEnv       = "PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS"
 )
+
+// firstChunkTimeoutFor resolves the watchdog deadline for a provider call
+// whose prompt is roughly promptTokens long (the previous step's input token
+// count; 0 when unknown, which yields the base).
+func firstChunkTimeoutFor(p EnvPrefix, promptTokens int) time.Duration {
+	base := secondsKnob(p, firstChunkTimeoutBaseEnv, defaultFirstChunkTimeout)
+	if base < minFirstChunkTimeout {
+		base = minFirstChunkTimeout
+	}
+	maxTimeout := secondsKnob(p, firstChunkTimeoutMaxEnv, defaultFirstChunkTimeoutMax)
+	if maxTimeout < base {
+		maxTimeout = base
+	}
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
+	timeout := base + time.Duration(promptTokens/10_000)*firstChunkTimeoutPer10KTokens
+	if timeout > maxTimeout {
+		timeout = maxTimeout
+	}
+	return timeout
+}
+
+// secondsKnob reads a whole-or-fractional-seconds env knob through the
+// prefix aliases; unset or unparseable yields def (the registry in
+// internal/config refuses a malformed value at boot, this is the lenient
+// embedder fallback).
+func secondsKnob(p EnvPrefix, suffix string, def time.Duration) time.Duration {
+	secs := p.lookupFloatDefault(suffix, def.Seconds())
+	if secs <= 0 {
+		return def
+	}
+	return time.Duration(secs * float64(time.Second))
+}
+
+// firstChunkTimeoutError is the watchdog's error: it satisfies
+// errors.Is(err, ErrFirstChunkTimeout) (so classifyStreamError still files it
+// as a stream blip) and carries the deadline and prompt size the retry
+// log/event report, so the correlation between prompt size and a timeout is
+// visible in exported logs (#1537).
+type firstChunkTimeoutError struct {
+	timeout      time.Duration
+	promptTokens int
+	cause        error
+}
+
+func (e *firstChunkTimeoutError) Error() string {
+	return fmt.Sprintf("%s after %s (prompt ≈ %d tokens): %v", ErrFirstChunkTimeout, e.timeout, e.promptTokens, e.cause)
+}
+
+func (e *firstChunkTimeoutError) Unwrap() []error { return []error{ErrFirstChunkTimeout, e.cause} }
+
+// firstChunkTimeoutDetail extracts the watchdog detail from a stream error,
+// when it was one.
+func firstChunkTimeoutDetail(err error) (timeout time.Duration, promptTokens int, ok bool) {
+	var fc *firstChunkTimeoutError
+	if errors.As(err, &fc) {
+		return fc.timeout, fc.promptTokens, true
+	}
+	return 0, 0, false
+}
 
 // streamBlipRetryDelay is the wait before retrying the same model after a
 // transient mid-stream error. A var (not a const) only so the package's tests
@@ -400,7 +477,7 @@ func newRetryLogger(session *LogSession) fantasy.OnRetryCallback {
 
 // logStreamBlipRetry records a same-model in-place retry triggered by a
 // mid-stream error.
-func (e *engine) logStreamBlipRetry(providerErr *fantasy.ProviderError) {
+func (e *engine) logStreamBlipRetry(providerErr *fantasy.ProviderError, cause error) {
 	if e == nil || e.logSession == nil {
 		return
 	}
@@ -413,6 +490,9 @@ func (e *engine) logStreamBlipRetry(providerErr *fantasy.ProviderError) {
 	msgType := messageTypeSystemRetry
 	note := fmt.Sprintf("[stream-blip-retry] status=%d delay=%s msg=%q",
 		status, streamBlipRetryDelay, body)
+	if timeout, promptTokens, ok := firstChunkTimeoutDetail(cause); ok {
+		note += fmt.Sprintf(" first_chunk_timeout=%s prompt_tokens=%d", timeout, promptTokens)
+	}
 	e.logSession.AddMessageWithMetadata(roleUser, note, nil, nil, &msgType, nil, nil, "")
 }
 
@@ -478,7 +558,12 @@ func emitProviderFailover(sink *streamSink, from, to fantasy.LanguageModel, reas
 // rolled-back attempt's discarded partial output is not projected into the
 // recovered history. Emitted from fantasy's inner-retry backoff (engine.go
 // stream OnRetry) and from every rollbackAttempt re-drive.
-func emitTurnRetry(sink *streamSink, providerErr *fantasy.ProviderError, delay time.Duration) {
+//
+// cause is the stream error that triggered the re-drive (nil from fantasy's
+// inner retry); when it is the first-chunk watchdog, the payload also carries
+// first_chunk_timeout_ms and prompt_tokens so a timeout can be correlated with
+// prompt size in exported logs (#1537).
+func emitTurnRetry(sink *streamSink, providerErr *fantasy.ProviderError, delay time.Duration, cause error) {
 	if sink == nil {
 		return
 	}
@@ -491,6 +576,12 @@ func emitTurnRetry(sink *streamSink, providerErr *fantasy.ProviderError, delay t
 		payload["status_code"] = providerErr.StatusCode
 		payload["title"] = title
 		payload["message"] = summarizeForConsole(providerErr.Message)
+	}
+	if timeout, promptTokens, ok := firstChunkTimeoutDetail(cause); ok {
+		payload["title"] = "Provider slow to start streaming"
+		payload["message"] = fmt.Sprintf("no first chunk within %s for a prompt of about %d tokens; retrying", timeout, promptTokens)
+		payload["first_chunk_timeout_ms"] = timeout.Milliseconds()
+		payload["prompt_tokens"] = promptTokens
 	}
 	sink.emit("turn.retry", payload)
 }
@@ -627,7 +718,7 @@ func (e *engine) streamRoundWithResilience(
 			// The rollback only unwinds the in-memory sink; deltas already
 			// journaled/streamed can't be unsent, so mark the discard point for
 			// journal recovery and the live client (#833).
-			emitTurnRetry(sink, providerErr, 0)
+			emitTurnRetry(sink, providerErr, 0, err)
 			sink.rollbackTo(attemptMark)
 			messages = dropTrailingAssistant(messages)
 		}
@@ -679,7 +770,7 @@ func (e *engine) streamRoundWithResilience(
 				streamBlipRetryUsed = true
 				log.Printf("🔁 Mid-stream provider error (status=%d); retrying same model once after %s",
 					providerErrStatus(providerErr), streamBlipRetryDelay)
-				e.logStreamBlipRetry(providerErr)
+				e.logStreamBlipRetry(providerErr, err)
 				select {
 				case <-time.After(streamBlipRetryDelay):
 				case <-ctx.Done():
