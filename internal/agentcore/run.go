@@ -260,6 +260,12 @@ type Result struct {
 	// calls audited before their first attempt. It does not count effects from
 	// tools the bundle did not declare critical or infer their absence.
 	CriticalActionsExecuted int
+	// CriticalActionsOutstanding lists every declared critical action the run
+	// still owed when it ended (typed commitments with their record binding,
+	// legacy headroom, audited-but-never-executed calls). Empty when every
+	// declared action executed. Stamped on every exit that carries the audit
+	// verdict, including a cost/token-ceiling stop (#1532).
+	CriticalActionsOutstanding []string
 }
 
 // ErrRunCancelled is the driver-facing classification for a run whose Result
@@ -730,7 +736,11 @@ func streamErrorResult(ctx context.Context, serr error, cfg RunConfig, sink *str
 		return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 	}
 	if errors.Is(serr, ErrCostCeilingExceeded) {
-		res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round)
+		// The budget stop pre-empts the finish gates, so the verdict is the
+		// only record of what the run left behind: stamp it (#1532) — the
+		// scheduled driver's dead-letter reason reads it, and the interactive
+		// driver ignores it on this path.
+		res := withAuditVerdict(cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), usageOrch)
 		res.StoppedByBudget = true
 		if len(cfg.OutputSchema) > 0 {
 			return res, serr
@@ -817,6 +827,7 @@ func completeRun(ctx context.Context, in runCompletion) (Result, error) {
 // audit abort is the more informative of the two.
 func withAuditVerdict(res Result, orch *orchestrationState) Result {
 	res.AuditAborted, res.AuditSummary, res.CriticalActionsExecuted = orch.auditVerdict()
+	res.CriticalActionsOutstanding = orch.outstandingCriticalActions()
 	return res
 }
 

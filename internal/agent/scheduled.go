@@ -950,7 +950,11 @@ func persistRoundCapPartial(session *LogSession, res agentcore.Result) {
 //     cost_ceiling failure class fires for free-form tasks exactly as it
 //     already does for structured-output ones. (With a declared OutputSchema
 //     agentcore returns the sentinel itself and Execute errors before reaching
-//     here — no double handling.)
+//     here — no double handling.) The reason carries the audit facts
+//     (budgetStopFacts, #1532): a ceiling that fired after every declared
+//     critical action executed is a deliverable that most likely landed with
+//     its finish checks skipped, and the DLQ must not describe it as a run
+//     that never finished its work.
 //   - A bare cancel wraps ErrRunCancelled plus the ctx cause when one exists;
 //     the runner's stop/pause/wake/interrupt attribution still takes
 //     precedence over the error — this only closes the no-marker path that
@@ -969,8 +973,8 @@ func persistRoundCapPartial(session *LogSession, res agentcore.Result) {
 func scheduledTerminalError(ctx context.Context, res agentcore.Result) error {
 	switch {
 	case res.StoppedByBudget:
-		return fmt.Errorf("%w: run stopped after $%.4f spent without finishing the task",
-			agentcore.ErrCostCeilingExceeded, res.Usage.CostUSD)
+		return fmt.Errorf("%w: run stopped after $%.4f spent, before it finished. %s",
+			agentcore.ErrCostCeilingExceeded, res.Usage.CostUSD, budgetStopFacts(res))
 	case res.Cancelled:
 		if cause := context.Cause(ctx); cause != nil {
 			return fmt.Errorf("%w: %w", agentcore.ErrRunCancelled, cause)
@@ -984,6 +988,29 @@ func scheduledTerminalError(ctx context.Context, res agentcore.Result) error {
 	default:
 		return nil
 	}
+}
+
+// budgetStopFacts tells an operator reading the dead-letter queue what a
+// cost/token-ceiling stop actually left behind (#1532): how many declared
+// critical actions ran, which are still owed, and whether the agent had already
+// written its summary. "Every declared action completed" is a run whose
+// deliverable most likely landed — the ceiling only pre-empted the finish
+// checks — and must read differently from one that spent the money and
+// produced nothing. It never claims verification: those checks did not run.
+func budgetStopFacts(res agentcore.Result) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d critical action(s) completed", res.CriticalActionsExecuted)
+	switch {
+	case len(res.CriticalActionsOutstanding) > 0:
+		fmt.Fprintf(&b, "; still outstanding: %s", strings.Join(res.CriticalActionsOutstanding, ", "))
+	case res.CriticalActionsExecuted > 0:
+		b.WriteString("; no declared critical action is outstanding, so the deliverable most likely landed")
+	}
+	if strings.TrimSpace(res.FinalText) != "" {
+		b.WriteString("; the agent had written its final summary")
+	}
+	b.WriteString(". The end-of-run checks did not run and external effects have not been rolled back.")
+	return b.String()
 }
 
 // scheduledThinkingConfig resolves the extended-thinking config for a scheduled
