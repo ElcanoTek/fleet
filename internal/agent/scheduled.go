@@ -150,6 +150,10 @@ type Agent struct {
 	// into RunConfig so denied tools never enter the model's tool list.
 	personaPolicy *agentcore.PersonaToolPermissions
 
+	// auditProtocolRef names the bundle's self-audit protocol in the audit
+	// guidance ("protocols/self-audit.md"), or "" when the bundle ships none.
+	auditProtocolRef string
+
 	// outputSchema is the task's required terminal machine-output contract. It
 	// is passed into the one agentcore.Run; the driver never implements a second
 	// generation loop of its own.
@@ -226,6 +230,10 @@ type Options struct {
 	// (scheduledrun) resolves it from the bundle manifest's personas: block for
 	// the task's effective persona and threads it into RunConfig.
 	PersonaPolicy *agentcore.PersonaToolPermissions
+	// AuditProtocolRef is the workspace-relative self-audit protocol path the
+	// audit guidance names, from AuditProtocolRef(protocolsDir); "" when the
+	// bundle ships none, so the model is never sent after a missing file.
+	AuditProtocolRef string
 
 	// Overlay is the per-user remote-MCP overlay (#443): the task owner's
 	// OAuth-connected hosted servers, wired via the same compositeBroker the
@@ -343,6 +351,7 @@ func NewAgent(opts Options) *Agent {
 		credentialAllowlist: opts.CredentialAllowlist,
 		thinkingBudget:      opts.ThinkingBudget,
 		personaPolicy:       opts.PersonaPolicy,
+		auditProtocolRef:    opts.AuditProtocolRef,
 		outputSchema:        append(json.RawMessage(nil), opts.OutputSchema...),
 		phoneAFriendEnabled: opts.PhoneAFriendEnabled,
 		reviewerModel:       opts.ReviewerModel,
@@ -690,6 +699,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	} else {
 		inner = agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
 	}
+	inner.SetAuditProtocolRef(a.auditProtocolRef)
 	if a.noteProposer != nil {
 		inner.SetNoteProposer(a.noteProposer)
 	}

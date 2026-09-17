@@ -975,6 +975,22 @@ byte-for-byte unchanged unless an operator opts in.
 
 ---
 
+## The self-audit protocol is named only when the bundle ships it
+
+The finish nudge ("Before finishing: read protocols/self-audit.md and audit
+…"), the `BLOCKED: … requires audit first` text and the typed-declaration
+rejections point the model at the bundle's self-audit protocol. That reference
+is now resolved per run from the filesystem: the chat manager and the
+scheduled runner call `agent.AuditProtocolRef(protocolsDir)`, which returns
+`protocols/self-audit.md` when the bundle's protocols directory contains
+`self-audit.md` and `""` otherwise, and hand it to the policy
+(`SetAuditProtocolRef`). Without the file the texts still demand the audit and
+`confirm_audit(...)`, just without naming a file — a bundle that shipped none
+had a run's fallback model take the old wording literally, look for the file,
+find nothing, and abort a finished report as FAILED / INCOMPLETE. Sub-agents
+inherit the parent's reference. Embedders that never set it keep the default
+wording.
+
 ## The scheduled end-of-run verifier
 
 Scheduled runs layer an extra host-side LLM re-check on top of the shared

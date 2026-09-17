@@ -925,6 +925,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	learnedInstruction := r.activeLearnedInstruction(ctx, task.ID)
 
 	a := agent.NewAgent(agent.Options{
+		AuditProtocolRef: agent.AuditProtocolRef(r.protocolsDir),
 		Config:           r.cfg,
 		Model:            model,
 		FallbackModel:    fallback,

@@ -149,8 +149,7 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 			"consume on the first critical execution and any trailing critical call "+
 			"will be blocked. Likely cause: paraphrased declarations instead of "+
 			"literal tool names. Use the typed `critical_actions` field with the "+
-			"exact tool name (e.g. \"mcp_myserver_create_record\"). "+
-			"See protocols/self-audit.md.", len(declared))
+			"exact tool name (e.g. \"mcp_myserver_create_record\").%s", len(declared), o.auditProtocolClause())
 	}
 }
 
@@ -309,9 +308,10 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 				argsHash: argsHash,
 			})
 		}
+		instruction := o.auditInstruction()
 		return true, fmt.Sprintf("BLOCKED: '%s' requires audit first. "+
-			"Read protocols/self-audit.md, call confirm_audit(...), then retry '%s'.",
-			toolName, toolName)
+			"%s, call confirm_audit(...), then retry '%s'.",
+			toolName, strings.ToUpper(instruction[:1])+instruction[1:], toolName)
 	}
 
 	if isCriticalTool(toolName) && o.auditConfirmed {
@@ -400,7 +400,7 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 			// completion audit) names the two rationalizations unattended runs
 			// actually fail on: declaring done on intent, and declaring done on
 			// a plausible-sounding final answer nothing verified.
-			return false, []string{"Before finishing: read protocols/self-audit.md and audit the current state against every requirement of the original task — do not treat intent, partial progress, or a plausible final answer as proof of completion. Then call confirm_audit(...)."}
+			return false, []string{"Before finishing: " + o.auditInstruction() + " — do not treat intent, partial progress, or a plausible final answer as proof of completion. Then call confirm_audit(...)."}
 		}
 
 		if !o.selfAuditConfirmedOnce {
@@ -530,7 +530,7 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 									"tool. Each entry's `tool` MUST be the literal tool name copied verbatim (e.g. " +
 									"\"mcp_myserver_create_record\") — a bare suffix or paraphrase is refused so the " +
 									"audit cannot silently unlock an unbound mutation. Fix the tool names and re-run " +
-									"confirm_audit. See protocols/self-audit.md."), nil
+									"confirm_audit." + orch.auditProtocolClause()), nil
 						}
 					}
 				} else {
