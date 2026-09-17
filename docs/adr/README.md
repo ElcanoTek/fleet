@@ -73,3 +73,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0062](0062-trunk-based-development.md) | Trunk-based development: `main` is the only branch, every PR squash-merges into it, one CI lane | Accepted; amends ADR-0059 and ADR-0061 |
 | [0063](0063-remove-the-rampart-pii-engine.md) | Remove the Rampart PII engine, its one-click installer and the `scripts/rampart-service` npm tree; PII redaction keeps the built-in pattern engine | Accepted; amends ADR-0028 and ADR-0036 |
 | [0064](0064-application-session-lifetimes.md) | Fleet sessions live one day, idle out after twelve hours, and are re-minted on activity | Accepted; amends ADR-0041 |
+| [0066](0066-mcp-workspace-file-arguments.md) | Hash-bound sandbox workspace references for MCP binary arguments | Accepted |

@@ -744,19 +744,20 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	a.spawnObserver = observer
 
 	deps := agentcore.Deps{
-		Input:           scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
-		Observer:        observer,
-		Policy:          inner, // inner policy exposes orchestration() for confirm_audit + usage
-		Executor:        NewSandboxExecutor(a.sb),
-		Model:           a.model,
-		FallbackModel:   a.fallbackModel,
-		FallbackModels:  a.fallbackModels,
-		MCPClient:       a.mcpClient,
-		MCPBroker:       a.mcpBroker,
-		MCPCatalog:      a.mcpCatalog,
-		LogSession:      a.logSession,
-		MCPServersDirty: a.mcpDirty,
-		ClearMCPDirty:   a.clearMCPDirty,
+		Input:             scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
+		Observer:          observer,
+		Policy:            inner, // inner policy exposes orchestration() for confirm_audit + usage
+		Executor:          NewSandboxExecutor(a.sb),
+		ReadWorkspaceFile: tools.WorkspaceFileReader(a.sb),
+		Model:             a.model,
+		FallbackModel:     a.fallbackModel,
+		FallbackModels:    a.fallbackModels,
+		MCPClient:         a.mcpClient,
+		MCPBroker:         a.mcpBroker,
+		MCPCatalog:        a.mcpCatalog,
+		LogSession:        a.logSession,
+		MCPServersDirty:   a.mcpDirty,
+		ClearMCPDirty:     a.clearMCPDirty,
 	}
 	// Per-user remote-MCP overlay (#443): wire the task owner's OAuth-connected
 	// hosted servers via the SAME compositeBroker the interactive path uses, so a

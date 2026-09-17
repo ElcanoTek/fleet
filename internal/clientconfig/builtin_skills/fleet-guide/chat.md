@@ -187,6 +187,12 @@ Four ways data reaches a conversation. Most days you will use the first two.
 > handle does nothing on your deployment, the feature is off and attaching works
 > the same way.
 
+For connectors that advertise binary file inputs, Fleet can send a hash-checked
+workspace file chunk directly through the connector. This avoids copying large
+base64 strings into the conversation and works without sandbox HTTP access.
+The connector's existing permissions and publication checks still apply; a
+staged upload alone does not mean a page or document was published.
+
 ## 5. Connectors in a conversation
 
 A connector is a live link to a system: a mailbox, a reporting API, a document

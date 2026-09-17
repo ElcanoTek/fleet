@@ -21,6 +21,7 @@
 package redact
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"sync"
@@ -97,7 +98,8 @@ type literal struct {
 // including for secrets acquired at RUNTIME (e.g. a refreshed OAuth bearer,
 // #1124) — while Redact runs on other goroutines.
 type Redactor struct {
-	patterns []pattern
+	patterns       []pattern
+	customPatterns []pattern
 
 	// mu guards literals, index and scopeGen. index mirrors literals for O(1)
 	// dedupe: runtime registration re-offers the same token on every
@@ -165,12 +167,13 @@ func canonicalPatterns() []pattern {
 // caller-supplied regexes (invalid ones are skipped).
 func NewRedactor(extraPatterns []string) *Redactor {
 	pats := canonicalPatterns()
+	canonicalCount := len(pats)
 	for _, p := range extraPatterns {
 		if re, err := regexp.Compile(p); err == nil {
 			pats = append(pats, pattern{re, placeholder})
 		}
 	}
-	return &Redactor{patterns: pats}
+	return &Redactor{patterns: pats, customPatterns: pats[canonicalCount:]}
 }
 
 // AddLiteral registers a raw value for PERMANENT literal redaction — a
@@ -386,6 +389,21 @@ func (r *Redactor) Redact(input string) string {
 	if input == "" || r == nil {
 		return input
 	}
+	if json.Valid([]byte(input)) {
+		// Operator patterns may span keys and values. Run them on the original
+		// serialization too; an invalid structural replacement fails closed.
+		for _, p := range r.customPatterns {
+			input = p.re.ReplaceAllString(input, p.repl)
+		}
+		if !json.Valid([]byte(input)) {
+			return `"[REDACTED]"`
+		}
+		return r.redactJSON(input)
+	}
+	return r.redactPlain(input)
+}
+
+func (r *Redactor) redactPlain(input string) string {
 	r.sweepDue()
 	out := input
 	r.mu.RLock()

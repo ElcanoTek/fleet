@@ -167,6 +167,7 @@ func OptionalServerForToolName(toolName string, optional MCPOptionalSet) string 
 type toolBuildConfig struct {
 	// includeConfirmAudit appends the scheduled-mode confirm_audit tool.
 	includeConfirmAudit bool
+	readWorkspaceFile   func(context.Context, string, int64) ([]byte, error)
 	// loaderTools are extra always-registered tools (scheduled mcp_list/load).
 	loaderTools []fantasy.AgentTool
 	// remediationHints configures the fast.io inline-upload guard hint.
@@ -296,12 +297,13 @@ func buildFantasyToolsWithRoster(
 		// caller. The tool is advertised; a denied call is refused at dispatch with
 		// a governance message.
 		mt := &mcpTool{
-			serverName: st.ServerName,
-			tool:       st.Tool,
-			broker:     broker,
-			policy:     policy,
-			hooks:      cfg.hooks,
-			journal:    cfg.journal,
+			serverName:        st.ServerName,
+			tool:              st.Tool,
+			broker:            broker,
+			policy:            policy,
+			hooks:             cfg.hooks,
+			journal:           cfg.journal,
+			readWorkspaceFile: cfg.readWorkspaceFile,
 		}
 		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
 		// mcp_<server>_<tool> identity, before the disclosure decision below —
@@ -543,13 +545,14 @@ func sanitizeSchemaValue(v any) any {
 // mapping, while the broker owns the call itself (guard, transport, flatten,
 // fast.io trim).
 type mcpTool struct {
-	serverName      string
-	tool            mcp.Tool
-	broker          MCPBroker
-	policy          Policy
-	providerOptions fantasy.ProviderOptions
-	hooks           *hookEngine // #788; fires under the real mcp_<server>_<tool> name (also on the deferred route)
-	journal         TurnJournal // #798; nil = no durable journal (scheduled/evals)
+	readWorkspaceFile func(context.Context, string, int64) ([]byte, error)
+	serverName        string
+	tool              mcp.Tool
+	broker            MCPBroker
+	policy            Policy
+	providerOptions   fantasy.ProviderOptions
+	hooks             *hookEngine // #788; fires under the real mcp_<server>_<tool> name (also on the deferred route)
+	journal           TurnJournal // #798; nil = no durable journal (scheduled/evals)
 }
 
 func (m *mcpTool) Name() string {
@@ -573,6 +576,7 @@ func (m *mcpTool) Info() fantasy.ToolInfo {
 		required = reqStr
 	}
 
+	m.advertiseFileReferences(parameters)
 	return fantasy.ToolInfo{
 		Name:        m.Name(),
 		Description: m.tool.Description,
@@ -612,6 +616,10 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	// The broker owns the call itself — the fast.io inline-upload guard, the
 	// transport against the credentialed client, the content flatten, and the
 	// fast.io response trim. mcpTool keeps only the per-call framing.
+	if err := m.resolveFileReferences(ctx, args); err != nil {
+		message, _ := governToolOutput(ctx, toolName, err.Error())
+		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
+	}
 	callCtx, cancel := context.WithTimeout(ctx, toolCallTimeout)
 	defer cancel()
 	// Sentry breadcrumb (#193): a trail of every MCP call so a captured
