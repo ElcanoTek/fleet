@@ -124,3 +124,60 @@ func TestSanitizeWorkdirPrefix(t *testing.T) {
 		t.Errorf("empty prefix should default to run-, got %q", got)
 	}
 }
+
+// TestExpandWorkspaceRootEnv pins the ${FLEET_WORKSPACE_ROOT} contract: the
+// token resolves to the absolute workspace root on every path, composes with
+// a suffix or a neighbouring value, is never dropped, does not collide with
+// ${FLEET_WORKSPACE}, and leaves token-free maps untouched.
+func TestExpandWorkspaceRootEnv(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+
+	env := map[string]string{
+		"CUTLASS_ALLOWED_DIRS": "/etc/extra:" + WorkspaceRootEnvToken,
+		"REPORT_ROOT":          WorkspaceRootEnvToken + "/reports",
+		"CUTLASS_RUN_WORKDIR":  WorkspaceEnvToken,
+		"STATIC":               "value",
+	}
+	if EnvReferencesWorkspace(map[string]string{"A": WorkspaceRootEnvToken}) {
+		t.Fatal("a root-only reference must not read as a ${FLEET_WORKSPACE} reference (it would mint a per-run dir)")
+	}
+	if !EnvReferencesWorkspaceRoot(env) || EnvReferencesWorkspaceRoot(map[string]string{"A": WorkspaceEnvToken}) {
+		t.Fatal("EnvReferencesWorkspaceRoot must match exactly the root token")
+	}
+
+	out := ExpandWorkspaceRootEnv(env)
+	if got := out["CUTLASS_ALLOWED_DIRS"]; got != "/etc/extra:"+root {
+		t.Errorf("CUTLASS_ALLOWED_DIRS = %q, want the root composed after the operator value", got)
+	}
+	if got := out["REPORT_ROOT"]; got != filepath.Join(root, "reports") {
+		t.Errorf("REPORT_ROOT = %q, want root + suffix", got)
+	}
+	if got := out["CUTLASS_RUN_WORKDIR"]; got != WorkspaceEnvToken {
+		t.Errorf("CUTLASS_RUN_WORKDIR = %q, the per-run token belongs to ExpandWorkspaceEnv", got)
+	}
+	if out["STATIC"] != "value" || len(out) != len(env) {
+		t.Errorf("token-free keys must pass through, got %v", out)
+	}
+	if env["CUTLASS_ALLOWED_DIRS"] != "/etc/extra:"+WorkspaceRootEnvToken {
+		t.Error("input map was mutated")
+	}
+
+	// The per-run expansion with NO workdir drops ${FLEET_WORKSPACE} keys but
+	// must leave a root-only key alone: the root is always offerable.
+	dropped := ExpandWorkspaceEnv(env, "")
+	if _, ok := dropped["CUTLASS_RUN_WORKDIR"]; ok {
+		t.Error("per-run token must still be dropped without a workdir")
+	}
+	if dropped["CUTLASS_ALLOWED_DIRS"] != env["CUTLASS_ALLOWED_DIRS"] {
+		t.Error("root-only key must survive the per-run drop")
+	}
+
+	plain := map[string]string{"A": "1"}
+	if got := ExpandWorkspaceRootEnv(plain); got["A"] != "1" || len(got) != 1 {
+		t.Errorf("token-free map must come back as-is, got %v", got)
+	}
+	if !filepath.IsAbs(WorkspaceRootDir()) {
+		t.Errorf("WorkspaceRootDir must be absolute, got %q", WorkspaceRootDir())
+	}
+}

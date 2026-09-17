@@ -236,6 +236,9 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		// Every other caller has no task identity — drop token-bearing keys
 		// instead of leaking the literal placeholder to the connector.
 		variantEnv = ExpandTaskIDEnv(variantEnv, "")
+		// ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path
+		// (per-run, load-on-demand and broker scopes all bind through here).
+		variantEnv = ExpandWorkspaceRootEnv(variantEnv)
 		cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
 		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, cwd); err != nil {
 			if base.Required {

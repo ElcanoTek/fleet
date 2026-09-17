@@ -280,6 +280,16 @@ func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testi
 			if spellings[spelling] {
 				continue
 			}
+			// The bare ${FLEET_WORKSPACE_ROOT} is a RESERVED spawn-time token
+			// (agentcore.WorkspaceRootEnvToken): a bundle writing it is not
+			// claiming the operator's variable — fleet substitutes the token
+			// at launch and the loader keeps the name out of
+			// ConnectorEnvVarNames — so it is the one parent-owned spelling
+			// that must NOT be refused (pinned separately below). Its
+			// CHAT_/CUTLASS_ alias spellings are ordinary claims and still are.
+			if spelling == "FLEET_WORKSPACE_ROOT" {
+				continue
+			}
 			spellings[spelling] = true
 			fmt.Fprintf(&refs, "      WIRE_KEY_%d: \"${%s}\"\n", len(spellings), spelling)
 		}
@@ -309,6 +319,45 @@ func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testi
 	for spelling := range spellings {
 		if !refused[spelling] {
 			t.Errorf("alias spelling %s of a parent-owned name was not refused", spelling)
+		}
+	}
+}
+
+// TestValidateConnectorParentEnvSeparation_AdmitsReservedWorkspaceRootToken:
+// the bare reserved token is substituted by fleet at spawn, never read from or
+// scrubbed out of the parent env, so a connector allowlisting the workspace
+// root through it is not an overlap — while the alias spellings of the same
+// knob remain ordinary (refused) claims.
+func TestValidateConnectorParentEnvSeparation_AdmitsReservedWorkspaceRootToken(t *testing.T) {
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: mailer
+    type: stdio
+    command: /bin/true
+    always: true
+    env:
+      CUTLASS_ALLOWED_DIRS: "${CUTLASS_ALLOWED_DIRS}:${FLEET_WORKSPACE_ROOT}"
+      CUTLASS_RUN_WORKDIR: "${FLEET_WORKSPACE}"
+`))
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
+	}
+	if err := validateConnectorParentEnvSeparation(bundle); err != nil {
+		t.Fatalf("reserved ${FLEET_WORKSPACE_ROOT} token must not read as a parent-env claim: %v", err)
+	}
+	for _, alias := range []string{"CHAT_WORKSPACE_ROOT", "CUTLASS_WORKSPACE_ROOT"} {
+		aliased, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: mailer
+    type: stdio
+    command: /bin/true
+    always: true
+    env:
+      CUTLASS_ALLOWED_DIRS: "${`+alias+`}"
+`))
+		if err != nil {
+			t.Fatalf("load bundle: %v", err)
+		}
+		if err := validateConnectorParentEnvSeparation(aliased); err == nil || !strings.Contains(err.Error(), alias) {
+			t.Errorf("alias spelling %s is an ordinary claim and must still be refused, got %v", alias, err)
 		}
 	}
 }

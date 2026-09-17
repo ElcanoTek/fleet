@@ -36,6 +36,17 @@ import (
 // key whose value still references the token, so the server sees the var as
 // unset — the servers' documented inert/fail-safe posture — rather than as a
 // literal "${FLEET_WORKSPACE}" path or a confusing blank.
+//
+// ${FLEET_WORKSPACE_ROOT} is the third reserved token: the deployment's
+// workspace root itself — the directory a scheduled run's sandbox works in and
+// the parent of both mcp-shared/ and the minted mcp-runs/ dirs. EVERY spawn
+// path substitutes it (shared, per-run, broker scope, probe) because there is
+// always exactly one root, so unlike ${FLEET_WORKSPACE} it is never dropped
+// and it creates nothing on disk. A connector that allowlists the files it may
+// read — an outbound mailer's content_file / attachments — declares it so a
+// report the run wrote at the workspace root is admissible: the per-run dir's
+// random suffix is not knowable from inside the sandbox, so pointing such an
+// allowlist at ${FLEET_WORKSPACE} alone leaves the model no path it can name.
 const (
 	// WorkspaceEnvToken is the reserved token as it appears in a manifest env
 	// value. Only this bare spelling is reserved; a ${FLEET_WORKSPACE:-x} /
@@ -46,6 +57,10 @@ const (
 	// the current task UUID. Bundles map it to whatever compatibility variable
 	// their connector consumes; fleet itself remains connector-agnostic.
 	TaskIDEnvToken = "${FLEET_TASK_ID}" //nolint:gosec // interpolation placeholder, not a credential.
+	// WorkspaceRootEnvToken is replaced on every spawn path with
+	// WorkspaceRootDir(): the absolute workspace root. See the package doc
+	// above for why a file-allowlisting connector needs it.
+	WorkspaceRootEnvToken = "${FLEET_WORKSPACE_ROOT}" //nolint:gosec // interpolation placeholder, not a credential.
 
 	// sharedMCPWorkspaceSubdir is the stable per-deployment directory (under
 	// the workspace root) substituted for shared, process-lifetime spawns.
@@ -124,6 +139,48 @@ func ExpandWorkspaceEnv(env map[string]string, workdir string) map[string]string
 			continue
 		}
 		out[k] = strings.ReplaceAll(v, WorkspaceEnvToken, workdir)
+	}
+	return out
+}
+
+// EnvReferencesWorkspaceRoot reports whether any value carries the reserved
+// ${FLEET_WORKSPACE_ROOT} token. The two workspace tokens never collide:
+// "${FLEET_WORKSPACE}" (closing brace included) is not a substring of
+// "${FLEET_WORKSPACE_ROOT}".
+func EnvReferencesWorkspaceRoot(env map[string]string) bool {
+	for _, v := range env {
+		if strings.Contains(v, WorkspaceRootEnvToken) {
+			return true
+		}
+	}
+	return false
+}
+
+// WorkspaceRootDir returns the absolute workspace root every spawn path
+// substitutes for ${FLEET_WORKSPACE_ROOT}: FLEET_WORKSPACE_ROOT (legacy
+// CHAT_/CUTLASS_ aliases honored), else ./workspace resolved against the
+// process cwd — the same root SharedMCPWorkspaceDir and PerRunMCPWorkspaceDir
+// nest under. It creates nothing on disk.
+func WorkspaceRootDir() string {
+	root := mcpWorkspaceRoot()
+	if abs, err := filepath.Abs(root); err == nil {
+		return abs
+	}
+	return root
+}
+
+// ExpandWorkspaceRootEnv returns a copy of env with every
+// ${FLEET_WORKSPACE_ROOT} occurrence replaced by WorkspaceRootDir(). There is
+// always a root to offer, so — unlike ExpandWorkspaceEnv — no key is ever
+// dropped. A map with no token references is returned as-is (no copy).
+func ExpandWorkspaceRootEnv(env map[string]string) map[string]string {
+	if !EnvReferencesWorkspaceRoot(env) {
+		return env
+	}
+	root := WorkspaceRootDir()
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		out[k] = strings.ReplaceAll(v, WorkspaceRootEnvToken, root)
 	}
 	return out
 }

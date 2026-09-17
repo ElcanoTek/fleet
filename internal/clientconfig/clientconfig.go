@@ -3120,13 +3120,21 @@ type expandResult struct {
 // never resolved from the process env (even if an operator exports a var of
 // that name) and never blanked. Only the bare ${FLEET_WORKSPACE} spelling is
 // reserved; any colon-suffixed (:-/:?) spelling fails the load (expandExpr).
+//
+// ${FLEET_WORKSPACE_ROOT} (agentcore.WorkspaceRootEnvToken) is the deployment
+// workspace root, substituted on every spawn path. It shares the operator
+// knob's NAME, but the bare token is still never read from the process env
+// here: the spawn paths resolve it through the same root lookup the knob
+// feeds, so an operator setting and the token always agree, and an unset knob
+// yields the ./workspace default instead of a blank.
 const (
-	reservedWorkspaceVar = "FLEET_WORKSPACE"
-	reservedTaskIDVar    = "FLEET_TASK_ID"
+	reservedWorkspaceVar     = "FLEET_WORKSPACE"
+	reservedWorkspaceRootVar = "FLEET_WORKSPACE_ROOT"
+	reservedTaskIDVar        = "FLEET_TASK_ID"
 )
 
 func reservedRuntimeVar(name string) bool {
-	return name == reservedWorkspaceVar || name == reservedTaskIDVar
+	return name == reservedWorkspaceVar || name == reservedWorkspaceRootVar || name == reservedTaskIDVar
 }
 
 // expandExpr resolves the body of a single ${...} expression (the text between

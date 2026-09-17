@@ -107,6 +107,7 @@ func TestRealBundleSanity(t *testing.T) {
 					// launcher, so they legitimately survive load-time
 					// resolution.
 					reserved := func(v string) string {
+						v = strings.ReplaceAll(v, "${FLEET_WORKSPACE_ROOT}", "")
 						v = strings.ReplaceAll(v, "${FLEET_WORKSPACE}", "")
 						return strings.ReplaceAll(v, "${FLEET_TASK_ID}", "")
 					}

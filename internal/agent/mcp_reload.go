@@ -107,6 +107,7 @@ func MCPServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 			// Mirror the shared spawn's ${FLEET_TASK_ID} handling (dropped —
 			// no task identity) so the diff compares like with like.
 			env = agentcore.ExpandTaskIDEnv(env, "")
+			env = agentcore.ExpandWorkspaceRootEnv(env)
 			// Dir must be the SAME value BuildMCPClient's spawn used, or
 			// serverDefEqual sees a changed def and restarts every server on
 			// every reload.

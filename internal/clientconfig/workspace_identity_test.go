@@ -59,6 +59,36 @@ mcp_servers:
 	}
 }
 
+// TestReservedWorkspaceRootTokenSurvivesLoad: ${FLEET_WORKSPACE_ROOT} shares
+// its name with the operator knob, so an exported FLEET_WORKSPACE_ROOT is the
+// realistic hijack — the bare token must still reach the spawn path verbatim,
+// composed with a suffix or another reference.
+func TestReservedWorkspaceRootTokenSurvivesLoad(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", "/must/not/resolve/at/bundle/load")
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: mailer
+    type: stdio
+    command: python3
+    args: ["mailer.py"]
+    always: true
+    env:
+      ALLOWED_DIRS: "${FLEET_WORKSPACE_ROOT}"
+      ALLOWED_EXTRA: "${FLEET_WORKSPACE_ROOT}/exports"
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := b.MCPServerConfigs()["mailer"].Env
+	if got := env["ALLOWED_DIRS"]; got != "${FLEET_WORKSPACE_ROOT}" {
+		t.Fatalf("workspace root token resolved during bundle load: %q", got)
+	}
+	if got := env["ALLOWED_EXTRA"]; got != "${FLEET_WORKSPACE_ROOT}/exports" {
+		t.Fatalf("workspace root token + suffix not preserved: %q", got)
+	}
+}
+
 // TestReservedTokenOpFormsFailTheLoad pins the guard companion to the
 // preserved-verbatim contract above: any colon-suffixed spelling of a reserved
 // runtime token (:-, :?, or a typo'd op) fails the load loudly, naming the
@@ -71,6 +101,7 @@ func TestReservedTokenOpFormsFailTheLoad(t *testing.T) {
 		{"workspace required form", `"${FLEET_WORKSPACE:?must be set}"`},
 		{"workspace unknown op", `"${FLEET_WORKSPACE:junk}"`},
 		{"task id default form", `"${FLEET_TASK_ID:-none}"`},
+		{"workspace root default form", `"${FLEET_WORKSPACE_ROOT:-/srv/workspace}"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,6 +137,7 @@ mcp_servers:
     always: true
     env:
       CUTLASS_RUN_WORKDIR: "${FLEET_WORKSPACE}"
+      CUTLASS_ALLOWED_DIRS: "${FLEET_WORKSPACE_ROOT}"
       LEGACY_TASK_ID: "${FLEET_TASK_ID}"
 `)
 	b, err := Load(dir)
@@ -113,7 +145,7 @@ mcp_servers:
 		t.Fatalf("load: %v", err)
 	}
 	for _, name := range b.EnvVarNames() {
-		if name == "FLEET_WORKSPACE" || name == "FLEET_TASK_ID" {
+		if name == "FLEET_WORKSPACE" || name == "FLEET_WORKSPACE_ROOT" || name == "FLEET_TASK_ID" {
 			t.Errorf("EnvVarNames must exclude reserved token %q, got %v", name, b.EnvVarNames())
 		}
 	}

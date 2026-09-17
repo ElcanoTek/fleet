@@ -59,6 +59,43 @@ aliases honored), else `./workspace`. A spawn path with no directory to offer
 drops the token-bearing keys so the server sees the var as **unset** (its
 documented inert posture) — never a literal token, never an empty string.
 
+### 1a. Reserved `${FLEET_WORKSPACE_ROOT}` — the root itself, on every path
+
+`${FLEET_WORKSPACE}` is the connector's *ledger* directory. It is not the
+directory the run's files live in: a scheduled run's sandbox works at the
+workspace root (`task.workspace_path`, the same `<workspace-root>` above), and
+the per-run `mcp-runs/task-<id>-<random>/` dir is minted with a suffix the
+model cannot know from inside the sandbox. A connector that allowlists the
+files it may read — the SES sender's `content_file` / `attachments`
+(`CUTLASS_ALLOWED_DIRS`) — therefore rejected every path the model could name:
+the workspace root ("outside allowed directories"), the sandbox's own `/tmp`
+(a different filesystem from the server's), and the per-run dir of an earlier
+attempt. The Reklaim health scan spent 20 turns per run on this before sending
+a hand-typed stub instead of its 350 KB report.
+
+A bundle may therefore also write, on a **stdio** server entry:
+
+```yaml
+env:
+  CUTLASS_RUN_WORKDIR: "${FLEET_WORKSPACE}"
+  CUTLASS_ALLOWED_DIRS: "${CUTLASS_ALLOWED_DIRS}:${FLEET_WORKSPACE_ROOT}"
+```
+
+| Spawn path | Substituted value |
+|---|---|
+| **Every** path — boot catalog, hot reload, load-on-demand, `fleet mcp test`, broker scopes, the dedicated per-run client | `agentcore.WorkspaceRootDir()` — the absolute `<workspace-root>` |
+
+There is always exactly one root, so the token is never dropped and never
+blanked, and substituting it creates nothing on disk (unlike the other two
+workspace dirs it does not mint anything, so a root-only reference does not
+trigger a per-run dir). The bare spelling is reserved like the others: it is
+never resolved from the process env at bundle load — the token shares its name
+with the operator knob on purpose, and the spawn paths resolve it through the
+same lookup that knob feeds, so the two can never disagree — and any
+colon-suffixed form fails the load. Admitting the root means the connector can
+read anything under the shared scheduled workspace; that is the same view the
+sandbox already has (fleet#1543 tracks per-task isolation of that root).
+
 **Honest scope.** On the *shared* spawn paths (the boot roster the broker child
 keeps for tool discovery, hot reload, `fleet mcp test`, and load-on-demand onto
 a shared client) MCP subprocesses are host-side and process-lifetime, so the
@@ -194,7 +231,7 @@ circularity. Three deliberate edges:
   a `url:`/`command:`/`sandbox.image`, so the literal token could never work.
   `${VAR:-default}` with the var unset still resolves to the default quietly;
   `$${...}` still writes an intentional literal. A bare reserved token
-  (`${FLEET_WORKSPACE}`/`${FLEET_TASK_ID}`) outside an `mcp_servers` env value
+  (`${FLEET_WORKSPACE}`/`${FLEET_WORKSPACE_ROOT}`/`${FLEET_TASK_ID}`) outside an `mcp_servers` env value
   fails the same way — the spawn paths substitute it only there, so even in
   the lazily-RESOLVED header maps (where `interpolate()` merely preserves it
   verbatim) it would ship on the wire as the literal token. Likewise a
