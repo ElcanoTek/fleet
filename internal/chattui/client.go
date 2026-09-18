@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -33,6 +34,13 @@ func (e Event) Str(key string) string {
 type Client struct {
 	cfg  Config
 	http *http.Client
+
+	// defaultModel is the workspace default slug adopted from GET /client-config
+	// when the operator passed no --model. It is sent ONLY on turns that start a
+	// new conversation (empty convID): resuming an existing thread must leave the
+	// conversation's stored model untouched (an empty request model means "no
+	// opinion, keep what's stored" server-side).
+	defaultModel string
 }
 
 // NewClient builds a Client. The HTTP client has NO overall timeout — a turn can
@@ -43,6 +51,39 @@ func NewClient(cfg Config) *Client {
 		cfg:  cfg,
 		http: &http.Client{Timeout: 0},
 	}
+}
+
+// AdoptDefaultModel records the workspace default slug (see defaultModel).
+func (c *Client) AdoptDefaultModel(slug string) { c.defaultModel = strings.TrimSpace(slug) }
+
+// EffectiveModel reports what the next NEW conversation would run on: the
+// explicit --model//model when set, else the adopted workspace default.
+func (c *Client) EffectiveModel() string {
+	if strings.TrimSpace(c.cfg.Model) != "" {
+		return c.cfg.Model
+	}
+	return c.defaultModel
+}
+
+// turnModel picks the slug for one turn: an explicit --model//model always wins;
+// the adopted workspace default applies only when starting a NEW conversation.
+func (c *Client) turnModel(convID string) string {
+	if strings.TrimSpace(c.cfg.Model) != "" {
+		return c.cfg.Model
+	}
+	if strings.TrimSpace(convID) == "" {
+		return c.defaultModel
+	}
+	return ""
+}
+
+// setAuthHeaders applies the shared-secret + identity headers every chattui
+// request carries. The token is a header, never a URL/query value, so it cannot
+// land in access logs.
+func (c *Client) setAuthHeaders(req *http.Request) {
+	req.Header.Set("X-Chat-Server-Token", c.cfg.Token)
+	req.Header.Set("X-User-Email", c.cfg.Email)
+	req.Header.Set("X-Fleet-Client", "fleet-chat")
 }
 
 // turnRequest is the subset of the server's chatRequest the TUI sends.
@@ -62,7 +103,7 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 	body, err := json.Marshal(turnRequest{
 		Message:        message,
 		ConversationID: convID,
-		Model:          c.cfg.Model,
+		Model:          c.turnModel(convID),
 		Persona:        c.cfg.Persona,
 	})
 	if err != nil {
@@ -74,9 +115,7 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("X-Chat-Server-Token", c.cfg.Token)
-	req.Header.Set("X-User-Email", c.cfg.Email)
-	req.Header.Set("X-Fleet-Client", "fleet-chat")
+	c.setAuthHeaders(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -192,6 +231,74 @@ func parseSSE(r io.Reader, fn func(Event)) error {
 		return fmt.Errorf("read stream: %w", err)
 	}
 	return nil
+}
+
+// DefaultModel fetches the workspace's advertised default model slug from
+// GET /client-config — the same endpoint the web model picker reads — so a
+// `fleet chat` with no --model lands on the same model a new web chat would
+// instead of dying on the server's "frontend must send a model" rejection
+// (#provider-aware model selection makes an empty slug a hard error).
+func (c *Client) DefaultModel(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+"/client-config", nil)
+	if err != nil {
+		return "", err
+	}
+	c.setAuthHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("client-config returned %d", resp.StatusCode)
+	}
+	var body struct {
+		Models struct {
+			DefaultModel string `json:"default_model"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return "", fmt.Errorf("decode client-config: %w", err)
+	}
+	return strings.TrimSpace(body.Models.DefaultModel), nil
+}
+
+// ResolveApproval approves (or denies) a staged approval card: POST
+// /conversations/{convID}/approvals/{approvalID} with {"approved": bool} — the
+// exact call the web approval card's Send/Cancel buttons make. On approve the
+// server runs the staged tool and returns its outcome; the returned strings are
+// the resolution status ("approved"/"rejected") and the tool's result text.
+func (c *Client) ResolveApproval(ctx context.Context, convID, approvalID string, approved bool) (string, string, error) {
+	body, err := json.Marshal(map[string]bool{"approved": approved})
+	if err != nil {
+		return "", "", err
+	}
+	url := c.cfg.ServerURL + "/conversations/" + url.PathEscape(convID) + "/approvals/" + url.PathEscape(approvalID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", "", fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
+	}
+	var out struct {
+		Status     string `json:"status"`
+		ResultText string `json:"result_text"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {
+		return "", "", fmt.Errorf("decode approval response: %w", err)
+	}
+	return out.Status, out.ResultText, nil
 }
 
 // Ping reports whether the server's /healthz answers quickly — a fast, friendly

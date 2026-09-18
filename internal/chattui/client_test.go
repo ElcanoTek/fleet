@@ -99,7 +99,7 @@ func TestRunOneShot_StreamsTextToStdout(t *testing.T) {
 	defer srv.Close()
 
 	var out, errOut bytes.Buffer
-	code := runOneShot(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"}, "", "what is 6*7?", strings.NewReader(""), &out, &errOut)
+	code := runOneShot(NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"}), "", "what is 6*7?", strings.NewReader(""), &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit %d; stderr=%s", code, errOut.String())
 	}
@@ -108,6 +108,12 @@ func TestRunOneShot_StreamsTextToStdout(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "python") {
 		t.Errorf("tool-call progress should go to stderr: %q", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "conversation: conv-xyz") {
+		t.Errorf("conversation id should be reported on stderr for resuming: %q", errOut.String())
+	}
+	if strings.Contains(out.String(), "conv-xyz") {
+		t.Errorf("conversation id must NOT leak into stdout (script capture): %q", out.String())
 	}
 }
 

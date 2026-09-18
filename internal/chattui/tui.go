@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,16 @@ type turnDoneMsg struct {
 }                            // turn finished (or stream ended)
 type spinnerTickMsg struct{} // animate the "working" indicator
 
+// approvalResolvedMsg reports the outcome of a /approve //deny POST back into
+// the model so the transcript can commit what happened.
+type approvalResolvedMsg struct {
+	tool       string
+	approved   bool
+	status     string // server-reported resolution ("approved" / "rejected")
+	resultText string // the staged tool's outcome text on approve
+	err        error
+}
+
 func spinnerTick() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return spinnerTickMsg{} })
 }
@@ -57,13 +68,31 @@ type model struct {
 	assistant strings.Builder // raw assistant text accumulated this turn
 	toolLines []string        // rendered per-tool one-liners this turn
 	toolNames []string        // raw tool names, index-aligned with toolLines
-	reasoning strings.Builder // raw reasoning this turn (shown only when showReasoning)
-	cancel    context.CancelFunc
-	frame     int
+	// approvalLines renders each staged card this turn. Kept OUT of toolLines:
+	// tool.result rewrites the LAST tool line on completion, and a staged
+	// tool's result arrives AFTER its card — an approval line in toolLines
+	// would be clobbered into a bogus "✗ failed" (observed live).
+	approvalLines []string
+	reasoning     strings.Builder // raw reasoning this turn (shown only when showReasoning)
+	cancel        context.CancelFunc
+	frame         int
 
 	showReasoning bool
 	lastUser      string // for /retry
 	statusErr     string // last error line (cleared on next send)
+
+	// Staged critical tools awaiting the human's call. Outlives the turn that
+	// staged them (the card is settled after turn.completed), so this is NOT
+	// reset per-turn like toolLines.
+	pending []pendingApproval
+}
+
+// pendingApproval is one staged approval card as the TUI tracks it: the id the
+// resolve endpoint needs, the tool name, and a one-line human summary.
+type pendingApproval struct {
+	id      string
+	tool    string
+	summary string
 }
 
 func newModel(cfg Config) *model {
@@ -86,7 +115,7 @@ func newModel(cfg Config) *model {
 				}
 				return ""
 			}()))
-	m.history = append(m.history, styleDim.Render("Type a message and press Enter. Slash commands: /new /retry /model <slug> /reasoning /clear /quit."))
+	m.history = append(m.history, styleDim.Render("Type a message and press Enter. Slash commands: /new /retry /model <slug> /reasoning /approve /deny /clear /quit."))
 	return m
 }
 
@@ -137,6 +166,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnDoneMsg:
 		m.finishTurn(msg)
+		m.refresh()
+		m.vp.GotoBottom()
+
+	case approvalResolvedMsg:
+		m.finishApproval(msg)
 		m.refresh()
 		m.vp.GotoBottom()
 
@@ -213,6 +247,10 @@ func (m *model) runSlash(text string) tea.Cmd {
 		return tea.Quit
 	case "/new":
 		m.convID = ""
+		// Pending cards belong to the conversation being abandoned; the TUI
+		// resolves by convID, so keeping them would target a thread we're no
+		// longer on. They stay pending server-side (settle them in the web UI).
+		m.pending = m.pending[:0]
 		m.history = append(m.history, styleDim.Render("— new conversation —"))
 		m.refresh()
 		m.vp.GotoBottom()
@@ -229,7 +267,7 @@ func (m *model) runSlash(text string) tea.Cmd {
 		return nil
 	case "/model":
 		if len(fields) < 2 {
-			m.history = append(m.history, styleDim.Render("usage: /model <slug>  (current: "+orDefault(m.client.cfg.Model, "server default")+")"))
+			m.history = append(m.history, styleDim.Render("usage: /model <slug>  (current: "+orDefault(m.client.EffectiveModel(), "server default")+")"))
 		} else {
 			m.client.cfg.Model = fields[1]
 			m.history = append(m.history, styleDim.Render("— model set to "+fields[1]+" (applies to the next turn) —"))
@@ -237,6 +275,8 @@ func (m *model) runSlash(text string) tea.Cmd {
 		m.refresh()
 		m.vp.GotoBottom()
 		return nil
+	case "/approve", "/deny":
+		return m.resolveNextApproval(fields[0] == "/approve")
 	case "/retry":
 		if m.lastUser == "" {
 			m.history = append(m.history, styleDim.Render("— nothing to retry —"))
@@ -251,6 +291,8 @@ func (m *model) runSlash(text string) tea.Cmd {
 			styleTool.Render("  /retry     ") + styleDim.Render("resend your last message"),
 			styleTool.Render("  /model <s> ") + styleDim.Render("switch model for the next turn"),
 			styleTool.Render("  /reasoning ") + styleDim.Render("toggle live reasoning display"),
+			styleTool.Render("  /approve   ") + styleDim.Render("run the oldest pending approval card"),
+			styleTool.Render("  /deny      ") + styleDim.Render("refuse the oldest pending approval card"),
 			styleTool.Render("  /clear     ") + styleDim.Render("clear the transcript"),
 			styleTool.Render("  /quit      ") + styleDim.Render("exit (Ctrl+D too) · Esc/Ctrl+C cancels a running turn"),
 		}, "\n"))
@@ -275,6 +317,7 @@ func (m *model) sendTurn(text string) tea.Cmd {
 	m.reasoning.Reset()
 	m.toolLines = m.toolLines[:0]
 	m.toolNames = m.toolNames[:0]
+	m.approvalLines = m.approvalLines[:0]
 	m.frame = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -319,13 +362,97 @@ func (m *model) applyEvent(ev Event) {
 			if len(m.toolNames) >= n {
 				name = m.toolNames[n-1]
 			}
-			if isErr, _ := ev.Data["is_err"].(bool); isErr {
+			// A staged critical tool resolves its call with an is_err
+			// APPROVAL_REQUIRED sentinel — that is a PAUSE for human review,
+			// not a failure, and rendering ✗ would tell the user the action
+			// died when it is actually waiting on them.
+			if strings.HasPrefix(ev.Str("text"), "APPROVAL_REQUIRED:") {
+				m.toolLines[n-1] = styleTool.Render("⏸ "+name) + styleDim.Render(" awaiting approval")
+			} else if isErr, _ := ev.Data["is_err"].(bool); isErr {
 				m.toolLines[n-1] = styleToolErr.Render("✗ "+name) + styleDim.Render(" failed")
 			} else {
 				m.toolLines[n-1] = styleToolOK.Render("✓ "+name) + styleDim.Render(" done")
 			}
 		}
+	case "tool.approval_required":
+		// A critical tool staged its card. Track it (it outlives this turn) and
+		// show a transcript line with the human-decision commands — the web
+		// renders a card here; the terminal renders text.
+		tool := orDefault(ev.Str("tool"), "tool")
+		ap := pendingApproval{
+			id:      ev.Str("approval_id"),
+			tool:    tool,
+			summary: approvalSummaryLine(tool, ev.Data["summary"]),
+		}
+		m.pending = append(m.pending, ap)
+		line := styleTool.Render("⚠ " + tool + " needs approval")
+		if ap.summary != "" {
+			line += styleDim.Render(" — " + ap.summary)
+		}
+		line += styleDim.Render("  (/approve · /deny)")
+		m.approvalLines = append(m.approvalLines, line)
+	case "tool.approval_superseded":
+		// The agent re-staged the same tool; the server voided the older card.
+		// Drop it so /approve can never settle a dead approval.
+		tool := ev.Str("tool")
+		kept := m.pending[:0]
+		for _, ap := range m.pending {
+			if ap.tool != tool {
+				kept = append(kept, ap)
+			}
+		}
+		m.pending = kept
 	}
+}
+
+// resolveNextApproval settles the OLDEST pending card (FIFO matches the
+// transcript's top-to-bottom reading order) and returns a command that POSTs
+// the decision and reports back via approvalResolvedMsg. Approving runs the
+// staged tool server-side, which can take seconds — hence async, never a
+// blocking call on the UI goroutine.
+func (m *model) resolveNextApproval(approve bool) tea.Cmd {
+	if len(m.pending) == 0 {
+		m.history = append(m.history, styleDim.Render("— no pending approvals —"))
+		m.refresh()
+		m.vp.GotoBottom()
+		return nil
+	}
+	ap := m.pending[0]
+	m.pending = m.pending[1:]
+	verb := "denying"
+	if approve {
+		verb = "approving"
+	}
+	m.history = append(m.history, styleDim.Render("— "+verb+" "+ap.tool+"… —"))
+	m.refresh()
+	m.vp.GotoBottom()
+
+	client := m.client
+	convID := m.convID
+	return func() tea.Msg {
+		status, resultText, err := client.ResolveApproval(context.Background(), convID, ap.id, approve)
+		return approvalResolvedMsg{tool: ap.tool, approved: approve, status: status, resultText: resultText, err: err}
+	}
+}
+
+// finishApproval commits an approval resolution to the transcript: the staged
+// tool's own outcome text on approve (task id, send confirmation — the same
+// text the web card shows), a short refusal line on deny, or the error.
+func (m *model) finishApproval(msg approvalResolvedMsg) {
+	if msg.err != nil {
+		m.statusErr = msg.err.Error()
+		m.history = append(m.history, styleErr.Render("error: ")+msg.err.Error())
+		return
+	}
+	if !msg.approved {
+		m.history = append(m.history, styleToolErr.Render("✗ "+msg.tool)+styleDim.Render(" denied"))
+		return
+	}
+	block := styleToolOK.Render("✓ " + msg.tool + " approved")
+	if t := strings.TrimSpace(msg.resultText); t != "" {
+		block += "\n" + styleDim.Render(t)
+	}
+	m.history = append(m.history, block)
 }
 
 func (m *model) finishTurn(msg turnDoneMsg) {
@@ -342,6 +469,9 @@ func (m *model) finishTurn(msg turnDoneMsg) {
 	block.WriteString(stylePillAgent.Render("agent"))
 	if len(m.toolLines) > 0 {
 		block.WriteString("\n" + strings.Join(m.toolLines, "\n"))
+	}
+	if len(m.approvalLines) > 0 {
+		block.WriteString("\n" + strings.Join(m.approvalLines, "\n"))
 	}
 	if txt := strings.TrimSpace(m.assistant.String()); txt != "" {
 		block.WriteString("\n" + m.md.render(txt, m.contentWidth()))
@@ -360,6 +490,7 @@ func (m *model) finishTurn(msg turnDoneMsg) {
 	}
 	m.toolLines = m.toolLines[:0]
 	m.toolNames = m.toolNames[:0]
+	m.approvalLines = m.approvalLines[:0]
 }
 
 // refresh rebuilds the viewport content from history + the in-flight turn.
@@ -375,6 +506,9 @@ func (m *model) refresh() {
 		}
 		if len(m.toolLines) > 0 {
 			live.WriteString("\n" + strings.Join(m.toolLines, "\n"))
+		}
+		if len(m.approvalLines) > 0 {
+			live.WriteString("\n" + strings.Join(m.approvalLines, "\n"))
 		}
 		if txt := m.assistant.String(); txt != "" {
 			live.WriteString("\n" + txt) // raw while streaming; glamour on completion
@@ -409,9 +543,13 @@ func (m *model) render() string {
 	header := barLine(m.width, styleHeader.Render("⚓ fleet chat"), styleDim.Render(right))
 
 	status := styleDim.Render("ready")
-	if m.streaming {
+	switch {
+	case m.streaming:
 		status = styleAccent.Render(spinnerFrames[m.frame%len(spinnerFrames)]+" streaming") + styleDim.Render(" — Esc/Ctrl+C to cancel")
-	} else if m.statusErr != "" {
+	case len(m.pending) > 0:
+		n := strconv.Itoa(len(m.pending))
+		status = styleTool.Render("⚠ "+n+" approval"+pluralS(len(m.pending))+" pending") + styleDim.Render(" — /approve · /deny")
+	case m.statusErr != "":
 		status = styleErr.Render("⚠ " + m.statusErr)
 	}
 	statusBar := barLine(m.width, status, styleDim.Render("PgUp/PgDn scroll · /help"))
@@ -462,6 +600,13 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func shortID(id string) string {

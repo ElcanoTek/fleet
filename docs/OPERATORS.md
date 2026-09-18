@@ -23,11 +23,26 @@ is read automatically from the same env file the server uses (`$FLEET_ENV_FILE`,
 else `.env.local`, else `/etc/fleet/fleet.env`), so an operator who can read that
 0600 file logs in without copying the token anywhere. The token is still never
 accepted on argv — override discovery with `$FLEET_SERVER_TOKEN`, `--token-file`,
-or `--env-file <path>` when the file lives elsewhere.
+or `--env-file <path>` when the file lives elsewhere. With no `--model`, a new
+conversation starts on the workspace default the server advertises (the same
+slug the web picker starts on); resuming with `--conversation <id>` keeps the
+model stored on that thread, and `/model <slug>` switches mid-session.
 Both interactive and one-shot modes require a terminal SSE lifecycle event:
 server-reported turn/model errors and an interrupted stream are failures, and
 one-shot mode exits nonzero so automation cannot mistake a partial answer for
-success.
+success. One-shot mode prints the conversation id to stderr (`conversation:
+<id>`) so scripts can resume the thread — stdout carries only the agent's
+prose.
+
+Critical tools (send an email, schedule a task, a bundle-declared deploy) stage
+an approval card, and the TUI is a full participant in that flow: the card's
+summary renders in the transcript with the pending count in the status bar,
+`/approve` runs the oldest staged action and `/deny` refuses it (the staged
+tool's own outcome — task id, send confirmation — prints on approve), and a
+staged call's tool line reads `⏸ awaiting approval` rather than a misleading
+failure. Scripts settle cards without a terminal: one-shot mode prints every
+staged approval id to stderr, and `fleet chat --conversation <id> --approve
+<approval-id>` (or `--deny`) resolves it and prints the outcome.
 
 ```
 fleet bootstrap   →   fleet update   →   fleet status / fleet doctor
