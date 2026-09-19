@@ -604,8 +604,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// but only from THIS round. Attempt rollbacks cannot precede roundMark.
 		_, accumulatedText := sink.snapshot()
 		finalText := strings.TrimSpace(accumulatedText[roundMark.finalText:])
-		if finalResult != nil && strings.TrimSpace(finalResult.Response.Content.Text()) != "" {
-			finalText = strings.TrimSpace(finalResult.Response.Content.Text())
+		if finalResult != nil {
+			if text := completedResponseText(finalResult.Response.Content); text != "" {
+				finalText = text
+			}
 		}
 
 		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, panicAttribution)

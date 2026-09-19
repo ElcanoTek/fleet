@@ -165,7 +165,7 @@ func (m *model) matchCardPolicy(a pendingApproval) (ApprovalDecision, bool) {
 func (c *Client) loadApprovals(ctx context.Context, conversation string) ([]pendingApproval, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+"/conversations/"+url.PathEscape(conversation)+"?omit_history=1", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+"/conversations/"+url.PathEscape(conversation)+"?omit_history=1&settlement_only=1", nil)
 	if err != nil {
 		return nil, err
 	}

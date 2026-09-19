@@ -1427,7 +1427,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	}
 	if approval.Status != "pending" {
 		// Idempotent: return the already-resolved state without re-firing.
-		writeJSON(w, approvalClientState(approval))
+		s.writeResolvedApprovalState(w, r, user, approval.ID)
 		return
 	}
 	if handlerOnlyApproval(approval.ToolName) && req.Scope != "" && req.Scope != "once" {
@@ -1632,7 +1632,16 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "approval already resolved", http.StatusConflict)
 		return
 	}
-	writeJSON(w, approvalClientState(latest))
+	state := approvalClientState(latest)
+	if latest.ToolName == "suggest_advanced_model" && latest.Status == "approved" {
+		conv, err := s.store.Get(r.Context(), user, latest.ConversationID)
+		if err != nil || conv == nil {
+			http.Error(w, "could not load conversation model", http.StatusInternalServerError)
+			return
+		}
+		state["model"] = conv.Model
+	}
+	writeJSON(w, state)
 }
 
 // handleSuggestAdvancedApproval resolves a suggest_advanced_model card.
@@ -1836,7 +1845,7 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 		return "", fmt.Errorf("unsupported tool for approval: %s", approval.ToolName)
 	}
 	var args map[string]any
-	if err := json.Unmarshal([]byte(approval.ArgsJSON), &args); err != nil {
+	if err := decodeJSONNumbers([]byte(approval.ArgsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 	// Give the send a generous but bounded timeout — SendGrid is usually

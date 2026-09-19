@@ -202,6 +202,7 @@ type chatStore interface {
 	// "ran without asking" records, whose undo hint would otherwise exist
 	// only on the SSE stream nobody was watching (#1153's record contract).
 	ListResolvedApprovals(ctx context.Context, userEmail, convID string) ([]store.Approval, error)
+	ListExecutingApprovals(ctx context.Context, userEmail, convID, sentinel string) ([]store.Approval, error)
 	// ListExpiredApprovals + ClaimExpiredApproval back the server-side
 	// expiry sweep (#225): pending approvals past their expires_at
 	// deadline are auto-denied for notification/audit. The claim-time

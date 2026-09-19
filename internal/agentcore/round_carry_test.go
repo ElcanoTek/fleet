@@ -72,6 +72,7 @@ type textCapturingModel struct {
 	slug        string
 	replies     []string
 	omitTextEnd bool
+	secondBlock string
 
 	recMu sync.Mutex
 	seen  [][]fantasy.Message
@@ -100,6 +101,17 @@ func (m *textCapturingModel) Stream(_ context.Context, call fantasy.Call) (fanta
 		}
 		if !m.omitTextEnd && !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"}) {
 			return
+		}
+		if m.secondBlock != "" {
+			for _, part := range []fantasy.StreamPart{
+				{Type: fantasy.StreamPartTypeTextStart, ID: "t2"},
+				{Type: fantasy.StreamPartTypeTextDelta, ID: "t2", Delta: m.secondBlock},
+				{Type: fantasy.StreamPartTypeTextEnd, ID: "t2"},
+			} {
+				if !yield(part) {
+					return
+				}
+			}
 		}
 		yield(fantasy.StreamPart{
 			Type:         fantasy.StreamPartTypeFinish,
@@ -259,6 +271,28 @@ func TestRun_FinalRoundOnlyWhenProviderOmitsCompletedText(t *testing.T) {
 	defer observer.mu.Unlock()
 	if got := reconstructVisibleText(observer.events); got != result.FinalText {
 		t.Fatalf("live result %q differs from stored %q", got, result.FinalText)
+	}
+}
+
+func TestRunPreservesAllCompletedTextBlocks(t *testing.T) {
+	session := NewLogSession()
+	observer := &streamEventObserver{}
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("answer")}, label: "multi-block"},
+		Policy: newRoundsPolicy(session, 0), Executor: &stubExecutor{},
+		Model:    &textCapturingModel{slug: "multi-block", replies: []string{"first "}, secondBlock: "second"},
+		Observer: observer, LogSession: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "first second" {
+		t.Fatalf("completed blocks truncated: %q", result.FinalText)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if got := reconstructVisibleText(observer.events); got != result.FinalText {
+		t.Fatalf("live text %q != persisted result %q", got, result.FinalText)
 	}
 }
 

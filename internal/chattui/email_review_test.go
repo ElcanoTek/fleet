@@ -25,6 +25,34 @@ func frozenWire(args map[string]any, complete bool) map[string]any {
 	return map[string]any{"complete": complete, "args": args}
 }
 
+func TestSSEEscapedEmailFitsTransport(t *testing.T) {
+	body := strings.Repeat("<", 900<<10)
+	encoded, err := json.Marshal(map[string]any{
+		"approval_id": "large", "tool": "mcp_sendgrid_send_email",
+		"summary":     map[string]any{"content": body},
+		"frozen_args": frozenWire(map[string]any{"content": body}, true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) <= 8<<20 {
+		t.Fatal("fixture must exceed the old scanner cap")
+	}
+	var got Event
+	err = parseSSE(strings.NewReader("event: tool.approval_required\ndata: "+string(encoded)+"\n\n"), func(ev Event) { got = ev })
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := got.Data["frozen_args"].(json.RawMessage)
+	if !ok {
+		t.Fatal("missing frozen arguments")
+	}
+	args, complete, present := parseFrozenArgs(raw)
+	if !present || !complete || args["content"] != body {
+		t.Fatal("transport truncated frozen email")
+	}
+}
+
 func assertFullEmailReview(t *testing.T, text string) {
 	t.Helper()
 	for _, want := range []string{"primary@example.com", "copy@example.com", "hidden@example.com", "BODY_END", "report.csv", "chart.png", "logo"} {
@@ -122,9 +150,22 @@ func TestTUIAutomaticallyPresentsFullFrozenBash(t *testing.T) {
 
 func TestFinishApprovalPinsSuggestedModel(t *testing.T) {
 	m := newModel(Config{Model: "old/slug"})
+	m.convID = "suggested"
 	m.finishApproval(approvalResolvedMsg{approved: true, status: "approved", tool: "suggest_advanced_model", model: "acme/frontier-1-pro"})
-	if m.client.cfg.Model != "acme/frontier-1-pro" {
-		t.Fatalf("model = %q, want pinned suggestion", m.client.cfg.Model)
+	if m.client.turnModel(m.convID) != "acme/frontier-1-pro" {
+		t.Fatalf("model = %q, want pinned suggestion", m.client.turnModel(m.convID))
+	}
+	m.runSlash("/new")
+	if got := m.client.turnModel(m.convID); got != "old/slug" {
+		t.Fatalf("new conversation lost explicit CLI override: %q", got)
+	}
+	m.client.cfg.Model = ""
+	m.client.AdoptDefaultModel("workspace/default")
+	if got := m.client.turnModel(""); got != "workspace/default" {
+		t.Fatalf("new conversation inherited suggestion: %q", got)
+	}
+	if got := m.client.turnModel("other"); got != "" {
+		t.Fatalf("resume would override stored model: %q", got)
 	}
 }
 

@@ -5,6 +5,44 @@ import (
 	"testing"
 )
 
+func TestListExecutingApprovalsExcludesCompletedBodies(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const user = "alice@example.com"
+	const sentinel = "Approved — executing…"
+	conv, err := s.CreateConversation(ctx, user, "t", "victoria", "m", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := s.CreateApproval(ctx, conv.ID, user, "bash", "running", `{"command":"echo hi"}`, 0, ApprovalSeat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ClaimApproval(ctx, user, running.ID, "approved", sentinel); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	for range MaxResolvedApprovalsPerConversation + 1 {
+		a, err := s.CreateApproval(ctx, conv.ID, user, "bash", "done", `{}`, 0, ApprovalSeat{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ResolveApproval(ctx, user, a.ID, "approved", "done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListExecutingApprovals(ctx, user, conv.ID, sentinel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != running.ID || got[0].ArgsJSON != "" {
+		t.Fatalf("settlement identifiers: %+v", got)
+	}
+	other, err := s.ListExecutingApprovals(ctx, "other@example.com", conv.ID, sentinel)
+	if err != nil || len(other) != 0 {
+		t.Fatalf("owner isolation: %+v %v", other, err)
+	}
+}
+
 // Resolved cards must survive a reload: the conversation GET re-hydrates them
 // from this listing so the transcript keeps the shape it had live — including
 // a notify-mode record whose undo hint has no other durable delivery (#1153).

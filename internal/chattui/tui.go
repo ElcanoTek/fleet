@@ -317,6 +317,7 @@ func (m *model) runSlash(text string) tea.Cmd {
 			m.history = append(m.history, styleDim.Render("usage: /model <slug>  (current: "+orDefault(m.client.turnModel(m.convID), fallback)+")"))
 		} else {
 			m.client.cfg.Model = fields[1]
+			delete(m.client.conversationModels, m.convID)
 			m.history = append(m.history, styleDim.Render("— model set to "+fields[1]+" (applies to the next turn) —"))
 		}
 		m.refresh()
@@ -525,7 +526,10 @@ func (m *model) finishApproval(msg approvalResolvedMsg) {
 		return
 	}
 	if slug := strings.TrimSpace(msg.model); slug != "" && m.client != nil {
-		m.client.cfg.Model = slug
+		if m.client.conversationModels == nil {
+			m.client.conversationModels = make(map[string]string)
+		}
+		m.client.conversationModels[m.convID] = slug
 	}
 	block := styleToolOK.Render("✓ " + msg.tool + " approved")
 	if t := strings.TrimSpace(msg.resultText); t != "" {
@@ -617,7 +621,7 @@ func (m *model) render() string {
 		conv = "conv " + shortID(m.convID)
 	}
 	right := conv
-	if mdl := strings.TrimSpace(m.client.cfg.Model); mdl != "" {
+	if mdl := strings.TrimSpace(m.client.turnModel(m.convID)); mdl != "" {
 		right = mdl + " · " + conv
 	}
 	header := barLine(m.width, styleHeader.Render("⚓ fleet chat"), styleDim.Render(right))

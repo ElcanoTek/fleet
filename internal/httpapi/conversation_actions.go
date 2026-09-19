@@ -66,13 +66,27 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// load-bearing for notify mode (#1153) — the "ran without asking" record
 	// with its undo hint, whose only other delivery is an SSE stream the
 	// away-from-page user (notify's entire audience) was not watching.
-	resolved, err := s.store.ListResolvedApprovals(r.Context(), user, id)
+	var resolved []store.Approval
+	settlementOnly := r.URL.Query().Get("settlement_only") == "1"
+	if settlementOnly {
+		resolved, err = s.store.ListExecutingApprovals(r.Context(), user, id, approvalExecutingSentinel)
+	} else {
+		resolved, err = s.store.ListResolvedApprovals(r.Context(), user, id)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	resolvedCards := make([]map[string]any, 0, len(resolved))
 	for _, a := range resolved {
+		if settlementOnly {
+			if approvalOutcomeFlags(&a)["executing"] == true {
+				resolvedCards = append(resolvedCards, map[string]any{
+					"approval_id": a.ID, "tool": a.ToolName, "executing": true,
+				})
+			}
+			continue
+		}
 		card := map[string]any{
 			"approval_id":  a.ID,
 			"tool":         a.ToolName,

@@ -5,6 +5,15 @@ the workspace's advertised default model unless `--model` is supplied. Resumed
 conversations retain their stored model. One-shot output reports the conversation
 ID on stderr so automation can resume the same thread.
 
+Accepted model suggestions are scoped to their conversation. New threads use
+the workspace default (or the explicit CLI/slash-command override); other
+resumed threads retain their stored selection absent an explicit override.
+Idempotent suggestion decisions return the current server-side conversation model.
+Terminal reloads request settlement-only resolved identifiers, excluding completed
+card bodies. SSE accepts up to 16 MiB per line to accommodate two 1 MiB review
+copies after JSON escaping. Reviewed numeric arguments retain their exact JSON
+number representation through approval execution and the credential broker.
+
 ## Review and resolve
 
 - `/approvals` shows pending cards, one-line summaries, the complete frozen

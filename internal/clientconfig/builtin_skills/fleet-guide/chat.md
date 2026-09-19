@@ -16,6 +16,10 @@ threads use the workspace default model by default; `--model` or `/model` select
 another model. `--message "..."` and `--no-tui` support scripts and piped input.
 One-shot mode prints the conversation ID to stderr; `--conversation <id>` resumes
 its model context and loads pending approvals in interactive mode.
+Accepting a model suggestion changes only that conversation. `/new` returns to
+the workspace default unless you selected an explicit `--model` or `/model`
+override; resuming another thread keeps its stored model unless that explicit
+override is set.
 
 The terminal shows staged actions and a pending count. `/approvals` displays
 complete frozen execution arguments, one-line summaries, and deadlines;

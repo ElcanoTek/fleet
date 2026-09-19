@@ -41,7 +41,8 @@ type Client struct {
 	// new conversation (empty convID): resuming an existing thread must leave the
 	// conversation's stored model untouched (an empty request model means "no
 	// opinion, keep what's stored" server-side).
-	defaultModel string
+	defaultModel       string
+	conversationModels map[string]string
 }
 
 // NewClient builds a Client. The HTTP client has NO overall timeout — a turn can
@@ -69,6 +70,9 @@ func (c *Client) EffectiveModel() string {
 // turnModel picks the slug for one turn: an explicit --model//model always wins;
 // the adopted workspace default applies only when starting a NEW conversation.
 func (c *Client) turnModel(convID string) string {
+	if model := c.conversationModels[convID]; convID != "" && model != "" {
+		return model
+	}
 	if strings.TrimSpace(c.cfg.Model) != "" {
 		return c.cfg.Model
 	}
@@ -201,7 +205,9 @@ func attachFrozenArgsRaw(m map[string]any, raw []byte) {
 func parseSSE(r io.Reader, fn func(Event)) error {
 	sc := bufio.NewScanner(r)
 	// Allow long frames (a big tool result or text block in one data line).
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	// A 1 MiB frozen argument object and its summary can each expand sixfold
+	// under JSON HTML escaping. Leave room for both plus event metadata.
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
 	var id, name string
 	var data strings.Builder
