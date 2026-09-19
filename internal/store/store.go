@@ -2103,6 +2103,22 @@ func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, s
 	return out, rows.Err()
 }
 
+// ApprovalExecutingSentinel represents a claimed action with no recorded outcome.
+const ApprovalExecutingSentinel = "Approved — executing…"
+
+// RecoverStrandedApprovals runs before accepting requests at startup. An action
+// may have committed remotely before the process died, so record uncertainty,
+// never failure or a retry: repeating it could duplicate a side effect.
+func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE approvals SET result_text = $1
+		WHERE status = 'approved' AND is_err IS NULL AND result_text = $2`,
+		"Execution outcome unknown after server restart. Verify the external result before taking further action.", ApprovalExecutingSentinel)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // CreateApproval stages a pending approval and returns the row.
 // toolCallID is the agent-assigned id of the tool_call event being
 // staged; empty is allowed (older code paths) but populating it lets

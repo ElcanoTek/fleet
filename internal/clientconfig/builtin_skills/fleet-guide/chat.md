@@ -20,6 +20,11 @@ Accepting a model suggestion changes only that conversation. `/new` returns to
 the workspace default unless you selected an explicit `--model` or `/model`
 override; resuming another thread keeps its stored model unless that explicit
 override is set.
+Model suggestions show the target frozen when the card was created. Older cards
+without a frozen target must be dismissed before requesting a new suggestion.
+
+If the server restarts during an approved action, its outcome is shown as unknown;
+verify the external result before trying another action.
 
 The terminal shows staged actions and a pending count. `/approvals` displays
 complete frozen execution arguments, one-line summaries, and deadlines;

@@ -13,10 +13,45 @@ import (
 type settlementStore struct {
 	chatStore
 	resolved []store.Approval
+	pending  []store.Approval
 }
 
 func (s *settlementStore) ListPendingApprovals(context.Context, string, string) ([]store.Approval, error) {
+	if s.pending != nil {
+		return s.pending, nil
+	}
 	return []store.Approval{{ID: "pending", ToolName: "bash", ArgsJSON: `{"command":"echo hi"}`}}, nil
+}
+
+func (s *settlementStore) GetApproval(_ context.Context, user, id string) (*store.Approval, error) {
+	for _, a := range s.pending {
+		if a.ID == id && a.UserEmail == user {
+			return &a, nil
+		}
+	}
+	return nil, nil
+}
+
+func TestSingleApprovalReviewExcludesUnrelatedPendingBodies(t *testing.T) {
+	st := &settlementStore{pending: []store.Approval{{ID: "small", ConversationID: "c", UserEmail: "u", Status: "pending", ToolName: "bash", ArgsJSON: `{"command":"echo hi"}`}}}
+	for range 3 {
+		st.pending = append(st.pending, store.Approval{ToolName: "mcp_sendgrid_send_email", ArgsJSON: `{"content":"` + strings.Repeat("<", 900<<10) + `"}`})
+	}
+	s := &Server{store: st}
+	for _, tc := range []struct {
+		user, conv string
+		status     int
+	}{{"u", "c", 200}, {"u", "other", 404}, {"other", "c", 404}} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/conversations/c?approval_id=small", nil)
+		s.handleConversationGet(rec, req, tc.user, tc.conv, &store.Conversation{ID: tc.conv})
+		if rec.Code != tc.status || rec.Body.Len() > 4096 {
+			t.Fatalf("single-card response: status=%d bytes=%d", rec.Code, rec.Body.Len())
+		}
+		if tc.status == 200 && !strings.Contains(rec.Body.String(), `"approval_id":"small"`) {
+			t.Fatal("requested card missing")
+		}
+	}
 }
 func (s *settlementStore) ListResolvedApprovals(context.Context, string, string) ([]store.Approval, error) {
 	return s.resolved, nil

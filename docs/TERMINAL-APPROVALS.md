@@ -14,6 +14,13 @@ card bodies. SSE accepts up to 16 MiB per line to accommodate two 1 MiB review
 copies after JSON escaping. Reviewed numeric arguments retain their exact JSON
 number representation through approval execution and the credential broker.
 
+One-shot review selects the requested approval ID rather than downloading other
+pending cards. Superseding a pending card preserves executing cards for result
+retrieval. Startup recovery marks interrupted approval executions as outcome
+unknown without retrying them. Model suggestions freeze the recommended slug at
+staging; changing the workspace advanced tier cannot change an existing card's
+target. Legacy suggestions lacking that target must be dismissed and replaced.
+
 ## Review and resolve
 
 - `/approvals` shows pending cards, one-line summaries, the complete frozen

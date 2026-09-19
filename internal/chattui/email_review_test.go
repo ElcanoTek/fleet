@@ -83,6 +83,11 @@ func TestCLIApprovalReviewsEmailBeforePost(t *testing.T) {
 	var out, errOut bytes.Buffer
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
+			if r.URL.Query().Get("approval_id") != "a" {
+				t.Error("one-shot review downloaded unrelated pending approvals")
+				http.Error(w, "approval filter required", http.StatusRequestEntityTooLarge)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"pending_approvals": []any{map[string]any{"approval_id": "a", "tool": "mcp_sendgrid_send_email", "frozen_args": frozenWire(emailFrozenArgs(), true)}}})
 			return
 		}

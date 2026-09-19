@@ -162,12 +162,17 @@ func (m *model) matchCardPolicy(a pendingApproval) (ApprovalDecision, bool) {
 // LoadApprovals rehydrates server-owned cards, including expiry, pattern_args,
 // and the full review summary. No decisions are inferred from a previous
 // terminal session.
-func (c *Client) loadApprovals(ctx context.Context, conversation string) ([]pendingApproval, error) {
+func (c *Client) loadApprovals(ctx context.Context, conversation string, approvalID ...string) ([]pendingApproval, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+"/conversations/"+url.PathEscape(conversation)+"?omit_history=1&settlement_only=1", nil)
 	if err != nil {
 		return nil, err
+	}
+	if len(approvalID) > 0 {
+		q := req.URL.Query()
+		q.Set("approval_id", approvalID[0])
+		req.URL.RawQuery = q.Encode()
 	}
 	c.setAuthHeaders(req)
 	resp, err := c.http.Do(req)

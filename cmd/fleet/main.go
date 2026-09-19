@@ -3489,6 +3489,11 @@ func (a *taskMemoryAdapter) ListTaskMemories(ctx context.Context, taskID uuid.UU
 func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer recCancel()
+	if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
+		log.Printf("stranded-approval recovery: %v", err)
+	} else if count > 0 {
+		log.Printf("stranded-approval recovery: %d unknown outcomes", count) //nolint:gosec // G706: count is an integer database row count.
+	}
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
 	if err != nil {
 		//nolint:gosec // G706: err wraps internal DB errors and an int count — no request input.

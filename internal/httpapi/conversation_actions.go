@@ -27,6 +27,10 @@ import (
 // ?omit_history=1 skips LoadHistory so a terminal approval review does not
 // have to download an unbounded transcript before POSTing a decision.
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
+	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
+		s.handleConversationApprovalGet(w, r, user, id, approvalID)
+		return
+	}
 	omitHistory := r.URL.Query().Get("omit_history") == "1"
 	var history []agent.HistoryEntry
 	if !omitHistory {
@@ -160,6 +164,28 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		"resolved_approvals":       resolvedCards,
 		"pending_memory_proposals": memProposals,
 	})
+}
+
+// handleConversationApprovalGet bounds one-shot review to the requested card;
+// unrelated pending email bodies must not block a small action's settlement.
+func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Request, user, convID, approvalID string) {
+	a, err := s.store.GetApproval(r.Context(), user, approvalID)
+	if err != nil {
+		http.Error(w, "could not load approval", http.StatusInternalServerError)
+		return
+	}
+	if a == nil || a.ConversationID != convID {
+		http.Error(w, "approval not found", http.StatusNotFound)
+		return
+	}
+	pending, resolved := []map[string]any{}, []map[string]any{}
+	if a.Status == "pending" {
+		card := approvalRequiredEvent(a, a.ArgsJSON, convID)
+		pending = append(pending, card)
+	} else if approvalOutcomeFlags(a)["executing"] == true {
+		resolved = append(resolved, map[string]any{"approval_id": a.ID, "tool": a.ToolName, "executing": true})
+	}
+	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
 }
 
 // handleConversationDelete serves DELETE /conversations/{id}.

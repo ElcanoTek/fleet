@@ -474,7 +474,7 @@ func (m *model) applyEvent(ev Event) {
 		tool := ev.Str("tool")
 		kept := m.pending[:0]
 		for _, ap := range m.pending {
-			if ap.tool != tool {
+			if ap.tool != tool || ap.executing {
 				kept = append(kept, ap)
 			}
 		}

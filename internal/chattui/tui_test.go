@@ -186,9 +186,10 @@ func TestApprovalSupersededDropsPending(t *testing.T) {
 	m := newModel(Config{ServerURL: "http://x", Email: "e@x.co"})
 	m.applyEvent(Event{Name: "tool.approval_required", Data: map[string]any{"approval_id": "a1", "tool": "send_email", "summary": map[string]any{}}})
 	m.applyEvent(Event{Name: "tool.approval_required", Data: map[string]any{"approval_id": "a2", "tool": "schedule_task", "summary": map[string]any{}}})
+	m.pending = append(m.pending, pendingApproval{id: "running", tool: "send_email", executing: true})
 	m.applyEvent(Event{Name: "tool.approval_superseded", Data: map[string]any{"tool": "send_email", "count": float64(1)}})
-	if len(m.pending) != 1 || m.pending[0].id != "a2" {
-		t.Errorf("pending after supersede = %+v, want only a2", m.pending)
+	if len(m.pending) != 2 || m.pending[0].id != "a2" || m.pending[1].id != "running" {
+		t.Errorf("pending after supersede = %+v, want a2 and executing card", m.pending)
 	}
 }
 

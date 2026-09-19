@@ -501,11 +501,12 @@ func excerpt(s string, maxChars int) string {
 // The agent-facing message reflects the suppression reason so the model
 // knows not to retry.
 func (a *approvalStager) StageSuggestion(reason string) (string, string, error) {
+	advancedModel := agentcore.CurrentAdvancedModel()
 	conv, err := a.store.Get(a.ctx, a.userEmail, a.conversationID)
 	if err != nil {
 		return "", "", fmt.Errorf("lookup conversation: %w", err)
 	}
-	if conv != nil && conv.Model == agentcore.CurrentAdvancedModel() {
+	if conv != nil && conv.Model == advancedModel {
 		return "", "SUGGESTION_SUPPRESSED: this conversation is already pinned to the advanced model. Do not call suggest_advanced_model again — proceed with the user's request.", nil
 	}
 
@@ -535,7 +536,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 
 	// Persist the reason as the args payload so the approval card can
 	// render it on page reload and the audit trail is intact.
-	rawInput, err := json.Marshal(map[string]any{"reason": reason})
+	rawInput, err := json.Marshal(map[string]any{"reason": reason, "recommend_model": advancedModel})
 	if err != nil {
 		return "", "", fmt.Errorf("encode reason: %w", err)
 	}
@@ -710,10 +711,15 @@ func frozenApprovalArgs(rawInput string) map[string]any {
 // GET /conversations/{id} pending cards so a terminal cannot see a truncated
 // summary for one tool class and a full snapshot for another.
 func approvalClientFields(toolName, rawInput, convID string) map[string]any {
+	frozen := frozenApprovalArgs(rawInput)
+	if toolName == tools.SuggestAdvancedModelToolName && suggestedModel(rawInput) == "" {
+		// Legacy suggestions did not freeze their target: require a new card.
+		frozen = map[string]any{"complete": false}
+	}
 	return map[string]any{
 		"summary":      summarizeApprovalInput(toolName, rawInput, convID),
 		"pattern_args": handlerApprovalPatternArgs(toolName, rawInput),
-		"frozen_args":  frozenApprovalArgs(rawInput),
+		"frozen_args":  frozen,
 	}
 }
 
@@ -818,9 +824,8 @@ func displayArgValue(v any) string {
 
 // summarizeSuggestAdvancedInput exposes the agent's reason and the
 // recommended model slug so the UI card can render both without
-// re-parsing the args. The recommended slug is server-authoritative
-// (agentcore.CurrentAdvancedModel(), the live admin-configurable tier) —
-// the agent doesn't choose it.
+// re-parsing the args. The server freezes the configured tier when staging;
+// a later admin change must not change what this card authorizes.
 func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 	var args struct {
 		Reason string `json:"reason"`
@@ -829,8 +834,18 @@ func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 	return map[string]any{
 		"tool":            toolName,
 		"reason":          args.Reason,
-		"recommend_model": agentcore.CurrentAdvancedModel(),
+		"recommend_model": suggestedModel(rawInput),
 	}
+}
+
+func suggestedModel(rawInput string) string {
+	var args struct {
+		Model string `json:"recommend_model"`
+	}
+	if json.Unmarshal([]byte(rawInput), &args) != nil {
+		return ""
+	}
+	return strings.TrimSpace(args.Model)
 }
 
 // summarizeScheduleTaskInput builds the schedule_task approval-card payload
@@ -1584,7 +1599,7 @@ func governApprovalResult(ctx context.Context, approval *store.Approval, text st
 // cannot stamp "Email sent ✓" while the winner is still in flight. Named
 // so clients and tests share one string; do not parse arbitrary tool output
 // for error.
-const approvalExecutingSentinel = "Approved — executing…"
+const approvalExecutingSentinel = store.ApprovalExecutingSentinel
 
 // approvalOutcomeFlags is the execution-outcome contract for an already-
 // resolved approval row. status remains consent; these flags tell the
@@ -1695,7 +1710,11 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 	// returned 500 with the approval already recorded as approved — and the
 	// retry saw a resolved row, echoed it, and never pinned. Now a failed pin
 	// rolls the claim back, the card stays pending, and the retry works.
-	advancedModel := agentcore.CurrentAdvancedModel()
+	advancedModel := suggestedModel(approval.ArgsJSON)
+	if advancedModel == "" {
+		http.Error(w, "suggestion has no frozen model target; dismiss it and request a new suggestion", http.StatusConflict)
+		return
+	}
 	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", advancedModel)
 	claimed, err := s.store.ClaimApprovalAndSetModel(r.Context(), user, approval.ID, resultText, approval.ConversationID, advancedModel)
 	if err != nil {

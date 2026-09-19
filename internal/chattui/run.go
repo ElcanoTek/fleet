@@ -87,7 +87,7 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 		return 2
 	}
 	if approve {
-		pending, err := client.loadApprovals(context.Background(), convID)
+		pending, err := client.loadApprovals(context.Background(), convID, approvalID)
 		if err != nil {
 			fmt.Fprintln(errOut, "fleet chat: cannot review approval: "+err.Error())
 			return 1

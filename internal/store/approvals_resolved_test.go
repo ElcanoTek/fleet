@@ -41,6 +41,19 @@ func TestListExecutingApprovalsExcludesCompletedBodies(t *testing.T) {
 	if err != nil || len(other) != 0 {
 		t.Fatalf("owner isolation: %+v %v", other, err)
 	}
+	if n, err := s.RecoverStrandedApprovals(ctx); err != nil || n != 1 {
+		t.Fatalf("restart recovery: count=%d error=%v", n, err)
+	}
+	recovered, err := s.GetApproval(ctx, user, running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != "approved" || recovered.IsErr.Valid || recovered.ResultText == sentinel {
+		t.Fatalf("must preserve consent and mark outcome unknown: %+v", recovered)
+	}
+	if n, err := s.RecoverStrandedApprovals(ctx); err != nil || n != 0 {
+		t.Fatalf("recovery not idempotent: %d %v", n, err)
+	}
 }
 
 // Resolved cards must survive a reload: the conversation GET re-hydrates them
