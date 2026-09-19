@@ -41,6 +41,10 @@ func Run(argv []string) int {
 	if err := fs.Parse(argv); err != nil {
 		return 2
 	}
+	if (*approve != "" && *deny != "") || ((*approve != "" || *deny != "") && (*msg != "" || *noTUI)) {
+		fmt.Fprintln(os.Stderr, "fleet chat: choose one of --approve, --deny, or a chat message")
+		return 2
+	}
 
 	cfg, err := Resolve(f, osEnv, osReadFile, osReadEnvValues)
 	if err != nil {
@@ -82,6 +86,21 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 		fmt.Fprintln(errOut, "fleet chat: --approve/--deny needs --conversation <id> (the approval's conversation)")
 		return 2
 	}
+	if approve {
+		pending, err := client.loadApprovals(context.Background(), convID)
+		if err != nil {
+			fmt.Fprintln(errOut, "fleet chat: cannot review approval: "+err.Error())
+			return 1
+		}
+		for _, card := range pending {
+			if card.id == approvalID {
+				if review := emailApprovalReview(card.tool, card.details); review != "" {
+					fmt.Fprintln(errOut, review)
+				}
+				break
+			}
+		}
+	}
 	status, resultText, err := client.ResolveApproval(context.Background(), convID, approvalID, approve)
 	if err != nil {
 		fmt.Fprintln(errOut, "fleet chat: "+err.Error())
@@ -104,7 +123,7 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 func runInteractive(client *Client, cfg Config, convID string) int {
 	m := newModel(cfg)
 	m.client = client // the shared client, carrying any adopted workspace default
-	if cfg.Model == "" && client.defaultModel != "" {
+	if cfg.Model == "" && client.defaultModel != "" && strings.TrimSpace(convID) == "" {
 		m.history = append(m.history, styleDim.Render("— workspace default model: "+client.defaultModel+" (/model <slug> to change) —"))
 	}
 	m.convID = strings.TrimSpace(convID)
@@ -138,9 +157,17 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 	}
 	ctx := context.Background()
 	var sawText bool
-	var staged []string // approval ids staged this turn
+	var staged []pendingApproval
 	newConvID, err := client.Stream(ctx, message, strings.TrimSpace(convID), func(ev Event) {
 		switch ev.Name {
+		case "tool.approval_superseded":
+			kept := staged[:0]
+			for _, a := range staged {
+				if a.tool != ev.Str("tool") {
+					kept = append(kept, a)
+				}
+			}
+			staged = kept
 		case "text.delta":
 			if t := ev.Str("text"); t != "" {
 				fmt.Fprint(out, t)
@@ -155,11 +182,14 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 			// click, so say exactly how to settle it from the shell.
 			id := ev.Str("approval_id")
 			if id != "" {
-				staged = append(staged, id)
+				staged = append(staged, pendingApproval{id: id, tool: ev.Str("tool")})
 			}
 			fmt.Fprintln(errOut, "⚠ approval required: "+orDefault(ev.Str("tool"), "tool")+
 				" — "+orDefault(approvalSummaryLine(ev.Str("tool"), ev.Data["summary"]), "(no summary)")+
 				" (approval "+id+")")
+			if review := emailApprovalReview(ev.Str("tool"), ev.Data["summary"]); review != "" {
+				fmt.Fprintln(errOut, review)
+			}
 		}
 	})
 	if sawText {
@@ -170,8 +200,8 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 	if newConvID != "" {
 		fmt.Fprintln(errOut, "conversation: "+newConvID)
 	}
-	for _, id := range staged {
-		fmt.Fprintln(errOut, "  settle it: fleet chat --conversation "+newConvID+" --approve "+id+"   (or --deny)")
+	for _, a := range staged {
+		fmt.Fprintln(errOut, "  settle it: fleet chat --conversation "+newConvID+" --approve "+a.id+"   (or --deny)")
 	}
 	if err != nil {
 		fmt.Fprintln(errOut, "fleet chat: "+err.Error())

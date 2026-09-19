@@ -7,6 +7,20 @@ import (
 	"strings"
 )
 
+// Email approval is a review of frozen server arguments, not model prose. JSON
+// preserves every recipient, attachment and body byte without interpreting HTML,
+// Markdown or terminal control characters, and deliberately has no truncation.
+func emailApprovalReview(tool string, summary any) string {
+	if tool != "send_email" && tool != "preview_email" && !strings.HasSuffix(tool, "_send_email") {
+		return ""
+	}
+	b, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return "Email review unavailable. Reload approvals before deciding."
+	}
+	return "Frozen email review (all recipients, content and attachments):\n" + string(b)
+}
+
 // approvalSummaryLine renders the server's tool.approval_required summary
 // payload as ONE readable line for the terminal. The summary shape is
 // tool-specific (built by httpapi.summarizeApprovalInput): known tools get a
@@ -17,6 +31,9 @@ func approvalSummaryLine(tool string, summary any) string {
 	m, _ := summary.(map[string]any)
 	if m == nil {
 		return ""
+	}
+	if strings.HasSuffix(tool, "_send_email") {
+		tool = "send_email"
 	}
 	switch tool {
 	case "schedule_task":

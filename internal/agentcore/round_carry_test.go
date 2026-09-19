@@ -117,7 +117,7 @@ func (m *textCapturingModel) call(i int) []fantasy.Message {
 func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 	session := NewLogSession()
 	model := &textCapturingModel{slug: "carry-test-model", replies: []string{"round one analysis", "confirmed"}}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
 		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("do the task")}, label: "carry"},
 		Policy:     newRoundsPolicy(session, 1), // round 0 blocked with a nudge, round 1 finishes
 		Executor:   &stubExecutor{},
@@ -129,6 +129,9 @@ func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 	}
 	if len(model.seen) != 2 {
 		t.Fatalf("expected 2 rounds, got %d", len(model.seen))
+	}
+	if result.FinalText != "confirmed" {
+		t.Fatalf("final answer includes a superseded pre-audit draft: %q", result.FinalText)
 	}
 
 	round2 := model.call(1)
@@ -156,6 +159,21 @@ func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 	}
 	if workIdx > nudgeIdx {
 		t.Errorf("carried transcript (idx %d) must precede the nudge (idx %d) so the nudge reads as a follow-up", workIdx, nudgeIdx)
+	}
+}
+
+func TestScheduledResultOmitsPreAuditDraft(t *testing.T) {
+	session := NewLogSession()
+	model := &textCapturingModel{slug: "scheduled-final-test", replies: []string{"FUTURE_PASS_391", "Audit complete. FUTURE_PASS_391"}}
+	result, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("compute and audit")}, label: "scheduled-final"},
+		Policy: newRoundsPolicy(session, 1), Executor: &stubExecutor{}, Model: model, LogSession: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "Audit complete. FUTURE_PASS_391" {
+		t.Fatalf("scheduled result concatenated superseded drafts: %q", result.FinalText)
 	}
 }
 

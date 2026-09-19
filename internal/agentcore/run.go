@@ -596,12 +596,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		activeModel = outcome.activeModel
 		swappedToFallback = outcome.swappedToFallback
 
-		// The model's user-visible text for this round comes from the streamed
-		// accumulation (sink), falling back to the final AgentResult content.
+		// Prefer the final completed response. The sink spans enforcement rounds:
+		// concatenating it here repeats an answer drafted before the completion
+		// audit with the answer produced after that audit. Keep streamed text as
+		// the fallback for providers that do not return completed text content.
 		_, accumulatedText := sink.snapshot()
 		finalText := strings.TrimSpace(accumulatedText)
-		if finalText == "" && finalResult != nil && finalResult.Response.Content != nil {
-			finalText = finalResult.Response.Content.Text()
+		if finalResult != nil && strings.TrimSpace(finalResult.Response.Content.Text()) != "" {
+			finalText = strings.TrimSpace(finalResult.Response.Content.Text())
 		}
 
 		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, panicAttribution)
