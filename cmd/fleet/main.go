@@ -3498,15 +3498,13 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 		log.Printf("stranded-turn recovery: turn %s (conv %s) projected %d entries, %d unknown-outcome tool calls",
 			r.TurnID, r.ConversationID, r.Projected, r.Synthesized)
 	}
-	// Outcomes must follow their recovered calls and pending markers. If turn
-	// recovery failed, leave approvals for the next boot rather than reversing
-	// model-visible history order.
-	if err == nil {
-		if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
-			log.Printf("stranded-approval recovery: %v", err)
-		} else if count > 0 {
-			log.Printf("stranded-approval recovery: %d unknown outcomes", count) //nolint:gosec // G706: count is an integer database row count.
-		}
+	// Outcomes must follow recovered calls. The store excludes conversations
+	// still containing running turns, so one failed recovery cannot strand
+	// otherwise-safe approvals in unrelated conversations.
+	if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
+		log.Printf("stranded-approval recovery: %v", err)
+	} else if count > 0 {
+		log.Printf("stranded-approval recovery: %d unknown outcomes", count) //nolint:gosec // G706: count is an integer database row count.
 	}
 	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
 	// process against the #798 durable record: durably-persisted ones complete,

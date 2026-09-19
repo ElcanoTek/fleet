@@ -2118,6 +2118,7 @@ func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
 	defer func() { _ = tx.Rollback() }()
 	rows, err := tx.QueryContext(ctx, `UPDATE approvals SET result_text = $1
 		WHERE status = 'approved' AND is_err IS NULL AND result_text = $2
+		AND NOT EXISTS (SELECT 1 FROM turns WHERE turns.conversation_id = approvals.conversation_id AND turns.status = 'running')
 		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, '')`, outcome, ApprovalExecutingSentinel)
 	if err != nil {
 		return 0, err

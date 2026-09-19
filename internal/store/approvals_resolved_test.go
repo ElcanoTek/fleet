@@ -77,6 +77,39 @@ func TestListExecutingApprovalsExcludesCompletedBodies(t *testing.T) {
 	}
 }
 
+func TestApprovalRecoveryIsolatesUnrecoveredConversations(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const user = "u@example.com"
+	blockedConv := seedConvAndTurn(t, s, "blocked-turn")
+	safeConv, err := s.CreateConversation(ctx, user, "safe", "", "m", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, 2)
+	for _, conv := range []string{blockedConv, safeConv.ID} {
+		a, err := s.CreateApproval(ctx, conv, user, "bash", "call", `{}`, 0, ApprovalSeat{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s.ClaimApproval(ctx, user, a.ID, "approved", ApprovalExecutingSentinel); err != nil || !ok {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+		ids = append(ids, a.ID)
+	}
+	if count, err := s.RecoverStrandedApprovals(ctx); err != nil || count != 1 {
+		t.Fatalf("safe recovery blocked by unrelated turn: %d %v", count, err)
+	}
+	blocked, err := s.GetApproval(ctx, user, ids[0])
+	if err != nil || blocked.ResultText != ApprovalExecutingSentinel {
+		t.Fatalf("outcome projected before call: %+v %v", blocked, err)
+	}
+	safe, err := s.GetApproval(ctx, user, ids[1])
+	if err != nil || safe.ResultText == ApprovalExecutingSentinel {
+		t.Fatalf("safe outcome remained running: %+v %v", safe, err)
+	}
+}
+
 // Resolved cards must survive a reload: the conversation GET re-hydrates them
 // from this listing so the transcript keeps the shape it had live — including
 // a notify-mode record whose undo hint has no other durable delivery (#1153).
