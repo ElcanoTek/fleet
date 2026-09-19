@@ -338,6 +338,11 @@ func (s *streamSink) replaceVisibleText(text string) {
 	if s == nil {
 		return
 	}
+	// Tool-only turns have no visible text to replace. An empty final answer
+	// after a streamed draft still needs a replacement to clear that draft.
+	if text == "" && s.mark().finalText == 0 {
+		return
+	}
 	s.emit(evtTextReplace, map[string]any{evtFieldText: text})
 }
 

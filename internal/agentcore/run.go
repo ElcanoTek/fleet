@@ -579,7 +579,8 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// rollbackTo only ever unwinds events past an attempt mark taken at or
 		// after this one, and a committed side effect suppresses rollback
 		// entirely (ADR-0035).
-		roundToolMark := sink.toolEventCount()
+		roundMark := sink.mark()
+		roundToolMark := roundMark.toolEvents
 		outcome, serr := eng.streamRoundWithResilience(
 			ctx, usageOrch, sink, maxTokens, messages, agent, activeModel, swappedToFallback, buildAgent,
 		)
@@ -599,9 +600,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// Prefer the final completed response. The sink spans enforcement rounds:
 		// concatenating it here repeats an answer drafted before the completion
 		// audit with the answer produced after that audit. Keep streamed text as
-		// the fallback for providers that do not return completed text content.
+		// the fallback for providers that do not return completed text content,
+		// but only from THIS round. Attempt rollbacks cannot precede roundMark.
 		_, accumulatedText := sink.snapshot()
-		finalText := strings.TrimSpace(accumulatedText)
+		finalText := strings.TrimSpace(accumulatedText[roundMark.finalText:])
 		if finalResult != nil && strings.TrimSpace(finalResult.Response.Content.Text()) != "" {
 			finalText = strings.TrimSpace(finalResult.Response.Content.Text())
 		}
@@ -689,8 +691,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			// replacement AFTER completeRun so structured-output tasks
 			// replace with the validated JSON (or emit nothing on a
 			// terminal-format error), matching Result.FinalText.
-			if res.FinalText != "" {
-				sink.replaceVisibleText(res.FinalText)
+			sink.replaceVisibleText(res.FinalText)
+			// Replacement is an observer boundary too. Do not let a lost final
+			// answer become a successful turn or run completion hooks after it.
+			if observerErr := observerBoundary.Err(); observerErr != nil {
+				return res, observerErr
 			}
 			// turn_end hooks (#788): observational only — a completed turn is not
 			// undone, so the decision is audited but not enforced. Fired only on

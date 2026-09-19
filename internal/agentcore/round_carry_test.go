@@ -69,8 +69,9 @@ func TestCarryRoundMessages(t *testing.T) {
 // exact message slice each Stream call received.
 type textCapturingModel struct {
 	mockModel
-	slug    string
-	replies []string
+	slug        string
+	replies     []string
+	omitTextEnd bool
 
 	recMu sync.Mutex
 	seen  [][]fantasy.Message
@@ -97,7 +98,7 @@ func (m *textCapturingModel) Stream(_ context.Context, call fantasy.Call) (fanta
 		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t1", Delta: reply}) {
 			return
 		}
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"}) {
+		if !m.omitTextEnd && !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"}) {
 			return
 		}
 		yield(fantasy.StreamPart{
@@ -234,6 +235,30 @@ func TestRun_LiveStreamRetractsPreAuditDraft(t *testing.T) {
 	}
 	if got := reconstructVisibleText(events); got != "confirmed" {
 		t.Fatalf("live stream reconstructed %q, want the final round only", got)
+	}
+}
+
+func TestRun_FinalRoundOnlyWhenProviderOmitsCompletedText(t *testing.T) {
+	session := NewLogSession()
+	model := &textCapturingModel{slug: "delta-only", replies: []string{"superseded draft", "final streamed answer"}, omitTextEnd: true}
+	observer := &streamEventObserver{}
+	result, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("finish after audit")}, label: "delta-only"},
+		Policy: newRoundsPolicy(session, 1), Executor: &stubExecutor{}, Model: model, Observer: observer, LogSession: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(model.seen) != 2 {
+		t.Fatalf("got %d rounds", len(model.seen))
+	}
+	if result.FinalText != "final streamed answer" {
+		t.Fatalf("final text includes earlier round: %q", result.FinalText)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if got := reconstructVisibleText(observer.events); got != result.FinalText {
+		t.Fatalf("live result %q differs from stored %q", got, result.FinalText)
 	}
 }
 

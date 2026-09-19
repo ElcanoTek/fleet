@@ -568,6 +568,29 @@ func TestObserverPanic_IsDisabledAndReturnedAsOrdinaryRunError(t *testing.T) {
 	}
 }
 
+func TestObserverPanicOnFinalReplacementFailsBeforeCompletionHook(t *testing.T) {
+	collector := capturePanicEvents(t)
+	executor := &scriptExecutor{out: `{"decision":"continue"}`}
+	engineWith(t, executor, nil, LifecycleHook{ID: "done", Event: HookTurnEnd, Command: "should-not-run"})
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input: stubInput{system: "s", user: "reply", label: "replace-panic"}, Policy: passPolicy{}, Executor: executor,
+		Model: &textCapturingModel{slug: "replace-panic", replies: []string{"final"}}, Observer: &panicOnEventObserver{event: evtTextReplace},
+	})
+	if !errors.Is(err, ErrRunBoundaryPanic) {
+		t.Fatalf("observer failure reported as success: %v", err)
+	}
+	if strings.Contains(err.Error(), "observer raw panic") {
+		t.Fatal("raw panic leaked")
+	}
+	if executor.lastCommand() != "" {
+		t.Fatal("completion hook executed after observer failure")
+	}
+	events := collector.snapshot()
+	if len(events) != 1 || events[0].Boundary != "observer.text.replace" {
+		t.Fatalf("wrong attribution: %+v", events)
+	}
+}
+
 func TestObserverPanic_AttributesPayloadToolField(t *testing.T) {
 	collector := capturePanicEvents(t)
 	observer := containObserver(
