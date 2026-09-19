@@ -163,17 +163,20 @@ func (m *model) matchCardPolicy(a pendingApproval) (ApprovalDecision, bool) {
 // and the full review summary. No decisions are inferred from a previous
 // terminal session.
 func (c *Client) loadApprovals(ctx context.Context, conversation string, approvalID ...string) ([]pendingApproval, error) {
+	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+"/conversations/"+url.PathEscape(conversation)+"?omit_history=1&settlement_only=1", nil)
 	if err != nil {
 		return nil, err
 	}
+	q := req.URL.Query()
 	if len(approvalID) > 0 {
-		q := req.URL.Query()
 		q.Set("approval_id", approvalID[0])
-		req.URL.RawQuery = q.Encode()
+	} else {
+		q.Set("approval_index", "1")
 	}
+	req.URL.RawQuery = q.Encode()
 	c.setAuthHeaders(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -207,6 +210,21 @@ func (c *Client) loadApprovals(ctx context.Context, conversation string, approva
 		}
 	}
 	for _, a := range body.Approvals {
+		if len(approvalID) > 0 && a.ID != approvalID[0] {
+			continue
+		}
+		if len(approvalID) == 0 && !a.Executing {
+			cards, err := c.loadApprovals(parentCtx, conversation, a.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, card := range cards {
+				if !card.settled || card.executing {
+					pending = append(pending, card)
+				}
+			}
+			continue
+		}
 		args, complete, present := parseFrozenArgs(a.FrozenArgs)
 		pending = append(pending, pendingApproval{
 			id:             a.ID,

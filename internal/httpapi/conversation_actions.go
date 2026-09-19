@@ -50,6 +50,10 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// events do, so the frontend reuses its render path.
 	approvals := make([]map[string]any, 0, len(pending))
 	for _, a := range pending {
+		if r.URL.Query().Get("approval_index") == "1" {
+			approvals = append(approvals, map[string]any{"approval_id": a.ID})
+			continue
+		}
 		card := approvalClientFields(a.ToolName, a.ArgsJSON, id)
 		card["approval_id"] = a.ID
 		card["tool"] = a.ToolName
@@ -111,6 +115,10 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 			card[k] = v
 		}
 		resolvedCards = append(resolvedCards, card)
+	}
+	if r.URL.Query().Get("approval_index") == "1" {
+		writeJSON(w, map[string]any{"pending_approvals": approvals, "resolved_approvals": resolvedCards})
+		return
 	}
 	// Pending memory proposals — same pattern as approvals. Without
 	// these, the visibilitychange/focus auto-refetch in chat-experience

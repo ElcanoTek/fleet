@@ -79,8 +79,8 @@ type approvalStager struct {
 	// convTimeoutSeconds is this conversation's per-chat override (nil = none).
 	// It sits above the global default and below per-tool manifest overrides.
 	convTimeoutSeconds *int
-	// autoApproveInTest auto-approves every staged critical tool instead of
-	// waiting for a human (FLEET_AUTO_APPROVE_IN_TEST). A CI/test escape hatch,
+	// autoApproveInTest auto-approves executable critical tools; handler-only
+	// cards still require explicit decisions. A CI/test escape hatch,
 	// off by default; see config.Config.AutoApproveInTest.
 	autoApproveInTest bool
 	// push, when configured, sends the conversation owner a low-detail
@@ -1571,6 +1571,11 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	resultText, isErr = governApprovalResult(execCtx, approval, resultText, isErr)
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
+		writeJSON(w, map[string]any{
+			"status": "approved", "execution_unknown": true,
+			"result_text": "The action was attempted but its outcome could not be recorded. Verify the external result before taking further action.",
+		})
+		return
 	}
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)

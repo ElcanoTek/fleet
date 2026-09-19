@@ -486,7 +486,7 @@ func TestLoadApprovalsParsesPatternArgsFromGET(t *testing.T) {
 	if _, ok := pending[0].patternArgs["prompt_preview"]; ok {
 		t.Fatal("display summary keys must not appear as pattern_args")
 	}
-	if gotURL != "omit_history=1&settlement_only=1" {
+	if gotURL != "approval_id=a&omit_history=1&settlement_only=1" {
 		t.Fatalf("loadApprovals query = %q, want omit_history=1 so settlement does not download the transcript", gotURL)
 	}
 }

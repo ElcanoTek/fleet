@@ -29,6 +29,11 @@ Completed execution outcomes and their conversation-history tool results also
 commit atomically. Legacy preview dismissals with the exact fixed no-send result
 remain known successes. One-shot stdout is buffered until the turn ends so only
 the authoritative reply is printed; progress continues on stderr.
+Interactive reload first fetches an identifier index, then reviews one bounded
+card response at a time. Outcome-persistence errors return explicit uncertainty,
+never success. Crash recovery applies authoritative `text.replace` events as
+well as deltas. The test auto-approval flag covers executable tools only;
+handler-only cards require explicit API decisions even in unattended tests.
 
 ## Review and resolve
 

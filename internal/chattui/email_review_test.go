@@ -2,6 +2,7 @@ package chattui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -50,6 +51,40 @@ func TestSSEEscapedEmailFitsTransport(t *testing.T) {
 	args, complete, present := parseFrozenArgs(raw)
 	if !present || !complete || args["content"] != body {
 		t.Fatal("transport truncated frozen email")
+	}
+}
+
+func TestInteractiveReloadFetchesLargeCardsIndividually(t *testing.T) {
+	body := strings.Repeat("<", 950<<10)
+	var fetched int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("approval_index") == "1" {
+			fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"a"},{"approval_id":"b"},{"approval_id":"c"}]}`)
+			return
+		}
+		id := r.URL.Query().Get("approval_id")
+		if id == "" {
+			http.Error(w, "aggregate request refused", http.StatusRequestEntityTooLarge)
+			return
+		}
+		fetched++
+		_ = json.NewEncoder(w).Encode(map[string]any{"pending_approvals": []any{map[string]any{
+			"approval_id": id, "tool": "mcp_" + id + "_send_email", "summary": map[string]any{"content": body},
+			"frozen_args": frozenWire(map[string]any{"content": body}, true),
+		}}})
+	}))
+	defer srv.Close()
+	cards, err := NewClient(Config{ServerURL: srv.URL}).loadApprovals(context.Background(), "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched != 3 || len(cards) != 3 {
+		t.Fatalf("fetched=%d cards=%d", fetched, len(cards))
+	}
+	for _, card := range cards {
+		if card.frozenArgs["content"] != body || !card.reviewComplete() {
+			t.Fatal("large card truncated")
+		}
 	}
 }
 

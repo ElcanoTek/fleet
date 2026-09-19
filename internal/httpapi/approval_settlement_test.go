@@ -3,10 +3,12 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -38,6 +40,11 @@ func TestSingleApprovalReviewExcludesUnrelatedPendingBodies(t *testing.T) {
 		st.pending = append(st.pending, store.Approval{ToolName: "mcp_sendgrid_send_email", ArgsJSON: `{"content":"` + strings.Repeat("<", 900<<10) + `"}`})
 	}
 	s := &Server{store: st}
+	index := httptest.NewRecorder()
+	s.handleConversationGet(index, httptest.NewRequest("GET", "/conversations/c?omit_history=1&settlement_only=1&approval_index=1", nil), "u", "c", &store.Conversation{ID: "c"})
+	if index.Code != 200 || index.Body.Len() > 4096 {
+		t.Fatalf("unbounded index: %d %d", index.Code, index.Body.Len())
+	}
 	for _, tc := range []struct {
 		user, conv string
 		status     int
@@ -58,6 +65,30 @@ func TestSingleApprovalReviewExcludesUnrelatedPendingBodies(t *testing.T) {
 	s.handleConversationGet(rec, httptest.NewRequest("GET", "/conversations/c?approval_id=small", nil), "u", "c", &store.Conversation{ID: "c"})
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"result_text":"recorded result"`) {
 		t.Fatalf("settled selector lost outcome: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+type failedOutcomeStore struct{ *expiredClickFakeStore }
+
+func (s *failedOutcomeStore) ClaimApproval(context.Context, string, string, string, string) (bool, error) {
+	return true, nil
+}
+func (s *failedOutcomeStore) SetApprovalResult(context.Context, string, string, string, bool) error {
+	return errors.New("history unavailable")
+}
+
+func TestApprovalPersistenceFailureReportsUnknownOutcome(t *testing.T) {
+	s := &Server{cfg: &config.Config{MockMode: true}, store: &failedOutcomeStore{&expiredClickFakeStore{approval: store.Approval{ID: "a", ConversationID: "c", ToolName: "bash", Status: "pending"}}}}
+	req := httptest.NewRequest("POST", "/conversations/c/approvals/a", strings.NewReader(`{"approved":true}`))
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u"))
+	rec := httptest.NewRecorder()
+	s.handleApproval(rec, req, "c", "a")
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["execution_unknown"] != true || body["is_err"] != nil {
+		t.Fatalf("invented durable success: %s", rec.Body.String())
 	}
 }
 func (s *settlementStore) ListResolvedApprovals(context.Context, string, string) ([]store.Approval, error) {

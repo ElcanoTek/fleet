@@ -753,7 +753,7 @@ func run() error {
 	// It is off by default and intended only for CI/test pipelines with a mocked
 	// backend; log loudly so it can never be on in production unnoticed.
 	if cfg.AutoApproveInTest {
-		log.Printf("WARNING: FLEET_AUTO_APPROVE_IN_TEST is ON — every staged critical tool is auto-approved without human review. Do NOT use this in production.")
+		log.Printf("WARNING: FLEET_AUTO_APPROVE_IN_TEST is ON — executable critical tools are auto-approved without human review; handler-only task, preview and model-suggestion cards still require explicit decisions. Do NOT use this in production.")
 	}
 
 	// ── orchestrator HTTP (sched/handlers) ──
