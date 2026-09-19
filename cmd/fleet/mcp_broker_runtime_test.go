@@ -261,7 +261,7 @@ func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *
 			if err != nil {
 				t.Fatalf("load bundle: %v", err)
 			}
-			if err := validateConnectorParentEnvSeparation(bundle); err == nil || !strings.Contains(err.Error(), name) {
+			if err := validateConnectorParentEnvSeparation(bundle); err == nil || !strings.Contains(overlapNames(t, err), name) {
 				t.Fatalf("overlap error = %v, want name-only %s refusal", err, name)
 			}
 		})
@@ -308,10 +308,7 @@ func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testi
 	if err == nil {
 		t.Fatal("bundle claiming every parent-owned spelling validated")
 	}
-	_, list, ok := strings.Cut(err.Error(), ": ")
-	if !ok {
-		t.Fatalf("overlap error = %v, want ': '-separated name list", err)
-	}
+	list := overlapNames(t, err)
 	refused := map[string]bool{}
 	for _, name := range strings.Split(list, ", ") {
 		refused[name] = true
@@ -356,7 +353,7 @@ func TestValidateConnectorParentEnvSeparation_AdmitsReservedWorkspaceRootToken(t
 		if err != nil {
 			t.Fatalf("load bundle: %v", err)
 		}
-		if err := validateConnectorParentEnvSeparation(aliased); err == nil || !strings.Contains(err.Error(), alias) {
+		if err := validateConnectorParentEnvSeparation(aliased); err == nil || !strings.Contains(overlapNames(t, err), alias) {
 			t.Errorf("alias spelling %s is an ordinary claim and must still be refused, got %v", alias, err)
 		}
 	}
@@ -380,7 +377,7 @@ providers:
 		t.Fatalf("load bundle: %v", err)
 	}
 	err = validateConnectorParentEnvSeparation(bundle)
-	if err == nil || !strings.Contains(err.Error(), "MODEL_KEY") || strings.Contains(err.Error(), "placeholder") {
+	if err == nil || !strings.Contains(overlapNames(t, err), "MODEL_KEY") || strings.Contains(err.Error(), "placeholder") || strings.Contains(err.Error(), "MODEL_KEY") {
 		t.Fatalf("overlap error = %v, want name-only MODEL_KEY refusal", err)
 	}
 }
@@ -430,7 +427,7 @@ func TestValidateConnectorParentEnvSeparation_RejectsRuntimeAndAccountOverlap(t 
 				tt.prepare(bundle)
 			}
 			err = validateConnectorParentEnvSeparation(bundle)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
+			if err == nil || !strings.Contains(overlapNames(t, err), tt.want) {
 				t.Fatalf("overlap error = %v, want name-only %s refusal", err, tt.want)
 			}
 		})

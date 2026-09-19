@@ -408,9 +408,18 @@ func validateConnectorParentEnvSeparation(bundle *clientconfig.Bundle) error {
 	}
 	sort.Strings(overlap)
 	if len(overlap) > 0 {
-		return fmt.Errorf("connector environment overlaps parent-owned configuration: %s", strings.Join(overlap, ", "))
+		// These should be environment variable names, but an invalid manifest can
+		// contain a pasted credential. Diagnose the collision without echoing raw
+		// credential-configuration fields into boot or broker logs.
+		return &connectorEnvOverlapError{names: overlap}
 	}
 	return nil
+}
+
+type connectorEnvOverlapError struct{ names []string }
+
+func (e *connectorEnvOverlapError) Error() string {
+	return fmt.Sprintf("connector environment overlaps parent-owned configuration (%d fields); separate connector env/account variables from provider api_key_env and fleet runtime variables", len(e.names))
 }
 
 func validAccountEnvSuffix(suffix string) bool {

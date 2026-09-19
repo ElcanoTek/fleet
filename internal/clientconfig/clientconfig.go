@@ -1908,7 +1908,7 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header is only meaningful with auth: api_key", name)
 		}
 		if !remoteMCPHeaderShape.MatchString(h) {
-			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header %q is not a valid header name", name, e.APIKeyHeader)
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header is not a valid header name (supply the name, not a credential)", name)
 		}
 	}
 	if q := strings.TrimSpace(e.APIKeyQuery); q != "" {
@@ -1919,7 +1919,7 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header and api_key_query are mutually exclusive", name)
 		}
 		if !remoteMCPHeaderShape.MatchString(q) {
-			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_query %q is not a valid query-parameter name", name, e.APIKeyQuery)
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_query is not a valid query-parameter name (supply the name, not a credential)", name)
 		}
 	}
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {
