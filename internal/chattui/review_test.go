@@ -458,7 +458,9 @@ func TestWelcomeAndNewDiscoverApprovals(t *testing.T) {
 }
 
 func TestLoadApprovalsParsesPatternArgsFromGET(t *testing.T) {
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var gotURL string
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.RawQuery
 		fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"a","tool":"schedule_task","summary":{"name":"n","prompt_preview":"truncated"},"pattern_args":{"name":"n","prompt":"full prompt","cron":"0 9 * * *","run_at":""}}]}`)
 	}))
 	defer s.Close()
@@ -474,6 +476,33 @@ func TestLoadApprovalsParsesPatternArgsFromGET(t *testing.T) {
 	}
 	if _, ok := pending[0].patternArgs["prompt_preview"]; ok {
 		t.Fatal("display summary keys must not appear as pattern_args")
+	}
+	if gotURL != "omit_history=1" {
+		t.Fatalf("loadApprovals query = %q, want omit_history=1 so settlement does not download the transcript", gotURL)
+	}
+}
+
+func TestEditRejectsCronOnOneTimeScheduleCard(t *testing.T) {
+	m := newModel(Config{})
+	m.pending = []pendingApproval{{id: "a", tool: "schedule_task", details: map[string]any{"run_at": "2026-09-19T00:00:00Z", "recurring": false}}}
+	m.editApproval(`/edit {"cron":"0 9 * * *"}`)
+	if m.pending[0].edits != nil {
+		t.Fatalf("cron edit applied to a one-time card: %+v", m.pending[0].edits)
+	}
+	if joined := strings.Join(m.history, "\n"); !strings.Contains(joined, "recurring") {
+		t.Fatalf("expected rejection note, got %q", joined)
+	}
+}
+
+func TestEditRejectsClearingRecurringCron(t *testing.T) {
+	m := newModel(Config{})
+	m.pending = []pendingApproval{{id: "a", tool: "schedule_task", details: map[string]any{"cron": "0 9 * * *", "recurring": true}}}
+	m.editApproval(`/edit {"cron":""}`)
+	if m.pending[0].edits != nil {
+		t.Fatalf("empty cron applied to a recurring card: %+v", m.pending[0].edits)
+	}
+	if joined := strings.Join(m.history, "\n"); !strings.Contains(joined, "immediate") {
+		t.Fatalf("expected rejection note, got %q", joined)
 	}
 }
 

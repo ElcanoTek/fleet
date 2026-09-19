@@ -667,13 +667,6 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 					return Result{}, err
 				}
 			}
-			// Live clients appended every round's text.delta. Replace with the
-			// same finalText completeRun persists so a reload and a live view
-			// agree. Skip an empty replacement: abort/cap paths keep the
-			// partial stream, and a blank event would wipe it.
-			if finalText != "" {
-				sink.replaceVisibleText(finalText)
-			}
 			res, cerr := completeRun(ctx, runCompletion{
 				engine:            eng,
 				config:            cfg,
@@ -691,6 +684,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			})
 			if cerr != nil {
 				return res, cerr
+			}
+			// Live clients appended every round's text.delta. Emit the
+			// replacement AFTER completeRun so structured-output tasks
+			// replace with the validated JSON (or emit nothing on a
+			// terminal-format error), matching Result.FinalText.
+			if res.FinalText != "" {
+				sink.replaceVisibleText(res.FinalText)
 			}
 			// turn_end hooks (#788): observational only — a completed turn is not
 			// undone, so the decision is audited but not enforced. Fired only on

@@ -195,6 +195,7 @@ func TestTaskStreamBuffer_FinishReportsSealOnce(t *testing.T) {
 func TestTaskStreamBuffer_ObserveMapsRunEvents(t *testing.T) {
 	buf := newTaskStreamBuffer()
 	buf.Observe("text.delta", map[string]any{"text": "partial answer"})
+	buf.Observe("text.replace", map[string]any{"text": "final answer"})
 	buf.Observe("tool.call", map[string]any{"id": "call-1", "name": "bash", "input": `{"command":"ls"}`})
 	buf.Observe("tool.result", map[string]any{"id": "call-1", "name": "bash", "text": "total 0", "is_err": false})
 	buf.Observe("reasoning.delta", map[string]any{"text": "thinking"}) // must NOT forward
@@ -207,7 +208,7 @@ func TestTaskStreamBuffer_ObserveMapsRunEvents(t *testing.T) {
 		t.Fatalf("Attach: %v", err)
 	}
 	body := rw.Body()
-	for _, want := range []string{"event: agent_message", "event: tool_call", "event: tool_result", `"call_id":"call-1"`, `"content":"partial answer"`} {
+	for _, want := range []string{"event: agent_message", "event: tool_call", "event: tool_result", `"call_id":"call-1"`, `"content":"partial answer"`, `"content":"final answer"`, `"replace":true`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected %q in stream:\n%s", want, body)
 		}
@@ -215,10 +216,10 @@ func TestTaskStreamBuffer_ObserveMapsRunEvents(t *testing.T) {
 	if strings.Contains(body, "thinking") || strings.Contains(body, "nudge") {
 		t.Errorf("loop-internal events should not be forwarded to the live stream:\n%s", body)
 	}
-	// Exactly three forwarded frames (the empty text.delta and the two ignored
-	// events produce nothing).
-	if c := strings.Count(body, "\nevent: "); c != 3 {
-		t.Errorf("expected 3 forwarded SSE frames, got %d:\n%s", c, body)
+	// Four forwarded frames: delta, replace, tool.call, tool.result. The empty
+	// text.delta and the two ignored internals produce nothing.
+	if c := strings.Count(body, "\nevent: "); c != 4 {
+		t.Errorf("expected 4 forwarded SSE frames, got %d:\n%s", c, body)
 	}
 }
 

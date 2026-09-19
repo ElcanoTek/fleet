@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -23,11 +24,18 @@ import (
 // handleConversationGet serves GET /conversations/{id}: the conversation row
 // plus its full history, pending and resolved approval cards, and pending
 // memory proposals — everything a reload needs to re-hydrate the transcript.
+// ?omit_history=1 skips LoadHistory so a terminal approval review does not
+// have to download an unbounded transcript before POSTing a decision.
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
-	history, err := s.store.LoadHistory(r.Context(), id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	omitHistory := r.URL.Query().Get("omit_history") == "1"
+	var history []agent.HistoryEntry
+	if !omitHistory {
+		var err error
+		history, err = s.store.LoadHistory(r.Context(), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	pending, err := s.store.ListPendingApprovals(r.Context(), user, id)
 	if err != nil {

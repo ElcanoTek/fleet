@@ -165,7 +165,7 @@ func (m *model) matchCardPolicy(a pendingApproval) (ApprovalDecision, bool) {
 func (c *Client) loadApprovals(ctx context.Context, conversation string) ([]pendingApproval, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+"/conversations/"+url.PathEscape(conversation), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+"/conversations/"+url.PathEscape(conversation)+"?omit_history=1", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +262,37 @@ func (m *model) showApprovals() tea.Cmd {
 	return m.reviewNote(b.String())
 }
 
+// scheduleCardKind reports whether the frozen schedule_task card is recurring
+// (cron), one-time (run_at), or immediate. Cron edits are only valid on
+// recurring cards: overlaying cron onto run_at fails validation after the
+// approval is claimed, and clearing cron on a recurring card silently turns
+// it into an immediate run.
+func scheduleCardKind(a pendingApproval) string {
+	if a.details != nil {
+		if rec, ok := a.details["recurring"].(bool); ok && rec {
+			return "recurring"
+		}
+		if strField(a.details, "cron") != "" {
+			return "recurring"
+		}
+		if strField(a.details, "run_at") != "" {
+			return "one-time"
+		}
+		if imm, ok := a.details["run_immediately"].(bool); ok && imm {
+			return "immediate"
+		}
+	}
+	if a.patternArgs != nil {
+		if strings.TrimSpace(a.patternArgs["cron"]) != "" {
+			return "recurring"
+		}
+		if strings.TrimSpace(a.patternArgs["run_at"]) != "" {
+			return "one-time"
+		}
+	}
+	return ""
+}
+
 func (m *model) editApproval(text string) tea.Cmd {
 	_, payload, ok := strings.Cut(text, " ")
 	if !ok || len(m.pending) == 0 {
@@ -288,6 +319,15 @@ func (m *model) editApproval(text string) tea.Cmd {
 	}
 	if edits.Prompt != nil && strings.TrimSpace(*edits.Prompt) == "" {
 		return m.reviewNote("Prompt cannot be empty.")
+	}
+	if edits.Cron != nil {
+		kind := scheduleCardKind(m.pending[0])
+		if kind == "one-time" || kind == "immediate" {
+			return m.reviewNote("Cron edits apply only to recurring schedule_task cards.")
+		}
+		if kind == "recurring" && strings.TrimSpace(*edits.Cron) == "" {
+			return m.reviewNote("Clearing cron would convert this recurring task into an immediate run.")
+		}
 	}
 	if m.pending[0].edits == nil {
 		m.pending[0].edits = &ScheduleEdits{}

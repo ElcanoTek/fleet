@@ -10,8 +10,11 @@ ID on stderr so automation can resume the same thread.
 - `/approvals` shows pending cards, full server-provided summaries, expiry
   deadlines, and local edits. `/approvals reload` refreshes server state.
 - `/edit {"name":"Report","prompt":"...","cron":"0 9 * * *"}` edits the oldest
-  scheduled-task card. Omitted fields stay unchanged. Edits are local until
-  approval; the server revalidates them before creating a task.
+  scheduled-task card. Omitted fields stay unchanged. `cron` may only change a
+  recurring card; adding it to a one-time/`run_at` card, or clearing it on a
+  recurring card, is rejected locally so approval cannot claim the card and
+  then fail validation. Edits are local until approval; the server revalidates
+  them before creating a task.
 - `/approve` or `/deny` resolves the oldest card. Supply its full ID to select
   another card explicitly.
 - `/approve [id] session` or `/deny [id] session` applies that decision to future

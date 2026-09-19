@@ -21,7 +21,9 @@ The terminal shows staged actions and a pending count. `/approvals` displays ful
 review summaries and deadlines; `/approve` and `/deny` decide the oldest card,
 or take a full approval ID. `/edit {"name":"...","prompt":"...","cron":"..."}`
 changes the oldest scheduled-task card locally before approval. Omitted fields
-stay unchanged, and the server validates edits when you approve.
+stay unchanged. `cron` can only be changed on a recurring card — not added to a
+one-time task, and not cleared (that would make the task run immediately). The
+server validates edits when you approve.
 Email cards automatically show the full frozen recipients, CC/BCC, attachments
 and body as escaped JSON; the one-line model summary is not the review record.
 
