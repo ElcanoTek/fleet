@@ -261,9 +261,7 @@ func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *
 			if err != nil {
 				t.Fatalf("load bundle: %v", err)
 			}
-			if err := validateConnectorParentEnvSeparation(bundle); err == nil || !strings.Contains(overlapNames(t, err), name) {
-				t.Fatalf("overlap error = %v, want name-only %s refusal", err, name)
-			}
+			requireOverlap(t, bundle, name)
 		})
 	}
 }
@@ -308,7 +306,7 @@ func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testi
 	if err == nil {
 		t.Fatal("bundle claiming every parent-owned spelling validated")
 	}
-	list := overlapNames(t, err)
+	list := overlapNames(t, bundle)
 	refused := map[string]bool{}
 	for _, name := range strings.Split(list, ", ") {
 		refused[name] = true
@@ -316,6 +314,9 @@ func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testi
 	for spelling := range spellings {
 		if !refused[spelling] {
 			t.Errorf("alias spelling %s of a parent-owned name was not refused", spelling)
+		}
+		if strings.Contains(err.Error(), spelling) {
+			t.Errorf("loggable overlap error echoed alias spelling %s: %v", spelling, err)
 		}
 	}
 }
@@ -353,9 +354,7 @@ func TestValidateConnectorParentEnvSeparation_AdmitsReservedWorkspaceRootToken(t
 		if err != nil {
 			t.Fatalf("load bundle: %v", err)
 		}
-		if err := validateConnectorParentEnvSeparation(aliased); err == nil || !strings.Contains(overlapNames(t, err), alias) {
-			t.Errorf("alias spelling %s is an ordinary claim and must still be refused, got %v", alias, err)
-		}
+		requireOverlap(t, aliased, alias)
 	}
 }
 
@@ -376,9 +375,9 @@ providers:
 	if err != nil {
 		t.Fatalf("load bundle: %v", err)
 	}
-	err = validateConnectorParentEnvSeparation(bundle)
-	if err == nil || !strings.Contains(overlapNames(t, err), "MODEL_KEY") || strings.Contains(err.Error(), "placeholder") || strings.Contains(err.Error(), "MODEL_KEY") {
-		t.Fatalf("overlap error = %v, want name-only MODEL_KEY refusal", err)
+	err = requireOverlap(t, bundle, "MODEL_KEY")
+	if strings.Contains(err.Error(), "placeholder") {
+		t.Fatalf("overlap error echoed env value: %v", err)
 	}
 }
 
@@ -426,10 +425,7 @@ func TestValidateConnectorParentEnvSeparation_RejectsRuntimeAndAccountOverlap(t 
 			if tt.prepare != nil {
 				tt.prepare(bundle)
 			}
-			err = validateConnectorParentEnvSeparation(bundle)
-			if err == nil || !strings.Contains(overlapNames(t, err), tt.want) {
-				t.Fatalf("overlap error = %v, want name-only %s refusal", err, tt.want)
-			}
+			requireOverlap(t, bundle, tt.want)
 		})
 	}
 }
