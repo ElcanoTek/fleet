@@ -27,12 +27,25 @@ afterEach(() => {
 });
 
 describe("approval cards keep a pending card pending when the POST fails", () => {
+  it("lets a refreshed terminal outcome supersede locally held executing state", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "approved", executing: true }), { status: 200 }),
+    ));
+    const onResolved = vi.fn();
+    const approval: Approval = { id: "a", tool: "mcp_sendgrid_send_email", status: "pending", summary: { to: "recipient@example.com", subject: "Test" } };
+    const view = render(<ApprovalCard approval={approval} conversationId="c" onResolved={onResolved} />);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByRole("button", { name: "Check result" });
+    view.rerender(<ApprovalCard approval={{ ...approval, status: "failed", executing: false, resultText: "Send failed" }} conversationId="c" onResolved={onResolved} />);
+    expect(screen.queryByRole("button", { name: "Check result" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Send failed").length).toBeGreaterThan(0);
+  });
   it("shows the failure inline and re-enables the buttons after a non-2xx", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response("approval store unavailable", { status: 503 }))
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ status: "approved", result_text: "ran" }), { status: 200 }),
+        new Response(JSON.stringify({ status: "approved", result_text: "ran", is_err: false }), { status: 200 }),
       );
     vi.stubGlobal("fetch", fetchMock);
     const onResolved = renderCard({
@@ -55,6 +68,124 @@ describe("approval cards keep a pending card pending when the POST fails", () =>
     await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
     expect(onResolved.mock.calls[0][0]).toMatchObject({ status: "approved", resultText: "ran" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stamps failed when a 200 retry reports is_err, not approved/success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ status: "approved", result_text: "action failed: boom", is_err: true }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const onResolved = renderCard({
+      tool: "mcp_pages_deploy_page",
+      summary: { tool: "mcp_pages_deploy_page", args: [{ key: "slug", value: "q3" }] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Approve & run" }));
+    await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+    expect(onResolved.mock.calls[0][0]).toMatchObject({
+      status: "failed",
+      resultText: "action failed: boom",
+      executing: false,
+    });
+  });
+
+  it("persists executing and offers Check result, not new consent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            status: "approved",
+            result_text: "Approved — executing…",
+            executing: true,
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const onResolved = renderCard({ tool: "bash", summary: { command: "ls" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve & run" }));
+    await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+    expect(onResolved.mock.calls[0][0]).toMatchObject({
+      status: "pending",
+      executing: true,
+    });
+    expect(await screen.findByTestId("approval-check-result")).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve & run" })).toBeNull();
+    expect(screen.getByTestId("approval-still-running")).toHaveTextContent("still running");
+  });
+
+  it("clears executing when a later check returns success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ status: "approved", result_text: "ok", is_err: false }), {
+          status: 200,
+        }),
+      ),
+    );
+    const onResolved = renderCard({
+      tool: "bash",
+      summary: { command: "ls" },
+      executing: true,
+    });
+    expect(screen.getByTestId("approval-check-result")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("approval-check-result"));
+    await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+    expect(onResolved.mock.calls[0][0]).toMatchObject({
+      status: "approved",
+      executing: false,
+      resultText: "ok",
+    });
+  });
+
+  it("does not show expiry or deny on a hydrated executing card", () => {
+    renderCard({
+      tool: "bash",
+      summary: { command: "ls" },
+      executing: true,
+      expiresAt: Math.floor(Date.now() / 1000) - 60,
+    });
+    expect(screen.getByText("Command running")).toBeInTheDocument();
+    expect(screen.getByTestId("approval-check-result")).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Ask again/i })).toBeNull();
+    expect(screen.queryByTestId("approval-countdown")).toBeNull();
+    expect(screen.queryByText(/timed out/i)).toBeNull();
+  });
+
+  it("hides apply-all and deny on an executing generic card", () => {
+    renderCard({
+      tool: "mcp_pages_deploy_page",
+      summary: { tool: "mcp_pages_deploy_page", args: [{ key: "slug", value: "q3" }] },
+      executing: true,
+    });
+    expect(screen.getByTestId("approval-check-result")).toBeInTheDocument();
+    expect(screen.queryByTestId("approval-apply-all")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  it("does not green-stamp an approved row with no is_err as success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ status: "approved", result_text: "ok", execution_unknown: true }), {
+          status: 200,
+        }),
+      ),
+    );
+    const onResolved = renderCard({
+      tool: "mcp_pages_deploy_page",
+      summary: { tool: "mcp_pages_deploy_page", args: [{ key: "slug", value: "q3" }] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Approve & run" }));
+    await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+    expect(onResolved.mock.calls[0][0]).toMatchObject({ status: "execution_unknown" });
   });
 
   it("treats a network failure the same way", async () => {
@@ -122,5 +253,27 @@ describe("the advanced-model nudge keeps its choices when the POST fails", () =>
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
     expect(onResolved.mock.calls[0][0]).toMatchObject({ status: "rejected" });
+  });
+
+  it("keeps a successful model pin as approved when the body omits is_err", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            status: "approved",
+            action: "switch_only",
+            model: "anthropic/claude-opus-5",
+            result_text: "User accepted the suggestion.",
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const onResolved = renderCard({ tool: "suggest_advanced_model", summary: {} });
+    fireEvent.click(screen.getByRole("button", { name: "Just switch" }));
+    await waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+    expect(onResolved.mock.calls[0][0]).toMatchObject({ status: "approved" });
+    expect(onResolved.mock.calls[0][0].status).not.toBe("execution_unknown");
   });
 });

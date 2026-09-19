@@ -15,11 +15,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net/http"
@@ -77,8 +79,8 @@ type approvalStager struct {
 	// convTimeoutSeconds is this conversation's per-chat override (nil = none).
 	// It sits above the global default and below per-tool manifest overrides.
 	convTimeoutSeconds *int
-	// autoApproveInTest auto-approves every staged critical tool instead of
-	// waiting for a human (FLEET_AUTO_APPROVE_IN_TEST). A CI/test escape hatch,
+	// autoApproveInTest auto-approves executable critical tools; handler-only
+	// cards still require explicit decisions. A CI/test escape hatch,
 	// off by default; see config.Config.AutoApproveInTest.
 	autoApproveInTest bool
 	// push, when configured, sends the conversation owner a low-detail
@@ -263,7 +265,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// after surfacing a tool.auto_resolved event so an observing stream still sees
 	// the decision. Runs before staging so no approval row or card is created.
 	// NEVER enable this in production — it bypasses the human-in-the-loop gate.
-	if a.autoApproveInTest {
+	if a.autoApproveInTest && !handlerOnlyApproval(toolName) {
 		a.sink.Emit("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
@@ -276,7 +278,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// sentinel the orchestration gate interprets — pre-approved → run the tool
 	// normally; pre-denied → block it. This runs before staging so a pre-approved
 	// tool never creates an approval row or emits a card.
-	if a.sessionRegistry != nil {
+	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) {
 		if p, ok := a.sessionRegistry.Match(a.conversationID, toolName, rawInput); ok {
 			a.sink.Emit("tool.auto_resolved", map[string]any{
 				"tool":    toolName,
@@ -366,23 +368,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		return "", err
 	}
 
-	// Extract the display-relevant fields so the UI can render a readable card
-	// without re-parsing the whole payload.
-	summary := summarizeApprovalInput(toolName, rawInput, a.conversationID)
-
-	a.sink.Emit("tool.approval_required", map[string]any{
-		"approval_id": approval.ID,
-		"tool":        toolName,
-		"summary":     summary,
-		// Unix-seconds default-deny deadline (#225); the UI renders a countdown
-		// and transitions the card to a timed-out state at this instant.
-		"expires_at": approval.ExpiresAt,
-		// The public seat the approved call will run under (#167 residual 2).
-		// Empty for native tools and for the default bundle seat, which the UI
-		// renders as no account badge at all.
-		"mcp_server":  approval.MCPServer,
-		"mcp_account": approval.MCPAccount,
-	})
+	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
 	a.firePushNotification(toolName)
 	return approval.ID, nil
 }
@@ -515,11 +501,12 @@ func excerpt(s string, maxChars int) string {
 // The agent-facing message reflects the suppression reason so the model
 // knows not to retry.
 func (a *approvalStager) StageSuggestion(reason string) (string, string, error) {
+	advancedModel := agentcore.CurrentAdvancedModel()
 	conv, err := a.store.Get(a.ctx, a.userEmail, a.conversationID)
 	if err != nil {
 		return "", "", fmt.Errorf("lookup conversation: %w", err)
 	}
-	if conv != nil && conv.Model == agentcore.CurrentAdvancedModel() {
+	if conv != nil && conv.Model == advancedModel {
 		return "", "SUGGESTION_SUPPRESSED: this conversation is already pinned to the advanced model. Do not call suggest_advanced_model again — proceed with the user's request.", nil
 	}
 
@@ -549,7 +536,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 
 	// Persist the reason as the args payload so the approval card can
 	// render it on page reload and the audit trail is intact.
-	rawInput, err := json.Marshal(map[string]any{"reason": reason})
+	rawInput, err := json.Marshal(map[string]any{"reason": reason, "recommend_model": advancedModel})
 	if err != nil {
 		return "", "", fmt.Errorf("encode reason: %w", err)
 	}
@@ -577,16 +564,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 		return "", "", err
 	}
 
-	a.sink.Emit("tool.approval_required", map[string]any{
-		"approval_id": approval.ID,
-		"tool":        tools.SuggestAdvancedModelToolName,
-		"summary": map[string]any{
-			"tool":            tools.SuggestAdvancedModelToolName,
-			"reason":          reason,
-			"recommend_model": agentcore.CurrentAdvancedModel(),
-		},
-		"expires_at": approval.ExpiresAt,
-	})
+	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, string(rawInput), a.conversationID))
 
 	msg := fmt.Sprintf(
 		"SUGGESTION_DISPLAYED: the user is now seeing your model-switch suggestion (suggestion_id=%s). The card has three actions — Switch & retry (default), Just switch, Dismiss — and the user picks. Do NOT call suggest_advanced_model again. Briefly summarize what you've done so far and stop iterating; the user's choice will arrive on the next turn.",
@@ -681,6 +659,80 @@ type validationResult struct {
 	Warnings []string `json:"warnings"`
 }
 
+// frozenArgsMaxBytes bounds ArgsJSON before frozen_args is decoded. Oversized
+// raw input is complete:false so clients refuse informed consent; execution
+// still uses the stored row.
+const frozenArgsMaxBytes = 1 << 20
+
+var errTrailingJSON = errors.New("trailing JSON")
+
+// decodeJSONNumbers decodes one JSON value with json.Number so integers above
+// 2^53 and exponent literals survive. A second token is rejected so this is
+// not more lenient than json.Unmarshal.
+func decodeJSONNumbers(raw []byte, dest any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(dest); err != nil {
+		return err
+	}
+	var extra json.RawMessage
+	switch err := dec.Decode(&extra); err {
+	case io.EOF:
+		return nil
+	case nil:
+		return errTrailingJSON
+	default:
+		return err
+	}
+}
+
+// frozenApprovalArgs is the complete execution-argument review for every
+// staged tool. ArgsJSON is the source of truth (model-authored arguments the
+// handler will replay). Broker-resolved credentials are never copied in.
+// complete is false when the snapshot is missing, unparseable, trailing,
+// typed JSON null, not an object, or over frozenArgsMaxBytes — clients fail closed.
+func frozenApprovalArgs(rawInput string) map[string]any {
+	incomplete := map[string]any{"complete": false}
+	if len(rawInput) > frozenArgsMaxBytes {
+		return incomplete
+	}
+	var args any
+	if err := decodeJSONNumbers([]byte(rawInput), &args); err != nil {
+		return incomplete
+	}
+	obj, ok := args.(map[string]any)
+	if !ok || obj == nil {
+		return incomplete
+	}
+	return map[string]any{"complete": true, "args": obj}
+}
+
+// approvalClientFields is the review payload shared by live SSE events and
+// GET /conversations/{id} pending cards so a terminal cannot see a truncated
+// summary for one tool class and a full snapshot for another.
+func approvalClientFields(toolName, rawInput, convID string) map[string]any {
+	frozen := frozenApprovalArgs(rawInput)
+	if toolName == tools.SuggestAdvancedModelToolName && suggestedModel(rawInput) == "" {
+		// Legacy suggestions did not freeze their target: require a new card.
+		frozen = map[string]any{"complete": false}
+	}
+	return map[string]any{
+		"summary":      summarizeApprovalInput(toolName, rawInput, convID),
+		"pattern_args": handlerApprovalPatternArgs(toolName, rawInput),
+		"frozen_args":  frozen,
+	}
+}
+
+func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) map[string]any {
+	ev := approvalClientFields(approval.ToolName, rawInput, convID)
+	ev["approval_id"] = approval.ID
+	ev["tool"] = approval.ToolName
+	ev["expires_at"] = approval.ExpiresAt
+	ev["mcp_server"] = approval.MCPServer
+	ev["mcp_account"] = approval.MCPAccount
+	return ev
+}
+
 // summarizeApprovalInput dispatches on tool name to build a display
 // payload for the approval card. convID is used by the email
 // summarizer to resolve workspace-relative inline attachment paths
@@ -772,9 +824,8 @@ func displayArgValue(v any) string {
 
 // summarizeSuggestAdvancedInput exposes the agent's reason and the
 // recommended model slug so the UI card can render both without
-// re-parsing the args. The recommended slug is server-authoritative
-// (agentcore.CurrentAdvancedModel(), the live admin-configurable tier) —
-// the agent doesn't choose it.
+// re-parsing the args. The server freezes the configured tier when staging;
+// a later admin change must not change what this card authorizes.
 func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 	var args struct {
 		Reason string `json:"reason"`
@@ -783,8 +834,18 @@ func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 	return map[string]any{
 		"tool":            toolName,
 		"reason":          args.Reason,
-		"recommend_model": agentcore.CurrentAdvancedModel(),
+		"recommend_model": suggestedModel(rawInput),
 	}
+}
+
+func suggestedModel(rawInput string) string {
+	var args struct {
+		Model string `json:"recommend_model"`
+	}
+	if json.Unmarshal([]byte(rawInput), &args) != nil {
+		return ""
+	}
+	return strings.TrimSpace(args.Model)
 }
 
 // summarizeScheduleTaskInput builds the schedule_task approval-card payload
@@ -1025,6 +1086,10 @@ func summarizeBashInput(toolName, rawInput string) map[string]any {
 //     HTML iframe preview exactly matching what SendGrid will receive.
 //   - `content_type`: "text/html" vs "text/plain" so the UI picks the
 //     right renderer without sniffing the body.
+//   - `attachments` / `inline_attachments`: the frozen path/cid metadata
+//     from ArgsJSON, so a terminal review can show every file that will
+//     actually be sent. File bytes stay out of the summary; execution still
+//     replays the original ArgsJSON.
 //
 // The full content is capped at 1 MiB — SendGrid tolerates much more, but
 // anything beyond that in an approval payload is almost certainly a bug
@@ -1070,7 +1135,7 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 		// before send.
 		contentType = sniffContentType(full)
 	}
-	return map[string]any{
+	out := map[string]any{
 		"tool":             toolName,
 		"to":               args["to_email"],
 		"cc":               args["cc_emails"],
@@ -1082,6 +1147,13 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 		"content_type":     contentType,
 		"content_overflow": contentOverflow,
 	}
+	if v, ok := args["attachments"]; ok {
+		out["attachments"] = v
+	}
+	if v, ok := args["inline_attachments"]; ok {
+		out["inline_attachments"] = v
+	}
+	return out
 }
 
 // cidPattern matches one `cid:<id>` reference. The id runs to the first
@@ -1269,6 +1341,38 @@ type approvalRequest struct {
 	Edits *scheduleTaskEdits `json:"edits,omitempty"`
 }
 
+// Handler-only tools have no runnable tool body. A session sentinel would be
+// mistaken for an approval id instead of creating a task or changing a model.
+func handlerOnlyApproval(tool string) bool {
+	switch tool {
+	case tools.ScheduleTaskToolName, tools.ManageTasksToolName, "preview_email", tools.SuggestAdvancedModelToolName:
+		return true
+	default:
+		return false
+	}
+}
+
+// Handler-only terminal policies must match frozen argument strings, never
+// display aliases or synthetic summary fields. These tools' arguments contain
+// user-authored task/email/model data, not broker credentials. Executable tools
+// continue to match their arguments exclusively in the server registry.
+func handlerApprovalPatternArgs(tool, raw string) map[string]string {
+	if !handlerOnlyApproval(tool) {
+		return nil
+	}
+	var args map[string]any
+	if json.Unmarshal([]byte(raw), &args) != nil {
+		return nil
+	}
+	result := make(map[string]string)
+	for k, v := range args {
+		if s, ok := v.(string); ok {
+			result[k] = s
+		}
+	}
+	return result
+}
+
 // scheduleTaskEdits is the editable subset of a staged schedule_task call —
 // exactly the fields the approval card displays. Applied over the staged args
 // BEFORE re-validation, so an edited cron passes the same pure checks the gate
@@ -1338,10 +1442,11 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	}
 	if approval.Status != "pending" {
 		// Idempotent: return the already-resolved state without re-firing.
-		writeJSON(w, map[string]any{
-			"status":      approval.Status,
-			"result_text": approval.ResultText,
-		})
+		s.writeResolvedApprovalState(w, r, user, approval.ID)
+		return
+	}
+	if handlerOnlyApproval(approval.ToolName) && req.Scope != "" && req.Scope != "once" {
+		http.Error(w, "this tool requires a separate decision for each staged card; use scope once", http.StatusBadRequest)
 		return
 	}
 
@@ -1370,7 +1475,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		}
 		if claimed {
 			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-				resolutionCallID(approval), resultText, false)
+				resolutionCallID(approval), resultText)
 			writeJSON(w, map[string]any{"status": "rejected", "result_text": resultText})
 			return
 		}
@@ -1404,7 +1509,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// original tool_call id so the chip in the UI updates instead
 		// of orphaning a second result row keyed off the approval id.
 		appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-			resolutionCallID(approval), historyMsg, false)
+			resolutionCallID(approval), historyMsg)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 		writeJSON(w, map[string]any{"status": "rejected"})
 		return
@@ -1417,7 +1522,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// afterwards. Losing the claim means someone else is running it —
 	// return their resolved state instead of re-firing.
 	claimed, err := s.store.ClaimApproval(r.Context(), user, approvalID, "approved",
-		"Approved — executing…")
+		approvalExecutingSentinel)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1464,14 +1569,16 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	}
 	isErr := toolErr != nil
 	resultText, isErr = governApprovalResult(execCtx, approval, resultText, isErr)
-	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText); err != nil {
+	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
+		s.approvalPersistenceFailures.Store(approvalID, true)
+		writeJSON(w, map[string]any{
+			"status": "approved", "execution_unknown": true,
+			"result_text": "The action was attempted but its outcome could not be recorded. Verify the external result before taking further action.",
+		})
+		return
 	}
-	// Write the real tool_result into history so the next turn's model
-	// sees what happened — and so the existing chip in the UI updates
-	// from "APPROVAL_REQUIRED..." to the real outcome on reload.
-	appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-		resolutionCallID(approval), resultText, isErr)
+	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 
 	writeJSON(w, map[string]any{
@@ -1488,6 +1595,69 @@ func governApprovalResult(ctx context.Context, approval *store.Approval, text st
 	return agentcore.GovernAndBoundModelVisibleToolText(ctx, approval.ToolName, resolutionCallID(approval), text, isErr)
 }
 
+// approvalExecutingSentinel is the result_text ClaimApproval writes before
+// the staged tool runs. An idempotent retry that sees this text and a NULL
+// is_err must report executing:true — not success — so a concurrent loser
+// cannot stamp "Email sent ✓" while the winner is still in flight. Named
+// so clients and tests share one string; do not parse arbitrary tool output
+// for error.
+const approvalExecutingSentinel = store.ApprovalExecutingSentinel
+
+// approvalOutcomeFlags is the execution-outcome contract for an already-
+// resolved approval row. status remains consent; these flags tell the
+// client whether the attempt succeeded, failed, is still running, or was
+// never recorded (legacy rows). The TUI matches executing and
+// execution_unknown by these exact keys.
+func approvalOutcomeFlags(a *store.Approval) map[string]any {
+	if a == nil || a.Status != "approved" {
+		return nil
+	}
+	if a.IsErr.Valid {
+		return map[string]any{"is_err": a.IsErr.Bool}
+	}
+	if a.ToolName == tools.SuggestAdvancedModelToolName {
+		// Even before is_err existed, approval and the model pin committed in
+		// one transaction. An approved suggestion proves successful execution.
+		return map[string]any{"is_err": false}
+	}
+	if a.ToolName == previewEmailToolName && a.ResultText == "Preview dismissed by user. No email was sent." {
+		return map[string]any{"is_err": false}
+	}
+	if a.ResultText == approvalExecutingSentinel {
+		return map[string]any{"executing": true}
+	}
+	if isNotifyRecordResult(a.ResultText) {
+		// Pre-migration notify records have no IsErr but the prefix proves
+		// RecordAction observed a successful run. Do not relabel them unknown.
+		return map[string]any{"is_err": false}
+	}
+	return map[string]any{"execution_unknown": true}
+}
+
+func (s *Server) approvalOutcomeFlags(a *store.Approval) map[string]any {
+	if _, failed := s.approvalPersistenceFailures.Load(a.ID); failed && !a.IsErr.Valid && a.ResultText == approvalExecutingSentinel {
+		return map[string]any{"execution_unknown": true}
+	}
+	return approvalOutcomeFlags(a)
+}
+
+// approvalClientState is the idempotent POST body: consent plus the
+// outcome flags. Used by the already-resolved early return and by
+// writeResolvedApprovalState so a replay cannot drop is_err.
+func (s *Server) approvalClientState(a *store.Approval) map[string]any {
+	out := map[string]any{
+		"status":      a.Status,
+		"result_text": a.ResultText,
+	}
+	for k, v := range s.approvalOutcomeFlags(a) {
+		out[k] = v
+	}
+	if out["execution_unknown"] == true && a.ResultText == approvalExecutingSentinel {
+		out["result_text"] = "Execution outcome could not be recorded. Verify the external result before taking further action."
+	}
+	return out
+}
+
 // writeResolvedApprovalState answers a request that lost the claim race
 // (or arrived after resolution) with the current state of the approval,
 // mirroring the idempotent already-resolved response above.
@@ -1497,10 +1667,16 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "approval already resolved", http.StatusConflict)
 		return
 	}
-	writeJSON(w, map[string]any{
-		"status":      latest.Status,
-		"result_text": latest.ResultText,
-	})
+	state := s.approvalClientState(latest)
+	if latest.ToolName == "suggest_advanced_model" && latest.Status == "approved" {
+		conv, err := s.store.Get(r.Context(), user, latest.ConversationID)
+		if err != nil || conv == nil {
+			http.Error(w, "could not load conversation model", http.StatusInternalServerError)
+			return
+		}
+		state["model"] = conv.Model
+	}
+	writeJSON(w, state)
 }
 
 // handleSuggestAdvancedApproval resolves a suggest_advanced_model card.
@@ -1539,7 +1715,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 			return
 		}
 		appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
-			"User dismissed the model-switch suggestion. Continue working with the current model.", false)
+			"User dismissed the model-switch suggestion. Continue working with the current model.")
 		writeJSON(w, map[string]any{
 			"status": "rejected",
 			"action": "dismiss",
@@ -1554,7 +1730,11 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 	// returned 500 with the approval already recorded as approved — and the
 	// retry saw a resolved row, echoed it, and never pinned. Now a failed pin
 	// rolls the claim back, the card stays pending, and the retry works.
-	advancedModel := agentcore.CurrentAdvancedModel()
+	advancedModel := suggestedModel(approval.ArgsJSON)
+	if advancedModel == "" {
+		http.Error(w, "suggestion has no frozen model target; dismiss it and request a new suggestion", http.StatusConflict)
+		return
+	}
 	resultText := fmt.Sprintf("User accepted the suggestion. Conversation pinned to %s.", advancedModel)
 	claimed, err := s.store.ClaimApprovalAndSetModel(r.Context(), user, approval.ID, resultText, approval.ConversationID, advancedModel)
 	if err != nil {
@@ -1567,7 +1747,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		return
 	}
 	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
-		resultText, false)
+		resultText)
 
 	action := req.Action
 	if action == "" {
@@ -1670,7 +1850,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 			continue
 		}
 		appendToolResultToHistory(ctx, s.store, a.ConversationID, a.ToolName,
-			resolutionCallID(&a), resultText, false)
+			resolutionCallID(&a), resultText)
 		denied++
 	}
 	return denied, nil
@@ -1704,7 +1884,7 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (s
 		return "", fmt.Errorf("unsupported tool for approval: %s", approval.ToolName)
 	}
 	var args map[string]any
-	if err := json.Unmarshal([]byte(approval.ArgsJSON), &args); err != nil {
+	if err := decodeJSONNumbers([]byte(approval.ArgsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 	// Give the send a generous but bounded timeout — SendGrid is usually
@@ -2197,7 +2377,7 @@ func (s *Server) orchestratorTaskLink() string {
 
 // appendToolResultToHistory writes a synthetic tool_result row so the
 // conversation transcript reflects the outcome of the (async) approval.
-func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string, isErr bool) {
+func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string) {
 	entry := agent.HistoryEntry{
 		Role: "tool",
 		Type: "tool_result",
@@ -2206,7 +2386,7 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 		"id":     callID,
 		"name":   toolName,
 		"text":   text,
-		"is_err": isErr,
+		"is_err": false,
 	})
 	entry.Content = payload
 	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {

@@ -519,6 +519,9 @@ export type TaskStreamFrame = {
     | string;
   role?: string;
   content?: string;
+  // text.replace from the run loop: replace the live assistant entry instead
+  // of concatenating another delta (pre-audit draft vs final answer).
+  replace?: boolean;
   call_id?: string;
   name?: string;
   input?: string;

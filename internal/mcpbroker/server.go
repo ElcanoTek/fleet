@@ -81,6 +81,8 @@ func NewServer(backend Backend) *Server {
 // peer hangup (EOF) or ctx cancellation, and the decode error otherwise.
 func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	dec := json.NewDecoder(conn)
+	// Arguments are consent-bound JSON: never round record IDs through float64.
+	dec.UseNumber()
 	enc := json.NewEncoder(conn)
 
 	var writeMu sync.Mutex

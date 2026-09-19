@@ -172,6 +172,17 @@ describe("a resolved email approval's result", () => {
     );
   });
 
+  it("does not claim email sent when the outcome was never recorded", () => {
+    renderCard({
+      tool: "mcp_mailbux_send_email",
+      status: "execution_unknown",
+      resultText: "ok",
+      summary: { subject: "Weekly report", content: "body", content_type: "text/plain" },
+    });
+    expect(screen.getByText("Approved — outcome not recorded")).toBeTruthy();
+    expect(screen.queryByText("Email sent ✓")).toBeNull();
+  });
+
   it("keeps the raw view on the preview card's result", () => {
     renderCard({
       tool: "preview_email",

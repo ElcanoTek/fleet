@@ -195,13 +195,14 @@ type chatStore interface {
 	// at click time (#1109), not whenever the next sweep tick runs.
 	ClaimExpiredApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
 	ResolveApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) error
-	SetApprovalResult(ctx context.Context, userEmail, approvalID, resultText string) error
+	SetApprovalResult(ctx context.Context, userEmail, approvalID, resultText string, isErr bool) error
 	ListPendingApprovals(ctx context.Context, userEmail, convID string) ([]store.Approval, error)
 	// ListResolvedApprovals re-hydrates resolved cards on reload so the
 	// transcript keeps the same shape it had live — including notify-mode
 	// "ran without asking" records, whose undo hint would otherwise exist
 	// only on the SSE stream nobody was watching (#1153's record contract).
 	ListResolvedApprovals(ctx context.Context, userEmail, convID string) ([]store.Approval, error)
+	ListExecutingApprovals(ctx context.Context, userEmail, convID, sentinel string) ([]store.Approval, error)
 	// ListExpiredApprovals + ClaimExpiredApproval back the server-side
 	// expiry sweep (#225): pending approvals past their expires_at
 	// deadline are auto-denied for notification/audit. The claim-time

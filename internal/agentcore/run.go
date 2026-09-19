@@ -579,7 +579,8 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// rollbackTo only ever unwinds events past an attempt mark taken at or
 		// after this one, and a committed side effect suppresses rollback
 		// entirely (ADR-0035).
-		roundToolMark := sink.toolEventCount()
+		roundMark := sink.mark()
+		roundToolMark := roundMark.toolEvents
 		outcome, serr := eng.streamRoundWithResilience(
 			ctx, usageOrch, sink, maxTokens, messages, agent, activeModel, swappedToFallback, buildAgent,
 		)
@@ -596,12 +597,17 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		activeModel = outcome.activeModel
 		swappedToFallback = outcome.swappedToFallback
 
-		// The model's user-visible text for this round comes from the streamed
-		// accumulation (sink), falling back to the final AgentResult content.
+		// Prefer the final completed response. The sink spans enforcement rounds:
+		// concatenating it here repeats an answer drafted before the completion
+		// audit with the answer produced after that audit. Keep streamed text as
+		// the fallback for providers that do not return completed text content,
+		// but only from THIS round. Attempt rollbacks cannot precede roundMark.
 		_, accumulatedText := sink.snapshot()
-		finalText := strings.TrimSpace(accumulatedText)
-		if finalText == "" && finalResult != nil && finalResult.Response.Content != nil {
-			finalText = finalResult.Response.Content.Text()
+		finalText := strings.TrimSpace(accumulatedText[roundMark.finalText:])
+		if finalResult != nil {
+			if text := completedResponseText(finalResult.Response.Content); text != "" {
+				finalText = text
+			}
 		}
 
 		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, panicAttribution)
@@ -683,6 +689,16 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			if cerr != nil {
 				return res, cerr
 			}
+			// Live clients appended every round's text.delta. Emit the
+			// replacement AFTER completeRun so structured-output tasks
+			// replace with the validated JSON (or emit nothing on a
+			// terminal-format error), matching Result.FinalText.
+			sink.replaceVisibleText(res.FinalText)
+			// Replacement is an observer boundary too. Do not let a lost final
+			// answer become a successful turn or run completion hooks after it.
+			if observerErr := observerBoundary.Err(); observerErr != nil {
+				return res, observerErr
+			}
 			// turn_end hooks (#788): observational only — a completed turn is not
 			// undone, so the decision is audited but not enforced. Fired only on
 			// normal completion (not cancel/budget, where ctx is dead and a
@@ -696,7 +712,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// input, then inject the enforcement nudges and loop. The fallback-swap
 		// state carries forward (cutlass nextRoundMessages). The transcript
 		// carry is what lets the next round CONTINUE the work instead of
-		// restarting it — see carryRoundMessages.
+		// restarting it — see carryRoundMessages. Live clients still hold
+		// this round's text.delta events; completeRun emits text.replace with
+		// the authoritative final answer so they drop the superseded draft
+		// without discarding abort-path transcripts.
 		messages = append(messages, carryRoundMessages(finalResult)...)
 		messages, err = appendEnforcementMessages(messages, enforcementMsgs, deps.Observer, observerBoundary)
 		if err != nil {

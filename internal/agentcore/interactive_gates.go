@@ -196,10 +196,10 @@ func (o *orchestrationState) checkPreviewEmailSafety(toolName, toolCallID, rawIn
 // tool set, so the no-sink branch is a defensive backstop, not a normal path.
 //
 // Unlike send_email/bash, this gate does NOT handle the pre-approve/pre-deny
-// session sentinels: schedule_task has no apply-all card chrome, so the session
-// registry never holds a policy for it and Stage never returns a sentinel here.
-// A pre-approval would be meaningless anyway — the work runs handler-side, not in
-// the tool's (error-only) Run.
+// session sentinels: the HTTP stager excludes handler-only tools from registry
+// matching. Terminal session decisions instead resolve each real approval row.
+// A sentinel would be meaningless here — the work runs handler-side, not in the
+// tool's (error-only) Run.
 func (o *orchestrationState) checkScheduleTaskSafety(toolName, toolCallID, rawInput string) (bool, string) {
 	if toolName != toolNameScheduleTask {
 		return false, ""

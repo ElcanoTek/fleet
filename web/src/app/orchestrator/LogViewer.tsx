@@ -739,10 +739,21 @@ function LiveTaskView({
         }
         return;
       }
-      if (frame.type === "agent_message" && frame.content) {
-        const content = frame.content;
+      if (frame.type === "agent_message" && (frame.content || frame.replace)) {
+        const content = frame.content ?? "";
         // Coalesce adjacent text deltas into one readable assistant entry.
+        // replace=true is the run's authoritative final text: drop the
+        // concatenated pre-audit draft instead of appending.
         setEntries((prev) => {
+          if (frame.replace) {
+            const kept = prev.filter((e) => e.kind !== "message");
+            const entry: ActivityEntry = {
+              key: `e${seq.current++}`,
+              kind: "message",
+              text: clampText(content),
+            };
+            return [...kept, entry].slice(-1000);
+          }
           const last = prev[prev.length - 1];
           if (last?.kind === "message") {
             return [...prev.slice(0, -1), { ...last, text: clampText(last.text + content) }];

@@ -1,0 +1,11 @@
+-- 061_approval_is_err.sql — persist the staged tool's execution outcome on
+-- the approval row so an idempotent retry (and conversation GET) can echo
+-- is_err instead of looking like success.
+--
+-- status stays consent (pending|approved|rejected). is_err is the execution
+-- boolean, written atomically with result_text by SetApprovalResult. NULL
+-- means the outcome is not yet known: the in-flight claim sentinel, a
+-- rejection, or a legacy approved row whose run finished before this column
+-- existed. Nullable ADD is the zero-downtime form; do not backfill — a
+-- guessed false would green-stamp historical failures.
+ALTER TABLE approvals ADD COLUMN is_err BOOLEAN;

@@ -598,6 +598,25 @@ func buildRecoveredEntries(journal []TurnJournalRow, events []TurnEvent) ([]agen
 			}
 		case "turn.retry":
 			text.Reset()
+		case "text.replace":
+			var p struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(ev.Data, &p) != nil {
+				continue
+			}
+			// Replacement covers the whole visible answer, including fragments
+			// flushed before intervening tool/reasoning events. Keep those tool
+			// records and user steers; only superseded assistant prose retracts.
+			kept := entries[:0]
+			for _, entry := range entries {
+				if entry.Role != "assistant" || entry.Type != "text" {
+					kept = append(kept, entry)
+				}
+			}
+			entries = kept
+			text.Reset()
+			text.WriteString(p.Text)
 		case "user.message":
 			// A steered mid-turn user message (#785) normally becomes durable
 			// only with the terminal history commit, so an interrupted turn

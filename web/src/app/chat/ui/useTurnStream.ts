@@ -741,6 +741,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
 
+    if (event.event === "text.replace") {
+      // Authoritative replacement for the assistant's visible text. The
+      // runtime emits this at finish so a pre-audit draft concatenated from
+      // earlier text.delta events is replaced by the persisted final answer.
+      const p = payload as { text?: string };
+      if (!ctx.hasStartedStreaming) {
+        ctx.hasStartedStreaming = true;
+        startThinkingCrossfade(ctx.assistantId);
+      }
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
+        ...clearRetryNotice(m),
+        content: p.text ?? "",
+        state: "streaming",
+      }));
+      return;
+    }
+
     if (event.event === "text.delta") {
       const p = payload as { text?: string };
       if (!p.text) return;
@@ -935,7 +952,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const next = existing.map((msg) => {
           if (!msg.approvals?.length) return msg;
           const touched = msg.approvals.map((ap) =>
-            ap.tool === p.tool && ap.status === "pending"
+            ap.tool === p.tool && ap.status === "pending" && !ap.executing
               ? { ...ap, status: "rejected" as ApprovalStatus, resultText: "Superseded by a newer call." }
               : ap,
           );

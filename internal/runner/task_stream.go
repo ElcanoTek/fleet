@@ -130,9 +130,10 @@ func (b *taskStreamBuffer) Emit(event string, payload any) {
 // real event stream here. It maps the run's internal event names onto the stable
 // SSE event types the orchestrator UI tails (#200):
 //
-//   - text.delta  → agent_message  (an assistant output chunk)
-//   - tool.call   → tool_call      (a tool invocation: name + raw JSON input)
-//   - tool.result → tool_result    (a tool result: name + output + error flag)
+//   - text.delta   → agent_message  (an assistant output chunk)
+//   - text.replace → agent_message with replace=true (authoritative final text)
+//   - tool.call    → tool_call      (a tool invocation: name + raw JSON input)
+//   - tool.result  → tool_result    (a tool result: name + output + error flag)
 //
 // Reasoning / enforcement / context-pressure events are intentionally not
 // forwarded to the live stream — they are loop internals, not run-log output the
@@ -149,6 +150,14 @@ func (b *taskStreamBuffer) Observe(eventType string, payload map[string]any) {
 			"type":    "agent_message",
 			"role":    "assistant",
 			"content": text,
+		})
+	case "text.replace":
+		text, _ := payload["text"].(string)
+		b.Emit("agent_message", map[string]any{
+			"type":    "agent_message",
+			"role":    "assistant",
+			"content": text,
+			"replace": true,
 		})
 	case "tool.call":
 		b.Emit("tool_call", map[string]any{

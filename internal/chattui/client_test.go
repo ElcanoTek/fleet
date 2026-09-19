@@ -99,7 +99,7 @@ func TestRunOneShot_StreamsTextToStdout(t *testing.T) {
 	defer srv.Close()
 
 	var out, errOut bytes.Buffer
-	code := runOneShot(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"}, "", "what is 6*7?", strings.NewReader(""), &out, &errOut)
+	code := runOneShot(NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "sekret"}), "", "what is 6*7?", strings.NewReader(""), &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit %d; stderr=%s", code, errOut.String())
 	}
@@ -108,6 +108,34 @@ func TestRunOneShot_StreamsTextToStdout(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "python") {
 		t.Errorf("tool-call progress should go to stderr: %q", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "conversation: conv-xyz") {
+		t.Errorf("conversation id should be reported on stderr for resuming: %q", errOut.String())
+	}
+	if strings.Contains(out.String(), "conv-xyz") {
+		t.Errorf("conversation id must NOT leak into stdout (script capture): %q", out.String())
+	}
+}
+
+func TestRunOneShot_TextReplaceDropsSupersededDraft(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: conversation\ndata: {\"id\":\"c\"}\n\n")
+		io.WriteString(w, "event: text.delta\ndata: {\"text\":\"DRAFT_SHOULD_VANISH\"}\n\n")
+		io.WriteString(w, "event: text.delta\ndata: {\"text\":\"final answer\"}\n\n")
+		io.WriteString(w, "event: text.replace\ndata: {\"text\":\"final answer\"}\n\n")
+		io.WriteString(w, "event: turn.completed\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+	var out, errOut bytes.Buffer
+	if code := runOneShot(NewClient(Config{ServerURL: srv.URL}), "", "go", strings.NewReader(""), &out, &errOut); code != 0 {
+		t.Fatal(code, errOut.String())
+	}
+	if strings.Contains(out.String(), "DRAFT_SHOULD_VANISH") {
+		t.Fatalf("one-shot stdout kept the retracted draft: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "final answer") {
+		t.Fatalf("one-shot stdout missing final answer: %q", out.String())
 	}
 }
 

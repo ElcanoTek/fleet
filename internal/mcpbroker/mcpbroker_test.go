@@ -656,7 +656,7 @@ func TestClientServer_CallRoundTrip(t *testing.T) {
 	fake := &fakeBroker{text: "hello-result"}
 	client := loopback(t, fake)
 
-	text, isErr, err := client.CallMCP(context.Background(), "deal_sheet", "lookup", map[string]any{"q": "x"})
+	text, isErr, err := client.CallMCP(context.Background(), "deal_sheet", "lookup", map[string]any{"q": "x", "record_id": json.Number("9007199254740993")})
 	if err != nil {
 		t.Fatalf("CallMCP err: %v", err)
 	}
@@ -665,6 +665,9 @@ func TestClientServer_CallRoundTrip(t *testing.T) {
 	}
 	if fake.lastServer != "deal_sheet" || fake.lastTool != "lookup" || fake.lastArgs["q"] != "x" {
 		t.Fatalf("server got (%q, %q, %v), want the forwarded server/tool/args", fake.lastServer, fake.lastTool, fake.lastArgs)
+	}
+	if got := fake.lastArgs["record_id"]; got != json.Number("9007199254740993") {
+		t.Fatalf("broker changed reviewed numeric ID: %v (%T)", got, got)
 	}
 }
 

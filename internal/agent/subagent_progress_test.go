@@ -24,6 +24,28 @@ type recordingObserver struct {
 	events []subagentEvent
 }
 
+func TestChildProgressReplacesPreviewWithoutCoalescing(t *testing.T) {
+	observer := &recordingObserver{}
+	p := newChildProgress(observer, "call", "child", "worker")
+	p.Observe("text.delta", map[string]any{"text": "superseded buffered draft"})
+	p.Observe("text.replace", map[string]any{"text": "final"})
+	got := observer.progress()
+	if len(got) != 1 || got[0].payload["phase"] != subagentPhaseText || got[0].payload["detail"] != "final" {
+		t.Fatalf("replacement not forwarded immediately: %+v", got)
+	}
+	p.mu.Lock()
+	buffered := p.text.String()
+	p.mu.Unlock()
+	if buffered != "" {
+		t.Fatalf("superseded draft remains buffered: %q", buffered)
+	}
+	p.Observe("text.replace", map[string]any{"text": ""})
+	got = observer.progress()
+	if len(got) != 2 || got[1].payload["detail"] != "" {
+		t.Fatal("empty replacement failed to clear preview")
+	}
+}
+
 type subagentEvent struct {
 	typ     string
 	payload map[string]any

@@ -69,8 +69,10 @@ func TestCarryRoundMessages(t *testing.T) {
 // exact message slice each Stream call received.
 type textCapturingModel struct {
 	mockModel
-	slug    string
-	replies []string
+	slug        string
+	replies     []string
+	omitTextEnd bool
+	secondBlock string
 
 	recMu sync.Mutex
 	seen  [][]fantasy.Message
@@ -97,8 +99,19 @@ func (m *textCapturingModel) Stream(_ context.Context, call fantasy.Call) (fanta
 		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t1", Delta: reply}) {
 			return
 		}
-		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"}) {
+		if !m.omitTextEnd && !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "t1"}) {
 			return
+		}
+		if m.secondBlock != "" {
+			for _, part := range []fantasy.StreamPart{
+				{Type: fantasy.StreamPartTypeTextStart, ID: "t2"},
+				{Type: fantasy.StreamPartTypeTextDelta, ID: "t2", Delta: m.secondBlock},
+				{Type: fantasy.StreamPartTypeTextEnd, ID: "t2"},
+			} {
+				if !yield(part) {
+					return
+				}
+			}
 		}
 		yield(fantasy.StreamPart{
 			Type:         fantasy.StreamPartTypeFinish,
@@ -117,7 +130,7 @@ func (m *textCapturingModel) call(i int) []fantasy.Message {
 func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 	session := NewLogSession()
 	model := &textCapturingModel{slug: "carry-test-model", replies: []string{"round one analysis", "confirmed"}}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
 		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("do the task")}, label: "carry"},
 		Policy:     newRoundsPolicy(session, 1), // round 0 blocked with a nudge, round 1 finishes
 		Executor:   &stubExecutor{},
@@ -129,6 +142,9 @@ func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 	}
 	if len(model.seen) != 2 {
 		t.Fatalf("expected 2 rounds, got %d", len(model.seen))
+	}
+	if result.FinalText != "confirmed" {
+		t.Fatalf("final answer includes a superseded pre-audit draft: %q", result.FinalText)
 	}
 
 	round2 := model.call(1)
@@ -156,6 +172,162 @@ func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 	}
 	if workIdx > nudgeIdx {
 		t.Errorf("carried transcript (idx %d) must precede the nudge (idx %d) so the nudge reads as a follow-up", workIdx, nudgeIdx)
+	}
+}
+
+type streamEventObserver struct {
+	mu     sync.Mutex
+	events []streamEvent
+}
+
+type streamEvent struct {
+	typ     string
+	payload map[string]any
+}
+
+func (o *streamEventObserver) Observe(eventType string, payload map[string]any) {
+	copied := map[string]any{}
+	for k, v := range payload {
+		copied[k] = v
+	}
+	o.mu.Lock()
+	o.events = append(o.events, streamEvent{typ: eventType, payload: copied})
+	o.mu.Unlock()
+}
+
+func reconstructVisibleText(events []streamEvent) string {
+	var b strings.Builder
+	for _, e := range events {
+		text, _ := e.payload["text"].(string)
+		switch e.typ {
+		case "text.delta":
+			b.WriteString(text)
+		case evtTextReplace:
+			b.Reset()
+			b.WriteString(text)
+		}
+	}
+	return b.String()
+}
+
+func TestRun_LiveStreamRetractsPreAuditDraft(t *testing.T) {
+	session := NewLogSession()
+	model := &textCapturingModel{slug: "stream-replace-test", replies: []string{"round one analysis", "confirmed"}}
+	obs := &streamEventObserver{}
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("do the task")}, label: "stream-replace"},
+		Policy:     newRoundsPolicy(session, 1),
+		Executor:   &stubExecutor{},
+		Model:      model,
+		LogSession: session,
+		Observer:   obs,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.FinalText != "confirmed" {
+		t.Fatalf("FinalText = %q, want confirmed", result.FinalText)
+	}
+	obs.mu.Lock()
+	events := append([]streamEvent(nil), obs.events...)
+	obs.mu.Unlock()
+	var lastReplace string
+	var sawReplace bool
+	for _, e := range events {
+		if e.typ == evtTextReplace {
+			sawReplace = true
+			lastReplace, _ = e.payload["text"].(string)
+		}
+	}
+	if !sawReplace {
+		t.Fatal("expected text.replace with the authoritative final answer")
+	}
+	if lastReplace != "confirmed" {
+		t.Fatalf("text.replace payload = %q, want confirmed", lastReplace)
+	}
+	if got := reconstructVisibleText(events); got != "confirmed" {
+		t.Fatalf("live stream reconstructed %q, want the final round only", got)
+	}
+}
+
+func TestRun_FinalRoundOnlyWhenProviderOmitsCompletedText(t *testing.T) {
+	session := NewLogSession()
+	model := &textCapturingModel{slug: "delta-only", replies: []string{"superseded draft", "final streamed answer"}, omitTextEnd: true}
+	observer := &streamEventObserver{}
+	result, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("finish after audit")}, label: "delta-only"},
+		Policy: newRoundsPolicy(session, 1), Executor: &stubExecutor{}, Model: model, Observer: observer, LogSession: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(model.seen) != 2 {
+		t.Fatalf("got %d rounds", len(model.seen))
+	}
+	if result.FinalText != "final streamed answer" {
+		t.Fatalf("final text includes earlier round: %q", result.FinalText)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if got := reconstructVisibleText(observer.events); got != result.FinalText {
+		t.Fatalf("live result %q differs from stored %q", got, result.FinalText)
+	}
+}
+
+func TestRunPreservesAllCompletedTextBlocks(t *testing.T) {
+	session := NewLogSession()
+	observer := &streamEventObserver{}
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("answer")}, label: "multi-block"},
+		Policy: newRoundsPolicy(session, 0), Executor: &stubExecutor{},
+		Model:    &textCapturingModel{slug: "multi-block", replies: []string{"first "}, secondBlock: "second"},
+		Observer: observer, LogSession: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "first second" {
+		t.Fatalf("completed blocks truncated: %q", result.FinalText)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if got := reconstructVisibleText(observer.events); got != result.FinalText {
+		t.Fatalf("live text %q != persisted result %q", got, result.FinalText)
+	}
+}
+
+func TestRunRetractsFinalizeObserverDraftWhenFinalAnswerIsEmpty(t *testing.T) {
+	observer := &streamEventObserver{}
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input: stubInput{system: "s", user: "answer", label: "empty-finalize"}, Policy: passPolicy{},
+		Model: &textCapturingModel{slug: "empty-main", replies: []string{""}}, Observer: observer,
+		Finalize: func(_ context.Context, in FinalizeInput) (string, error) {
+			in.Observer.Observe("text.delta", map[string]any{"text": "discarded finalize draft"})
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if result.FinalText != "" || reconstructVisibleText(observer.events) != "" {
+		t.Fatalf("finalize draft survived: final=%q live=%q", result.FinalText, reconstructVisibleText(observer.events))
+	}
+}
+
+func TestScheduledResultOmitsPreAuditDraft(t *testing.T) {
+	session := NewLogSession()
+	model := &textCapturingModel{slug: "scheduled-final-test", replies: []string{"FUTURE_PASS_391", "Audit complete. FUTURE_PASS_391"}}
+	result, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("compute and audit")}, label: "scheduled-final"},
+		Policy: newRoundsPolicy(session, 1), Executor: &stubExecutor{}, Model: model, LogSession: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FinalText != "Audit complete. FUTURE_PASS_391" {
+		t.Fatalf("scheduled result concatenated superseded drafts: %q", result.FinalText)
 	}
 }
 

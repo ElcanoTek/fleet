@@ -2,8 +2,113 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestListExecutingApprovalsExcludesCompletedBodies(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const user = "alice@example.com"
+	const sentinel = "Approved — executing…"
+	conv, err := s.CreateConversation(ctx, user, "t", "victoria", "m", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := s.CreateApproval(ctx, conv.ID, user, "bash", "running", `{"command":"echo hi"}`, 0, ApprovalSeat{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ClaimApproval(ctx, user, running.ID, "approved", sentinel); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	for range MaxResolvedApprovalsPerConversation + 1 {
+		a, err := s.CreateApproval(ctx, conv.ID, user, "bash", "done", `{}`, 0, ApprovalSeat{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ResolveApproval(ctx, user, a.ID, "approved", "done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListExecutingApprovals(ctx, user, conv.ID, sentinel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != running.ID || got[0].ArgsJSON != "" {
+		t.Fatalf("settlement identifiers: %+v", got)
+	}
+	other, err := s.ListExecutingApprovals(ctx, "other@example.com", conv.ID, sentinel)
+	if err != nil || len(other) != 0 {
+		t.Fatalf("owner isolation: %+v %v", other, err)
+	}
+	if n, err := s.RecoverStrandedApprovals(ctx); err != nil || n != 1 {
+		t.Fatalf("restart recovery: count=%d error=%v", n, err)
+	}
+	recovered, err := s.GetApproval(ctx, user, running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != "approved" || recovered.IsErr.Valid || recovered.ResultText == sentinel {
+		t.Fatalf("must preserve consent and mark outcome unknown: %+v", recovered)
+	}
+	history, err := s.LoadHistory(ctx, conv.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("recovery history count=%d err=%v", len(history), err)
+	}
+	var result struct {
+		ID    string `json:"id"`
+		Text  string `json:"text"`
+		IsErr bool   `json:"is_err"`
+	}
+	if err := json.Unmarshal(history[0].Content, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "running" || !result.IsErr || !strings.Contains(result.Text, "Do not repeat") {
+		t.Fatalf("unknown outcome missing from model context: %+v", result)
+	}
+	if n, err := s.RecoverStrandedApprovals(ctx); err != nil || n != 0 {
+		t.Fatalf("recovery not idempotent: %d %v", n, err)
+	}
+	history, err = s.LoadHistory(ctx, conv.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("recovery duplicated history: %d %v", len(history), err)
+	}
+}
+
+func TestApprovalRecoveryIsolatesUnrecoveredConversations(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const user = "u@example.com"
+	blockedConv := seedConvAndTurn(t, s, "blocked-turn")
+	safeConv, err := s.CreateConversation(ctx, user, "safe", "", "m", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, 2)
+	for _, conv := range []string{blockedConv, safeConv.ID} {
+		a, err := s.CreateApproval(ctx, conv, user, "bash", "call", `{}`, 0, ApprovalSeat{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s.ClaimApproval(ctx, user, a.ID, "approved", ApprovalExecutingSentinel); err != nil || !ok {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+		ids = append(ids, a.ID)
+	}
+	if count, err := s.RecoverStrandedApprovals(ctx); err != nil || count != 1 {
+		t.Fatalf("safe recovery blocked by unrelated turn: %d %v", count, err)
+	}
+	blocked, err := s.GetApproval(ctx, user, ids[0])
+	if err != nil || blocked.ResultText != ApprovalExecutingSentinel {
+		t.Fatalf("outcome projected before call: %+v %v", blocked, err)
+	}
+	safe, err := s.GetApproval(ctx, user, ids[1])
+	if err != nil || safe.ResultText == ApprovalExecutingSentinel {
+		t.Fatalf("safe outcome remained running: %+v %v", safe, err)
+	}
+}
 
 // Resolved cards must survive a reload: the conversation GET re-hydrates them
 // from this listing so the transcript keeps the shape it had live — including
@@ -61,6 +166,9 @@ func TestListResolvedApprovals_ReturnsResolvedRowsOldestFirst(t *testing.T) {
 	}
 	if s1.ResultText != `{"status_code":202}` || s1.Status != "approved" {
 		t.Errorf("resolved row lost its outcome: status=%q result=%q", s1.Status, s1.ResultText)
+	}
+	if !s1.IsErr.Valid || s1.IsErr.Bool {
+		t.Errorf("approved ResolveApproval is_err = %+v, want valid false (the resolve IS the outcome)", s1.IsErr)
 	}
 	d1, ok := byID[denied.ID]
 	if !ok {

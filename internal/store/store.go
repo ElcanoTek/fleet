@@ -1991,6 +1991,12 @@ type Approval struct {
 	// the default seat.
 	MCPServer  string
 	MCPAccount string
+	// IsErr is the staged tool's execution outcome, written atomically with
+	// result_text by SetApprovalResult. Valid=false means unknown: still
+	// executing after the claim sentinel, a rejection, or a legacy approved
+	// row whose run finished before this column existed. status stays consent
+	// (pending|approved|rejected) even when IsErr is true.
+	IsErr sql.NullBool
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -2001,7 +2007,8 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
+		        is_err
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
 		 ORDER BY created_at ASC`,
@@ -2016,7 +2023,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2042,7 +2049,8 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
+		        is_err
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
 		 ORDER BY created_at DESC
@@ -2058,7 +2066,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2071,6 +2079,83 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
+}
+
+// ListExecutingApprovals returns settlement identifiers without downloading
+// completed cards or their argument bodies. Filter before any display limit so
+// an older in-flight execution cannot be hidden by newer completed approvals.
+func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, sentinel string) ([]Approval, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, '') FROM approvals
+		WHERE conversation_id = $1 AND user_email = $2 AND status = 'approved'
+		AND is_err IS NULL AND result_text = $3 ORDER BY created_at`, convID, userEmail, sentinel)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Approval
+	for rows.Next() {
+		a := Approval{Status: "approved", ResultText: sentinel}
+		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ApprovalExecutingSentinel represents a claimed action with no recorded outcome.
+const ApprovalExecutingSentinel = "Approved — executing…"
+
+// RecoverStrandedApprovals runs before accepting requests at startup. An action
+// may have committed remotely before the process died, so record uncertainty,
+// never failure or a retry: repeating it could duplicate a side effect.
+func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
+	const outcome = "Execution outcome unknown after server restart. Do not repeat this action automatically; verify the external result before taking further action."
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `UPDATE approvals SET result_text = $1
+		WHERE status = 'approved' AND is_err IS NULL AND result_text = $2
+		AND NOT EXISTS (SELECT 1 FROM turns WHERE turns.conversation_id = approvals.conversation_id AND turns.status = 'running')
+		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, '')`, outcome, ApprovalExecutingSentinel)
+	if err != nil {
+		return 0, err
+	}
+	var recovered []Approval
+	for rows.Next() {
+		var a Approval
+		if err := rows.Scan(&a.ID, &a.ConversationID, &a.ToolName, &a.ToolCallID); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		recovered = append(recovered, a)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	for _, a := range recovered {
+		callID := a.ToolCallID
+		if callID == "" {
+			callID = a.ID
+		}
+		payload, err := json.Marshal(map[string]any{"id": callID, "name": a.ToolName, "text": outcome, "is_err": true})
+		if err != nil {
+			return 0, err
+		}
+		if _, err := s.appendHistoryTx(ctx, tx, a.ConversationID, []agent.HistoryEntry{{Role: "tool", Type: "tool_result", Content: payload}}); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(recovered)), nil
 }
 
 // CreateApproval stages a pending approval and returns the row.
@@ -2130,14 +2215,15 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
+		        is_err
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2162,7 +2248,8 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
+		        is_err
 		 FROM approvals
 		 WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at > 0 AND expires_at < $1
 		 ORDER BY expires_at ASC
@@ -2178,7 +2265,7 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount); err != nil {
+			&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -2203,11 +2290,26 @@ func (s *Store) ResolveApproval(ctx context.Context, userEmail, approvalID, newS
 	if !validApprovalResolution(newStatus) {
 		return fmt.Errorf("invalid approval status %q", newStatus)
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3
-		 WHERE id = $4 AND user_email = $5 AND status = 'pending'`,
-		newStatus, resultText, time.Now().Unix(), approvalID, userEmail,
+	now := time.Now().Unix()
+	var (
+		res sql.Result
+		err error
 	)
+	// An approved ResolveApproval IS the outcome (notify-mode records), so
+	// is_err=false is part of the write. Rejections leave is_err NULL.
+	if newStatus == approvalStatusApproved {
+		res, err = s.db.ExecContext(ctx,
+			`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3, is_err = FALSE
+			 WHERE id = $4 AND user_email = $5 AND status = 'pending'`,
+			newStatus, resultText, now, approvalID, userEmail,
+		)
+	} else {
+		res, err = s.db.ExecContext(ctx,
+			`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3
+			 WHERE id = $4 AND user_email = $5 AND status = 'pending'`,
+			newStatus, resultText, now, approvalID, userEmail,
+		)
+	}
 	if err != nil {
 		return err
 	}
@@ -2267,7 +2369,7 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx,
-		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2
+		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, is_err = FALSE
 		 WHERE id = $3 AND user_email = $4 AND status = 'pending'
 		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)`,
 		resultText, now, approvalID, userEmail, now,
@@ -2317,14 +2419,39 @@ func (s *Store) ClaimExpiredApproval(ctx context.Context, userEmail, approvalID,
 }
 
 // SetApprovalResult records the staged tool's outcome on an
-// already-claimed (non-pending) approval.
-func (s *Store) SetApprovalResult(ctx context.Context, userEmail, approvalID, resultText string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET result_text = $1
-		 WHERE id = $2 AND user_email = $3 AND status <> 'pending'`,
-		resultText, approvalID, userEmail,
-	)
-	return err
+// already-claimed (non-pending) approval. result_text and is_err are
+// written together so an idempotent retry cannot echo the claim sentinel
+// (or a result without its error bit).
+func (s *Store) SetApprovalResult(ctx context.Context, userEmail, approvalID, resultText string, isErr bool) error {
+	// The next model turn must see the same outcome as the approval card.
+	// Commit both together so a crash cannot leave APPROVAL_REQUIRED as the
+	// only model-visible result of an action that already executed.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var convID, tool, callID string
+	err = tx.QueryRowContext(ctx,
+		`UPDATE approvals SET result_text = $1, is_err = $2
+		 WHERE id = $3 AND user_email = $4 AND status <> 'pending'
+		 RETURNING conversation_id, tool_name, COALESCE(NULLIF(tool_call_id, ''), id)`,
+		resultText, isErr, approvalID, userEmail,
+	).Scan(&convID, &tool, &callID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"id": callID, "name": tool, "text": resultText, "is_err": isErr})
+	if err != nil {
+		return err
+	}
+	if _, err := s.appendHistoryTx(ctx, tx, convID, []agent.HistoryEntry{{Role: "tool", Type: "tool_result", Content: payload}}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LatestApprovalByTool returns the most recent approval (any status)
@@ -2337,7 +2464,8 @@ func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName strin
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
 		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, '')
+		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
+		        is_err
 		 FROM approvals
 		 WHERE conversation_id = $1 AND tool_name = $2
 		 ORDER BY created_at DESC
@@ -2347,7 +2475,7 @@ func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName strin
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
 		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount); err != nil {
+		&a.MCPServer, &a.MCPAccount, &a.IsErr); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

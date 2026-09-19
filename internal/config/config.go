@@ -866,8 +866,9 @@ type Config struct {
 	// never as "deny instantly".
 	ApprovalTimeoutSeconds int
 
-	// AutoApproveInTest, when true, makes the approval stager auto-approve every
-	// staged critical tool instead of waiting for a human (#225).
+	// AutoApproveInTest auto-approves executable critical tools (#225).
+	// Handler-only schedule_task, manage_tasks, preview_email and model
+	// suggestions still create cards and require explicit API decisions.
 	// FLEET_AUTO_APPROVE_IN_TEST, default FALSE. This is a CI/test escape hatch
 	// for pipelines with no human present and a mocked backend — it WEAKENS the
 	// human-in-the-loop gate, so it must NEVER be enabled in production. Off by

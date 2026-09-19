@@ -311,7 +311,10 @@ come back, not just a raw tool chip. See
 critical-action card, honest per-tool copy, timed-out recovery).
 
 `FLEET_AUTO_APPROVE_IN_TEST` (default **false**) is a CI/test escape hatch that
-auto-approves every staged critical tool instead of waiting for a human. It
+auto-approves executable critical tools instead of waiting for a human.
+Handler-only `schedule_task`, `manage_tasks`, `preview_email`, and model
+suggestions still create approval cards; unattended tests must resolve those
+cards explicitly through the approval API. The flag
 **bypasses the human-in-the-loop gate** and is intended only for pipelines with
 no human present and a mocked backend — never enable it in production. fleet logs
 a loud warning at startup when it is on.

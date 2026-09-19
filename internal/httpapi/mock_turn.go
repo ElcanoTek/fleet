@@ -34,17 +34,7 @@ func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, us
 			`{"to_email":"demo@example.com","subject":"Mock subject","content":"<p>Hi from the mock turn.</p>"}`, expiresAt,
 			store.ApprovalSeat{Server: "sendgrid"})
 		if err == nil {
-			sink.Emit("tool.approval_required", map[string]any{
-				"approval_id": approval.ID,
-				"tool":        "mcp_sendgrid_send_email",
-				"summary": map[string]any{
-					"tool":    "mcp_sendgrid_send_email",
-					"to":      "demo@example.com",
-					"subject": "Mock subject",
-					"preview": "<p>Hi from the mock turn.</p>",
-				},
-				"expires_at": approval.ExpiresAt,
-			})
+			sink.Emit("tool.approval_required", approvalRequiredEvent(approval, approval.ArgsJSON, conv.ID))
 		}
 	}
 

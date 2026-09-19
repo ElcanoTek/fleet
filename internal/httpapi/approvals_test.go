@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -68,9 +71,11 @@ type fakeMCPBroker struct {
 	err     error
 	server  string
 	tool    string
+	args    map[string]any
 }
 
-func (f *fakeMCPBroker) CallMCP(_ context.Context, server, tool string, _ map[string]any) (string, bool, error) {
+func (f *fakeMCPBroker) CallMCP(_ context.Context, server, tool string, args map[string]any) (string, bool, error) {
+	f.args = args
 	f.server = server
 	f.tool = tool
 	return f.text, f.isError, f.err
@@ -210,14 +215,23 @@ func (e *approvalEngine) OpenApprovalMCPScope(context.Context, agentcore.MCPSele
 
 func TestRunStagedToolUsesBrokerSeam(t *testing.T) {
 	broker := &fakeMCPBroker{text: "sent"}
+	clientConn, serverConn := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = mcpbroker.NewServer(&approvalWireBackend{fakeMCPBroker: broker}).Serve(ctx, serverConn)
+	}()
+	client := mcpbroker.NewClient(clientConn)
+	t.Cleanup(func() { _ = client.Close(); cancel(); <-done })
 	s := &Server{agent: &approvalEngine{
 		fakeEngine: &fakeEngine{},
-		broker:     broker,
+		broker:     client,
 		catalog:    sendgridApprovalCatalog,
 	}}
 	text, err := s.runStagedTool(context.Background(), &store.Approval{
 		ToolName: "mcp_send_grid_send_email",
-		ArgsJSON: `{"to":"test@example.com"}`,
+		ArgsJSON: `{"to":"test@example.com","record_id":9007199254740993}`,
 	})
 	if err != nil {
 		t.Fatalf("runStagedTool: %v", err)
@@ -225,6 +239,19 @@ func TestRunStagedToolUsesBrokerSeam(t *testing.T) {
 	if text != "sent" || broker.server != "send_grid" || broker.tool != "send_email" {
 		t.Fatalf("result/route = %q %q.%q, want sent send_grid.send_email", text, broker.server, broker.tool)
 	}
+	if got := broker.args["record_id"]; got != json.Number("9007199254740993") {
+		t.Fatalf("reviewed record ID changed during execution: %v (%T)", got, got)
+	}
+}
+
+// Use the real credential-broker protocol through its final tool-dispatch seam.
+type approvalWireBackend struct {
+	mcpbroker.Backend
+	*fakeMCPBroker
+}
+
+func (b *approvalWireBackend) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
+	return b.fakeMCPBroker.CallMCP(ctx, server, tool, args)
 }
 
 func TestRunStagedToolPropagatesMCPToolError(t *testing.T) {

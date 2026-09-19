@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -23,11 +24,22 @@ import (
 // handleConversationGet serves GET /conversations/{id}: the conversation row
 // plus its full history, pending and resolved approval cards, and pending
 // memory proposals — everything a reload needs to re-hydrate the transcript.
+// ?omit_history=1 skips LoadHistory so a terminal approval review does not
+// have to download an unbounded transcript before POSTing a decision.
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
-	history, err := s.store.LoadHistory(r.Context(), id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if approvalID := r.URL.Query().Get("approval_id"); approvalID != "" {
+		s.handleConversationApprovalGet(w, r, user, id, approvalID)
 		return
+	}
+	omitHistory := r.URL.Query().Get("omit_history") == "1"
+	var history []agent.HistoryEntry
+	if !omitHistory {
+		var err error
+		history, err = s.store.LoadHistory(r.Context(), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	pending, err := s.store.ListPendingApprovals(r.Context(), user, id)
 	if err != nil {
@@ -38,35 +50,55 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// events do, so the frontend reuses its render path.
 	approvals := make([]map[string]any, 0, len(pending))
 	for _, a := range pending {
-		approvals = append(approvals, map[string]any{
-			"approval_id": a.ID,
-			"tool":        a.ToolName,
-			"summary":     summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
-			// Re-hydrate the countdown on reload (#225); 0 = no expiry.
-			"expires_at": a.ExpiresAt,
-			// Re-hydrate the seat badge (#167 residual 2); empty account
-			// means the default bundle seat and renders no badge.
-			"mcp_server":  a.MCPServer,
-			"mcp_account": a.MCPAccount,
-			// Anchors the card to the message holding this tool_call so a
-			// reload places it where the live stream did (last-assistant
-			// fallback when empty — older rows, promote cards).
-			"tool_call_id": a.ToolCallID,
-		})
+		if r.URL.Query().Get("approval_index") == "1" {
+			approvals = append(approvals, map[string]any{"approval_id": a.ID})
+			continue
+		}
+		card := approvalClientFields(a.ToolName, a.ArgsJSON, id)
+		card["approval_id"] = a.ID
+		card["tool"] = a.ToolName
+		// Re-hydrate the countdown on reload (#225); 0 = no expiry.
+		card["expires_at"] = a.ExpiresAt
+		// Re-hydrate the seat badge (#167 residual 2); empty account
+		// means the default bundle seat and renders no badge.
+		card["mcp_server"] = a.MCPServer
+		card["mcp_account"] = a.MCPAccount
+		// Anchors the card to the message holding this tool_call so a
+		// reload places it where the live stream did (last-assistant
+		// fallback when empty — older rows, promote cards).
+		card["tool_call_id"] = a.ToolCallID
+		approvals = append(approvals, card)
 	}
 	// Resolved approvals re-hydrate too, so the transcript keeps the shape
 	// it had live: the "Email sent ✓" outcome card, a timed-out card, and —
 	// load-bearing for notify mode (#1153) — the "ran without asking" record
 	// with its undo hint, whose only other delivery is an SSE stream the
 	// away-from-page user (notify's entire audience) was not watching.
-	resolved, err := s.store.ListResolvedApprovals(r.Context(), user, id)
+	var resolved []store.Approval
+	settlementOnly := r.URL.Query().Get("settlement_only") == "1"
+	if settlementOnly {
+		resolved, err = s.store.ListExecutingApprovals(r.Context(), user, id, approvalExecutingSentinel)
+	} else {
+		resolved, err = s.store.ListResolvedApprovals(r.Context(), user, id)
+		if err == nil {
+			resolved, err = s.includeExecutingApprovals(r.Context(), user, id, resolved)
+		}
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	resolvedCards := make([]map[string]any, 0, len(resolved))
 	for _, a := range resolved {
-		resolvedCards = append(resolvedCards, map[string]any{
+		if settlementOnly {
+			if s.approvalOutcomeFlags(&a)["executing"] == true {
+				resolvedCards = append(resolvedCards, map[string]any{
+					"approval_id": a.ID, "tool": a.ToolName, "executing": true,
+				})
+			}
+			continue
+		}
+		card := map[string]any{
 			"approval_id":  a.ID,
 			"tool":         a.ToolName,
 			"summary":      summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
@@ -78,7 +110,18 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 			// True for a notify-mode record (#1153): the card says the tool
 			// already ran without asking, not that the user approved it.
 			"recorded": isNotifyRecordResult(a.ResultText),
-		})
+		}
+		// Same executing / is_err / execution_unknown keys as the approval
+		// POST so a reload (and the TUI's resolved_approvals ingest) cannot
+		// green-stamp an in-flight sentinel or a failed run.
+		for k, v := range s.approvalClientState(&a) {
+			card[k] = v
+		}
+		resolvedCards = append(resolvedCards, card)
+	}
+	if r.URL.Query().Get("approval_index") == "1" {
+		writeJSON(w, map[string]any{"pending_approvals": approvals, "resolved_approvals": resolvedCards})
+		return
 	}
 	// Pending memory proposals — same pattern as approvals. Without
 	// these, the visibilitychange/focus auto-refetch in chat-experience
@@ -132,6 +175,47 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		"resolved_approvals":       resolvedCards,
 		"pending_memory_proposals": memProposals,
 	})
+}
+
+// handleConversationApprovalGet bounds one-shot review to the requested card;
+// unrelated pending email bodies must not block a small action's settlement.
+func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Request, user, convID, approvalID string) {
+	a, err := s.store.GetApproval(r.Context(), user, approvalID)
+	if err != nil {
+		http.Error(w, "could not load approval", http.StatusInternalServerError)
+		return
+	}
+	if a == nil || a.ConversationID != convID {
+		http.Error(w, "approval not found", http.StatusNotFound)
+		return
+	}
+	pending, resolved := []map[string]any{}, []map[string]any{}
+	if a.Status == "pending" {
+		card := approvalRequiredEvent(a, a.ArgsJSON, convID)
+		pending = append(pending, card)
+	} else {
+		card := s.approvalClientState(a)
+		card["approval_id"], card["tool"] = a.ID, a.ToolName
+		resolved = append(resolved, card)
+	}
+	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
+}
+
+func (s *Server) includeExecutingApprovals(ctx context.Context, user, convID string, resolved []store.Approval) ([]store.Approval, error) {
+	executing, err := s.store.ListExecutingApprovals(ctx, user, convID, approvalExecutingSentinel)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(resolved))
+	for _, a := range resolved {
+		seen[a.ID] = true
+	}
+	for _, a := range executing {
+		if !seen[a.ID] {
+			resolved = append(resolved, a)
+		}
+	}
+	return resolved, nil
 }
 
 // handleConversationDelete serves DELETE /conversations/{id}.
