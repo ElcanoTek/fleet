@@ -7,8 +7,9 @@ ID on stderr so automation can resume the same thread.
 
 ## Review and resolve
 
-- `/approvals` shows pending cards, full server-provided summaries, expiry
-  deadlines, and local edits. `/approvals reload` refreshes server state.
+- `/approvals` shows pending cards, one-line summaries, the complete frozen
+  execution arguments, expiry deadlines, and local edits. `/approvals reload`
+  refreshes server state.
 - `/edit {"name":"Report","prompt":"...","cron":"0 9 * * *"}` edits the oldest
   scheduled-task card. Omitted fields stay unchanged. `cron` may only change a
   recurring card; adding it to a one-time/`run_at` card, or clearing it on a
@@ -65,15 +66,22 @@ receive the executable-tool auto-approve sentinel.
 
 This closes the initial terminal deferrals: scheduled-task editing,
 session/pattern decisions, and switching conversations to resolve saved cards.
-Edit fields match the existing web endpoint (name, prompt, cron). Terminal review
-automatically displays the full frozen email summary, including all recipients,
-CC/BCC, attachments and content, in escaped JSON before offering a decision.
-If the server flags `content_overflow` (body over the 1 MiB summary cap),
-approval is refused so a hidden tail cannot be sent. Bash cards likewise print
-the complete frozen command, control-escaped, rather than a 120-rune prefix.
-One-line summaries sanitize terminal control bytes.
-One-shot settlement fetches the current card and prints its email review before
-the approval request. `/approvals` also exposes full summaries for every tool.
+Edit fields match the existing web endpoint (name, prompt, cron). Authenticated SSE `tool.approval_required` events and GET pending cards expose
+`frozen_args` for every staged tool: `{complete: true, args: <ArgsJSON object>}`
+or `{complete: false}` when the snapshot is missing, unparseable, trailing,
+typed JSON null, not an object, or over the 1 MiB raw ArgsJSON bound.
+JSON number literals (integers above 2^53, exponents) are preserved. Display summaries stay
+truncated for cards; they are not the review record. Terminal review
+automatically prints those execution arguments as escaped JSON before any
+approve — schedule_task, manage_tasks, bash, email, model suggestions, and
+bundle-declared critical tools alike. Local `/edit` values overlay the printed
+object so it matches what the POST will send. Approval is refused when
+`complete` is not true, including legacy payloads that omit `frozen_args`.
+Deny and in-flight result retrieval do not need a complete snapshot.
+One-line summaries, frozen JSON, `result_text`, and approval errors sanitize
+C0/C1/ESC/CR and bidirectional formatting so they cannot drive the TTY.
+Broker-resolved credentials are never copied into `frozen_args`; the snapshot
+is the model-authored ArgsJSON the handler already owned.
 
 Tests cover expired/failed outcomes, retry after transport failure, rehydration,
 editing, scoped requests, superseded cards, conflicting flags and prefixed email

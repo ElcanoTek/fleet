@@ -1,60 +1,139 @@
 package chattui
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+	"unicode"
 )
 
-// Email approval is a review of frozen server arguments, not model prose. JSON
-// preserves every recipient, attachment and body byte without interpreting HTML,
-// Markdown or terminal control characters. The server summary itself may still
-// cap content at 1 MiB (content_overflow); that is not a complete review and
-// approval is refused until the agent restages a smaller body.
-func emailApprovalReview(tool string, summary any) string {
-	if tool != "send_email" && tool != "preview_email" && !strings.HasSuffix(tool, "_send_email") {
-		return ""
+// frozenApprovalReview is the last thing a terminal user sees before a
+// decision: the complete execution arguments (ArgsJSON), JSON-escaped so
+// C0/C1/ESC/CR and bidi controls cannot drive the TTY. Local schedule_task
+// edits are overlaid so the printed object is what the POST will send.
+// Incomplete, typed-nil, or truncated snapshots are not a review.
+func frozenApprovalReview(a pendingApproval) string {
+	if !a.reviewComplete() {
+		return "INCOMPLETE frozen argument review: the server did not provide a complete snapshot of the arguments that will execute. Approval is refused."
 	}
-	b, err := json.MarshalIndent(summary, "", "  ")
+	b, err := json.MarshalIndent(a.executionArgs(), "", "  ")
 	if err != nil {
-		return "Email review unavailable. Reload approvals before deciding."
+		return "INCOMPLETE frozen argument review: the snapshot could not be encoded. Approval is refused."
 	}
-	if emailSummaryOverflow(summary) {
-		return "INCOMPLETE email review: the frozen body exceeded the 1 MiB summary cap, so the tail is not shown. Approval is refused until the agent restages a smaller body.\n" + string(b)
-	}
-	return "Frozen email review (all recipients, content and attachments):\n" + string(b)
+	return "Frozen argument review (complete execution args):\n" + sanitizeTerminalText(string(b))
 }
 
-func bashApprovalReview(tool string, summary any) string {
-	if tool != "bash" {
+func (a pendingApproval) reviewComplete() bool {
+	return a.frozenPresent && a.frozenComplete && a.frozenArgs != nil
+}
+
+func (a pendingApproval) refuseApprove() string {
+	if a.executing {
 		return ""
 	}
-	m, _ := summary.(map[string]any)
-	if m == nil || strField(m, "command") == "" {
-		return ""
+	if !a.reviewComplete() {
+		return "Refusing to approve: complete frozen arguments are unavailable or truncated. Deny, reload, or wait for a restage."
 	}
-	b, err := json.MarshalIndent(map[string]any{"command": m["command"]}, "", "  ")
-	if err != nil {
-		return "Bash review unavailable. Reload approvals before deciding."
+	if _, err := json.Marshal(a.executionArgs()); err != nil {
+		return "Refusing to approve: frozen arguments could not be encoded."
 	}
-	return "Frozen bash review (full command):\n" + string(b)
+	return ""
 }
 
-func frozenApprovalReview(tool string, summary any) string {
-	if review := emailApprovalReview(tool, summary); review != "" {
-		return review
+// executionArgs is the object that will be sent (frozen snapshot plus any
+// local schedule_task edits). The server still revalidates edits.
+func (a pendingApproval) executionArgs() map[string]any {
+	out := make(map[string]any, len(a.frozenArgs)+3)
+	for k, v := range a.frozenArgs {
+		out[k] = v
 	}
-	return bashApprovalReview(tool, summary)
+	if a.edits == nil {
+		return out
+	}
+	if a.edits.Name != nil {
+		out["name"] = *a.edits.Name
+	}
+	if a.edits.Prompt != nil {
+		out["prompt"] = *a.edits.Prompt
+	}
+	if a.edits.Cron != nil {
+		out["cron"] = *a.edits.Cron
+	}
+	return out
 }
 
-func emailSummaryOverflow(summary any) bool {
-	m, _ := summary.(map[string]any)
-	if m == nil {
-		return false
+var errTrailingJSON = errors.New("trailing JSON")
+
+// decodeJSONNumbers decodes one JSON value with json.Number so integers above
+// 2^53 and exponent literals survive. A second token is rejected so this is
+// not more lenient than json.Unmarshal.
+func decodeJSONNumbers(raw []byte, dest any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(dest); err != nil {
+		return err
 	}
-	overflow, _ := m["content_overflow"].(bool)
-	return overflow
+	var extra json.RawMessage
+	switch err := dec.Decode(&extra); err {
+	case io.EOF:
+		return nil
+	case nil:
+		return errTrailingJSON
+	default:
+		return err
+	}
+}
+
+// parseFrozenArgs copies the server's frozen_args object. Wire JSON (SSE/GET)
+// arrives as json.RawMessage and is decoded with json.Number. A missing or
+// typed-nil payload is not present (legacy servers); a present object with
+// complete:true and an object args is the only approvable snapshot.
+func parseFrozenArgs(v any) (args map[string]any, complete, present bool) {
+	switch t := v.(type) {
+	case nil:
+		return nil, false, false
+	case json.RawMessage:
+		return parseFrozenArgsRaw(t)
+	case map[string]any:
+		if t == nil {
+			return nil, false, false
+		}
+		return frozenArgsFromMap(t)
+	default:
+		return nil, false, false
+	}
+}
+
+func parseFrozenArgsRaw(raw json.RawMessage) (args map[string]any, complete, present bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false, false
+	}
+	var v any
+	if err := decodeJSONNumbers(raw, &v); err != nil {
+		return nil, false, true
+	}
+	m, ok := v.(map[string]any)
+	if !ok || m == nil {
+		return nil, false, true
+	}
+	return frozenArgsFromMap(m)
+}
+
+func frozenArgsFromMap(m map[string]any) (args map[string]any, complete, present bool) {
+	complete, _ = m["complete"].(bool)
+	raw, hasArgs := m["args"]
+	if !hasArgs || raw == nil {
+		return nil, false, true
+	}
+	args, ok := raw.(map[string]any)
+	if !ok || args == nil {
+		return nil, false, true
+	}
+	return args, complete, true
 }
 
 // approvalSummaryLine renders the server's tool.approval_required summary
@@ -166,16 +245,29 @@ func truncateRunes(s string, limit int) string {
 	return string(r[:limit]) + "…"
 }
 
-// sanitizeTerminal keeps approval one-liners from driving the terminal:
-// C0/C1 controls and DEL become visible \uXXXX escapes so a staged
-// recipient or command cannot clear the viewport or inject OSC writes.
+// sanitizeTerminal keeps one-liners from driving the terminal: C0/C1/DEL and
+// bidi controls become visible \uXXXX escapes so a staged recipient or
+// command cannot clear the viewport, inject OSC writes, or reverse text.
 func sanitizeTerminal(s string) string {
+	return sanitizeTerminalRunes(s, false)
+}
+
+// sanitizeTerminalText is the same neutralization for multi-line terminal
+// sinks (frozen JSON review, result_text, errors). Newlines and tabs stay so
+// JSON indent remains readable; every other control is escaped.
+func sanitizeTerminalText(s string) string {
+	return sanitizeTerminalRunes(s, true)
+}
+
+func sanitizeTerminalRunes(s string, keepSpaceControls bool) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch {
-		case r == '\t':
+		case keepSpaceControls && (r == '\n' || r == '\t'):
+			b.WriteRune(r)
+		case r == '\t' && !keepSpaceControls:
 			b.WriteByte(' ')
-		case r < 32 || r == 127 || (r >= 0x80 && r <= 0x9f):
+		case r < 32 || r == 127 || (r >= 0x80 && r <= 0x9f) || unicode.Is(unicode.Bidi_Control, r):
 			fmt.Fprintf(&b, "\\u%04x", r)
 		default:
 			b.WriteRune(r)

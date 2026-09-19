@@ -17,17 +17,19 @@ another model. `--message "..."` and `--no-tui` support scripts and piped input.
 One-shot mode prints the conversation ID to stderr; `--conversation <id>` resumes
 its model context and loads pending approvals in interactive mode.
 
-The terminal shows staged actions and a pending count. `/approvals` displays full
-review summaries and deadlines; `/approve` and `/deny` decide the oldest card,
+The terminal shows staged actions and a pending count. `/approvals` displays
+complete frozen execution arguments, one-line summaries, and deadlines;
+`/approve` and `/deny` decide the oldest card,
 or take a full approval ID. `/edit {"name":"...","prompt":"...","cron":"..."}`
 changes the oldest scheduled-task card locally before approval. Omitted fields
 stay unchanged. `cron` can only be changed on a recurring card — not added to a
 one-time task, and not cleared (that would make the task run immediately). The
 server validates edits when you approve.
-Email cards automatically show the full frozen recipients, CC/BCC, attachments
-and body as escaped JSON; the one-line model summary is not the review record.
-If the body is over the 1 MiB review cap, the terminal refuses to approve.
-Bash cards print the complete frozen command, with control characters escaped.
+Every staged tool automatically shows its complete frozen execution arguments as
+escaped JSON; the one-line summary is not the review record. If the server does
+not provide a complete snapshot (or the arguments exceed the 1 MiB review cap),
+the terminal refuses to approve. Control characters in reviews, results, and
+errors are escaped so they cannot drive the terminal.
 
 Add `session` to a decision to apply it to future calls of that tool in the same
 conversation, or `pattern arg=glob` to restrict that policy to matching arguments.

@@ -179,6 +179,21 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 	return newConvID, fmt.Errorf("stream ended before a terminal turn event")
 }
 
+// attachFrozenArgsRaw replaces frozen_args with the exact JSON bytes so
+// json.Number decoding can preserve integers above 2^53. Other event fields
+// keep the default float64 mapping.
+func attachFrozenArgsRaw(m map[string]any, raw []byte) {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil {
+		return
+	}
+	fa, ok := envelope["frozen_args"]
+	if !ok || len(fa) == 0 || string(fa) == "null" {
+		return
+	}
+	m["frozen_args"] = fa
+}
+
 // parseSSE reads a text/event-stream and calls fn for each complete frame. It
 // handles multi-line `data:` (joined with "\n"), `id:`, and `event:` (default
 // "message"), and ignores comments (`:`-prefixed heartbeats). A frame whose data
@@ -199,8 +214,10 @@ func parseSSE(r io.Reader, fn func(Event)) error {
 			ev.Name = "message"
 		}
 		if data.Len() > 0 {
+			raw := []byte(data.String())
 			var m map[string]any
-			if json.Unmarshal([]byte(data.String()), &m) == nil {
+			if json.Unmarshal(raw, &m) == nil {
+				attachFrozenArgsRaw(m, raw)
 				ev.Data = m
 			}
 		}

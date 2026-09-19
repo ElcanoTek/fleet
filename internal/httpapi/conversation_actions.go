@@ -46,22 +46,20 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// events do, so the frontend reuses its render path.
 	approvals := make([]map[string]any, 0, len(pending))
 	for _, a := range pending {
-		approvals = append(approvals, map[string]any{
-			"approval_id":  a.ID,
-			"tool":         a.ToolName,
-			"summary":      summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
-			"pattern_args": handlerApprovalPatternArgs(a.ToolName, a.ArgsJSON),
-			// Re-hydrate the countdown on reload (#225); 0 = no expiry.
-			"expires_at": a.ExpiresAt,
-			// Re-hydrate the seat badge (#167 residual 2); empty account
-			// means the default bundle seat and renders no badge.
-			"mcp_server":  a.MCPServer,
-			"mcp_account": a.MCPAccount,
-			// Anchors the card to the message holding this tool_call so a
-			// reload places it where the live stream did (last-assistant
-			// fallback when empty — older rows, promote cards).
-			"tool_call_id": a.ToolCallID,
-		})
+		card := approvalClientFields(a.ToolName, a.ArgsJSON, id)
+		card["approval_id"] = a.ID
+		card["tool"] = a.ToolName
+		// Re-hydrate the countdown on reload (#225); 0 = no expiry.
+		card["expires_at"] = a.ExpiresAt
+		// Re-hydrate the seat badge (#167 residual 2); empty account
+		// means the default bundle seat and renders no badge.
+		card["mcp_server"] = a.MCPServer
+		card["mcp_account"] = a.MCPAccount
+		// Anchors the card to the message holding this tool_call so a
+		// reload places it where the live stream did (last-assistant
+		// fallback when empty — older rows, promote cards).
+		card["tool_call_id"] = a.ToolCallID
+		approvals = append(approvals, card)
 	}
 	// Resolved approvals re-hydrate too, so the transcript keeps the shape
 	// it had live: the "Email sent ✓" outcome card, a timed-out card, and —

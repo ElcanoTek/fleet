@@ -179,12 +179,13 @@ func (c *Client) loadApprovals(ctx context.Context, conversation string) ([]pend
 		return nil, fmt.Errorf("load conversation: HTTP %d", resp.StatusCode)
 	}
 	type approvalWire struct {
-		ID          string         `json:"approval_id"`
-		Tool        string         `json:"tool"`
-		Summary     map[string]any `json:"summary"`
-		PatternArgs map[string]any `json:"pattern_args"`
-		ExpiresAt   int64          `json:"expires_at"`
-		Executing   bool           `json:"executing"`
+		ID          string          `json:"approval_id"`
+		Tool        string          `json:"tool"`
+		Summary     map[string]any  `json:"summary"`
+		PatternArgs map[string]any  `json:"pattern_args"`
+		FrozenArgs  json.RawMessage `json:"frozen_args"`
+		ExpiresAt   int64           `json:"expires_at"`
+		Executing   bool            `json:"executing"`
 	}
 	var body struct {
 		Approvals []approvalWire `json:"pending_approvals"`
@@ -200,14 +201,18 @@ func (c *Client) loadApprovals(ctx context.Context, conversation string) ([]pend
 		}
 	}
 	for _, a := range body.Approvals {
+		args, complete, present := parseFrozenArgs(a.FrozenArgs)
 		pending = append(pending, pendingApproval{
-			id:          a.ID,
-			tool:        a.Tool,
-			summary:     approvalSummaryLine(a.Tool, a.Summary),
-			details:     a.Summary,
-			patternArgs: parsePatternArgs(a.PatternArgs),
-			expiresAt:   a.ExpiresAt,
-			executing:   a.Executing,
+			id:             a.ID,
+			tool:           a.Tool,
+			summary:        approvalSummaryLine(a.Tool, a.Summary),
+			details:        a.Summary,
+			patternArgs:    parsePatternArgs(a.PatternArgs),
+			frozenArgs:     args,
+			frozenComplete: complete,
+			frozenPresent:  present,
+			expiresAt:      a.ExpiresAt,
+			executing:      a.Executing,
 		})
 	}
 	return pending, nil
@@ -251,12 +256,8 @@ func (m *model) showApprovals() tea.Cmd {
 		} else {
 			b.WriteString("No pattern keys on this card.\n")
 		}
-		data, _ := json.MarshalIndent(a.details, "", "  ")
-		b.Write(data)
-		if a.edits != nil {
-			data, _ = json.MarshalIndent(a.edits, "", "  ")
-			fmt.Fprintf(&b, "\nStaged edits: %s", data)
-		}
+		b.WriteString(frozenApprovalReview(a))
+		b.WriteByte('\n')
 		b.WriteString("\n/approve [id] [session|pattern arg=glob] · /deny [id]\n")
 	}
 	return m.reviewNote(b.String())
@@ -390,8 +391,11 @@ func (m *model) decideApproval(fields []string, approve bool) tea.Cmd {
 		}
 	}
 	a := m.pending[idx]
-	if approve && !a.executing && emailSummaryOverflow(a.details) {
-		return m.reviewNote("Refusing to approve: the frozen email body exceeded the 1 MiB review cap. Deny, or wait for a smaller restage.")
+	if approve && !a.executing {
+		if reason := a.refuseApprove(); reason != "" {
+			return m.reviewNote(reason)
+		}
+		m.reviewNote(frozenApprovalReview(a))
 	}
 	if a.executing {
 		if !approve {
@@ -463,6 +467,9 @@ func (m *model) autoResolveCard() tea.Cmd {
 		}
 		d, ok := m.matchCardPolicy(a)
 		if !ok {
+			continue
+		}
+		if d.Approved && !a.reviewComplete() {
 			continue
 		}
 		m.reviewNote("Applying terminal session decision to " + a.tool + " · " + a.id)

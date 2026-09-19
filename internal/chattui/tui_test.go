@@ -136,6 +136,7 @@ func TestApprovalCardLifecycle(t *testing.T) {
 		"approval_id": "appr-1",
 		"tool":        "schedule_task",
 		"summary":     map[string]any{"name": "nightly", "run_immediately": true},
+		"frozen_args": map[string]any{"complete": true, "args": map[string]any{"name": "nightly"}},
 	}})
 	if len(m.pending) != 1 || m.pending[0].id != "appr-1" {
 		t.Fatalf("pending = %+v", m.pending)

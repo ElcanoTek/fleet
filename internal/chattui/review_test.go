@@ -16,7 +16,13 @@ import (
 func TestApprovalOutcomesAreAuthoritative(t *testing.T) {
 	for _, body := range []string{`{"status":"rejected","result_text":"expired"}`, `{"status":"approved","is_err":true,"result_text":"execution failed"}`} {
 		t.Run(body, func(t *testing.T) {
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, body) }))
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"a","tool":"bash","frozen_args":{"complete":true,"args":{"command":"ls"}}}]}`)
+					return
+				}
+				fmt.Fprint(w, body)
+			}))
 			defer s.Close()
 			var out, errOut bytes.Buffer
 			if code := runResolveApproval(NewClient(Config{ServerURL: s.URL}), "c", "a", true, &out, &errOut); code != 1 {
@@ -33,7 +39,7 @@ func TestResumeEditScopedApproval(t *testing.T) {
 	var decision ApprovalDecision
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"a","tool":"schedule_task","summary":{"name":"old","prompt":"old prompt"},"pattern_args":{"name":"old","prompt":"old prompt"}}]}`)
+			fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"a","tool":"schedule_task","summary":{"name":"old","prompt":"old prompt"},"pattern_args":{"name":"old","prompt":"old prompt"},"frozen_args":{"complete":true,"args":{"name":"old","prompt":"old prompt"}}}]}`)
 			return
 		}
 		if r.URL.Path != "/conversations/other/approvals/a" {
@@ -73,7 +79,7 @@ func TestFailedResolutionCanRetry(t *testing.T) {
 	defer s.Close()
 	m := newModel(Config{ServerURL: s.URL})
 	m.convID = "c"
-	m.pending = []pendingApproval{{id: "a", tool: "schedule_task"}}
+	m.pending = []pendingApproval{withFrozen(pendingApproval{id: "a", tool: "schedule_task"}, nil)}
 	cmd := m.runSlash("/approve")
 	m.Update(cmd())
 	if len(m.pending) != 1 || m.pending[0].id != "a" || m.reviewBusy {
@@ -161,10 +167,10 @@ func TestTerminalSessionResolvesNewScheduledCardsThroughEndpoint(t *testing.T) {
 	defer s.Close()
 	m := newModel(Config{ServerURL: s.URL})
 	m.convID = "first"
-	m.pending = []pendingApproval{{id: "one", tool: "schedule_task"}}
+	m.pending = []pendingApproval{withFrozen(pendingApproval{id: "one", tool: "schedule_task"}, nil)}
 	cmd := m.runSlash("/approve session")
 	m.finishApproval(cmd().(approvalResolvedMsg))
-	m.pending = []pendingApproval{{id: "two", tool: "schedule_task"}}
+	m.pending = []pendingApproval{withFrozen(pendingApproval{id: "two", tool: "schedule_task"}, nil)}
 	cmd = m.autoResolveCard()
 	if cmd == nil {
 		t.Fatal("session did not resolve next card")
@@ -274,7 +280,7 @@ func TestPatternJoinPreservesSpaces(t *testing.T) {
 	defer s.Close()
 	m := newModel(Config{ServerURL: s.URL})
 	m.convID = "c"
-	m.pending = []pendingApproval{{id: "a", tool: "schedule_task", patternArgs: map[string]string{"name": "foo bar"}}}
+	m.pending = []pendingApproval{withFrozen(pendingApproval{id: "a", tool: "schedule_task", patternArgs: map[string]string{"name": "foo bar"}}, nil)}
 	cmd := m.runSlash("/approve a pattern name=foo bar")
 	if cmd == nil {
 		t.Fatal("pattern with spaces rejected")
@@ -306,7 +312,7 @@ func TestOptionalPatternKeyRegistersForFutureCards(t *testing.T) {
 	defer s.Close()
 	m := newModel(Config{ServerURL: s.URL})
 	m.convID = "c"
-	m.pending = []pendingApproval{{id: "a", tool: "schedule_task", patternArgs: map[string]string{"name": "x"}}}
+	m.pending = []pendingApproval{withFrozen(pendingApproval{id: "a", tool: "schedule_task", patternArgs: map[string]string{"name": "x"}}, nil)}
 	cmd := m.runSlash("/approve pattern cron=0 9 * * *")
 	if cmd == nil {
 		t.Fatal("optional cron pattern should register even when this card has no cron")
@@ -337,7 +343,7 @@ func TestAutoResolveOnReloadAndExpiredChain(t *testing.T) {
 	ids := []string{}
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"live","tool":"schedule_task","pattern_args":{"name":"ok"}},{"approval_id":"stale","tool":"schedule_task","expires_at":1,"pattern_args":{"name":"ok"}}]}`)
+			fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"live","tool":"schedule_task","pattern_args":{"name":"ok"},"frozen_args":{"complete":true,"args":{"name":"ok"}}},{"approval_id":"stale","tool":"schedule_task","expires_at":1,"pattern_args":{"name":"ok"},"frozen_args":{"complete":true,"args":{"name":"ok"}}}]}`)
 			return
 		}
 		ids = append(ids, r.URL.Path)
@@ -388,8 +394,8 @@ func TestAutoBlockedIsPerCardAndResetsOnRetry(t *testing.T) {
 		"c": {"schedule_task": {{Approved: true, Scope: "session"}}},
 	}
 	m.pending = []pendingApproval{
-		{id: "bad", tool: "schedule_task"},
-		{id: "good", tool: "schedule_task"},
+		withFrozen(pendingApproval{id: "bad", tool: "schedule_task"}, nil),
+		withFrozen(pendingApproval{id: "good", tool: "schedule_task"}, nil),
 	}
 	cmd := m.autoResolveCard()
 	if cmd == nil {
@@ -461,7 +467,7 @@ func TestLoadApprovalsParsesPatternArgsFromGET(t *testing.T) {
 	var gotURL string
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotURL = r.URL.RawQuery
-		fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"a","tool":"schedule_task","summary":{"name":"n","prompt_preview":"truncated"},"pattern_args":{"name":"n","prompt":"full prompt","cron":"0 9 * * *","run_at":""}}]}`)
+		fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"a","tool":"schedule_task","summary":{"name":"n","prompt_preview":"truncated"},"pattern_args":{"name":"n","prompt":"full prompt","cron":"0 9 * * *","run_at":""},"frozen_args":{"complete":true,"args":{"name":"n","prompt":"full prompt","cron":"0 9 * * *"}}}]}`)
 	}))
 	defer s.Close()
 	pending, err := NewClient(Config{ServerURL: s.URL}).loadApprovals(context.Background(), "c")
@@ -473,6 +479,9 @@ func TestLoadApprovalsParsesPatternArgsFromGET(t *testing.T) {
 	}
 	if pending[0].patternArgs["prompt"] != "full prompt" || pending[0].patternArgs["name"] != "n" || pending[0].patternArgs["cron"] != "0 9 * * *" {
 		t.Fatalf("pattern_args %+v", pending[0].patternArgs)
+	}
+	if !pending[0].reviewComplete() || pending[0].frozenArgs["prompt"] != "full prompt" {
+		t.Fatalf("frozen_args %+v complete=%v", pending[0].frozenArgs, pending[0].reviewComplete())
 	}
 	if _, ok := pending[0].patternArgs["prompt_preview"]; ok {
 		t.Fatal("display summary keys must not appear as pattern_args")
@@ -513,8 +522,9 @@ func TestApplyEventParsesPatternArgs(t *testing.T) {
 		"tool":         "schedule_task",
 		"summary":      map[string]any{"name": "n", "prompt_preview": "trunc"},
 		"pattern_args": map[string]any{"name": "n", "prompt": "full"},
+		"frozen_args":  map[string]any{"complete": true, "args": map[string]any{"name": "n", "prompt": "full"}},
 	}})
-	if len(m.pending) != 1 || m.pending[0].patternArgs["prompt"] != "full" {
+	if len(m.pending) != 1 || m.pending[0].patternArgs["prompt"] != "full" || !m.pending[0].reviewComplete() {
 		t.Fatalf("%+v", m.pending)
 	}
 }
@@ -526,9 +536,9 @@ func TestPoliciesAccumulatePerTool(t *testing.T) {
 	defer s.Close()
 	m := newModel(Config{ServerURL: s.URL})
 	m.convID = "c"
-	m.pending = []pendingApproval{{id: "one", tool: "schedule_task", patternArgs: map[string]string{"name": "a"}}}
+	m.pending = []pendingApproval{withFrozen(pendingApproval{id: "one", tool: "schedule_task", patternArgs: map[string]string{"name": "a"}}, nil)}
 	m.finishApproval(m.runSlash("/approve session")().(approvalResolvedMsg))
-	m.pending = []pendingApproval{{id: "two", tool: "schedule_task", patternArgs: map[string]string{"name": "b"}}}
+	m.pending = []pendingApproval{withFrozen(pendingApproval{id: "two", tool: "schedule_task", patternArgs: map[string]string{"name": "b"}}, nil)}
 	m.finishApproval(m.runSlash("/approve pattern name=b")().(approvalResolvedMsg))
 	got := m.cardPolicies["c"]["schedule_task"]
 	if len(got) != 2 || got[0].Scope != "session" || got[1].Pattern != "name=b" {

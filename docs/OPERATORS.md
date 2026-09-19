@@ -53,9 +53,9 @@ threads and reloads pending cards. Network failures retain cards for retry;
 expired or failed actions are reported as errors. See
 [Terminal approvals](TERMINAL-APPROVALS.md) for the complete command contract.
 
-Email cards automatically print the full frozen recipients (including CC/BCC),
-body and attachments as escaped JSON. One-shot approval retrieves and prints
-that review before submitting. Patterns match original string argument names
+Every staged tool automatically prints its complete frozen execution arguments
+as escaped JSON before `/approve`. Truncated or missing snapshots are refused.
+One-shot approval retrieves and prints that review before submitting. Patterns match original string argument names
 (for example `to_email`, not the summary's `to` label); matching denies win.
 Handler-only policies live for the terminal session and settle each server card
 individually. Handler-only patterns require the server's `pattern_args` metadata.

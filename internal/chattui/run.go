@@ -92,22 +92,26 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 			fmt.Fprintln(errOut, "fleet chat: cannot review approval: "+err.Error())
 			return 1
 		}
-		for _, card := range pending {
-			if card.id == approvalID {
-				if review := frozenApprovalReview(card.tool, card.details); review != "" {
-					fmt.Fprintln(errOut, review)
-				}
-				if emailSummaryOverflow(card.details) {
-					fmt.Fprintln(errOut, "fleet chat: refusing to approve a truncated email body")
-					return 1
-				}
+		var found *pendingApproval
+		for i := range pending {
+			if pending[i].id == approvalID {
+				found = &pending[i]
 				break
 			}
+		}
+		if found == nil {
+			fmt.Fprintln(errOut, "fleet chat: refusing to approve: the card is not in the pending snapshot")
+			return 1
+		}
+		fmt.Fprintln(errOut, frozenApprovalReview(*found))
+		if reason := found.refuseApprove(); reason != "" {
+			fmt.Fprintln(errOut, "fleet chat: "+reason)
+			return 1
 		}
 	}
 	status, resultText, err := client.ResolveApproval(context.Background(), convID, approvalID, approve)
 	if err != nil {
-		fmt.Fprintln(errOut, "fleet chat: "+err.Error())
+		fmt.Fprintln(errOut, "fleet chat: "+sanitizeTerminalText(err.Error()))
 		return 1
 	}
 	verb := "denied"
@@ -116,7 +120,7 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 	}
 	fmt.Fprintf(out, "%s (%s)\n", verb, status)
 	if t := strings.TrimSpace(resultText); t != "" {
-		fmt.Fprintln(out, t)
+		fmt.Fprintln(out, sanitizeTerminalText(t))
 	}
 	return 0
 }
@@ -191,9 +195,9 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 			fmt.Fprintln(errOut, "⚠ approval required: "+orDefault(ev.Str("tool"), "tool")+
 				" — "+orDefault(approvalSummaryLine(ev.Str("tool"), ev.Data["summary"]), "(no summary)")+
 				" (approval "+id+")")
-			if review := frozenApprovalReview(ev.Str("tool"), ev.Data["summary"]); review != "" {
-				fmt.Fprintln(errOut, review)
-			}
+			card := pendingApproval{id: id, tool: ev.Str("tool")}
+			card.frozenArgs, card.frozenComplete, card.frozenPresent = parseFrozenArgs(ev.Data["frozen_args"])
+			fmt.Fprintln(errOut, frozenApprovalReview(card))
 		}
 	})
 	if visible.Len() > 0 {

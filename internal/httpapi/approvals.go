@@ -15,11 +15,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net/http"
@@ -366,24 +368,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		return "", err
 	}
 
-	// Extract the display-relevant fields so the UI can render a readable card
-	// without re-parsing the whole payload.
-	summary := summarizeApprovalInput(toolName, rawInput, a.conversationID)
-
-	a.sink.Emit("tool.approval_required", map[string]any{
-		"approval_id":  approval.ID,
-		"tool":         toolName,
-		"summary":      summary,
-		"pattern_args": handlerApprovalPatternArgs(toolName, rawInput),
-		// Unix-seconds default-deny deadline (#225); the UI renders a countdown
-		// and transitions the card to a timed-out state at this instant.
-		"expires_at": approval.ExpiresAt,
-		// The public seat the approved call will run under (#167 residual 2).
-		// Empty for native tools and for the default bundle seat, which the UI
-		// renders as no account badge at all.
-		"mcp_server":  approval.MCPServer,
-		"mcp_account": approval.MCPAccount,
-	})
+	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
 	a.firePushNotification(toolName)
 	return approval.ID, nil
 }
@@ -578,17 +563,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 		return "", "", err
 	}
 
-	a.sink.Emit("tool.approval_required", map[string]any{
-		"approval_id": approval.ID,
-		"tool":        tools.SuggestAdvancedModelToolName,
-		"summary": map[string]any{
-			"tool":            tools.SuggestAdvancedModelToolName,
-			"reason":          reason,
-			"recommend_model": agentcore.CurrentAdvancedModel(),
-		},
-		"pattern_args": handlerApprovalPatternArgs(tools.SuggestAdvancedModelToolName, string(rawInput)),
-		"expires_at":   approval.ExpiresAt,
-	})
+	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, string(rawInput), a.conversationID))
 
 	msg := fmt.Sprintf(
 		"SUGGESTION_DISPLAYED: the user is now seeing your model-switch suggestion (suggestion_id=%s). The card has three actions — Switch & retry (default), Just switch, Dismiss — and the user picks. Do NOT call suggest_advanced_model again. Briefly summarize what you've done so far and stop iterating; the user's choice will arrive on the next turn.",
@@ -681,6 +656,75 @@ type validationResult struct {
 	Valid    bool     `json:"valid"`
 	Errors   []string `json:"errors"`
 	Warnings []string `json:"warnings"`
+}
+
+// frozenArgsMaxBytes bounds ArgsJSON before frozen_args is decoded. Oversized
+// raw input is complete:false so clients refuse informed consent; execution
+// still uses the stored row.
+const frozenArgsMaxBytes = 1 << 20
+
+var errTrailingJSON = errors.New("trailing JSON")
+
+// decodeJSONNumbers decodes one JSON value with json.Number so integers above
+// 2^53 and exponent literals survive. A second token is rejected so this is
+// not more lenient than json.Unmarshal.
+func decodeJSONNumbers(raw []byte, dest any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(dest); err != nil {
+		return err
+	}
+	var extra json.RawMessage
+	switch err := dec.Decode(&extra); err {
+	case io.EOF:
+		return nil
+	case nil:
+		return errTrailingJSON
+	default:
+		return err
+	}
+}
+
+// frozenApprovalArgs is the complete execution-argument review for every
+// staged tool. ArgsJSON is the source of truth (model-authored arguments the
+// handler will replay). Broker-resolved credentials are never copied in.
+// complete is false when the snapshot is missing, unparseable, trailing,
+// typed JSON null, not an object, or over frozenArgsMaxBytes — clients fail closed.
+func frozenApprovalArgs(rawInput string) map[string]any {
+	incomplete := map[string]any{"complete": false}
+	if len(rawInput) > frozenArgsMaxBytes {
+		return incomplete
+	}
+	var args any
+	if err := decodeJSONNumbers([]byte(rawInput), &args); err != nil {
+		return incomplete
+	}
+	obj, ok := args.(map[string]any)
+	if !ok || obj == nil {
+		return incomplete
+	}
+	return map[string]any{"complete": true, "args": obj}
+}
+
+// approvalClientFields is the review payload shared by live SSE events and
+// GET /conversations/{id} pending cards so a terminal cannot see a truncated
+// summary for one tool class and a full snapshot for another.
+func approvalClientFields(toolName, rawInput, convID string) map[string]any {
+	return map[string]any{
+		"summary":      summarizeApprovalInput(toolName, rawInput, convID),
+		"pattern_args": handlerApprovalPatternArgs(toolName, rawInput),
+		"frozen_args":  frozenApprovalArgs(rawInput),
+	}
+}
+
+func approvalRequiredEvent(approval *store.Approval, rawInput, convID string) map[string]any {
+	ev := approvalClientFields(approval.ToolName, rawInput, convID)
+	ev["approval_id"] = approval.ID
+	ev["tool"] = approval.ToolName
+	ev["expires_at"] = approval.ExpiresAt
+	ev["mcp_server"] = approval.MCPServer
+	ev["mcp_account"] = approval.MCPAccount
+	return ev
 }
 
 // summarizeApprovalInput dispatches on tool name to build a display

@@ -133,7 +133,7 @@ func TestRunOneShotSurfacesApprovals(t *testing.T) {
 		write := func(s string) { _, _ = io.WriteString(w, s); fl.Flush() }
 		write("event: conversation\ndata: {\"id\":\"conv-77\"}\n\n")
 		write("event: tool.call\ndata: {\"name\":\"schedule_task\",\"id\":\"c1\"}\n\n")
-		write("event: tool.approval_required\ndata: {\"approval_id\":\"appr-5\",\"tool\":\"schedule_task\",\"summary\":{\"tool\":\"schedule_task\",\"name\":\"nightly\",\"prompt_preview\":\"do the thing\",\"run_immediately\":true,\"recurring\":false}}\n\n")
+		write("event: tool.approval_required\ndata: {\"approval_id\":\"appr-5\",\"tool\":\"schedule_task\",\"summary\":{\"tool\":\"schedule_task\",\"name\":\"nightly\",\"prompt_preview\":\"do the thing\",\"run_immediately\":true,\"recurring\":false},\"frozen_args\":{\"complete\":true,\"args\":{\"name\":\"nightly\",\"prompt\":\"do the thing\"}}}\n\n")
 		write("event: text.delta\ndata: {\"text\":\"staged for your approval\"}\n\n")
 		write("event: turn.completed\ndata: {}\n\n")
 	}))
@@ -157,7 +157,11 @@ func TestRunOneShotSurfacesApprovals(t *testing.T) {
 
 // TestRunResolveApprovalCLI drives the --approve/--deny one-shot path.
 func TestRunResolveApprovalCLI(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"pending_approvals":[{"approval_id":"appr-1","tool":"send_email","frozen_args":{"complete":true,"args":{"to_email":"a@b.c"}}}]}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"status":"approved","result_text":"Email sent."}`)
 	}))
 	defer srv.Close()
@@ -261,7 +265,7 @@ func TestBashApprovalReviewShowsFullEscapedCommand(t *testing.T) {
 	if strings.ContainsAny(line, "\x1b") {
 		t.Fatal("one-line summary leaked a control byte")
 	}
-	review := frozenApprovalReview("bash", summary)
+	review := frozenApprovalReview(withFrozen(pendingApproval{tool: "bash"}, map[string]any{"command": cmd + "\x1b[2J"}))
 	if !strings.Contains(review, hidden) || strings.ContainsAny(review, "\x1b") {
 		t.Fatalf("full bash review missing hidden tail or leaked controls: %s", review)
 	}

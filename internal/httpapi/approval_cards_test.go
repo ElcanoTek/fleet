@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http/httptest"
@@ -257,5 +258,110 @@ func TestSummarizeSendEmailInputIncludesFrozenAttachments(t *testing.T) {
 	bare := summarizeSendEmailInput("send_email", `{"to_email":"a@b.com","content":"hi"}`, "")
 	if _, ok := bare["attachments"]; ok {
 		t.Error("absent attachments key should stay absent")
+	}
+}
+
+// The display summary is bounded; frozen_args is the execution snapshot.
+// A generic value over genericArgValueMax and a schedule prompt over the
+// 200-rune preview must still appear in frozen_args with complete:true.
+func TestFrozenApprovalArgsExposesWhatSummarizersTruncate(t *testing.T) {
+	hiddenHTML := "HIDDEN_DEPLOY_TARGET"
+	genericRaw := `{"html":"` + strings.Repeat("x", genericArgValueMax) + hiddenHTML + `","url":"https://evil.example"}`
+	sum := summarizeGenericToolInput("mcp_pages_deploy_page", genericRaw)
+	rows, _ := sum["args"].([]map[string]string)
+	joined := ""
+	for _, row := range rows {
+		joined += row["value"]
+	}
+	if strings.Contains(joined, hiddenHTML) {
+		t.Fatal("generic summary should still truncate; this test needs the production cap")
+	}
+	frozen := frozenApprovalArgs(genericRaw)
+	if frozen["complete"] != true {
+		t.Fatalf("generic frozen_args incomplete: %v", frozen)
+	}
+	args, _ := frozen["args"].(map[string]any)
+	if html, _ := args["html"].(string); !strings.Contains(html, hiddenHTML) {
+		t.Fatalf("frozen_args lost the suffix the summary hid: %v", args["html"])
+	}
+
+	hiddenPrompt := "MALICIOUS_TASK_TAIL"
+	schedRaw := `{"name":"daily","prompt":"` + strings.Repeat("p", 250) + hiddenPrompt + `","cron":"0 0 * * *"}`
+	schedSum := summarizeScheduleTaskInput("schedule_task", schedRaw)
+	if preview, _ := schedSum["prompt_preview"].(string); strings.Contains(preview, hiddenPrompt) {
+		t.Fatal("schedule preview should truncate")
+	}
+	schedFrozen := frozenApprovalArgs(schedRaw)
+	if schedFrozen["complete"] != true {
+		t.Fatalf("schedule frozen_args incomplete: %v", schedFrozen)
+	}
+	schedArgs, _ := schedFrozen["args"].(map[string]any)
+	if prompt, _ := schedArgs["prompt"].(string); !strings.Contains(prompt, hiddenPrompt) {
+		t.Fatalf("frozen schedule prompt lost the tail: %v", schedArgs["prompt"])
+	}
+
+	emailRaw := `{"to_email":"primary@example.com","cc_emails":["copy@example.com"],"bcc_emails":["hidden@example.com"],"content":"hello","attachments":[{"path":"report.csv"}]}`
+	emailFields := approvalClientFields("mcp_sendgrid_send_email", emailRaw, "")
+	emailFrozen, _ := emailFields["frozen_args"].(map[string]any)
+	if emailFrozen["complete"] != true {
+		t.Fatalf("email frozen_args: %v", emailFrozen)
+	}
+	emailArgs, _ := emailFrozen["args"].(map[string]any)
+	if emailArgs["to_email"] != "primary@example.com" {
+		t.Fatalf("email frozen args: %v", emailArgs)
+	}
+}
+
+func TestFrozenApprovalArgsFailClosed(t *testing.T) {
+	for _, raw := range []string{"", "null", "[]", "true", "{", `{"x":`, `{"x":1}{"y":2}`, `{"x":1} true`} {
+		got := frozenApprovalArgs(raw)
+		if got["complete"] != false {
+			t.Errorf("raw %q: complete=%v, want false", raw, got["complete"])
+		}
+		if _, ok := got["args"]; ok {
+			t.Errorf("raw %q: incomplete snapshot must omit args, got %v", raw, got["args"])
+		}
+	}
+	huge := `{"x":"` + strings.Repeat("a", frozenArgsMaxBytes) + `"}`
+	if got := frozenApprovalArgs(huge); got["complete"] != false {
+		t.Fatal("oversize ArgsJSON must be complete:false")
+	}
+}
+
+func TestFrozenApprovalArgsPreservesJSONNumberLiterals(t *testing.T) {
+	const big = "9007199254740993"
+	raw := `{"nested":{"id":` + big + `},"n":` + big + `,"rate":1e2}`
+	frozen := frozenApprovalArgs(raw)
+	if frozen["complete"] != true {
+		t.Fatalf("complete: %v", frozen)
+	}
+	wire, err := json.Marshal(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(wire, []byte(big)) {
+		t.Fatalf("integer literal rounded on the wire: %s", wire)
+	}
+	if bytes.Contains(wire, []byte("9007199254740992")) {
+		t.Fatalf("integer rounded to 2^53: %s", wire)
+	}
+	if !bytes.Contains(wire, []byte("1e2")) {
+		t.Fatalf("exponent literal not preserved: %s", wire)
+	}
+}
+
+func TestApprovalRequiredEventCarriesFrozenArgs(t *testing.T) {
+	raw := `{"command":"echo secret-suffix"}`
+	ev := approvalRequiredEvent(&store.Approval{ID: "a", ToolName: "bash", ArgsJSON: raw}, raw, "")
+	frozen, _ := ev["frozen_args"].(map[string]any)
+	if frozen["complete"] != true {
+		t.Fatalf("event frozen_args: %v", ev["frozen_args"])
+	}
+	args, _ := frozen["args"].(map[string]any)
+	if args["command"] != "echo secret-suffix" {
+		t.Fatalf("args: %v", args)
+	}
+	if _, ok := ev["summary"]; !ok {
+		t.Fatal("event lost the display summary")
 	}
 }

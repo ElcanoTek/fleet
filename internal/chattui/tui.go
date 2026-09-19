@@ -97,15 +97,18 @@ type model struct {
 // pendingApproval is one staged approval card as the TUI tracks it: the id the
 // resolve endpoint needs, the tool name, and a one-line human summary.
 type pendingApproval struct {
-	id          string
-	tool        string
-	summary     string
-	details     map[string]any
-	patternArgs map[string]string
-	edits       *ScheduleEdits
-	expiresAt   int64
-	executing   bool
-	autoBlocked bool // automatic resolve already failed; reset on reload/retry
+	id             string
+	tool           string
+	summary        string
+	details        map[string]any
+	patternArgs    map[string]string
+	frozenArgs     map[string]any
+	frozenComplete bool
+	frozenPresent  bool
+	edits          *ScheduleEdits
+	expiresAt      int64
+	executing      bool
+	autoBlocked    bool // automatic resolve already failed; reset on reload/retry
 }
 
 func newModel(cfg Config) *model {
@@ -452,6 +455,7 @@ func (m *model) applyEvent(ev Event) {
 			patternArgs: parsePatternArgs(ev.Data["pattern_args"]),
 		}
 		ap.details, _ = ev.Data["summary"].(map[string]any)
+		ap.frozenArgs, ap.frozenComplete, ap.frozenPresent = parseFrozenArgs(ev.Data["frozen_args"])
 		if expiry, ok := ev.Data["expires_at"].(float64); ok {
 			ap.expiresAt = int64(expiry)
 		}
@@ -462,9 +466,7 @@ func (m *model) applyEvent(ev Event) {
 		}
 		line += styleDim.Render("  (/approve · /deny)")
 		m.approvalLines = append(m.approvalLines, line)
-		if review := frozenApprovalReview(tool, ev.Data["summary"]); review != "" {
-			m.approvalLines = append(m.approvalLines, review)
-		}
+		m.approvalLines = append(m.approvalLines, frozenApprovalReview(ap))
 	case "tool.approval_superseded":
 		// The agent re-staged the same tool; the server voided the older card.
 		// Drop it so /approve can never settle a dead approval.
@@ -514,8 +516,8 @@ func (m *model) finishApproval(msg approvalResolvedMsg) {
 			card.autoBlocked = true
 			m.pending = append([]pendingApproval{card}, m.pending...)
 		}
-		m.statusErr = msg.err.Error()
-		m.history = append(m.history, styleErr.Render("error: ")+msg.err.Error())
+		m.statusErr = sanitizeTerminalText(msg.err.Error())
+		m.history = append(m.history, styleErr.Render("error: ")+sanitizeTerminalText(msg.err.Error()))
 		return
 	}
 	if !msg.approved {
@@ -527,7 +529,7 @@ func (m *model) finishApproval(msg approvalResolvedMsg) {
 	}
 	block := styleToolOK.Render("✓ " + msg.tool + " approved")
 	if t := strings.TrimSpace(msg.resultText); t != "" {
-		block += "\n" + styleDim.Render(t)
+		block += "\n" + styleDim.Render(sanitizeTerminalText(t))
 	}
 	m.history = append(m.history, block)
 }
