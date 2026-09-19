@@ -61,6 +61,37 @@ func TestCLIApprovalReviewsEmailBeforePost(t *testing.T) {
 	}
 }
 
+func TestEmailReviewRefusesOverflowedBody(t *testing.T) {
+	summary := emailReviewFixture()
+	summary["content_overflow"] = true
+	text := emailApprovalReview("mcp_sendgrid_send_email", summary)
+	if !strings.Contains(text, "INCOMPLETE") || !strings.Contains(text, "report.csv") {
+		t.Fatal(text)
+	}
+	var posted bool
+	var out, errOut bytes.Buffer
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{"pending_approvals": []any{map[string]any{"approval_id": "a", "tool": "mcp_sendgrid_send_email", "summary": summary}}})
+			return
+		}
+		posted = true
+		fmt.Fprint(w, `{"status":"approved"}`)
+	}))
+	defer srv.Close()
+	if code := runResolveApproval(NewClient(Config{ServerURL: srv.URL}), "c", "a", true, &out, &errOut); code != 1 {
+		t.Fatal(code, errOut.String())
+	}
+	if posted {
+		t.Fatal("truncated email body was approved")
+	}
+	m := newModel(Config{})
+	m.pending = []pendingApproval{{id: "a", tool: "mcp_sendgrid_send_email", details: summary}}
+	if cmd := m.decideApproval([]string{"/approve"}, true); cmd != nil {
+		t.Fatal("TUI posted an overflowed email")
+	}
+}
+
 func TestEmailReviewEscapesTerminalControlBytes(t *testing.T) {
 	text := emailApprovalReview("preview_email", map[string]any{"content": "\x1b[2J\rhidden"})
 	if strings.ContainsAny(text, "\x1b\r") || !strings.Contains(text, "hidden") {

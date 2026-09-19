@@ -9,7 +9,9 @@ import (
 
 // Email approval is a review of frozen server arguments, not model prose. JSON
 // preserves every recipient, attachment and body byte without interpreting HTML,
-// Markdown or terminal control characters, and deliberately has no truncation.
+// Markdown or terminal control characters. The server summary itself may still
+// cap content at 1 MiB (content_overflow); that is not a complete review and
+// approval is refused until the agent restages a smaller body.
 func emailApprovalReview(tool string, summary any) string {
 	if tool != "send_email" && tool != "preview_email" && !strings.HasSuffix(tool, "_send_email") {
 		return ""
@@ -18,7 +20,19 @@ func emailApprovalReview(tool string, summary any) string {
 	if err != nil {
 		return "Email review unavailable. Reload approvals before deciding."
 	}
+	if emailSummaryOverflow(summary) {
+		return "INCOMPLETE email review: the frozen body exceeded the 1 MiB summary cap, so the tail is not shown. Approval is refused until the agent restages a smaller body.\n" + string(b)
+	}
 	return "Frozen email review (all recipients, content and attachments):\n" + string(b)
+}
+
+func emailSummaryOverflow(summary any) bool {
+	m, _ := summary.(map[string]any)
+	if m == nil {
+		return false
+	}
+	overflow, _ := m["content_overflow"].(bool)
+	return overflow
 }
 
 // approvalSummaryLine renders the server's tool.approval_required summary

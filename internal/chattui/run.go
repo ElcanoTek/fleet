@@ -97,6 +97,10 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 				if review := emailApprovalReview(card.tool, card.details); review != "" {
 					fmt.Fprintln(errOut, review)
 				}
+				if emailSummaryOverflow(card.details) {
+					fmt.Fprintln(errOut, "fleet chat: refusing to approve a truncated email body")
+					return 1
+				}
 				break
 			}
 		}

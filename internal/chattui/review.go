@@ -390,6 +390,9 @@ func (m *model) decideApproval(fields []string, approve bool) tea.Cmd {
 		}
 	}
 	a := m.pending[idx]
+	if approve && !a.executing && emailSummaryOverflow(a.details) {
+		return m.reviewNote("Refusing to approve: the frozen email body exceeded the 1 MiB review cap. Deny, or wait for a smaller restage.")
+	}
 	if a.executing {
 		if !approve {
 			return m.reviewNote("This action is already executing; /approve " + a.id + " retrieves its outcome.")
