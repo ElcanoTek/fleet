@@ -43,6 +43,7 @@ type approvalResolvedMsg struct {
 	approved     bool
 	status       string // server-reported resolution ("approved" / "rejected")
 	resultText   string // the staged tool's outcome text on approve
+	model        string // suggest_advanced_model pins this slug server-side
 	err          error
 }
 
@@ -461,7 +462,7 @@ func (m *model) applyEvent(ev Event) {
 		}
 		line += styleDim.Render("  (/approve · /deny)")
 		m.approvalLines = append(m.approvalLines, line)
-		if review := emailApprovalReview(tool, ev.Data["summary"]); review != "" {
+		if review := frozenApprovalReview(tool, ev.Data["summary"]); review != "" {
 			m.approvalLines = append(m.approvalLines, review)
 		}
 	case "tool.approval_superseded":
@@ -520,6 +521,9 @@ func (m *model) finishApproval(msg approvalResolvedMsg) {
 	if !msg.approved {
 		m.history = append(m.history, styleToolErr.Render("✗ "+msg.tool)+styleDim.Render(" denied"))
 		return
+	}
+	if slug := strings.TrimSpace(msg.model); slug != "" && m.client != nil {
+		m.client.cfg.Model = slug
 	}
 	block := styleToolOK.Render("✓ " + msg.tool + " approved")
 	if t := strings.TrimSpace(msg.resultText); t != "" {

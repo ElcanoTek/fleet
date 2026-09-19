@@ -414,8 +414,8 @@ func (m *model) decideApproval(fields []string, approve bool) tea.Cmd {
 			wire.Scope = ""
 			wire.Pattern = ""
 		}
-		status, result, err := client.ResolveApprovalWithOptions(context.Background(), conv, a.id, wire)
-		return approvalResolvedMsg{tool: a.tool, approved: approve, status: status, resultText: result, err: err, card: a, decision: d, conversation: conv}
+		status, result, model, err := client.ResolveApprovalWithOptions(context.Background(), conv, a.id, wire)
+		return approvalResolvedMsg{tool: a.tool, approved: approve, status: status, resultText: result, model: model, err: err, card: a, decision: d, conversation: conv}
 	}
 }
 

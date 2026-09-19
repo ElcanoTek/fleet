@@ -69,7 +69,9 @@ Edit fields match the existing web endpoint (name, prompt, cron). Terminal revie
 automatically displays the full frozen email summary, including all recipients,
 CC/BCC, attachments and content, in escaped JSON before offering a decision.
 If the server flags `content_overflow` (body over the 1 MiB summary cap),
-approval is refused so a hidden tail cannot be sent.
+approval is refused so a hidden tail cannot be sent. Bash cards likewise print
+the complete frozen command, control-escaped, rather than a 120-rune prefix.
+One-line summaries sanitize terminal control bytes.
 One-shot settlement fetches the current card and prints its email review before
 the approval request. `/approvals` also exposes full summaries for every tool.
 

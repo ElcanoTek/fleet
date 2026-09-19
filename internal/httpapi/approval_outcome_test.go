@@ -64,6 +64,14 @@ func TestApprovalOutcomeFlags(t *testing.T) {
 			want: map[string]any{"execution_unknown": true},
 		},
 		{
+			name: "legacy notify record is completed success, not unknown",
+			a: store.Approval{
+				Status:     "approved",
+				ResultText: notifyRecordResultPrefix + ": this tool is declared notify-mode in the client bundle. Undo with rollback.",
+			},
+			want: map[string]any{"is_err": false},
+		},
+		{
 			name: "known is_err wins over sentinel text",
 			a: store.Approval{
 				Status:     "approved",

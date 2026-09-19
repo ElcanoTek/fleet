@@ -99,6 +99,25 @@ func TestEmailReviewEscapesTerminalControlBytes(t *testing.T) {
 	}
 }
 
+func TestTUIAutomaticallyPresentsFullFrozenBash(t *testing.T) {
+	hidden := "git push origin main"
+	cmd := strings.Repeat("echo safe; ", 20) + hidden
+	m := newModel(Config{})
+	m.applyEvent(Event{Name: "tool.approval_required", Data: map[string]any{"approval_id": "b", "tool": "bash", "summary": map[string]any{"command": cmd}}})
+	joined := strings.Join(m.approvalLines, "\n")
+	if !strings.Contains(joined, hidden) {
+		t.Fatal("TUI did not present the full frozen command before /approve")
+	}
+}
+
+func TestFinishApprovalPinsSuggestedModel(t *testing.T) {
+	m := newModel(Config{Model: "old/slug"})
+	m.finishApproval(approvalResolvedMsg{approved: true, status: "approved", tool: "suggest_advanced_model", model: "acme/frontier-1-pro"})
+	if m.client.cfg.Model != "acme/frontier-1-pro" {
+		t.Fatalf("model = %q, want pinned suggestion", m.client.cfg.Model)
+	}
+}
+
 func TestTUIAutomaticallyPresentsFullFrozenEmail(t *testing.T) {
 	m := newModel(Config{})
 	m.applyEvent(Event{Name: "tool.approval_required", Data: map[string]any{"approval_id": "a", "tool": "mcp_sendgrid_send_email", "summary": emailReviewFixture()}})

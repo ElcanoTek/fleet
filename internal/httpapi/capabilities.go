@@ -30,7 +30,7 @@ import (
 type SSECapability string
 
 const (
-	CapText          SSECapability = "text"           // text.delta
+	CapText          SSECapability = "text"           // text.delta, text.replace
 	CapReasoning     SSECapability = "reasoning"      // reasoning.start/delta/end
 	CapToolCalls     SSECapability = "tool_calls"     // tool.call
 	CapToolResults   SSECapability = "tool_results"   // tool.result
@@ -56,6 +56,7 @@ var allSSECapabilities = []SSECapability{
 // declared set.
 var capabilityForEvent = map[string]SSECapability{
 	"text.delta":      CapText,
+	"text.replace":    CapText,
 	"reasoning.start": CapReasoning,
 	"reasoning.delta": CapReasoning,
 	"reasoning.end":   CapReasoning,

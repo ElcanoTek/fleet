@@ -27,6 +27,7 @@ server validates edits when you approve.
 Email cards automatically show the full frozen recipients, CC/BCC, attachments
 and body as escaped JSON; the one-line model summary is not the review record.
 If the body is over the 1 MiB review cap, the terminal refuses to approve.
+Bash cards print the complete frozen command, with control characters escaped.
 
 Add `session` to a decision to apply it to future calls of that tool in the same
 conversation, or `pattern arg=glob` to restrict that policy to matching arguments.

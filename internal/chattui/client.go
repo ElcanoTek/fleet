@@ -272,7 +272,8 @@ func (c *Client) DefaultModel(ctx context.Context) (string, error) {
 // server runs the staged tool and returns its outcome; the returned strings are
 // the resolution status ("approved"/"rejected") and the tool's result text.
 func (c *Client) ResolveApproval(ctx context.Context, convID, approvalID string, approved bool) (string, string, error) {
-	return c.ResolveApprovalWithOptions(ctx, convID, approvalID, ApprovalDecision{Approved: approved})
+	status, result, _, err := c.ResolveApprovalWithOptions(ctx, convID, approvalID, ApprovalDecision{Approved: approved})
+	return status, result, err
 }
 
 // ApprovalDecision uses the existing governed web approval endpoint.
@@ -295,51 +296,52 @@ func (approvalRunningError) Error() string {
 	return "approval execution is still running; retry to retrieve its outcome"
 }
 
-func (c *Client) ResolveApprovalWithOptions(ctx context.Context, convID, approvalID string, decision ApprovalDecision) (string, string, error) {
+func (c *Client) ResolveApprovalWithOptions(ctx context.Context, convID, approvalID string, decision ApprovalDecision) (string, string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 11*time.Minute)
 	defer cancel()
 	body, err := json.Marshal(decision)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	url := c.cfg.ServerURL + "/conversations/" + url.PathEscape(convID) + "/approvals/" + url.PathEscape(approvalID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuthHeaders(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
+		return "", "", "", fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", "", fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
+		return "", "", "", fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
 	}
 	var out struct {
 		Status           string `json:"status"`
 		ResultText       string `json:"result_text"`
+		Model            string `json:"model"`
 		IsErr            bool   `json:"is_err"`
 		Executing        bool   `json:"executing"`
 		ExecutionUnknown bool   `json:"execution_unknown"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {
-		return "", "", fmt.Errorf("decode approval response: %w", err)
+		return "", "", "", fmt.Errorf("decode approval response: %w", err)
 	}
 	if out.Executing {
 		// Consent has been claimed, but the detached server action has not
 		// finished. Retain the card for an idempotent status retry, not success.
-		return "", out.ResultText, approvalRunningError{}
+		return "", out.ResultText, "", approvalRunningError{}
 	}
 	if out.ExecutionUnknown {
-		return out.Status, out.ResultText, fmt.Errorf("approval was recorded, but its execution outcome is unavailable")
+		return out.Status, out.ResultText, "", fmt.Errorf("approval was recorded, but its execution outcome is unavailable")
 	}
 	if out.IsErr || (decision.Approved && out.Status != "approved") || (!decision.Approved && out.Status != "rejected") {
-		return out.Status, out.ResultText, fmt.Errorf("approval resolved as %q: %s", out.Status, out.ResultText)
+		return out.Status, out.ResultText, out.Model, fmt.Errorf("approval resolved as %q: %s", out.Status, out.ResultText)
 	}
-	return out.Status, out.ResultText, nil
+	return out.Status, out.ResultText, out.Model, nil
 }
 
 // Ping reports whether the server's /healthz answers quickly — a fast, friendly

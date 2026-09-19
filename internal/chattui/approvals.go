@@ -26,6 +26,28 @@ func emailApprovalReview(tool string, summary any) string {
 	return "Frozen email review (all recipients, content and attachments):\n" + string(b)
 }
 
+func bashApprovalReview(tool string, summary any) string {
+	if tool != "bash" {
+		return ""
+	}
+	m, _ := summary.(map[string]any)
+	if m == nil || strField(m, "command") == "" {
+		return ""
+	}
+	b, err := json.MarshalIndent(map[string]any{"command": m["command"]}, "", "  ")
+	if err != nil {
+		return "Bash review unavailable. Reload approvals before deciding."
+	}
+	return "Frozen bash review (full command):\n" + string(b)
+}
+
+func frozenApprovalReview(tool string, summary any) string {
+	if review := emailApprovalReview(tool, summary); review != "" {
+		return review
+	}
+	return bashApprovalReview(tool, summary)
+}
+
 func emailSummaryOverflow(summary any) bool {
 	m, _ := summary.(map[string]any)
 	if m == nil {
@@ -42,6 +64,10 @@ func emailSummaryOverflow(summary any) bool {
 // only — the staged arguments on the server stay the execution source of
 // truth, exactly like the web card.
 func approvalSummaryLine(tool string, summary any) string {
+	return sanitizeTerminal(formatApprovalSummary(tool, summary))
+}
+
+func formatApprovalSummary(tool string, summary any) string {
 	m, _ := summary.(map[string]any)
 	if m == nil {
 		return ""
@@ -138,4 +164,22 @@ func truncateRunes(s string, limit int) string {
 		return s
 	}
 	return string(r[:limit]) + "…"
+}
+
+// sanitizeTerminal keeps approval one-liners from driving the terminal:
+// C0/C1 controls and DEL become visible \uXXXX escapes so a staged
+// recipient or command cannot clear the viewport or inject OSC writes.
+func sanitizeTerminal(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\t':
+			b.WriteByte(' ')
+		case r < 32 || r == 127 || (r >= 0x80 && r <= 0x9f):
+			fmt.Fprintf(&b, "\\u%04x", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

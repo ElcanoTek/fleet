@@ -94,7 +94,7 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 		}
 		for _, card := range pending {
 			if card.id == approvalID {
-				if review := emailApprovalReview(card.tool, card.details); review != "" {
+				if review := frozenApprovalReview(card.tool, card.details); review != "" {
 					fmt.Fprintln(errOut, review)
 				}
 				if emailSummaryOverflow(card.details) {
@@ -191,7 +191,7 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 			fmt.Fprintln(errOut, "⚠ approval required: "+orDefault(ev.Str("tool"), "tool")+
 				" — "+orDefault(approvalSummaryLine(ev.Str("tool"), ev.Data["summary"]), "(no summary)")+
 				" (approval "+id+")")
-			if review := emailApprovalReview(ev.Str("tool"), ev.Data["summary"]); review != "" {
+			if review := frozenApprovalReview(ev.Str("tool"), ev.Data["summary"]); review != "" {
 				fmt.Fprintln(errOut, review)
 			}
 		}

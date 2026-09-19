@@ -586,7 +586,8 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 			"reason":          reason,
 			"recommend_model": agentcore.CurrentAdvancedModel(),
 		},
-		"expires_at": approval.ExpiresAt,
+		"pattern_args": handlerApprovalPatternArgs(tools.SuggestAdvancedModelToolName, string(rawInput)),
+		"expires_at":   approval.ExpiresAt,
 	})
 
 	msg := fmt.Sprintf(
@@ -1555,6 +1556,11 @@ func approvalOutcomeFlags(a *store.Approval) map[string]any {
 	}
 	if a.ResultText == approvalExecutingSentinel {
 		return map[string]any{"executing": true}
+	}
+	if isNotifyRecordResult(a.ResultText) {
+		// Pre-migration notify records have no IsErr but the prefix proves
+		// RecordAction observed a successful run. Do not relabel them unknown.
+		return map[string]any{"is_err": false}
 	}
 	return map[string]any{"execution_unknown": true}
 }

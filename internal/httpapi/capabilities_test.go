@@ -57,10 +57,17 @@ func TestShouldEmit(t *testing.T) {
 	if !shouldEmit(caps, "text.delta") {
 		t.Error("declared text.delta should emit")
 	}
+	if !shouldEmit(caps, "text.replace") {
+		t.Error("declared text.replace should emit under CapText")
+	}
 	for _, suppressed := range []string{"reasoning.delta", "tool.call", "tool.result", "tool.approval_required", "memory.proposed", "tool.auto_resolved"} {
 		if shouldEmit(caps, suppressed) {
 			t.Errorf("undeclared governed event %q should be suppressed", suppressed)
 		}
+	}
+	toolsOnly := map[SSECapability]bool{CapToolCalls: true}
+	if shouldEmit(toolsOnly, "text.replace") {
+		t.Error("text.replace must not bypass a client that opted out of CapText")
 	}
 
 	// Lifecycle / control events are never governed → always emit, even with a

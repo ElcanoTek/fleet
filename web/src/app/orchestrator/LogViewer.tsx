@@ -745,10 +745,18 @@ function LiveTaskView({
         // replace=true is the run's authoritative final text: drop the
         // concatenated pre-audit draft instead of appending.
         setEntries((prev) => {
+          if (frame.replace) {
+            const kept = prev.filter((e) => e.kind !== "message");
+            const entry: ActivityEntry = {
+              key: `e${seq.current++}`,
+              kind: "message",
+              text: clampText(content),
+            };
+            return [...kept, entry].slice(-1000);
+          }
           const last = prev[prev.length - 1];
           if (last?.kind === "message") {
-            const text = frame.replace ? content : last.text + content;
-            return [...prev.slice(0, -1), { ...last, text: clampText(text) }];
+            return [...prev.slice(0, -1), { ...last, text: clampText(last.text + content) }];
           }
           const entry: ActivityEntry = { key: `e${seq.current++}`, kind: "message", text: content };
           return [...prev, entry].slice(-1000);

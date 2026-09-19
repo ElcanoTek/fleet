@@ -213,6 +213,12 @@ func TestApprovalSummaryLine(t *testing.T) {
 			want:    "rm -rf /tmp/scratch",
 		},
 		{
+			name:    "control bytes escaped",
+			tool:    "bash",
+			summary: map[string]any{"command": "echo \x1b[2J innocent"},
+			want:    `echo \u001b[2J innocent`,
+		},
+		{
 			name:    "suggest_advanced_model",
 			tool:    "suggest_advanced_model",
 			summary: map[string]any{"recommend_model": "acme/frontier-1-pro"},
@@ -241,5 +247,22 @@ func TestApprovalSummaryLine(t *testing.T) {
 				t.Errorf("approvalSummaryLine = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBashApprovalReviewShowsFullEscapedCommand(t *testing.T) {
+	hidden := "git push origin main"
+	cmd := strings.Repeat("echo safe; ", 20) + hidden
+	summary := map[string]any{"command": cmd + "\x1b[2J"}
+	line := approvalSummaryLine("bash", summary)
+	if strings.Contains(line, hidden) {
+		t.Fatal("one-line summary should stay compact")
+	}
+	if strings.ContainsAny(line, "\x1b") {
+		t.Fatal("one-line summary leaked a control byte")
+	}
+	review := frozenApprovalReview("bash", summary)
+	if !strings.Contains(review, hidden) || strings.ContainsAny(review, "\x1b") {
+		t.Fatalf("full bash review missing hidden tail or leaked controls: %s", review)
 	}
 }
