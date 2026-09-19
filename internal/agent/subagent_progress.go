@@ -186,6 +186,12 @@ func (p *childProgress) Observe(eventType string, payload map[string]any) {
 		if t, _ := payload["text"].(string); t != "" {
 			p.appendText(t, subagentPhaseText)
 		}
+	case "text.replace":
+		// Text-phase consumers replace their current preview. Bypass coalescing
+		// so even short/empty final answers retract the previous draft.
+		p.flushText()
+		text, _ := payload["text"].(string)
+		p.emit(subagentPhaseText, map[string]any{"detail": tailRunes(collapseWhitespace(text), subagentPreviewChars)})
 	case "reasoning.delta", "reasoning.start":
 		if t, _ := payload["text"].(string); t != "" {
 			p.appendText(t, subagentPhaseThinking)

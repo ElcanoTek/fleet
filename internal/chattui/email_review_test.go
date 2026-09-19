@@ -27,16 +27,17 @@ func frozenWire(args map[string]any, complete bool) map[string]any {
 }
 
 func TestSSEEscapedEmailFitsTransport(t *testing.T) {
-	body := strings.Repeat("<", 900<<10)
+	body := strings.Repeat("<", 950<<10)
 	encoded, err := json.Marshal(map[string]any{
-		"approval_id": "large", "tool": "mcp_sendgrid_send_email",
-		"summary":     map[string]any{"content": body},
-		"frozen_args": frozenWire(map[string]any{"content": body}, true),
+		"approval_id": "large", "tool": "preview_email",
+		"pattern_args": map[string]any{"content": body},
+		"summary":      map[string]any{"content": body},
+		"frozen_args":  frozenWire(map[string]any{"content": body}, true),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(encoded) <= 8<<20 {
+	if len(encoded) <= 16<<20 {
 		t.Fatal("fixture must exceed the old scanner cap")
 	}
 	var got Event

@@ -205,9 +205,9 @@ func attachFrozenArgsRaw(m map[string]any, raw []byte) {
 func parseSSE(r io.Reader, fn func(Event)) error {
 	sc := bufio.NewScanner(r)
 	// Allow long frames (a big tool result or text block in one data line).
-	// A 1 MiB frozen argument object and its summary can each expand sixfold
-	// under JSON HTML escaping. Leave room for both plus event metadata.
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	// A 1 MiB frozen object, its summary and handler-only pattern arguments can
+	// each expand sixfold under JSON escaping. Budget all three plus metadata.
+	sc.Buffer(make([]byte, 0, 64*1024), 24*1024*1024)
 
 	var id, name string
 	var data strings.Builder

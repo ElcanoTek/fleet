@@ -3489,11 +3489,6 @@ func (a *taskMemoryAdapter) ListTaskMemories(ctx context.Context, taskID uuid.UU
 func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer recCancel()
-	if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
-		log.Printf("stranded-approval recovery: %v", err)
-	} else if count > 0 {
-		log.Printf("stranded-approval recovery: %d unknown outcomes", count) //nolint:gosec // G706: count is an integer database row count.
-	}
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
 	if err != nil {
 		//nolint:gosec // G706: err wraps internal DB errors and an int count — no request input.
@@ -3502,6 +3497,16 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	for _, r := range recovered {
 		log.Printf("stranded-turn recovery: turn %s (conv %s) projected %d entries, %d unknown-outcome tool calls",
 			r.TurnID, r.ConversationID, r.Projected, r.Synthesized)
+	}
+	// Outcomes must follow their recovered calls and pending markers. If turn
+	// recovery failed, leave approvals for the next boot rather than reversing
+	// model-visible history order.
+	if err == nil {
+		if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
+			log.Printf("stranded-approval recovery: %v", err)
+		} else if count > 0 {
+			log.Printf("stranded-approval recovery: %d unknown outcomes", count) //nolint:gosec // G706: count is an integer database row count.
+		}
 	}
 	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
 	// process against the #798 durable record: durably-persisted ones complete,

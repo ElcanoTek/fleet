@@ -10,7 +10,7 @@ the workspace default (or the explicit CLI/slash-command override); other
 resumed threads retain their stored selection absent an explicit override.
 Idempotent suggestion decisions return the current server-side conversation model.
 Terminal reloads request settlement-only resolved identifiers, excluding completed
-card bodies. SSE accepts up to 16 MiB per line to accommodate two 1 MiB review
+card bodies. SSE accepts up to 24 MiB per line to accommodate three 1 MiB review
 copies after JSON escaping. Reviewed numeric arguments retain their exact JSON
 number representation through approval execution and the credential broker.
 
@@ -34,6 +34,9 @@ card response at a time. Outcome-persistence errors return explicit uncertainty,
 never success. Crash recovery applies authoritative `text.replace` events as
 well as deltas. The test auto-approval flag covers executable tools only;
 handler-only cards require explicit API decisions even in unattended tests.
+Startup restores turn history before appending interrupted approval outcomes.
+Child-agent progress also replaces its preview when the final answer retracts
+earlier drafts.
 
 ## Review and resolve
 
