@@ -44,6 +44,7 @@ import {
 } from "@/app/shared/ui/KeyboardShortcutsOverlay";
 import {
   historyToMessages,
+  hydrateResolvedApproval,
   type Approval,
   type ApprovalStatus,
   type HistoryEntry,
@@ -2098,6 +2099,9 @@ export function ChatExperience({
           summary: Approval["summary"];
           status: ApprovalStatus;
           result_text?: string;
+          is_err?: boolean;
+          executing?: boolean;
+          execution_unknown?: boolean;
           mcp_server?: string;
           mcp_account?: string;
           tool_call_id?: string;
@@ -2149,17 +2153,7 @@ export function ChatExperience({
         // anything still pending, so resolved-then-pending keeps cards in
         // rough chronological order within a message.
         const approvalCards: Approval[] = [
-          ...resolvedApprovals.map((p): Approval => ({
-            id: p.approval_id,
-            tool: p.tool,
-            summary: p.summary,
-            status: p.status,
-            resultText: p.result_text,
-            recorded: p.recorded,
-            mcpServer: p.mcp_server,
-            mcpAccount: p.mcp_account,
-            toolCallId: p.tool_call_id,
-          })),
+          ...resolvedApprovals.map((p): Approval => hydrateResolvedApproval(p)),
           ...pendingApprovals.map((p): Approval => ({
             id: p.approval_id,
             tool: p.tool,

@@ -68,6 +68,7 @@ async function mockConversationWithApprovals(page: Page) {
               args: [{ key: "slug", value: "q3-report" }],
             },
             status: "approved",
+            is_err: false,
             result_text:
               "Ran without asking: this tool is declared notify-mode in the client bundle. Undo with mcp_pages_rollback_page(slug, version_id).",
             recorded: true,

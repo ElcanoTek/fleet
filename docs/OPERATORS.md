@@ -44,6 +44,22 @@ failure. Scripts settle cards without a terminal: one-shot mode prints every
 staged approval id to stderr, and `fleet chat --conversation <id> --approve
 <approval-id>` (or `--deny`) resolves it and prints the outcome.
 
+`/approvals` reviews full summaries and expiry deadlines; `/approvals reload`
+refreshes them from the server. `/edit {"name":"...","prompt":"...","cron":"..."}`
+edits the oldest scheduled-task proposal before approval. `/approve [id] session`
+and `/deny [id] session` apply to future calls to that tool in this conversation;
+`pattern arg=glob` narrows that policy. `/resume <conversation-id>` switches
+threads and reloads pending cards. Network failures retain cards for retry;
+expired or failed actions are reported as errors. See
+[Terminal approvals](TERMINAL-APPROVALS.md) for the complete command contract.
+
+Email cards automatically print the full frozen recipients (including CC/BCC),
+body and attachments as escaped JSON. One-shot approval retrieves and prints
+that review before submitting. Patterns match original string argument names
+(for example `to_email`, not the summary's `to` label); matching denies win.
+Handler-only policies live for the terminal session and settle each server card
+individually. Handler-only patterns require the server's `pattern_args` metadata.
+
 ```
 fleet bootstrap   →   fleet update   →   fleet status / fleet doctor
   (provision a box)   (roll a new version)   (check health / repair drift)

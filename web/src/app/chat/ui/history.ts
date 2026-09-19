@@ -236,7 +236,7 @@ export function parsePythonStream(raw: string): PythonStream {
 
 export type MessageState = "thinking" | "streaming" | "done";
 
-export type ApprovalStatus = "pending" | "approved" | "rejected" | "failed";
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "failed" | "execution_unknown";
 
 export type MemoryProposalStatus = "pending" | "saved" | "dismissed";
 
@@ -362,7 +362,84 @@ export type Approval = {
    */
   mcpServer?: string;
   mcpAccount?: string;
+  /**
+   * True while a claimed approval is still running. Status stays pending so
+   * "Check result" can retrieve the outcome, but the card is not a new
+   * consent: no deny/edit/apply-all, and the expiry countdown is suppressed
+   * (the claim already won; default-deny must not fire on the waiting UI).
+   */
+  executing?: boolean;
 };
+
+/**
+ * Server fields on the approval POST body and on GET resolved_approvals.
+ * status is consent (pending|approved|rejected). Execution outcome is
+ * is_err / executing / execution_unknown — never inferred from result_text.
+ */
+export type ApprovalOutcomePayload = {
+  status: ApprovalStatus;
+  result_text?: string;
+  is_err?: boolean;
+  executing?: boolean;
+  execution_unknown?: boolean;
+};
+
+/**
+ * Maps those fields to a card status. null means in-flight: the caller
+ * must keep the card pending WITH executing=true so a later "Check result"
+ * can fetch the outcome without looking like new consent.
+ *
+ * Approved is success only when is_err is explicitly false. A missing
+ * boolean is execution_unknown so a legacy row cannot render as
+ * "Email sent ✓". Do not use this helper for suggest_advanced_model: the
+ * winning pin response omits is_err (the pin IS the outcome) and must
+ * stay status=approved.
+ */
+export function approvalStatusFromOutcome(
+  data: ApprovalOutcomePayload,
+): ApprovalStatus | null {
+  if (data.executing) return null;
+  if (data.status === "approved") {
+    if (data.is_err === true) return "failed";
+    if (data.is_err === false) return "approved";
+    return "execution_unknown";
+  }
+  return data.status;
+}
+
+export function approvalIsExecuting(a: Pick<Approval, "status" | "executing">): boolean {
+  return a.status === "pending" && a.executing === true;
+}
+
+/** Hydrate a GET resolved_approvals row. executing stays pending with the flag. */
+export function hydrateResolvedApproval(p: {
+  approval_id: string;
+  tool: string;
+  summary: Approval["summary"];
+  status: ApprovalStatus;
+  result_text?: string;
+  is_err?: boolean;
+  executing?: boolean;
+  execution_unknown?: boolean;
+  mcp_server?: string;
+  mcp_account?: string;
+  tool_call_id?: string;
+  recorded?: boolean;
+}): Approval {
+  const executing = p.executing === true;
+  return {
+    id: p.approval_id,
+    tool: p.tool,
+    summary: p.summary,
+    status: executing ? "pending" : (approvalStatusFromOutcome(p) ?? "pending"),
+    resultText: p.result_text,
+    recorded: p.recorded,
+    mcpServer: p.mcp_server,
+    mcpAccount: p.mcp_account,
+    toolCallId: p.tool_call_id,
+    executing: executing || undefined,
+  };
+}
 
 /** Per-turn cost + tokens + duration for the inline chip under assistant messages. */
 export type TurnSummary = {

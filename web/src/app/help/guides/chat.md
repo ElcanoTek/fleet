@@ -9,6 +9,36 @@ onto a schedule.
 
 ## 1. What Chat is
 
+### Terminal chat
+
+On the server, `fleet chat --email you@example.com` opens terminal chat. New
+threads use the workspace default model by default; `--model` or `/model` selects
+another model. `--message "..."` and `--no-tui` support scripts and piped input.
+One-shot mode prints the conversation ID to stderr; `--conversation <id>` resumes
+its model context and loads pending approvals in interactive mode.
+
+The terminal shows staged actions and a pending count. `/approvals` displays full
+review summaries and deadlines; `/approve` and `/deny` decide the oldest card,
+or take a full approval ID. `/edit {"name":"...","prompt":"...","cron":"..."}`
+changes the oldest scheduled-task card locally before approval. Omitted fields
+stay unchanged, and the server validates edits when you approve.
+Email cards automatically show the full frozen recipients, CC/BCC, attachments
+and body as escaped JSON; the one-line model summary is not the review record.
+
+Add `session` to a decision to apply it to future calls of that tool in the same
+conversation, or `pattern arg=glob` to restrict that policy to matching arguments.
+Patterns use original string argument names, such as `name`, `cron`, or
+`to_email` (not the summary label `to`). Spaces are allowed in globs, and a
+matching deny takes precedence over approvals. `/approvals` shows the available
+handler-only pattern arguments; this requires a server that supplies them.
+Executable-tool policies reset on server restart. Scheduled-task and other
+handler-only card policies last for this terminal session and still resolve each
+card through the server's approval endpoint. `/resume <id>` switches conversation and
+loads its cards; `/approvals reload` refreshes cards. Expired cards are removed,
+and failed network requests retain the card for retry. One-shot callers use
+`--conversation <id> --approve <approval-id>` or `--deny`. A rejected or failed
+action returns a nonzero exit code rather than claiming success.
+
 Chat is the conversation with the assistant: you ask, it works, you read the
 result and steer. Most of what runs on your deployment took shape here first, in
 a conversation someone could watch and correct before it was trusted to run on
@@ -260,6 +290,14 @@ button: the card exists to tell you. **Cancel is free**: the assistant continues
 without doing the thing, and you can ask it to try a different way. **Cards
 expire**: a card left unanswered times out to no, and the transcript records that
 it did.
+
+After you approve, the card shows what actually happened: it ran, it failed, it
+is still running, or — for an older card whose run finished before outcomes were
+stored — that the outcome was not recorded. A still-running card is not a new
+decision: Cancel, Edit, and the expiry countdown are withheld, and **Check
+result** fetches the outcome without running the action twice. In terminal chat
+the same flags apply: `/approve <id>` on a running card retrieves the result;
+an unknown historical outcome is an error, not success.
 
 Some cards carry a checkbox that widens your decision to every later call of the
 same kind in this conversation, turning the button into **Approve + allow all**.

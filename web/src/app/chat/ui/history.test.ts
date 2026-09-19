@@ -8,6 +8,8 @@ import {
   clearRetryNotice,
   conversationTotals,
   historyToMessages,
+  hydrateResolvedApproval,
+  approvalStatusFromOutcome,
   humanToolLabel,
   parsePythonStream,
   prettyToolName,
@@ -697,5 +699,72 @@ describe("parsePythonStream", () => {
   it("filters non-string entries out of image_files", () => {
     const raw = JSON.stringify({ stdout: "x", image_files: ["figures/ok.png", 123, "", null] });
     expect(parsePythonStream(raw).imageFiles).toEqual(["figures/ok.png"]);
+  });
+});
+
+describe("approvalStatusFromOutcome", () => {
+  it("keeps in-flight execution pending (null)", () => {
+    expect(
+      approvalStatusFromOutcome({
+        status: "approved",
+        executing: true,
+        result_text: "Approved — executing…",
+      }),
+    ).toBeNull();
+  });
+
+  it("maps is_err true to failed, not approved", () => {
+    expect(
+      approvalStatusFromOutcome({
+        status: "approved",
+        is_err: true,
+        result_text: "send failed: boom",
+      }),
+    ).toBe("failed");
+  });
+
+  it("maps is_err false to approved", () => {
+    expect(approvalStatusFromOutcome({ status: "approved", is_err: false })).toBe("approved");
+  });
+
+  it("treats approved without is_err as execution_unknown", () => {
+    expect(approvalStatusFromOutcome({ status: "approved", result_text: "ok" })).toBe(
+      "execution_unknown",
+    );
+    expect(
+      approvalStatusFromOutcome({ status: "approved", execution_unknown: true, result_text: "ok" }),
+    ).toBe("execution_unknown");
+  });
+
+  it("passes rejected through", () => {
+    expect(approvalStatusFromOutcome({ status: "rejected" })).toBe("rejected");
+  });
+});
+
+describe("hydrateResolvedApproval", () => {
+  it("hydrates an executing GET row as pending with executing=true", () => {
+    const card = hydrateResolvedApproval({
+      approval_id: "a1",
+      tool: "bash",
+      summary: { command: "ls" },
+      status: "approved",
+      result_text: "Approved — executing…",
+      executing: true,
+    });
+    expect(card.status).toBe("pending");
+    expect(card.executing).toBe(true);
+    expect(card.id).toBe("a1");
+  });
+
+  it("hydrates a failed GET row as failed", () => {
+    const card = hydrateResolvedApproval({
+      approval_id: "a1",
+      tool: "mcp_email_send_email",
+      summary: {},
+      status: "approved",
+      result_text: "send failed: boom",
+      is_err: true,
+    });
+    expect(card.status).toBe("failed");
   });
 });

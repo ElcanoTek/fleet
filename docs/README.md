@@ -279,6 +279,7 @@ above fails otherwise.
 - [`TASK-TAGS.md`](TASK-TAGS.md) — Task tags on the board — chips, the tag filter, and the catalogue TTL
 - [`TASK-TITLES.md`](TASK-TITLES.md) — Task titles
 - [`TEAM-SHARING.md`](TEAM-SHARING.md) — Sharing work inside a project — team-shared chats and team learnings
+- [`TERMINAL-APPROVALS.md`](TERMINAL-APPROVALS.md) — Terminal chat and scheduled-task approvals
 - [`TESTING.md`](TESTING.md) — Testing fleet
 - [`TIMERS.md`](TIMERS.md) — `fleet timers install` — one-command setup for the scheduled-maintenance timers
 - [`TOOL-DISCLOSURE.md`](TOOL-DISCLOSURE.md) — BM25 progressive tool disclosure

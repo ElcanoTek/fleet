@@ -21,6 +21,8 @@ import {
   type Approval,
   type ApprovalStatus,
   type MemoryProposal,
+  approvalIsExecuting,
+  approvalStatusFromOutcome,
 } from "./history";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
 
@@ -51,9 +53,10 @@ type PreviewInbox = "light" | "dark";
 function useApprovalCountdown(
   expiresAt: number | undefined,
   status: ApprovalStatus,
+  executing?: boolean,
 ): { remaining: number | null; expired: boolean } {
   const hasDeadline =
-    typeof expiresAt === "number" && expiresAt > 0 && status === "pending";
+    typeof expiresAt === "number" && expiresAt > 0 && status === "pending" && !executing;
   const [remaining, setRemaining] = useState<number | null>(null);
   // Mirrors BulkDeleteConfirmModal's lint-clean countdown: read the clock and
   // call setState only inside the interval callback (never synchronously in the
@@ -216,17 +219,67 @@ async function describeSubmitFailure(response: Response): Promise<string> {
     : `Couldn't submit your decision (HTTP ${response.status}).`;
 }
 
-function ApprovalSubmitError({ message }: { message: string | null }) {
-  if (!message) return null;
+function ApprovalSubmitError({
+  message,
+  running,
+}: {
+  message: string | null;
+  running?: string | null;
+}) {
   return (
-    <p
-      role="alert"
-      data-testid="approval-submit-error"
-      className="text-[0.72rem] leading-[1.45]"
-      style={{ color: "var(--color-danger)" }}
-    >
-      {message} Try again.
-    </p>
+    <>
+      {running ? (
+        <p
+          role="status"
+          data-testid="approval-still-running"
+          className="text-[0.72rem] leading-[1.45]"
+          style={{ color: "var(--color-text-secondary)" }}
+        >
+          {running}
+        </p>
+      ) : null}
+      {message ? (
+        <p
+          role="alert"
+          data-testid="approval-submit-error"
+          className="text-[0.72rem] leading-[1.45]"
+          style={{ color: "var(--color-danger)" }}
+        >
+          {message} Try again.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+// A claimed approval that is still running is not a new consent: no deny,
+// edit, apply-all, or expiry countdown. "Check result" is the TUI's
+// `/approve <id>` — an idempotent fetch of the outcome.
+function ApprovalExecutingControls({
+  submitting,
+  submitError,
+  onCheck,
+}: {
+  submitting: "send" | "cancel" | null;
+  submitError: string | null;
+  onCheck: () => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-col gap-2" data-testid="approval-executing">
+      <button
+        type="button"
+        data-testid="approval-check-result"
+        className="w-fit rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary)] transition hover:opacity-90 disabled:opacity-50"
+        disabled={submitting !== null}
+        onClick={onCheck}
+      >
+        {submitting === "send" ? "Checking…" : "Check result"}
+      </button>
+      <ApprovalSubmitError
+        message={submitError}
+        running="This action is still running. Check result to see the outcome without running it again."
+      />
+    </div>
   );
 }
 
@@ -300,6 +353,12 @@ export function ApprovalCard({
   // Why the last resolve attempt did not reach the server, shown inline under
   // the buttons; cleared on the next attempt. See ApprovalSubmitError.
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Held locally so a test (or a parent that has not yet patched) still
+  // shows the executing chrome after onResolved; the transcript persists
+  // it on Approval.executing.
+  const [heldExecuting, setHeldExecuting] = useState(false);
+  const executing = approval.status === "pending" && (approvalIsExecuting(approval) || heldExecuting);
+  const card: Approval = executing ? { ...approval, executing: true } : approval;
   // Both card kinds auto-expand: preview because seeing the render IS
   // the feature, send because users were missing the Send button when
   // the card landed below an already-expanded preview iframe and the
@@ -318,13 +377,14 @@ export function ApprovalCard({
   // bash/suggest early-returns to satisfy the rules of hooks; the bash card
   // runs its own countdown, and the suggest_advanced_model nudge intentionally
   // shows none.
-  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
 
   const resolve = async (
     approved: boolean,
     edits?: { name?: string; prompt?: string; cron?: string },
   ) => {
     if (submitting || approval.status !== "pending" || !conversationId) return;
+    if (executing && !approved) return;
     setSubmitting(approved ? "send" : "cancel");
     setSubmitError(null);
     try {
@@ -335,8 +395,8 @@ export function ApprovalCard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             approved,
-            scope: applyAll ? "session" : "once",
-            ...(edits && Object.keys(edits).length > 0 ? { edits } : {}),
+            scope: executing ? "once" : applyAll ? "session" : "once",
+            ...(!executing && edits && Object.keys(edits).length > 0 ? { edits } : {}),
           }),
         },
       );
@@ -352,11 +412,26 @@ export function ApprovalCard({
         status: ApprovalStatus;
         result_text?: string;
         is_err?: boolean;
+        executing?: boolean;
+        execution_unknown?: boolean;
       };
+      const nextStatus = approvalStatusFromOutcome(data);
+      if (nextStatus === null) {
+        setHeldExecuting(true);
+        onResolved({
+          ...approval,
+          status: "pending",
+          executing: true,
+          resultText: data.result_text,
+        });
+        return;
+      }
+      setHeldExecuting(false);
       onResolved({
         ...approval,
-        status: data.is_err ? "failed" : data.status,
+        status: nextStatus,
         resultText: data.result_text,
+        executing: false,
       });
     } catch (err) {
       // Network failure: nothing reached the server, same posture as a non-2xx.
@@ -371,7 +446,7 @@ export function ApprovalCard({
   if (approval.tool === "bash") {
     return (
       <BashApprovalCard
-        approval={approval}
+        approval={card}
         submitting={submitting}
         submitError={submitError}
         onResolve={resolve}
@@ -395,7 +470,7 @@ export function ApprovalCard({
   if (approval.tool === "schedule_task") {
     return (
       <ScheduleTaskCard
-        approval={approval}
+        approval={card}
         submitting={submitting}
         submitError={submitError}
         onResolve={resolve}
@@ -407,7 +482,7 @@ export function ApprovalCard({
   if (approval.tool === "manage_tasks") {
     return (
       <ManageTasksCard
-        approval={approval}
+        approval={card}
         submitting={submitting}
         submitError={submitError}
         onResolve={resolve}
@@ -424,7 +499,7 @@ export function ApprovalCard({
   if (!isEmailApprovalTool(approval.tool)) {
     return (
       <GenericActionCard
-        approval={approval}
+        approval={card}
         submitting={submitting}
         submitError={submitError}
         onResolve={resolve}
@@ -459,7 +534,9 @@ export function ApprovalCard({
   // className below, no background tint); send reads as an action card
   // (accent border + faint accent-tinted background).
   const statusStyle: React.CSSProperties =
-    approval.status === "approved"
+    executing
+      ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+      : approval.status === "approved"
       ? isPreviewOnly
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
         : { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
@@ -467,6 +544,8 @@ export function ApprovalCard({
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
         : approval.status === "failed"
           ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          : approval.status === "execution_unknown"
+            ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : isPreviewOnly
             ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
             : {
@@ -481,18 +560,26 @@ export function ApprovalCard({
   // The pending verb-phrase is what every existing e2e test asserts on
   // (e.g. /Send this email\?/i) — substring matches still pass.
   const title = isPreviewOnly
-    ? approval.status === "pending"
+    ? executing
+      ? "Dismissing…"
+      : approval.status === "pending"
       ? "DRAFT · Email preview (not sent)"
       : approval.status === "approved" || approval.status === "rejected"
         ? "Draft dismissed"
-        : "Preview failed"
-    : approval.status === "pending"
+        : approval.status === "execution_unknown"
+          ? "Preview outcome not recorded"
+          : "Preview failed"
+    : executing
+      ? "Sending…"
+      : approval.status === "pending"
       ? "ACTION REQUIRED · Send this email?"
       : approval.status === "approved"
         ? "Email sent ✓"
         : approval.status === "rejected"
           ? "Send cancelled"
-          : "Send failed";
+          : approval.status === "execution_unknown"
+            ? "Approved — outcome not recorded"
+            : "Send failed";
 
   // Pending preview gets a dashed border to signal "draft / not real /
   // sketch." Pending send keeps the solid border (the default `border`
@@ -500,12 +587,12 @@ export function ApprovalCard({
   // a user reads the title. Resolved states fall back to solid for both
   // — once a card is finalized the draft/action distinction no longer
   // matters and the success/danger color tells the story.
-  const isPendingPreview = isPreviewOnly && approval.status === "pending";
+  const isPendingPreview = isPreviewOnly && approval.status === "pending" && !executing;
   const borderStyleClass = isPendingPreview ? " border-dashed" : "";
   // No tint override needed for pending send — the inline `background`
   // in statusStyle replaces the default. For all other states keep the
   // existing soft overlay.
-  const bgClass = approval.status === "pending" && !isPreviewOnly
+  const bgClass = approval.status === "pending" && !isPreviewOnly && !executing
     ? ""
     : " bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)]";
 
@@ -561,7 +648,13 @@ export function ApprovalCard({
       ) : null}
 
       {approval.status === "pending" ? (
-        isPreviewOnly ? (
+        executing ? (
+          <ApprovalExecutingControls
+            submitting={submitting}
+            submitError={submitError}
+            onCheck={() => void resolve(true)}
+          />
+        ) : isPreviewOnly ? (
           <div className="mt-3 flex items-center gap-2">
             <button
               type="button"
@@ -615,7 +708,7 @@ export function ApprovalCard({
       ) : (
         <>
           {approval.resultText ? (
-            isPreviewOnly ? (
+            isPreviewOnly || approval.status === "execution_unknown" ? (
               <ApprovalResult text={approval.resultText} />
             ) : (
               <EmailApprovalOutcome
@@ -657,7 +750,8 @@ function GenericActionCard({
   onApplyAllChange: (v: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
 }) {
-  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
+  const executing = approvalIsExecuting(approval);
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
   const { action, server } = actionLabel(approval.tool);
   const args = Array.isArray(approval.summary.args) ? approval.summary.args : [];
   const rawArgs = approval.summary.raw ?? "";
@@ -665,7 +759,9 @@ function GenericActionCard({
   const timedOut = isTimedOutApproval(approval);
 
   const title =
-    approval.status === "pending"
+    executing
+      ? `${action} · running`
+      : approval.status === "pending"
       ? `ACTION REQUIRED · Run "${action}"?`
       : approval.status === "approved"
         ? recorded
@@ -675,12 +771,16 @@ function GenericActionCard({
           ? timedOut
             ? `${action} · timed out`
             : `${action} · cancelled`
-          : `${action} · failed`;
+          : approval.status === "execution_unknown"
+            ? `${action} · outcome not recorded`
+            : `${action} · failed`;
 
   // A record is information, not a past decision — muted chrome, like the
   // dismissed-preview state, so it never masquerades as an approval.
   const statusStyle: React.CSSProperties =
-    approval.status === "approved"
+    executing
+      ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+      : approval.status === "approved"
       ? recorded
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
         : { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
@@ -688,6 +788,8 @@ function GenericActionCard({
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
         : approval.status === "failed"
           ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          : approval.status === "execution_unknown"
+            ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
 
   return (
@@ -730,6 +832,13 @@ function GenericActionCard({
       ) : null}
 
       {approval.status === "pending" ? (
+        executing ? (
+          <ApprovalExecutingControls
+            submitting={submitting}
+            submitError={submitError}
+            onCheck={() => onResolve(true)}
+          />
+        ) : (
         <div className="mt-3 flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <button
@@ -766,6 +875,7 @@ function GenericActionCard({
             Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
           </label>
         </div>
+        )
       ) : (
         <>
           {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
@@ -792,15 +902,20 @@ function BashApprovalCard({
   const command = approval.summary.command ?? approval.summary.preview ?? "";
   const workingDir = approval.summary.working_dir ?? "";
   const timeoutSec = approval.summary.timeout_seconds ?? 0;
-  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
+  const executing = approvalIsExecuting(approval);
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
 
   const statusStyle: React.CSSProperties =
-    approval.status === "approved"
+    executing
+      ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+      : approval.status === "approved"
       ? { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
       : approval.status === "rejected"
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
         : approval.status === "failed"
           ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          : approval.status === "execution_unknown"
+            ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
 
   return (
@@ -811,13 +926,17 @@ function BashApprovalCard({
       <div className="mb-2 flex items-center gap-2">
         <span aria-hidden>⚡</span>
         <span className="font-medium">
-          {approval.status === "pending"
+          {executing
+            ? "Command running"
+            : approval.status === "pending"
             ? "Run this shell command?"
             : approval.status === "approved"
               ? "Command executed"
               : approval.status === "rejected"
                 ? "Command declined"
-                : "Command failed"}
+                : approval.status === "execution_unknown"
+                  ? "Command outcome not recorded"
+                  : "Command failed"}
         </span>
       </div>
 
@@ -833,6 +952,13 @@ function BashApprovalCard({
       ) : null}
 
       {approval.status === "pending" ? (
+        executing ? (
+          <ApprovalExecutingControls
+            submitting={submitting}
+            submitError={submitError}
+            onCheck={() => onResolve(true)}
+          />
+        ) : (
         <div className="mt-3 flex flex-col gap-2">
           <div className="flex items-center gap-2">
             <button
@@ -856,6 +982,7 @@ function BashApprovalCard({
           <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
+        )
       ) : (
         <>
           {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
@@ -887,7 +1014,8 @@ function ScheduleTaskCard({
   onResolve: (approved: boolean, edits?: { name?: string; prompt?: string; cron?: string }) => void;
   onAskAgain?: (approval: Approval) => void;
 }) {
-  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
+  const executing = approvalIsExecuting(approval);
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
   const s = approval.summary;
   const name = (s.name ?? "").trim();
   const promptPreview = s.prompt_preview ?? "";
@@ -936,22 +1064,30 @@ function ScheduleTaskCard({
   const noConnectors = s.no_connectors === true || (connectors.length === 0 && alwaysOn.length === 0);
 
   const statusStyle: React.CSSProperties =
-    approval.status === "approved"
+    executing
+      ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+      : approval.status === "approved"
       ? { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
       : approval.status === "rejected"
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
         : approval.status === "failed"
           ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          : approval.status === "execution_unknown"
+            ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
 
   const title =
-    approval.status === "pending"
+    executing
+      ? "Scheduling…"
+      : approval.status === "pending"
       ? "ACTION REQUIRED · Schedule this task?"
       : approval.status === "approved"
         ? "Task scheduled ✓"
         : approval.status === "rejected"
           ? "Scheduling cancelled"
-          : "Scheduling failed";
+          : approval.status === "execution_unknown"
+            ? "Approved — outcome not recorded"
+            : "Scheduling failed";
 
   return (
     <div
@@ -1016,7 +1152,7 @@ function ScheduleTaskCard({
         </div>
       ) : null}
 
-      {editing && approval.status === "pending" ? (
+      {editing && approval.status === "pending" && !executing ? (
         <div className="mt-2 grid gap-2">
           <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
             Name
@@ -1053,6 +1189,13 @@ function ScheduleTaskCard({
       ) : null}
 
       {approval.status === "pending" ? (
+        executing ? (
+          <ApprovalExecutingControls
+            submitting={submitting}
+            submitError={submitError}
+            onCheck={() => onResolve(true)}
+          />
+        ) : (
         <div className="mt-3 flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1098,6 +1241,7 @@ function ScheduleTaskCard({
           <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
+        )
       ) : (
         <>
           {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
@@ -1137,7 +1281,8 @@ function ManageTasksCard({
   onResolve: (approved: boolean) => void;
   onAskAgain?: (approval: Approval) => void;
 }) {
-  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
+  const executing = approvalIsExecuting(approval);
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
   const s = approval.summary as {
     action?: string;
     task_ids?: string[];
@@ -1153,7 +1298,11 @@ function ManageTasksCard({
   const changes = Array.isArray(s.changes) ? s.changes : [];
 
   const title =
-    approval.status === "pending"
+    executing
+      ? stopping
+        ? "Stopping tasks…"
+        : "Updating tasks…"
+      : approval.status === "pending"
       ? stopping
         ? "Stop scheduled tasks?"
         : "Change scheduled tasks?"
@@ -1163,10 +1312,14 @@ function ManageTasksCard({
           : "Tasks updated"
         : approval.status === "rejected"
           ? "Change cancelled"
-          : "Change failed";
+          : approval.status === "execution_unknown"
+            ? "Approved — outcome not recorded"
+            : "Change failed";
 
   const statusStyle =
-    approval.status === "pending"
+    executing
+      ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+      : approval.status === "pending"
       ? {
           borderColor: stopping ? "var(--color-danger, #b3261e)" : "var(--color-accent)",
         }
@@ -1221,6 +1374,13 @@ function ManageTasksCard({
       ) : null}
 
       {approval.status === "pending" ? (
+        executing ? (
+          <ApprovalExecutingControls
+            submitting={submitting}
+            submitError={submitError}
+            onCheck={() => onResolve(true)}
+          />
+        ) : (
         <div className="mt-3 flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1250,6 +1410,7 @@ function ManageTasksCard({
           <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
+        )
       ) : (
         <>
           {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
@@ -1335,10 +1496,14 @@ function SuggestAdvancedModelCard({
         model?: string;
         result_text?: string;
       };
+      // Do not run this through approvalStatusFromOutcome: the winning pin
+      // response omits is_err (the model flip IS the outcome). Treating a
+      // missing boolean as execution_unknown would hide a successful switch.
       onResolved({
         ...approval,
         status: data.status,
         resultText: data.result_text,
+        executing: false,
       });
       if (data.status === "approved" && data.model) {
         onModelSwitched?.(data.model);
@@ -1362,6 +1527,8 @@ function SuggestAdvancedModelCard({
         ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
         : approval.status === "failed"
           ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          : approval.status === "execution_unknown"
+            ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
           : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
 
   const title =
@@ -1371,7 +1538,9 @@ function SuggestAdvancedModelCard({
         ? `Switched to ${recommendedLabel}`
         : approval.status === "rejected"
           ? "Suggestion dismissed"
-          : "Suggestion failed";
+          : approval.status === "execution_unknown"
+            ? "Approved — outcome not recorded"
+            : "Suggestion failed";
 
   return (
     <div
