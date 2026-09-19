@@ -37,7 +37,10 @@ type recordingObserver struct {
 	events []map[string]any
 }
 
-func (o *recordingObserver) Observe(_ string, payload map[string]any) {
+func (o *recordingObserver) Observe(event string, payload map[string]any) {
+	if event != "persona_tool_blocked" {
+		return
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.events = append(o.events, payload)

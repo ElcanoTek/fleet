@@ -41,6 +41,9 @@ Accepted suggestion slugs are display-only in the terminal: later messages defer
 to the stored conversation model, including changes made by another client.
 An explicit `/model` re-enables a request override. Even empty completed answers
 emit a replacement so a rolled-back draft cannot remain visible after a retry.
+Normal completion always replaces visible text, including direct finalize-hook
+drafts. Web supersession, like terminal supersession, retains executing cards
+and their result-retrieval control.
 
 ## Review and resolve
 

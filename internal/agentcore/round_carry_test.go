@@ -296,6 +296,26 @@ func TestRunPreservesAllCompletedTextBlocks(t *testing.T) {
 	}
 }
 
+func TestRunRetractsFinalizeObserverDraftWhenFinalAnswerIsEmpty(t *testing.T) {
+	observer := &streamEventObserver{}
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input: stubInput{system: "s", user: "answer", label: "empty-finalize"}, Policy: passPolicy{},
+		Model: &textCapturingModel{slug: "empty-main", replies: []string{""}}, Observer: observer,
+		Finalize: func(_ context.Context, in FinalizeInput) (string, error) {
+			in.Observer.Observe("text.delta", map[string]any{"text": "discarded finalize draft"})
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if result.FinalText != "" || reconstructVisibleText(observer.events) != "" {
+		t.Fatalf("finalize draft survived: final=%q live=%q", result.FinalText, reconstructVisibleText(observer.events))
+	}
+}
+
 func TestScheduledResultOmitsPreAuditDraft(t *testing.T) {
 	session := NewLogSession()
 	model := &textCapturingModel{slug: "scheduled-final-test", replies: []string{"FUTURE_PASS_391", "Audit complete. FUTURE_PASS_391"}}

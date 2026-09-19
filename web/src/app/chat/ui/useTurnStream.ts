@@ -952,7 +952,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const next = existing.map((msg) => {
           if (!msg.approvals?.length) return msg;
           const touched = msg.approvals.map((ap) =>
-            ap.tool === p.tool && ap.status === "pending"
+            ap.tool === p.tool && ap.status === "pending" && !ap.executing
               ? { ...ap, status: "rejected" as ApprovalStatus, resultText: "Superseded by a newer call." }
               : ap,
           );

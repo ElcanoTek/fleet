@@ -196,7 +196,10 @@ const makeHarness = (opts: {
     markConvUploadDone: noop,
     getPendingAttachmentsForKey: () => [],
     promoteComposerKey: noop,
-    setMessagesByConv: noop,
+    setMessagesByConv: (updater) => {
+      const next = typeof updater === "function" ? updater(store) : updater;
+      Object.assign(store, next);
+    },
     setConversations: noop,
     setActiveConversationId: noop,
     setSelectedPersona: noop,
@@ -271,6 +274,31 @@ describe("hasPendingQueueWork", () => {
 });
 
 describe("followQueueDrain", () => {
+  it("keeps executing same-tool cards when a pending card is superseded", async () => {
+    const initial = answeredTranscript();
+    initial[1].approvals = [
+      { id: "running", tool: "bash", status: "pending", executing: true, summary: {} },
+      { id: "pending", tool: "bash", status: "pending", summary: {} },
+    ];
+    const h = makeHarness({
+      initial,
+      persisted: drainedHistory(),
+      queue: [[queuedRow("q1", "running")], []],
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [() => closedStream([
+        sse(1, "turn.started", { turn_id: "t2", input_id: "q1", queued: true }),
+        sse(2, "user.message", { text: "stage again" }),
+        sse(3, "tool.approval_superseded", { tool: "bash" }),
+        sse(4, "turn.completed", {}),
+      ])],
+    });
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.followQueueDrain(CONV);
+    const cards = h.store[CONV].flatMap((message) => message.approvals ?? []);
+    expect(cards.find((card) => card.id === "running")).toMatchObject({ status: "pending", executing: true });
+    expect(cards.find((card) => card.id === "pending")).toMatchObject({ status: "rejected" });
+  });
+
   it("streams the drained turn instead of leaving it invisible", async () => {
     const h = makeHarness({
       initial: answeredTranscript(),
