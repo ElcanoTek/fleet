@@ -64,6 +64,11 @@ func TestApprovalOutcomeFlags(t *testing.T) {
 			want: map[string]any{"execution_unknown": true},
 		},
 		{
+			name: "legacy suggestion approval proves atomic model pin succeeded",
+			a:    store.Approval{ToolName: "suggest_advanced_model", Status: "approved"},
+			want: map[string]any{"is_err": false},
+		},
+		{
 			name: "legacy notify record is completed success, not unknown",
 			a: store.Approval{
 				Status:     "approved",

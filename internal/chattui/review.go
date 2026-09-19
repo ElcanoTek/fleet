@@ -191,6 +191,7 @@ func (c *Client) loadApprovals(ctx context.Context, conversation string, approva
 		FrozenArgs  json.RawMessage `json:"frozen_args"`
 		ExpiresAt   int64           `json:"expires_at"`
 		Executing   bool            `json:"executing"`
+		Status      string          `json:"status"`
 	}
 	var body struct {
 		Approvals []approvalWire `json:"pending_approvals"`
@@ -201,7 +202,7 @@ func (c *Client) loadApprovals(ctx context.Context, conversation string, approva
 	}
 	var pending []pendingApproval
 	for _, a := range body.Resolved {
-		if a.Executing {
+		if a.Executing || (len(approvalID) > 0 && a.ID == approvalID[0] && (a.Status == "approved" || a.Status == "rejected")) {
 			body.Approvals = append(body.Approvals, a)
 		}
 	}
@@ -209,6 +210,7 @@ func (c *Client) loadApprovals(ctx context.Context, conversation string, approva
 		args, complete, present := parseFrozenArgs(a.FrozenArgs)
 		pending = append(pending, pendingApproval{
 			id:             a.ID,
+			settled:        a.Status == "approved" || a.Status == "rejected",
 			tool:           a.Tool,
 			summary:        approvalSummaryLine(a.Tool, a.Summary),
 			details:        a.Summary,

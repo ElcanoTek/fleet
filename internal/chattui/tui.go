@@ -97,6 +97,7 @@ type model struct {
 // pendingApproval is one staged approval card as the TUI tracks it: the id the
 // resolve endpoint needs, the tool name, and a one-line human summary.
 type pendingApproval struct {
+	settled        bool // selected one-shot replay; POST can only echo its recorded outcome
 	id             string
 	tool           string
 	summary        string

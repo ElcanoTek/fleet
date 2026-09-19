@@ -2110,13 +2110,51 @@ const ApprovalExecutingSentinel = "Approved — executing…"
 // may have committed remotely before the process died, so record uncertainty,
 // never failure or a retry: repeating it could duplicate a side effect.
 func (s *Store) RecoverStrandedApprovals(ctx context.Context) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE approvals SET result_text = $1
-		WHERE status = 'approved' AND is_err IS NULL AND result_text = $2`,
-		"Execution outcome unknown after server restart. Verify the external result before taking further action.", ApprovalExecutingSentinel)
+	const outcome = "Execution outcome unknown after server restart. Do not repeat this action automatically; verify the external result before taking further action."
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `UPDATE approvals SET result_text = $1
+		WHERE status = 'approved' AND is_err IS NULL AND result_text = $2
+		RETURNING id, conversation_id, tool_name, COALESCE(tool_call_id, '')`, outcome, ApprovalExecutingSentinel)
+	if err != nil {
+		return 0, err
+	}
+	var recovered []Approval
+	for rows.Next() {
+		var a Approval
+		if err := rows.Scan(&a.ID, &a.ConversationID, &a.ToolName, &a.ToolCallID); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		recovered = append(recovered, a)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	for _, a := range recovered {
+		callID := a.ToolCallID
+		if callID == "" {
+			callID = a.ID
+		}
+		payload, err := json.Marshal(map[string]any{"id": callID, "name": a.ToolName, "text": outcome, "is_err": true})
+		if err != nil {
+			return 0, err
+		}
+		if _, err := s.appendHistoryTx(ctx, tx, a.ConversationID, []agent.HistoryEntry{{Role: "tool", Type: "tool_result", Content: payload}}); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(recovered)), nil
 }
 
 // CreateApproval stages a pending approval and returns the row.

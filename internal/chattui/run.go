@@ -103,10 +103,12 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 			fmt.Fprintln(errOut, "fleet chat: refusing to approve: the card is not in the pending snapshot")
 			return 1
 		}
-		fmt.Fprintln(errOut, frozenApprovalReview(*found))
-		if reason := found.refuseApprove(); reason != "" {
-			fmt.Fprintln(errOut, "fleet chat: "+reason)
-			return 1
+		if !found.settled && !found.executing {
+			fmt.Fprintln(errOut, frozenApprovalReview(*found))
+			if reason := found.refuseApprove(); reason != "" {
+				fmt.Fprintln(errOut, "fleet chat: "+reason)
+				return 1
+			}
 		}
 	}
 	status, resultText, err := client.ResolveApproval(context.Background(), convID, approvalID, approve)

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -51,8 +53,27 @@ func TestListExecutingApprovalsExcludesCompletedBodies(t *testing.T) {
 	if recovered.Status != "approved" || recovered.IsErr.Valid || recovered.ResultText == sentinel {
 		t.Fatalf("must preserve consent and mark outcome unknown: %+v", recovered)
 	}
+	history, err := s.LoadHistory(ctx, conv.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("recovery history count=%d err=%v", len(history), err)
+	}
+	var result struct {
+		ID    string `json:"id"`
+		Text  string `json:"text"`
+		IsErr bool   `json:"is_err"`
+	}
+	if err := json.Unmarshal(history[0].Content, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "running" || !result.IsErr || !strings.Contains(result.Text, "Do not repeat") {
+		t.Fatalf("unknown outcome missing from model context: %+v", result)
+	}
 	if n, err := s.RecoverStrandedApprovals(ctx); err != nil || n != 0 {
 		t.Fatalf("recovery not idempotent: %d %v", n, err)
+	}
+	history, err = s.LoadHistory(ctx, conv.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("recovery duplicated history: %d %v", len(history), err)
 	}
 }
 

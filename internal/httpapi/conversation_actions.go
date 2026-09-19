@@ -182,8 +182,10 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 	if a.Status == "pending" {
 		card := approvalRequiredEvent(a, a.ArgsJSON, convID)
 		pending = append(pending, card)
-	} else if approvalOutcomeFlags(a)["executing"] == true {
-		resolved = append(resolved, map[string]any{"approval_id": a.ID, "tool": a.ToolName, "executing": true})
+	} else {
+		card := approvalClientState(a)
+		card["approval_id"], card["tool"] = a.ID, a.ToolName
+		resolved = append(resolved, card)
 	}
 	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
 }

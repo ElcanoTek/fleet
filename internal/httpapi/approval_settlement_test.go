@@ -52,6 +52,13 @@ func TestSingleApprovalReviewExcludesUnrelatedPendingBodies(t *testing.T) {
 			t.Fatal("requested card missing")
 		}
 	}
+	st.pending[0].Status = "approved"
+	st.pending[0].ResultText = "recorded result"
+	rec := httptest.NewRecorder()
+	s.handleConversationGet(rec, httptest.NewRequest("GET", "/conversations/c?approval_id=small", nil), "u", "c", &store.Conversation{ID: "c"})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"result_text":"recorded result"`) {
+		t.Fatalf("settled selector lost outcome: %d %s", rec.Code, rec.Body.String())
+	}
 }
 func (s *settlementStore) ListResolvedApprovals(context.Context, string, string) ([]store.Approval, error) {
 	return s.resolved, nil

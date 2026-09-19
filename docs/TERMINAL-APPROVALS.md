@@ -20,6 +20,11 @@ retrieval. Startup recovery marks interrupted approval executions as outcome
 unknown without retrying them. Model suggestions freeze the recommended slug at
 staging; changing the workspace advanced tier cannot change an existing card's
 target. Legacy suggestions lacking that target must be dismissed and replaced.
+One-shot retries can retrieve a previously settled result after a lost response.
+Restart recovery also records the unknown outcome in conversation history so the
+next model turn is told not to repeat the action automatically. Historically
+approved model suggestions retain their successful outcome because their pin and
+approval were committed atomically.
 
 ## Review and resolve
 

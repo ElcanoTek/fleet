@@ -1613,6 +1613,11 @@ func approvalOutcomeFlags(a *store.Approval) map[string]any {
 	if a.IsErr.Valid {
 		return map[string]any{"is_err": a.IsErr.Bool}
 	}
+	if a.ToolName == tools.SuggestAdvancedModelToolName {
+		// Even before is_err existed, approval and the model pin committed in
+		// one transaction. An approved suggestion proves successful execution.
+		return map[string]any{"is_err": false}
+	}
 	if a.ResultText == approvalExecutingSentinel {
 		return map[string]any{"executing": true}
 	}

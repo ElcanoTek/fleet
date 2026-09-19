@@ -100,6 +100,42 @@ func TestCLIApprovalReviewsEmailBeforePost(t *testing.T) {
 	}
 }
 
+func TestCLIApprovalRetriesSettledOutcomeAfterLostResponse(t *testing.T) {
+	var committed bool
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			if committed {
+				fmt.Fprint(w, `{"resolved_approvals":[{"approval_id":"a","tool":"bash","status":"approved","is_err":false}]}`)
+			} else {
+				fmt.Fprint(w, `{"pending_approvals":[{"approval_id":"a","tool":"bash","frozen_args":{"complete":true,"args":{"command":"echo hi"}}}]}`)
+			}
+			return
+		}
+		posts++
+		if !committed {
+			committed = true
+			http.Error(w, "response lost after commit", http.StatusBadGateway)
+			return
+		}
+		fmt.Fprint(w, `{"status":"approved","result_text":"recorded result","is_err":false}`)
+	}))
+	defer srv.Close()
+	client := NewClient(Config{ServerURL: srv.URL})
+	var out, errOut bytes.Buffer
+	if code := runResolveApproval(client, "c", "a", true, &out, &errOut); code != 1 {
+		t.Fatalf("first response should fail: %d", code)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := runResolveApproval(client, "c", "a", true, &out, &errOut); code != 0 {
+		t.Fatalf("recorded result was not retrievable: %d %s", code, errOut.String())
+	}
+	if posts != 2 || !strings.Contains(out.String(), "recorded result") || strings.Contains(errOut.String(), "INCOMPLETE") {
+		t.Fatalf("replay posts=%d stdout=%q stderr=%q", posts, out.String(), errOut.String())
+	}
+}
+
 func TestEmailReviewRefusesOverflowedBody(t *testing.T) {
 	incomplete := frozenWire(emailFrozenArgs(), false)
 	text := frozenApprovalReview(pendingApproval{tool: "mcp_sendgrid_send_email", frozenPresent: true, frozenComplete: false, frozenArgs: emailFrozenArgs()})
