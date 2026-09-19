@@ -2085,7 +2085,7 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 // completed cards or their argument bodies. Filter before any display limit so
 // an older in-flight execution cannot be hidden by newer completed approvals.
 func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, sentinel string) ([]Approval, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name FROM approvals
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_name, COALESCE(tool_call_id, ''), COALESCE(mcp_server, ''), COALESCE(mcp_account, '') FROM approvals
 		WHERE conversation_id = $1 AND user_email = $2 AND status = 'approved'
 		AND is_err IS NULL AND result_text = $3 ORDER BY created_at`, convID, userEmail, sentinel)
 	if err != nil {
@@ -2095,7 +2095,7 @@ func (s *Store) ListExecutingApprovals(ctx context.Context, userEmail, convID, s
 	var out []Approval
 	for rows.Next() {
 		a := Approval{Status: "approved", ResultText: sentinel}
-		if err := rows.Scan(&a.ID, &a.ToolName); err != nil {
+		if err := rows.Scan(&a.ID, &a.ToolName, &a.ToolCallID, &a.MCPServer, &a.MCPAccount); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

@@ -1571,6 +1571,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	resultText, isErr = governApprovalResult(execCtx, approval, resultText, isErr)
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
+		s.approvalPersistenceFailures.Store(approvalID, true)
 		writeJSON(w, map[string]any{
 			"status": "approved", "execution_unknown": true,
 			"result_text": "The action was attempted but its outcome could not be recorded. Verify the external result before taking further action.",
@@ -1633,16 +1634,26 @@ func approvalOutcomeFlags(a *store.Approval) map[string]any {
 	return map[string]any{"execution_unknown": true}
 }
 
+func (s *Server) approvalOutcomeFlags(a *store.Approval) map[string]any {
+	if _, failed := s.approvalPersistenceFailures.Load(a.ID); failed && !a.IsErr.Valid && a.ResultText == approvalExecutingSentinel {
+		return map[string]any{"execution_unknown": true}
+	}
+	return approvalOutcomeFlags(a)
+}
+
 // approvalClientState is the idempotent POST body: consent plus the
 // outcome flags. Used by the already-resolved early return and by
 // writeResolvedApprovalState so a replay cannot drop is_err.
-func approvalClientState(a *store.Approval) map[string]any {
+func (s *Server) approvalClientState(a *store.Approval) map[string]any {
 	out := map[string]any{
 		"status":      a.Status,
 		"result_text": a.ResultText,
 	}
-	for k, v := range approvalOutcomeFlags(a) {
+	for k, v := range s.approvalOutcomeFlags(a) {
 		out[k] = v
+	}
+	if out["execution_unknown"] == true && a.ResultText == approvalExecutingSentinel {
+		out["result_text"] = "Execution outcome could not be recorded. Verify the external result before taking further action."
 	}
 	return out
 }
@@ -1656,7 +1667,7 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "approval already resolved", http.StatusConflict)
 		return
 	}
-	state := approvalClientState(latest)
+	state := s.approvalClientState(latest)
 	if latest.ToolName == "suggest_advanced_model" && latest.Status == "approved" {
 		conv, err := s.store.Get(r.Context(), user, latest.ConversationID)
 		if err != nil || conv == nil {

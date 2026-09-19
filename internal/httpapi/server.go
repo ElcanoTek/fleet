@@ -27,11 +27,14 @@ import (
 // Server wires the agent Manager + store + shared-secret auth into an
 // http.Handler that Next.js talks to.
 type Server struct {
-	cfg         *config.Config
-	agent       turnEngine
-	store       chatStore
-	sharedToken string
-	rate        *ratelimit.Limiter
+	// A failed durable outcome write must not masquerade as live execution on
+	// retry. Startup recovers the persisted sentinel after this process exits.
+	approvalPersistenceFailures sync.Map
+	cfg                         *config.Config
+	agent                       turnEngine
+	store                       chatStore
+	sharedToken                 string
+	rate                        *ratelimit.Limiter
 	// concurrent caps simultaneous in-flight turns per user. nil disables it
 	// (rate limiting off, or FLEET_CHAT_RATE_LIMIT_CONCURRENT=0).
 	concurrent *ratelimit.ConcurrencyLimiter

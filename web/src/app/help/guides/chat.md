@@ -44,6 +44,8 @@ escaped JSON; the one-line summary is not the review record. If the server does
 not provide a complete snapshot (or the arguments exceed the 1 MiB review cap),
 the terminal refuses to approve. Control characters in reviews, results, and
 errors are escaped so they cannot drive the terminal.
+Approval-result stdout redirected to a pipe or file preserves the raw result for
+automation; direct terminal output remains escaped.
 
 Add `session` to a decision to apply it to future calls of that tool in the same
 conversation, or `pattern arg=glob` to restrict that policy to matching arguments.

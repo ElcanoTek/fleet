@@ -41,8 +41,9 @@ type Client struct {
 	// new conversation (empty convID): resuming an existing thread must leave the
 	// conversation's stored model untouched (an empty request model means "no
 	// opinion, keep what's stored" server-side).
-	defaultModel       string
-	conversationModels map[string]string
+	defaultModel             string
+	conversationModels       map[string]string
+	serverModelConversations map[string]bool
 }
 
 // NewClient builds a Client. The HTTP client has NO overall timeout — a turn can
@@ -71,7 +72,7 @@ func (c *Client) EffectiveModel() string {
 // Accepting a suggestion hands this conversation back to its stored pin until
 // /model explicitly overrides it again. Workspace defaults apply to new threads.
 func (c *Client) turnModel(convID string) string {
-	if model := c.conversationModels[convID]; convID != "" && model != "" {
+	if convID != "" && c.serverModelConversations[convID] {
 		return ""
 	}
 	if strings.TrimSpace(c.cfg.Model) != "" {

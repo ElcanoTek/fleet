@@ -80,6 +80,9 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		resolved, err = s.store.ListExecutingApprovals(r.Context(), user, id, approvalExecutingSentinel)
 	} else {
 		resolved, err = s.store.ListResolvedApprovals(r.Context(), user, id)
+		if err == nil {
+			resolved, err = s.includeExecutingApprovals(r.Context(), user, id, resolved)
+		}
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -88,7 +91,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	resolvedCards := make([]map[string]any, 0, len(resolved))
 	for _, a := range resolved {
 		if settlementOnly {
-			if approvalOutcomeFlags(&a)["executing"] == true {
+			if s.approvalOutcomeFlags(&a)["executing"] == true {
 				resolvedCards = append(resolvedCards, map[string]any{
 					"approval_id": a.ID, "tool": a.ToolName, "executing": true,
 				})
@@ -111,7 +114,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		// Same executing / is_err / execution_unknown keys as the approval
 		// POST so a reload (and the TUI's resolved_approvals ingest) cannot
 		// green-stamp an in-flight sentinel or a failed run.
-		for k, v := range approvalOutcomeFlags(&a) {
+		for k, v := range s.approvalClientState(&a) {
 			card[k] = v
 		}
 		resolvedCards = append(resolvedCards, card)
@@ -191,11 +194,28 @@ func (s *Server) handleConversationApprovalGet(w http.ResponseWriter, r *http.Re
 		card := approvalRequiredEvent(a, a.ArgsJSON, convID)
 		pending = append(pending, card)
 	} else {
-		card := approvalClientState(a)
+		card := s.approvalClientState(a)
 		card["approval_id"], card["tool"] = a.ID, a.ToolName
 		resolved = append(resolved, card)
 	}
 	writeJSON(w, map[string]any{"pending_approvals": pending, "resolved_approvals": resolved})
+}
+
+func (s *Server) includeExecutingApprovals(ctx context.Context, user, convID string, resolved []store.Approval) ([]store.Approval, error) {
+	executing, err := s.store.ListExecutingApprovals(ctx, user, convID, approvalExecutingSentinel)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(resolved))
+	for _, a := range resolved {
+		seen[a.ID] = true
+	}
+	for _, a := range executing {
+		if !seen[a.ID] {
+			resolved = append(resolved, a)
+		}
+	}
+	return resolved, nil
 }
 
 // handleConversationDelete serves DELETE /conversations/{id}.

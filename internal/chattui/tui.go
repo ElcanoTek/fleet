@@ -319,6 +319,7 @@ func (m *model) runSlash(text string) tea.Cmd {
 		} else {
 			m.client.cfg.Model = fields[1]
 			delete(m.client.conversationModels, m.convID)
+			delete(m.client.serverModelConversations, m.convID)
 			m.history = append(m.history, styleDim.Render("— model set to "+fields[1]+" (applies to the next turn) —"))
 		}
 		m.refresh()
@@ -409,6 +410,12 @@ func (m *model) applyEvent(ev Event) {
 	case "conversation":
 		if id := ev.Str("id"); id != "" {
 			m.convID = id
+			if slug := ev.Str("model"); slug != "" {
+				if m.client.conversationModels == nil {
+					m.client.conversationModels = make(map[string]string)
+				}
+				m.client.conversationModels[id] = slug
+			}
 		}
 	case "text.delta":
 		m.assistant.WriteString(ev.Str("text"))
@@ -531,6 +538,10 @@ func (m *model) finishApproval(msg approvalResolvedMsg) {
 			m.client.conversationModels = make(map[string]string)
 		}
 		m.client.conversationModels[m.convID] = slug
+		if m.client.serverModelConversations == nil {
+			m.client.serverModelConversations = make(map[string]bool)
+		}
+		m.client.serverModelConversations[m.convID] = true
 	}
 	block := styleToolOK.Render("✓ " + msg.tool + " approved")
 	if t := strings.TrimSpace(msg.resultText); t != "" {

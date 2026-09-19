@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"golang.org/x/term"
 )
 
 // Run is the `fleet chat` entry point (#457). It resolves the connection config
@@ -121,8 +122,12 @@ func runResolveApproval(client *Client, convID, approvalID string, approve bool,
 		verb = "approved"
 	}
 	fmt.Fprintf(out, "%s (%s)\n", verb, status)
-	if t := strings.TrimSpace(resultText); t != "" {
-		fmt.Fprintln(out, sanitizeTerminalText(t))
+	if strings.TrimSpace(resultText) != "" {
+		t := resultText
+		if fd, ok := out.(interface{ Fd() uintptr }); ok && term.IsTerminal(int(fd.Fd())) {
+			t = sanitizeTerminalText(t)
+		}
+		fmt.Fprintln(out, t)
 	}
 	return 0
 }

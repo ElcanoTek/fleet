@@ -210,7 +210,7 @@ func TestFinishApprovalSanitizesResultAndErrors(t *testing.T) {
 	}
 }
 
-func TestCLISanitizesApprovalResult(t *testing.T) {
+func TestCLIPreservesRedirectedApprovalResult(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			_ = json.NewEncoder(w).Encode(map[string]any{"pending_approvals": []any{map[string]any{"approval_id": "a", "tool": "bash", "frozen_args": map[string]any{"complete": true, "args": map[string]any{"command": "ls"}}}}})
@@ -223,7 +223,7 @@ func TestCLISanitizesApprovalResult(t *testing.T) {
 	if code := runResolveApproval(NewClient(Config{ServerURL: srv.URL}), "c", "a", true, &out, &errOut); code != 0 {
 		t.Fatal(code, errOut.String())
 	}
-	if strings.ContainsAny(out.String(), "\x1b") {
+	if !strings.Contains(out.String(), "done\x1b]52;c;evil") {
 		t.Fatal(out.String())
 	}
 }

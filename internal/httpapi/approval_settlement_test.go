@@ -71,6 +71,8 @@ func TestSingleApprovalReviewExcludesUnrelatedPendingBodies(t *testing.T) {
 type failedOutcomeStore struct{ *expiredClickFakeStore }
 
 func (s *failedOutcomeStore) ClaimApproval(context.Context, string, string, string, string) (bool, error) {
+	s.approval.Status = "approved"
+	s.approval.ResultText = approvalExecutingSentinel
 	return true, nil
 }
 func (s *failedOutcomeStore) SetApprovalResult(context.Context, string, string, string, bool) error {
@@ -89,6 +91,31 @@ func TestApprovalPersistenceFailureReportsUnknownOutcome(t *testing.T) {
 	}
 	if body["execution_unknown"] != true || body["is_err"] != nil {
 		t.Fatalf("invented durable success: %s", rec.Body.String())
+	}
+	retry := httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/conversations/c/approvals/a", strings.NewReader(`{"approved":true}`))
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u"))
+	s.handleApproval(retry, req, "c", "a")
+	if !strings.Contains(retry.Body.String(), `"execution_unknown":true`) || strings.Contains(retry.Body.String(), `"executing":true`) {
+		t.Fatalf("retry regressed to running: %s", retry.Body.String())
+	}
+	get := httptest.NewRecorder()
+	s.handleConversationApprovalGet(get, req, "u", "c", "a")
+	if !strings.Contains(get.Body.String(), `"execution_unknown":true`) {
+		t.Fatalf("reload lost unknown outcome: %s", get.Body.String())
+	}
+}
+
+func TestWebReloadIncludesExecutingRowsOutsideResolvedLimit(t *testing.T) {
+	st := &settlementStore{}
+	for range 100 {
+		st.resolved = append(st.resolved, store.Approval{ID: "completed", Status: "approved"})
+	}
+	s := &Server{store: st}
+	rec := httptest.NewRecorder()
+	s.handleConversationGet(rec, httptest.NewRequest("GET", "/conversations/c?omit_history=1", nil), "u", "c", &store.Conversation{ID: "c"})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"approval_id":"running"`) || !strings.Contains(rec.Body.String(), `"executing":true`) {
+		t.Fatalf("web reload lost running card: %d %s", rec.Code, rec.Body.String())
 	}
 }
 func (s *settlementStore) ListResolvedApprovals(context.Context, string, string) ([]store.Approval, error) {

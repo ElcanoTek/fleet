@@ -44,6 +44,11 @@ emit a replacement so a rolled-back draft cannot remain visible after a retry.
 Normal completion always replaces visible text, including direct finalize-hook
 drafts. Web supersession, like terminal supersession, retains executing cards
 and their result-retrieval control.
+Failed outcome writes remain unknown on retries in the same process; web reloads
+retain executing cards outside the completed-card display limit. Conversation
+events refresh the terminal's model label without changing request overrides.
+Approval results are escaped on a real terminal; redirected stdout preserves the
+raw result for scripts.
 
 ## Review and resolve
 

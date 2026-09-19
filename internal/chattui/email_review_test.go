@@ -235,6 +235,13 @@ func TestFinishApprovalPinsSuggestedModel(t *testing.T) {
 	if got := m.client.turnModel(m.convID); got != "" {
 		t.Fatalf("cached pin would overwrite another client's selection: %q", got)
 	}
+	m.applyEvent(Event{Name: "conversation", Data: map[string]any{"id": m.convID, "model": "changed/elsewhere"}})
+	if got := m.client.displayModel(m.convID); got != "changed/elsewhere" {
+		t.Fatalf("display ignored authoritative model: %q", got)
+	}
+	if got := m.client.turnModel(m.convID); got != "" {
+		t.Fatalf("display event became a request override: %q", got)
+	}
 	m.runSlash("/model explicit/new")
 	if got := m.client.turnModel(m.convID); got != "explicit/new" {
 		t.Fatalf("explicit operator override lost: %q", got)
