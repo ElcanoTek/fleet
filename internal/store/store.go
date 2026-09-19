@@ -2422,12 +2422,35 @@ func (s *Store) ClaimExpiredApproval(ctx context.Context, userEmail, approvalID,
 // written together so an idempotent retry cannot echo the claim sentinel
 // (or a result without its error bit).
 func (s *Store) SetApprovalResult(ctx context.Context, userEmail, approvalID, resultText string, isErr bool) error {
-	_, err := s.db.ExecContext(ctx,
+	// The next model turn must see the same outcome as the approval card.
+	// Commit both together so a crash cannot leave APPROVAL_REQUIRED as the
+	// only model-visible result of an action that already executed.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var convID, tool, callID string
+	err = tx.QueryRowContext(ctx,
 		`UPDATE approvals SET result_text = $1, is_err = $2
-		 WHERE id = $3 AND user_email = $4 AND status <> 'pending'`,
+		 WHERE id = $3 AND user_email = $4 AND status <> 'pending'
+		 RETURNING conversation_id, tool_name, COALESCE(NULLIF(tool_call_id, ''), id)`,
 		resultText, isErr, approvalID, userEmail,
-	)
-	return err
+	).Scan(&convID, &tool, &callID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"id": callID, "name": tool, "text": resultText, "is_err": isErr})
+	if err != nil {
+		return err
+	}
+	if _, err := s.appendHistoryTx(ctx, tx, convID, []agent.HistoryEntry{{Role: "tool", Type: "tool_result", Content: payload}}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LatestApprovalByTool returns the most recent approval (any status)

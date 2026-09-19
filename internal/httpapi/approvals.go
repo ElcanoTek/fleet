@@ -1475,7 +1475,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		}
 		if claimed {
 			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-				resolutionCallID(approval), resultText, false)
+				resolutionCallID(approval), resultText)
 			writeJSON(w, map[string]any{"status": "rejected", "result_text": resultText})
 			return
 		}
@@ -1509,7 +1509,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// original tool_call id so the chip in the UI updates instead
 		// of orphaning a second result row keyed off the approval id.
 		appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-			resolutionCallID(approval), historyMsg, false)
+			resolutionCallID(approval), historyMsg)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 		writeJSON(w, map[string]any{"status": "rejected"})
 		return
@@ -1572,11 +1572,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
 	}
-	// Write the real tool_result into history so the next turn's model
-	// sees what happened — and so the existing chip in the UI updates
-	// from "APPROVAL_REQUIRED..." to the real outcome on reload.
-	appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-		resolutionCallID(approval), resultText, isErr)
+	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 
 	writeJSON(w, map[string]any{
@@ -1616,6 +1612,9 @@ func approvalOutcomeFlags(a *store.Approval) map[string]any {
 	if a.ToolName == tools.SuggestAdvancedModelToolName {
 		// Even before is_err existed, approval and the model pin committed in
 		// one transaction. An approved suggestion proves successful execution.
+		return map[string]any{"is_err": false}
+	}
+	if a.ToolName == previewEmailToolName && a.ResultText == "Preview dismissed by user. No email was sent." {
 		return map[string]any{"is_err": false}
 	}
 	if a.ResultText == approvalExecutingSentinel {
@@ -1700,7 +1699,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 			return
 		}
 		appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
-			"User dismissed the model-switch suggestion. Continue working with the current model.", false)
+			"User dismissed the model-switch suggestion. Continue working with the current model.")
 		writeJSON(w, map[string]any{
 			"status": "rejected",
 			"action": "dismiss",
@@ -1732,7 +1731,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		return
 	}
 	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
-		resultText, false)
+		resultText)
 
 	action := req.Action
 	if action == "" {
@@ -1835,7 +1834,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 			continue
 		}
 		appendToolResultToHistory(ctx, s.store, a.ConversationID, a.ToolName,
-			resolutionCallID(&a), resultText, false)
+			resolutionCallID(&a), resultText)
 		denied++
 	}
 	return denied, nil
@@ -2362,7 +2361,7 @@ func (s *Server) orchestratorTaskLink() string {
 
 // appendToolResultToHistory writes a synthetic tool_result row so the
 // conversation transcript reflects the outcome of the (async) approval.
-func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string, isErr bool) {
+func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string) {
 	entry := agent.HistoryEntry{
 		Role: "tool",
 		Type: "tool_result",
@@ -2371,7 +2370,7 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 		"id":     callID,
 		"name":   toolName,
 		"text":   text,
-		"is_err": isErr,
+		"is_err": false,
 	})
 	entry.Content = payload
 	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {

@@ -69,6 +69,16 @@ func TestApprovalOutcomeFlags(t *testing.T) {
 			want: map[string]any{"is_err": false},
 		},
 		{
+			name: "legacy completed preview dismissal is known success",
+			a:    store.Approval{ToolName: "preview_email", Status: "approved", ResultText: "Preview dismissed by user. No email was sent."},
+			want: map[string]any{"is_err": false},
+		},
+		{
+			name: "legacy preview without fixed result remains unknown",
+			a:    store.Approval{ToolName: "preview_email", Status: "approved"},
+			want: map[string]any{"execution_unknown": true},
+		},
+		{
 			name: "legacy notify record is completed success, not unknown",
 			a: store.Approval{
 				Status:     "approved",

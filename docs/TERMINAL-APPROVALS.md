@@ -25,6 +25,10 @@ Restart recovery also records the unknown outcome in conversation history so the
 next model turn is told not to repeat the action automatically. Historically
 approved model suggestions retain their successful outcome because their pin and
 approval were committed atomically.
+Completed execution outcomes and their conversation-history tool results also
+commit atomically. Legacy preview dismissals with the exact fixed no-send result
+remain known successes. One-shot stdout is buffered until the turn ends so only
+the authoritative reply is printed; progress continues on stderr.
 
 ## Review and resolve
 

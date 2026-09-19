@@ -14,6 +14,8 @@ onto a schedule.
 On the server, `fleet chat --email you@example.com` opens terminal chat. New
 threads use the workspace default model by default; `--model` or `/model` selects
 another model. `--message "..."` and `--no-tui` support scripts and piped input.
+One-shot stdout is buffered until the turn ends so it contains the final reply
+instead of superseded drafts; progress and approval notices go to stderr.
 One-shot mode prints the conversation ID to stderr; `--conversation <id>` resumes
 its model context and loads pending approvals in interactive mode.
 Accepting a model suggestion changes only that conversation. `/new` returns to

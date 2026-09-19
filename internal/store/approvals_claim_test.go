@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -124,6 +125,20 @@ func TestSetApprovalResult_UpdatesClaimedRow(t *testing.T) {
 	}
 	if !got.IsErr.Valid || got.IsErr.Bool {
 		t.Fatalf("is_err = %+v, want valid false (success)", got.IsErr)
+	}
+	history, err := s.LoadHistory(ctx, conv.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("outcome history missing or duplicated: %d %v", len(history), err)
+	}
+	var result struct {
+		ID   string `json:"id"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(history[0].Content, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "call_1" || result.Text != "sent ok" {
+		t.Fatalf("wrong outcome breadcrumb: %+v", result)
 	}
 
 	if err := s.SetApprovalResult(ctx, "alice@example.com", a.ID, "send failed: boom", true); err != nil {

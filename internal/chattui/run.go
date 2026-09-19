@@ -25,7 +25,7 @@ func Run(argv []string) int {
 	fs.StringVar(&f.Model, "model", "", "model slug for the turn(s) (default: the conversation/server default)")
 	fs.StringVar(&f.Persona, "persona", "", "persona for a NEW conversation")
 	conv := fs.String("conversation", "", "resume an existing conversation by id")
-	msg := fs.String("message", "", "non-interactive: send this one message, stream the reply to stdout, exit")
+	msg := fs.String("message", "", "non-interactive: send one message, print the buffered final reply to stdout when the turn ends, exit")
 	noTUI := fs.Bool("no-tui", false, "force non-interactive mode (read the message from --message or stdin)")
 	approve := fs.String("approve", "", "non-interactive: approve this staged approval id (needs --conversation), print the outcome, exit")
 	deny := fs.String("deny", "", "non-interactive: deny this staged approval id (needs --conversation), exit")
@@ -150,7 +150,8 @@ func runInteractive(client *Client, cfg Config, convID string) int {
 	return 0
 }
 
-// runOneShot sends a single turn and streams the reply as plain text to out. The
+// runOneShot buffers one turn's authoritative reply and writes plain text to out
+// when the turn ends, so text.replace can retract superseded drafts. The
 // message is --message or, if empty, all of stdin. Tool-call/▸ progress, staged
 // approval notices, and the conversation id go to errOut so a pipe capturing
 // stdout gets only the agent's prose. This is the scriptable/CI path — it
