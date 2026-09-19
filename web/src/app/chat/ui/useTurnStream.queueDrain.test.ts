@@ -302,6 +302,33 @@ describe("followQueueDrain", () => {
     expect(h.loadConversationCalls).toEqual([]);
   });
 
+  it("text.replace retracts a superseded pre-audit draft", async () => {
+    const h = makeHarness({
+      initial: answeredTranscript(),
+      persisted: drainedHistory(),
+      queue: [[queuedRow("q1", "running")], []],
+      inflight: [{ inflight: true, turn_id: "t2" }],
+      streamBodies: [
+        () =>
+          closedStream([
+            sse(1, "turn.started", { turn_id: "t2", input_id: "q1", queued: true }),
+            sse(2, "user.message", { text: "keep it clear and concise" }),
+            sse(3, "text.delta", { text: "DRAFT_SHOULD_VANISH" }),
+            sse(4, "text.delta", { text: "Rewritten for the client." }),
+            sse(5, "text.replace", { text: "Rewritten for the client." }),
+            sse(6, "turn.completed", { cost_usd: 0.02, duration_ms: 20 }),
+          ]),
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.followQueueDrain(CONV);
+
+    const msgs = h.store[CONV];
+    expect(msgs[3].content).toBe("Rewritten for the client.");
+    expect(msgs[3].content).not.toContain("DRAFT_SHOULD_VANISH");
+  });
+
   it("chains to the next queued row after the first one finishes", async () => {
     const h = makeHarness({
       initial: answeredTranscript(),

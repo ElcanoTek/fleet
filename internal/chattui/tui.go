@@ -406,6 +406,9 @@ func (m *model) applyEvent(ev Event) {
 		}
 	case "text.delta":
 		m.assistant.WriteString(ev.Str("text"))
+	case "text.replace":
+		m.assistant.Reset()
+		m.assistant.WriteString(ev.Str("text"))
 	case "reasoning.delta":
 		m.reasoning.WriteString(ev.Str("text"))
 	case "tool.call":

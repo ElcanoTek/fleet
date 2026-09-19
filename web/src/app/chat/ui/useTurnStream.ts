@@ -741,6 +741,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
 
+    if (event.event === "text.replace") {
+      // Authoritative replacement for the assistant's visible text. The
+      // runtime emits this at finish so a pre-audit draft concatenated from
+      // earlier text.delta events is replaced by the persisted final answer.
+      const p = payload as { text?: string };
+      if (!ctx.hasStartedStreaming) {
+        ctx.hasStartedStreaming = true;
+        startThinkingCrossfade(ctx.assistantId);
+      }
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
+        ...clearRetryNotice(m),
+        content: p.text ?? "",
+        state: "streaming",
+      }));
+      return;
+    }
+
     if (event.event === "text.delta") {
       const p = payload as { text?: string };
       if (!p.text) return;

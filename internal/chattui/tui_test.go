@@ -27,9 +27,15 @@ func TestModelTurnLifecycle(t *testing.T) {
 	m.streaming = true
 	m.applyEvent(Event{Name: "conversation", Data: map[string]any{"id": "conv-7"}})
 	m.applyEvent(Event{Name: "tool.call", Data: map[string]any{"name": "bash"}})
-	m.applyEvent(Event{Name: "text.delta", Data: map[string]any{"text": "the answer is **42**"}})
+	m.applyEvent(Event{Name: "text.delta", Data: map[string]any{"text": "draft I will now send"}})
 	if m.convID != "conv-7" {
 		t.Errorf("convID = %q, want conv-7", m.convID)
+	}
+
+	m.applyEvent(Event{Name: "text.delta", Data: map[string]any{"text": "the answer is **42**"}})
+	m.applyEvent(Event{Name: "text.replace", Data: map[string]any{"text": "the answer is **42**"}})
+	if got := m.assistant.String(); got != "the answer is **42**" {
+		t.Fatalf("text.replace left superseded draft in the live buffer: %q", got)
 	}
 
 	m.finishTurn(turnDoneMsg{convID: "conv-7"})
@@ -42,6 +48,9 @@ func TestModelTurnLifecycle(t *testing.T) {
 	}
 	if !strings.Contains(joined, "42") {
 		t.Errorf("agent reply missing from transcript:\n%s", joined)
+	}
+	if strings.Contains(joined, "draft I will now send") {
+		t.Errorf("committed transcript kept the retracted draft:\n%s", joined)
 	}
 
 	// View must render without panicking now that we're sized.

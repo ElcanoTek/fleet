@@ -237,3 +237,25 @@ func TestCardPreviewsTruncateOnRuneBoundaries(t *testing.T) {
 		t.Errorf("content over the cap should be flagged: %v", email["content_overflow"])
 	}
 }
+
+// Terminal email review marshals this summary. Omitting the frozen attachment
+// arrays hid workspace files that runStagedTool still sends from ArgsJSON.
+func TestSummarizeSendEmailInputIncludesFrozenAttachments(t *testing.T) {
+	raw := `{"to_email":"primary@example.com","cc_emails":["copy@example.com"],"bcc_emails":["hidden@example.com"],"subject":"Q","content":"hello","content_type":"text/plain","attachments":[{"path":"report.csv"}],"inline_attachments":[{"path":"chart.png","cid":"logo"}]}`
+	got := summarizeSendEmailInput("mcp_sendgrid_send_email", raw, "")
+	if got["to"] != "primary@example.com" {
+		t.Errorf("to = %v", got["to"])
+	}
+	atts, _ := json.Marshal(got["attachments"])
+	if !strings.Contains(string(atts), "report.csv") {
+		t.Errorf("attachments missing report.csv: %s", atts)
+	}
+	inline, _ := json.Marshal(got["inline_attachments"])
+	if !strings.Contains(string(inline), "chart.png") || !strings.Contains(string(inline), "logo") {
+		t.Errorf("inline_attachments missing chart/cid: %s", inline)
+	}
+	bare := summarizeSendEmailInput("send_email", `{"to_email":"a@b.com","content":"hi"}`, "")
+	if _, ok := bare["attachments"]; ok {
+		t.Error("absent attachments key should stay absent")
+	}
+}

@@ -14,8 +14,9 @@ import (
 )
 
 // Event is one parsed SSE frame from POST /chat. Name is the `event:` field
-// (conversation, turn.started, reasoning.delta, text.delta, tool.call,
-// tool.result, turn.completed, …); Data is the decoded JSON `data:` object.
+// (conversation, turn.started, reasoning.delta, text.delta, text.replace,
+// tool.call, tool.result, turn.completed, …); Data is the decoded JSON
+// `data:` object.
 type Event struct {
 	ID   string
 	Name string

@@ -667,6 +667,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 					return Result{}, err
 				}
 			}
+			// Live clients appended every round's text.delta. Replace with the
+			// same finalText completeRun persists so a reload and a live view
+			// agree. Skip an empty replacement: abort/cap paths keep the
+			// partial stream, and a blank event would wipe it.
+			if finalText != "" {
+				sink.replaceVisibleText(finalText)
+			}
 			res, cerr := completeRun(ctx, runCompletion{
 				engine:            eng,
 				config:            cfg,
@@ -698,7 +705,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// input, then inject the enforcement nudges and loop. The fallback-swap
 		// state carries forward (cutlass nextRoundMessages). The transcript
 		// carry is what lets the next round CONTINUE the work instead of
-		// restarting it — see carryRoundMessages.
+		// restarting it — see carryRoundMessages. Live clients still hold
+		// this round's text.delta events; completeRun emits text.replace with
+		// the authoritative final answer so they drop the superseded draft
+		// without discarding abort-path transcripts.
 		messages = append(messages, carryRoundMessages(finalResult)...)
 		messages, err = appendEnforcementMessages(messages, enforcementMsgs, deps.Observer, observerBoundary)
 		if err != nil {

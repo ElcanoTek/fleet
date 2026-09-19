@@ -117,6 +117,28 @@ func TestRunOneShot_StreamsTextToStdout(t *testing.T) {
 	}
 }
 
+func TestRunOneShot_TextReplaceDropsSupersededDraft(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: conversation\ndata: {\"id\":\"c\"}\n\n")
+		io.WriteString(w, "event: text.delta\ndata: {\"text\":\"DRAFT_SHOULD_VANISH\"}\n\n")
+		io.WriteString(w, "event: text.delta\ndata: {\"text\":\"final answer\"}\n\n")
+		io.WriteString(w, "event: text.replace\ndata: {\"text\":\"final answer\"}\n\n")
+		io.WriteString(w, "event: turn.completed\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+	var out, errOut bytes.Buffer
+	if code := runOneShot(NewClient(Config{ServerURL: srv.URL}), "", "go", strings.NewReader(""), &out, &errOut); code != 0 {
+		t.Fatal(code, errOut.String())
+	}
+	if strings.Contains(out.String(), "DRAFT_SHOULD_VANISH") {
+		t.Fatalf("one-shot stdout kept the retracted draft: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "final answer") {
+		t.Fatalf("one-shot stdout missing final answer: %q", out.String())
+	}
+}
+
 func TestClientStream_403ErrorRedactsToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)

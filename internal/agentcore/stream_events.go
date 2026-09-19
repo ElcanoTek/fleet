@@ -85,6 +85,13 @@ const (
 // Informational — the hard stop is still budgetGuardedStep at the ceiling.
 const evtBudgetWindDown = "fleet.budget_winddown"
 
+// evtTextReplace tells live clients that the assistant's visible text is now
+// exactly payload["text"]. Enforcement rounds stream every draft via
+// text.delta; completeRun persists only the last completed response, and
+// emits this so the live stream matches a reload. Abort/round-cap paths do
+// not emit it, so the partial transcript stays.
+const evtTextReplace = "text.replace"
+
 // Budget wind-down event payload fields.
 const (
 	evtFieldSpentCostUSD = "spent_cost_usd"
@@ -320,6 +327,18 @@ func (s *streamSink) rollbackTo(m sinkMark) {
 	s.toolEvents = m.toolEvents
 	s.failedToolResults = m.failedToolResults
 	clear(s.reasoningBufs)
+}
+
+// replaceVisibleText tells live clients the assistant's visible text is now
+// exactly `text`. Enforcement rounds stream every draft via text.delta; the
+// finish path persists only the last completed response, so this event keeps
+// the Observer/SSE view aligned with a reload. The sink's own accumulator is
+// left alone so abort/round-cap paths still return the partial transcript.
+func (s *streamSink) replaceVisibleText(text string) {
+	if s == nil {
+		return
+	}
+	s.emit(evtTextReplace, map[string]any{evtFieldText: text})
 }
 
 // snapshot returns a copy of the accumulated entries plus the accumulated final

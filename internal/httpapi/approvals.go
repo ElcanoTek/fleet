@@ -1026,6 +1026,10 @@ func summarizeBashInput(toolName, rawInput string) map[string]any {
 //     HTML iframe preview exactly matching what SendGrid will receive.
 //   - `content_type`: "text/html" vs "text/plain" so the UI picks the
 //     right renderer without sniffing the body.
+//   - `attachments` / `inline_attachments`: the frozen path/cid metadata
+//     from ArgsJSON, so a terminal review can show every file that will
+//     actually be sent. File bytes stay out of the summary; execution still
+//     replays the original ArgsJSON.
 //
 // The full content is capped at 1 MiB — SendGrid tolerates much more, but
 // anything beyond that in an approval payload is almost certainly a bug
@@ -1071,7 +1075,7 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 		// before send.
 		contentType = sniffContentType(full)
 	}
-	return map[string]any{
+	out := map[string]any{
 		"tool":             toolName,
 		"to":               args["to_email"],
 		"cc":               args["cc_emails"],
@@ -1083,6 +1087,13 @@ func summarizeSendEmailInput(toolName, rawInput, convID string) map[string]any {
 		"content_type":     contentType,
 		"content_overflow": contentOverflow,
 	}
+	if v, ok := args["attachments"]; ok {
+		out["attachments"] = v
+	}
+	if v, ok := args["inline_attachments"]; ok {
+		out["inline_attachments"] = v
+	}
+	return out
 }
 
 // cidPattern matches one `cid:<id>` reference. The id runs to the first

@@ -11,12 +11,17 @@ import (
 )
 
 func emailReviewFixture() map[string]any {
-	return map[string]any{"to": "primary@example.com", "cc": []string{"copy@example.com"}, "bcc": []string{"hidden@example.com"}, "content": strings.Repeat("long body ", 100) + "BODY_END", "attachments": []string{"report.csv"}}
+	return map[string]any{
+		"to": "primary@example.com", "cc": []string{"copy@example.com"}, "bcc": []string{"hidden@example.com"},
+		"content":            strings.Repeat("long body ", 100) + "BODY_END",
+		"attachments":        []any{map[string]any{"path": "report.csv"}},
+		"inline_attachments": []any{map[string]any{"path": "chart.png", "cid": "logo"}},
+	}
 }
 
 func assertFullEmailReview(t *testing.T, text string) {
 	t.Helper()
-	for _, want := range []string{"primary@example.com", "copy@example.com", "hidden@example.com", "BODY_END", "report.csv"} {
+	for _, want := range []string{"primary@example.com", "copy@example.com", "hidden@example.com", "BODY_END", "report.csv", "chart.png", "logo"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("email review missing %s", want)
 		}

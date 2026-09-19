@@ -162,6 +162,81 @@ func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 	}
 }
 
+type streamEventObserver struct {
+	mu     sync.Mutex
+	events []streamEvent
+}
+
+type streamEvent struct {
+	typ     string
+	payload map[string]any
+}
+
+func (o *streamEventObserver) Observe(eventType string, payload map[string]any) {
+	copied := map[string]any{}
+	for k, v := range payload {
+		copied[k] = v
+	}
+	o.mu.Lock()
+	o.events = append(o.events, streamEvent{typ: eventType, payload: copied})
+	o.mu.Unlock()
+}
+
+func reconstructVisibleText(events []streamEvent) string {
+	var b strings.Builder
+	for _, e := range events {
+		text, _ := e.payload["text"].(string)
+		switch e.typ {
+		case "text.delta":
+			b.WriteString(text)
+		case evtTextReplace:
+			b.Reset()
+			b.WriteString(text)
+		}
+	}
+	return b.String()
+}
+
+func TestRun_LiveStreamRetractsPreAuditDraft(t *testing.T) {
+	session := NewLogSession()
+	model := &textCapturingModel{slug: "stream-replace-test", replies: []string{"round one analysis", "confirmed"}}
+	obs := &streamEventObserver{}
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("do the task")}, label: "stream-replace"},
+		Policy:     newRoundsPolicy(session, 1),
+		Executor:   &stubExecutor{},
+		Model:      model,
+		LogSession: session,
+		Observer:   obs,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.FinalText != "confirmed" {
+		t.Fatalf("FinalText = %q, want confirmed", result.FinalText)
+	}
+	obs.mu.Lock()
+	events := append([]streamEvent(nil), obs.events...)
+	obs.mu.Unlock()
+	var lastReplace string
+	var sawReplace bool
+	for _, e := range events {
+		if e.typ == evtTextReplace {
+			sawReplace = true
+			lastReplace, _ = e.payload["text"].(string)
+		}
+	}
+	if !sawReplace {
+		t.Fatal("expected text.replace with the authoritative final answer")
+	}
+	if lastReplace != "confirmed" {
+		t.Fatalf("text.replace payload = %q, want confirmed", lastReplace)
+	}
+	if got := reconstructVisibleText(events); got != "confirmed" {
+		t.Fatalf("live stream reconstructed %q, want the final round only", got)
+	}
+}
+
 func TestScheduledResultOmitsPreAuditDraft(t *testing.T) {
 	session := NewLogSession()
 	model := &textCapturingModel{slug: "scheduled-final-test", replies: []string{"FUTURE_PASS_391", "Audit complete. FUTURE_PASS_391"}}

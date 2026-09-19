@@ -156,7 +156,7 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 		return 1
 	}
 	ctx := context.Background()
-	var sawText bool
+	var visible strings.Builder
 	var staged []pendingApproval
 	newConvID, err := client.Stream(ctx, message, strings.TrimSpace(convID), func(ev Event) {
 		switch ev.Name {
@@ -169,10 +169,10 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 			}
 			staged = kept
 		case "text.delta":
-			if t := ev.Str("text"); t != "" {
-				fmt.Fprint(out, t)
-				sawText = true
-			}
+			visible.WriteString(ev.Str("text"))
+		case "text.replace":
+			visible.Reset()
+			visible.WriteString(ev.Str("text"))
 		case "tool.call":
 			if n := ev.Str("name"); n != "" {
 				fmt.Fprintln(errOut, "▸ "+n)
@@ -192,7 +192,8 @@ func runOneShot(client *Client, convID, message string, in io.Reader, out, errOu
 			}
 		}
 	})
-	if sawText {
+	if visible.Len() > 0 {
+		fmt.Fprint(out, visible.String())
 		fmt.Fprintln(out) // trailing newline so piped output ends cleanly
 	}
 	// The conversation id is the ONLY way to resume or settle approvals from a
