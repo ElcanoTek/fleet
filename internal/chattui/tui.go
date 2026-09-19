@@ -622,7 +622,7 @@ func (m *model) render() string {
 		conv = "conv " + shortID(m.convID)
 	}
 	right := conv
-	if mdl := strings.TrimSpace(m.client.turnModel(m.convID)); mdl != "" {
+	if mdl := strings.TrimSpace(m.client.displayModel(m.convID)); mdl != "" {
 		right = mdl + " · " + conv
 	}
 	header := barLine(m.width, styleHeader.Render("⚓ fleet chat"), styleDim.Render(right))

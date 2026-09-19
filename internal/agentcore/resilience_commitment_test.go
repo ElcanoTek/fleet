@@ -329,6 +329,20 @@ func TestStreamSinkMarkRollback(t *testing.T) {
 	}
 }
 
+func TestEmptyCompletionRetractsRolledBackObserverText(t *testing.T) {
+	observer := &streamEventObserver{}
+	sink := newStreamSink(observer)
+	mark := sink.mark()
+	sink.onTextDelta("abandoned attempt")
+	sink.rollbackTo(mark)
+	sink.replaceVisibleText("")
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if got := reconstructVisibleText(observer.events); got != "" {
+		t.Fatalf("rolled-back draft survived empty completion: %q", got)
+	}
+}
+
 // The committed-side-effects error must carry the partial transcript with it:
 // the executed tool's records are the driver's only chance to project the
 // side effect into canonical history before the turn seals — discarded, the

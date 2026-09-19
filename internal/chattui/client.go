@@ -67,11 +67,12 @@ func (c *Client) EffectiveModel() string {
 	return c.defaultModel
 }
 
-// turnModel picks the slug for one turn: an explicit --model//model always wins;
-// the adopted workspace default applies only when starting a NEW conversation.
+// turnModel sends explicit operator overrides, never cached server selections.
+// Accepting a suggestion hands this conversation back to its stored pin until
+// /model explicitly overrides it again. Workspace defaults apply to new threads.
 func (c *Client) turnModel(convID string) string {
 	if model := c.conversationModels[convID]; convID != "" && model != "" {
-		return model
+		return ""
 	}
 	if strings.TrimSpace(c.cfg.Model) != "" {
 		return c.cfg.Model
@@ -80,6 +81,13 @@ func (c *Client) turnModel(convID string) string {
 		return c.defaultModel
 	}
 	return ""
+}
+
+func (c *Client) displayModel(convID string) string {
+	if model := c.conversationModels[convID]; convID != "" && model != "" {
+		return model
+	}
+	return c.turnModel(convID)
 }
 
 // setAuthHeaders applies the shared-secret + identity headers every chattui

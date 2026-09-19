@@ -125,6 +125,8 @@ type streamSink struct {
 	// finalText accumulates the assistant's user-visible text across the run so
 	// the loop can recover it for the finalize hook + the Result.
 	finalText strings.Builder
+	// Unlike finalText, this survives rollback: observers saw the abandoned text.
+	everStreamedText bool
 	// reasoningBufs buffers reasoning deltas per id; committed on End.
 	reasoningBufs map[string]*strings.Builder
 	// toolEvents counts observable tool side effects (tool_call/tool_result).
@@ -178,6 +180,7 @@ func (s *streamSink) onUserInjected(id, text string) {
 func (s *streamSink) onTextDelta(text string) {
 	s.mu.Lock()
 	s.finalText.WriteString(text)
+	s.everStreamedText = s.everStreamedText || text != ""
 	s.mu.Unlock()
 	s.emit("text.delta", map[string]any{evtFieldText: text})
 }
@@ -338,9 +341,12 @@ func (s *streamSink) replaceVisibleText(text string) {
 	if s == nil {
 		return
 	}
-	// Tool-only turns have no visible text to replace. An empty final answer
-	// after a streamed draft still needs a replacement to clear that draft.
-	if text == "" && s.mark().finalText == 0 {
+	// A rolled-back attempt may have emitted a draft before its text was
+	// removed from the accumulator. Only genuinely text-free runs can skip.
+	s.mu.Lock()
+	streamed := s.everStreamedText
+	s.mu.Unlock()
+	if text == "" && !streamed {
 		return
 	}
 	s.emit(evtTextReplace, map[string]any{evtFieldText: text})

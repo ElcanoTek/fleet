@@ -37,6 +37,10 @@ handler-only cards require explicit API decisions even in unattended tests.
 Startup restores turn history before appending interrupted approval outcomes.
 Child-agent progress also replaces its preview when the final answer retracts
 earlier drafts.
+Accepted suggestion slugs are display-only in the terminal: later messages defer
+to the stored conversation model, including changes made by another client.
+An explicit `/model` re-enables a request override. Even empty completed answers
+emit a replacement so a rolled-back draft cannot remain visible after a retry.
 
 ## Review and resolve
 

@@ -22,6 +22,9 @@ Accepting a model suggestion changes only that conversation. `/new` returns to
 the workspace default unless you selected an explicit `--model` or `/model`
 override; resuming another thread keeps its stored model unless that explicit
 override is set.
+After accepting a suggestion, messages use that conversation's stored model,
+including later changes made by another client; `/model` sets a new explicit
+override.
 Model suggestions show the target frozen when the card was created. Older cards
 without a frozen target must be dismissed before requesting a new suggestion.
 

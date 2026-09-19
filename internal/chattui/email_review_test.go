@@ -229,9 +229,17 @@ func TestFinishApprovalPinsSuggestedModel(t *testing.T) {
 	m := newModel(Config{Model: "old/slug"})
 	m.convID = "suggested"
 	m.finishApproval(approvalResolvedMsg{approved: true, status: "approved", tool: "suggest_advanced_model", model: "acme/frontier-1-pro"})
-	if m.client.turnModel(m.convID) != "acme/frontier-1-pro" {
-		t.Fatalf("model = %q, want pinned suggestion", m.client.turnModel(m.convID))
+	if m.client.displayModel(m.convID) != "acme/frontier-1-pro" {
+		t.Fatalf("model = %q, want pinned suggestion", m.client.displayModel(m.convID))
 	}
+	if got := m.client.turnModel(m.convID); got != "" {
+		t.Fatalf("cached pin would overwrite another client's selection: %q", got)
+	}
+	m.runSlash("/model explicit/new")
+	if got := m.client.turnModel(m.convID); got != "explicit/new" {
+		t.Fatalf("explicit operator override lost: %q", got)
+	}
+	m.client.cfg.Model = "old/slug"
 	m.runSlash("/new")
 	if got := m.client.turnModel(m.convID); got != "old/slug" {
 		t.Fatalf("new conversation lost explicit CLI override: %q", got)
