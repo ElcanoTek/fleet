@@ -39,9 +39,10 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	approvals := make([]map[string]any, 0, len(pending))
 	for _, a := range pending {
 		approvals = append(approvals, map[string]any{
-			"approval_id": a.ID,
-			"tool":        a.ToolName,
-			"summary":     summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
+			"approval_id":  a.ID,
+			"tool":         a.ToolName,
+			"summary":      summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
+			"pattern_args": handlerApprovalPatternArgs(a.ToolName, a.ArgsJSON),
 			// Re-hydrate the countdown on reload (#225); 0 = no expiry.
 			"expires_at": a.ExpiresAt,
 			// Re-hydrate the seat badge (#167 residual 2); empty account
@@ -66,7 +67,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	}
 	resolvedCards := make([]map[string]any, 0, len(resolved))
 	for _, a := range resolved {
-		resolvedCards = append(resolvedCards, map[string]any{
+		card := map[string]any{
 			"approval_id":  a.ID,
 			"tool":         a.ToolName,
 			"summary":      summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
@@ -78,7 +79,14 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 			// True for a notify-mode record (#1153): the card says the tool
 			// already ran without asking, not that the user approved it.
 			"recorded": isNotifyRecordResult(a.ResultText),
-		})
+		}
+		// Same executing / is_err / execution_unknown keys as the approval
+		// POST so a reload (and the TUI's resolved_approvals ingest) cannot
+		// green-stamp an in-flight sentinel or a failed run.
+		for k, v := range approvalOutcomeFlags(&a) {
+			card[k] = v
+		}
+		resolvedCards = append(resolvedCards, card)
 	}
 	// Pending memory proposals — same pattern as approvals. Without
 	// these, the visibilitychange/focus auto-refetch in chat-experience

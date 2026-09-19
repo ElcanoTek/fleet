@@ -62,6 +62,9 @@ func TestListResolvedApprovals_ReturnsResolvedRowsOldestFirst(t *testing.T) {
 	if s1.ResultText != `{"status_code":202}` || s1.Status != "approved" {
 		t.Errorf("resolved row lost its outcome: status=%q result=%q", s1.Status, s1.ResultText)
 	}
+	if !s1.IsErr.Valid || s1.IsErr.Bool {
+		t.Errorf("approved ResolveApproval is_err = %+v, want valid false (the resolve IS the outcome)", s1.IsErr)
+	}
 	d1, ok := byID[denied.ID]
 	if !ok {
 		t.Fatal("resolved listing missing the rejected deploy")

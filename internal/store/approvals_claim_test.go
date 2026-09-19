@@ -97,23 +97,44 @@ func TestSetApprovalResult_UpdatesClaimedRow(t *testing.T) {
 	}
 
 	// Pending rows must not be touched — result text belongs to a claim.
-	if err := s.SetApprovalResult(ctx, "alice@example.com", a.ID, "too early"); err != nil {
+	if err := s.SetApprovalResult(ctx, "alice@example.com", a.ID, "too early", true); err != nil {
 		t.Fatalf("SetApprovalResult: %v", err)
 	}
 	got, _ := s.GetApproval(ctx, "alice@example.com", a.ID)
 	if got.ResultText == "too early" {
 		t.Fatal("SetApprovalResult must not write to a pending approval")
 	}
+	if got.IsErr.Valid {
+		t.Fatal("SetApprovalResult must not write is_err on a pending approval")
+	}
 
 	if claimed, err := s.ClaimApproval(ctx, "alice@example.com", a.ID, "approved", "executing"); err != nil || !claimed {
 		t.Fatalf("claim failed (claimed=%v err=%v)", claimed, err)
 	}
-	if err := s.SetApprovalResult(ctx, "alice@example.com", a.ID, "sent ok"); err != nil {
+	got, _ = s.GetApproval(ctx, "alice@example.com", a.ID)
+	if got.IsErr.Valid {
+		t.Fatal("claim must leave is_err NULL so an in-flight retry cannot look like success")
+	}
+	if err := s.SetApprovalResult(ctx, "alice@example.com", a.ID, "sent ok", false); err != nil {
 		t.Fatalf("SetApprovalResult: %v", err)
 	}
 	got, _ = s.GetApproval(ctx, "alice@example.com", a.ID)
 	if got.ResultText != "sent ok" {
 		t.Fatalf("result_text = %q, want %q", got.ResultText, "sent ok")
+	}
+	if !got.IsErr.Valid || got.IsErr.Bool {
+		t.Fatalf("is_err = %+v, want valid false (success)", got.IsErr)
+	}
+
+	if err := s.SetApprovalResult(ctx, "alice@example.com", a.ID, "send failed: boom", true); err != nil {
+		t.Fatalf("SetApprovalResult(error): %v", err)
+	}
+	got, _ = s.GetApproval(ctx, "alice@example.com", a.ID)
+	if got.ResultText != "send failed: boom" {
+		t.Fatalf("result_text = %q after error write", got.ResultText)
+	}
+	if !got.IsErr.Valid || !got.IsErr.Bool {
+		t.Fatalf("is_err = %+v, want valid true (failed execution)", got.IsErr)
 	}
 }
 
@@ -164,6 +185,9 @@ func TestClaimApprovalAndSetModel_AtomicAndRetryable(t *testing.T) {
 	got, _ = s.GetApproval(ctx, user, a.ID)
 	if got.Status != "approved" || got.ResultText != "pinned" {
 		t.Fatalf("approval = %q/%q, want approved/pinned", got.Status, got.ResultText)
+	}
+	if !got.IsErr.Valid || got.IsErr.Bool {
+		t.Fatalf("model-pin claim is_err = %+v, want valid false (the pin IS the outcome)", got.IsErr)
 	}
 	c, _ = s.Get(ctx, user, conv.ID)
 	if c.Model != "advanced/model" {

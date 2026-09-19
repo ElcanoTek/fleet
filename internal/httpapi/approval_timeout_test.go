@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -72,6 +73,41 @@ func TestStage_AutoApproveInTest(t *testing.T) {
 	}
 	if len(sink.events) != 1 || sink.events[0] != "tool.auto_resolved" {
 		t.Errorf("events = %v, want exactly [tool.auto_resolved]", sink.events)
+	}
+}
+
+// Handler-only tools cannot execute through the auto-approve sentinel even
+// when FLEET_AUTO_APPROVE_IN_TEST is on: that would skip the real schedule
+// handler and invent a success without creating a task.
+func TestAutoApproveInTestStillValidatesScheduledCard(t *testing.T) {
+	a := &approvalStager{
+		ctx:               context.Background(),
+		conversationID:    "c1",
+		userEmail:         "alice@example.com",
+		sink:              &recordingSink{},
+		autoApproveInTest: true,
+	}
+	a.taskConnectors = func(context.Context) (chatTaskConnectors, error) {
+		return chatTaskConnectors{}, errors.New("connector lookup unavailable")
+	}
+	id, err := a.Stage("schedule_task", "call-1", `{"prompt":"test"}`)
+	if err == nil || id == agentcore.PreApprovedSentinel {
+		t.Fatalf("auto-approve bypassed schedule validation: id=%q err=%v", id, err)
+	}
+}
+
+// A handler-only tool must never receive the executable-tool sentinel: that
+// produces a binary-looking approval id without creating the requested task.
+func TestSessionPolicyStillValidatesScheduledCard(t *testing.T) {
+	r := NewSessionApprovalRegistry()
+	r.Register("c1", "schedule_task", SessionApprovalPolicy{Mode: "approve"})
+	a := &approvalStager{ctx: context.Background(), conversationID: "c1", userEmail: "alice@example.com", sink: &recordingSink{}, sessionRegistry: r}
+	a.taskConnectors = func(context.Context) (chatTaskConnectors, error) {
+		return chatTaskConnectors{}, errors.New("connector lookup unavailable")
+	}
+	id, err := a.Stage("schedule_task", "call-1", `{"prompt":"test"}`)
+	if err == nil || id == agentcore.PreApprovedSentinel {
+		t.Fatalf("session policy bypassed schedule validation: id=%q err=%v", id, err)
 	}
 }
 

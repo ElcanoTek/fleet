@@ -263,7 +263,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// after surfacing a tool.auto_resolved event so an observing stream still sees
 	// the decision. Runs before staging so no approval row or card is created.
 	// NEVER enable this in production — it bypasses the human-in-the-loop gate.
-	if a.autoApproveInTest {
+	if a.autoApproveInTest && !handlerOnlyApproval(toolName) {
 		a.sink.Emit("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
@@ -276,7 +276,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// sentinel the orchestration gate interprets — pre-approved → run the tool
 	// normally; pre-denied → block it. This runs before staging so a pre-approved
 	// tool never creates an approval row or emits a card.
-	if a.sessionRegistry != nil {
+	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) {
 		if p, ok := a.sessionRegistry.Match(a.conversationID, toolName, rawInput); ok {
 			a.sink.Emit("tool.auto_resolved", map[string]any{
 				"tool":    toolName,
@@ -371,9 +371,10 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	summary := summarizeApprovalInput(toolName, rawInput, a.conversationID)
 
 	a.sink.Emit("tool.approval_required", map[string]any{
-		"approval_id": approval.ID,
-		"tool":        toolName,
-		"summary":     summary,
+		"approval_id":  approval.ID,
+		"tool":         toolName,
+		"summary":      summary,
+		"pattern_args": handlerApprovalPatternArgs(toolName, rawInput),
 		// Unix-seconds default-deny deadline (#225); the UI renders a countdown
 		// and transitions the card to a timed-out state at this instant.
 		"expires_at": approval.ExpiresAt,
@@ -1269,6 +1270,38 @@ type approvalRequest struct {
 	Edits *scheduleTaskEdits `json:"edits,omitempty"`
 }
 
+// Handler-only tools have no runnable tool body. A session sentinel would be
+// mistaken for an approval id instead of creating a task or changing a model.
+func handlerOnlyApproval(tool string) bool {
+	switch tool {
+	case tools.ScheduleTaskToolName, tools.ManageTasksToolName, "preview_email", tools.SuggestAdvancedModelToolName:
+		return true
+	default:
+		return false
+	}
+}
+
+// Handler-only terminal policies must match frozen argument strings, never
+// display aliases or synthetic summary fields. These tools' arguments contain
+// user-authored task/email/model data, not broker credentials. Executable tools
+// continue to match their arguments exclusively in the server registry.
+func handlerApprovalPatternArgs(tool, raw string) map[string]string {
+	if !handlerOnlyApproval(tool) {
+		return nil
+	}
+	var args map[string]any
+	if json.Unmarshal([]byte(raw), &args) != nil {
+		return nil
+	}
+	result := make(map[string]string)
+	for k, v := range args {
+		if s, ok := v.(string); ok {
+			result[k] = s
+		}
+	}
+	return result
+}
+
 // scheduleTaskEdits is the editable subset of a staged schedule_task call —
 // exactly the fields the approval card displays. Applied over the staged args
 // BEFORE re-validation, so an edited cron passes the same pure checks the gate
@@ -1338,10 +1371,11 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	}
 	if approval.Status != "pending" {
 		// Idempotent: return the already-resolved state without re-firing.
-		writeJSON(w, map[string]any{
-			"status":      approval.Status,
-			"result_text": approval.ResultText,
-		})
+		writeJSON(w, approvalClientState(approval))
+		return
+	}
+	if handlerOnlyApproval(approval.ToolName) && req.Scope != "" && req.Scope != "once" {
+		http.Error(w, "this tool requires a separate decision for each staged card; use scope once", http.StatusBadRequest)
 		return
 	}
 
@@ -1417,7 +1451,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	// afterwards. Losing the claim means someone else is running it —
 	// return their resolved state instead of re-firing.
 	claimed, err := s.store.ClaimApproval(r.Context(), user, approvalID, "approved",
-		"Approved — executing…")
+		approvalExecutingSentinel)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1464,7 +1498,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	}
 	isErr := toolErr != nil
 	resultText, isErr = governApprovalResult(execCtx, approval, resultText, isErr)
-	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText); err != nil {
+	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
 	}
 	// Write the real tool_result into history so the next turn's model
@@ -1488,6 +1522,46 @@ func governApprovalResult(ctx context.Context, approval *store.Approval, text st
 	return agentcore.GovernAndBoundModelVisibleToolText(ctx, approval.ToolName, resolutionCallID(approval), text, isErr)
 }
 
+// approvalExecutingSentinel is the result_text ClaimApproval writes before
+// the staged tool runs. An idempotent retry that sees this text and a NULL
+// is_err must report executing:true — not success — so a concurrent loser
+// cannot stamp "Email sent ✓" while the winner is still in flight. Named
+// so clients and tests share one string; do not parse arbitrary tool output
+// for error.
+const approvalExecutingSentinel = "Approved — executing…"
+
+// approvalOutcomeFlags is the execution-outcome contract for an already-
+// resolved approval row. status remains consent; these flags tell the
+// client whether the attempt succeeded, failed, is still running, or was
+// never recorded (legacy rows). The TUI matches executing and
+// execution_unknown by these exact keys.
+func approvalOutcomeFlags(a *store.Approval) map[string]any {
+	if a == nil || a.Status != "approved" {
+		return nil
+	}
+	if a.IsErr.Valid {
+		return map[string]any{"is_err": a.IsErr.Bool}
+	}
+	if a.ResultText == approvalExecutingSentinel {
+		return map[string]any{"executing": true}
+	}
+	return map[string]any{"execution_unknown": true}
+}
+
+// approvalClientState is the idempotent POST body: consent plus the
+// outcome flags. Used by the already-resolved early return and by
+// writeResolvedApprovalState so a replay cannot drop is_err.
+func approvalClientState(a *store.Approval) map[string]any {
+	out := map[string]any{
+		"status":      a.Status,
+		"result_text": a.ResultText,
+	}
+	for k, v := range approvalOutcomeFlags(a) {
+		out[k] = v
+	}
+	return out
+}
+
 // writeResolvedApprovalState answers a request that lost the claim race
 // (or arrived after resolution) with the current state of the approval,
 // mirroring the idempotent already-resolved response above.
@@ -1497,10 +1571,7 @@ func (s *Server) writeResolvedApprovalState(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "approval already resolved", http.StatusConflict)
 		return
 	}
-	writeJSON(w, map[string]any{
-		"status":      latest.Status,
-		"result_text": latest.ResultText,
-	})
+	writeJSON(w, approvalClientState(latest))
 }
 
 // handleSuggestAdvancedApproval resolves a suggest_advanced_model card.
