@@ -1,29 +1,59 @@
 package main
 
 import (
-	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 )
 
-// Inspect the typed diagnostic without relying on its public/loggable string.
-// This preserves the exhaustive alias-refusal assertions while requiring the
-// error message to omit credential-related raw configuration.
-func overlapNames(t *testing.T, err error) string {
+// Inspect the collected overlap names without relying on the public/loggable
+// error string. Exhaustive alias-refusal tests assert the refused names here;
+// boot logs only see a count.
+func overlapNames(t *testing.T, bundle *clientconfig.Bundle) string {
 	t.Helper()
-	var e *connectorEnvOverlapError
-	if !errors.As(err, &e) {
-		t.Fatalf("unexpected error type %T", err)
+	return strings.Join(connectorParentEnvOverlap(bundle), ", ")
+}
+
+func requireOverlap(t *testing.T, bundle *clientconfig.Bundle, wantName string) error {
+	t.Helper()
+	err := validateConnectorParentEnvSeparation(bundle)
+	if err == nil {
+		t.Fatalf("expected overlap refusal for %s", wantName)
 	}
-	return strings.Join(e.names, ", ")
+	if !strings.Contains(overlapNames(t, bundle), wantName) {
+		t.Fatalf("overlap names = %q, want %s", overlapNames(t, bundle), wantName)
+	}
+	if strings.Contains(err.Error(), wantName) {
+		t.Fatalf("loggable error echoed %s: %v", wantName, err)
+	}
+	return err
 }
 
 func TestOverlapErrorDoesNotEchoRawConfiguration(t *testing.T) {
-	err := &connectorEnvOverlapError{names: []string{"FAKE_PASTED_CREDENTIAL"}}
-	if strings.Contains(err.Error(), "FAKE_PASTED_CREDENTIAL") {
-		t.Fatal("raw field leaked")
+	const pasted = "FAKE_PASTED_CREDENTIAL"
+	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
+  - name: demo
+    type: stdio
+    command: /bin/true
+    always: true
+    env:
+      TOKEN: "${`+pasted+`}"
+providers:
+  - name: models
+    type: openai
+    api_key_env: `+pasted+`
+`))
+	if err != nil {
+		t.Fatalf("load bundle: %v", err)
 	}
-	if !strings.Contains(err.Error(), "1 fields") {
-		t.Fatal("missing actionable diagnostic")
+	overlapErr := requireOverlap(t, bundle, pasted)
+	if !strings.Contains(overlapErr.Error(), "1 fields") {
+		t.Fatalf("missing actionable diagnostic: %v", overlapErr)
+	}
+	wrapped := fmt.Errorf("start production MCP broker: %w", overlapErr)
+	if strings.Contains(wrapped.Error(), pasted) {
+		t.Fatalf("wrapped boot error echoed raw field: %v", wrapped)
 	}
 }

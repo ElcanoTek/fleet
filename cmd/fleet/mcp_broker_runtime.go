@@ -351,6 +351,21 @@ func cloneAccountInventory(src map[string][]string) map[string][]string {
 }
 
 func validateConnectorParentEnvSeparation(bundle *clientconfig.Bundle) error {
+	n := len(connectorParentEnvOverlap(bundle))
+	if n > 0 {
+		// Count only: the overlapping names can be provider api_key_env
+		// metadata (or a pasted credential in an invalid manifest). Putting
+		// them on the returned error re-taints log.Fatalf even when Error()
+		// never prints them (CodeQL alert #179).
+		return fmt.Errorf("connector environment overlaps parent-owned configuration (%d fields); separate connector env/account variables from provider api_key_env and fleet runtime variables", n)
+	}
+	return nil
+}
+
+// connectorParentEnvOverlap returns the colliding names for tests. Boot and
+// broker logs must use validateConnectorParentEnvSeparation, which reports
+// only the count.
+func connectorParentEnvOverlap(bundle *clientconfig.Bundle) []string {
 	parent := map[string]bool{}
 	parentNames := parentOwnedRuntimeEnvNames(bundle)
 	for _, name := range parentNames {
@@ -407,19 +422,7 @@ func validateConnectorParentEnvSeparation(bundle *clientconfig.Bundle) error {
 		}
 	}
 	sort.Strings(overlap)
-	if len(overlap) > 0 {
-		// These should be environment variable names, but an invalid manifest can
-		// contain a pasted credential. Diagnose the collision without echoing raw
-		// credential-configuration fields into boot or broker logs.
-		return &connectorEnvOverlapError{names: overlap}
-	}
-	return nil
-}
-
-type connectorEnvOverlapError struct{ names []string }
-
-func (e *connectorEnvOverlapError) Error() string {
-	return fmt.Sprintf("connector environment overlaps parent-owned configuration (%d fields); separate connector env/account variables from provider api_key_env and fleet runtime variables", len(e.names))
+	return overlap
 }
 
 func validAccountEnvSuffix(suffix string) bool {
