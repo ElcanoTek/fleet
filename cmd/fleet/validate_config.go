@@ -28,6 +28,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -187,7 +189,7 @@ func pinBundleDirFromEnvFile(path string) {
 // a blocking failure of the relevant check (and dependent checks degrade to a
 // blocking failure too, since they cannot run without it).
 func runChecks(ctx context.Context, opts validateOptions) []checkResult {
-	results := make([]checkResult, 0, 8)
+	results := make([]checkResult, 0, 9)
 
 	envFile := preflightEnvFile()
 	bundle, bundleErr := clientconfig.Load(clientconfig.Dir())
@@ -210,6 +212,7 @@ func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 	results = append(results, checkManifest(bundle, bundleErr, cfg))
 	results = append(results, checkMCPServers(ctx, bundle, cfg, opts))
 	results = append(results, checkMCPCatalog(bundle, bundleErr))
+	results = append(results, checkManifestFiles(bundle, bundleErr))
 	results = append(results, checkDatabase(ctx, cfg, cfgErr, opts))
 	results = append(results, checkCredentials(bundle, bundleErr))
 	results = append(results, checkSandbox(ctx, cfg, bundle))
@@ -625,84 +628,15 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 		s := &bundle.MCPCatalog[i]
 		if strings.TrimSpace(s.Name) == "" {
 			problems = append(problems, fmt.Sprintf("mcp_catalog[%d]: empty server name", i))
-		} else {
-			label := fmt.Sprintf("mcp_catalog[%q]", s.Name)
-			if seen[s.Name] && !dupes[s.Name] {
-				problems = append(problems, label+": duplicate server name")
-				dupes[s.Name] = true
-			}
-			seen[s.Name] = true
-			// The name becomes part of every tool name (mcp_<server>_<tool>), and
-			// upstream providers reject a dot or a space there. The loader does
-			// not enforce this for manifest servers — see ValidMCPServerName for
-			// why — so a credential-gated `sales.api` would pass boot and break
-			// the first turn that enables it. Same rule as plugin server keys.
-			if !clientconfig.ValidMCPServerName(s.Name) {
-				problems = append(problems, label+": name must be 1-64 chars of letters, digits, '_' or '-' (it becomes part of the mcp_<server>_<tool> tool name)")
-			}
-			switch {
-			case s.Type == "http":
-				raw := strings.TrimSpace(s.URL)
-				// MCPServerConfigs copies s.URL verbatim and net/http rejects a
-				// padded request URL, so trimming here alone would pass a
-				// declaration the runtime cannot dial.
-				if raw != "" && s.URL != raw {
-					problems = append(problems, fmt.Sprintf("%s: url %q has surrounding whitespace", label, s.URL))
-				}
-				if raw == "" {
-					problems = append(problems, label+": http server has empty url")
-				} else if u, err := url.Parse(raw); err != nil {
-					problems = append(problems, fmt.Sprintf("%s: url does not parse: %v", label, err))
-				} else if u.Scheme != "http" && u.Scheme != "https" {
-					problems = append(problems, fmt.Sprintf("%s: url scheme %q is not http/https", label, u.Scheme))
-				} else if u.Host == "" {
-					// url.Parse accepts "https://", "https:///mcp" and the opaque
-					// "http:foo" without complaint; none can be dialled.
-					problems = append(problems, fmt.Sprintf("%s: url %q has no host", label, raw))
-				}
-				// Manifest headers get no validation in Load (plugin headers do,
-				// spec §7.2.1) and net/http fails the request at send time on a
-				// bad name or a value with a line break — visible only once the
-				// server's credentials enable it. Same rule as plugin headers.
-				if err := clientconfig.ValidateHTTPHeaders(s.Headers); err != nil {
-					problems = append(problems, fmt.Sprintf("%s: %v", label, err))
-				}
-			case strings.TrimSpace(s.Command) == "":
-				// Anything not "http" is stdio (the manifest's default type) and
-				// must name a command. Resolution of that command is deliberately
-				// not this check's business — see the comment above.
-				problems = append(problems, label+": stdio server has empty command")
-			case s.Command != strings.TrimSpace(s.Command):
-				// The loader keeps the command verbatim and exec looks for that
-				// literal name; " python3 " resolves nowhere, on any machine.
-				problems = append(problems, fmt.Sprintf("%s: command %q has surrounding whitespace", label, s.Command))
-			}
-			// Every var name that gates or accounts the server, INCLUDING each
-			// member of every enabled_groups alternative: enabled() looks those up
-			// verbatim, so a padded " API_KEY" reads an unset var and leaves the
-			// connector silently disabled on every box.
-			// identity_env too: the loader trims the name for its own env-map
-			// lookup but propagates the padded original, and the named-account
-			// guard then looks up the padded key, reads the identity as unset,
-			// and can let a variant inherit the default seat's routing identity.
-			varLists := [][]string{s.EnabledEnv, s.AccountVars, s.IdentityEnv}
-			for gi, group := range s.EnabledGroups {
-				if len(group) == 0 {
-					// allSet(nil) is vacuously true: an empty alternative ENABLES
-					// the server with no gate at all, the opposite of what a
-					// gated declaration means.
-					problems = append(problems, fmt.Sprintf("%s: enabled_groups[%d] is empty (an empty group enables the server unconditionally)", label, gi))
-				}
-				varLists = append(varLists, group)
-			}
-			for _, vars := range varLists {
-				for _, v := range vars {
-					if v == "" || strings.TrimSpace(v) != v {
-						problems = append(problems, fmt.Sprintf("%s: env var name %q is empty or has surrounding whitespace", label, v))
-					}
-				}
-			}
+			continue
 		}
+		label := fmt.Sprintf("mcp_catalog[%q]", s.Name)
+		if seen[s.Name] && !dupes[s.Name] {
+			problems = append(problems, label+": duplicate server name")
+			dupes[s.Name] = true
+		}
+		seen[s.Name] = true
+		problems = append(problems, catalogServerProblems(s, label)...)
 	}
 	problems = append(problems, bundle.ValidateMCPArgPaths()...)
 	// A plugin problem means part of the DECLARED bundle was dropped or rejected
@@ -732,6 +666,202 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 		return res
 	}
 	res.Detail = fmt.Sprintf("%d server(s): structure ok", len(bundle.MCPCatalog))
+	return res
+}
+
+// catalogServerProblems is the per-server half of checkMCPCatalog: every
+// structural rule for one named declaration, in one place, each rule a helper
+// so the function stays readable as rules accumulate (they have — four review
+// rounds' worth). label is the `mcp_catalog["name"]` prefix every problem
+// carries. Nothing here touches the machine: no PATH lookup, no dial, no exec.
+func catalogServerProblems(s *clientconfig.ServerDef, label string) []string {
+	var problems []string
+	// The name becomes part of every tool name (mcp_<server>_<tool>), and
+	// upstream providers reject a dot or a space there. The loader does not
+	// enforce this for manifest servers — see ValidMCPServerName for why — so a
+	// credential-gated `sales.api` would pass boot and break the first turn
+	// that enables it. Same rule as plugin server keys.
+	if !clientconfig.ValidMCPServerName(s.Name) {
+		problems = append(problems, label+": name must be 1-64 chars of letters, digits, '_' or '-' (it becomes part of the mcp_<server>_<tool> tool name)")
+	}
+	problems = append(problems, catalogActivationProblems(s, label)...)
+	if s.Type == "http" {
+		problems = append(problems, catalogHTTPProblems(s, label)...)
+	} else {
+		problems = append(problems, catalogStdioProblems(s, label)...)
+	}
+	return append(problems, catalogVarNameProblems(s, label)...)
+}
+
+// catalogActivationProblems: a server that is not `always` and declares no
+// enable gate has NO activation path — enabled() returns false for that
+// combination on every box, so the server is declared, structurally perfect,
+// and never offered anywhere. `optional` and `enabled_by_default` do not
+// enable; they only shape the picker once a gate is satisfied.
+func catalogActivationProblems(s *clientconfig.ServerDef, label string) []string {
+	gated := len(s.EnabledEnv) > 0
+	for _, g := range s.EnabledGroups {
+		if len(g) > 0 {
+			gated = true
+		}
+	}
+	if s.Always || gated {
+		return nil
+	}
+	return []string{label + ": no activation path — set always: true or declare enabled_env / enabled_groups (optional: true alone never enables a server)"}
+}
+
+// catalogHTTPProblems validates an http server's url and headers.
+//
+// None of the diagnostics echo the URL. A manifest url may carry userinfo or a
+// signed query string, and this output lands in JSON reports, CI job
+// summaries and journals — the no-credential-values rule applies to a
+// malformed URL too. The server label is enough to find it. (*url.Error
+// embeds the URL, so the parse failure is reported without the error text.)
+func catalogHTTPProblems(s *clientconfig.ServerDef, label string) []string {
+	var problems []string
+	raw := strings.TrimSpace(s.URL)
+	// MCPServerConfigs copies s.URL verbatim and net/http rejects a padded
+	// request URL, so trimming here alone would pass a declaration the runtime
+	// cannot dial.
+	if raw != "" && s.URL != raw {
+		problems = append(problems, label+": url has surrounding whitespace")
+	}
+	switch u, err := url.Parse(raw); {
+	case raw == "":
+		problems = append(problems, label+": http server has empty url")
+	case err != nil:
+		problems = append(problems, label+": url does not parse")
+	case u.Scheme != "http" && u.Scheme != "https":
+		problems = append(problems, fmt.Sprintf("%s: url scheme %q is not http/https", label, u.Scheme))
+	case u.Host == "":
+		// url.Parse accepts "https://", "https:///mcp" and the opaque
+		// "http:foo" without complaint; none can be dialled.
+		problems = append(problems, label+": url has no host")
+	case u.Port() != "":
+		// url.Parse keeps ":99999" as a string; the transport rejects it as an
+		// invalid address only when it first dials.
+		if n, perr := strconv.Atoi(u.Port()); perr != nil || n < 1 || n > 65535 {
+			problems = append(problems, fmt.Sprintf("%s: url port %q is not in 1-65535", label, u.Port()))
+		}
+	}
+	// Manifest headers get no validation in Load (plugin headers do, spec
+	// §7.2.1) and net/http fails the request at send time on a bad name or a
+	// value with a forbidden byte — visible only once the server's credentials
+	// enable it. Same rule as plugin headers.
+	if err := clientconfig.ValidateHTTPHeaders(s.Headers); err != nil {
+		problems = append(problems, fmt.Sprintf("%s: %v", label, err))
+	}
+	return problems
+}
+
+// catalogStdioProblems validates the launch fields of a stdio server (the
+// manifest's default type). Resolution of the command is deliberately NOT this
+// check's business — see checkMCPCatalog — but the loader keeps every field
+// verbatim and os/exec is unforgiving about what it is handed: a padded
+// " python3 " resolves nowhere, and exec.Cmd.Start rejects a NUL anywhere in
+// argv or the environment. Env values are checked pre-interpolation (${VAR}
+// refs or literals); an env KEY with '=' or NUL cannot be represented in a
+// process environment at all.
+func catalogStdioProblems(s *clientconfig.ServerDef, label string) []string {
+	var problems []string
+	switch {
+	case strings.TrimSpace(s.Command) == "":
+		problems = append(problems, label+": stdio server has empty command")
+	case s.Command != strings.TrimSpace(s.Command):
+		problems = append(problems, fmt.Sprintf("%s: command %q has surrounding whitespace", label, s.Command))
+	}
+	if strings.IndexByte(s.Command, 0) >= 0 {
+		problems = append(problems, label+": command contains a NUL byte")
+	}
+	for ai, a := range s.Args {
+		if strings.IndexByte(a, 0) >= 0 {
+			problems = append(problems, fmt.Sprintf("%s: args[%d] contains a NUL byte", label, ai))
+		}
+	}
+	var badEnv []string
+	for k, v := range s.Env {
+		if strings.ContainsAny(k, "=\x00") || strings.IndexByte(v, 0) >= 0 {
+			badEnv = append(badEnv, k)
+		}
+	}
+	sort.Strings(badEnv) // map order is random; keep the report stable
+	for _, k := range badEnv {
+		problems = append(problems, fmt.Sprintf("%s: env %q cannot be passed to a process ('=' or NUL in the key, or NUL in the value)", label, k))
+	}
+	return problems
+}
+
+// catalogVarNameProblems validates every env var NAME that gates or accounts
+// the server — enabled_env, account_vars, identity_env, and each member of
+// every enabled_groups alternative. enabled() looks those up verbatim, so a
+// padded " API_KEY" reads an unset var and leaves the connector silently
+// disabled on every box; '=' and NUL cannot occur in a process-environment
+// name at all (entries split at the first '='), so os.Getenv("API=KEY") can
+// never find anything. identity_env is the sharp one: the loader trims the
+// name for its own env-map lookup but propagates the padded original, and the
+// named-account guard then reads the identity as unset and can let a variant
+// inherit the default seat's routing identity. An EMPTY group is rejected
+// outright: allSet(nil) is vacuously true, so `enabled_groups: [[]]` enables
+// the server with no gate at all — the opposite of what a gated declaration
+// means.
+func catalogVarNameProblems(s *clientconfig.ServerDef, label string) []string {
+	var problems []string
+	varLists := make([][]string, 0, 3+len(s.EnabledGroups))
+	varLists = append(varLists, s.EnabledEnv, s.AccountVars, s.IdentityEnv)
+	for gi, group := range s.EnabledGroups {
+		if len(group) == 0 {
+			problems = append(problems, fmt.Sprintf("%s: enabled_groups[%d] is empty (an empty group enables the server unconditionally)", label, gi))
+		}
+		varLists = append(varLists, group)
+	}
+	for _, vars := range varLists {
+		for _, v := range vars {
+			if v == "" || strings.TrimSpace(v) != v || strings.ContainsAny(v, "=\x00") {
+				problems = append(problems, fmt.Sprintf("%s: env var name %q is empty, has surrounding whitespace, or contains '=' or NUL (the process environment cannot represent it)", label, v))
+			}
+		}
+	}
+	return problems
+}
+
+// ── 3c. Bundle files the engines always read (CI gate, non-blocking) ──
+
+// checkManifestFiles is the bundle-intrinsic slice of checkManifest, split out
+// so CI can gate it. checkManifest mixes two kinds of fact: files every box
+// reads (the interactive base prompt chat.md and the scheduled base
+// default.md — a missing chat.md fails every interactive turn) and defaults a
+// BOX supplies (the persona chosen by FLEET_PERSONA, which a runner that sets
+// no such variable legitimately lacks). Gating `manifest` in CI therefore
+// pins half the bundle family red for a true statement about the runner,
+// while leaving `manifest` ungated lets a deleted chat.md merge green because
+// Load and mcp_catalog both still succeed without it. This check carries only
+// the first kind, so the workflow can require it everywhere.
+//
+// It is a second check rather than a re-scoped `manifest` because `manifest`
+// is BLOCKING and operators read its exit code: narrowing it would change
+// what `fleet validate-config` refuses to start on every existing box.
+// Non-blocking for the same reason as mcp_catalog — CI keys on the status.
+func checkManifestFiles(bundle *clientconfig.Bundle, bundleErr error) checkResult {
+	res := checkResult{Name: "manifest_files", Blocking: false}
+	if bundle == nil || bundleErr != nil {
+		res.Status = statusWarn
+		res.Detail = "skipped (bundle not loaded)"
+		return res
+	}
+	var problems []string
+	for _, name := range []string{"chat.md", "default.md"} {
+		if !fileExists(filepath.Join(bundle.SystemPromptsDir, name)) {
+			problems = append(problems, fmt.Sprintf("system prompt %s missing", name))
+		}
+	}
+	if len(problems) > 0 {
+		res.Status = statusFail
+		res.Detail = strings.Join(problems, "; ")
+		return res
+	}
+	res.Status = statusOK
+	res.Detail = "system prompts present (chat.md, default.md)"
 	return res
 }
 

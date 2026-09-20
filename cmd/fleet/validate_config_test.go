@@ -834,7 +834,7 @@ func TestCheckMCPCatalog(t *testing.T) {
 			// bundles' tooling on the runner.
 			bundle: catalog(
 				clientconfig.ServerDef{Name: "local", Command: "definitely-not-installed-mcp-uvx-xyz", EnabledEnv: []string{"SOME_KEY"}},
-				clientconfig.ServerDef{Name: "remote", Type: "http", URL: "https://example.invalid/mcp"},
+				clientconfig.ServerDef{Name: "remote", Type: "http", URL: "https://example.invalid/mcp", Always: true},
 			),
 			wantStatus: statusOK,
 			wantDetail: "2 server(s): structure ok",
@@ -1002,9 +1002,75 @@ func TestCheckMCPCatalog(t *testing.T) {
 		{
 			name: "well-formed http headers are ok",
 			bundle: catalog(clientconfig.ServerDef{
-				Name: "remote", Type: "http", URL: "https://x.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer ${TOKEN}", "X-Tenant": "acme"},
+				Name: "remote", Type: "http", URL: "https://x.example.com/mcp", Always: true,
+				Headers: map[string]string{"Authorization": "Bearer ${TOKEN}", "X-Tenant": "acme"},
 			}),
 			wantStatus: statusOK,
+		},
+		{
+			// net/http rejects NUL/DEL/control bytes in a value at send time, not
+			// only CR/LF.
+			name: "http header value with a NUL byte fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "remote", Type: "http", URL: "https://x.example.com/mcp", Always: true, Headers: map[string]string{"X-A": "a\x00b"},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "byte net/http rejects",
+		},
+		{
+			// Environment entries split at the first '='; os.Getenv("API=KEY") can
+			// never find anything, so the connector stays silently disabled.
+			name:       "gate var name containing '=' fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "a", EnabledEnv: []string{"API=KEY"}}),
+			wantStatus: statusFail,
+			wantDetail: `"API=KEY"`,
+		},
+		{
+			// exec.Cmd.Start rejects a NUL anywhere in argv.
+			name:       "stdio arg with a NUL byte fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "python3", Args: []string{"mcp\x00.py"}, EnabledEnv: []string{"K"}}),
+			wantStatus: statusFail,
+			wantDetail: "args[0] contains a NUL byte",
+		},
+		{
+			// enabled() returns false for not-always + no gate: declared, sound,
+			// and never offered on any box.
+			name:       "server with no activation path fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "a"}),
+			wantStatus: statusFail,
+			wantDetail: "no activation path",
+		},
+		{
+			// optional: true is a picker hint, not a gate — the raptive class of bug.
+			name:       "optional server with no gate still has no activation path",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "a", Optional: true}),
+			wantStatus: statusFail,
+			wantDetail: "no activation path",
+		},
+		{
+			name:       "always: true with no gate is ok",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "a", Always: true}),
+			wantStatus: statusOK,
+		},
+		{
+			// url.Parse keeps ":99999"; the transport rejects it only when dialling.
+			name:       "http url with an out-of-range port fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: "https://example.com:99999/mcp", Always: true}),
+			wantStatus: statusFail,
+			wantDetail: `port "99999" is not in 1-65535`,
+		},
+		{
+			name:       "http url with a valid explicit port is ok",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: "https://example.com:8443/mcp", Always: true}),
+			wantStatus: statusOK,
+		},
+		{
+			// A malformed URL may carry userinfo or a signed query; the diagnostic
+			// must name the server, never the URL.
+			name:       "url diagnostics never echo the url",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: " https://user:s3cr3t@example.com/mcp?sig=abc", Always: true}),
+			wantStatus: statusFail,
+			wantDetail: "url has surrounding whitespace",
 		},
 	}
 
@@ -1034,8 +1100,8 @@ func TestCheckMCPCatalog(t *testing.T) {
 // gate red on every real bundle.
 func TestCheckMCPCatalogNeverChecksCommandInstallation(t *testing.T) {
 	bundle := &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: []clientconfig.ServerDef{
-		{Name: "uvx_server", Command: "uvx", Args: []string{"some-mcp-package"}},
-		{Name: "node_server", Command: "npx", Args: []string{"-y", "another-mcp-package"}},
+		{Name: "uvx_server", Command: "uvx", Args: []string{"some-mcp-package"}, Always: true},
+		{Name: "node_server", Command: "npx", Args: []string{"-y", "another-mcp-package"}, Always: true},
 	}}
 	res := checkMCPCatalog(bundle, nil)
 	if res.Status != statusOK {
@@ -1136,5 +1202,75 @@ func TestCheckMCPCatalogFailsWhenOnlyPluginServerIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(res.Detail, `"has.dot"`) {
 		t.Errorf("Detail should name the dropped plugin server, got: %s", res.Detail)
+	}
+}
+
+// TestCheckMCPCatalogNeverEchoesURL: a manifest url may carry userinfo or a
+// signed query string, and validate-config output lands in JSON reports, CI
+// job summaries and journals. Every URL diagnostic must name the server and
+// never the URL — including the *url.Error text, which embeds it.
+func TestCheckMCPCatalogNeverEchoesURL(t *testing.T) {
+	const secret = "s3cr3t-token-value"
+	for _, u := range []string{
+		" https://user:" + secret + "@example.com/mcp",    // padded → whitespace branch
+		"https://user:" + secret + "@example.com:99999/x", // port branch
+		"://user:" + secret + "@bad",                      // parse-error branch (*url.Error embeds the URL)
+		"ftp://user:" + secret + "@example.com/",          // scheme branch
+	} {
+		bundle := &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: []clientconfig.ServerDef{
+			{Name: "remote", Type: "http", URL: u, Always: true},
+		}}
+		res := checkMCPCatalog(bundle, nil)
+		if res.Status != statusFail {
+			t.Errorf("url %q: Status = %q, want fail", u, res.Status)
+		}
+		if strings.Contains(res.Detail, secret) {
+			t.Errorf("url %q: diagnostic leaked the URL's embedded credential: %s", u, res.Detail)
+		}
+	}
+}
+
+// TestCheckManifestFiles pins the bundle-intrinsic half of checkManifest that
+// CI gates: the two prompt files every box reads. A missing chat.md fails
+// every interactive turn, yet Load and mcp_catalog both succeed without it.
+func TestCheckManifestFiles(t *testing.T) {
+	withPrompts := func(names ...string) *clientconfig.Bundle {
+		dir := t.TempDir()
+		for _, n := range names {
+			if err := os.WriteFile(filepath.Join(dir, n), []byte("# prompt\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return &clientconfig.Bundle{Dir: dir, SystemPromptsDir: dir}
+	}
+	cases := []struct {
+		name       string
+		bundle     *clientconfig.Bundle
+		bundleErr  error
+		wantStatus checkStatus
+		wantDetail string
+	}{
+		{"both prompts present is ok", withPrompts("chat.md", "default.md"), nil, statusOK, "system prompts present"},
+		{"missing chat.md fails", withPrompts("default.md"), nil, statusFail, "system prompt chat.md missing"},
+		{"missing default.md fails", withPrompts("chat.md"), nil, statusFail, "system prompt default.md missing"},
+		{"nil bundle degrades to a skip", nil, nil, statusWarn, "skipped (bundle not loaded)"},
+		{"load error degrades to a skip", withPrompts("chat.md", "default.md"), errors.New("nope"), statusWarn, "skipped (bundle not loaded)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := checkManifestFiles(tc.bundle, tc.bundleErr)
+			if res.Name != "manifest_files" {
+				t.Errorf("Name = %q, want manifest_files", res.Name)
+			}
+			if res.Blocking {
+				t.Error("manifest_files must never be Blocking — `manifest` owns the operator exit code; CI keys on status")
+			}
+			if res.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q (detail: %s)", res.Status, tc.wantStatus, res.Detail)
+			}
+			if !strings.Contains(res.Detail, tc.wantDetail) {
+				t.Errorf("Detail %q should contain %q", res.Detail, tc.wantDetail)
+			}
+		})
 	}
 }

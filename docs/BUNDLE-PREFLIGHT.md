@@ -68,8 +68,9 @@ four and is unsatisfiable on elcano/reklaim/zeta. So each caller names what it
 can honestly gate today and tightens it as its environment contract firms up,
 rather than the workflow hard-coding a set that is wrong for half the family.
 
-The floor is **`mcp_catalog`**, not `mcp_servers`, and that distinction is the
-substance of this note.
+The floor is **`mcp_catalog` and `manifest_files`**, not `mcp_servers`, and
+that distinction is the substance of this note. Both are gated whatever a
+caller passes.
 
 ### The `mcp_servers` trap
 
@@ -129,6 +130,17 @@ http header "Bad Header" (gated)     -> RED: mcp_catalog["remote_gated"]: header
 elcano-config (4 http servers) and reklaim-config (2) stayed `ok` throughout,
 so the URL and header rules matched no real declaration.
 
+Fourth round, floor now `mcp_catalog,manifest_files`, all seven bundles still
+green on it. Negatives on zeta-config copies, each red on exactly the intended
+check, plus an `always: true` http server on `:8443` as a control that stayed
+green:
+
+```
+system_prompts/chat.md deleted           -> manifest_files=fail: system prompt chat.md missing
+optional: true server, no gate           -> mcp_catalog=fail: mcp_catalog["dead_server"]: no activation path — set always: true or declare enabled_env / enabled_groups …
+gated http url …:99999                   -> mcp_catalog=fail: mcp_catalog["remote_gated"]: url port "99999" is not in 1-65535
+```
+
 ### `mcp_catalog`
 
 A check that walks the **full** `bundle.MCPCatalog` regardless of enable gates —
@@ -166,6 +178,27 @@ structure and deliberately **not** installation:
   default seat's routing identity.
 - script args resolve to a file under the bundle (reuses
   `Bundle.ValidateMCPArgPaths()`, which already walked the full catalog)
+- **an activation path.** A server that is not `always: true` and declares no
+  `enabled_env` / non-empty `enabled_groups` has none: `enabled()` returns
+  false for that combination on every box, so the server is declared,
+  structurally perfect, and never offered anywhere. `optional: true` and
+  `enabled_by_default` do not enable — they only shape the picker once a gate
+  is satisfied. This is the raptive class of bug seen from the other side.
+- http: **port in range** — `url.Parse` keeps `:99999` as a string and the
+  transport rejects it only when it first dials.
+- **names the process environment can represent** — `=` and NUL cannot occur
+  in an env var name (entries split at the first `=`), so
+  `enabled_env: ["API=KEY"]` can never be found and the connector stays
+  silently disabled. Stdio launch fields (command, args, env keys and values)
+  are also refused a NUL byte, which `exec.Cmd.Start` rejects outright.
+- http: **header values with only bytes `net/http` will send** — not just no
+  CR/LF but `httpguts.ValidHeaderFieldValue`, the transport's own rule; a NUL
+  or DEL fails the request at send time with "invalid header field value".
+- **URL diagnostics never echo the URL.** A manifest url may carry userinfo or
+  a signed query string, and this output lands in JSON reports, CI job
+  summaries and journals. Every URL problem names the server, never the value
+  — including the parse failure, because `*url.Error` embeds the URL. A test
+  plants a credential in the URL for each branch and asserts it never appears.
 - **no Agent Plugin problems.** An `mcp.json` server the plugin loader skips
   as invalid never reaches `MCPCatalog`, and `Load` still succeeds —
   `checkManifest` demotes `PluginProblems()` to advisories so a running box is
@@ -190,6 +223,25 @@ or `node`.
 change the exit code of `fleet validate-config` on any existing operator box.
 CI gets its signal from the status, not the exit code.
 
+### `manifest_files` — the other half of the floor
+
+`checkManifest` mixes two kinds of fact: files every box reads (`chat.md`, the
+interactive base prompt, and `default.md`, the scheduled one — a missing
+`chat.md` fails every interactive turn) and defaults a *box* supplies (the
+persona selected by `FLEET_PERSONA`). Gating `manifest` in CI pins half the
+family red for a true statement about the runner; leaving it ungated lets a
+deleted `chat.md` merge green, because `Load` and `mcp_catalog` both succeed
+without it and only the ungated `manifest` row noticed.
+
+`manifest_files` carries only the first kind, so the workflow can require it
+everywhere. It is a second check rather than a re-scoped `manifest` because
+`manifest` is blocking and operators read its exit code: narrowing it would
+change what `fleet validate-config` refuses to start on every existing box.
+
+Measured: deleting `system_prompts/chat.md` on a bundle copy →
+`manifest_files=fail: system prompt chat.md missing`, with `mcp_catalog` still
+`ok` — exactly the gap.
+
 ## Gating on `ok`, not on "not `fail`"
 
 The first version of the gate selected checks whose status was `fail`. That was
@@ -206,6 +258,14 @@ An **empty `gate_checks`** is refused for the same reason. A caller that passes
 "Every gated check passed" over a run that gated nothing, which is the exact
 failure this workflow exists to prevent. The table is still written first so
 the reason is visible in the job summary.
+
+The floor is a **floor**, not a default. `mcp_catalog` and `manifest_files`
+are added to whatever the caller names — a caller passing `gate_checks:
+manifest` alone would otherwise leave the one credential-independent
+connector check and the prompt-file check ungated, and a broken gated-off
+connector or a deleted `chat.md` would merge green. The summary says which
+checks were added and why, so nothing is silent; a caller can add checks but
+never remove those two.
 
 ## Untrusted-caller hardening
 
@@ -226,10 +286,40 @@ properties are load-bearing:
   top-level `json.py` gets it executed by the gate script's `import json`.
   Verified both ways before the fix landed: with `python3 -` the shadowing file
   runs; with `python3 -I -` the standard library is imported instead.
+- **Symlink containment before the loader runs.** The loader follows symlinks.
+  A `manifest.yaml` that is a symlink to `/proc/self/environ` would be read,
+  fail to parse, and the parse error would echo the offending source line —
+  the validator's own environment, runner service credentials included — into
+  the JSON report the gate step publishes to the job summary. A shell step
+  therefore refuses any symlink anywhere in the caller checkout whose target
+  resolves outside the workspace, and a `bundle_dir` that does, before any Go
+  runs. The whole workspace is scanned (minus fleet's own `.fleet-core`
+  checkout) so a chain through an in-repo directory cannot route around it.
+  Verified on hostile copies: `manifest.yaml → /proc/self/environ` and an
+  escaping `bundle_dir` both exit 1 with a `::error::`; a clean checkout and an
+  in-workspace symlink both pass.
 
 `fleet_ref` and `bundle_dir` are validated with the same allow-lists as
 `build-sandbox-image.yml`, for the same reason — `fleet_ref` selects source that
 is compiled and executed. Keep the lists in step.
+
+## `bundle_env` — non-secret deployment variables
+
+`Load` interpolates `${VAR}` over the whole manifest and fails for a bare
+reference that is still unset in any field *outside* the lazily-resolved
+connector env/header maps — `url:`, `command:`, `sandbox.image`
+(`internal/clientconfig/manifest_env.go`). None of the seven bundles does this
+today, but one that did would report `mcp_catalog: warn "skipped (bundle not
+loaded)"` on a secretless runner and stay red for a bundle the production env
+file makes valid.
+
+The reusable workflow therefore takes an optional `bundle_env` input: one
+`KEY=VALUE` per line, validated to a `[A-Za-z_][A-Za-z0-9_]*` key before the
+loader sees it, written to a runner-local file and passed as
+`FLEET_ENV_FILE`. It is for **non-secret** deployment variables only —
+workflow files are repository content, and the `credentials` check is
+*expected* to report absences in CI. Where a placeholder is acceptable,
+`${VAR:-default}` in the manifest needs no input at all.
 
 ## Scope and deviations
 

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // Agent Plugins (https://agent-plugins.org, specification v1.0.0) support for
@@ -1206,6 +1208,14 @@ func validatePluginHeaders(h map[string]string) error {
 		seen[lower] = name
 		if strings.ContainsAny(val, "\r\n") {
 			return fmt.Errorf("header %q value contains a line break", name)
+		}
+		// net/http applies its own byte rules at send time (no NUL, DEL or
+		// other control bytes; RFC 7230 field-vchar plus obs-text) and fails
+		// the request with "invalid header field value". Ask the same question
+		// here so a value that can never be sent is refused where the author
+		// can see it, not on the first enabled request.
+		if !httpguts.ValidHeaderFieldValue(val) {
+			return fmt.Errorf("header %q value contains a byte net/http rejects", name)
 		}
 	}
 	return nil

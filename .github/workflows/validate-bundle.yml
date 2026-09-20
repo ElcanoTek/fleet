@@ -67,6 +67,13 @@ name: Validate client bundle (reusable)
 # every declared server regardless of its enable gate, which is exactly the
 # credential-independent question CI is entitled to ask.
 #
+# `manifest_files` is the other half of the floor: the two prompt files every
+# box reads (chat.md, default.md), split out of `manifest` because `manifest`
+# also carries the box-supplied persona default that half the family cannot
+# satisfy on a runner. Without it, deleting chat.md merged green — Load and
+# mcp_catalog both succeed without it, and only the ungated `manifest` row
+# noticed. Both floor checks are gated whatever `gate_checks` says.
+#
 # Caller contract (in a client config repo):
 #
 #   name: Bundle preflight
@@ -81,7 +88,7 @@ name: Validate client bundle (reusable)
 #     validate:
 #       uses: ElcanoTek/fleet/.github/workflows/validate-bundle.yml@main
 #       with:
-#         gate_checks: "manifest,mcp_catalog"   # or just "mcp_catalog"
+#         gate_checks: "manifest,mcp_catalog,manifest_files"   # the last two are always gated
 
 on:
   workflow_call:
@@ -104,10 +111,25 @@ on:
           gate decorative. An empty value is refused for the same reason: a
           job that passes having gated nothing is the failure this workflow
           exists to prevent.
-          Default is the set that is bundle-intrinsic for every bundle today.
+          `mcp_catalog` and `manifest_files` are the floor: they are gated
+          whether or not they are named here, so a caller can add checks but
+          never remove those two.
         type: string
         required: false
-        default: "mcp_catalog"
+        default: "mcp_catalog,manifest_files"
+      bundle_env:
+        description: >-
+          Optional NON-SECRET deployment variables the manifest needs to load,
+          one KEY=VALUE per line (a bare `${VAR}` in a field outside the
+          connector env/header maps — url:, command:, sandbox.image — fails
+          the load while VAR is unset; see internal/clientconfig/manifest_env.go).
+          Written to a runner-local file and passed as FLEET_ENV_FILE. Never
+          put a credential here: workflow files are repository content, and
+          the credentials check is expected to report absences in CI. Prefer
+          `${VAR:-default}` in the manifest where a placeholder is acceptable.
+        type: string
+        required: false
+        default: ""
       fleet_ref:
         description: "fleet ref to build the validate-config binary from"
         type: string
@@ -121,10 +143,10 @@ on:
         required: false
         default: "config/default"
       gate_checks:
-        description: "Comma-separated checks that must report ok"
+        description: "Comma-separated checks that must report ok (mcp_catalog and manifest_files are always added)"
         type: string
         required: false
-        default: "mcp_catalog"
+        default: "mcp_catalog,manifest_files"
 
 # Checkout and build only. This workflow reads a manifest in a throwaway
 # runner and never spawns the bundle's servers: no registry, no push, no repo
@@ -179,6 +201,39 @@ jobs:
               echo "::error::bundle_dir contains a character outside [A-Za-z0-9._/-]. Refused before the run."; exit 1 ;;
           esac
           echo "bundle_dir accepted: '${REQUESTED:-.}'"
+
+      # On a pull_request run the caller checkout is untrusted, and the loader
+      # follows symlinks. A manifest.yaml that is a symlink to
+      # /proc/self/environ would be read, fail to parse, and the parse error
+      # would echo the offending source line into the JSON report the gate
+      # step publishes to the job summary — the validator's own environment,
+      # runner service credentials included, in a public place. So before the
+      # loader runs, refuse any symlink anywhere in the checkout whose target
+      # resolves outside the workspace, and a bundle_dir that does. The whole
+      # workspace is scanned, not just the bundle dir, so a chain through an
+      # in-repo directory cannot get around it. Pure shell, no Go involved.
+      - name: Contain symlinks in the caller checkout
+        run: |
+          set -euo pipefail
+          root=$(realpath "$GITHUB_WORKSPACE")
+          bdir=$(realpath "$GITHUB_WORKSPACE/$BUNDLE_DIR")
+          case "$bdir" in
+            "$root"|"$root"/*) ;;
+            *) echo "::error::bundle_dir resolves outside the workspace: $bdir"; exit 1 ;;
+          esac
+          bad=0
+          while IFS= read -r -d '' link; do
+            target=$(realpath -m -- "$link")
+            case "$target" in
+              "$root"|"$root"/*) ;;
+              *) echo "::error::symlink escapes the workspace: ${link#"$root"/} -> $target"; bad=1 ;;
+            esac
+          done < <(find "$root" -path "$root/.fleet-core" -prune -o -type l -print0)
+          if [ "$bad" != 0 ]; then
+            echo "::error::refusing to run the loader over a checkout with escaping symlinks"
+            exit 1
+          fi
+          echo "no escaping symlinks under the workspace"
 
       # Identical allow-list to build-sandbox-image.yml, and for the identical
       # reason: this ref selects source that is then COMPILED AND EXECUTED here.
@@ -257,8 +312,24 @@ jobs:
           # runner-owned dir so the only way that fires is a real defect, not
           # whatever ~/.cache looks like on this image.
           FLEET_DATA_DIR: ${{ runner.temp }}/fleet-data
+          BUNDLE_ENV: ${{ inputs.bundle_env }}
         run: |
           set -uo pipefail
+          # Non-secret deployment variables the manifest needs to load (see the
+          # bundle_env input). Each line must be KEY=VALUE with a shell-safe
+          # KEY; anything else is refused before the loader sees it. The file
+          # lives in runner.temp and is never uploaded.
+          : > "$RUNNER_TEMP/bundle.env"
+          while IFS= read -r line; do
+            case "$line" in ""|\#*) continue ;; esac
+            if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+              printf '%s\n' "$line" >> "$RUNNER_TEMP/bundle.env"
+            else
+              # Only the key is echoed — a malformed line may still be a value.
+              echo "::error::bundle_env line is not KEY=VALUE with a [A-Za-z_][A-Za-z0-9_]* key: '${line%%=*}'"; exit 1
+            fi
+          done <<< "$BUNDLE_ENV"
+          export FLEET_ENV_FILE="$RUNNER_TEMP/bundle.env"
           "$RUNNER_TEMP/fleet" validate-config \
             --bundle-path "$GITHUB_WORKSPACE/$BUNDLE_DIR" \
             --skip-network-checks --json > "$RUNNER_TEMP/report.json" 2> "$RUNNER_TEMP/report.err" || true
@@ -295,6 +366,17 @@ jobs:
           checks = report.get("checks", [])
           gated = [c.strip() for c in os.environ.get("GATE_CHECKS", "").split(",") if c.strip()]
 
+          # The floor is not a default, it is a floor. `mcp_catalog` is the one
+          # credential-independent question about the connectors, and
+          # `manifest_files` is the one about the two prompt files every box
+          # reads; a caller naming only `manifest` would leave both ungated and
+          # a broken gated-off connector — or a deleted chat.md — would merge
+          # green. Add them to whatever the caller named and say so in the
+          # summary, so the floor cannot be lowered by an input.
+          FLOOR = ["mcp_catalog", "manifest_files"]
+          forced = [f for f in FLOOR if gated and f not in gated]
+          gated += forced
+
           icon = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
           print("## Bundle preflight\n")
           print("| Check | Status | Gated | Detail |")
@@ -322,6 +404,9 @@ jobs:
           failed = [g for g in gated if by_name.get(g, {}).get("status") != "ok"]
 
           print("\n**Gated checks:** " + (", ".join(f"`{g}`" for g in gated) or "_none_"))
+          if forced:
+              print("\n_Added to the gated set because they are the floor and cannot be "
+                    "removed by `gate_checks`: " + ", ".join(f"`{f}`" for f in forced) + "._")
           print("\nUngated checks still run and are shown above. `credentials` is "
                 "expected to report absences here: this runner holds no production "
                 "secrets, which is why it does not gate.")
