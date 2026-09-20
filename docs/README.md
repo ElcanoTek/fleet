@@ -112,6 +112,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   [ADR-0054](adr/0054-agent-plugins.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
   `fleet mcp reload` / SIGHUP / admin endpoint): [`docs/MCP-RELOAD.md`](MCP-RELOAD.md)
+- **Gating a client bundle's manifest in its own CI** (the reusable
+  `validate-bundle.yml`, the `mcp_catalog` check, why `credentials` and
+  `manifest` cannot be the default gate):
+  [`docs/BUNDLE-PREFLIGHT.md`](BUNDLE-PREFLIGHT.md)
 - **Testing MCP servers** (`fleet mcp test` per-server smoke: handshake +
   tools/list with the boot loader's exact env/gates; plus the full testing
   ladder): [`docs/MCP-TESTING.md`](MCP-TESTING.md)
@@ -196,6 +200,7 @@ above fails otherwise.
 - [`BRANDING.md`](BRANDING.md) — White-labeling fleet from a bundle
 - [`BROWSERBASE.md`](BROWSERBASE.md) — Browserbase: hosted browser sessions with a human handoff (#987)
 - [`BUILDING-ON-FLEET.md`](BUILDING-ON-FLEET.md) — Building on fleet: the API as your automation substrate
+- [`BUNDLE-PREFLIGHT.md`](BUNDLE-PREFLIGHT.md) — Bundle preflight in CI — the reusable gate and the `mcp_catalog` check
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working

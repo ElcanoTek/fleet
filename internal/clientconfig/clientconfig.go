@@ -258,7 +258,10 @@ type Bundle struct {
 	Plugins []Plugin
 	// PluginRoots are the manifest's extra plugin roots, absolutized.
 	PluginRoots    []string
-	pluginProblems []string
+	pluginProblems []string // entry-level: decided by the bundle's own files
+	// pluginRootProblems are about this machine (a plugin_roots dir missing or
+	// unreadable here); see pluginLoadResult for why they are kept apart.
+	pluginRootProblems []string
 }
 
 // AgentPolicy is the bundle's client-configurable agent tool-behavior policy. It
@@ -1313,6 +1316,7 @@ func Load(dir string) (*Bundle, error) {
 	pl := loadPlugins(abs, m.PluginRoots, taken)
 	b.Plugins = pl.plugins
 	b.pluginProblems = pl.problems
+	b.pluginRootProblems = pl.rootProblems
 	b.pluginSkillOverlays = pl.overlays
 	b.MCPCatalog = append(b.MCPCatalog, pl.servers...)
 	// Inherit fleet's embedded hosted-server directory (after validate: bundle
@@ -2946,6 +2950,13 @@ func (b *Bundle) WebhookSecretEnvNames() []string {
 	}
 	return out
 }
+
+// FromPlugin reports whether this catalog entry came from an Agent Plugin's
+// mcp.json rather than the manifest. Plugin servers launch in the plugin root,
+// not the bundle, so bundle-relative path checks (script args, a
+// ./bin/server command) do not apply to them — the plugin loader already
+// resolved and contained those paths against the plugin root.
+func (s *ServerDef) FromPlugin() bool { return s.plugin != "" }
 
 // enabled evaluates the server's gate against the process env.
 func (s *ServerDef) enabled() bool {
