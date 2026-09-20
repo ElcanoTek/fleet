@@ -622,6 +622,13 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 	// The loop is a no-op when empty; the ok detail reads "no servers
 	// declared" at the end instead.
 	var problems []string
+	// Bundle-relative paths resolve against the absolute bundle dir, the same
+	// way ValidateMCPArgPaths and the runtime do; fall back to the raw dir if
+	// Abs fails so the check degrades to "relative to cwd" rather than skipping.
+	bundleDir := bundle.Dir
+	if abs, err := filepath.Abs(bundle.Dir); err == nil {
+		bundleDir = abs
+	}
 	seen := make(map[string]bool, len(bundle.MCPCatalog))
 	dupes := make(map[string]bool)
 	for i := range bundle.MCPCatalog {
@@ -636,7 +643,7 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 			dupes[s.Name] = true
 		}
 		seen[s.Name] = true
-		problems = append(problems, catalogServerProblems(s, label)...)
+		problems = append(problems, catalogServerProblems(s, label, bundleDir)...)
 	}
 	problems = append(problems, bundle.ValidateMCPArgPaths()...)
 	// A plugin problem means part of the DECLARED bundle was dropped or rejected
@@ -651,7 +658,15 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 	// plugin's stdio servers were skipped and the catalog under test is
 	// incomplete, so failing is still the honest answer (the CI workflow pins
 	// FLEET_DATA_DIR to a fresh runner.temp dir so it cannot arise there).
-	for _, p := range bundle.PluginProblems() {
+	//
+	// ENTRY problems only. Root-availability problems — an explicit
+	// plugin_roots dir such as /opt/fleet/site-plugins that is missing or
+	// unreadable HERE — are facts about the machine, not the bundle
+	// (docs/AGENT-PLUGINS.md supports absolute roots precisely so a site can
+	// mount plugins outside the repo). Folding them in would pin every PR of
+	// such a bundle red for a configuration that is valid on the box. They stay
+	// visible as `manifest` advisories, where the operator view belongs.
+	for _, p := range bundle.PluginEntryProblems() {
 		problems = append(problems, "plugin: "+p)
 	}
 
@@ -674,7 +689,7 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 // so the function stays readable as rules accumulate (they have — four review
 // rounds' worth). label is the `mcp_catalog["name"]` prefix every problem
 // carries. Nothing here touches the machine: no PATH lookup, no dial, no exec.
-func catalogServerProblems(s *clientconfig.ServerDef, label string) []string {
+func catalogServerProblems(s *clientconfig.ServerDef, label, bundleDir string) []string {
 	var problems []string
 	// The name becomes part of every tool name (mcp_<server>_<tool>), and
 	// upstream providers reject a dot or a space there. The loader does not
@@ -684,13 +699,39 @@ func catalogServerProblems(s *clientconfig.ServerDef, label string) []string {
 	if !clientconfig.ValidMCPServerName(s.Name) {
 		problems = append(problems, label+": name must be 1-64 chars of letters, digits, '_' or '-' (it becomes part of the mcp_<server>_<tool> tool name)")
 	}
+	problems = append(problems, catalogToolNameBudgetProblems(s, label)...)
 	problems = append(problems, catalogActivationProblems(s, label)...)
 	if s.Type == "http" {
 		problems = append(problems, catalogHTTPProblems(s, label)...)
 	} else {
-		problems = append(problems, catalogStdioProblems(s, label)...)
+		problems = append(problems, catalogStdioProblems(s, label, bundleDir)...)
 	}
 	return append(problems, catalogVarNameProblems(s, label)...)
+}
+
+// catalogToolNameBudgetProblems: providers cap a tool name at
+// MaxProviderToolNameLen (64) and the runtime emits mcp_<server>_<tool> with no
+// truncation, so the budget is shared. Where the manifest declares a tools
+// allowlist, every generated name is checked exactly; where it does not (tools
+// are discovered at connect time), the server name must at least leave room
+// for a one-character tool, or NO tool could ever be advertised. A too-long
+// name is not a warning — once the server's credentials enable it, every
+// model request that carries the tool fails.
+func catalogToolNameBudgetProblems(s *clientconfig.ServerDef, label string) []string {
+	var problems []string
+	fixed := len(clientconfig.MCPToolNamePrefix) + len(s.Name) + 1 // "mcp_" + name + "_"
+	if len(s.Tools) == 0 {
+		if fixed+1 > clientconfig.MaxProviderToolNameLen {
+			problems = append(problems, fmt.Sprintf("%s: name is %d chars; %s<name>_<tool> must fit in %d, which leaves no room for any tool name", label, len(s.Name), clientconfig.MCPToolNamePrefix, clientconfig.MaxProviderToolNameLen))
+		}
+		return problems
+	}
+	for _, tool := range s.Tools {
+		if n := fixed + len(tool); n > clientconfig.MaxProviderToolNameLen {
+			problems = append(problems, fmt.Sprintf("%s: tool %q would be advertised as a %d-char name (%s%s_%s); providers cap tool names at %d", label, tool, n, clientconfig.MCPToolNamePrefix, s.Name, tool, clientconfig.MaxProviderToolNameLen))
+		}
+	}
+	return problems
 }
 
 // catalogActivationProblems: a server that is not `always` and declares no
@@ -734,9 +775,11 @@ func catalogHTTPProblems(s *clientconfig.ServerDef, label string) []string {
 		problems = append(problems, label+": url does not parse")
 	case u.Scheme != "http" && u.Scheme != "https":
 		problems = append(problems, fmt.Sprintf("%s: url scheme %q is not http/https", label, u.Scheme))
-	case u.Host == "":
-		// url.Parse accepts "https://", "https:///mcp" and the opaque
-		// "http:foo" without complaint; none can be dialled.
+	case u.Hostname() == "":
+		// url.Parse accepts "https://", "https:///mcp", the opaque "http:foo"
+		// AND "https://:443/mcp" (Host ":443", Hostname "") without complaint;
+		// none can be dialled, and the last has nothing to derive SNI or the
+		// certificate name from. Hostname(), not Host, is the test.
 		problems = append(problems, label+": url has no host")
 	case u.Port() != "":
 		// url.Parse keeps ":99999" as a string; the transport rejects it as an
@@ -763,13 +806,25 @@ func catalogHTTPProblems(s *clientconfig.ServerDef, label string) []string {
 // argv or the environment. Env values are checked pre-interpolation (${VAR}
 // refs or literals); an env KEY with '=' or NUL cannot be represented in a
 // process environment at all.
-func catalogStdioProblems(s *clientconfig.ServerDef, label string) []string {
+func catalogStdioProblems(s *clientconfig.ServerDef, label, bundleDir string) []string {
 	var problems []string
 	switch {
 	case strings.TrimSpace(s.Command) == "":
 		problems = append(problems, label+": stdio server has empty command")
 	case s.Command != strings.TrimSpace(s.Command):
 		problems = append(problems, fmt.Sprintf("%s: command %q has surrounding whitespace", label, s.Command))
+	case !filepath.IsAbs(s.Command) && strings.ContainsRune(s.Command, os.PathSeparator) && !s.FromPlugin():
+		// A command WITH a path separator that is not absolute is a file the
+		// bundle ships (./mcp/server, .venv/bin/python) — bundle content, not a
+		// runner-installed dependency — and probeMCPServer already resolves it
+		// against the bundle dir. So it IS structural: check it exists and is
+		// executable, exactly as the runtime will. Bare names (python3, uvx)
+		// stay exempt: that is installation. Absolute paths stay exempt: they
+		// name the deployment box's filesystem, not the bundle's. Plugin
+		// servers launch in the plugin root and were resolved by its loader.
+		if p := filepath.Join(bundleDir, s.Command); !isExecutableFile(p) {
+			problems = append(problems, fmt.Sprintf("%s: bundle-relative command %q is not an executable file under the bundle", label, s.Command))
+		}
 	}
 	if strings.IndexByte(s.Command, 0) >= 0 {
 		problems = append(problems, label+": command contains a NUL byte")

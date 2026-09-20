@@ -320,13 +320,17 @@ jobs:
           # KEY; anything else is refused before the loader sees it. The file
           # lives in runner.temp and is never uploaded.
           : > "$RUNNER_TEMP/bundle.env"
+          n=0
           while IFS= read -r line; do
+            n=$((n+1))
             case "$line" in ""|\#*) continue ;; esac
             if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
               printf '%s\n' "$line" >> "$RUNNER_TEMP/bundle.env"
             else
-              # Only the key is echoed — a malformed line may still be a value.
-              echo "::error::bundle_env line is not KEY=VALUE with a [A-Za-z_][A-Za-z0-9_]* key: '${line%%=*}'"; exit 1
+              # Nothing from the line is echoed. The malformed case is exactly
+              # the one where the whole line may BE a value (a token pasted
+              # without its KEY=), and this log is public. Line number only.
+              echo "::error::bundle_env line $n is not KEY=VALUE with a [A-Za-z_][A-Za-z0-9_]* key (content withheld)"; exit 1
             fi
           done <<< "$BUNDLE_ENV"
           export FLEET_ENV_FILE="$RUNNER_TEMP/bundle.env"
@@ -401,7 +405,11 @@ jobs:
           # not "ok" stops the merge.
           by_name = {c.get("name"): c for c in checks}
           unknown = [g for g in gated if g not in by_name]
-          failed = [g for g in gated if by_name.get(g, {}).get("status") != "ok"]
+          # Only names the report actually contains: an unknown name is reported
+          # by its own branch below, and putting it here too made the detail
+          # loop KeyError on by_name[g] — a red job, but with a traceback where
+          # the actionable line should be.
+          failed = [g for g in gated if g in by_name and by_name[g].get("status") != "ok"]
 
           print("\n**Gated checks:** " + (", ".join(f"`{g}`" for g in gated) or "_none_"))
           if forced:

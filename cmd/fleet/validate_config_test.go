@@ -1072,6 +1072,66 @@ func TestCheckMCPCatalog(t *testing.T) {
 			wantStatus: statusFail,
 			wantDetail: "url has surrounding whitespace",
 		},
+		{
+			// Host is ":443" but Hostname is "": nothing to dial or derive SNI from.
+			name:       "http url with a port but no hostname fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: "https://:443/mcp", Always: true}),
+			wantStatus: statusFail,
+			wantDetail: "url has no host",
+		},
+		{
+			// 59 chars passes the shape regex but mcp_<59>_<1 char> is already 65.
+			name:       "server name that leaves no room for any tool name fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: strings.Repeat("a", 59), Command: "a", Always: true}),
+			wantStatus: statusFail,
+			wantDetail: "leaves no room for any tool name",
+		},
+		{
+			// With an allowlist the exact generated name is checked: mcp_ + 10 + _ + 50 = 65.
+			name: "declared tool whose generated name exceeds the provider cap fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "abcdefghij", Command: "a", Always: true, Tools: []string{"ok_tool", strings.Repeat("t", 50)},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "65-char name",
+		},
+		{
+			// mcp_ + 10 + _ + 49 = 64 exactly: at the cap is fine.
+			name: "declared tools that fit the provider cap are ok",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "abcdefghij", Command: "a", Always: true, Tools: []string{"ok_tool", strings.Repeat("t", 49)},
+			}),
+			wantStatus: statusOK,
+		},
+		{
+			// A command with a path separator is bundle content, not a PATH
+			// dependency; probeMCPServer resolves it against the bundle dir too.
+			name:       "bundle-relative command that does not exist fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "./mcp/server", Always: true}),
+			wantStatus: statusFail,
+			wantDetail: `bundle-relative command "./mcp/server" is not an executable file`,
+		},
+		{
+			name: "bundle-relative command that exists and is executable is ok",
+			bundle: func() *clientconfig.Bundle {
+				b := catalog(clientconfig.ServerDef{Name: "local", Command: "./mcp/server", Always: true})
+				if err := os.MkdirAll(filepath.Join(b.Dir, "mcp"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(b.Dir, "mcp", "server"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return b
+			}(),
+			wantStatus: statusOK,
+		},
+		{
+			// An absolute command names the box's filesystem, not the bundle's —
+			// installation, exempt. Bare names likewise (pinned separately).
+			name:       "absolute command path is not checked for existence",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "/opt/definitely/not/here/python3", Always: true}),
+			wantStatus: statusOK,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1272,5 +1332,40 @@ func TestCheckManifestFiles(t *testing.T) {
 				t.Errorf("Detail %q should contain %q", res.Detail, tc.wantDetail)
 			}
 		})
+	}
+}
+
+// TestCheckMCPCatalogIgnoresDeploymentLocalPluginRoots: an absolute
+// plugin_roots entry such as /opt/fleet/site-plugins legitimately exists only
+// on the deployment box (docs/AGENT-PLUGINS.md). The loader records its
+// absence here as a problem; folding that into mcp_catalog would pin every PR
+// of such a bundle red for a configuration that is valid in production. The
+// catalog check must consume PluginEntryProblems only, and the root problem
+// must still be visible through PluginProblems for the manifest advisory.
+func TestCheckMCPCatalogIgnoresDeploymentLocalPluginRoots(t *testing.T) {
+	t.Setenv("FLEET_DATA_DIR", t.TempDir())
+	dir := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "site-plugins-not-on-this-machine")
+	manifest := "skills_builtin: false\nplugin_roots: [\"" + missing + "\"]\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("Load must succeed — a missing explicit root is a problem, not a load failure: %v", err)
+	}
+	if len(bundle.PluginRootProblems()) == 0 {
+		t.Fatal("fixture no longer produces a root problem; the test proves nothing")
+	}
+	if n := len(bundle.PluginEntryProblems()); n != 0 {
+		t.Fatalf("a missing root must not be classified as an entry problem, got %d: %v", n, bundle.PluginEntryProblems())
+	}
+	if len(bundle.PluginProblems()) == 0 {
+		t.Error("PluginProblems() must still surface the root problem for the manifest advisory")
+	}
+
+	res := checkMCPCatalog(bundle, nil)
+	if res.Status != statusOK {
+		t.Fatalf("Status = %q (%s), want ok: a deployment-local plugin root must not fail the catalog gate", res.Status, res.Detail)
 	}
 }

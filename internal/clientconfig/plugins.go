@@ -359,6 +359,20 @@ var pluginServerNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 // pattern to manifest servers instead of carrying a second copy that drifts.
 func ValidMCPServerName(name string) bool { return pluginServerNameRe.MatchString(name) }
 
+// MaxProviderToolNameLen is the longest function/tool name the upstream
+// providers accept: OpenAI-compatible APIs and Anthropic both cap it at 64
+// characters. The agent advertises a server's tools as mcp_<server>_<tool>
+// (agentcore.mcpTool.Name) with no truncation, so the budget is shared between
+// the server name and each tool name — a 59-character server name leaves no
+// room for any tool at all. The runtime does not enforce this (it would have
+// to drop tools mid-turn); the mcp_catalog preflight does, against the tools
+// allowlist where one is declared.
+const MaxProviderToolNameLen = 64
+
+// MCPToolNamePrefix is what the agent prepends to a server's tool names; kept
+// beside the budget so the preflight computes the same name the runtime emits.
+const MCPToolNamePrefix = "mcp_"
+
 // httpHeaderNameRe is RFC 7230 token syntax for a header field name.
 var httpHeaderNameRe = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
@@ -428,7 +442,16 @@ type pluginLoadResult struct {
 	plugins  []Plugin
 	servers  []ServerDef
 	overlays []skillOverlay
+	// problems are ENTRY-level: a plugin.json the loader refused, an mcp.json
+	// server skipped as invalid, a skill that would not parse. Decided by the
+	// bundle's own files, so they hold on any machine.
 	problems []string
+	// rootProblems are ROOT-availability: an explicit plugin_roots entry that
+	// is missing, not a directory, or unreadable HERE. An absolute root such as
+	// /opt/fleet/site-plugins legitimately exists only on the deployment box
+	// (docs/AGENT-PLUGINS.md), so these are facts about the machine, kept apart
+	// so a preflight can report them without failing a bundle for them.
+	rootProblems []string
 }
 
 // validPluginName reports whether name satisfies spec §5.5: 1–64 chars of
@@ -635,17 +658,17 @@ func loadPlugins(bundleDir string, extraRoots []string, takenServerNames map[str
 			// The fixed plugins/ dir is optional (a bundle need not ship
 			// plugins); a root the operator listed explicitly is not.
 			if i > 0 {
-				res.problems = append(res.problems, fmt.Sprintf("plugin_roots: %s: %v", root, err))
+				res.rootProblems = append(res.rootProblems, fmt.Sprintf("plugin_roots: %s: %v", root, err))
 			}
 			continue
 		}
 		if !info.IsDir() {
-			res.problems = append(res.problems, fmt.Sprintf("%s exists but is not a directory; no plugins loaded from it", root))
+			res.rootProblems = append(res.rootProblems, fmt.Sprintf("%s exists but is not a directory; no plugins loaded from it", root))
 			continue
 		}
 		entries, err := os.ReadDir(root)
 		if err != nil {
-			res.problems = append(res.problems, fmt.Sprintf("%s: cannot read: %v", root, err))
+			res.rootProblems = append(res.rootProblems, fmt.Sprintf("%s: cannot read: %v", root, err))
 			continue
 		}
 		for _, e := range entries {
@@ -1230,12 +1253,33 @@ func validatePluginHeaders(h map[string]string) error {
 // the server's credentials enabled it. One rule, exported, no second copy.
 func ValidateHTTPHeaders(h map[string]string) error { return validatePluginHeaders(h) }
 
-// PluginProblems returns the human-readable problems the plugin loader
-// reported (unknown manifest fields, skipped skills/servers, rejected
-// plugins). Load logs them as warnings; `fleet validate-config` surfaces them
-// as advisories. Empty means every discovered plugin loaded cleanly.
+// PluginProblems returns every human-readable problem the plugin loader
+// reported — root availability first, then entry-level (unknown manifest
+// fields, skipped skills/servers, rejected plugins). Load logs them as
+// warnings; `fleet validate-config`'s manifest check surfaces them as
+// advisories. Empty means every discovered plugin loaded cleanly.
 func (b *Bundle) PluginProblems() []string {
+	out := make([]string, 0, len(b.pluginRootProblems)+len(b.pluginProblems))
+	out = append(out, b.pluginRootProblems...)
+	return append(out, b.pluginProblems...)
+}
+
+// PluginEntryProblems is the subset of PluginProblems decided by the bundle's
+// own files: a plugin.json the loader refused, an mcp.json server skipped as
+// invalid, a skill that would not parse. These hold on any machine, which is
+// what lets `fleet validate-config`'s mcp_catalog preflight fail a bundle for
+// them in CI.
+func (b *Bundle) PluginEntryProblems() []string {
 	return append([]string(nil), b.pluginProblems...)
+}
+
+// PluginRootProblems is the subset of PluginProblems about the MACHINE: an
+// explicit plugin_roots entry that is missing, not a directory, or unreadable
+// here. An absolute root such as /opt/fleet/site-plugins legitimately exists
+// only on the deployment box, so a preflight reports these without failing
+// the bundle for them.
+func (b *Bundle) PluginRootProblems() []string {
+	return append([]string(nil), b.pluginRootProblems...)
 }
 
 // SkillOrigin says where a name in the merged skill roster came from.

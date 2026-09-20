@@ -199,6 +199,24 @@ structure and deliberately **not** installation:
   summaries and journals. Every URL problem names the server, never the value
   — including the parse failure, because `*url.Error` embeds the URL. A test
   plants a credential in the URL for each branch and asserts it never appears.
+- **a tool-name budget.** Providers cap a tool name at 64 characters and the
+  runtime emits `mcp_<server>_<tool>` with no truncation
+  (`clientconfig.MaxProviderToolNameLen`), so the budget is shared. Where the
+  manifest declares a `tools` allowlist every generated name is checked
+  exactly; where it does not, the server name must at least leave room for a
+  one-character tool — a 59-character name can never advertise anything. Once
+  enabled, every model request carrying an over-long tool fails.
+- http: **a hostname**, not just a host — `https://:443/mcp` parses with
+  `Host == ":443"` and an empty `Hostname()`, and there is nothing to dial or
+  to derive SNI from.
+- stdio: **a bundle-relative command exists and is executable.** A command
+  containing a path separator that is not absolute (`./mcp/server`,
+  `.venv/bin/python`) is a file the bundle ships, not a runner-installed
+  dependency — `probeMCPServer` already resolves it against the bundle dir —
+  so checking it is structure, not installation. Bare names stay exempt
+  (installation); absolute paths stay exempt (the box's filesystem); plugin
+  servers stay exempt (resolved by the plugin loader against the plugin root,
+  which is why `ServerDef.FromPlugin` is exported).
 - **no Agent Plugin problems.** An `mcp.json` server the plugin loader skips
   as invalid never reaches `MCPCatalog`, and `Load` still succeeds —
   `checkManifest` demotes `PluginProblems()` to advisories so a running box is
@@ -212,7 +230,14 @@ structure and deliberately **not** installation:
   deliberately **no** "empty catalog → ok" early return, because a bundle with
   no manifest servers whose *only* plugin server was rejected arrives with an
   empty `MCPCatalog` and a non-empty `PluginProblems()` — the exact case an
-  early return would wave through.
+  early return would wave through. **Entry** problems only, though: an
+  explicit `plugin_roots` dir such as `/opt/fleet/site-plugins` that is
+  missing or unreadable *on the runner* is a fact about the machine — absolute
+  roots exist precisely so a site can mount plugins outside the repo — and
+  folding it in would pin every PR of such a bundle red. The loader now keeps
+  root-availability problems apart (`PluginRootProblems`); the catalog check
+  consumes `PluginEntryProblems`, and the root ones stay visible as `manifest`
+  advisories, where the operator view belongs.
 
 It does **not** check whether a command resolves on `PATH`. That is
 environmental, it belongs to `mcp_servers` on a real box, and putting it here
@@ -323,10 +348,18 @@ workflow files are repository content, and the `credentials` check is
 
 ## Scope and deviations
 
-Shipped: the reusable workflow, the `mcp_catalog` check and its tests, and
-caller workflows in all seven bundle repos (elcano, reklaim, zeta, omnicom,
-raptive, example, example-kubernetes), plus the `optional: true` template fix in
-example-config and raptive-config.
+Shipped **in this repository**: the reusable workflow, the `mcp_catalog` and
+`manifest_files` checks and their tests, and the exported
+`clientconfig.ValidMCPServerName` / `ValidateHTTPHeaders` /
+`PluginEntryProblems` / `PluginRootProblems` helpers they rely on.
+
+Coordinated, **pending merge elsewhere**: caller workflows are open as PRs in
+all seven bundle repos (elcano, reklaim, zeta, omnicom, raptive, example,
+example-kubernetes), with the `optional: true` template fix in example-config
+and raptive-config. They reference this workflow `@main`, so this PR must merge
+first; until it does their `bundle-preflight` job cannot resolve its `uses:`.
+Nothing in a bundle repo is delivered by this change — this note will be
+updated to "shipped" as those PRs land.
 
 Deliberately not shipped:
 
