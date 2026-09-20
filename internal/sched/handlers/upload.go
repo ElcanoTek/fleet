@@ -272,6 +272,19 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	tempDir := filepath.Join(h.config.DataDir, "temp_uploads")
 
+	// A missing temp_uploads root means nothing was ever staged — "nothing to
+	// clean", not an error: logging it produced an hourly ERROR on every box
+	// that has never received an upload. Mirrors worktree.PruneStale's
+	// missing-dir early return. A stat failure that is NOT absence (broken
+	// permissions, dangling symlink) still logs — that one an operator must
+	// see.
+	if _, err := os.Stat(tempDir); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("Error accessing temp uploads dir %s: %v", tempDir, err)
+		}
+		return
+	}
+
 	err := filepath.Walk(tempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			// Log but continue walking - we want to clean up as many files as possible

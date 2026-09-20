@@ -83,6 +83,56 @@ func TestPruneStaleMissingDirIsNotAnError(t *testing.T) {
 	}
 }
 
+// On the majority of boxes the workspace root is not a git repository at all.
+// The sweep must stay quiet there — the git-record prune has nothing to clean
+// and used to log an hourly WARNING the operator could not act on — while the
+// filesystem sweep still does its real work.
+func TestPruneStaleNonGitRootIsQuiet(t *testing.T) {
+	root := t.TempDir()
+	old := mkWorktreeDir(t, root, "task-old", 48*time.Hour)
+
+	res, err := PruneStale(context.Background(), root, 24*time.Hour, false)
+	if err != nil {
+		t.Fatalf("PruneStale: %v", err)
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("non-git root must not warn: %v", res.Warnings)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("aged worktree %s survived the sweep (stat err %v)", old, err)
+	}
+}
+
+// A root that LOOKS like a git top level but whose git layer is broken (here a
+// gitfile pointing nowhere) must still surface git's failure as a warning: a
+// wedged or unreadable repository is exactly what an operator needs to see.
+func TestPruneStaleBrokenGitLayerStillWarns(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: /nonexistent/gitdir\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := mkWorktreeDir(t, root, "task-old", 48*time.Hour)
+
+	res, err := PruneStale(context.Background(), root, 24*time.Hour, false)
+	if err != nil {
+		t.Fatalf("PruneStale: %v", err)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "git worktree prune") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a broken git layer should warn, got: %v", res.Warnings)
+	}
+	// The directory sweep is independent of git's state: an aged directory
+	// git cannot list is unknown to git, so it falls back to a plain delete.
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("aged worktree %s survived the sweep (stat err %v)", old, err)
+	}
+}
+
 // A caller that passes a zero duration must not get "delete everything" — the
 // age bound is the only thing standing between the sweep and a running task's
 // checkout, so a zero is replaced with the default rather than honoured.

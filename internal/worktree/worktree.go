@@ -79,7 +79,10 @@ func (r Result) Count() int { return len(r.Removed) }
 //
 //  1. `git worktree prune` cleans git-side admin records for worktrees whose
 //     directory is already gone. This frees no disk; it stops git's
-//     .git/worktrees metadata from accumulating.
+//     .git/worktrees metadata from accumulating. It is skipped when root is
+//     not a git top-level (the common box, which never enables worktree
+//     isolation): there are no records to clean, and the command would only
+//     fail with "not a git repository".
 //  2. A filesystem sweep removes <root>/.fleet-worktrees/* directories older
 //     than olderThan — the part that actually frees disk.
 //
@@ -119,7 +122,17 @@ func PruneStale(ctx context.Context, root string, olderThan time.Duration, dryRu
 		olderThan = MinPruneAge
 	}
 
-	if !dryRun {
+	// Only a git top-level can hold fleet-created worktree admin records, and
+	// the workspace root on most boxes was never a repository at all: `git
+	// worktree prune` there fails with exit 128 "not a git repository", which
+	// logged an hourly WARNING the operator can do nothing about. Checking the
+	// layout rather than matching that error text keeps genuine git failures —
+	// a wedged repo, an unreadable .git — on the warning path: those still run
+	// and still warn. .git is checked as dir-or-file because a linked
+	// worktree's gitdir is a file. A root with no .git of its own is skipped
+	// even if it sits inside a parent repository: fleet registers worktrees
+	// only against the top-level repo, so there are no records to prune.
+	if !dryRun && isGitTopLevel(root) {
 		if out, err := gitOutput(ctx, root, "worktree", "prune"); err != nil {
 			// Non-fatal: the directory sweep below is the part that frees disk.
 			res.Warnings = append(res.Warnings,
@@ -185,6 +198,19 @@ func PruneStale(ctx context.Context, root string, olderThan time.Duration, dryRu
 		res.Removed = append(res.Removed, path)
 	}
 	return res, nil
+}
+
+// isGitTopLevel reports whether root carries a .git (directory or gitfile —
+// a linked worktree's gitdir is a file). Absence is a quiet skip: no .git
+// means fleet could never have registered a worktree there. Any OTHER stat
+// error (permissions) returns true so the prune still runs and git's own
+// failure lands on the warning path instead of being swallowed here.
+func isGitTopLevel(root string) bool {
+	_, err := os.Stat(filepath.Join(root, ".git"))
+	if err == nil {
+		return true
+	}
+	return !os.IsNotExist(err)
 }
 
 // listGitWorktrees parses `git worktree list --porcelain` for the repository

@@ -430,3 +430,45 @@ func TestScheduledTerminalErrorBudgetStopCarriesFacts(t *testing.T) {
 		t.Errorf("reason %q for a run that produced nothing must say so plainly", msg)
 	}
 }
+
+// The terminal report must name WHICH ceiling fired. A token-ceiling stop used
+// to be reconstructed as a cost-only sentence ("run stopped after $X spent"),
+// so an operator saw $0.03 against a $50 deployment ceiling with no token
+// numbers and no way to tell why the run stopped. The guard's own sentence is
+// preferred now; the audit facts still append.
+func TestScheduledTerminalErrorBudgetStopNamesTheCeiling(t *testing.T) {
+	token := scheduledTerminalError(context.Background(), agentcore.Result{
+		StoppedByBudget:  true,
+		Cancelled:        true,
+		BudgetStopReason: "TOKEN_CEILING_REACHED: this turn has processed 2000 uncached tokens which meets or exceeds the configured ceiling of 2000. Stop calling tools and end the turn with what you have.",
+		Usage:            agentcore.RunUsage{PromptTokens: 1800, CompletionTokens: 200},
+	})
+	if !errors.Is(token, agentcore.ErrCostCeilingExceeded) {
+		t.Fatalf("token stop returned %v, want ErrCostCeilingExceeded", token)
+	}
+	msg := token.Error()
+	for _, want := range []string{"TOKEN_CEILING_REACHED", "2000 uncached tokens", "ceiling of 2000", "0 critical action(s) completed"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("token-stop message %q should contain %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "$") {
+		t.Errorf("token-stop message must not fabricate a cost claim: %q", msg)
+	}
+
+	cost := scheduledTerminalError(context.Background(), agentcore.Result{
+		StoppedByBudget:  true,
+		Cancelled:        true,
+		BudgetStopReason: "COST_CEILING_REACHED: this turn has accumulated $0.0260 which meets or exceeds the configured ceiling of $0.03. Stop calling tools and end the turn with what you have.",
+		Usage:            agentcore.RunUsage{CostUSD: 0.026},
+	})
+	cmsg := cost.Error()
+	for _, want := range []string{"COST_CEILING_REACHED", "$0.0260", "$0.03", "0 critical action(s) completed"} {
+		if !strings.Contains(cmsg, want) {
+			t.Errorf("cost-stop message %q should contain %q", cmsg, want)
+		}
+	}
+	if strings.Count(cmsg, "cost/token ceiling exceeded") != 1 {
+		t.Errorf("sentinel text must appear exactly once (the failure class), got: %q", cmsg)
+	}
+}

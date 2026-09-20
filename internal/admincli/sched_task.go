@@ -153,7 +153,7 @@ func listTasks(st taskListStore, w, errW io.Writer, status string, limit int, as
 	for _, t := range tasks {
 		rows = append(rows, []string{shortID(t.ID), taskLabel(t), string(t.Status), fmt.Sprint(t.Priority), taskSchedule(t), taskModel(t)})
 	}
-	if err := renderTable(w, []string{"ID", "NAME/PROMPT", "STATUS", "PRI", "SCHEDULE", "MODEL"}, rows); err != nil {
+	if err := renderTable(w, []string{"ID", "LABEL", "STATUS", "PRI", "SCHEDULE", "MODEL"}, rows); err != nil {
 		return err
 	}
 	if total > len(tasks) {
@@ -181,24 +181,34 @@ func validTaskStatusFilter(s string) bool {
 // and paste-completable via the web UI / export when the full ID is needed.
 func shortID(id uuid.UUID) string { return id.String()[:8] }
 
-// taskLabel prefers the operator-assigned name, falling back to a one-line
-// prompt excerpt so unnamed tasks are still recognizable.
+// taskLabel is the task's operator-facing label: the operator-assigned Name,
+// then the chat-supplied Title — Name is deliberately cleared on every
+// recurrence occurrence, re-run and clone while Title is carried, so without
+// the Title rung every occurrence of a named recurring job would list as a
+// raw prompt blob — then a one-line prompt excerpt so unnamed tasks are
+// still recognizable.
 func taskLabel(t *models.Task) string {
 	if t.Name != "" {
-		return excerpt(t.Name, 40)
+		return excerpt(t.Name)
 	}
-	return excerpt(t.Prompt, 40)
+	if t.Title != "" {
+		return excerpt(t.Title)
+	}
+	return excerpt(t.Prompt)
 }
 
-// excerpt collapses whitespace/newlines and truncates to max runes with an
-// ellipsis, so multi-line prompts can't break the table.
-func excerpt(s string, maxRunes int) string {
+// excerptLimit is the rune budget for a one-line task label in the listing.
+const excerptLimit = 40
+
+// excerpt collapses whitespace/newlines and truncates to excerptLimit runes
+// with an ellipsis, so multi-line prompts can't break the table.
+func excerpt(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	r := []rune(s)
-	if len(r) <= maxRunes {
+	if len(r) <= excerptLimit {
 		return s
 	}
-	return string(r[:maxRunes-1]) + "…"
+	return string(r[:excerptLimit-1]) + "…"
 }
 
 // taskSchedule renders the cadence column: the cron recurrence when set,

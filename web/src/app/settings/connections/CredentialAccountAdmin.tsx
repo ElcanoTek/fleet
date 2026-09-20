@@ -182,6 +182,7 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
               <ConnField label="Server">
                 <span className="select-wrap block">
                   <select
+                    id="credentialAccountServer"
                     className={`${SETTINGS_INPUT} appearance-none pr-8!`}
                     value={selectedServer}
                     onChange={(e) => setServer(e.target.value)}
@@ -197,6 +198,7 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
               </ConnField>
               <ConnField label="Account name" grow>
                 <input
+                  id="credentialAccountName"
                   className={SETTINGS_INPUT}
                   type="text"
                   placeholder="e.g. client_a"
@@ -211,6 +213,7 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
               {secrets.map((s, idx) => (
                 <div key={idx} className="mb-2 flex items-center gap-2">
                   <input
+                    id={`credentialSecretKey-${idx}`}
                     className={SETTINGS_INPUT}
                     type="text"
                     placeholder="ENV_KEY"
@@ -221,6 +224,7 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
                   <input
                     // WRITE-ONLY: a password field that always starts empty. The
                     // app never reads a stored secret back into here.
+                    id={`credentialSecretValue-${idx}`}
                     className={SETTINGS_INPUT}
                     type="password"
                     autoComplete="new-password"

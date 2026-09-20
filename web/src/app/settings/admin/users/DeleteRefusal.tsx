@@ -203,11 +203,12 @@ function TransferProject({
   }
   return (
     <div className="grid gap-[0.25rem]">
-      <label className="grid gap-[0.2rem]">
+      <label className="grid gap-[0.2rem]" htmlFor={`transferOwner-${project.id}`}>
         <span className="[overflow-wrap:anywhere]">
           Hand {project.name} to
         </span>
         <select
+          id={`transferOwner-${project.id}`}
           className="w-full max-w-[18rem] rounded-[var(--radius-sm)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-[0.4rem] py-[0.25rem] text-[0.72rem]"
           value={choice}
           disabled={busy || members === null}

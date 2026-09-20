@@ -51,6 +51,15 @@ iteration.
 Each store method treats a non-positive TTL as *disabled*, so turning a
 retention knob off yields a no-op rather than a surprise deletion.
 
+**A reclaimer with nothing to reclaim is silent.** Most boxes never receive an
+orchestrator upload and never enable worktree isolation, so `temp_uploads` and
+`.fleet-worktrees` simply do not exist on them. Both sweeps treat an absent
+root as *nothing to clean* and log nothing — an hourly ticker turns one
+cosmetic log line into 24 a day, and an operator who learns to ignore this
+pass stops reading it when it has something real to say. A stat failure that
+is **not** absence (a permissions problem, an unreadable `.git`) is still
+reported: that one an operator must see.
+
 ### The post-turn pass is now an optimization
 
 A completed chat turn still triggers the same pass — it reclaims promptly after
@@ -265,7 +274,12 @@ What this does **not** do:
   **locked** is kept, one git knows is removed through git, and only a
   directory git does not list is deleted directly. A box whose wall-clock
   ceiling is raised above 4h must raise the prune age to match; the floor
-  cannot see the override.
+  cannot see the override. The `git worktree prune` half of the sweep runs
+  only when the workspace root actually carries a `.git` — fleet registers
+  worktrees against the top-level repo, so a root that is not one can hold no
+  records to prune, and running git there just to report exit 128 was noise.
+  A root that *is* a repository still prunes, and a genuine git failure there
+  still warns.
 - **The persistent-session cap stays soft.** See above; a busy session is never
   evicted, so the live count can exceed the limit transiently.
 - **No automatic `--deep` prune.** Named-image removal stays a human decision.

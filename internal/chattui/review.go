@@ -265,7 +265,7 @@ func (m *model) showApprovals() tea.Cmd {
 	}
 	var b strings.Builder
 	for _, a := range m.pending {
-		fmt.Fprintf(&b, "Approval %s · %s\n%s\n", a.id, a.tool, a.summary)
+		fmt.Fprintf(&b, "Approval %s · %s\n%s\n", a.id, a.tool, a.displaySummary())
 		if a.executing {
 			b.WriteString("Already approved; execution is running. /approve " + a.id + " retrieves the outcome without re-executing.\n")
 		}

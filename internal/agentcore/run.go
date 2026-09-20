@@ -245,6 +245,17 @@ type Result struct {
 	// partial transcript.
 	StoppedByBudget bool
 
+	// BudgetStopReason is the budget guard's own stop sentence — which ceiling
+	// fired (COST_CEILING_REACHED / TOKEN_CEILING_REACHED) with the spend or
+	// token count and the configured limit — with the ErrCostCeilingExceeded
+	// sentinel text stripped (the runner's failure class already prints that,
+	// and repeating it would read "cost/token ceiling exceeded: cost/token
+	// ceiling exceeded: …"). Empty unless StoppedByBudget. A driver reporting
+	// the stop should prefer this over reconstructing a cost-only message: a
+	// token-ceiling stop otherwise masquerades as a cost message against the
+	// deployment ceiling.
+	BudgetStopReason string
+
 	// Usage is the accumulated token + cost accounting for the whole run.
 	Usage RunUsage
 
@@ -761,6 +772,10 @@ func streamErrorResult(ctx context.Context, serr error, cfg RunConfig, sink *str
 		// driver ignores it on this path.
 		res := withAuditVerdict(cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), usageOrch)
 		res.StoppedByBudget = true
+		// Carry the guard's sentence (which ceiling, the count, the limit) so
+		// the terminal report never has to reconstruct it. budgetGuardedStep
+		// joins it as "%w: %s", so trimming the sentinel text is exact.
+		res.BudgetStopReason = strings.TrimPrefix(serr.Error(), ErrCostCeilingExceeded.Error()+": ")
 		if len(cfg.OutputSchema) > 0 {
 			return res, serr
 		}

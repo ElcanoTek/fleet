@@ -6,7 +6,7 @@ import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { Icon } from "@/app/shared/ui/Icon";
 import { labelChipStyle } from "@/app/shared/lib/labelColors";
-import { createdByLabel, scheduleLabel, slaBadge, TaskSlaBadge } from "./taskDisplay";
+import { createdByLabel, scheduleLabel, slaBadge, taskRunLabel, TaskSlaBadge } from "./taskDisplay";
 
 // Statuses whose tasks can be edited: pending/scheduled edit in place;
 // terminal ones reopen the form to resubmit with changes. In-flight tasks
@@ -49,6 +49,23 @@ const STOPPABLE_STATUSES = new Set([
 // server-side — the worker holds the lease and is still writing to the row — so
 // the affordance is hidden rather than offered and then rejected. Stop it first.
 const UNDELETABLE_STATUSES = new Set(["leased", "running"]);
+
+// taskControlLabel is the accessible name for a per-row task control. The
+// human-readable part comes from taskRunLabel — the shared title →
+// prompt-first-line helper, which is the web's documented display precedence
+// (the server-side `name` is deliberately never rendered as a display label:
+// it is empty on every recurrence and clone, orchestratorApi.ts). The short
+// id is appended because titles are non-unique by design and the id is what
+// disambiguates two identically-titled jobs — knowing WHICH task a Stop or
+// Delete will hit is the whole point of the name.
+function taskControlLabel(task: Task, action: string): string {
+  const idPart = task.id.slice(0, 8);
+  const label = taskRunLabel(task, 60);
+  // taskRunLabel's last resort is the short id itself; don't print it twice.
+  return label === idPart
+    ? `${action} task ${idPart}`
+    : `${action} task ${label} (${idPart})`;
+}
 
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
 // moc dashboard.js renderTasks()/buildTaskQueryString()/pagination controls.
@@ -267,8 +284,9 @@ export function TasksTable({
             </div>
           </div>
         ) : null}
-        <label className="filter-checkbox-label">
+        <label className="filter-checkbox-label" htmlFor="taskScheduledOnlyFilter">
           <input
+            id="taskScheduledOnlyFilter"
             type="checkbox"
             aria-label="Scheduled only"
             checked={filters.scheduledOnly}
@@ -327,7 +345,13 @@ export function TasksTable({
             {tasks.length === 0 ? (
               <tr>
                 <td colSpan={8} className="table-empty">
-                  <TasksEmptyState loading={loading} error={error} onRetry={onRetry} />
+                  <TasksEmptyState
+                    loading={loading}
+                    error={error}
+                    onRetry={onRetry}
+                    anyFilter={anyFilter}
+                    onClearFilters={onClearFilters}
+                  />
                 </td>
               </tr>
             ) : (
@@ -342,7 +366,7 @@ export function TasksTable({
                     data-sla-breached={task.sla_breached ? "true" : undefined}
                     role="button"
                     tabIndex={0}
-                    aria-label={`View task ${task.id.slice(0, 8)}`}
+                    aria-label={taskControlLabel(task, "View")}
                     onClick={() => onOpenLogs(task)}
                     onKeyDown={(e) => {
                       // Only open logs when the row itself is focused, not when
@@ -397,7 +421,7 @@ export function TasksTable({
                           <button
                             type="button"
                             className="icon-action task-run-now-btn"
-                            aria-label={`Run task ${task.id.slice(0, 8)} now`}
+                            aria-label={`${taskControlLabel(task, "Run")} now`}
                             title="Run now"
                             data-testid="task-run-now-button"
                             onClick={(e) => {
@@ -412,7 +436,7 @@ export function TasksTable({
                           <button
                             type="button"
                             className="icon-action task-edit-btn"
-                            aria-label={`Edit task ${task.id.slice(0, 8)}`}
+                            aria-label={taskControlLabel(task, "Edit")}
                             title="Edit task"
                             data-testid="task-edit-button"
                             onClick={(e) => {
@@ -427,7 +451,7 @@ export function TasksTable({
                           <button
                             type="button"
                             className="icon-action task-stop-btn"
-                            aria-label={`Stop task ${task.id.slice(0, 8)}`}
+                            aria-label={taskControlLabel(task, "Stop")}
                             title={
                               task.recurrence
                                 ? "Stop this job — it will not run again"
@@ -446,7 +470,7 @@ export function TasksTable({
                           <button
                             type="button"
                             className="icon-action task-delete-btn"
-                            aria-label={`Delete task ${task.id.slice(0, 8)}`}
+                            aria-label={taskControlLabel(task, "Delete")}
                             title="Delete permanently — frees its name for reuse"
                             data-testid="task-delete-button"
                             onClick={(e) => {
@@ -476,7 +500,13 @@ export function TasksTable({
       <ul className="task-cards" data-testid="task-cards">
         {tasks.length === 0 ? (
           <li className="table-empty">
-            <TasksEmptyState loading={loading} error={error} onRetry={onRetry} />
+            <TasksEmptyState
+              loading={loading}
+              error={error}
+              onRetry={onRetry}
+              anyFilter={anyFilter}
+              onClearFilters={onClearFilters}
+            />
           </li>
         ) : (
           tasks.map((task) => {
@@ -489,7 +519,7 @@ export function TasksTable({
                   className="task-card"
                   data-task-id={task.id}
                   data-sla-breached={task.sla_breached ? "true" : undefined}
-                  aria-label={`View task ${task.id.slice(0, 8)}`}
+                  aria-label={taskControlLabel(task, "View")}
                   onClick={() => onOpenLogs(task)}
                 >
                   <span className="task-card-top">
@@ -523,7 +553,7 @@ export function TasksTable({
                         role="button"
                         tabIndex={0}
                         className="icon-action task-run-now-btn"
-                        aria-label={`Run task ${task.id.slice(0, 8)} now`}
+                        aria-label={`${taskControlLabel(task, "Run")} now`}
                         title="Run now"
                         data-testid="task-run-now-button-card"
                         onClick={(e) => {
@@ -546,7 +576,7 @@ export function TasksTable({
                         role="button"
                         tabIndex={0}
                         className="icon-action task-edit-btn"
-                        aria-label={`Edit task ${task.id.slice(0, 8)}`}
+                        aria-label={taskControlLabel(task, "Edit")}
                         title="Edit task"
                         data-testid="task-edit-button-card"
                         onClick={(e) => {
@@ -569,7 +599,7 @@ export function TasksTable({
                         role="button"
                         tabIndex={0}
                         className="icon-action task-stop-btn"
-                        aria-label={`Stop task ${task.id.slice(0, 8)}`}
+                        aria-label={taskControlLabel(task, "Stop")}
                         title={
                           task.recurrence ? "Stop this job — it will not run again" : "Stop this task"
                         }
@@ -594,7 +624,7 @@ export function TasksTable({
                         role="button"
                         tabIndex={0}
                         className="icon-action task-delete-btn"
-                        aria-label={`Delete task ${task.id.slice(0, 8)}`}
+                        aria-label={taskControlLabel(task, "Delete")}
                         title="Delete permanently — frees its name for reuse"
                         data-testid="task-delete-button-card"
                         onClick={(e) => {
@@ -729,18 +759,32 @@ function TaskTagChips({
   );
 }
 
-// TasksEmptyState is the zero-row body of both the table and the phone cards:
-// a load in flight, a failed load (with Retry when the parent offers one), or
-// the genuine empty account — in that order, so an outage never reads as
-// "nothing here".
+// TasksEmptyState is the zero-row body of both the table and the phone cards.
+// Four cases, in this order:
+//  1. a failed load (with Retry when the parent offers one),
+//  2. a load in flight,
+//  3. filters set with nothing matching,
+//  4. the genuine empty account.
+// The ordering is the whole point: an outage must never read as "nothing
+// here" (1 and 2 precede everything), and a filter that matched nothing must
+// never read as "the account has no tasks" — case 3 precedes case 4 because
+// the moment an operator deletes or narrows down to zero rows is the exact
+// moment "No tasks created yet" is a false and alarming statement.
 function TasksEmptyState({
   loading,
   error,
   onRetry,
+  anyFilter,
+  onClearFilters,
 }: {
   loading: boolean;
   error: string | null;
   onRetry?: () => void;
+  // A filter is set but the loaded list is empty — say "no match", not
+  // "no tasks" (see the comment above), and offer the same Clear filters
+  // affordance the parent wires rather than inventing a second one.
+  anyFilter: boolean;
+  onClearFilters?: () => void;
 }) {
   if (error) {
     return (
@@ -759,6 +803,21 @@ function TasksEmptyState({
   }
   if (loading) {
     return <span data-testid="tasks-loading">Loading tasks…</span>;
+  }
+  if (anyFilter) {
+    return (
+      <span data-testid="tasks-no-match">
+        No tasks match the current filters.
+        {onClearFilters ? (
+          <>
+            {" "}
+            <button type="button" className="btn btn-small" onClick={onClearFilters}>
+              Clear filters
+            </button>
+          </>
+        ) : null}
+      </span>
+    );
   }
   return <>No tasks created yet</>;
 }

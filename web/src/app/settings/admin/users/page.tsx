@@ -199,12 +199,14 @@ function PermissionFields({
 // still types that name if an admin needs it, and the server's own guards
 // apply either way.
 function TeamPicker({
+  id,
   label,
   teams,
   value,
   onChange,
   className,
 }: {
+  id: string;
   label: string;
   teams: string[];
   value: string;
@@ -231,6 +233,7 @@ function TeamPicker({
   return (
     <span className="flex min-w-0 flex-1 items-center gap-[0.35rem]">
       <select
+        id={id}
         aria-label={label}
         value={showInput ? "__new__" : value}
         onChange={(e) => {
@@ -254,6 +257,7 @@ function TeamPicker({
       </select>
       {showInput ? (
         <input
+          id={`${id}New`}
           aria-label={`${label}: new team name`}
           placeholder="Team name"
           maxLength={64}
@@ -852,6 +856,7 @@ export default function AdminUsersPage() {
               selects need the important override to sit side by side). ── */}
           <div className="mb-3 grid gap-[0.55rem]">
             <input
+              id="userSearch"
               aria-label="Search users"
               placeholder="Search email or team…"
               value={query}
@@ -860,6 +865,7 @@ export default function AdminUsersPage() {
             />
             <div className="flex flex-wrap items-center gap-[0.55rem]">
               <select
+                id="filterChatRole"
                 aria-label="Filter by chat role"
                 value={filterRole}
                 onChange={(e) => setFilterRole(e.target.value)}
@@ -873,6 +879,7 @@ export default function AdminUsersPage() {
                 ))}
               </select>
               <select
+                id="filterOpsRole"
                 aria-label="Filter by Ops Center role"
                 value={filterOps}
                 onChange={(e) => setFilterOps(e.target.value)}
@@ -886,6 +893,7 @@ export default function AdminUsersPage() {
                 ))}
               </select>
               <select
+                id="filterTeam"
                 aria-label="Filter by team"
                 value={filterTeam}
                 onChange={(e) => setFilterTeam(e.target.value)}
@@ -916,6 +924,7 @@ export default function AdminUsersPage() {
                   <span className="inline-flex items-center gap-[0.35rem]">
                     <input
                       ref={renameInputRef}
+                      id="renameTeamName"
                       aria-label={`New name for team ${filterTeam}`}
                       value={renameDraft}
                       onChange={(e) => setRenameDraft(e.target.value)}
@@ -1195,6 +1204,7 @@ export default function AdminUsersPage() {
                   Team
                 </span>
                 <TeamPicker
+                  id="editUserTeam"
                   label={`Team for ${menu.email}`}
                   teams={teams}
                   value={menu.team}
@@ -1291,6 +1301,7 @@ export default function AdminUsersPage() {
               <ConnForm className="mt-[0.7rem]">
                 <ConnField label="Email" grow>
                   <input
+                    id="newUserEmail"
                     aria-label="New user email"
                     type="email"
                     value={newEmail}
@@ -1302,6 +1313,7 @@ export default function AdminUsersPage() {
                 <ConnField label="Password" grow>
                   <div className="flex gap-[0.45rem]">
                     <input
+                      id="newUserPassword"
                       aria-label="New user password"
                       type="text"
                       value={newPassword}
@@ -1331,6 +1343,7 @@ export default function AdminUsersPage() {
                 </div>
                 <ConnField label="Team" grow>
                   <TeamPicker
+                    id="newUserTeam"
                     label="New user team"
                     teams={teams}
                     value={newTeam}

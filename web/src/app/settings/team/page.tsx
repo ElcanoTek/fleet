@@ -188,6 +188,7 @@ export default function TeamSettingsPage() {
             </p>
             <div className="flex flex-wrap items-center gap-[0.55rem]">
               <input
+                id="teamName"
                 className={`${SETTINGS_INPUT} max-w-[18rem] flex-1`}
                 placeholder="platform"
                 aria-label="Team name"

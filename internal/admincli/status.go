@@ -210,12 +210,34 @@ func sandboxImageEnv() string {
 	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE"))
 }
 
-// sandboxProbeArgv builds the `podman run --rm <ref> true` probe. As root with
-// a non-root service user it runs through runuser with the unit's HOME and
-// XDG_RUNTIME_DIR so the probe reads the SERVICE's image store; otherwise it
-// runs as the caller and the note says whose store that is. Pure, for tests.
+// sandboxProbeArgv builds the `podman run --rm <ref> true` probe against the
+// image store the SERVICE uses. Pure, for tests; the store resolution itself is
+// ServiceStorePodmanArgv, which `fleet validate-config` shares (see its doc).
 func sandboxProbeArgv(ref, svcUser, svcHome string, asRoot bool) (argv []string, storeNote string) {
-	probe := []string{"podman", "run", "--rm", ref, "true"}
+	return ServiceStorePodmanArgv(svcUser, svcHome, asRoot, "run", "--rm", ref, "true")
+}
+
+// ServiceStorePodmanArgv wraps a podman invocation so it reads the image store
+// the fleet SERVICE uses, and returns a note naming whose store the verdict is
+// actually about.
+//
+// Rootless podman keeps one image store PER USER. The service runs as the
+// unit's User= (fleet), so the sandbox image lives in THAT store; a root shell
+// running podman inspects root's store instead and reports "missing" for an
+// image `fleet doctor` just verified as present and runnable. As root with a
+// non-root service user the command therefore goes through runuser with the
+// unit's HOME and XDG_RUNTIME_DIR (the same shape scripts/build-sandbox-image.sh
+// and doctor.sh use); as anyone else it runs as the caller and the note says
+// whose store that was, so nobody chases a phantom.
+//
+// Exported because `fleet validate-config` made exactly the mistake this
+// function exists to prevent: it probed as the caller and reported a present
+// image as a BLOCKING "not present" on a healthy box, while `fleet status` in
+// the same shell reported it present. Two copies of this reasoning is one copy
+// too many — callers share this one rather than growing a second, wronger
+// version. Pure, so both callers' tables can pin it.
+func ServiceStorePodmanArgv(svcUser, svcHome string, asRoot bool, podmanArgs ...string) (argv []string, storeNote string) {
+	probe := append([]string{"podman"}, podmanArgs...)
 	switch {
 	case asRoot && svcUser != "" && svcUser != "root":
 		home := svcHome
@@ -232,6 +254,12 @@ func sandboxProbeArgv(ref, svcUser, svcHome string, asRoot bool) (argv []string,
 		return probe, ""
 	}
 }
+
+// ServiceUserAndHome is the exported ServiceStorePodmanArgv companion: the
+// fleet unit's User= and that account's home, or empty strings when the unit,
+// systemd or the user is unknown (which ServiceStorePodmanArgv reads as "run as
+// the caller").
+func ServiceUserAndHome() (user, home string) { return serviceUserAndHome(serviceName("")) }
 
 // serviceUserAndHome returns the unit's User= and that account's home
 // directory, or empty strings when the unit/systemd/user is unknown.

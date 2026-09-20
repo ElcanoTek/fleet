@@ -38,7 +38,14 @@ or take a full approval ID. `/edit {"name":"...","prompt":"...","cron":"..."}`
 changes the oldest scheduled-task card locally before approval. Omitted fields
 stay unchanged. `cron` can only be changed on a recurring card — not added to a
 one-time task, and not cleared (that would make the task run immediately). The
-server validates edits when you approve.
+server validates edits when you approve. After an edit, the card's one-line
+summary is re-rendered from the edited values, so the name, prompt and cron you
+see described are the ones that will be submitted — including the approximate
+runs-per-month hint, which is recomputed for the edited cron rather than left
+describing the old schedule. A schedule that fires more than about a thousand
+times a month is shown as a floor (`≥1000 runs/month`), because the count stops
+there. An edited cron the terminal cannot parse shows no hint at all rather than
+a guess.
 Every staged tool automatically shows its complete frozen execution arguments as
 escaped JSON; the one-line summary is not the review record. If the server does
 not provide a complete snapshot (or the arguments exceed the 1 MiB review cap),
