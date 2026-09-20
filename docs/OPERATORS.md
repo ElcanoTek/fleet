@@ -168,9 +168,13 @@ does.** On a provisioned box the unit's `UnsetEnvironment=` keeps
 the preflight verbs (`validate-config`, `mcp test`, `eval`) resolve the env
 file themselves and take the bundle directory from it — `--bundle-path` still
 wins, then anything already in your environment, then the file. And because
-rootless podman keeps one image store **per user**, the sandbox checks probe
-the store the unit's `User=` owns, exactly as `fleet status` and `fleet doctor`
-do, and say whose store the verdict is about. Without both of those, a healthy
+rootless podman keeps one image store **per user**, **every** sandbox probe —
+`podman info`, the image lookup, the OCI-runtime resolution, the allowlisted-egress
+network helper, and the `/dev/kvm` gate — runs as the unit's `User=`, exactly as
+`fleet status` and `fleet doctor` do, and says whose store the verdict is about.
+That matters past the image: a runtime or network helper registered only in the
+service user's `containers.conf` boots fine and would otherwise fail a check run
+as root. Without both of those, a healthy
 box preflighted as two blocking failures — a bundle that "does not exist" and a
 sandbox image that was present all along.
 

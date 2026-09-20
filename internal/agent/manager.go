@@ -721,7 +721,9 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	// silently degrade to a shared-kernel container (the no-degrade invariant,
 	// ADR-0010). A named shared-kernel runtime (runc/crun/runsc) is checked too,
 	// but only for podman resolvability; the empty default preflights as a no-op.
-	if err := sandbox.PreflightRuntime(context.Background(), poolCfg.Container.PodmanBinary, sandboxRuntime); err != nil {
+	// The exec context is prefix-free: the service process already IS the service
+	// user, so every probe runs exactly as the historical podmanBin-only shape.
+	if err := sandbox.PreflightRuntime(context.Background(), sandbox.PodmanExec{Binary: poolCfg.Container.PodmanBinary}, sandboxRuntime); err != nil {
 		return nil, fmt.Errorf("sandbox runtime preflight failed (fail-closed): %w", err)
 	}
 	// Pay the one-time keep-id id-remapped layer copy of a NEW sandbox image
@@ -762,8 +764,9 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		// it BEFORE the warm pool spawns anything: on a host without that helper
 		// every container start fails, and without this check boot would succeed,
 		// log "egress filtered to […]", and then error on every single tool call.
-		// Fails closed — never downgraded to open egress.
-		if err := sandbox.PreflightAllowlistedNetwork(context.Background(), poolCfg.Container.PodmanBinary); err != nil {
+		// Fails closed — never downgraded to open egress. Prefix-free exec context:
+		// the service already IS the user whose podman store and config matter.
+		if err := sandbox.PreflightAllowlistedNetwork(context.Background(), sandbox.PodmanExec{Binary: poolCfg.Container.PodmanBinary}); err != nil {
 			return nil, fmt.Errorf("sandbox egress preflight failed (fail-closed): %w", err)
 		}
 		proxy := sandbox.NewEgressProxy()

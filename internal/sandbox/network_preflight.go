@@ -6,7 +6,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -84,7 +83,10 @@ func allowlistedNetworkHelper() (string, error) {
 //
 // Called from the single production pool-construction path
 // (agent.buildSandboxPool) when FLEET_DEFAULT_NETWORK_MODE=allowlisted, and from
-// `fleet validate-config`.
+// `fleet validate-config`. The podman probe runs through the caller's PodmanExec
+// so both call sites ask the question as the user whose podman configuration
+// boot will actually use (the boot path passes a prefix-free context — the
+// service already IS that user).
 //
 // It FAILS CLOSED, in both the expected and the unexpected direction: an
 // operator who asked for allowlisted egress on a host that cannot provide it
@@ -93,12 +95,12 @@ func allowlistedNetworkHelper() (string, error) {
 // refuses rather than silently reporting success. Callers must not downgrade to
 // open egress on error — that would hand unrestricted network to a deployment
 // that explicitly asked for a filtered one.
-func PreflightAllowlistedNetwork(ctx context.Context, podmanBin string) error {
+func PreflightAllowlistedNetwork(ctx context.Context, execCtx PodmanExec) error {
 	helper, err := allowlistedNetworkHelper()
 	if err != nil {
 		return fmt.Errorf("allowlisted egress preflight: %w", err)
 	}
-	return preflightNetworkHelper(ctx, podmanBin, helper)
+	return preflightNetworkHelper(ctx, execCtx, helper)
 }
 
 // networkHelperInfoTemplate maps a rootless network helper to the `podman info`
@@ -111,20 +113,19 @@ var networkHelperInfoTemplate = map[string]string{
 }
 
 // preflightNetworkHelper asks Podman whether it has the named rootless network
-// helper. Split out from PreflightAllowlistedNetwork so the unknown-helper
+// helper, through the caller's execution context (see PreflightAllowlistedNetwork
+// for why the service-user context matters on a root-run validate-config).
+// Split out from PreflightAllowlistedNetwork so the unknown-helper
 // fail-closed path is testable without mutating networkArgs.
-func preflightNetworkHelper(ctx context.Context, podmanBin, helper string) error {
+func preflightNetworkHelper(ctx context.Context, execCtx PodmanExec, helper string) error {
 	tmpl, known := networkHelperInfoTemplate[helper]
 	if !known {
 		return fmt.Errorf("allowlisted egress preflight: networkArgs requests the %q network helper, "+
 			"which this preflight does not know how to verify — add it to networkHelperInfoTemplate alongside that change", helper)
 	}
-	if podmanBin == "" {
-		podmanBin = "podman"
-	}
 	infoCtx, cancel := context.WithTimeout(ctx, networkPreflightTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(infoCtx, podmanBin, "info", "--format", tmpl).Output()
+	out, err := execCtx.CommandContext(infoCtx, "", "info", "--format", tmpl).Output()
 	if err != nil {
 		return fmt.Errorf("allowlisted egress preflight: could not ask podman about the %s helper: %w%s", helper, err, stderrOf(err))
 	}

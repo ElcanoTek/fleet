@@ -15,6 +15,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 // cmdStatus is the `fleet status` (a.k.a. doctor) health report. It runs a
@@ -236,23 +237,18 @@ func sandboxProbeArgv(ref, svcUser, svcHome string, asRoot bool) (argv []string,
 // the same shell reported it present. Two copies of this reasoning is one copy
 // too many — callers share this one rather than growing a second, wronger
 // version. Pure, so both callers' tables can pin it.
+//
+// The runuser construction itself lives in ONE place — sandbox.ServiceStorePodmanExec,
+// which the sandbox preflights (runtime, network helper, KVM) also build on, so
+// the status probes and the preflights can never drift apart in whose podman
+// they ask. This wrapper only re-shapes that context back into a flat argv for
+// callers that exec directly.
 func ServiceStorePodmanArgv(svcUser, svcHome string, asRoot bool, podmanArgs ...string) (argv []string, storeNote string) {
-	probe := append([]string{"podman"}, podmanArgs...)
-	switch {
-	case asRoot && svcUser != "" && svcUser != "root":
-		home := svcHome
-		if home == "" {
-			home = "/var/lib/" + svcUser
-		}
-		argv = append([]string{"runuser", "-u", svcUser, "--", "env", "HOME=" + home, "XDG_RUNTIME_DIR=/run/" + svcUser}, probe...)
-		return argv, " (as " + svcUser + " — the service's image store)"
-	case asRoot:
-		return probe, " (root's store — the service runs as root too)"
-	case svcUser != "" && svcUser != "root":
-		return probe, " (YOUR store, not " + svcUser + "'s — run: sudo fleet status, or sudo fleet doctor for the authoritative check)"
-	default:
-		return probe, ""
-	}
+	execCtx, note := sandbox.ServiceStorePodmanExec(svcUser, svcHome, asRoot)
+	argv = make([]string, 0, len(execCtx.Prefix)+1+len(podmanArgs))
+	argv = append(argv, execCtx.Prefix...)
+	argv = append(argv, "podman")
+	return append(argv, podmanArgs...), note
 }
 
 // ServiceUserAndHome is the exported ServiceStorePodmanArgv companion: the

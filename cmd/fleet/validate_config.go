@@ -119,21 +119,6 @@ func newValidateFlagSet(opts *validateOptions) *flag.FlagSet {
 	return fs
 }
 
-// serviceStorePodmanCmd builds the exec.Cmd for an argv from
-// admincli.ServiceStorePodmanArgv. It exists for the cwd: rootless podman
-// re-execs and chdir()s back to the inherited working directory, which the
-// service user may not be able to enter (a root shell's /root is mode 0700),
-// so a probe that is otherwise correct fails on the chdir. `fleet status`
-// applies the same rule.
-func serviceStorePodmanCmd(ctx context.Context, argv []string, svcUser, svcHome string, asRoot bool) *exec.Cmd {
-	//nolint:gosec // G204: fixed binaries (podman, or runuser+env+podman); the image ref is operator config (FLEET_SANDBOX_IMAGE / bundle manifest) and svcUser is the unit's own User= — neither is request or LLM input, so neither can inject a subprocess.
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	if asRoot && svcHome != "" && svcUser != "" && svcUser != "root" {
-		cmd.Dir = svcHome
-	}
-	return cmd
-}
-
 // preflightEnvFile resolves the env file the in-binary preflight verbs
 // (validate-config, eval, mcp test) load, and pins FLEET_ENV_FILE to it in the
 // process env when the shell left it unset. The resolution is
@@ -837,21 +822,24 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		res.Detail = "podman not found in PATH"
 		return res
 	}
-	// Rootless podman keeps one image store PER USER, so both podman probes
-	// below must ask the store the SERVICE uses, not the one this shell has.
+	// Rootless podman keeps one image store PER USER, so EVERY podman probe
+	// below must ask the store the SERVICE uses, not the one this shell has —
 	// `fleet status` and `fleet doctor` already hop to the unit's User=; this
 	// verb did not, and reported a present, runnable sandbox image as a
-	// BLOCKING "not present" on a box those two called healthy. Share their
-	// resolution rather than keeping a second, wronger copy.
+	// BLOCKING "not present" on a box those two called healthy. The runtime
+	// and network-helper preflights below take the same context: a runtime
+	// registered only in the fleet user's containers.conf booted fine while
+	// these checks, run as root, failed it. One construction, shared with the
+	// status probes through sandbox.ServiceStorePodmanExec.
 	svcUser, svcHome := admincli.ServiceUserAndHome()
-	asRoot := os.Geteuid() == 0
+	execCtx, storeNote := sandbox.ServiceStorePodmanExec(svcUser, svcHome, os.Geteuid() == 0)
+	execCtx.Binary = podmanBin
 	// `podman info` FIRST: the runtime preflight below also shells out to podman,
 	// so a broken rootless setup would otherwise be reported as "could not
 	// resolve --runtime=…", blaming the runtime for a podman problem.
 	infoCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	infoArgv, storeNote := admincli.ServiceStorePodmanArgv(svcUser, svcHome, asRoot, "info")
-	if err := serviceStorePodmanCmd(infoCtx, infoArgv, svcUser, svcHome, asRoot).Run(); err != nil {
+	if err := execCtx.CommandContext(infoCtx, "", "info").Run(); err != nil {
 		res.Status = statusFail
 		res.Detail = "podman info failed" + storeNote + " (rootless/daemon setup not accessible): " + err.Error()
 		return res
@@ -865,7 +853,7 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 	// whichever same-named binary is first on PATH, and it reports FAIL for a
 	// perfectly good containers.conf that maps the name to an off-PATH binary.
 	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
-		if err := sandbox.PreflightRuntime(ctx, podmanBin, rt); err != nil {
+		if err := sandbox.PreflightRuntime(ctx, execCtx, rt); err != nil {
 			res.Status = statusFail
 			res.Detail = err.Error()
 			return res
@@ -876,7 +864,7 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 	// the same fail-closed preflight the boot path runs (#211 / ADR-0012).
 	networkHelperNote := ""
 	if cfg.DefaultNetworkMode == sandbox.NetworkModeAllowlisted {
-		if err := sandbox.PreflightAllowlistedNetwork(ctx, podmanBin); err != nil {
+		if err := sandbox.PreflightAllowlistedNetwork(ctx, execCtx); err != nil {
 			res.Status = statusFail
 			res.Detail = err.Error()
 			return res
@@ -895,8 +883,7 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 	}
 	imgCtx, imgCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer imgCancel()
-	imgArgv, _ := admincli.ServiceStorePodmanArgv(svcUser, svcHome, asRoot, "image", "exists", image)
-	if err := serviceStorePodmanCmd(imgCtx, imgArgv, svcUser, svcHome, asRoot).Run(); err != nil {
+	if err := execCtx.CommandContext(imgCtx, "", "image", "exists", image).Run(); err != nil {
 		res.Status = statusFail
 		res.Detail = fmt.Sprintf("sandbox image %q not present%s (build it with scripts/build-sandbox-image.sh or pull it)", image, storeNote)
 		return res

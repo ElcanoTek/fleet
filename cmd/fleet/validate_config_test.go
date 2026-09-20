@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 // TestParseValidateFlags covers the verb's flag surface: defaults, each flag, and
@@ -755,20 +756,24 @@ func TestPinBundleDirFromEnvFile(t *testing.T) {
 	})
 }
 
-// TestServiceStorePodmanCmdRunsFromServiceHome pins the cwd rule: rootless
+// TestServiceStorePodmanExecRunsFromServiceHome pins the cwd rule: rootless
 // podman re-execs and chdir()s back to the inherited working directory, which
 // the service user may not be able to enter (a root shell's /root is 0700).
-func TestServiceStorePodmanCmdRunsFromServiceHome(t *testing.T) {
-	argv := []string{"runuser", "-u", "fleet", "--", "env", "podman", "image", "exists", "ref"}
-
-	if got := serviceStorePodmanCmd(context.Background(), argv, "fleet", "/var/lib/fleet", true).Dir; got != "/var/lib/fleet" {
+// The rule lives in PodmanExec.CommandContext, fed by
+// sandbox.ServiceStorePodmanExec — the same contract the removed
+// serviceStorePodmanCmd helper pinned, on the surface the preflights now share.
+func TestServiceStorePodmanExecRunsFromServiceHome(t *testing.T) {
+	execCtx, _ := sandbox.ServiceStorePodmanExec("fleet", "/var/lib/fleet", true)
+	if got := execCtx.CommandContext(context.Background(), "", "info").Dir; got != "/var/lib/fleet" {
 		t.Errorf("root + non-root service user: Dir = %q, want the service home", got)
 	}
 	// Running as the caller: no hop, so no reason to move the cwd.
-	if got := serviceStorePodmanCmd(context.Background(), argv, "fleet", "/var/lib/fleet", false).Dir; got != "" {
+	plain, _ := sandbox.ServiceStorePodmanExec("fleet", "/var/lib/fleet", false)
+	if got := plain.CommandContext(context.Background(), "", "info").Dir; got != "" {
 		t.Errorf("non-root caller: Dir = %q, want the inherited cwd", got)
 	}
-	if got := serviceStorePodmanCmd(context.Background(), argv, "root", "/root", true).Dir; got != "" {
+	root, _ := sandbox.ServiceStorePodmanExec("root", "/root", true)
+	if got := root.CommandContext(context.Background(), "", "info").Dir; got != "" {
 		t.Errorf("root service user: Dir = %q, want the inherited cwd", got)
 	}
 }
