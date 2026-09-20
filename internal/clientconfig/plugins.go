@@ -652,6 +652,7 @@ func loadPlugins(bundleDir string, extraRoots []string, takenServerNames map[str
 		if r == "" {
 			continue
 		}
+		orig := r // as written in the manifest, for the message below
 		deploymentLocal := filepath.IsAbs(r)
 		if !deploymentLocal {
 			r = filepath.Join(bundleDir, r)
@@ -659,6 +660,18 @@ func loadPlugins(bundleDir string, extraRoots []string, takenServerNames map[str
 		r = filepath.Clean(r)
 		if seenRoot[r] {
 			continue
+		}
+		// A RELATIVE root is bundle content, so it must stay inside the bundle:
+		// "../shared/plugins" cleans to a directory the bundle does not ship,
+		// and a preflight that loaded plugins from it would certify a bundle
+		// that lacks them wherever it is deployed alone. Recorded as an ENTRY
+		// problem (the preflight gates it) and still loaded, so this changes
+		// no running box — an operator who relies on it today keeps working
+		// and sees the warning; the fix is to move the root inside the bundle
+		// or name it absolutely as a deployment-local root.
+		cleanBundle := filepath.Clean(bundleDir)
+		if !deploymentLocal && r != cleanBundle && !strings.HasPrefix(r, cleanBundle+string(filepath.Separator)) {
+			res.problems = append(res.problems, fmt.Sprintf("plugin_roots: %s: a relative root must stay inside the bundle (resolved to %s); name a deployment-local root absolutely", orig, r))
 		}
 		seenRoot[r] = true
 		roots = append(roots, r)

@@ -288,6 +288,12 @@ jobs:
           bdir=$(realpath "$GITHUB_WORKSPACE/$BUNDLE_DIR")
           core="$root/.fleet-core"
           case "$bdir" in
+            "$core"|"$core"/*)
+              # The name check refused ".fleet-core/..." literally; a caller can
+              # still commit `bundle -> .fleet-core/config/default` and pass the
+              # name check with "bundle". realpath resolves it here, so the
+              # RESOLVED bundle dir is checked against the trusted checkout too.
+              echo "::error::bundle_dir resolves into fleet's own checkout (.fleet-core), which is not the caller's bundle"; exit 1 ;;
             "$root"|"$root"/*) ;;
             *) echo "::error::bundle_dir resolves outside the workspace: $bdir"; exit 1 ;;
           esac

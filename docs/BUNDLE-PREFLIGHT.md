@@ -169,6 +169,21 @@ Shell, on hostile copies: `bundle_dir` = `.fleet-core/config/default`,
 bundle, links to `.fleet-core`, `/proc/self/environ` and an out-of-bundle repo
 file all fail; an in-bundle link passes.
 
+Eighth round, all seven bundles green (one proposed rule — `account_vars` must
+name an env key — went red on two real bundles and was dropped as contradicting
+the documented contract; see the rule list):
+
+```
+args: ["../shared/server.py"]              -> mcp_catalog=fail: mcp_catalog["g"]: args[0] is a relative path that escapes the bundle directory
+url: "sk-live-token://host/mcp"            -> mcp_catalog=fail: mcp_catalog["g"]: url scheme is not http or https        (0 occurrences of the token)
+plugin_roots: ["../shared-plugins"]        -> mcp_catalog=fail: plugin: plugin_roots: ../shared-plugins: a relative root must stay inside the bundle …
+account_vars naming a SOURCE variable      -> GREEN (documented contract; control)
+```
+
+Shell: `bundle -> .fleet-core/config/default` committed as a symlink and passed
+as `bundle_dir` is refused after resolution (`resolves into fleet's own
+checkout`); a clean `config/default` passes.
+
 ### `mcp_catalog`
 
 A check that walks the **full** `bundle.MCPCatalog` regardless of enable gates —
@@ -300,6 +315,31 @@ structure and deliberately **not** installation:
   well-formed name is echoed, as `checkMCPServers` already does; a test plants
   a secret-shaped name across several failing rules and asserts it never
   appears.
+- **script args that stay inside the bundle.** `ValidateMCPArgPaths` joins and
+  stats, so `../shared/server.py` passed whenever the file happened to sit
+  elsewhere in the checkout — and the gate certified content the bundle does
+  not ship. A relative arg with a path separator gets the same cleaned-path
+  containment as the command; plugin servers stay exempt (contained by their
+  loader).
+- **relative `plugin_roots` that stay inside the bundle.** `../shared/plugins`
+  is bundle content by declaration but resolves to a directory the bundle does
+  not ship. The loader records it as an entry problem (so the preflight gates
+  it) and **still loads it**, so no running box changes; the fix is to move the
+  root inside the bundle or name it absolutely as a deployment-local root.
+- **`optional_env` entries and the URL scheme are not echoed.** Both are places
+  a `${VAR}` interpolation can land a value on an operator run; the index and
+  a fixed message identify the entry instead. A test plants a secret-shaped
+  string in `optional_env` and `account_vars` on an invalid-named server and
+  asserts it appears nowhere.
+- **`account_vars` is deliberately *not* required to name an env-map key.** A
+  review finding asked for it, reasoning that `ApplyClientSuffix` overlays only
+  env-map keys. But `ServerDef.AccountVars` is documented as *"informational
+  for the catalog; the actual overlay reads Env's keys"*, `MCP-BUNDLE-ENV.md`
+  says *"as env keys or `account_vars`"*, and two production bundles list the
+  source variables (`OMNICOM_EMAIL_AWS_ACCESS_KEY_ID` beside env key
+  `AWS_ACCESS_KEY_ID`). The rule was tried, went red on both, and was removed:
+  whether that split contract fully works is a runtime design question, not one
+  a preflight should adjudicate. A positive test pins the documented pattern.
 - **no Agent Plugin problems.** An `mcp.json` server the plugin loader skips
   as invalid never reaches `MCPCatalog`, and `Load` still succeeds —
   `checkManifest` demotes `PluginProblems()` to advisories so a running box is
@@ -420,13 +460,16 @@ properties are load-bearing:
   fail to parse, and the parse error would echo the offending source line —
   the validator's own environment, runner service credentials included — into
   the JSON report the gate step publishes to the job summary. A shell step
-  therefore refuses any symlink anywhere in the caller checkout whose target
-  resolves outside the workspace, and a `bundle_dir` that does, before any Go
-  runs. The whole workspace is scanned (minus fleet's own `.fleet-core`
-  checkout) so a chain through an in-repo directory cannot route around it.
-  Verified on hostile copies: `manifest.yaml → /proc/self/environ` and an
-  escaping `bundle_dir` both exit 1 with a `::error::`; a clean checkout and an
-  in-workspace symlink both pass.
+  therefore refuses, before any Go runs: any symlink **under the bundle dir**
+  whose target resolves outside the bundle dir or anywhere under `.fleet-core`;
+  and a `bundle_dir` that resolves outside the workspace **or into
+  `.fleet-core`** — the latter catches `bundle -> .fleet-core/config/default`,
+  a symlink whose *name* passes the literal `.fleet-core` check but whose
+  resolved path is fleet's own generic bundle. Verified on hostile copies:
+  `manifest.yaml → /proc/self/environ`, an escaping `bundle_dir`, and the
+  symlinked `bundle_dir` all exit 1 with a `::error::`; a clean checkout and an
+  in-bundle symlink both pass. (The two bullets below record how this boundary
+  was tightened after review.)
 
   Two tightenings followed review. The step now runs **after** the fleet
   checkout and refuses any symlink whose target is under `.fleet-core`: with
@@ -516,6 +559,18 @@ Deliberately **not** in this change, and why:
   change. The preflight does what a secretless runner honestly can: fail when
   no label could ever fit, and print each server's headroom so the operator
   picks a label that does.
+- **Provider-valid server names are echoed in diagnostics.** A name that fails
+  the provider shape is labelled by index (it is the shape a pasted secret
+  takes); a well-formed name is printed, because the report is for the
+  operator and `checkMCPServers` and every log line already print it. An
+  alphanumeric token accidentally used as `name: "${API_KEY}"` on an operator's
+  own box would appear — in that operator's own output. Hiding all names would
+  make the report useless to the one person it is for.
+- **Cross-server generated-name collisions are not detected.** `a_b` with tool
+  `c` and `a` with tool `b_c` both produce `mcp_a_b_c`; the runtime resolves
+  the ambiguity toward the longer server name. Both allowlists must be declared
+  for the preflight to see it, no bundle in the family has the shape, and it is
+  a correctness edge rather than a leak or a gate bypass. Recorded, not gated.
 
 Deliberately not shipped:
 

@@ -856,7 +856,9 @@ func catalogHTTPProblems(s *clientconfig.ServerDef, label string) []string {
 	case err != nil:
 		problems = append(problems, label+": url does not parse")
 	case u.Scheme != "http" && u.Scheme != "https":
-		problems = append(problems, fmt.Sprintf("%s: url scheme %q is not http/https", label, u.Scheme))
+		// The scheme is not echoed either: `url: "${API_KEY}://host"` puts the
+		// interpolated value exactly there.
+		problems = append(problems, label+": url scheme is not http or https")
 	case u.Hostname() == "":
 		// url.Parse accepts "https://", "https:///mcp", the opaque "http:foo"
 		// AND "https://:443/mcp" (Host ":443", Hostname "") without complaint;
@@ -934,6 +936,18 @@ func catalogStdioProblems(s *clientconfig.ServerDef, label, bundleDir string) []
 		if strings.IndexByte(a, 0) >= 0 {
 			problems = append(problems, fmt.Sprintf("%s: args[%d] contains a NUL byte", label, ai))
 		}
+		// A relative arg with a path separator is a file the bundle ships (the
+		// runtime spawns with cwd = bundle dir). ValidateMCPArgPaths checks
+		// that a script arg EXISTS but only joins-and-stats, so "../shared/x.py"
+		// passes when the file happens to sit elsewhere in the checkout — and
+		// the gate would certify content the bundle does not ship. Same
+		// containment as the command. Plugin servers launch in the plugin root
+		// and were contained by its loader.
+		if !s.FromPlugin() && !filepath.IsAbs(a) && strings.ContainsRune(a, os.PathSeparator) {
+			if p := filepath.Clean(filepath.Join(bundleDir, a)); p != bundleDir && !strings.HasPrefix(p, bundleDir+string(os.PathSeparator)) {
+				problems = append(problems, fmt.Sprintf("%s: args[%d] is a relative path that escapes the bundle directory", label, ai))
+			}
+		}
 	}
 	var badEnv []string
 	for k, v := range s.Env {
@@ -972,11 +986,22 @@ func catalogVarNameProblems(s *clientconfig.ServerDef, label string) []string {
 	// not to see, and one that distinguishes absent from empty fails only once
 	// its credentials enable it. The spelling rule above catches padding; this
 	// catches the typo.
-	for _, v := range s.OptionalEnv {
+	// Neither entry is echoed: on an operator run the manifest is interpolated
+	// against the real deployment env first, so `optional_env: ["${API_KEY}"]`
+	// arrives here as the key itself. The index finds it just as well.
+	for i, v := range s.OptionalEnv {
 		if _, ok := s.Env[v]; !ok && strings.TrimSpace(v) == v && v != "" {
-			problems = append(problems, fmt.Sprintf("%s: optional_env %q is not a key of the server's env map, so it can never drop anything", label, v))
+			problems = append(problems, fmt.Sprintf("%s: optional_env[%d] is not a key of the server's env map, so it can never drop anything", label, i))
 		}
 	}
+	// account_vars is deliberately NOT held to "must be a key of the env map".
+	// It is documented as informational for seat discovery (creds.AccountsFor
+	// scans <VAR>_<ACCOUNT> for the names listed here) while the overlay reads
+	// Env's keys (ServerDef.AccountVars; docs/MCP-BUNDLE-ENV.md: "as env keys
+	// or account_vars"), and two production bundles rely on listing the SOURCE
+	// variables (OMNICOM_EMAIL_AWS_ACCESS_KEY_ID beside env key
+	// AWS_ACCESS_KEY_ID). Whether that split contract fully works is a runtime
+	// design question, not one a preflight should adjudicate.
 	for gi, group := range s.EnabledGroups {
 		if len(group) == 0 {
 			problems = append(problems, fmt.Sprintf("%s: enabled_groups[%d] is empty (an empty group enables the server unconditionally)", label, gi))

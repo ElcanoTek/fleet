@@ -855,7 +855,7 @@ func TestCheckMCPCatalog(t *testing.T) {
 			name:       "http url with a non-http scheme fails",
 			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: "ftp://example.invalid/mcp"}),
 			wantStatus: statusFail,
-			wantDetail: `scheme "ftp" is not http/https`,
+			wantDetail: "url scheme is not http or https", // the scheme is never echoed: "${API_KEY}://host" puts a value there
 		},
 		{
 			name:       "stdio server with empty command fails",
@@ -1153,7 +1153,7 @@ func TestCheckMCPCatalog(t *testing.T) {
 			// detail reports the headroom so the operator knows the label cap.
 			name: "account_vars server with one char of account headroom is ok and reports it",
 			bundle: catalog(clientconfig.ServerDef{
-				Name: strings.Repeat("s", 56), Command: "a", Always: true, AccountVars: []string{"API_KEY"}, Tools: []string{"x"},
+				Name: strings.Repeat("s", 56), Command: "a", Always: true, Env: map[string]string{"API_KEY": "${API_KEY}"}, AccountVars: []string{"API_KEY"}, Tools: []string{"x"},
 			}),
 			wantStatus: statusOK,
 			wantDetail: "account label headroom (chars, per account_vars server): " + strings.Repeat("s", 56) + "=1",
@@ -1163,7 +1163,7 @@ func TestCheckMCPCatalog(t *testing.T) {
 			// never be advertised. Without account_vars this same name passes.
 			name: "account_vars server with no account headroom fails",
 			bundle: catalog(clientconfig.ServerDef{
-				Name: strings.Repeat("s", 57), Command: "a", Always: true, AccountVars: []string{"API_KEY"}, Tools: []string{"x"},
+				Name: strings.Repeat("s", 57), Command: "a", Always: true, Env: map[string]string{"API_KEY": "${API_KEY}"}, AccountVars: []string{"API_KEY"}, Tools: []string{"x"},
 			}),
 			wantStatus: statusFail,
 			wantDetail: "no room for any account label",
@@ -1174,7 +1174,7 @@ func TestCheckMCPCatalog(t *testing.T) {
 			// is ok — a fixed 16-char reservation would have failed it.
 			name: "account_vars server with a long tool name reports realistic headroom",
 			bundle: catalog(clientconfig.ServerDef{
-				Name: "magnite_mcp", Command: "a", Always: true, AccountVars: []string{"K"}, Tools: []string{"magnite_run_report_from_prompt_inputs"},
+				Name: "magnite_mcp", Command: "a", Always: true, Env: map[string]string{"K": "${K}"}, AccountVars: []string{"K"}, Tools: []string{"magnite_run_report_from_prompt_inputs"},
 			}),
 			wantStatus: statusOK,
 			wantDetail: "magnite_mcp=10",
@@ -1212,7 +1212,7 @@ func TestCheckMCPCatalog(t *testing.T) {
 				Name: "local", Command: "a", Always: true, Env: map[string]string{"TOKEN": "${TOKEN}"}, OptionalEnv: []string{"TOKEM"},
 			}),
 			wantStatus: statusFail,
-			wantDetail: `optional_env "TOKEM" is not a key`,
+			wantDetail: "optional_env[0] is not a key", // the entry is never echoed: it may be ${VAR}-interpolated
 		},
 		{
 			name: "padded optional_env entry fails on spelling",
@@ -1236,6 +1236,27 @@ func TestCheckMCPCatalog(t *testing.T) {
 			bundle:     catalog(clientconfig.ServerDef{Name: "sales.api", Command: "a", Always: true}),
 			wantStatus: statusFail,
 			wantDetail: "mcp_catalog[#0]: name must be 1-64 chars",
+		},
+		{
+			// ValidateMCPArgPaths joins-and-stats; a script that exists elsewhere in
+			// the checkout would pass while the bundle alone does not ship it.
+			name:       "relative script arg that escapes the bundle fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "python3", Args: []string{"../shared/server.py"}, Always: true}),
+			wantStatus: statusFail,
+			wantDetail: "args[0] is a relative path that escapes the bundle directory",
+		},
+		{
+			// account_vars is documented as informational for seat DISCOVERY while
+			// the overlay reads Env's keys ("as env keys or account_vars",
+			// docs/MCP-BUNDLE-ENV.md); two production bundles list the SOURCE
+			// variables rather than the env keys. The check must not reject that.
+			name: "account_vars naming a source variable rather than an env key is ok",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "email", Command: "a", Always: true,
+				Env:         map[string]string{"AWS_ACCESS_KEY_ID": "${ACME_EMAIL_AWS_ACCESS_KEY_ID}"},
+				AccountVars: []string{"ACME_EMAIL_AWS_ACCESS_KEY_ID"},
+			}),
+			wantStatus: statusOK,
 		},
 	}
 
@@ -1509,7 +1530,8 @@ func TestCheckMCPCatalogGatesMissingRelativePluginRoot(t *testing.T) {
 func TestCheckMCPCatalogNeverEchoesInvalidName(t *testing.T) {
 	const leaked = "sk-live.s3cr3t/value with space"
 	bundle := &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: []clientconfig.ServerDef{
-		{Name: leaked, Command: "a", Always: true, EnabledEnv: []string{" PAD "}, Tools: []string{"bad.tool"}},
+		{Name: leaked, Command: "a", Always: true, EnabledEnv: []string{" PAD "}, Tools: []string{"bad.tool"},
+			Env: map[string]string{"TOKEN": "${TOKEN}"}, OptionalEnv: []string{leaked}, AccountVars: []string{leaked}}, // interpolated values in optional_env / account_vars must not be echoed either
 		{Name: leaked, Command: "", Always: true}, // duplicate + empty command: more diagnostics that carry the label
 	}}
 	res := checkMCPCatalog(bundle, nil)
@@ -1523,6 +1545,36 @@ func TestCheckMCPCatalogNeverEchoesInvalidName(t *testing.T) {
 		if !strings.Contains(res.Detail, want) {
 			t.Errorf("Detail should contain %q (index labels), got: %s", want, res.Detail)
 		}
+	}
+}
+
+// TestCheckMCPCatalogGatesEscapingRelativePluginRoot: a RELATIVE plugin root
+// is bundle content, so "../shared/plugins" — which cleans to a directory the
+// bundle does not ship — must be an entry problem even when that directory
+// exists and loads fine on this machine. The loader still loads it (no running
+// box changes); the preflight gates it.
+func TestCheckMCPCatalogGatesEscapingRelativePluginRoot(t *testing.T) {
+	t.Setenv("FLEET_DATA_DIR", t.TempDir())
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "bundle")
+	if err := os.MkdirAll(filepath.Join(parent, "shared", "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("skills_builtin: false\nplugin_roots: [\"../shared/plugins\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("Load must succeed — this is a problem, not a load failure: %v", err)
+	}
+	if len(bundle.PluginEntryProblems()) == 0 {
+		t.Fatalf("an escaping relative root must be an entry problem; entry=%v root=%v", bundle.PluginEntryProblems(), bundle.PluginRootProblems())
+	}
+	if res := checkMCPCatalog(bundle, nil); res.Status != statusFail || !strings.Contains(res.Detail, "must stay inside the bundle") {
+		t.Fatalf("Status = %q (%s), want fail naming the escaping root", res.Status, res.Detail)
 	}
 }
 
