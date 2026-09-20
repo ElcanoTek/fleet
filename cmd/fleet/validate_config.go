@@ -189,7 +189,7 @@ func pinBundleDirFromEnvFile(path string) {
 // a blocking failure of the relevant check (and dependent checks degrade to a
 // blocking failure too, since they cannot run without it).
 func runChecks(ctx context.Context, opts validateOptions) []checkResult {
-	results := make([]checkResult, 0, 9)
+	results := make([]checkResult, 0, 10)
 
 	envFile := preflightEnvFile()
 	bundle, bundleErr := clientconfig.Load(clientconfig.Dir())
@@ -213,6 +213,7 @@ func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 	results = append(results, checkMCPServers(ctx, bundle, cfg, opts))
 	results = append(results, checkMCPCatalog(bundle, bundleErr))
 	results = append(results, checkManifestFiles(bundle, bundleErr))
+	results = append(results, checkBundleSkills(bundle, bundleErr))
 	results = append(results, checkDatabase(ctx, cfg, cfgErr, opts))
 	results = append(results, checkCredentials(bundle, bundleErr))
 	results = append(results, checkSandbox(ctx, cfg, bundle))
@@ -680,7 +681,7 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 		res.Detail = "no servers declared"
 		return res
 	}
-	res.Detail = fmt.Sprintf("%d server(s): structure ok", len(bundle.MCPCatalog))
+	res.Detail = fmt.Sprintf("%d server(s): structure ok%s", len(bundle.MCPCatalog), catalogAccountHeadroomNotes(bundle.MCPCatalog))
 	return res
 }
 
@@ -719,19 +720,79 @@ func catalogServerProblems(s *clientconfig.ServerDef, label, bundleDir string) [
 // model request that carries the tool fails.
 func catalogToolNameBudgetProblems(s *clientconfig.ServerDef, label string) []string {
 	var problems []string
+	// The allowlist is matched EXACTLY against the tool names the server
+	// advertises (MCPServerConfigs copies the strings verbatim), so a padded
+	// " lookup " excludes the real lookup and a blank entry matches nothing —
+	// a non-empty list of blanks silently filters every tool the server has.
+	for i, tool := range s.Tools {
+		if strings.TrimSpace(tool) == "" || strings.TrimSpace(tool) != tool {
+			problems = append(problems, fmt.Sprintf("%s: tools[%d] is blank or has surrounding whitespace; the allowlist is matched exactly and this entry can never match a real tool", label, i))
+		}
+	}
 	fixed := len(clientconfig.MCPToolNamePrefix) + len(s.Name) + 1 // "mcp_" + name + "_"
 	if len(s.Tools) == 0 {
 		if fixed+1 > clientconfig.MaxProviderToolNameLen {
 			problems = append(problems, fmt.Sprintf("%s: name is %d chars; %s<name>_<tool> must fit in %d, which leaves no room for any tool name", label, len(s.Name), clientconfig.MCPToolNamePrefix, clientconfig.MaxProviderToolNameLen))
 		}
-		return problems
 	}
 	for _, tool := range s.Tools {
 		if n := fixed + len(tool); n > clientconfig.MaxProviderToolNameLen {
 			problems = append(problems, fmt.Sprintf("%s: tool %q would be advertised as a %d-char name (%s%s_%s); providers cap tool names at %d", label, tool, n, clientconfig.MCPToolNamePrefix, s.Name, tool, clientconfig.MaxProviderToolNameLen))
 		}
 	}
+	// A named seat is registered as <server>_<account> before the prefix and
+	// tool are added (agentcore.RegisteredMCPName), so on a server that
+	// declares account_vars the budget is ALSO shared with the account label.
+	// Labels are operator input at `fleet mcp account set` time with no length
+	// cap, so a secretless preflight cannot know them — and a fixed reservation
+	// would be arbitrary: a 16-char one failed four real bundles whose seats
+	// work today with `production`. So the exact headroom is computed instead:
+	// it is a FAILURE only when even a one-character label cannot fit (a named
+	// seat is then impossible on this server), and otherwise it is reported —
+	// see catalogAccountHeadroom, which the ok detail carries — so the operator
+	// knows the label cap for each server before they create the account.
+	if len(s.AccountVars) > 0 {
+		if h := catalogAccountHeadroom(s); h < 1 {
+			problems = append(problems, fmt.Sprintf("%s: declares account_vars but %s%s_<account>_<longest tool> already reaches %d; no room for any account label, so a named seat can never be advertised", label, clientconfig.MCPToolNamePrefix, s.Name, clientconfig.MaxProviderToolNameLen))
+		}
+	}
 	return problems
+}
+
+// catalogAccountHeadroom is the longest account label a server that declares
+// account_vars can carry before mcp_<server>_<account>_<tool> exceeds the
+// provider cap, measured against its longest allowlisted tool (or a
+// one-character tool when no allowlist is declared). Negative or zero means
+// no label fits at all.
+func catalogAccountHeadroom(s *clientconfig.ServerDef) int {
+	longest := 1
+	for _, t := range s.Tools {
+		if len(t) > longest {
+			longest = len(t)
+		}
+	}
+	// "mcp_" + name + "_" + account + "_" + tool
+	return clientconfig.MaxProviderToolNameLen - (len(clientconfig.MCPToolNamePrefix) + len(s.Name) + 1 + 1 + longest)
+}
+
+// catalogAccountHeadroomNotes renders, for the ok detail, the label cap of
+// every server that declares account_vars — the one fact about named seats a
+// secretless preflight can state, and the number an operator needs when they
+// pick an account label. Sorted by server name for a stable report.
+func catalogAccountHeadroomNotes(catalog []clientconfig.ServerDef) string {
+	var parts []string
+	for i := range catalog {
+		s := &catalog[i]
+		if len(s.AccountVars) == 0 || strings.TrimSpace(s.Name) == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%d", s.Name, catalogAccountHeadroom(s)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sort.Strings(parts)
+	return "; account label headroom (chars, per account_vars server): " + strings.Join(parts, ", ")
 }
 
 // catalogActivationProblems: a server that is not `always` and declares no
@@ -812,7 +873,9 @@ func catalogStdioProblems(s *clientconfig.ServerDef, label, bundleDir string) []
 	case strings.TrimSpace(s.Command) == "":
 		problems = append(problems, label+": stdio server has empty command")
 	case s.Command != strings.TrimSpace(s.Command):
-		problems = append(problems, fmt.Sprintf("%s: command %q has surrounding whitespace", label, s.Command))
+		// Not echoed: the manifest is ${VAR}-interpolated before it gets here,
+		// so a command field can carry a value that came from the environment.
+		problems = append(problems, label+": command has surrounding whitespace")
 	case !filepath.IsAbs(s.Command) && strings.ContainsRune(s.Command, os.PathSeparator) && !s.FromPlugin():
 		// A command WITH a path separator that is not absolute is a file the
 		// bundle ships (./mcp/server, .venv/bin/python) — bundle content, not a
@@ -917,6 +980,37 @@ func checkManifestFiles(bundle *clientconfig.Bundle, bundleErr error) checkResul
 	}
 	res.Status = statusOK
 	res.Detail = "system prompts present (chat.md, default.md)"
+	return res
+}
+
+// ── 3d. Bundle skills (CI gate, non-blocking) ──
+
+// checkBundleSkills surfaces Bundle.ValidateSkills — a skill folder with no
+// SKILL.md, bad frontmatter, a name/folder mismatch, an empty description — as
+// a check result. Load deliberately does not fail on these: a defective skill
+// is skipped from the roster and the problem is LOGGED, so a running box is
+// not taken down by one bad skill. But "logged to stderr" is invisible to a
+// CI gate that reads the JSON report, and a checked-in skill that quietly
+// drops out of the roster is a bundle defect on every box. Decided entirely by
+// the bundle's own files, so it belongs in the floor. Non-blocking for the
+// same reason as the other floor checks: CI keys on the status, operators on
+// the exit code, and this must not change any existing box's exit code.
+// (Plugin skills are covered separately: the plugin loader records their
+// defects as PluginEntryProblems, which mcp_catalog already folds in.)
+func checkBundleSkills(bundle *clientconfig.Bundle, bundleErr error) checkResult {
+	res := checkResult{Name: "bundle_skills", Blocking: false}
+	if bundle == nil || bundleErr != nil {
+		res.Status = statusWarn
+		res.Detail = "skipped (bundle not loaded)"
+		return res
+	}
+	if problems := bundle.ValidateSkills(); len(problems) > 0 {
+		res.Status = statusFail
+		res.Detail = strings.Join(problems, "; ")
+		return res
+	}
+	res.Status = statusOK
+	res.Detail = "bundle skills well-formed"
 	return res
 }
 

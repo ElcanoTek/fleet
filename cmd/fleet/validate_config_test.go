@@ -962,7 +962,7 @@ func TestCheckMCPCatalog(t *testing.T) {
 			name:       "stdio command with surrounding whitespace fails",
 			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: " python3 "}),
 			wantStatus: statusFail,
-			wantDetail: `command " python3 " has surrounding whitespace`,
+			wantDetail: "command has surrounding whitespace", // the value is never echoed: it may be ${VAR}-interpolated
 		},
 		{
 			// The loader trims identity_env for its own lookup but propagates the
@@ -1131,6 +1131,53 @@ func TestCheckMCPCatalog(t *testing.T) {
 			name:       "absolute command path is not checked for existence",
 			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "/opt/definitely/not/here/python3", Always: true}),
 			wantStatus: statusOK,
+		},
+		{
+			// The allowlist is matched exactly; a padded entry can never match.
+			name:       "padded tools allowlist entry fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "a", Always: true, Tools: []string{" lookup "}}),
+			wantStatus: statusFail,
+			wantDetail: "tools[0] is blank or has surrounding whitespace",
+		},
+		{
+			// A non-empty list of blanks filters every tool the server has.
+			name:       "blank tools allowlist entry fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "a", Always: true, Tools: []string{""}}),
+			wantStatus: statusFail,
+			wantDetail: "tools[0] is blank",
+		},
+		{
+			// account_vars → a named seat is registered as <server>_<account>, so
+			// the budget is shared with the label. mcp_(4)+56+_(1)+<acct>+_(1)+x(1)
+			// = 63 + len(acct): a one-character label still fits → ok, and the ok
+			// detail reports the headroom so the operator knows the label cap.
+			name: "account_vars server with one char of account headroom is ok and reports it",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: strings.Repeat("s", 56), Command: "a", Always: true, AccountVars: []string{"API_KEY"}, Tools: []string{"x"},
+			}),
+			wantStatus: statusOK,
+			wantDetail: "account label headroom (chars, per account_vars server): " + strings.Repeat("s", 56) + "=1",
+		},
+		{
+			// One char longer: no label of any length fits, so a named seat can
+			// never be advertised. Without account_vars this same name passes.
+			name: "account_vars server with no account headroom fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: strings.Repeat("s", 57), Command: "a", Always: true, AccountVars: []string{"API_KEY"}, Tools: []string{"x"},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "no room for any account label",
+		},
+		{
+			// A real shape from the bundle family (magnite_mcp + a 37-char tool):
+			// 64 - (4 + 11 + 1 + 1 + 37) = 10, so `production` fits and the check
+			// is ok — a fixed 16-char reservation would have failed it.
+			name: "account_vars server with a long tool name reports realistic headroom",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "magnite_mcp", Command: "a", Always: true, AccountVars: []string{"K"}, Tools: []string{"magnite_run_report_from_prompt_inputs"},
+			}),
+			wantStatus: statusOK,
+			wantDetail: "magnite_mcp=10",
 		},
 	}
 
@@ -1367,5 +1414,79 @@ func TestCheckMCPCatalogIgnoresDeploymentLocalPluginRoots(t *testing.T) {
 	res := checkMCPCatalog(bundle, nil)
 	if res.Status != statusOK {
 		t.Fatalf("Status = %q (%s), want ok: a deployment-local plugin root must not fail the catalog gate", res.Status, res.Detail)
+	}
+}
+
+// TestCheckMCPCatalogGatesMissingRelativePluginRoot is the other half of the
+// root split: a RELATIVE plugin_roots entry (vendor/plugins) is bundle content
+// by spec, so when that checked-in directory is deleted every plugin under it
+// vanishes on every box — an entry-level defect the catalog gate must fail,
+// not a machine fact to wave through.
+func TestCheckMCPCatalogGatesMissingRelativePluginRoot(t *testing.T) {
+	t.Setenv("FLEET_DATA_DIR", t.TempDir())
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("skills_builtin: false\nplugin_roots: [\"vendor/plugins\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("Load must succeed: %v", err)
+	}
+	if len(bundle.PluginEntryProblems()) == 0 {
+		t.Fatalf("a missing RELATIVE root must be an entry problem; entry=%v root=%v", bundle.PluginEntryProblems(), bundle.PluginRootProblems())
+	}
+	if len(bundle.PluginRootProblems()) != 0 {
+		t.Errorf("a relative root must not be classified deployment-local: %v", bundle.PluginRootProblems())
+	}
+	if res := checkMCPCatalog(bundle, nil); res.Status != statusFail || !strings.Contains(res.Detail, "vendor/plugins") {
+		t.Fatalf("Status = %q (%s), want fail naming vendor/plugins", res.Status, res.Detail)
+	}
+}
+
+// TestCheckBundleSkills: Load logs a malformed bundle skill to stderr and
+// carries on, which a CI gate reading the JSON report never sees. The check
+// must turn ValidateSkills into a result the floor can gate.
+func TestCheckBundleSkills(t *testing.T) {
+	skillsDir := func(withSkillMD bool) string {
+		d := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(d, "my-skill"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if withSkillMD {
+			body := "---\nname: my-skill\ndescription: Does a thing.\n---\n\nBody.\n"
+			if err := os.WriteFile(filepath.Join(d, "my-skill", "SKILL.md"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return d
+	}
+	cases := []struct {
+		name       string
+		bundle     *clientconfig.Bundle
+		bundleErr  error
+		wantStatus checkStatus
+		wantDetail string
+	}{
+		{"well-formed skill is ok", &clientconfig.Bundle{Dir: t.TempDir(), BundleSkillsDir: skillsDir(true)}, nil, statusOK, "well-formed"},
+		{"skill folder without SKILL.md fails", &clientconfig.Bundle{Dir: t.TempDir(), BundleSkillsDir: skillsDir(false)}, nil, statusFail, "my-skill"},
+		{"nil bundle degrades to a skip", nil, nil, statusWarn, "skipped (bundle not loaded)"},
+		{"load error degrades to a skip", &clientconfig.Bundle{Dir: t.TempDir(), BundleSkillsDir: skillsDir(true)}, errors.New("nope"), statusWarn, "skipped (bundle not loaded)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := checkBundleSkills(tc.bundle, tc.bundleErr)
+			if res.Name != "bundle_skills" {
+				t.Errorf("Name = %q, want bundle_skills", res.Name)
+			}
+			if res.Blocking {
+				t.Error("bundle_skills must never be Blocking — CI keys on status; operator exit codes must not change")
+			}
+			if res.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q (detail: %s)", res.Status, tc.wantStatus, res.Detail)
+			}
+			if !strings.Contains(res.Detail, tc.wantDetail) {
+				t.Errorf("Detail %q should contain %q", res.Detail, tc.wantDetail)
+			}
+		})
 	}
 }

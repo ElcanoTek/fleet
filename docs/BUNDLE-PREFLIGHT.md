@@ -68,9 +68,9 @@ four and is unsatisfiable on elcano/reklaim/zeta. So each caller names what it
 can honestly gate today and tightens it as its environment contract firms up,
 rather than the workflow hard-coding a set that is wrong for half the family.
 
-The floor is **`mcp_catalog` and `manifest_files`**, not `mcp_servers`, and
-that distinction is the substance of this note. Both are gated whatever a
-caller passes.
+The floor is **`mcp_catalog`, `manifest_files` and `bundle_skills`**, not
+`mcp_servers`, and that distinction is the substance of this note. All three
+are gated whatever a caller passes.
 
 ### The `mcp_servers` trap
 
@@ -139,6 +139,16 @@ green:
 system_prompts/chat.md deleted           -> manifest_files=fail: system prompt chat.md missing
 optional: true server, no gate           -> mcp_catalog=fail: mcp_catalog["dead_server"]: no activation path — set always: true or declare enabled_env / enabled_groups …
 gated http url …:99999                   -> mcp_catalog=fail: mcp_catalog["remote_gated"]: url port "99999" is not in 1-65535
+```
+
+Sixth round, floor now `mcp_catalog,manifest_files,bundle_skills`, all seven
+bundles green on it (a fixed account-suffix reservation tried first failed
+four of them, which is why it became exact headroom):
+
+```
+plugin_roots: ["vendor/plugins"] missing   -> mcp_catalog=fail: plugin: plugin_roots: …/vendor/plugins: no such file or directory
+skills/broken-skill/ without SKILL.md      -> bundle_skills=fail: skills/broken-skill: missing SKILL.md
+gated server tools: [" ping "]             -> mcp_catalog=fail: mcp_catalog["remote_gated"]: tools[0] is blank or has surrounding whitespace …
 ```
 
 ### `mcp_catalog`
@@ -217,6 +227,24 @@ structure and deliberately **not** installation:
   (installation); absolute paths stay exempt (the box's filesystem); plugin
   servers stay exempt (resolved by the plugin loader against the plugin root,
   which is why `ServerDef.FromPlugin` is exported).
+- **usable `tools` allowlist entries.** The allowlist is matched exactly
+  against what the server advertises, so `" lookup "` excludes the real
+  `lookup` and a non-empty list of blanks filters every tool. Blank or padded
+  entries are rejected.
+- **account-label headroom, reported — and failed only when it is zero.** A
+  named seat is registered as `<server>_<account>` before the prefix and tool
+  are added (`agentcore.RegisteredMCPName`), so on a server that declares
+  `account_vars` the 64-char budget is also shared with the label. Labels are
+  operator input at `fleet mcp account set` time with no length cap, so a
+  secretless preflight cannot know them — and a fixed reservation is
+  arbitrary: a 16-character one failed four real bundles (`magnite_mcp`,
+  `gamma`) whose seats work today with `production`. So the check computes the
+  **exact headroom** against the longest allowlisted tool, fails only when
+  even a one-character label cannot fit, and otherwise reports it in the ok
+  detail per server. It already says something useful: elcano-config's
+  `magnite_mcp` has 8 characters of headroom, so a `production` seat there
+  would exceed the cap. Capping labels at creation time is the complete fix
+  and is *not* in this change — see Scope.
 - **no Agent Plugin problems.** An `mcp.json` server the plugin loader skips
   as invalid never reaches `MCPCatalog`, and `Load` still succeeds —
   `checkManifest` demotes `PluginProblems()` to advisories so a running box is
@@ -237,7 +265,12 @@ structure and deliberately **not** installation:
   folding it in would pin every PR of such a bundle red. The loader now keeps
   root-availability problems apart (`PluginRootProblems`); the catalog check
   consumes `PluginEntryProblems`, and the root ones stay visible as `manifest`
-  advisories, where the operator view belongs.
+  advisories, where the operator view belongs. The split is decided by
+  whether the manifest named the root **absolutely**: a *relative* root
+  (`vendor/plugins`) is bundle content by spec, so if that checked-in
+  directory is deleted every plugin under it vanishes on every box — an
+  entry-level defect the gate fails. Both halves are pinned by tests through
+  the real loader.
 
 It does **not** check whether a command resolves on `PATH`. That is
 environmental, it belongs to `mcp_servers` on a real box, and putting it here
@@ -267,6 +300,22 @@ Measured: deleting `system_prompts/chat.md` on a bundle copy →
 `manifest_files=fail: system prompt chat.md missing`, with `mcp_catalog` still
 `ok` — exactly the gap.
 
+### `bundle_skills` — the third floor check
+
+`Load` deliberately does not fail on a malformed checked-in skill — a folder
+with no `SKILL.md`, bad frontmatter, a name/folder mismatch — because a running
+box should not go down over one bad skill. It *logs* `ValidateSkills()` to
+stderr and skips the skill from the roster. A gate that reads the JSON report
+never sees stderr, so a skill that quietly dropped out merged green.
+`bundle_skills` turns `ValidateSkills()` into a check result; it is decided
+entirely by the bundle's own files, so it is part of the forced floor.
+Non-blocking, like the other floor checks. (Plugin skills are covered by the
+plugin loader's entry problems, which `mcp_catalog` already folds in.)
+
+Measured: a `skills/broken-skill/` folder with no `SKILL.md` on a bundle copy →
+`bundle_skills=fail: skills/broken-skill: missing SKILL.md`, everything else
+`ok`.
+
 ## Gating on `ok`, not on "not `fail`"
 
 The first version of the gate selected checks whose status was `fail`. That was
@@ -284,13 +333,13 @@ An **empty `gate_checks`** is refused for the same reason. A caller that passes
 failure this workflow exists to prevent. The table is still written first so
 the reason is visible in the job summary.
 
-The floor is a **floor**, not a default. `mcp_catalog` and `manifest_files`
-are added to whatever the caller names — a caller passing `gate_checks:
-manifest` alone would otherwise leave the one credential-independent
-connector check and the prompt-file check ungated, and a broken gated-off
-connector or a deleted `chat.md` would merge green. The summary says which
-checks were added and why, so nothing is silent; a caller can add checks but
-never remove those two.
+The floor is a **floor**, not a default. `mcp_catalog`, `manifest_files` and
+`bundle_skills` are added to whatever the caller names — a caller passing
+`gate_checks: manifest` alone would otherwise leave the connector check, the
+prompt-file check and the skills check ungated, and a broken gated-off
+connector, a deleted `chat.md` or a skill that quietly dropped out of the
+roster would merge green. The summary says which checks were added and why,
+so nothing is silent; a caller can add checks but never remove those three.
 
 ## Untrusted-caller hardening
 
@@ -323,6 +372,31 @@ properties are load-bearing:
   Verified on hostile copies: `manifest.yaml → /proc/self/environ` and an
   escaping `bundle_dir` both exit 1 with a `::error::`; a clean checkout and an
   in-workspace symlink both pass.
+
+  Two tightenings followed review. The step now runs **after** the fleet
+  checkout and refuses any symlink whose target is under `.fleet-core`: with
+  the default `bundle_dir: .` the trusted checkout lands *inside* the directory
+  treated as bundle content, so `system_prompts/chat.md ->
+  ../.fleet-core/README.md` was dangling at caller-checkout time (and passed a
+  pre-checkout scan), then resolved once fleet was checked out, and
+  `manifest_files` reported ok for a bundle that has no `chat.md` anywhere it
+  is deployed. And targets must resolve under the **bundle dir**, not merely
+  the workspace — anything outside it is not shipped with the bundle. Verified:
+  the `.fleet-core` link and an in-repo-but-out-of-bundle link both exit 1;
+  clean and in-bundle links pass.
+- **A clean environment for the validator.** `Load` `${VAR}`-interpolates the
+  whole manifest from the process environment, and a runner carries service
+  credentials (`ACTIONS_RUNTIME_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`). An
+  untrusted PR could write `name: "${ACTIONS_RUNTIME_TOKEN}"` and have the
+  server label — which every diagnostic carries — deliver the substituted
+  value into the job summary. The validator therefore runs under `env -i` with
+  only `PATH`, `HOME`, `FLEET_MOCK_MODE`, `FLEET_DATA_DIR` and `FLEET_ENV_FILE`:
+  an unknown `${VAR}` interpolates as unset and the load fails closed — red,
+  nothing to leak. Measured with a planted secret in the outer environment and
+  `name: "${LEAK_ME}"` in a bundle copy: **0 occurrences** in the report under
+  the workflow's invocation, **3** when the same binary runs with the
+  inherited environment. The clean environment is the load-bearing layer; the
+  no-echo rules on URL and command values are defence in depth.
 
 `fleet_ref` and `bundle_dir` are validated with the same allow-lists as
 `build-sandbox-image.yml`, for the same reason — `fleet_ref` selects source that
@@ -360,6 +434,18 @@ and raptive-config. They reference this workflow `@main`, so this PR must merge
 first; until it does their `bundle-preflight` job cannot resolve its `uses:`.
 Nothing in a bundle repo is delivered by this change — this note will be
 updated to "shipped" as those PRs land.
+
+Deliberately **not** in this change, and why:
+
+- **No length cap on account labels at creation time.** The complete fix for
+  the account-suffix budget is to reject, at `fleet mcp account set` / the
+  accounts API, a label that would push `mcp_<server>_<account>_<tool>` past
+  the provider cap. That is a production behaviour change to an existing
+  API — it could refuse labels already in use on a box — and belongs in its
+  own PR with its own compatibility decision, not inside a CI-hardening
+  change. The preflight does what a secretless runner honestly can: fail when
+  no label could ever fit, and print each server's headroom so the operator
+  picks a label that does.
 
 Deliberately not shipped:
 

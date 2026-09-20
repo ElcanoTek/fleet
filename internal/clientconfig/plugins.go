@@ -446,11 +446,14 @@ type pluginLoadResult struct {
 	// server skipped as invalid, a skill that would not parse. Decided by the
 	// bundle's own files, so they hold on any machine.
 	problems []string
-	// rootProblems are ROOT-availability: an explicit plugin_roots entry that
-	// is missing, not a directory, or unreadable HERE. An absolute root such as
-	// /opt/fleet/site-plugins legitimately exists only on the deployment box
-	// (docs/AGENT-PLUGINS.md), so these are facts about the machine, kept apart
-	// so a preflight can report them without failing a bundle for them.
+	// rootProblems are ROOT-availability for DEPLOYMENT-LOCAL roots only: an
+	// ABSOLUTE plugin_roots entry that is missing, not a directory, or
+	// unreadable HERE. /opt/fleet/site-plugins legitimately exists only on the
+	// deployment box (docs/AGENT-PLUGINS.md), so that is a fact about the
+	// machine, kept apart so a preflight can report it without failing a bundle
+	// for it. A RELATIVE root (vendor/plugins) is bundle content — the spec
+	// defines it as such — so its absence is an entry-level problem and lands
+	// in `problems`, where the preflight gates it.
 	rootProblems []string
 }
 
@@ -635,13 +638,22 @@ func pluginDataDir(name string) (string, error) {
 func loadPlugins(bundleDir string, extraRoots []string, takenServerNames map[string]bool) pluginLoadResult {
 	var res pluginLoadResult
 	roots := []string{filepath.Join(bundleDir, PluginsDirName)}
+	// rootIsDeploymentLocal[i]: the manifest named this root ABSOLUTELY, so it
+	// is a path on the deployment box (/opt/fleet/site-plugins), not bundle
+	// content. A RELATIVE root (vendor/plugins) is bundle content: if it is
+	// missing, the bundle is broken wherever it is deployed. The distinction
+	// decides which problem list an unavailable root lands in — see
+	// pluginLoadResult — and it must be taken BEFORE the path is absolutized,
+	// which is why it is recorded here rather than inferred later.
+	rootIsDeploymentLocal := []bool{false}
 	seenRoot := map[string]bool{filepath.Clean(roots[0]): true}
 	for _, r := range extraRoots {
 		r = strings.TrimSpace(r)
 		if r == "" {
 			continue
 		}
-		if !filepath.IsAbs(r) {
+		deploymentLocal := filepath.IsAbs(r)
+		if !deploymentLocal {
 			r = filepath.Join(bundleDir, r)
 		}
 		r = filepath.Clean(r)
@@ -650,6 +662,17 @@ func loadPlugins(bundleDir string, extraRoots []string, takenServerNames map[str
 		}
 		seenRoot[r] = true
 		roots = append(roots, r)
+		rootIsDeploymentLocal = append(rootIsDeploymentLocal, deploymentLocal)
+	}
+	// rootProblem files an unavailable-root message where it belongs: a
+	// deployment-local (absolute) root is a fact about this machine; a
+	// bundle-relative one is a defect in the bundle's own files.
+	rootProblem := func(i int, msg string) {
+		if rootIsDeploymentLocal[i] {
+			res.rootProblems = append(res.rootProblems, msg)
+			return
+		}
+		res.problems = append(res.problems, msg)
 	}
 	seenName := map[string]string{}
 	for i, root := range roots {
@@ -658,17 +681,17 @@ func loadPlugins(bundleDir string, extraRoots []string, takenServerNames map[str
 			// The fixed plugins/ dir is optional (a bundle need not ship
 			// plugins); a root the operator listed explicitly is not.
 			if i > 0 {
-				res.rootProblems = append(res.rootProblems, fmt.Sprintf("plugin_roots: %s: %v", root, err))
+				rootProblem(i, fmt.Sprintf("plugin_roots: %s: %v", root, err))
 			}
 			continue
 		}
 		if !info.IsDir() {
-			res.rootProblems = append(res.rootProblems, fmt.Sprintf("%s exists but is not a directory; no plugins loaded from it", root))
+			rootProblem(i, fmt.Sprintf("%s exists but is not a directory; no plugins loaded from it", root))
 			continue
 		}
 		entries, err := os.ReadDir(root)
 		if err != nil {
-			res.rootProblems = append(res.rootProblems, fmt.Sprintf("%s: cannot read: %v", root, err))
+			rootProblem(i, fmt.Sprintf("%s: cannot read: %v", root, err))
 			continue
 		}
 		for _, e := range entries {

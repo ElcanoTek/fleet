@@ -72,7 +72,12 @@ name: Validate client bundle (reusable)
 # also carries the box-supplied persona default that half the family cannot
 # satisfy on a runner. Without it, deleting chat.md merged green — Load and
 # mcp_catalog both succeed without it, and only the ungated `manifest` row
-# noticed. Both floor checks are gated whatever `gate_checks` says.
+# noticed.
+#
+# `bundle_skills` is the third: Load LOGS a malformed checked-in skill (no
+# SKILL.md, bad frontmatter) and carries on, which a gate reading the JSON
+# report never sees, so a skill that quietly dropped out of the roster merged
+# green. All three floor checks are gated whatever `gate_checks` says.
 #
 # Caller contract (in a client config repo):
 #
@@ -88,7 +93,7 @@ name: Validate client bundle (reusable)
 #     validate:
 #       uses: ElcanoTek/fleet/.github/workflows/validate-bundle.yml@main
 #       with:
-#         gate_checks: "manifest,mcp_catalog,manifest_files"   # the last two are always gated
+#         gate_checks: "manifest,mcp_catalog,manifest_files,bundle_skills"   # the last three are always gated
 
 on:
   workflow_call:
@@ -111,12 +116,12 @@ on:
           gate decorative. An empty value is refused for the same reason: a
           job that passes having gated nothing is the failure this workflow
           exists to prevent.
-          `mcp_catalog` and `manifest_files` are the floor: they are gated
-          whether or not they are named here, so a caller can add checks but
-          never remove those two.
+          `mcp_catalog`, `manifest_files` and `bundle_skills` are the floor:
+          they are gated whether or not they are named here, so a caller can
+          add checks but never remove those three.
         type: string
         required: false
-        default: "mcp_catalog,manifest_files"
+        default: "mcp_catalog,manifest_files,bundle_skills"
       bundle_env:
         description: >-
           Optional NON-SECRET deployment variables the manifest needs to load,
@@ -143,10 +148,10 @@ on:
         required: false
         default: "config/default"
       gate_checks:
-        description: "Comma-separated checks that must report ok (mcp_catalog and manifest_files are always added)"
+        description: "Comma-separated checks that must report ok (mcp_catalog, manifest_files and bundle_skills are always added)"
         type: string
         required: false
-        default: "mcp_catalog,manifest_files"
+        default: "mcp_catalog,manifest_files,bundle_skills"
 
 # Checkout and build only. This workflow reads a manifest in a throwaway
 # runner and never spawns the bundle's servers: no registry, no push, no repo
@@ -202,38 +207,6 @@ jobs:
           esac
           echo "bundle_dir accepted: '${REQUESTED:-.}'"
 
-      # On a pull_request run the caller checkout is untrusted, and the loader
-      # follows symlinks. A manifest.yaml that is a symlink to
-      # /proc/self/environ would be read, fail to parse, and the parse error
-      # would echo the offending source line into the JSON report the gate
-      # step publishes to the job summary — the validator's own environment,
-      # runner service credentials included, in a public place. So before the
-      # loader runs, refuse any symlink anywhere in the checkout whose target
-      # resolves outside the workspace, and a bundle_dir that does. The whole
-      # workspace is scanned, not just the bundle dir, so a chain through an
-      # in-repo directory cannot get around it. Pure shell, no Go involved.
-      - name: Contain symlinks in the caller checkout
-        run: |
-          set -euo pipefail
-          root=$(realpath "$GITHUB_WORKSPACE")
-          bdir=$(realpath "$GITHUB_WORKSPACE/$BUNDLE_DIR")
-          case "$bdir" in
-            "$root"|"$root"/*) ;;
-            *) echo "::error::bundle_dir resolves outside the workspace: $bdir"; exit 1 ;;
-          esac
-          bad=0
-          while IFS= read -r -d '' link; do
-            target=$(realpath -m -- "$link")
-            case "$target" in
-              "$root"|"$root"/*) ;;
-              *) echo "::error::symlink escapes the workspace: ${link#"$root"/} -> $target"; bad=1 ;;
-            esac
-          done < <(find "$root" -path "$root/.fleet-core" -prune -o -type l -print0)
-          if [ "$bad" != 0 ]; then
-            echo "::error::refusing to run the loader over a checkout with escaping symlinks"
-            exit 1
-          fi
-          echo "no escaping symlinks under the workspace"
 
       # Identical allow-list to build-sandbox-image.yml, and for the identical
       # reason: this ref selects source that is then COMPILED AND EXECUTED here.
@@ -269,6 +242,59 @@ jobs:
           ref: ${{ steps.pin.outputs.resolved }}
           path: .fleet-core
           persist-credentials: false
+
+      # On a pull_request run the caller checkout is untrusted, and the loader
+      # follows symlinks. A manifest.yaml that is a symlink to
+      # /proc/self/environ would be read, fail to parse, and the parse error
+      # would echo the offending source line into the JSON report the gate
+      # step publishes to the job summary — the validator's own environment,
+      # runner service credentials included, in a public place.
+      #
+      # So before the loader runs, refuse any symlink anywhere in the caller
+      # checkout whose target resolves outside the BUNDLE dir, or anywhere
+      # under fleet's own .fleet-core checkout, and a bundle_dir that resolves
+      # outside the workspace. Two details are deliberate:
+      #
+      #   - This step runs AFTER the fleet checkout, and .fleet-core is refused
+      #     as a target by name. With the default bundle_dir "." the trusted
+      #     checkout lands INSIDE the directory treated as bundle content, so
+      #     `system_prompts/chat.md -> ../.fleet-core/README.md` would be a
+      #     dangling link at caller-checkout time (and pass a pre-checkout
+      #     scan), then resolve once fleet is checked out, and manifest_files
+      #     would report ok for a bundle that has no chat.md anywhere it is
+      #     deployed. Scanning after the checkout, with .fleet-core excluded as
+      #     a target, closes that.
+      #   - Targets must be under the bundle dir, not merely the workspace:
+      #     anything outside the bundle dir is not shipped with the bundle.
+      #
+      # The whole caller checkout is scanned (minus .fleet-core's own tree), so
+      # a chain through an in-repo directory cannot get around it. Pure shell.
+      - name: Contain symlinks in the caller checkout
+        run: |
+          set -euo pipefail
+          root=$(realpath "$GITHUB_WORKSPACE")
+          bdir=$(realpath "$GITHUB_WORKSPACE/$BUNDLE_DIR")
+          core="$root/.fleet-core"
+          case "$bdir" in
+            "$root"|"$root"/*) ;;
+            *) echo "::error::bundle_dir resolves outside the workspace: $bdir"; exit 1 ;;
+          esac
+          bad=0
+          while IFS= read -r -d '' link; do
+            target=$(realpath -m -- "$link")
+            case "$target" in
+              "$core"|"$core"/*)
+                echo "::error::symlink targets fleet's own checkout, which is not bundle content: ${link#"$root"/}"; bad=1 ;;
+              "$bdir"|"$bdir"/*) ;;
+              *)
+                echo "::error::symlink escapes the bundle dir: ${link#"$root"/} -> $target"; bad=1 ;;
+            esac
+          done < <(find "$root" -path "$core" -prune -o -type l -print0)
+          if [ "$bad" != 0 ]; then
+            echo "::error::refusing to run the loader over a checkout with escaping symlinks"
+            exit 1
+          fi
+          echo "no escaping symlinks under the bundle dir"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -334,9 +360,23 @@ jobs:
             fi
           done <<< "$BUNDLE_ENV"
           export FLEET_ENV_FILE="$RUNNER_TEMP/bundle.env"
-          "$RUNNER_TEMP/fleet" validate-config \
-            --bundle-path "$GITHUB_WORKSPACE/$BUNDLE_DIR" \
-            --skip-network-checks --json > "$RUNNER_TEMP/report.json" 2> "$RUNNER_TEMP/report.err" || true
+          # A CLEAN environment, not the runner's. The loader ${VAR}-interpolates
+          # the whole manifest from the process environment, and a runner
+          # carries service credentials (ACTIONS_RUNTIME_TOKEN,
+          # ACTIONS_ID_TOKEN_REQUEST_TOKEN, ...). An untrusted PR could write
+          # `command: " ${ACTIONS_RUNTIME_TOKEN} "` and have a diagnostic carry
+          # the substituted value into the report and the job summary. With
+          # `env -i` and only the variables the validator needs, an unknown
+          # ${VAR} interpolates as unset and the load fails closed — red, and
+          # nothing to leak. Do not pass the runner environment through here.
+          env -i \
+            PATH="$PATH" HOME="$HOME" \
+            FLEET_MOCK_MODE="$FLEET_MOCK_MODE" \
+            FLEET_DATA_DIR="$FLEET_DATA_DIR" \
+            FLEET_ENV_FILE="$FLEET_ENV_FILE" \
+            "$RUNNER_TEMP/fleet" validate-config \
+              --bundle-path "$GITHUB_WORKSPACE/$BUNDLE_DIR" \
+              --skip-network-checks --json > "$RUNNER_TEMP/report.json" 2> "$RUNNER_TEMP/report.err" || true
           if ! [ -s "$RUNNER_TEMP/report.json" ]; then
             echo "::error::validate-config produced no JSON report. stderr follows:"
             cat "$RUNNER_TEMP/report.err" || true
@@ -371,13 +411,16 @@ jobs:
           gated = [c.strip() for c in os.environ.get("GATE_CHECKS", "").split(",") if c.strip()]
 
           # The floor is not a default, it is a floor. `mcp_catalog` is the one
-          # credential-independent question about the connectors, and
-          # `manifest_files` is the one about the two prompt files every box
-          # reads; a caller naming only `manifest` would leave both ungated and
-          # a broken gated-off connector — or a deleted chat.md — would merge
-          # green. Add them to whatever the caller named and say so in the
-          # summary, so the floor cannot be lowered by an input.
-          FLOOR = ["mcp_catalog", "manifest_files"]
+          # credential-independent question about the connectors,
+          # `manifest_files` the one about the two prompt files every box reads,
+          # and `bundle_skills` the one about the checked-in skills (Load only
+          # LOGS a malformed skill, so nothing else in the report would show
+          # it). A caller naming only `manifest` would leave all three ungated
+          # and a broken gated-off connector — or a deleted chat.md, or a skill
+          # that quietly dropped out of the roster — would merge green. Add
+          # them to whatever the caller named and say so in the summary, so
+          # the floor cannot be lowered by an input.
+          FLOOR = ["mcp_catalog", "manifest_files", "bundle_skills"]
           forced = [f for f in FLOOR if gated and f not in gated]
           gated += forced
 
