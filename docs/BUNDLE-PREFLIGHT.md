@@ -117,6 +117,18 @@ The second is the case `mcp_servers` could never see: the loader skipped the
 server before any check ran, `Load` succeeded, and the only trace was a plugin
 problem that `checkManifest` files as an advisory.
 
+Third round, same method, on copies of zeta-config with a credential-gated
+declaration mutated (plus a well-formed http control that stayed green):
+
+```
+stdio command " python3 "            -> RED: mcp_catalog["pubmatic_mcp"]: command " python3 " has surrounding whitespace
+http url " https://…/mcp" (gated)    -> RED: mcp_catalog["remote_gated"]: url " https://tools.example.com/mcp" has surrounding whitespace
+http header "Bad Header" (gated)     -> RED: mcp_catalog["remote_gated"]: header "Bad Header" is not a valid HTTP header name
+```
+
+elcano-config (4 http servers) and reklaim-config (2) stayed `ok` throughout,
+so the URL and header rules matched no real declaration.
+
 ### `mcp_catalog`
 
 A check that walks the **full** `bundle.MCPCatalog` regardless of enable gates —
@@ -131,16 +143,27 @@ structure and deliberately **not** installation:
   would take a running box down over a name that has worked for months), so
   without this check a credential-gated `sales.api` passes boot and breaks the
   first turn that enables it.
-- stdio: command string present
-- http: URL present, parses, uses an http/https scheme, **and has a host** —
-  `url.Parse` accepts `https://`, `https:///mcp` and the opaque `http:foo`
-  without complaint, and none can be dialled
-- `enabled_env`, `account_vars` **and every member of every `enabled_groups`
-  alternative** well-formed — `enabled()` looks each one up verbatim, so a
+- stdio: command string present **and not padded** — the loader keeps it
+  verbatim and exec looks for the literal `" python3 "`, which resolves nowhere
+- http: URL present, **not padded**, parses, uses an http/https scheme, **and
+  has a host** — `url.Parse` accepts `https://`, `https:///mcp` and the opaque
+  `http:foo` without complaint, and none can be dialled; `MCPServerConfigs`
+  copies the URL verbatim and `net/http` rejects a padded one
+- http: **headers valid** — token names, no case-duplicate names, no CR/LF in
+  values, the same rule the plugin loader already applies to plugin headers
+  (`clientconfig.ValidateHTTPHeaders`). The manifest loader validates none of
+  this, and `net/http` fails the request at send time — visible only once the
+  server's credentials enable it.
+- `enabled_env`, `account_vars`, **`identity_env`** and every member of every
+  `enabled_groups` alternative well-formed — `enabled()` looks each one up
+  verbatim, so a
   padded `" API_KEY"` reads an unset var and leaves the connector silently
   disabled everywhere. An **empty** group is rejected outright: `allSet(nil)`
   is vacuously true, so `enabled_groups: [[]]` enables the server with no gate
-  at all.
+  at all. `identity_env` is the sharp one: the loader trims each name for its
+  own env-map lookup but propagates the padded original, and the named-account
+  guard then reads the identity as unset and can let a variant inherit the
+  default seat's routing identity.
 - script args resolve to a file under the bundle (reuses
   `Bundle.ValidateMCPArgPaths()`, which already walked the full catalog)
 - **no Agent Plugin problems.** An `mcp.json` server the plugin loader skips
@@ -152,7 +175,11 @@ structure and deliberately **not** installation:
   files, with one environmental exception (PLUGIN_DATA dir unavailable) that
   also means the catalog under test is incomplete, so red is still the honest
   answer; the workflow pins `FLEET_DATA_DIR` to a fresh `runner.temp` dir so it
-  cannot arise there.
+  cannot arise there. Ordering matters here and is pinned by a test: there is
+  deliberately **no** "empty catalog → ok" early return, because a bundle with
+  no manifest servers whose *only* plugin server was rejected arrives with an
+  empty `MCPCatalog` and a non-empty `PluginProblems()` — the exact case an
+  early return would wave through.
 
 It does **not** check whether a command resolves on `PATH`. That is
 environmental, it belongs to `mcp_servers` on a real box, and putting it here

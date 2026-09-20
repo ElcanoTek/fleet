@@ -612,12 +612,12 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 		res.Detail = "skipped (bundle not loaded)"
 		return res
 	}
-	if len(bundle.MCPCatalog) == 0 {
-		res.Status = statusOK
-		res.Detail = "no servers declared"
-		return res
-	}
-
+	// No early return for an empty catalog. A bundle with no manifest servers
+	// whose ONLY plugin server the loader rejected arrives here with an empty
+	// MCPCatalog and a non-empty PluginProblems — returning ok before the
+	// plugin fold below would hide exactly the connector that just vanished.
+	// The loop is a no-op when empty; the ok detail reads "no servers
+	// declared" at the end instead.
 	var problems []string
 	seen := make(map[string]bool, len(bundle.MCPCatalog))
 	dupes := make(map[string]bool)
@@ -640,8 +640,15 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 			if !clientconfig.ValidMCPServerName(s.Name) {
 				problems = append(problems, label+": name must be 1-64 chars of letters, digits, '_' or '-' (it becomes part of the mcp_<server>_<tool> tool name)")
 			}
-			if s.Type == "http" {
+			switch {
+			case s.Type == "http":
 				raw := strings.TrimSpace(s.URL)
+				// MCPServerConfigs copies s.URL verbatim and net/http rejects a
+				// padded request URL, so trimming here alone would pass a
+				// declaration the runtime cannot dial.
+				if raw != "" && s.URL != raw {
+					problems = append(problems, fmt.Sprintf("%s: url %q has surrounding whitespace", label, s.URL))
+				}
 				if raw == "" {
 					problems = append(problems, label+": http server has empty url")
 				} else if u, err := url.Parse(raw); err != nil {
@@ -653,17 +660,32 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 					// "http:foo" without complaint; none can be dialled.
 					problems = append(problems, fmt.Sprintf("%s: url %q has no host", label, raw))
 				}
-			} else if strings.TrimSpace(s.Command) == "" {
+				// Manifest headers get no validation in Load (plugin headers do,
+				// spec §7.2.1) and net/http fails the request at send time on a
+				// bad name or a value with a line break — visible only once the
+				// server's credentials enable it. Same rule as plugin headers.
+				if err := clientconfig.ValidateHTTPHeaders(s.Headers); err != nil {
+					problems = append(problems, fmt.Sprintf("%s: %v", label, err))
+				}
+			case strings.TrimSpace(s.Command) == "":
 				// Anything not "http" is stdio (the manifest's default type) and
 				// must name a command. Resolution of that command is deliberately
 				// not this check's business — see the comment above.
 				problems = append(problems, label+": stdio server has empty command")
+			case s.Command != strings.TrimSpace(s.Command):
+				// The loader keeps the command verbatim and exec looks for that
+				// literal name; " python3 " resolves nowhere, on any machine.
+				problems = append(problems, fmt.Sprintf("%s: command %q has surrounding whitespace", label, s.Command))
 			}
 			// Every var name that gates or accounts the server, INCLUDING each
 			// member of every enabled_groups alternative: enabled() looks those up
 			// verbatim, so a padded " API_KEY" reads an unset var and leaves the
 			// connector silently disabled on every box.
-			varLists := [][]string{s.EnabledEnv, s.AccountVars}
+			// identity_env too: the loader trims the name for its own env-map
+			// lookup but propagates the padded original, and the named-account
+			// guard then looks up the padded key, reads the identity as unset,
+			// and can let a variant inherit the default seat's routing identity.
+			varLists := [][]string{s.EnabledEnv, s.AccountVars, s.IdentityEnv}
 			for gi, group := range s.EnabledGroups {
 				if len(group) == 0 {
 					// allSet(nil) is vacuously true: an empty alternative ENABLES
@@ -705,6 +727,10 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 		return res
 	}
 	res.Status = statusOK
+	if len(bundle.MCPCatalog) == 0 {
+		res.Detail = "no servers declared"
+		return res
+	}
 	res.Detail = fmt.Sprintf("%d server(s): structure ok", len(bundle.MCPCatalog))
 	return res
 }

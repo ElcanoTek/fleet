@@ -950,6 +950,62 @@ func TestCheckMCPCatalog(t *testing.T) {
 			}),
 			wantStatus: statusOK,
 		},
+		{
+			// MCPServerConfigs copies the URL verbatim; net/http rejects it padded.
+			name:       "http url with surrounding whitespace fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: " https://x.example.com/mcp"}),
+			wantStatus: statusFail,
+			wantDetail: "has surrounding whitespace",
+		},
+		{
+			// The loader keeps the command verbatim; exec looks for " python3 ".
+			name:       "stdio command with surrounding whitespace fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: " python3 "}),
+			wantStatus: statusFail,
+			wantDetail: `command " python3 " has surrounding whitespace`,
+		},
+		{
+			// The loader trims identity_env for its own lookup but propagates the
+			// padded original; the named-account guard then reads it as unset.
+			name: "identity_env entry with surrounding whitespace fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "local", Command: "a", Env: map[string]string{"OWNER_ID": "x"}, IdentityEnv: []string{" OWNER_ID "},
+			}),
+			wantStatus: statusFail,
+			wantDetail: `" OWNER_ID "`,
+		},
+		{
+			// Manifest headers get no validation in Load; net/http fails at send.
+			name: "http header with an invalid name fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "remote", Type: "http", URL: "https://x.example.com/mcp", Headers: map[string]string{"Bad Header": "v"},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "is not a valid HTTP header name",
+		},
+		{
+			name: "http header value with a line break fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "remote", Type: "http", URL: "https://x.example.com/mcp", Headers: map[string]string{"X-A": "1\r\nInjected: y"},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "contains a line break",
+		},
+		{
+			name: "http headers duplicated under different casing fail",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "remote", Type: "http", URL: "https://x.example.com/mcp", Headers: map[string]string{"X-A": "1", "x-a": "2"},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "same header under different casing",
+		},
+		{
+			name: "well-formed http headers are ok",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "remote", Type: "http", URL: "https://x.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer ${TOKEN}", "X-Tenant": "acme"},
+			}),
+			wantStatus: statusOK,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1037,5 +1093,48 @@ func TestCheckMCPCatalogFailsOnRejectedPluginServer(t *testing.T) {
 	}
 	if res.Blocking {
 		t.Error("mcp_catalog must stay non-blocking even when plugin problems are folded in")
+	}
+}
+
+// TestCheckMCPCatalogFailsWhenOnlyPluginServerIsRejected pins the order of
+// operations the previous test cannot: no manifest servers, and the bundle's
+// ONLY server is a plugin entry the loader skips. MCPCatalog is then empty,
+// and an "empty catalog → ok" early return would report success over a bundle
+// whose one connector just vanished. The plugin fold must run first.
+func TestCheckMCPCatalogFailsWhenOnlyPluginServerIsRejected(t *testing.T) {
+	t.Setenv("FLEET_DATA_DIR", t.TempDir())
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("manifest.yaml", "skills_builtin: false\n")
+	write("plugins/p/plugin.json", `{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": "p"}`)
+	write("plugins/p/mcp.json", `{"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", "mcpServers": {`+
+		`"has.dot": {"type": "stdio", "command": "python3"}}}`)
+
+	bundle, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("Load must succeed — the loader skips the bad server rather than failing: %v", err)
+	}
+	if len(bundle.MCPCatalog) != 0 {
+		t.Fatalf("fixture must leave the catalog EMPTY to prove the ordering; got %d server(s)", len(bundle.MCPCatalog))
+	}
+	if len(bundle.PluginProblems()) == 0 {
+		t.Fatal("fixture no longer produces a plugin problem; the test proves nothing")
+	}
+
+	res := checkMCPCatalog(bundle, nil)
+	if res.Status != statusFail {
+		t.Fatalf("Status = %q (%s), want %q: an empty catalog must not short-circuit past the plugin problems", res.Status, res.Detail, statusFail)
+	}
+	if !strings.Contains(res.Detail, `"has.dot"`) {
+		t.Errorf("Detail should name the dropped plugin server, got: %s", res.Detail)
 	}
 }

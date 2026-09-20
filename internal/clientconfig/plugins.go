@@ -1211,6 +1211,15 @@ func validatePluginHeaders(h map[string]string) error {
 	return nil
 }
 
+// ValidateHTTPHeaders is validatePluginHeaders for callers outside the loader.
+// The manifest loader does not validate a manifest server's headers (a
+// running box must not be taken down at boot over a header that has been
+// tolerated for months), so `fleet validate-config`'s mcp_catalog preflight
+// applies the plugin rule to them instead — net/http would otherwise fail the
+// request at send time with "invalid header field name/value", and only once
+// the server's credentials enabled it. One rule, exported, no second copy.
+func ValidateHTTPHeaders(h map[string]string) error { return validatePluginHeaders(h) }
+
 // PluginProblems returns the human-readable problems the plugin loader
 // reported (unknown manifest fields, skipped skills/servers, rejected
 // plugins). Load logs them as warnings; `fleet validate-config` surfaces them
