@@ -893,6 +893,63 @@ func TestCheckMCPCatalog(t *testing.T) {
 			wantStatus: statusFail,
 			wantDetail: "does not resolve to a file under the bundle",
 		},
+		{
+			// The name becomes mcp_<server>_<tool>; providers reject a dot there.
+			// The loader does not enforce this for manifest servers, so a gated
+			// connector would pass boot and break the first turn that enabled it.
+			name:       "server name with a dot fails (provider-safe shape)",
+			bundle:     catalog(clientconfig.ServerDef{Name: "sales.api", Command: "a"}),
+			wantStatus: statusFail,
+			wantDetail: "1-64 chars of letters, digits",
+		},
+		{
+			name:       "server name with a space fails (provider-safe shape)",
+			bundle:     catalog(clientconfig.ServerDef{Name: "sales api", Command: "a"}),
+			wantStatus: statusFail,
+			wantDetail: "1-64 chars of letters, digits",
+		},
+		{
+			// url.Parse is happy with these; nothing can dial them.
+			name:       "http url with a scheme but no host fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: "https:///mcp"}),
+			wantStatus: statusFail,
+			wantDetail: "has no host",
+		},
+		{
+			name:       "opaque http url fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: "http:foo"}),
+			wantStatus: statusFail,
+			wantDetail: "has no host",
+		},
+		{
+			// enabled() looks every group member up verbatim, so a padded name
+			// reads an unset var and the connector is silently disabled everywhere.
+			name: "enabled_groups member with surrounding whitespace fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "local", Command: "a", EnabledGroups: [][]string{{"API_KEY"}, {" OTHER_KEY", "OTHER_SECRET"}},
+			}),
+			wantStatus: statusFail,
+			wantDetail: `" OTHER_KEY"`,
+		},
+		{
+			// allSet(nil) is vacuously true: an empty alternative enables the
+			// server with no gate at all.
+			name: "empty enabled_groups alternative fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "local", Command: "a", EnabledGroups: [][]string{{"API_KEY"}, {}},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "enabled_groups[1] is empty",
+		},
+		{
+			// Well-formed groups must not false-fail — the whole point is that a
+			// gated-off server is validated, not that gating is suspicious.
+			name: "well-formed enabled_groups on a gated-off server is ok",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "local", Command: "a", EnabledGroups: [][]string{{"API_KEY"}, {"OTHER_KEY", "OTHER_SECRET"}},
+			}),
+			wantStatus: statusOK,
+		},
 	}
 
 	for _, tc := range cases {
@@ -927,5 +984,58 @@ func TestCheckMCPCatalogNeverChecksCommandInstallation(t *testing.T) {
 	res := checkMCPCatalog(bundle, nil)
 	if res.Status != statusOK {
 		t.Fatalf("a catalog naming only uninstalled commands = %q (%s), want %q — the check must validate structure, not installation", res.Status, res.Detail, statusOK)
+	}
+}
+
+// TestCheckMCPCatalogFailsOnRejectedPluginServer: an Agent Plugin mcp.json
+// server the loader skips as invalid never reaches MCPCatalog, and Load still
+// succeeds — checkManifest demotes the problem to an advisory so a running box
+// is not taken down by a plugin defect. Walking only the survivors would
+// therefore report "ok" over a connector that just vanished. The catalog check
+// must fold PluginProblems in, or the default CI gate stays green while a
+// plugin server disappears. Goes through the real loader on a real fixture:
+// there is no seam for injecting plugin problems, and there should not be.
+func TestCheckMCPCatalogFailsOnRejectedPluginServer(t *testing.T) {
+	t.Setenv("FLEET_DATA_DIR", t.TempDir()) // keep the plugin-data dir out of ~/.cache
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("manifest.yaml", "skills_builtin: false\n")
+	write("plugins/p/plugin.json", `{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": "p"}`)
+	// "has.dot" is rejected for its name (it would become a tool name a
+	// provider refuses) and skipped; "good_one" survives, so the catalog is
+	// non-empty and the only signal that anything was lost is PluginProblems.
+	write("plugins/p/mcp.json", `{"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", "mcpServers": {`+
+		`"has.dot": {"type": "stdio", "command": "python3"}, `+
+		`"good_one": {"type": "stdio", "command": "python3"}}}`)
+
+	bundle, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("Load must succeed — the loader skips the bad server rather than failing: %v", err)
+	}
+	if len(bundle.PluginProblems()) == 0 {
+		t.Fatal("fixture no longer produces a plugin problem; the test proves nothing")
+	}
+	if _, survived := bundle.MCPServerConfigs()["has.dot"]; survived {
+		t.Fatal("fixture no longer skips the bad server; the test proves nothing")
+	}
+
+	res := checkMCPCatalog(bundle, nil)
+	if res.Status != statusFail {
+		t.Fatalf("Status = %q (%s), want %q: a skipped plugin server must fail the catalog check", res.Status, res.Detail, statusFail)
+	}
+	if !strings.Contains(res.Detail, "plugin:") || !strings.Contains(res.Detail, `"has.dot"`) {
+		t.Errorf("Detail should name the dropped plugin server, got: %s", res.Detail)
+	}
+	if res.Blocking {
+		t.Error("mcp_catalog must stay non-blocking even when plugin problems are folded in")
 	}
 }

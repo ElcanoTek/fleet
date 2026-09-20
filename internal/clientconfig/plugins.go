@@ -342,9 +342,20 @@ var pluginNameRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$`)
 // pluginServerNameRe bounds a plugin's mcp.json server keys to the characters
 // every provider accepts in a tool name: the agent addresses a server's tools
 // as mcp_<server>_<tool>, so a key with a dot or a space would produce a tool
-// name upstream rejects. The manifest's own servers carry no such rule (they
-// are hand-named by the bundle author); plugin keys come from third parties.
+// name upstream rejects. The manifest LOADER applies no such rule to the
+// bundle's own hand-named servers — rejecting one at boot would take a
+// running box down over a name that has worked for months — but the
+// `fleet validate-config` mcp_catalog preflight holds them to the same shape
+// via ValidMCPServerName, so the bundle repo's CI catches it before the
+// connector is ever enabled on a box.
 var pluginServerNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+// ValidMCPServerName reports whether name has the shape every provider
+// accepts inside a tool name (mcp_<server>_<tool>): 1–64 characters of
+// letters, digits, '_' or '-', starting with a letter or digit. It is the
+// plugin loader's rule, exported so the mcp_catalog preflight applies the one
+// pattern to manifest servers instead of carrying a second copy that drifts.
+func ValidMCPServerName(name string) bool { return pluginServerNameRe.MatchString(name) }
 
 // httpHeaderNameRe is RFC 7230 token syntax for a header field name.
 var httpHeaderNameRe = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")

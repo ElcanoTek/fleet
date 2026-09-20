@@ -105,18 +105,54 @@ gate=mcp_servers  -> GREEN (missed)
 gate=mcp_catalog  -> RED (caught)
 ```
 
+Two more negatives, run the same way before the follow-up rules shipped, each
+red with the exact defect named:
+
+```
+gated server renamed magnite.mcp  -> RED: mcp_catalog["magnite.mcp"]: name must be 1-64 chars of letters, digits, '_' or '-' …
+plugin server renamed has.dot     -> RED: plugin: plugins/example-plugin/mcp.json: server "has.dot": name must be … ; skipped
+```
+
+The second is the case `mcp_servers` could never see: the loader skipped the
+server before any check ran, `Load` succeeded, and the only trace was a plugin
+problem that `checkManifest` files as an advisory.
+
 ### `mcp_catalog`
 
 A check that walks the **full** `bundle.MCPCatalog` regardless of enable gates —
 the credential-independent question CI is entitled to ask. It validates
 structure and deliberately **not** installation:
 
-- server name present and unique
+- server name present, unique, and **provider-safe** — the same
+  `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` the plugin loader already enforces
+  (`clientconfig.ValidMCPServerName`). The name becomes part of every tool
+  name (`mcp_<server>_<tool>`), and providers reject a dot or a space there.
+  The loader deliberately does *not* enforce this for manifest servers (it
+  would take a running box down over a name that has worked for months), so
+  without this check a credential-gated `sales.api` passes boot and breaks the
+  first turn that enables it.
 - stdio: command string present
-- http: URL present, parses, and uses an http/https scheme
-- `enabled_env` / `account_vars` entries well-formed
+- http: URL present, parses, uses an http/https scheme, **and has a host** —
+  `url.Parse` accepts `https://`, `https:///mcp` and the opaque `http:foo`
+  without complaint, and none can be dialled
+- `enabled_env`, `account_vars` **and every member of every `enabled_groups`
+  alternative** well-formed — `enabled()` looks each one up verbatim, so a
+  padded `" API_KEY"` reads an unset var and leaves the connector silently
+  disabled everywhere. An **empty** group is rejected outright: `allSet(nil)`
+  is vacuously true, so `enabled_groups: [[]]` enables the server with no gate
+  at all.
 - script args resolve to a file under the bundle (reuses
   `Bundle.ValidateMCPArgPaths()`, which already walked the full catalog)
+- **no Agent Plugin problems.** An `mcp.json` server the plugin loader skips
+  as invalid never reaches `MCPCatalog`, and `Load` still succeeds —
+  `checkManifest` demotes `PluginProblems()` to advisories so a running box is
+  not taken down by a plugin defect. Walking only the survivors would report
+  `ok` over a connector that just vanished, so the catalog check folds every
+  plugin problem in as a failure. They are all decided by the bundle's own
+  files, with one environmental exception (PLUGIN_DATA dir unavailable) that
+  also means the catalog under test is incomplete, so red is still the honest
+  answer; the workflow pins `FLEET_DATA_DIR` to a fresh `runner.temp` dir so it
+  cannot arise there.
 
 It does **not** check whether a command resolves on `PATH`. That is
 environmental, it belongs to `mcp_servers` on a real box, and putting it here
@@ -137,6 +173,12 @@ loaded" path. A bundle whose manifest did not load at all would have printed
 
 A gated check now passes only on `ok`. Anything that is not `ok` is a reason to
 look, so anything that is not `ok` stops the merge.
+
+An **empty `gate_checks`** is refused for the same reason. A caller that passes
+`""` — typically a repository variable that was never set — would otherwise get
+"Every gated check passed" over a run that gated nothing, which is the exact
+failure this workflow exists to prevent. The table is still written first so
+the reason is visible in the job summary.
 
 ## Untrusted-caller hardening
 

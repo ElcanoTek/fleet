@@ -583,11 +583,14 @@ func pingHTTP(ctx context.Context, rawURL string) (string, bool) {
 // nearly vacuous: the broken gated-off server is not even listed — a live
 // fleet box reported "knowledge_base: ok, plugin_notes: ok" while its broken
 // example_api entry went unexamined. Structure means what is true on ANY
-// machine: names present and unique, http URLs parse with an http(s) scheme,
-// stdio servers name a command, the env-var names that gate and account the
-// server are clean, and the bundle's own script-arg paths resolve
+// machine: names present, unique and provider-safe (they become part of
+// mcp_<server>_<tool>), http URLs parse with an http(s) scheme AND a host,
+// stdio servers name a command, every env-var name that gates or accounts the
+// server — enabled_env, account_vars and each enabled_groups member — is
+// clean and no group is empty, the bundle's own script-arg paths resolve
 // (ValidateMCPArgPaths already walks this same unfiltered catalog — reuse,
-// don't reimplement).
+// don't reimplement), and the Agent Plugin loader dropped nothing on the way
+// in (PluginProblems).
 //
 // Deliberately NOT checked: whether a stdio Command resolves on PATH. That is
 // INSTALLATION, not structure — it belongs to mcp_servers — and checking it
@@ -629,6 +632,14 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 				dupes[s.Name] = true
 			}
 			seen[s.Name] = true
+			// The name becomes part of every tool name (mcp_<server>_<tool>), and
+			// upstream providers reject a dot or a space there. The loader does
+			// not enforce this for manifest servers — see ValidMCPServerName for
+			// why — so a credential-gated `sales.api` would pass boot and break
+			// the first turn that enables it. Same rule as plugin server keys.
+			if !clientconfig.ValidMCPServerName(s.Name) {
+				problems = append(problems, label+": name must be 1-64 chars of letters, digits, '_' or '-' (it becomes part of the mcp_<server>_<tool> tool name)")
+			}
 			if s.Type == "http" {
 				raw := strings.TrimSpace(s.URL)
 				if raw == "" {
@@ -637,6 +648,10 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 					problems = append(problems, fmt.Sprintf("%s: url does not parse: %v", label, err))
 				} else if u.Scheme != "http" && u.Scheme != "https" {
 					problems = append(problems, fmt.Sprintf("%s: url scheme %q is not http/https", label, u.Scheme))
+				} else if u.Host == "" {
+					// url.Parse accepts "https://", "https:///mcp" and the opaque
+					// "http:foo" without complaint; none can be dialled.
+					problems = append(problems, fmt.Sprintf("%s: url %q has no host", label, raw))
 				}
 			} else if strings.TrimSpace(s.Command) == "" {
 				// Anything not "http" is stdio (the manifest's default type) and
@@ -644,7 +659,21 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 				// not this check's business — see the comment above.
 				problems = append(problems, label+": stdio server has empty command")
 			}
-			for _, vars := range [][]string{s.EnabledEnv, s.AccountVars} {
+			// Every var name that gates or accounts the server, INCLUDING each
+			// member of every enabled_groups alternative: enabled() looks those up
+			// verbatim, so a padded " API_KEY" reads an unset var and leaves the
+			// connector silently disabled on every box.
+			varLists := [][]string{s.EnabledEnv, s.AccountVars}
+			for gi, group := range s.EnabledGroups {
+				if len(group) == 0 {
+					// allSet(nil) is vacuously true: an empty alternative ENABLES
+					// the server with no gate at all, the opposite of what a
+					// gated declaration means.
+					problems = append(problems, fmt.Sprintf("%s: enabled_groups[%d] is empty (an empty group enables the server unconditionally)", label, gi))
+				}
+				varLists = append(varLists, group)
+			}
+			for _, vars := range varLists {
 				for _, v := range vars {
 					if v == "" || strings.TrimSpace(v) != v {
 						problems = append(problems, fmt.Sprintf("%s: env var name %q is empty or has surrounding whitespace", label, v))
@@ -654,6 +683,21 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 		}
 	}
 	problems = append(problems, bundle.ValidateMCPArgPaths()...)
+	// A plugin problem means part of the DECLARED bundle was dropped or rejected
+	// before it reached MCPCatalog — an mcp.json server skipped as invalid, a
+	// plugin.json the loader refused, a skill that would not parse. Walking only
+	// the survivors would report "ok" over a connector that just vanished, and
+	// checkManifest deliberately demotes these to advisories (a running box
+	// must not be taken down by a plugin defect). Here the question is whether
+	// the bundle is sound, so they count. Every one of them is decided by the
+	// bundle's own files, not the machine — with one exception: the
+	// PLUGIN_DATA-unavailable case is environmental, but it also means the
+	// plugin's stdio servers were skipped and the catalog under test is
+	// incomplete, so failing is still the honest answer (the CI workflow pins
+	// FLEET_DATA_DIR to a fresh runner.temp dir so it cannot arise there).
+	for _, p := range bundle.PluginProblems() {
+		problems = append(problems, "plugin: "+p)
+	}
 
 	if len(problems) > 0 {
 		res.Status = statusFail
