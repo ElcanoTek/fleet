@@ -777,3 +777,155 @@ func TestServiceStorePodmanExecRunsFromServiceHome(t *testing.T) {
 		t.Errorf("root service user: Dir = %q, want the inherited cwd", got)
 	}
 }
+
+// TestCheckMCPCatalog pins the CI-facing structural gate over the FULL MCP
+// catalog — including servers an enabled_env gate turns off, which
+// checkMCPServers never sees (the regression this check exists for). Table-
+// driven against an in-memory bundle; Dir points at a temp dir so
+// ValidateMCPArgPaths has a real root for its relative script-arg lookups.
+func TestCheckMCPCatalog(t *testing.T) {
+	catalog := func(servers ...clientconfig.ServerDef) *clientconfig.Bundle {
+		return &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: servers}
+	}
+
+	cases := []struct {
+		name       string
+		bundle     *clientconfig.Bundle
+		bundleErr  error
+		wantStatus checkStatus
+		// wantDetail, when non-empty, must appear in the result Detail.
+		wantDetail string
+	}{
+		{
+			// THE regression: the only server in the catalog is gated off (no
+			// ENABLED_API_KEY here), so checkMCPServers would report "no enabled
+			// MCP servers" and validate nothing. The breakage must still surface.
+			name: "a gated-off server is still structurally validated",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "example_api", Type: "http", EnabledEnv: []string{"ENABLED_API_KEY"},
+				URL: "://not-a-url",
+			}),
+			wantStatus: statusFail,
+			wantDetail: "example_api",
+		},
+		{
+			name:       "nil bundle degrades to a skip",
+			bundle:     nil,
+			wantStatus: statusWarn,
+			wantDetail: "skipped (bundle not loaded)",
+		},
+		{
+			name:       "bundle load error degrades to a skip",
+			bundle:     catalog(),
+			bundleErr:  errors.New("manifest: nope"),
+			wantStatus: statusWarn,
+			wantDetail: "skipped (bundle not loaded)",
+		},
+		{
+			name:       "empty catalog is ok",
+			bundle:     catalog(),
+			wantStatus: statusOK,
+			wantDetail: "no servers declared",
+		},
+		{
+			name: "healthy catalog is ok — command need NOT be installed",
+			// A command this machine does not have: structure, not installation.
+			// This row pins the rule that keeps the CI gate from requiring the
+			// bundles' tooling on the runner.
+			bundle: catalog(
+				clientconfig.ServerDef{Name: "local", Command: "definitely-not-installed-mcp-uvx-xyz", EnabledEnv: []string{"SOME_KEY"}},
+				clientconfig.ServerDef{Name: "remote", Type: "http", URL: "https://example.invalid/mcp"},
+			),
+			wantStatus: statusOK,
+			wantDetail: "2 server(s): structure ok",
+		},
+		{
+			name:       "http server with empty url fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http"}),
+			wantStatus: statusFail,
+			wantDetail: "empty url",
+		},
+		{
+			name:       "http url that does not parse fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: "://broken"}),
+			wantStatus: statusFail,
+			wantDetail: "does not parse",
+		},
+		{
+			name:       "http url with a non-http scheme fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "remote", Type: "http", URL: "ftp://example.invalid/mcp"}),
+			wantStatus: statusFail,
+			wantDetail: `scheme "ftp" is not http/https`,
+		},
+		{
+			name:       "stdio server with empty command fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "  "}),
+			wantStatus: statusFail,
+			wantDetail: "empty command",
+		},
+		{
+			name: "duplicate names fail, reported once for the dupe",
+			bundle: catalog(
+				clientconfig.ServerDef{Name: "dup", Command: "a"},
+				clientconfig.ServerDef{Name: "dup", Command: "b"},
+				clientconfig.ServerDef{Name: "dup", Command: "c"},
+			),
+			wantStatus: statusFail,
+			wantDetail: `mcp_catalog["dup"]: duplicate server name`,
+		},
+		{
+			name:       "empty server name fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: " ", Command: "a"}),
+			wantStatus: statusFail,
+			wantDetail: "empty server name",
+		},
+		{
+			name:       "env var name with surrounding whitespace fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "a", EnabledEnv: []string{" API_KEY"}}),
+			wantStatus: statusFail,
+			wantDetail: "surrounding whitespace",
+		},
+		{
+			name: "missing script arg path is folded in from ValidateMCPArgPaths",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "local", Command: "python3", Args: []string{"mcp/missing_probe_script.py"},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "does not resolve to a file under the bundle",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := checkMCPCatalog(tc.bundle, tc.bundleErr)
+			if res.Name != "mcp_catalog" {
+				t.Errorf("Name = %q, want mcp_catalog", res.Name)
+			}
+			if res.Blocking {
+				t.Error("mcp_catalog must never be Blocking — the workflow gate keys on status, and Blocking would change operator-box exit codes")
+			}
+			if res.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q (detail: %s)", res.Status, tc.wantStatus, res.Detail)
+			}
+			if tc.wantDetail != "" && !strings.Contains(res.Detail, tc.wantDetail) {
+				t.Errorf("Detail %q should contain %q", res.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+// TestCheckMCPCatalogNeverChecksCommandInstallation is the explicit guard for
+// the check's most important boundary: a stdio server naming a binary that is
+// not on this machine (and not under the bundle) still comes back ok. Without
+// this, a future "harmless" PATH-lookup addition would silently turn the CI
+// gate red on every real bundle.
+func TestCheckMCPCatalogNeverChecksCommandInstallation(t *testing.T) {
+	bundle := &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: []clientconfig.ServerDef{
+		{Name: "uvx_server", Command: "uvx", Args: []string{"some-mcp-package"}},
+		{Name: "node_server", Command: "npx", Args: []string{"-y", "another-mcp-package"}},
+	}}
+	res := checkMCPCatalog(bundle, nil)
+	if res.Status != statusOK {
+		t.Fatalf("a catalog naming only uninstalled commands = %q (%s), want %q — the check must validate structure, not installation", res.Status, res.Detail, statusOK)
+	}
+}

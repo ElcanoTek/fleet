@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -186,7 +187,7 @@ func pinBundleDirFromEnvFile(path string) {
 // a blocking failure of the relevant check (and dependent checks degrade to a
 // blocking failure too, since they cannot run without it).
 func runChecks(ctx context.Context, opts validateOptions) []checkResult {
-	results := make([]checkResult, 0, 7)
+	results := make([]checkResult, 0, 8)
 
 	envFile := preflightEnvFile()
 	bundle, bundleErr := clientconfig.Load(clientconfig.Dir())
@@ -208,6 +209,7 @@ func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 	results = append(results, checkEnvVars(cfg, cfgErr))
 	results = append(results, checkManifest(bundle, bundleErr, cfg))
 	results = append(results, checkMCPServers(ctx, bundle, cfg, opts))
+	results = append(results, checkMCPCatalog(bundle, bundleErr))
 	results = append(results, checkDatabase(ctx, cfg, cfgErr, opts))
 	results = append(results, checkCredentials(bundle, bundleErr))
 	results = append(results, checkSandbox(ctx, cfg, bundle))
@@ -569,6 +571,98 @@ func pingHTTP(ctx context.Context, rawURL string) (string, bool) {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	return "ok", true
+}
+
+// ── 3b. MCP catalog structure (CI gate, non-blocking) ──
+
+// checkMCPCatalog validates the STRUCTURE of the bundle's FULL MCP catalog —
+// every declared server, including the ones an enable gate (enabled_env /
+// enabled_groups, production secrets CI does not hold) turns off.
+// checkMCPServers above only ever sees the enabled subset
+// (Bundle.MCPServerConfigs skips !s.enabled()), so a CI gate on mcp_servers is
+// nearly vacuous: the broken gated-off server is not even listed — a live
+// fleet box reported "knowledge_base: ok, plugin_notes: ok" while its broken
+// example_api entry went unexamined. Structure means what is true on ANY
+// machine: names present and unique, http URLs parse with an http(s) scheme,
+// stdio servers name a command, the env-var names that gate and account the
+// server are clean, and the bundle's own script-arg paths resolve
+// (ValidateMCPArgPaths already walks this same unfiltered catalog — reuse,
+// don't reimplement).
+//
+// Deliberately NOT checked: whether a stdio Command resolves on PATH. That is
+// INSTALLATION, not structure — it belongs to mcp_servers — and checking it
+// here would pin the CI gate permanently red on every bundle whose servers
+// need uvx/node, which a bare CI runner does not have. This check must be
+// green on a machine with none of the bundles' tooling, or it is useless as
+// a gate.
+//
+// Non-blocking BY DESIGN, and the reason is load-bearing: the workflow gate
+// keys on status != "ok" (the Blocking flag feeds only validate-config's own
+// exit code). Blocking:true here would newly fail `fleet validate-config` on
+// operator boxes that are legitimately fine, and this change must not alter
+// any existing box's exit code — CI reads the status, operators read the exit
+// code, and only the former may change.
+func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
+	res := checkResult{Name: "mcp_catalog", Blocking: false}
+	if bundle == nil || bundleErr != nil {
+		res.Status = statusWarn
+		res.Detail = "skipped (bundle not loaded)"
+		return res
+	}
+	if len(bundle.MCPCatalog) == 0 {
+		res.Status = statusOK
+		res.Detail = "no servers declared"
+		return res
+	}
+
+	var problems []string
+	seen := make(map[string]bool, len(bundle.MCPCatalog))
+	dupes := make(map[string]bool)
+	for i := range bundle.MCPCatalog {
+		s := &bundle.MCPCatalog[i]
+		if strings.TrimSpace(s.Name) == "" {
+			problems = append(problems, fmt.Sprintf("mcp_catalog[%d]: empty server name", i))
+		} else {
+			label := fmt.Sprintf("mcp_catalog[%q]", s.Name)
+			if seen[s.Name] && !dupes[s.Name] {
+				problems = append(problems, label+": duplicate server name")
+				dupes[s.Name] = true
+			}
+			seen[s.Name] = true
+			if s.Type == "http" {
+				raw := strings.TrimSpace(s.URL)
+				if raw == "" {
+					problems = append(problems, label+": http server has empty url")
+				} else if u, err := url.Parse(raw); err != nil {
+					problems = append(problems, fmt.Sprintf("%s: url does not parse: %v", label, err))
+				} else if u.Scheme != "http" && u.Scheme != "https" {
+					problems = append(problems, fmt.Sprintf("%s: url scheme %q is not http/https", label, u.Scheme))
+				}
+			} else if strings.TrimSpace(s.Command) == "" {
+				// Anything not "http" is stdio (the manifest's default type) and
+				// must name a command. Resolution of that command is deliberately
+				// not this check's business — see the comment above.
+				problems = append(problems, label+": stdio server has empty command")
+			}
+			for _, vars := range [][]string{s.EnabledEnv, s.AccountVars} {
+				for _, v := range vars {
+					if v == "" || strings.TrimSpace(v) != v {
+						problems = append(problems, fmt.Sprintf("%s: env var name %q is empty or has surrounding whitespace", label, v))
+					}
+				}
+			}
+		}
+	}
+	problems = append(problems, bundle.ValidateMCPArgPaths()...)
+
+	if len(problems) > 0 {
+		res.Status = statusFail
+		res.Detail = strings.Join(problems, "; ")
+		return res
+	}
+	res.Status = statusOK
+	res.Detail = fmt.Sprintf("%d server(s): structure ok", len(bundle.MCPCatalog))
+	return res
 }
 
 // ── 4. database (blocking) ──

@@ -1,9 +1,19 @@
 name: Validate client bundle (reusable)
 
 # Bundle PREFLIGHT (reusable). A client config repo calls this to prove its
-# manifest still loads and every server it declares still starts — the same
-# `fleet validate-config` a box runs before `systemctl start fleet`, pointed at
-# the bundle in the caller's repo.
+# manifest still loads and every server it declares is still STRUCTURALLY
+# sound — the same `fleet validate-config` a box runs before
+# `systemctl start fleet`, pointed at the bundle in the caller's repo.
+#
+# "Structurally sound" is the honest word and it is narrower than "starts".
+# validate-config resolves declarations: the manifest parses, a script arg
+# points at a file that exists, a command name is present, an http URL is
+# well-formed. It never spawns a server and never completes an MCP handshake,
+# so a connector whose command exists but whose Python dependency is missing,
+# or that crashes during initialization, passes this gate. Liveness is
+# `fleet mcp test --all` against a configured box (docs/MCP-TESTING.md); it
+# needs the credentials and the installed runtime that a secretless CI runner
+# by definition does not have. Do not widen this comment to claim otherwise.
 #
 # WHY THIS EXISTS
 #
@@ -27,10 +37,12 @@ name: Validate client bundle (reusable)
 # inherits the landmine.
 #
 # What it does catch is the other half, which was equally unguarded: a manifest
-# that stops loading, a persona or plugin reference that goes stale, a server
-# whose command path or dependencies break. Those are bundle-intrinsic — they
-# fail the same way on every box — and before this they first surfaced at deploy
-# time on a customer's machine.
+# that stops loading, a persona or plugin reference that goes stale, a script
+# arg that no longer names a file in the bundle, a malformed server
+# declaration. Those are bundle-intrinsic — they fail the same way on every
+# box — and before this they first surfaced at deploy time on a customer's
+# machine. Missing *dependencies* are not in that set; see the note on
+# liveness at the top.
 #
 # Every check still RUNS and the whole table lands in the job summary, so a
 # reviewer sees the credentials line on every PR even though it does not gate.
@@ -44,8 +56,16 @@ name: Validate client bundle (reusable)
 # that sets no such variable. That is a true statement about the runner, not a
 # defect in the bundle. Rather than hard-code a set that is wrong for half the
 # family, each caller names what it can honestly gate today, and tightens it as
-# its environment contract firms up. `mcp_servers` is green across every bundle
-# in the family, so it is the floor.
+# its environment contract firms up.
+#
+# The floor is `mcp_catalog`, NOT `mcp_servers`, and the difference is the
+# whole point. `mcp_servers` inspects the RESOLVED catalog — the servers left
+# after `enabled_env` gating — so on a secretless runner most of the family's
+# connectors are filtered out before it looks, and a bundle whose servers are
+# all credential-gated reports the cheerful `ok: no enabled MCP servers`.
+# Gating on it would have been close to gating on nothing. `mcp_catalog` walks
+# every declared server regardless of its enable gate, which is exactly the
+# credential-independent question CI is entitled to ask.
 #
 # Caller contract (in a client config repo):
 #
@@ -61,7 +81,7 @@ name: Validate client bundle (reusable)
 #     validate:
 #       uses: ElcanoTek/fleet/.github/workflows/validate-bundle.yml@main
 #       with:
-#         gate_checks: "manifest,mcp_servers"   # or just "mcp_servers"
+#         gate_checks: "manifest,mcp_catalog"   # or just "mcp_catalog"
 
 on:
   workflow_call:
@@ -76,12 +96,16 @@ on:
         default: "."
       gate_checks:
         description: >-
-          Comma-separated validate-config check names that must not be `fail`.
+          Comma-separated validate-config check names that must report `ok`.
           Every check still runs and is reported; only these decide the exit.
+          A gated check that reports `warn` fails the job: several checks
+          (mcp_servers among them) are declared non-blocking and surface real
+          problems as warnings, so treating warn as success would make the
+          gate decorative.
           Default is the set that is bundle-intrinsic for every bundle today.
         type: string
         required: false
-        default: "mcp_servers"
+        default: "mcp_catalog"
       fleet_ref:
         description: "fleet ref to build the validate-config binary from"
         type: string
@@ -95,13 +119,13 @@ on:
         required: false
         default: "config/default"
       gate_checks:
-        description: "Comma-separated checks that must not fail"
+        description: "Comma-separated checks that must report ok"
         type: string
         required: false
-        default: "mcp_servers"
+        default: "mcp_catalog"
 
-# Checkout and build only. This workflow reads a manifest and starts the
-# bundle's own MCP servers in a throwaway runner: no registry, no push, no repo
+# Checkout and build only. This workflow reads a manifest in a throwaway
+# runner and never spawns the bundle's servers: no registry, no push, no repo
 # writes, and no secrets are passed to it — the credentials check is expected to
 # report absences and does not gate.
 permissions:
@@ -120,8 +144,18 @@ jobs:
       BUNDLE_DIR: ${{ inputs.bundle_dir }}
       GATE_CHECKS: ${{ inputs.gate_checks }}
     steps:
+      # persist-credentials: false is load-bearing here, not hygiene. Everything
+      # after this step reads UNTRUSTED content: the caller's manifest, and on a
+      # pull_request run the contents of that PR. The default checkout leaves a
+      # usable token in .git/config for the rest of the job, so any step that
+      # can be steered into running caller-authored code would run it holding a
+      # credential for the caller's repo. We only ever read files here — nothing
+      # fetches, pushes or calls the API — so the token buys us nothing and
+      # costs us that.
       - name: Checkout caller repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Same validation as build-sandbox-image.yml: this value selects which
       # manifest is read, and nothing else stops `../../elsewhere` from
@@ -177,6 +211,7 @@ jobs:
           repository: ElcanoTek/fleet
           ref: ${{ steps.pin.outputs.resolved }}
           path: .fleet-core
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -188,14 +223,26 @@ jobs:
       # is what makes the unsandboxed host executor absent from a shipped
       # binary. Build the same way here so the preflight this gate runs is the
       # preflight an operator runs.
+      #
+      # GOWORK=off closes a real supply-chain path, so do not drop it. The
+      # trusted fleet checkout is a CHILD of the untrusted caller checkout, and
+      # Go's default GOWORK=auto walks *containing* directories looking for a
+      # go.work. A caller repo that commits a go.work at its root — including
+      # via an ordinary pull request — could therefore `replace` one of fleet's
+      # own module dependencies with code from that PR, and this step would
+      # compile it into the binary the next step executes. Turning the
+      # workspace off makes the build depend on .fleet-core/go.mod and nothing
+      # above it.
       - name: Build fleet
         working-directory: .fleet-core
+        env:
+          GOWORK: "off"
         run: go build -o "$RUNNER_TEMP/fleet" ./cmd/fleet
 
       # FLEET_MOCK_MODE keeps the env_vars check from demanding an OpenRouter
       # key this runner has no business holding; --skip-network-checks drops the
       # DB probe and the model-API call. Neither weakens the bundle-owned checks
-      # below: manifest, mcp_servers and credentials are all computed from the
+      # below: manifest, mcp_catalog and credentials are all computed from the
       # manifest and the process env, not from the network.
       - name: Run validate-config
         id: validate
@@ -215,12 +262,24 @@ jobs:
       # The gate and the report are one script so the summary is written even
       # when the gate fails: a red check whose reason is only in a collapsed log
       # costs more time than it saves.
+      #
+      # `python3 -I` and the working-directory are both security fixes, not
+      # style. A plain `python3 -` puts the CURRENT DIRECTORY at the front of
+      # sys.path, and the current directory here is the untrusted caller
+      # checkout — so a caller repo that commits a top-level `json.py` gets it
+      # executed by the `import json` below, before a single line of gate logic
+      # runs. Verified: with `python3 -` the shadowing file runs; with
+      # `python3 -I -` the standard library is imported instead. Isolated mode
+      # also drops PYTHONPATH and the user site-packages dir, and running from
+      # runner.temp means even a non-isolated import cannot reach the caller
+      # tree.
       - name: Gate and report
+        working-directory: ${{ runner.temp }}
         env:
           REPORT: ${{ runner.temp }}/report.json
         run: |
           set -euo pipefail
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          python3 -I - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json, os, sys
 
           report = json.load(open(os.environ["REPORT"]))
@@ -240,9 +299,18 @@ jobs:
               print(f"| `{name}` | {icon.get(status, status)} {status} | "
                     f"{'yes' if name in gated else 'no'} | {safe} |")
 
+          # A gated check passes ONLY on "ok". Gating on status == "fail" was
+          # the original bug in this workflow and it made the default gate
+          # nearly decorative: checkMCPServers is declared non-blocking and
+          # reports every per-server problem as "warn", never "fail", so a
+          # bundle with a broken connector — and even one whose manifest did
+          # not load at all, which reports warn "skipped (bundle/config not
+          # loaded)" — sailed through printing "Every gated check passed".
+          # Anything that is not "ok" is a reason to look, so anything that is
+          # not "ok" stops the merge.
           by_name = {c.get("name"): c for c in checks}
           unknown = [g for g in gated if g not in by_name]
-          failed = [g for g in gated if by_name.get(g, {}).get("status") == "fail"]
+          failed = [g for g in gated if by_name.get(g, {}).get("status") != "ok"]
 
           print("\n**Gated checks:** " + (", ".join(f"`{g}`" for g in gated) or "_none_"))
           print("\nUngated checks still run and are shown above. `credentials` is "
@@ -253,9 +321,10 @@ jobs:
               print(f"\n❌ **Unknown check name(s) in `gate_checks`:** {', '.join(unknown)} — "
                     f"valid names are {', '.join(sorted(by_name))}.")
           if failed:
-              print(f"\n❌ **Failed:** {', '.join(f'`{g}`' for g in failed)}")
+              print(f"\n❌ **Gated check(s) not ok:** {', '.join(f'`{g}`' for g in failed)}")
               for g in failed:
-                  print(f"\n- `{g}`: {by_name[g].get('detail','')}")
+                  c = by_name[g]
+                  print(f"\n- `{g}` ({c.get('status','?')}): {c.get('detail','')}")
 
           if unknown or failed:
               sys.exit(1)
