@@ -1179,6 +1179,64 @@ func TestCheckMCPCatalog(t *testing.T) {
 			wantStatus: statusOK,
 			wantDetail: "magnite_mcp=10",
 		},
+		{
+			// The tool name is advertised verbatim inside mcp_<server>_<tool>;
+			// providers accept only [A-Za-z0-9_-] there.
+			name:       "allowlisted tool name with a dot fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "a", Always: true, Tools: []string{"reports.run"}}),
+			wantStatus: statusFail,
+			wantDetail: "tools[0] contains characters providers reject",
+		},
+		{
+			// "../bin/server" joins to a path outside the bundle — not shipped
+			// with it, whatever happens to be there on this machine.
+			name:       "bundle-relative command that escapes the bundle fails",
+			bundle:     catalog(clientconfig.ServerDef{Name: "local", Command: "../bin/server", Always: true}),
+			wantStatus: statusFail,
+			wantDetail: "escapes the bundle directory",
+		},
+		{
+			// resolveMCPVariant refuses every named account on an http base, yet
+			// AccountsFor would still publish the seats: selectable, never runnable.
+			name: "account_vars on an http server fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "remote", Type: "http", URL: "https://x.example.com/mcp", Always: true, AccountVars: []string{"API_KEY"},
+			}),
+			wantStatus: statusFail,
+			wantDetail: "account_vars is stdio-only",
+		},
+		{
+			// resolveEnvMap looks optional_env up exactly; a typo drops nothing.
+			name: "optional_env naming a key not in the env map fails",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "local", Command: "a", Always: true, Env: map[string]string{"TOKEN": "${TOKEN}"}, OptionalEnv: []string{"TOKEM"},
+			}),
+			wantStatus: statusFail,
+			wantDetail: `optional_env "TOKEM" is not a key`,
+		},
+		{
+			name: "padded optional_env entry fails on spelling",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "local", Command: "a", Always: true, Env: map[string]string{"TOKEN": "${TOKEN}"}, OptionalEnv: []string{" TOKEN "},
+			}),
+			wantStatus: statusFail,
+			wantDetail: `" TOKEN "`,
+		},
+		{
+			name: "well-formed optional_env is ok",
+			bundle: catalog(clientconfig.ServerDef{
+				Name: "local", Command: "a", Always: true, Env: map[string]string{"TOKEN": "${TOKEN}"}, OptionalEnv: []string{"TOKEN"},
+			}),
+			wantStatus: statusOK,
+		},
+		{
+			// A name that fails the provider shape is exactly the shape a pasted
+			// or interpolated secret takes: identified by index, never printed.
+			name:       "shape-invalid server name is labelled by index",
+			bundle:     catalog(clientconfig.ServerDef{Name: "sales.api", Command: "a", Always: true}),
+			wantStatus: statusFail,
+			wantDetail: "mcp_catalog[#0]: name must be 1-64 chars",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1440,6 +1498,31 @@ func TestCheckMCPCatalogGatesMissingRelativePluginRoot(t *testing.T) {
 	}
 	if res := checkMCPCatalog(bundle, nil); res.Status != statusFail || !strings.Contains(res.Detail, "vendor/plugins") {
 		t.Fatalf("Status = %q (%s), want fail naming vendor/plugins", res.Status, res.Detail)
+	}
+}
+
+// TestCheckMCPCatalogNeverEchoesInvalidName: on an operator run the real
+// deployment env is loaded before the manifest is ${VAR}-interpolated, so
+// `name: "${API_KEY}"` arrives as the key itself and the label would carry it
+// into JSON and journal output. A name that fails the provider shape is
+// identified by index and its text must appear nowhere in the detail.
+func TestCheckMCPCatalogNeverEchoesInvalidName(t *testing.T) {
+	const leaked = "sk-live.s3cr3t/value with space"
+	bundle := &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: []clientconfig.ServerDef{
+		{Name: leaked, Command: "a", Always: true, EnabledEnv: []string{" PAD "}, Tools: []string{"bad.tool"}},
+		{Name: leaked, Command: "", Always: true}, // duplicate + empty command: more diagnostics that carry the label
+	}}
+	res := checkMCPCatalog(bundle, nil)
+	if res.Status != statusFail {
+		t.Fatalf("Status = %q, want fail", res.Status)
+	}
+	if strings.Contains(res.Detail, leaked) || strings.Contains(res.Detail, "s3cr3t") {
+		t.Fatalf("an invalid server name must never be echoed, got: %s", res.Detail)
+	}
+	for _, want := range []string{"mcp_catalog[#0]", "mcp_catalog[#1]", "duplicate server name"} {
+		if !strings.Contains(res.Detail, want) {
+			t.Errorf("Detail should contain %q (index labels), got: %s", want, res.Detail)
+		}
 	}
 }
 

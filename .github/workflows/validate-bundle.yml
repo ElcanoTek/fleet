@@ -202,6 +202,13 @@ jobs:
               echo "::error::bundle_dir must be relative to the caller repo, not absolute."; exit 1 ;;
             *..*)
               echo "::error::bundle_dir must not contain '..' — it may only name a path inside the caller repo."; exit 1 ;;
+            .fleet-core|.fleet-core/*|*/.fleet-core|*/.fleet-core/*)
+              # The trusted fleet checkout lands at .fleet-core INSIDE the
+              # workspace. A caller naming it (".fleet-core/config/default")
+              # would have this job validate fleet's own generic bundle and
+              # report the required check green for an arbitrarily broken
+              # caller PR. Refused by name, before either checkout runs.
+              echo "::error::bundle_dir must not name fleet's own checkout (.fleet-core); it may only name the caller's bundle."; exit 1 ;;
             *[!a-zA-Z0-9._/-]*)
               echo "::error::bundle_dir contains a character outside [A-Za-z0-9._/-]. Refused before the run."; exit 1 ;;
           esac
@@ -267,8 +274,13 @@ jobs:
       #   - Targets must be under the bundle dir, not merely the workspace:
       #     anything outside the bundle dir is not shipped with the bundle.
       #
-      # The whole caller checkout is scanned (minus .fleet-core's own tree), so
-      # a chain through an in-repo directory cannot get around it. Pure shell.
+      # Only the BUNDLE dir is scanned. The loader reads nothing outside it, so
+      # a symlink elsewhere in the repo is unreachable — and scanning the whole
+      # checkout rejected unrelated documentation links (fleet's own
+      # `CLAUDE.md -> AGENTS.md` made the manual-dispatch default
+      # `config/default` fail before validation ever ran). A chain cannot get
+      # around the narrower scan: a link inside the bundle dir must itself
+      # resolve inside the bundle dir, whatever it passes through. Pure shell.
       - name: Contain symlinks in the caller checkout
         run: |
           set -euo pipefail
@@ -289,7 +301,7 @@ jobs:
               *)
                 echo "::error::symlink escapes the bundle dir: ${link#"$root"/} -> $target"; bad=1 ;;
             esac
-          done < <(find "$root" -path "$core" -prune -o -type l -print0)
+          done < <(find "$bdir" -path "$core" -prune -o -type l -print0)
           if [ "$bad" != 0 ]; then
             echo "::error::refusing to run the loader over a checkout with escaping symlinks"
             exit 1

@@ -151,6 +151,24 @@ skills/broken-skill/ without SKILL.md      -> bundle_skills=fail: skills/broken-
 gated server tools: [" ping "]             -> mcp_catalog=fail: mcp_catalog["remote_gated"]: tools[0] is blank or has surrounding whitespace …
 ```
 
+Seventh round, all seven bundles green — after the `account_vars`-on-http rule
+first went **red on two real bundles**, which turned out to be five dead
+declarations, not a false positive (see the rule above; fixed in the bundle
+PRs):
+
+```
+gated tools: ["reports.run"]               -> mcp_catalog=fail: mcp_catalog["g"]: tools[0] contains characters providers reject in a tool name …
+command: ../bin/server                     -> mcp_catalog=fail: mcp_catalog["g"]: bundle-relative command "../bin/server" escapes the bundle directory
+http server with account_vars              -> mcp_catalog=fail: mcp_catalog["g"]: account_vars is stdio-only …
+optional_env: ["TOKEM"] (env has TOKEN)    -> mcp_catalog=fail: mcp_catalog["g"]: optional_env "TOKEM" is not a key of the server's env map …
+```
+
+Shell, on hostile copies: `bundle_dir` = `.fleet-core/config/default`,
+`sub/.fleet-core`, `.fleet-core` all refused; the manual-dispatch shape
+(`config/default` with `CLAUDE.md -> AGENTS.md` at the root) passes; inside the
+bundle, links to `.fleet-core`, `/proc/self/environ` and an out-of-bundle repo
+file all fail; an in-bundle link passes.
+
 ### `mcp_catalog`
 
 A check that walks the **full** `bundle.MCPCatalog` regardless of enable gates —
@@ -245,6 +263,43 @@ structure and deliberately **not** installation:
   `magnite_mcp` has 8 characters of headroom, so a `production` seat there
   would exceed the cap. Capping labels at creation time is the complete fix
   and is *not* in this change — see Scope.
+- **allowlisted tool names providers accept.** The tool name is advertised
+  verbatim inside `mcp_<server>_<tool>`, and providers accept only letters,
+  digits, `_` and `-` there, so a dotted or spaced allowlist entry fails every
+  model request once the connector is enabled. Same character rule as the
+  server name, so "checked exactly" is true of the characters as well as the
+  length.
+- **bundle-relative commands that stay inside the bundle.** `../bin/server`
+  joins to a path outside the bundle — not shipped with it, whatever happens to
+  be there on the runner, and enough `..` would have the runner vouch for an
+  unrelated host binary. The joined path is cleaned and must remain beneath the
+  bundle dir.
+- **no `account_vars` on an http server.** Named accounts are env-suffixed
+  variants of a stdio *spawn*; `agentcore.resolveMCPVariant` refuses every
+  named account on an http base ("does not support account variants"), and
+  http headers resolve with no account overlay. But `creds.AccountsFor` still
+  publishes a seat for any suffixed credential it finds on any server that
+  declares `account_vars` — so an http server with `account_vars` advertises
+  seats that can never run. This rule found **five dead declarations in two
+  production bundles** (elcano `fast_io`, `gamma_official`, `pages`; reklaim
+  `tavily`, `browserbase`), each removed in that bundle's open preflight PR with
+  a comment saying why. The stdio siblings that share a credential name
+  (`fastio_helpers`, `gamma`) keep theirs: stdio seats are real.
+- **`optional_env` entries that name a real env key.** `resolveEnvMap` looks
+  them up exactly, so a typo'd entry drops nothing and the connector receives
+  an empty variable it was meant not to see. Padding is caught by the spelling
+  rule; a spelled-right name that is not a key of the server's `env` map is
+  its own failure.
+- **shape-invalid server names are never echoed.** The label that heads every
+  diagnostic carries the server name — and the manifest is `${VAR}`-
+  interpolated before it gets here. On an *operator* run the real deployment
+  env is loaded first, so `name: "${API_KEY}"` arrives as the key itself. A
+  name that fails the provider shape (a dot, a slash, a space, over 64 chars)
+  is exactly the shape a pasted secret takes, so such an entry is labelled by
+  index (`mcp_catalog[#3]`) and its text appears nowhere in the output. A
+  well-formed name is echoed, as `checkMCPServers` already does; a test plants
+  a secret-shaped name across several failing rules and asserts it never
+  appears.
 - **no Agent Plugin problems.** An `mcp.json` server the plugin loader skips
   as invalid never reaches `MCPCatalog`, and `Load` still succeeds —
   `checkManifest` demotes `PluginProblems()` to advisories so a running box is
@@ -397,6 +452,21 @@ properties are load-bearing:
   the workflow's invocation, **3** when the same binary runs with the
   inherited environment. The clean environment is the load-bearing layer; the
   no-echo rules on URL and command values are defence in depth.
+- **`bundle_dir` may not name fleet's own checkout.** `.fleet-core` lands
+  inside the workspace, so `bundle_dir: .fleet-core/config/default` passed the
+  character checks and would have had the job validate fleet's generic bundle
+  and report the required check green for an arbitrarily broken caller PR.
+  Refused by name (`.fleet-core`, `.fleet-core/*`, `*/.fleet-core`,
+  `*/.fleet-core/*`) before either checkout runs. Verified: all three
+  spellings exit 1; `.` and `config/default` pass.
+- **The symlink scan is scoped to the bundle dir.** The loader reads nothing
+  outside it, so a link elsewhere in the repo is unreachable — and scanning the
+  whole checkout rejected unrelated documentation links: fleet's own
+  `CLAUDE.md -> AGENTS.md` made the manual-dispatch default `config/default`
+  fail before validation ever ran. A chain cannot route around the narrower
+  scan, because a link inside the bundle dir must itself resolve inside the
+  bundle dir. Verified: the dispatch shape now passes; `.fleet-core`, `/proc`
+  and out-of-bundle targets inside the bundle still fail.
 
 `fleet_ref` and `bundle_dir` are validated with the same allow-lists as
 `build-sandbox-image.yml`, for the same reason — `fleet_ref` selects source that

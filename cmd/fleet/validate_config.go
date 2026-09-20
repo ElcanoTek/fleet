@@ -638,7 +638,18 @@ func checkMCPCatalog(bundle *clientconfig.Bundle, bundleErr error) checkResult {
 			problems = append(problems, fmt.Sprintf("mcp_catalog[%d]: empty server name", i))
 			continue
 		}
-		label := fmt.Sprintf("mcp_catalog[%q]", s.Name)
+		// The label names the server in every diagnostic — unless the name is
+		// not even shaped like one. The manifest is ${VAR}-interpolated before
+		// it gets here, and on an OPERATOR run preflightEnvFile loads the real
+		// deployment env first, so `name: "${API_KEY}"` arrives as the key
+		// itself. A name that fails the provider shape (a dot, a slash, a
+		// space, over 64 chars) is exactly the shape a pasted secret takes, so
+		// such an entry is identified by INDEX and its text is never printed.
+		// A well-formed name is echoed, as checkMCPServers already does.
+		label := fmt.Sprintf("mcp_catalog[#%d]", i)
+		if clientconfig.ValidMCPServerName(s.Name) {
+			label = fmt.Sprintf("mcp_catalog[%q]", s.Name)
+		}
 		if seen[s.Name] && !dupes[s.Name] {
 			problems = append(problems, label+": duplicate server name")
 			dupes[s.Name] = true
@@ -725,8 +736,18 @@ func catalogToolNameBudgetProblems(s *clientconfig.ServerDef, label string) []st
 	// " lookup " excludes the real lookup and a blank entry matches nothing —
 	// a non-empty list of blanks silently filters every tool the server has.
 	for i, tool := range s.Tools {
-		if strings.TrimSpace(tool) == "" || strings.TrimSpace(tool) != tool {
+		switch {
+		case strings.TrimSpace(tool) == "" || strings.TrimSpace(tool) != tool:
 			problems = append(problems, fmt.Sprintf("%s: tools[%d] is blank or has surrounding whitespace; the allowlist is matched exactly and this entry can never match a real tool", label, i))
+		case !clientconfig.ValidMCPServerName(tool):
+			// The tool name is advertised inside mcp_<server>_<tool> verbatim,
+			// and providers accept only letters, digits, '_' and '-' there — a
+			// dot, slash or space in an allowlisted name fails every model
+			// request once the connector is enabled. Same character rule as the
+			// server name (ValidMCPServerName), so "checked exactly" is true of
+			// the characters as well as the length. Not echoed: an allowlist
+			// entry is manifest text and may be ${VAR}-interpolated.
+			problems = append(problems, fmt.Sprintf("%s: tools[%d] contains characters providers reject in a tool name (allowed: letters, digits, '_', '-')", label, i))
 		}
 	}
 	fixed := len(clientconfig.MCPToolNamePrefix) + len(s.Name) + 1 // "mcp_" + name + "_"
@@ -856,6 +877,16 @@ func catalogHTTPProblems(s *clientconfig.ServerDef, label string) []string {
 	if err := clientconfig.ValidateHTTPHeaders(s.Headers); err != nil {
 		problems = append(problems, fmt.Sprintf("%s: %v", label, err))
 	}
+	// Named accounts are env-suffixed variants of a stdio spawn; there is no
+	// such thing for an http server, and agentcore.resolveMCPVariant refuses
+	// every named account whose base is http. But AccountsFor still publishes
+	// the suffixed accounts for any server spec that declares account_vars,
+	// so an http server with account_vars exposes seats that can never run.
+	// The loader already rejects the sibling stdio-only field (identity_env)
+	// on http servers; hold account_vars to the same rule here.
+	if len(s.AccountVars) > 0 {
+		problems = append(problems, label+": account_vars is stdio-only (accounts are env-suffixed spawn variants; an http server rejects every named account, so these seats could never run)")
+	}
 	return problems
 }
 
@@ -885,7 +916,14 @@ func catalogStdioProblems(s *clientconfig.ServerDef, label, bundleDir string) []
 		// stay exempt: that is installation. Absolute paths stay exempt: they
 		// name the deployment box's filesystem, not the bundle's. Plugin
 		// servers launch in the plugin root and were resolved by its loader.
-		if p := filepath.Join(bundleDir, s.Command); !isExecutableFile(p) {
+		p := filepath.Clean(filepath.Join(bundleDir, s.Command))
+		switch {
+		case p != bundleDir && !strings.HasPrefix(p, bundleDir+string(os.PathSeparator)):
+			// "../bin/server" joins to a path OUTSIDE the bundle. Whatever is
+			// there on this machine, it is not shipped with the bundle — and
+			// enough ".." makes the runner vouch for an unrelated host binary.
+			problems = append(problems, fmt.Sprintf("%s: bundle-relative command %q escapes the bundle directory", label, s.Command))
+		case !isExecutableFile(p):
 			problems = append(problems, fmt.Sprintf("%s: bundle-relative command %q is not an executable file under the bundle", label, s.Command))
 		}
 	}
@@ -926,7 +964,19 @@ func catalogStdioProblems(s *clientconfig.ServerDef, label, bundleDir string) []
 func catalogVarNameProblems(s *clientconfig.ServerDef, label string) []string {
 	var problems []string
 	varLists := make([][]string, 0, 3+len(s.EnabledGroups))
-	varLists = append(varLists, s.EnabledEnv, s.AccountVars, s.IdentityEnv)
+	varLists = append(varLists, s.EnabledEnv, s.AccountVars, s.IdentityEnv, s.OptionalEnv)
+	// optional_env names keys of THIS server's env map whose empty value should
+	// be DROPPED from the spawned environment rather than passed as "".
+	// resolveEnvMap looks the name up exactly, so a typo'd or padded entry is
+	// silently a no-op: the connector receives an empty variable it was meant
+	// not to see, and one that distinguishes absent from empty fails only once
+	// its credentials enable it. The spelling rule above catches padding; this
+	// catches the typo.
+	for _, v := range s.OptionalEnv {
+		if _, ok := s.Env[v]; !ok && strings.TrimSpace(v) == v && v != "" {
+			problems = append(problems, fmt.Sprintf("%s: optional_env %q is not a key of the server's env map, so it can never drop anything", label, v))
+		}
+	}
 	for gi, group := range s.EnabledGroups {
 		if len(group) == 0 {
 			problems = append(problems, fmt.Sprintf("%s: enabled_groups[%d] is empty (an empty group enables the server unconditionally)", label, gi))
