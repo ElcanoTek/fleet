@@ -540,13 +540,24 @@ Shipped **in this repository**: the reusable workflow, the `mcp_catalog` and
 `clientconfig.ValidMCPServerName` / `ValidateHTTPHeaders` /
 `PluginEntryProblems` / `PluginRootProblems` helpers they rely on.
 
-Coordinated, **pending merge elsewhere**: caller workflows are open as PRs in
-all seven bundle repos (elcano, reklaim, zeta, omnicom, raptive, example,
-example-kubernetes), with the `optional: true` template fix in example-config
-and raptive-config. They reference this workflow `@main`, so this PR must merge
-first; until it does their `bundle-preflight` job cannot resolve its `uses:`.
-Nothing in a bundle repo is delivered by this change — this note will be
-updated to "shipped" as those PRs land.
+**Shipped in the bundle repos** (2026-09-20, after this workflow reached
+`main`): caller workflows merged in all seven — elcano-config #157,
+reklaim-config #60, zeta-config #78, omnicom-config #50, raptive-config #1,
+example-config #33, example-kubernetes-config #7 — each with a green
+`bundle-preflight` run on its exact head before merge and on `main` after.
+Three carry manifest changes found by this gate before it merged:
+
+- raptive-config #1 and example-config #33: `example_api` marked
+  `optional: true` **and** `enabled_by_default: true`. The second flag was a
+  review catch on the bundle PRs: `optional` alone would have turned the
+  connector into a per-conversation opt-in on a box that *does* set the key,
+  contradicting the README's "set the key and it appears". With both, the key
+  still gates it, it starts on in new conversations, and a keyless box
+  preflights clean. Deployed to `fleet.raptivevic.com`; its `validate-config`
+  went from `✗ credentials` (blocking) to exit 0.
+- elcano-config #157 and reklaim-config #60: five dead `account_vars`
+  declarations removed from http servers (`fast_io`, `gamma_official`,
+  `pages`; `tavily`, `browserbase`).
 
 Deliberately **not** in this change, and why:
 
