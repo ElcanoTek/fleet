@@ -1,0 +1,263 @@
+name: Validate client bundle (reusable)
+
+# Bundle PREFLIGHT (reusable). A client config repo calls this to prove its
+# manifest still loads and every server it declares still starts — the same
+# `fleet validate-config` a box runs before `systemctl start fleet`, pointed at
+# the bundle in the caller's repo.
+#
+# WHY THIS EXISTS
+#
+# No bundle repo validated its own manifest. The gap surfaced on 2026-09-20:
+# `fleet validate-config` on fleet.raptivevic.com exited 1 — a BLOCKING
+# "required gate var(s) missing for non-optional server(s): EXAMPLE_API_KEY" —
+# on a box that was healthy and serving. The entry was template scaffolding
+# inherited verbatim when raptive-config was rebranded from example-config, and
+# example-config itself failed fleet's own preflight out of the box. Three
+# bundles had independently patched around it; the template never did, so every
+# rebrand inherited it.
+#
+# WHAT THIS GATE DOES AND DOES NOT CATCH — read this before trusting it
+#
+# It does NOT catch the bug above, and it is important not to pretend otherwise.
+# That check is `credentials`, and it cannot be gated here: a real bundle's
+# production secrets are legitimately absent in CI, so gating on it would pin
+# elcano-config, reklaim-config and zeta-config permanently red for the entirely
+# correct reason that this runner does not hold their SendGrid and Magnite keys.
+# The durable fix for THAT class was fixing the template so no future rebrand
+# inherits the landmine.
+#
+# What it does catch is the other half, which was equally unguarded: a manifest
+# that stops loading, a persona or plugin reference that goes stale, a server
+# whose command path or dependencies break. Those are bundle-intrinsic — they
+# fail the same way on every box — and before this they first surfaced at deploy
+# time on a customer's machine.
+#
+# Every check still RUNS and the whole table lands in the job summary, so a
+# reviewer sees the credentials line on every PR even though it does not gate.
+# That visibility is what would have made the raptive entry obvious in review.
+#
+# WHY THE GATED SET IS AN INPUT
+#
+# `manifest` mixes bundle-intrinsic correctness (does it parse, do the personas
+# and plugins resolve) with box-dependent defaults: a bundle whose default
+# persona is chosen by FLEET_PERSONA on the box reports `fail` in a CI runner
+# that sets no such variable. That is a true statement about the runner, not a
+# defect in the bundle. Rather than hard-code a set that is wrong for half the
+# family, each caller names what it can honestly gate today, and tightens it as
+# its environment contract firms up. `mcp_servers` is green across every bundle
+# in the family, so it is the floor.
+#
+# Caller contract (in a client config repo):
+#
+#   name: Bundle preflight
+#   on:
+#     pull_request:
+#     push:
+#       branches: [main]
+#     workflow_dispatch:
+#   permissions:
+#     contents: read
+#   jobs:
+#     validate:
+#       uses: ElcanoTek/fleet/.github/workflows/validate-bundle.yml@main
+#       with:
+#         gate_checks: "manifest,mcp_servers"   # or just "mcp_servers"
+
+on:
+  workflow_call:
+    inputs:
+      bundle_dir:
+        description: >-
+          Client bundle directory relative to the caller repo root (the dir
+          holding manifest.yaml). Client config repos are the bundle, so the
+          default is the repo root.
+        type: string
+        required: false
+        default: "."
+      gate_checks:
+        description: >-
+          Comma-separated validate-config check names that must not be `fail`.
+          Every check still runs and is reported; only these decide the exit.
+          Default is the set that is bundle-intrinsic for every bundle today.
+        type: string
+        required: false
+        default: "mcp_servers"
+      fleet_ref:
+        description: "fleet ref to build the validate-config binary from"
+        type: string
+        required: false
+        default: "main"
+  workflow_dispatch:
+    inputs:
+      bundle_dir:
+        description: "Bundle dir relative to repo root"
+        type: string
+        required: false
+        default: "config/default"
+      gate_checks:
+        description: "Comma-separated checks that must not fail"
+        type: string
+        required: false
+        default: "mcp_servers"
+
+# Checkout and build only. This workflow reads a manifest and starts the
+# bundle's own MCP servers in a throwaway runner: no registry, no push, no repo
+# writes, and no secrets are passed to it — the credentials check is expected to
+# report absences and does not gate.
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-bundle-${{ github.repository }}-${{ github.ref }}-${{ inputs.bundle_dir }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Bundle preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BUNDLE_DIR: ${{ inputs.bundle_dir }}
+      GATE_CHECKS: ${{ inputs.gate_checks }}
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same validation as build-sandbox-image.yml: this value selects which
+      # manifest is read, and nothing else stops `../../elsewhere` from
+      # repointing the run at a different bundle. No shell injection is possible
+      # (it goes through env: and is quoted at every use) — this is defence in
+      # depth and consistency with the sibling workflow.
+      - name: Validate bundle_dir
+        env:
+          REQUESTED: ${{ inputs.bundle_dir }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED" in
+            ""|.) ;;
+            /*)
+              echo "::error::bundle_dir must be relative to the caller repo, not absolute."; exit 1 ;;
+            *..*)
+              echo "::error::bundle_dir must not contain '..' — it may only name a path inside the caller repo."; exit 1 ;;
+            *[!a-zA-Z0-9._/-]*)
+              echo "::error::bundle_dir contains a character outside [A-Za-z0-9._/-]. Refused before the run."; exit 1 ;;
+          esac
+          echo "bundle_dir accepted: '${REQUESTED:-.}'"
+
+      # Identical allow-list to build-sandbox-image.yml, and for the identical
+      # reason: this ref selects source that is then COMPILED AND EXECUTED here.
+      # Every named ref in fleet is collaborator-written except refs/pull/*, and
+      # a bare SHA is refused because fork-PR commits stay reachable by SHA from
+      # the base repo. Keep the two lists in step.
+      - name: Pin fleet_ref to collaborator-controlled refs
+        id: pin
+        env:
+          REQUESTED: ${{ inputs.fleet_ref || 'main' }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED" in
+            "")
+              echo "::error::fleet_ref is empty"; exit 1 ;;
+            *[!a-zA-Z0-9._/-]*)
+              echo "::error::fleet_ref contains a character outside [A-Za-z0-9._/-] (newline, space or shell metacharacter). Refused before checkout."; exit 1 ;;
+            -*|*..*|*//*)
+              echo "::error::fleet_ref '$REQUESTED' is not a plausible ref name"; exit 1 ;;
+            refs/pull/*|pull/*)
+              echo "::error::fleet_ref '$REQUESTED' is refused: pull-request refs carry fork-controlled code, and this workflow compiles and runs the checked-out source."; exit 1 ;;
+          esac
+          if [ -z "$(printf '%s' "$REQUESTED" | tr -d '0-9a-fA-F')" ] && [ "${#REQUESTED}" -ge 7 ]; then
+            echo "::error::fleet_ref '$REQUESTED' looks like a raw commit SHA. Fork pull-request commits are reachable by SHA from this repository, so only named refs are accepted (e.g. main, refs/heads/x, v1.2.3)."
+            exit 1
+          fi
+          printf 'resolved=%s\n' "$REQUESTED" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout fleet (source for the preflight binary)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ElcanoTek/fleet
+          ref: ${{ steps.pin.outputs.resolved }}
+          path: .fleet-core
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .fleet-core/go.mod
+          cache-dependency-path: .fleet-core/go.sum
+
+      # The release build deliberately omits the fleet_host_executor tag, which
+      # is what makes the unsandboxed host executor absent from a shipped
+      # binary. Build the same way here so the preflight this gate runs is the
+      # preflight an operator runs.
+      - name: Build fleet
+        working-directory: .fleet-core
+        run: go build -o "$RUNNER_TEMP/fleet" ./cmd/fleet
+
+      # FLEET_MOCK_MODE keeps the env_vars check from demanding an OpenRouter
+      # key this runner has no business holding; --skip-network-checks drops the
+      # DB probe and the model-API call. Neither weakens the bundle-owned checks
+      # below: manifest, mcp_servers and credentials are all computed from the
+      # manifest and the process env, not from the network.
+      - name: Run validate-config
+        id: validate
+        env:
+          FLEET_MOCK_MODE: "1"
+        run: |
+          set -uo pipefail
+          "$RUNNER_TEMP/fleet" validate-config \
+            --bundle-path "$GITHUB_WORKSPACE/$BUNDLE_DIR" \
+            --skip-network-checks --json > "$RUNNER_TEMP/report.json" 2> "$RUNNER_TEMP/report.err" || true
+          if ! [ -s "$RUNNER_TEMP/report.json" ]; then
+            echo "::error::validate-config produced no JSON report. stderr follows:"
+            cat "$RUNNER_TEMP/report.err" || true
+            exit 1
+          fi
+
+      # The gate and the report are one script so the summary is written even
+      # when the gate fails: a red check whose reason is only in a collapsed log
+      # costs more time than it saves.
+      - name: Gate and report
+        env:
+          REPORT: ${{ runner.temp }}/report.json
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, sys
+
+          report = json.load(open(os.environ["REPORT"]))
+          checks = report.get("checks", [])
+          gated = [c.strip() for c in os.environ.get("GATE_CHECKS", "").split(",") if c.strip()]
+
+          icon = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
+          print("## Bundle preflight\n")
+          print("| Check | Status | Gated | Detail |")
+          print("|---|---|---|---|")
+          for c in checks:
+              name, status = c.get("name", "?"), c.get("status", "?")
+              detail = " ".join(str(c.get("detail", "")).split())
+              if len(detail) > 300:
+                  detail = detail[:297] + "…"
+              safe = detail.replace("|", "\\|")
+              print(f"| `{name}` | {icon.get(status, status)} {status} | "
+                    f"{'yes' if name in gated else 'no'} | {safe} |")
+
+          by_name = {c.get("name"): c for c in checks}
+          unknown = [g for g in gated if g not in by_name]
+          failed = [g for g in gated if by_name.get(g, {}).get("status") == "fail"]
+
+          print("\n**Gated checks:** " + (", ".join(f"`{g}`" for g in gated) or "_none_"))
+          print("\nUngated checks still run and are shown above. `credentials` is "
+                "expected to report absences here: this runner holds no production "
+                "secrets, which is why it does not gate.")
+
+          if unknown:
+              print(f"\n❌ **Unknown check name(s) in `gate_checks`:** {', '.join(unknown)} — "
+                    f"valid names are {', '.join(sorted(by_name))}.")
+          if failed:
+              print(f"\n❌ **Failed:** {', '.join(f'`{g}`' for g in failed)}")
+              for g in failed:
+                  print(f"\n- `{g}`: {by_name[g].get('detail','')}")
+
+          if unknown or failed:
+              sys.exit(1)
+          print("\n✅ Every gated check passed.")
+          PY
