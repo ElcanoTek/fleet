@@ -6,7 +6,7 @@
 // chips, the .skill-chip copy control, and the .stats-bar.admin-stats cards.
 // Metrics are the design's exact values on the app's semantic tokens.
 
-import { useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 
 /* ── Section frame (.set-section / .set-head) ── */
@@ -206,6 +206,10 @@ export function DirSearch({
   className?: string;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // No visible label element (the search icon + placeholder carry the affordance
+  // and the aria-label carries the name), so the id exists on its own —
+  // useId keeps it unique if a page ever renders more than one DirSearch.
+  const inputId = useId();
   return (
     <div className={["relative", className ?? ""].join(" ")}>
       <Icon
@@ -214,6 +218,7 @@ export function DirSearch({
       />
       <input
         ref={inputRef}
+        id={inputId}
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}

@@ -52,6 +52,19 @@ describe("CredentialAccountAdmin — write-only secrets", () => {
     expect(secret.type).toBe("password");
   });
 
+  it("associates the form fields with their labels via stable ids", () => {
+    render(<CredentialAccountAdmin servers={SERVERS} />);
+    openForm();
+    expect(screen.getByLabelText("Server")).toHaveAttribute(
+      "id",
+      "credentialAccountServer",
+    );
+    expect(screen.getByLabelText("Account name")).toHaveAttribute(
+      "id",
+      "credentialAccountName",
+    );
+  });
+
   it("submits secrets as a write-only payload (key+value forwarded, never read back)", async () => {
     render(<CredentialAccountAdmin servers={SERVERS} />);
     openForm();

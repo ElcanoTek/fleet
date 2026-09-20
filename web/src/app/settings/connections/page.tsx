@@ -359,10 +359,14 @@ function BundledCard({
           />
         ) : null}
         {on && (entry.accounts?.length ?? 0) > 0 ? (
-          <label className="inline-flex items-center gap-[0.45rem] text-[0.73rem] text-[var(--color-text-muted)]">
+          <label
+            htmlFor={`bundledAccount-${entry.name}`}
+            className="inline-flex items-center gap-[0.45rem] text-[0.73rem] text-[var(--color-text-muted)]"
+          >
             Account
             <span className="select-wrap inline-block">
               <select
+                id={`bundledAccount-${entry.name}`}
                 className={COMPACT_SELECT}
                 value={pref?.default_account ?? ""}
                 onChange={(e) => onPickAccount(e.target.value)}
@@ -638,9 +642,13 @@ function DirectoryCard({
           onClose={() => setFormOpen(false)}
         >
           {anotherAccount ? (
-            <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+            <label
+              htmlFor={`dirFormAccount-${entry.name}`}
+              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+            >
               <span className="font-medium">Account label</span>
               <input
+                id={`dirFormAccount-${entry.name}`}
                 className={SETTINGS_INPUT}
                 value={account}
                 onChange={(e) => setAccount(e.target.value)}
@@ -656,10 +664,12 @@ function DirectoryCard({
           {placeholders.map((ph) => (
             <label
               key={ph}
+              htmlFor={`dirFormField-${entry.name}-${ph}`}
               className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
             >
               <span className="font-medium">Your {placeholderLabel(ph)}</span>
               <input
+                id={`dirFormField-${entry.name}-${ph}`}
                 className={SETTINGS_INPUT}
                 value={values[ph] ?? ""}
                 onChange={(e) =>
@@ -675,9 +685,13 @@ function DirectoryCard({
             </p>
           ) : null}
           {entry.auth === "api_key" ? (
-            <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+            <label
+              htmlFor={`dirFormApiKey-${entry.name}`}
+              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+            >
               <span className="font-medium">API key</span>
               <input
+                id={`dirFormApiKey-${entry.name}`}
                 ref={apiKeyRef}
                 className={SETTINGS_INPUT}
                 type="password"
@@ -714,9 +728,13 @@ function DirectoryCard({
                   </div>
                 </div>
               ) : null}
-              <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+              <label
+                htmlFor={`dirFormClientId-${entry.name}`}
+                className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+              >
                 <span className="font-medium">OAuth client ID</span>
                 <input
+                  id={`dirFormClientId-${entry.name}`}
                   className={SETTINGS_INPUT}
                   value={clientId}
                   onChange={(e) => setClientId(e.target.value)}
@@ -724,13 +742,17 @@ function DirectoryCard({
                   data-testid={`dir-form-client-id-${entry.name}`}
                 />
               </label>
-              <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+              <label
+                htmlFor={`dirFormClientSecret-${entry.name}`}
+                className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+              >
                 <span className="font-medium">
                   {secretRequired
                     ? "OAuth client secret"
                     : "OAuth client secret (if your client has one)"}
                 </span>
                 <input
+                  id={`dirFormClientSecret-${entry.name}`}
                   className={SETTINGS_INPUT}
                   type="password"
                   autoComplete="off"
@@ -1656,6 +1678,7 @@ function ConnectionsPageInner() {
               <ConnForm>
                 <ConnField label="Name">
                   <input
+                    id="remoteServerName"
                     className={SETTINGS_INPUT}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -1665,6 +1688,7 @@ function ConnectionsPageInner() {
                 </ConnField>
                 <ConnField label="Server URL" grow>
                   <input
+                    id="remoteServerUrl"
                     className={SETTINGS_INPUT}
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
@@ -1675,6 +1699,7 @@ function ConnectionsPageInner() {
                 </ConnField>
                 <ConnField label="Account label (optional)">
                   <input
+                    id="remoteServerAccountLabel"
                     className={SETTINGS_INPUT}
                     value={accountLabel}
                     onChange={(e) => setAccountLabel(e.target.value)}
@@ -1852,6 +1877,7 @@ function ConnectionsPageInner() {
                             renameOpenFor === s.id ? (
                               <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
                                 <input
+                                  id={`renameSeat-${s.id}`}
                                   value={renameValue}
                                   onChange={(e) => setRenameValue(e.target.value)}
                                   onKeyDown={(e) => {
@@ -1878,6 +1904,7 @@ function ConnectionsPageInner() {
                             ) : keyOpenFor === s.id ? (
                               <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
                                 <input
+                                  id={`updateKey-${s.id}`}
                                   value={keyValue}
                                   onChange={(e) => setKeyValue(e.target.value)}
                                   onKeyDown={(e) => {
@@ -1936,6 +1963,7 @@ function ConnectionsPageInner() {
                                 ) : null}
                                 <div className="flex flex-wrap items-center gap-2">
                                   <input
+                                    id={`shareGrantee-${s.id}`}
                                     value={shareGrantee}
                                     onChange={(e) => setShareGrantee(e.target.value)}
                                     onKeyDown={(e) => {
@@ -2014,6 +2042,7 @@ function ConnectionsPageInner() {
                         className="mb-[0.55rem] flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5"
                       >
                         <input
+                          id={`addSeatLabel-${group.name}`}
                           value={addSeatLabel}
                           onChange={(e) => setAddSeatLabel(e.target.value)}
                           onKeyDown={(e) => {
@@ -2032,6 +2061,7 @@ function ConnectionsPageInner() {
                         />
                         {groupAuth === "api_key" ? (
                           <input
+                            id={`addSeatKey-${group.name}`}
                             value={addSeatKey}
                             onChange={(e) => setAddSeatKey(e.target.value)}
                             placeholder="API key for this account (never shown again)"

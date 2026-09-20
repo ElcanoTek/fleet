@@ -1,6 +1,7 @@
 package chattui
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -275,5 +276,61 @@ func TestHelpAndRenderStates(t *testing.T) {
 	m.statusErr = "boom"
 	if out := m.render(); !strings.Contains(out, "boom") {
 		t.Error("error status missing")
+	}
+}
+
+// TestWrapTranscriptReflowsLongLines pins the fix for clipped transcript
+// lines: the viewport hard-clips anything wider than it, so a long user
+// prompt or error line must arrive soft-wrapped to the content width — and a
+// narrower terminal must re-flow the SAME history, never re-clip it.
+func TestWrapTranscriptReflowsLongLines(t *testing.T) {
+	userLine := stylePillUser.Render("you") + "\n" + strings.Repeat("word ", 60) + "TAILMARK"
+	errLine := styleErr.Render("error: ") + strings.Repeat("bad ", 40) + "ERRTAIL"
+
+	for _, width := range []int{40, 72} {
+		t.Run(fmt.Sprintf("width %d", width), func(t *testing.T) {
+			m := newModel(Config{ServerURL: "http://x", Email: "e@x.co"})
+			m.width = width
+			m.history = append(m.history, userLine, errLine)
+
+			content := m.transcriptContent()
+			if !strings.Contains(content, "TAILMARK") || !strings.Contains(content, "ERRTAIL") {
+				t.Errorf("transcript clipped at width %d — tail markers missing:\n%s", width, content)
+			}
+			for _, line := range strings.Split(content, "\n") {
+				if w := lipglossWidth(line); w > width-2 {
+					t.Errorf("line wider than content width %d (got %d): %q", width-2, w, line)
+				}
+			}
+		})
+	}
+
+	// Shrinking the terminal re-flows what was committed at a wider width: no
+	// width may be baked into history at append time.
+	m := newModel(Config{ServerURL: "http://x", Email: "e@x.co"})
+	m.width = 120
+	m.history = append(m.history, userLine)
+	if before := m.transcriptContent(); !strings.Contains(before, "TAILMARK") {
+		t.Fatalf("wide terminal should not clip:\n%s", before)
+	}
+	m.width = 30
+	if after := m.transcriptContent(); !strings.Contains(after, "TAILMARK") {
+		t.Errorf("shrinking re-clipped instead of re-flowing:\n%s", after)
+	}
+}
+
+// TestWrapTranscriptLeavesCodeFencesAlone pins the disclosed trade-off: lines
+// inside fenced code blocks pass through verbatim — a hard break would mangle
+// the code — so they may exceed the wrap width, while plain prose still wraps.
+func TestWrapTranscriptLeavesCodeFencesAlone(t *testing.T) {
+	code := "    " + strings.Repeat("x", 100)
+	content := wrapTranscript("```\n"+code+"\n```\nplain "+strings.Repeat("word ", 30), 40)
+	if !strings.Contains(content, code) {
+		t.Errorf("code line must pass through verbatim:\n%s", content)
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "plain") && lipglossWidth(line) > 40 {
+			t.Errorf("plain line should be wrapped: %q", line)
+		}
 	}
 }

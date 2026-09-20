@@ -202,8 +202,11 @@ their wake time instead.
 Click any row to open the task's record: the full transcript of what the run did,
 its tool calls and results, token and cost figures, and the final output. A task
 that has not run yet has none of that — its record opens on its details and
-**No logs for this task**, and the actions that read a transcript (**Discuss in
-chat**, **Download logs**) wait until there is one. The
+**No transcript available for this task**, and the actions that read a
+transcript (**Discuss in chat**, **Download logs**) wait until there is one.
+The same line appears when a transcript exists but your permissions do not
+cover reading it, so it says "available" rather than claiming none was ever
+written. The
 record carries its own action strip, so **Edit**, **Resubmit**, **Delete**,
 **History**, **Discuss in chat**, and **Download logs** are all reachable from
 here without returning to the board. For a **running** task the same view

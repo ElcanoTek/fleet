@@ -426,6 +426,7 @@ function ProvidersAdmin() {
                 }
               >
                 <input
+                  id="providerName"
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                   placeholder="my-provider"
@@ -438,6 +439,7 @@ function ProvidersAdmin() {
               <ConnField label="Type">
                 <span className="select-wrap block">
                   <select
+                    id="providerType"
                     value={draft.type}
                     onChange={(e) => setDraft({ ...draft, type: e.target.value })}
                     // pr overrides the base px and needs `!` under Tailwind
@@ -467,6 +469,7 @@ function ProvidersAdmin() {
                 }
               >
                 <input
+                  id="providerBaseUrl"
                   value={draft.base_url}
                   onChange={(e) => setDraft({ ...draft, base_url: e.target.value })}
                   placeholder={typeInfo?.urlPlaceholder}
@@ -483,6 +486,7 @@ function ProvidersAdmin() {
                 }
               >
                 <input
+                  id="providerApiKey"
                   type="password"
                   autoComplete="new-password"
                   value={draft.api_key}
@@ -506,6 +510,7 @@ function ProvidersAdmin() {
               }
             >
               <textarea
+                id="providerModels"
                 value={draft.models}
                 onChange={(e) => setDraft({ ...draft, models: e.target.value })}
                 placeholder={"claude-sonnet-4-5\nclaude-opus-4-8"}
@@ -515,8 +520,12 @@ function ProvidersAdmin() {
               />
             </ConnField>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <label className="flex cursor-pointer items-center gap-[0.45rem] text-[0.875rem] text-[var(--color-text-secondary)]">
+              <label
+                className="flex cursor-pointer items-center gap-[0.45rem] text-[0.875rem] text-[var(--color-text-secondary)]"
+                htmlFor="providerEnabled"
+              >
                 <input
+                  id="providerEnabled"
                   type="checkbox"
                   checked={draft.enabled}
                   onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}

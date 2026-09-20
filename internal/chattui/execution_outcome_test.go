@@ -84,3 +84,23 @@ func TestResumedModelHelpDoesNotClaimWorkspaceDefault(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// TestModelUsagePrintsServerKnownSlug: when the server owns the conversation's
+// model (a suggestion was accepted, or the thread was resumed), /model with no
+// argument must print the real slug — the same one the header displays — not
+// the "stored conversation model" placeholder. turnModel deliberately returns
+// "" for these conversations; displayModel resolves them.
+func TestModelUsagePrintsServerKnownSlug(t *testing.T) {
+	m := newModel(Config{})
+	m.convID = "0cc68f9d"
+	m.client.conversationModels = map[string]string{"0cc68f9d": "google/gemini-3.8-flash"}
+	m.client.serverModelConversations = map[string]bool{"0cc68f9d": true}
+	m.runSlash("/model")
+	got := m.history[len(m.history)-1]
+	if !strings.Contains(got, "google/gemini-3.8-flash") {
+		t.Fatalf("/model usage should print the known slug, got: %q", got)
+	}
+	if strings.Contains(got, "stored conversation model") {
+		t.Fatalf("/model usage fell back to the placeholder despite a known slug: %q", got)
+	}
+}

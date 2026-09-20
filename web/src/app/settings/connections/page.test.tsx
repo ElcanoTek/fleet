@@ -221,6 +221,11 @@ describe("ConnectionsPage guided api_key add", () => {
     visit("?connector=browserbase");
 
     await screen.findByTestId("dir-form-browserbase");
+    // The guided form's fields are explicitly label-associated (htmlFor + id).
+    expect(screen.getByLabelText("API key")).toHaveAttribute(
+      "id",
+      "dirFormApiKey-browserbase",
+    );
     fireEvent.change(
       screen.getByPlaceholderText(
         "paste your key (stored encrypted, never shown again)",
@@ -708,6 +713,10 @@ describe("ConnectionsPage manual OAuth client with a required secret", () => {
     visit("?connector=github");
 
     await screen.findByTestId("dir-form-github");
+    expect(screen.getByLabelText("OAuth client ID")).toHaveAttribute(
+      "id",
+      "dirFormClientId-github",
+    );
     fireEvent.change(screen.getByTestId("dir-form-client-id-github"), {
       target: { value: "Iv1.client" },
     });

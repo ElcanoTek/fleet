@@ -116,3 +116,29 @@ func TestSandboxProbeArgv(t *testing.T) {
 		t.Errorf("no-unit argv=%q note=%q", argv, note)
 	}
 }
+
+// TestServiceStorePodmanArgvCarriesAnySubcommand pins the generalisation
+// `fleet validate-config` shares: the store hop is about WHICH store podman
+// reads, so it must apply to `image exists` and `info` exactly as it does to
+// the `run` probe. validate-config ran those two as the caller and reported a
+// present, runnable image as a blocking failure on a box `fleet status` called
+// healthy — one store resolution, one set of rules, no second copy to drift.
+func TestServiceStorePodmanArgvCarriesAnySubcommand(t *testing.T) {
+	argv, note := ServiceStorePodmanArgv("fleet", "/var/lib/fleet", true, "image", "exists", "ref")
+	want := []string{"runuser", "-u", "fleet", "--", "env", "HOME=/var/lib/fleet", "XDG_RUNTIME_DIR=/run/fleet", "podman", "image", "exists", "ref"}
+	if strings.Join(argv, " ") != strings.Join(want, " ") {
+		t.Errorf("image-exists argv = %q, want %q", argv, want)
+	}
+	if !strings.Contains(note, "as fleet") {
+		t.Errorf("note = %q, want it to name the service user", note)
+	}
+
+	// `podman info` takes the identical hop, and a caller-store verdict still
+	// says whose store it is about.
+	if argv, _ = ServiceStorePodmanArgv("fleet", "/var/lib/fleet", true, "info"); strings.Join(argv, " ") != "runuser -u fleet -- env HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet podman info" {
+		t.Errorf("info argv = %q", argv)
+	}
+	if argv, note = ServiceStorePodmanArgv("fleet", "/var/lib/fleet", false, "info"); argv[0] != "podman" || !strings.Contains(note, "YOUR store") {
+		t.Errorf("non-root info argv=%q note=%q", argv, note)
+	}
+}

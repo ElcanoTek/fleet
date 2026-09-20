@@ -90,6 +90,25 @@ describe("AdminServerPage", () => {
     expect(screen.getByTestId("storage-cleanup-run")).toBeEnabled();
   });
 
+  it("associates the cleanup controls with their visible labels", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    render(<AdminServerPage />);
+
+    await screen.findByTestId("storage-panel");
+    expect(screen.getByLabelText(/Idle more than/)).toHaveAttribute(
+      "id",
+      "cleanupDays",
+    );
+    expect(screen.getByLabelText("Delete unpinned chats")).toHaveAttribute(
+      "id",
+      "cleanupDeleteChats",
+    );
+    expect(screen.getByLabelText("Sweep aged upload files")).toHaveAttribute(
+      "id",
+      "cleanupSweepFiles",
+    );
+  });
+
   it("runs cleanup only after the inline confirm's second click", async () => {
     const CLEANED = {
       deleted_conversations: 7,

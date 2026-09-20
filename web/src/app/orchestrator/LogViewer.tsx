@@ -17,7 +17,7 @@ import type {
   TaskStreamFrame,
   TaskLearnedInstruction,
 } from "@/app/shared/lib/orchestratorApi";
-import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
+import { orchestratorApi, OrchestratorError } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
@@ -1056,6 +1056,24 @@ function LogViewerBody({
   // a number = one superseded transcript (run_logs row). Switching refetches
   // through the same cancellable hook, so loading/error handling is shared.
   const [attemptId, setAttemptId] = useState<number | null>(null);
+  // The transcript endpoints answer 404 for TWO different conditions with one
+  // status and one message, deliberately: the task has never run, or the
+  // caller may not read its transcript (log_authz.go hides the denied case
+  // behind the same 404 so it cannot leak whether the task exists). The board
+  // gates nothing per row, so a user without per-task read rights CAN open
+  // this modal — which means the UI must not present either condition as a
+  // failure ("Failed to load logs"), and must not try to tell them apart
+  // client-side (that would reveal the denied case the server hides). A 404
+  // therefore resolves to null — the empty state, worded to be true in both
+  // cases — and every other status still throws and renders the real error.
+  const absent404 = useCallback(
+    <T,>(p: Promise<T>): Promise<T | null> =>
+      p.catch((e: unknown) => {
+        if (e instanceof OrchestratorError && e.status === 404) return null;
+        throw e;
+      }),
+    [],
+  );
   const {
     data: session,
     loading,
@@ -1063,17 +1081,20 @@ function LogViewerBody({
   } = useCancellableFetch(
     useCallback(
       () =>
-        attemptId === null
-          ? orchestratorApi.taskLogs(task.id)
-          : orchestratorApi.taskLogHistoryEntry(task.id, attemptId),
-      [task.id, attemptId],
+        absent404(
+          attemptId === null
+            ? orchestratorApi.taskLogs(task.id)
+            : orchestratorApi.taskLogHistoryEntry(task.id, attemptId),
+        ),
+      [absent404, task.id, attemptId],
     ),
     [task.id, attemptId],
   );
   // The superseded-attempts list is metadata-only and cheap; most tasks have
-  // none, in which case the picker never renders.
+  // none, in which case the picker never renders. Same 404 contract as the
+  // transcript itself: never-run and not-readable are one response.
   const { data: attemptHistory } = useCancellableFetch(
-    useCallback(() => orchestratorApi.taskLogHistory(task.id), [task.id]),
+    useCallback(() => absent404(orchestratorApi.taskLogHistory(task.id)), [absent404, task.id]),
     [task.id],
   );
   const attempts = attemptHistory?.entries ?? [];
@@ -1354,7 +1375,12 @@ function LogViewerBody({
           ) : error ? (
             <div className="table-error">Failed to load logs: {error}</div>
           ) : !session || !session.messages || session.messages.length === 0 ? (
-            <div className="table-empty">No logs for this task.</div>
+            // Worded to be true for BOTH conditions the server's one-status
+            // 404 covers (see absent404 above): a task that has never run, and
+            // one whose transcript this principal may not read. Do not split
+            // the cases or name a cause here — distinguishing them client-side
+            // would leak the denied case the server deliberately hides.
+            <div className="table-empty">No transcript available for this task.</div>
           ) : (
             <>
               <LogFilters

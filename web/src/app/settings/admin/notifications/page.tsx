@@ -365,6 +365,7 @@ function NotificationsAdmin() {
                 <div className="mt-[0.9rem] grid grid-cols-2 gap-[0.75rem_0.85rem] max-[640px]:grid-cols-1">
                   <ConnField label="SMTP host">
                     <input
+                      id="notifySmtpHost"
                       value={draft.smtp_host}
                       onChange={(e) => setDraft({ ...draft, smtp_host: e.target.value })}
                       placeholder="smtp.example.com"
@@ -374,6 +375,7 @@ function NotificationsAdmin() {
                   </ConnField>
                   <ConnField label="Port">
                     <input
+                      id="notifySmtpPort"
                       value={draft.smtp_port}
                       onChange={(e) => setDraft({ ...draft, smtp_port: e.target.value })}
                       inputMode="numeric"
@@ -382,6 +384,7 @@ function NotificationsAdmin() {
                   </ConnField>
                   <ConnField label="Username (optional)">
                     <input
+                      id="notifySmtpUsername"
                       value={draft.smtp_username}
                       onChange={(e) => setDraft({ ...draft, smtp_username: e.target.value })}
                       autoComplete="off"
@@ -390,6 +393,7 @@ function NotificationsAdmin() {
                   </ConnField>
                   <SecretField
                     label="Password"
+                    id="notifySmtpPassword"
                     stored={view.settings.has_smtp_password}
                     value={draft.smtp_password}
                     clear={draft.clear_smtp_password}
@@ -403,6 +407,7 @@ function NotificationsAdmin() {
                   />
                   <ConnField label="From address">
                     <input
+                      id="notifySmtpFrom"
                       value={draft.smtp_from}
                       onChange={(e) => setDraft({ ...draft, smtp_from: e.target.value })}
                       placeholder="fleet@example.com"
@@ -411,6 +416,7 @@ function NotificationsAdmin() {
                   </ConnField>
                   <ConnField label="Recipients (comma-separated)">
                     <input
+                      id="notifyEmailTo"
                       value={draft.email_to}
                       onChange={(e) => setDraft({ ...draft, email_to: e.target.value })}
                       placeholder="ops@example.com, oncall@example.com"
@@ -434,6 +440,7 @@ function NotificationsAdmin() {
                 <div className="mt-[0.9rem] grid grid-cols-[1fr_9rem] gap-[0.75rem_0.85rem] max-[640px]:grid-cols-1">
                   <ConnField label="URL">
                     <input
+                      id="notifyWebhookUrl"
                       value={draft.webhook_url}
                       onChange={(e) => setDraft({ ...draft, webhook_url: e.target.value })}
                       placeholder="https://hooks.example.com/fleet"
@@ -444,6 +451,7 @@ function NotificationsAdmin() {
                   <ConnField label="Method">
                     <span className="select-wrap block">
                       <select
+                        id="notifyWebhookMethod"
                         value={draft.webhook_method}
                         onChange={(e) => setDraft({ ...draft, webhook_method: e.target.value })}
                         // pr overrides the base px and needs `!` under
@@ -458,6 +466,7 @@ function NotificationsAdmin() {
                   </ConnField>
                   <SecretField
                     label="Signing secret (outbound HMAC — see docs/WEBHOOK-SIGNING.md)"
+                    id="notifyWebhookSecret"
                     stored={view.settings.has_webhook_secret}
                     value={draft.webhook_secret}
                     clear={draft.clear_webhook_secret}
@@ -472,6 +481,7 @@ function NotificationsAdmin() {
                   />
                   <ConnField label="Body template (optional; Go text/template over the event)" full>
                     <textarea
+                      id="notifyWebhookBodyTemplate"
                       value={draft.webhook_body_template}
                       onChange={(e) =>
                         setDraft({ ...draft, webhook_body_template: e.target.value })
@@ -596,6 +606,7 @@ function ChannelPanel({
 // stored.
 function SecretField({
   label,
+  id,
   stored,
   value,
   clear,
@@ -605,6 +616,7 @@ function SecretField({
   className,
 }: {
   label: string;
+  id: string;
   stored: boolean;
   value: string;
   clear: boolean;
@@ -615,12 +627,13 @@ function SecretField({
 }) {
   return (
     <div className={["grid min-w-0 content-start gap-[0.3rem]", className ?? ""].join(" ")}>
-      <label className="grid gap-[0.3rem]">
+      <label className="grid gap-[0.3rem]" htmlFor={id}>
         <span className="text-[0.72rem] font-medium text-[var(--color-text-secondary)]">
           {label}
           {stored && !clear ? " (stored — leave blank to keep)" : ""}
         </span>
         <input
+          id={id}
           type="password"
           autoComplete="new-password"
           value={value}
@@ -632,8 +645,12 @@ function SecretField({
         />
       </label>
       {stored ? (
-        <label className="flex cursor-pointer items-center gap-[0.4rem] text-[0.7rem] text-[var(--color-text-muted)]">
+        <label
+          className="flex cursor-pointer items-center gap-[0.4rem] text-[0.7rem] text-[var(--color-text-muted)]"
+          htmlFor={`${id}Clear`}
+        >
           <input
+            id={`${id}Clear`}
             type="checkbox"
             checked={clear}
             onChange={(e) => onClear(e.target.checked)}

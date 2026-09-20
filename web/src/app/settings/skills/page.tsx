@@ -321,6 +321,7 @@ export default function SkillsPage() {
           <div className="mb-3 grid gap-[0.75rem] border-b border-[var(--color-border-subtle)] pb-4">
             <ConnField label="Name (lowercase-kebab, e.g. deal-check)">
               <input
+                id="skillName"
                 className={SETTINGS_INPUT}
                 placeholder="my-skill"
                 value={draft.name}
@@ -329,6 +330,7 @@ export default function SkillsPage() {
             </ConnField>
             <ConnField label="Description — one line: what it does and when to use it (this is how the agent decides the skill applies)">
               <input
+                id="skillDescription"
                 className={SETTINGS_INPUT}
                 placeholder="Verify a deal sheet before it goes to a client — use when asked to review or send a deal sheet."
                 value={draft.description}
@@ -337,6 +339,7 @@ export default function SkillsPage() {
             </ConnField>
             <ConnField label="Instructions (markdown — concrete steps the agent follows)">
               <textarea
+                id="skillBody"
                 className={`${SETTINGS_INPUT} min-h-[9rem]! resize-y pt-[0.55rem]! font-[family-name:var(--font-code)] text-[0.76rem]! leading-[1.6]`}
                 placeholder={"1. Read the attached sheet.\n2. Check…"}
                 value={draft.body}

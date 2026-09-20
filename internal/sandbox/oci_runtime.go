@@ -162,7 +162,9 @@ func RuntimeBinary(runtime string) string {
 const runtimeResolveTimeout = 20 * time.Second
 
 // resolveRuntimePath asks Podman which binary it will actually exec for
-// `--runtime=<runtime>`, rather than guessing from the name.
+// `--runtime=<runtime>`, rather than guessing from the name. It runs through
+// the caller's PodmanExec so a root-run validate-config asks the SERVICE
+// user's podman (whose containers.conf is the one boot will read), not root's.
 //
 // `podman --runtime=<r> info` is authoritative on both counts we care about: it
 // resolves the name through containers.conf ([engine.runtimes]) and reports the
@@ -175,14 +177,10 @@ const runtimeResolveTimeout = 20 * time.Second
 //
 // Any failure here is fail-closed for the caller: a hypervisor runtime whose
 // binary Podman cannot even name is one whose isolation we cannot verify.
-func resolveRuntimePath(ctx context.Context, podmanBin, runtime string) (string, error) {
-	if podmanBin == "" {
-		podmanBin = "podman"
-	}
+func resolveRuntimePath(ctx context.Context, execCtx PodmanExec, runtime string) (string, error) {
 	resolveCtx, cancel := context.WithTimeout(ctx, runtimeResolveTimeout)
 	defer cancel()
-	//nolint:gosec // podmanBin and runtime are operator-set config, not request input
-	out, err := exec.CommandContext(resolveCtx, podmanBin, "--runtime="+runtime, "info", "--format", "{{.Host.OCIRuntime.Path}}").Output()
+	out, err := execCtx.CommandContext(resolveCtx, "", "--runtime="+runtime, "info", "--format", "{{.Host.OCIRuntime.Path}}").Output()
 	if err != nil {
 		return "", fmt.Errorf("podman could not resolve --runtime=%s (is it registered in containers.conf?): %w%s", runtime, err, stderrOf(err))
 	}
@@ -215,8 +213,11 @@ func resolveRuntimePath(ctx context.Context, podmanBin, runtime string) (string,
 // The binary probed is the one PODMAN resolves the runtime to, not a guess from
 // the name (see resolveRuntimePath): validating a different binary than the one
 // that will run every tool call is exactly the silent isolation loss ADR-0010
-// exists to prevent.
-func PreflightRuntime(ctx context.Context, podmanBin, runtime string) error {
+// exists to prevent. Every subprocess runs through execCtx: the boot path
+// passes a prefix-free context (the service IS the service user), while a
+// root-run validate-config passes the service-user context so the question is
+// asked as the user that will actually boot.
+func PreflightRuntime(ctx context.Context, execCtx PodmanExec, runtime string) error {
 	normalized, _ := NormalizeRuntime(runtime)
 	if normalized == "" {
 		return nil
@@ -226,7 +227,7 @@ func PreflightRuntime(ctx context.Context, podmanBin, runtime string) error {
 	// labelled "kata preflight:" / "krun preflight:" — those prefixes belong to
 	// the hardware gates below and would misdirect an operator whose actual
 	// problem is a broken rootless podman.
-	bin, err := resolveRuntimePath(ctx, podmanBin, normalized)
+	bin, err := resolveRuntimePath(ctx, execCtx, normalized)
 	if err != nil {
 		return fmt.Errorf("sandbox runtime preflight: %w", err)
 	}
@@ -237,9 +238,9 @@ func PreflightRuntime(ctx context.Context, podmanBin, runtime string) error {
 	}
 	switch kind {
 	case runtimeKata:
-		return preflightKata(ctx, bin)
+		return preflightKata(ctx, execCtx, bin)
 	case runtimeKrun:
-		return preflightKrun(ctx, bin)
+		return preflightKrun(ctx, execCtx, bin)
 	default:
 		// Shared-kernel runtime (runc/crun/runsc/…): resolvability is the whole
 		// check — no hypervisor posture to verify.
@@ -248,13 +249,32 @@ func PreflightRuntime(ctx context.Context, podmanBin, runtime string) error {
 	}
 }
 
-// kvmAccessible opens /dev/kvm read-write — the HARD gate for any
-// hypervisor-isolated runtime. A bare os.Stat only proves the device node
-// exists; an O_RDWR open proves the fleet process user can actually USE KVM (it
-// needs membership in the `kvm` group). No usable KVM means no hypervisor
+// kvmAccessible reports whether /dev/kvm can be OPENED read-write — the HARD
+// gate for any hypervisor-isolated runtime. A bare os.Stat only proves the
+// device node exists; an open proves the device owner can actually USE KVM
+// (it needs membership in the `kvm` group). No usable KVM means no hypervisor
 // isolation, so the preflight fails closed rather than booting a runtime that
 // cannot deliver its security posture.
-func kvmAccessible() error {
+//
+// WHOSE access is probed depends on the execution context, and the message is
+// worded for exactly the user it probed. As the calling process (the boot
+// path — the service already IS the service user) it opens the device
+// in-process, unchanged from the original check. Under a service-user prefix
+// (a root-run validate-config) an in-process open would test ROOT's KVM
+// access and could pass for a service user who cannot open it — the exact
+// false negative this execution context exists to prevent — so it probes as
+// the target user instead: access(2) (test -r … -a -w …, the combined form
+// being invalid test(1)) approximates the O_RDWR open the runtime will
+// perform, run through the same runuser prefix as podman.
+func kvmAccessible(ctx context.Context, execCtx PodmanExec) error {
+	if len(execCtx.Prefix) > 0 {
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := execCtx.CommandContext(probeCtx, "test", "-r", "/dev/kvm", "-a", "-w", "/dev/kvm").Run(); err != nil {
+			return fmt.Errorf("/dev/kvm not accessible — KVM is required (is the fleet user in the kvm group?): %w", err)
+		}
+		return nil
+	}
 	f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("/dev/kvm not accessible — KVM is required (is the fleet user in the kvm group?): %w", err)
@@ -270,17 +290,19 @@ func kvmAccessible() error {
 // do not mean Kata is unusable, so its exit code is logged, NOT fail-closed —
 // gating on it would break otherwise-healthy rootless-kata hosts. /dev/kvm is
 // the real gate. --no-network-checks keeps a GitHub version check from delaying
-// boot; the timeout bounds the KVM_CREATE_VM probe the check itself runs.
-func preflightKata(ctx context.Context, bin string) error {
+// boot; the timeout bounds the KVM_CREATE_VM probe the check itself runs. The
+// binary exec runs through execCtx like every other probe, so a root-run
+// validate-config checks the binary the service user will actually run.
+func preflightKata(ctx context.Context, execCtx PodmanExec, bin string) error {
 	if err := lookRuntimeBinary(bin); err != nil {
 		return fmt.Errorf("kata preflight: %s not found — install Kata Containers: %w", bin, err)
 	}
-	if err := kvmAccessible(); err != nil {
+	if err := kvmAccessible(ctx, execCtx); err != nil {
 		return fmt.Errorf("kata preflight: %w", err)
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(checkCtx, bin, "check", "--no-network-checks").CombinedOutput()
+	out, err := execCtx.CommandContext(checkCtx, bin, "check", "--no-network-checks").CombinedOutput()
 	if err != nil {
 		log.Printf("sandbox: %s check reported issues (non-fatal — /dev/kvm is the hard gate): %v\n%s",
 			bin, err, strings.TrimSpace(string(out)))
@@ -296,16 +318,16 @@ func preflightKata(ctx context.Context, bin string) error {
 // renamed to `krun` would run as an ordinary shared-kernel container — a SILENT
 // loss of the VM isolation the operator asked for — so the missing feature flag
 // is a hard fail, not a pass.
-func preflightKrun(ctx context.Context, bin string) error {
+func preflightKrun(ctx context.Context, execCtx PodmanExec, bin string) error {
 	// Binary first (mirrors preflightKata) so a missing krun reports "not found"
 	// rather than the less-actionable "/dev/kvm not accessible".
 	if err := lookRuntimeBinary(bin); err != nil {
 		return fmt.Errorf("krun preflight: %s not found — install crun built with libkrun support: %w", bin, err)
 	}
-	if err := kvmAccessible(); err != nil {
+	if err := kvmAccessible(ctx, execCtx); err != nil {
 		return fmt.Errorf("krun preflight: %w", err)
 	}
-	if err := verifyKrunLibkrun(ctx, bin); err != nil {
+	if err := verifyKrunLibkrun(ctx, execCtx, bin); err != nil {
 		return fmt.Errorf("krun preflight: %w", err)
 	}
 	log.Printf("sandbox: krun (libkrun) preflight OK — %s has +LIBKRUN and /dev/kvm accessible", bin)
@@ -321,10 +343,10 @@ func preflightKrun(ctx context.Context, bin string) error {
 // isolation the operator asked for — so a missing feature flag is a hard fail,
 // not a pass. Case-insensitive to tolerate banner-format drift across crun
 // releases.
-func verifyKrunLibkrun(ctx context.Context, bin string) error {
+func verifyKrunLibkrun(ctx context.Context, execCtx PodmanExec, bin string) error {
 	verCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(verCtx, bin, "--version").CombinedOutput()
+	out, err := execCtx.CommandContext(verCtx, bin, "--version").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%q --version failed: %w", bin, err)
 	}

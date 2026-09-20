@@ -205,6 +205,12 @@ func TestApprovalSummaryLine(t *testing.T) {
 			want:    `"weekday report" — cron 0 9 * * MON-FRI (≈22 runs/month)`,
 		},
 		{
+			name:    "schedule_task cron at the cap reads as a floor",
+			tool:    "schedule_task",
+			summary: map[string]any{"name": "per-minute poll", "cron": "* * * * *", "runs_per_month": float64(1000)},
+			want:    `"per-minute poll" — cron * * * * * (≥1000 runs/month)`,
+		},
+		{
 			name:    "send_email",
 			tool:    "send_email",
 			summary: map[string]any{"to": "crew@x.co", "subject": "weekly numbers"},
@@ -268,5 +274,66 @@ func TestBashApprovalReviewShowsFullEscapedCommand(t *testing.T) {
 	review := frozenApprovalReview(withFrozen(pendingApproval{tool: "bash"}, map[string]any{"command": cmd + "\x1b[2J"}))
 	if !strings.Contains(review, hidden) || strings.ContainsAny(review, "\x1b") {
 		t.Fatalf("full bash review missing hidden tail or leaked controls: %s", review)
+	}
+}
+
+// TestDisplaySummaryReflectsEdits pins the headline an operator reviews before
+// deciding: after /edit, the summary line must show the edited name/prompt/cron
+// — never the pre-edit values — and the runs/month suffix must never describe
+// the old cron (absent once the cron is edited).
+func TestDisplaySummaryReflectsEdits(t *testing.T) {
+	strp := func(s string) *string { return &s }
+	details := map[string]any{
+		"name":           "qa-smoke-2026-09-20",
+		"cron":           "*/15 * * * *",
+		"runs_per_month": float64(2880),
+		"prompt_preview": "check the thing",
+	}
+	base := pendingApproval{tool: "schedule_task", details: details, summary: approvalSummaryLine("schedule_task", details)}
+
+	if got := base.displaySummary(); got != base.summary {
+		t.Errorf("unedited card should render the static summary, got %q want %q", got, base.summary)
+	}
+	if !strings.Contains(base.summary, "*/15 * * * *") || !strings.Contains(base.summary, "runs/month") {
+		t.Fatalf("baseline summary should carry the original cron + cadence hint: %q", base.summary)
+	}
+
+	renamed := base
+	renamed.edits = &ScheduleEdits{Name: strp("nightly-qa")}
+	if got := renamed.displaySummary(); !strings.Contains(got, "nightly-qa") {
+		t.Errorf("edited name missing from headline: %q", got)
+	}
+
+	recroned := base
+	recroned.edits = &ScheduleEdits{Cron: strp("7 5 * * *")}
+	if got := recroned.displaySummary(); !strings.Contains(got, "7 5 * * *") {
+		t.Errorf("edited cron missing from headline: %q", got)
+	} else if strings.Contains(got, "*/15") {
+		t.Errorf("headline still carries the pre-edit cron: %q", got)
+	} else if !strings.Contains(got, "(≈30 runs/month)") {
+		// The cadence hint must be RECOMPUTED for the edited cron — a daily
+		// 05:07 job is ~30/month, never the pre-edit 2880 and never absent.
+		t.Errorf("runs/month hint not recomputed for the edited cron: %q", got)
+	}
+
+	// Editing the cron to a per-minute schedule must render the floor form,
+	// not a false "≈" approximation.
+	perMinute := base
+	perMinute.edits = &ScheduleEdits{Cron: strp("* * * * *")}
+	if got := perMinute.displaySummary(); !strings.Contains(got, "(≥1000 runs/month)") {
+		t.Errorf("capped cadence should render as a floor: %q", got)
+	}
+
+	// An unparseable edited cron drops the hint rather than guessing.
+	badCron := base
+	badCron.edits = &ScheduleEdits{Cron: strp("not a cron")}
+	if got := badCron.displaySummary(); strings.Contains(got, "runs/month") {
+		t.Errorf("unparseable edited cron should carry no cadence hint: %q", got)
+	}
+
+	reprompted := base
+	reprompted.edits = &ScheduleEdits{Prompt: strp("a different instruction entirely")}
+	if got := reprompted.displaySummary(); !strings.Contains(got, "a different instruction entirely") {
+		t.Errorf("edited prompt missing from headline: %q", got)
 	}
 }

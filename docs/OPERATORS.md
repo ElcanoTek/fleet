@@ -162,6 +162,22 @@ out-of-loader, blocking and advisory — before starting the service; config
 hot-reload applies the same rules to the knobs it can reload (see
 [CONFIG-RELOAD.md](CONFIG-RELOAD.md)).
 
+**It reads the deployment the way the service does, not the way your shell
+does.** On a provisioned box the unit's `UnsetEnvironment=` keeps
+`FLEET_ENV_FILE` and `FLEET_CLIENT_CONFIG_DIR` out of an operator's shell, so
+the preflight verbs (`validate-config`, `mcp test`, `eval`) resolve the env
+file themselves and take the bundle directory from it — `--bundle-path` still
+wins, then anything already in your environment, then the file. And because
+rootless podman keeps one image store **per user**, **every** sandbox probe —
+`podman info`, the image lookup, the OCI-runtime resolution, the allowlisted-egress
+network helper, and the `/dev/kvm` gate — runs as the unit's `User=`, exactly as
+`fleet status` and `fleet doctor` do, and says whose store the verdict is about.
+That matters past the image: a runtime or network helper registered only in the
+service user's `containers.conf` boots fine and would otherwise fail a check run
+as root. Without both of those, a healthy
+box preflighted as two blocking failures — a bundle that "does not exist" and a
+sandbox image that was present all along.
+
 **Less-travelled knobs** the loader reads that have no page of their own
 (every one is optional; the default is what an unset value means):
 

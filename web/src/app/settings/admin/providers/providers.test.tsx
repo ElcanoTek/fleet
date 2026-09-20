@@ -94,6 +94,12 @@ describe("ProvidersAdminPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    // Draft-form fields are explicitly label-associated (htmlFor + id).
+    expect(screen.getByLabelText("Type")).toHaveAttribute("id", "providerType");
+    expect(screen.getByLabelText("Enabled")).toHaveAttribute(
+      "id",
+      "providerEnabled",
+    );
     fireEvent.change(screen.getByPlaceholderText("my-provider"), {
       target: { value: "openrouter-team" },
     });

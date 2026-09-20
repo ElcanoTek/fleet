@@ -76,7 +76,7 @@ func TestAllowlistedNetworkHelperMatchesNetworkArgs(t *testing.T) {
 
 func TestPreflightAllowlistedNetwork_HelperPresent(t *testing.T) {
 	podman := fakePodmanInfoHelper(t, "/usr/bin/slirp4netns", "", 0)
-	if err := PreflightAllowlistedNetwork(context.Background(), podman); err != nil {
+	if err := PreflightAllowlistedNetwork(context.Background(), PodmanExec{Binary: podman}); err != nil {
 		t.Errorf("PreflightAllowlistedNetwork with the helper present = %v, want nil", err)
 	}
 }
@@ -87,7 +87,7 @@ func TestPreflightAllowlistedNetwork_HelperPresent(t *testing.T) {
 // would fail. The error must name the helper and the remedy.
 func TestPreflightAllowlistedNetwork_HelperMissing(t *testing.T) {
 	podman := fakePodmanInfoHelper(t, "", "", 0)
-	err := PreflightAllowlistedNetwork(context.Background(), podman)
+	err := PreflightAllowlistedNetwork(context.Background(), PodmanExec{Binary: podman})
 	if err == nil {
 		t.Fatal("PreflightAllowlistedNetwork with no helper = nil, want a fail-closed error")
 	}
@@ -102,7 +102,7 @@ func TestPreflightAllowlistedNetwork_HelperMissing(t *testing.T) {
 // a newline must not be read as "helper present".
 func TestPreflightAllowlistedNetwork_WhitespaceOnlyIsMissing(t *testing.T) {
 	podman := fakePodmanInfoHelper(t, "   ", "", 0)
-	if err := PreflightAllowlistedNetwork(context.Background(), podman); err == nil {
+	if err := PreflightAllowlistedNetwork(context.Background(), PodmanExec{Binary: podman}); err == nil {
 		t.Fatal("a whitespace-only helper path = nil, want fail-closed")
 	}
 }
@@ -113,7 +113,7 @@ func TestPreflightAllowlistedNetwork_WhitespaceOnlyIsMissing(t *testing.T) {
 func TestPreflightAllowlistedNetwork_PodmanFailureFailsClosed(t *testing.T) {
 	const realErr = `Error: cannot re-exec process to join the existing user namespace`
 	podman := fakePodmanInfoHelper(t, "", realErr, 125)
-	err := PreflightAllowlistedNetwork(context.Background(), podman)
+	err := PreflightAllowlistedNetwork(context.Background(), PodmanExec{Binary: podman})
 	if err == nil {
 		t.Fatal("a failing podman info = nil, want fail-closed")
 	}
@@ -144,7 +144,7 @@ func TestPreflightAllowlistedNetwork_DefaultsPodmanBinary(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := PreflightAllowlistedNetwork(context.Background(), ""); err != nil {
+	if err := PreflightAllowlistedNetwork(context.Background(), PodmanExec{}); err != nil {
 		t.Errorf("PreflightAllowlistedNetwork with an empty podman binary = %v, want the PATH default to be used", err)
 	}
 }
@@ -166,7 +166,7 @@ func TestPreflightAllowlistedNetwork_DefaultsPodmanBinary(t *testing.T) {
 func TestPreflightNetworkHelper_UnknownHelperFailsClosed(t *testing.T) {
 	podman := fakePodmanInfoHelper(t, "/usr/bin/anything", "", 0)
 	for _, helper := range []string{"pasta", "", "bridge"} {
-		err := preflightNetworkHelper(context.Background(), podman, helper)
+		err := preflightNetworkHelper(context.Background(), PodmanExec{Binary: podman}, helper)
 		if err == nil {
 			t.Fatalf("preflightNetworkHelper(%q) = nil, want a fail-closed error", helper)
 		}

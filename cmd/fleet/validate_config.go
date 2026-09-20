@@ -32,8 +32,10 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver for the probe
 
+	"github.com/ElcanoTek/fleet/internal/admincli"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
@@ -134,12 +136,49 @@ func newValidateFlagSet(opts *validateOptions) *flag.FlagSet {
 // the pin, a ${CONNECTOR_KEY} in the manifest would still resolve against an
 // empty env. It is the same in-process override these verbs already apply for
 // --bundle-path (clientconfig.EnvDir).
+//
+// FLEET_CLIENT_CONFIG_DIR is pinned for exactly the same reason, and it is the
+// same bug wearing a different variable name: the bundle dir also lives only in
+// the deployment env file, clientconfig.Dir() reads it only from the process
+// env, and the unit's UnsetEnvironment= keeps it out of an operator's shell. So
+// on a provisioned box the bundle fell back to the RELATIVE default
+// ("config/default", resolved against the caller's cwd) and a healthy
+// deployment preflighted as "bundle load failed: stat /root/config/default: no
+// such file or directory" — which then failed the manifest check, degraded
+// mcp_servers and credentials to skipped, and failed the sandbox check too,
+// because FLEET_SANDBOX_IMAGE arrives as a manifest default.
 func preflightEnvFile() string {
 	path := config.ResolveEnvFile("")
 	if strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")) == "" {
 		_ = os.Setenv("FLEET_ENV_FILE", path)
 	}
+	pinBundleDirFromEnvFile(path)
 	return path
+}
+
+// pinBundleDirFromEnvFile folds the env file's FLEET_CLIENT_CONFIG_DIR into the
+// process env so clientconfig.Dir() can see it. Precedence is deliberate and
+// matches config.Load's: an explicit --bundle-path (which every preflight verb
+// pins into clientconfig.EnvDir BEFORE calling here) wins, then anything already
+// in the process env, then the file, then clientconfig's own default. Only an
+// unset variable is filled in, so this can never override an operator's choice.
+//
+// Every failure mode is a silent no-op on purpose: a missing file, an
+// unreadable one (0600 and not ours), or a file with no such key all leave the
+// caller exactly where it was, which is the pre-existing behaviour. Reporting
+// them here would turn a diagnostic that is supposed to name the REAL problem
+// into one that complains about its own bootstrap.
+func pinBundleDirFromEnvFile(path string) {
+	if strings.TrimSpace(os.Getenv(clientconfig.EnvDir)) != "" {
+		return
+	}
+	values, err := creds.ReadEnvValues(path, clientconfig.EnvDir)
+	if err != nil {
+		return
+	}
+	if dir := strings.TrimSpace(values[clientconfig.EnvDir]); dir != "" {
+		_ = os.Setenv(clientconfig.EnvDir, dir)
+	}
 }
 
 // runChecks loads the bundle + config and runs every preflight check in the
@@ -783,14 +822,26 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		res.Detail = "podman not found in PATH"
 		return res
 	}
+	// Rootless podman keeps one image store PER USER, so EVERY podman probe
+	// below must ask the store the SERVICE uses, not the one this shell has —
+	// `fleet status` and `fleet doctor` already hop to the unit's User=; this
+	// verb did not, and reported a present, runnable sandbox image as a
+	// BLOCKING "not present" on a box those two called healthy. The runtime
+	// and network-helper preflights below take the same context: a runtime
+	// registered only in the fleet user's containers.conf booted fine while
+	// these checks, run as root, failed it. One construction, shared with the
+	// status probes through sandbox.ServiceStorePodmanExec.
+	svcUser, svcHome := admincli.ServiceUserAndHome()
+	execCtx, storeNote := sandbox.ServiceStorePodmanExec(svcUser, svcHome, os.Geteuid() == 0)
+	execCtx.Binary = podmanBin
 	// `podman info` FIRST: the runtime preflight below also shells out to podman,
 	// so a broken rootless setup would otherwise be reported as "could not
 	// resolve --runtime=…", blaming the runtime for a podman problem.
 	infoCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(infoCtx, podmanBin, "info").Run(); err != nil {
+	if err := execCtx.CommandContext(infoCtx, "", "info").Run(); err != nil {
 		res.Status = statusFail
-		res.Detail = "podman info failed (rootless/daemon setup not accessible): " + err.Error()
+		res.Detail = "podman info failed" + storeNote + " (rootless/daemon setup not accessible): " + err.Error()
 		return res
 	}
 	// A non-default OCI runtime must be resolvable by podman and — for the
@@ -802,7 +853,7 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 	// whichever same-named binary is first on PATH, and it reports FAIL for a
 	// perfectly good containers.conf that maps the name to an off-PATH binary.
 	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
-		if err := sandbox.PreflightRuntime(ctx, podmanBin, rt); err != nil {
+		if err := sandbox.PreflightRuntime(ctx, execCtx, rt); err != nil {
 			res.Status = statusFail
 			res.Detail = err.Error()
 			return res
@@ -813,7 +864,7 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 	// the same fail-closed preflight the boot path runs (#211 / ADR-0012).
 	networkHelperNote := ""
 	if cfg.DefaultNetworkMode == sandbox.NetworkModeAllowlisted {
-		if err := sandbox.PreflightAllowlistedNetwork(ctx, podmanBin); err != nil {
+		if err := sandbox.PreflightAllowlistedNetwork(ctx, execCtx); err != nil {
 			res.Status = statusFail
 			res.Detail = err.Error()
 			return res
@@ -832,14 +883,13 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 	}
 	imgCtx, imgCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer imgCancel()
-	//nolint:gosec // G204: podmanBin is the fixed "podman" binary and image is an operator-config-derived ref (FLEET_SANDBOX_IMAGE / bundle manifest), not request input — it cannot inject a subprocess.
-	if err := exec.CommandContext(imgCtx, podmanBin, "image", "exists", image).Run(); err != nil {
+	if err := execCtx.CommandContext(imgCtx, "", "image", "exists", image).Run(); err != nil {
 		res.Status = statusFail
-		res.Detail = fmt.Sprintf("sandbox image %q not present (build it with scripts/build-sandbox-image.sh or pull it)", image)
+		res.Detail = fmt.Sprintf("sandbox image %q not present%s (build it with scripts/build-sandbox-image.sh or pull it)", image, storeNote)
 		return res
 	}
 	res.Status = statusOK
-	res.Detail = fmt.Sprintf("podman ok; image %q present%s", image, networkHelperNote)
+	res.Detail = fmt.Sprintf("podman ok; image %q present%s%s", image, storeNote, networkHelperNote)
 	return res
 }
 

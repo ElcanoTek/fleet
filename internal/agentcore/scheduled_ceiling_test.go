@@ -103,6 +103,61 @@ func TestCeiling_HardAbortBeforeNextCompletion(t *testing.T) {
 	if res.FinalText == "" {
 		t.Error("graceful ceiling stop should still return the partial transcript")
 	}
+	// The stop must carry the guard's own sentence: which ceiling fired, the
+	// count, the limit — and NOT the ErrCostCeilingExceeded sentinel text the
+	// runner's failure class already prints (doubling it reads as a bug).
+	if !res.StoppedByBudget {
+		t.Fatal("StoppedByBudget should be set on the ceiling path")
+	}
+	for _, want := range []string{"TOKEN_CEILING_REACHED", "60 uncached tokens", "ceiling of 10"} {
+		if !strings.Contains(res.BudgetStopReason, want) {
+			t.Errorf("BudgetStopReason %q should contain %q", res.BudgetStopReason, want)
+		}
+	}
+	if strings.Contains(res.BudgetStopReason, ErrCostCeilingExceeded.Error()) {
+		t.Errorf("BudgetStopReason should have the sentinel text stripped, got %q", res.BudgetStopReason)
+	}
+}
+
+// TestCeiling_BudgetStopReasonNamesCostCeiling is the cost half of the
+// BudgetStopReason contract: a dollar-ceiling stop must name
+// COST_CEILING_REACHED with the spend and the limit, not just "some ceiling".
+func TestCeiling_BudgetStopReasonNamesCostCeiling(t *testing.T) {
+	policy := NewScheduledPolicy(NewLogSession(), 50, 0.05 /* $0.05 ceiling */, 0)
+	policy.orch.CostUSD = 0.06 // already over before the first paid step
+	model := &mockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t", Delta: "working"})
+				yield(fantasy.StreamPart{
+					Type:         fantasy.StreamPartTypeFinish,
+					FinishReason: fantasy.FinishReasonStop,
+					Usage:        fantasy.Usage{InputTokens: 50, OutputTokens: 10},
+				})
+			}, nil
+		},
+	}
+	res, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:    stubInput{system: "sys", user: "go", label: "sched"},
+		Observer: &captureObserver{},
+		Policy:   policy,
+		Executor: &stubExecutor{},
+		Model:    model,
+	})
+	if err != nil {
+		t.Fatalf("ceiling hit should finish gracefully, got error: %v", err)
+	}
+	if !res.StoppedByBudget {
+		t.Fatal("StoppedByBudget should be set on the ceiling path")
+	}
+	for _, want := range []string{"COST_CEILING_REACHED", "$0.0600", "$0.05"} {
+		if !strings.Contains(res.BudgetStopReason, want) {
+			t.Errorf("BudgetStopReason %q should contain %q", res.BudgetStopReason, want)
+		}
+	}
+	if strings.Contains(res.BudgetStopReason, ErrCostCeilingExceeded.Error()) {
+		t.Errorf("BudgetStopReason should have the sentinel text stripped, got %q", res.BudgetStopReason)
+	}
 }
 
 func TestStructuredCeilingStopCannotBypassTerminalContract(t *testing.T) {

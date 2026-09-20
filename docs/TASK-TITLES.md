@@ -78,6 +78,13 @@ re-run, and every clone of a job lists under the same title.
   operator picked it by. Either way it stays editable.
 - **Chat-created tasks** — the name the chat assistant proposes and the user
   confirms on the `schedule_task` approval card is stored as the display title.
+- **`fleet sched task list`** — the `LABEL` column resolves `name` → `title` →
+  a prompt excerpt. The CLI is the one place this table's "shown everywhere the
+  task is listed" promise used to be false: it read `name` or the prompt and
+  never the title, so a chat-created task (title, no name) and *every*
+  occurrence, re-run and clone of a named recurring job — all of which clear
+  `name` and carry `title` — listed as a raw prompt blob. Untitled, unnamed
+  tasks still render the prompt's first line, exactly as before.
   The tool's `name` argument keeps its original spelling for compatibility,
   but it no longer populates the unrelated unique task-definition `name` column.
 - **The prompt library** — inserting an entry seeds an empty title from the

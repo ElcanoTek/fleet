@@ -316,6 +316,7 @@ export default function SharedFilesPage() {
                                 <ConnForm className="mb-0!">
                                   <ConnField label="Name" grow>
                                     <input
+                                      id={`editName-${file.id}`}
                                       type="text"
                                       value={editing.name}
                                       disabled={busy}
@@ -330,6 +331,7 @@ export default function SharedFilesPage() {
                                   </ConnField>
                                   <ConnField label="Folder (empty = library root)">
                                     <input
+                                      id={`editFolder-${file.id}`}
                                       type="text"
                                       value={editing.folder}
                                       disabled={busy}
@@ -345,6 +347,7 @@ export default function SharedFilesPage() {
                                   </ConnField>
                                   <ConnField label="Description (empty = clear)" grow>
                                     <input
+                                      id={`editDescription-${file.id}`}
                                       type="text"
                                       value={editing.description}
                                       disabled={busy}
@@ -507,6 +510,7 @@ function UploadPanel({
       <ConnForm>
         <ConnField label="Files" grow>
           <input
+            id="uploadFiles"
             ref={inputRef}
             type="file"
             multiple
@@ -521,6 +525,7 @@ function UploadPanel({
         </ConnField>
         <ConnField label="Folder (optional)">
           <input
+            id="uploadFolder"
             type="text"
             value={folder}
             disabled={busy}
@@ -533,6 +538,7 @@ function UploadPanel({
         </ConnField>
         <ConnField label="Description (optional)" grow>
           <input
+            id="uploadDescription"
             type="text"
             value={description}
             disabled={busy}

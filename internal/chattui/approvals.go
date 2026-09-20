@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/ElcanoTek/fleet/internal/croncount"
 )
 
 // frozenApprovalReview is the last thing a terminal user sees before a
@@ -64,6 +66,46 @@ func (a pendingApproval) executionArgs() map[string]any {
 		out["cron"] = *a.edits.Cron
 	}
 	return out
+}
+
+// displaySummary is the headline an operator reviews before deciding: the
+// server's summary line, unless local schedule_task edits exist — then the
+// edited name / prompt / cron are overlaid on a COPY of the server's summary
+// map and the line is re-rendered. A stale headline is worse than a plain
+// one: it is the human-readable review, and its runs/month cadence warning
+// must describe the cron about to be approved. An edited cron re-runs the
+// estimate through internal/croncount — the same estimator the server used,
+// lifted into a leaf both sides import so the two can never drift — and an
+// unparseable edit drops the hint rather than guessing.
+func (a pendingApproval) displaySummary() string {
+	if a.edits == nil {
+		return a.summary
+	}
+	details := make(map[string]any, len(a.details)+3)
+	for k, v := range a.details {
+		details[k] = v
+	}
+	if a.edits.Cron != nil {
+		details["cron"] = *a.edits.Cron
+		// The server's count describes the PRE-edit schedule; recompute
+		// against the edited cron (see the comment above for why the shared
+		// estimator is the only acceptable source).
+		if n, ok := croncount.EstimateRunsPerMonth(*a.edits.Cron); ok {
+			// An int, deliberately: the summary map mixes JSON-decoded
+			// float64 (server) with locally computed ints, and the renderer's
+			// runsPerMonth accepts both — do NOT cast here and re-narrow it.
+			details["runs_per_month"] = n
+		} else {
+			delete(details, "runs_per_month")
+		}
+	}
+	if a.edits.Name != nil {
+		details["name"] = *a.edits.Name
+	}
+	if a.edits.Prompt != nil {
+		details["prompt_preview"] = *a.edits.Prompt
+	}
+	return approvalSummaryLine(a.tool, details)
 }
 
 var errTrailingJSON = errors.New("trailing JSON")
@@ -160,8 +202,16 @@ func formatApprovalSummary(tool string, summary any) string {
 		when := "runs as soon as a worker is free"
 		if cron := strField(m, "cron"); cron != "" {
 			when = "cron " + cron
-			if n, ok := m["runs_per_month"].(float64); ok {
-				when += fmt.Sprintf(" (≈%d runs/month)", int(n))
+			if n, ok := runsPerMonth(m["runs_per_month"]); ok {
+				if n >= croncount.CountCap {
+					// At the cap the count is a floor, not an estimate — the
+					// contract internal/croncount documents and the web card
+					// already renders as "1000+". "≈1000" would understate a
+					// per-minute cron by more than an order of magnitude.
+					when += fmt.Sprintf(" (≥%d runs/month)", n)
+				} else {
+					when += fmt.Sprintf(" (≈%d runs/month)", n)
+				}
 			}
 		} else if runAt := strField(m, "run_at"); runAt != "" {
 			when = "one-time at " + runAt
@@ -194,6 +244,22 @@ func formatApprovalSummary(tool string, summary any) string {
 		}
 	}
 	return genericSummaryLine(m)
+}
+
+// runsPerMonth reads the cadence count from a summary map that TWO producers
+// write with different numeric types: the server's value arrives through JSON
+// decoding (float64 — both the SSE event and the settlement GET), while a
+// locally recomputed estimate (displaySummary) stores a plain int. Accepting
+// both at this ONE read site keeps either producer from silently losing the
+// hint to a failed type assertion.
+func runsPerMonth(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	}
+	return 0, false
 }
 
 // genericSummaryLine is the honest floor for a tool with no tailored line:

@@ -106,6 +106,15 @@ describe("NotificationsAdminPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<NotificationsAdminPage />);
 
+    // The secret fields are explicitly label-associated (htmlFor + id), so the
+    // labelled control is the input itself, not just its test id. The form
+    // renders after the settings fetch resolves, so these must be awaited;
+    // the password label carries a "stored" hint suffix, hence the regex.
+    expect((await screen.findByLabelText(/^Password/)).id).toBe("notifySmtpPassword");
+    expect(
+      (await screen.findByLabelText(/Signing secret \(outbound HMAC/)).id,
+    ).toBe("notifyWebhookSecret");
+
     // Type a webhook URL + its secret; leave the SMTP password untouched.
     fireEvent.change(await screen.findByTestId("notify-webhook-url", undefined, { timeout: 5000 }), {
       target: { value: "https://hooks.example.com/x" },
@@ -136,6 +145,11 @@ describe("NotificationsAdminPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<NotificationsAdminPage />);
     fireEvent.click(await screen.findByTestId("notify-smtp-password-clear", undefined, { timeout: 5000 }));
+    // The clear toggle is a real labelled control too (htmlFor + id).
+    expect(screen.getByLabelText("Clear the stored value on save")).toHaveAttribute(
+      "id",
+      "notifySmtpPasswordClear",
+    );
     fireEvent.click(screen.getByTestId("notify-save"));
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([, i]) => i?.method === "PUT")).toBe(true),

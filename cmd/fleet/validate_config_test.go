@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 // TestParseValidateFlags covers the verb's flag surface: defaults, each flag, and
@@ -702,4 +703,77 @@ func repoConfigDefault(t *testing.T) string {
 	}
 	t.Skip("config/default not found from test cwd")
 	return ""
+}
+
+// TestPinBundleDirFromEnvFile pins the precedence that made a healthy box
+// preflight as broken: FLEET_CLIENT_CONFIG_DIR lives only in the deployment env
+// file, the unit's UnsetEnvironment= keeps it out of an operator's shell, and
+// clientconfig.Dir() reads only the process env — so the bundle fell back to the
+// RELATIVE default and every bundle-dependent check failed or degraded.
+func TestPinBundleDirFromEnvFile(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("fills an unset variable from the file", func(t *testing.T) {
+		t.Setenv(clientconfig.EnvDir, "")
+		pinBundleDirFromEnvFile(envFile)
+		if got := os.Getenv(clientconfig.EnvDir); got != "/opt/fleet/client" {
+			t.Errorf("bundle dir = %q, want the env file's value", got)
+		}
+	})
+
+	// The process env is what --bundle-path pins into before this runs, so this
+	// case is also what keeps an explicit flag winning over the file.
+	t.Run("never overrides the process env", func(t *testing.T) {
+		t.Setenv(clientconfig.EnvDir, "/explicit/bundle")
+		pinBundleDirFromEnvFile(envFile)
+		if got := os.Getenv(clientconfig.EnvDir); got != "/explicit/bundle" {
+			t.Errorf("bundle dir = %q, want the pre-set value untouched", got)
+		}
+	})
+
+	// Every bootstrap failure is a deliberate no-op: a diagnostic that cannot
+	// read its own env file must still run and name the REAL problem.
+	t.Run("a missing file or absent key is a quiet no-op", func(t *testing.T) {
+		empty := filepath.Join(t.TempDir(), "other.env")
+		if err := os.WriteFile(empty, []byte("SOMETHING_ELSE=1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for name, path := range map[string]string{
+			"absent key":   empty,
+			"missing file": filepath.Join(t.TempDir(), "nope.env"),
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Setenv(clientconfig.EnvDir, "")
+				pinBundleDirFromEnvFile(path)
+				if got := os.Getenv(clientconfig.EnvDir); got != "" {
+					t.Errorf("bundle dir = %q, want it left unset", got)
+				}
+			})
+		}
+	})
+}
+
+// TestServiceStorePodmanExecRunsFromServiceHome pins the cwd rule: rootless
+// podman re-execs and chdir()s back to the inherited working directory, which
+// the service user may not be able to enter (a root shell's /root is 0700).
+// The rule lives in PodmanExec.CommandContext, fed by
+// sandbox.ServiceStorePodmanExec — the same contract the removed
+// serviceStorePodmanCmd helper pinned, on the surface the preflights now share.
+func TestServiceStorePodmanExecRunsFromServiceHome(t *testing.T) {
+	execCtx, _ := sandbox.ServiceStorePodmanExec("fleet", "/var/lib/fleet", true)
+	if got := execCtx.CommandContext(context.Background(), "", "info").Dir; got != "/var/lib/fleet" {
+		t.Errorf("root + non-root service user: Dir = %q, want the service home", got)
+	}
+	// Running as the caller: no hop, so no reason to move the cwd.
+	plain, _ := sandbox.ServiceStorePodmanExec("fleet", "/var/lib/fleet", false)
+	if got := plain.CommandContext(context.Background(), "", "info").Dir; got != "" {
+		t.Errorf("non-root caller: Dir = %q, want the inherited cwd", got)
+	}
+	root, _ := sandbox.ServiceStorePodmanExec("root", "/root", true)
+	if got := root.CommandContext(context.Background(), "", "info").Dir; got != "" {
+		t.Errorf("root service user: Dir = %q, want the inherited cwd", got)
+	}
 }

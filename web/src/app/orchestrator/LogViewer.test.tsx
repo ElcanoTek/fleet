@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import { LogViewer } from "./LogViewer";
+import { OrchestratorError } from "@/app/shared/lib/orchestratorApi";
 import type { LogSession, Task } from "@/app/shared/lib/orchestratorApi";
 
 // LogViewer renders a scheduled task's stored log. #271 adds inline rendering of
@@ -16,17 +17,24 @@ const taskSubagentLog = vi.fn();
 const rerunTask = vi.fn();
 const wakeTask = vi.fn();
 const tasks = vi.fn();
-vi.mock("@/app/shared/lib/orchestratorApi", () => ({
-  orchestratorApi: {
-    taskLogs: (...args: unknown[]) => taskLogs(...args),
-    taskLogHistory: (...args: unknown[]) => taskLogHistory(...args),
-    taskLogHistoryEntry: (...args: unknown[]) => taskLogHistoryEntry(...args),
-    taskSubagentLog: (...args: unknown[]) => taskSubagentLog(...args),
-    rerunTask: (...args: unknown[]) => rerunTask(...args),
-    wakeTask: (...args: unknown[]) => wakeTask(...args),
-    tasks: (...args: unknown[]) => tasks(...args),
-  },
-}));
+vi.mock("@/app/shared/lib/orchestratorApi", async (importOriginal) => {
+  // Spread the real module so value exports the component imports (notably
+  // OrchestratorError, used for the 404-vs-error branch) stay real; only the
+  // API surface is stubbed.
+  const actual = await importOriginal<typeof import("@/app/shared/lib/orchestratorApi")>();
+  return {
+    ...actual,
+    orchestratorApi: {
+      taskLogs: (...args: unknown[]) => taskLogs(...args),
+      taskLogHistory: (...args: unknown[]) => taskLogHistory(...args),
+      taskLogHistoryEntry: (...args: unknown[]) => taskLogHistoryEntry(...args),
+      taskSubagentLog: (...args: unknown[]) => taskSubagentLog(...args),
+      rerunTask: (...args: unknown[]) => rerunTask(...args),
+      wakeTask: (...args: unknown[]) => wakeTask(...args),
+      tasks: (...args: unknown[]) => tasks(...args),
+    },
+  };
+});
 
 const TASK_ID = "11111111-1111-1111-1111-111111111111";
 const TASK: Task = { id: TASK_ID, prompt: "Generate a weekly infographic" };
@@ -568,5 +576,48 @@ describe("LogViewer sub-agent child cards", () => {
     const card = await screen.findByTestId("subagent-card");
     expect(card).toHaveTextContent("worker");
     expect(card).toHaveTextContent("failed");
+  });
+});
+
+// The transcript endpoints return ONE status and message for two different
+// conditions, deliberately: the task has never run, or the caller may not read
+// its transcript (the server hides the denied case behind the same 404 so it
+// cannot leak whether the task exists). The board gates nothing per row, so an
+// unauthorized user can open this modal — the UI must not present either
+// condition as a failure, must not claim which one it is, and must still
+// surface every REAL failure.
+describe("LogViewer transcript-absent 404 handling", () => {
+  it("treats a 404 as 'no transcript yet', not a failure", async () => {
+    mockSession({ id: "sess", messages: [] } as unknown as LogSession);
+    taskLogs.mockReset();
+    taskLogs.mockRejectedValue(new OrchestratorError("Logs not found for this task", 404));
+    render(<LogViewer task={TASK} onClose={() => {}} />);
+
+    expect(await screen.findByText("No transcript available for this task.")).toBeTruthy();
+    expect(screen.queryByText(/Failed to load logs/)).toBeNull();
+  });
+
+  it("still surfaces a non-404 failure with its message", async () => {
+    mockSession({ id: "sess", messages: [] } as unknown as LogSession);
+    taskLogs.mockReset();
+    taskLogs.mockRejectedValue(new OrchestratorError("Request failed (500)", 500));
+    render(<LogViewer task={TASK} onClose={() => {}} />);
+
+    expect(
+      await screen.findByText(/Failed to load logs: Request failed \(500\)/),
+    ).toBeTruthy();
+    expect(screen.queryByText("No transcript available for this task.")).toBeNull();
+  });
+
+  it("does not banner when the run-history call 404s for a never-run task", async () => {
+    // Main transcript loads fine (a session with no messages); only the
+    // history list 404s — the same never-run condition. No error may surface.
+    mockSession({ id: "sess", messages: [] } as unknown as LogSession);
+    taskLogHistory.mockReset();
+    taskLogHistory.mockRejectedValue(new OrchestratorError("Logs not found for this task", 404));
+    render(<LogViewer task={TASK} onClose={() => {}} />);
+
+    expect(await screen.findByText("No transcript available for this task.")).toBeTruthy();
+    expect(screen.queryByText(/Failed to load logs/)).toBeNull();
   });
 });

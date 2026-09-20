@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
@@ -311,11 +312,16 @@ func (m *model) runSlash(text string) tea.Cmd {
 		return nil
 	case "/model":
 		if len(fields) < 2 {
+			// displayModel, not turnModel: turnModel deliberately returns ""
+			// once the server owns the conversation's model, which made this
+			// line claim "stored conversation model" while the header two rows
+			// away displayed the real slug. The fallback text is only for the
+			// genuinely-unknown case (no override, no stored slug, no default).
 			fallback := "server default"
 			if m.convID != "" {
 				fallback = "stored conversation model"
 			}
-			m.history = append(m.history, styleDim.Render("usage: /model <slug>  (current: "+orDefault(m.client.turnModel(m.convID), fallback)+")"))
+			m.history = append(m.history, styleDim.Render("usage: /model <slug>  (current: "+orDefault(m.client.displayModel(m.convID), fallback)+")"))
 		} else {
 			m.client.cfg.Model = fields[1]
 			delete(m.client.conversationModels, m.convID)
@@ -470,8 +476,8 @@ func (m *model) applyEvent(ev Event) {
 		}
 		m.pending = append(m.pending, ap)
 		line := styleTool.Render("⚠ " + tool + " needs approval")
-		if ap.summary != "" {
-			line += styleDim.Render(" — " + ap.summary)
+		if summary := ap.displaySummary(); summary != "" {
+			line += styleDim.Render(" — " + summary)
 		}
 		line += styleDim.Render("  (/approve · /deny)")
 		m.approvalLines = append(m.approvalLines, line)
@@ -591,6 +597,14 @@ func (m *model) finishTurn(msg turnDoneMsg) {
 
 // refresh rebuilds the viewport content from history + the in-flight turn.
 func (m *model) refresh() {
+	m.vp.SetContent(m.transcriptContent())
+}
+
+// transcriptContent composes the committed history + the in-flight streaming
+// block into the string handed to the viewport, soft-wrapped to the content
+// width. Factored out of refresh so the wrapping is unit-testable without a
+// Program.
+func (m *model) transcriptContent() string {
 	blocks := append([]string{}, m.history...)
 	if m.streaming {
 		var live strings.Builder
@@ -611,7 +625,90 @@ func (m *model) refresh() {
 		}
 		blocks = append(blocks, live.String())
 	}
-	m.vp.SetContent(strings.Join(blocks, "\n\n"))
+	return wrapTranscript(strings.Join(blocks, "\n\n"), m.contentWidth())
+}
+
+// wrapTranscript soft-wraps the composed transcript to the viewport's content
+// width: bubbles' viewport does not wrap, so any line wider than it — a long
+// user prompt, an error, a frozen-JSON approval review — was hard-clipped with
+// the overflow lost for good. Wrapping happens here, at SetContent time, not
+// when a block is appended to history, so resizing the terminal re-flows the
+// transcript instead of re-clipping it. lipgloss.Wrap preserves ANSI styling
+// and re-applies it across the inserted newlines, so the styled pills and dim
+// hints survive. Lines inside fenced code blocks pass through untouched:
+// hard-breaking a code line would mangle the verbatim text the fence exists
+// to protect, so an over-wide code line is still clipped — disclosed, not
+// silently rewritten.
+func wrapTranscript(content string, width int) string {
+	if width < 1 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	inFence := false
+	for i, line := range lines {
+		if isFenceLine(line) {
+			inFence = !inFence
+			continue
+		}
+		if !inFence {
+			lines[i] = lipgloss.Wrap(line, width, " ")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// isFenceLine reports whether a transcript line's VISIBLE text opens or closes
+// a fenced code block. The backticks must be found past any ANSI styling —
+// checking only the raw bytes would silently miss styled fence lines and
+// toggle state on the wrong lines.
+func isFenceLine(line string) bool {
+	trimmed := strings.TrimLeftFunc(visibleText(line), unicode.IsSpace)
+	return strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")
+}
+
+// visibleText drops ANSI escape sequences — SGR styling, OSC 8 hyperlinks: the
+// only flavors lipgloss and glamour emit — so fence detection sees the glyphs
+// a human would.
+func visibleText(s string) string {
+	if !strings.ContainsRune(s, 0x1b) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] != 0x1b {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		i++ // skip ESC itself
+		switch {
+		case i < len(s) && s[i] == '[': // CSI: params/intermediates, then a final byte 0x40–0x7e
+			i++
+			for i < len(s) && (s[i] < 0x40 || s[i] > 0x7e) {
+				i++
+			}
+			if i < len(s) {
+				i++
+			}
+		case i < len(s) && s[i] == ']': // OSC: runs to BEL or ST (ESC \)
+			i++
+			for i < len(s) {
+				if s[i] == '\a' {
+					i++
+					break
+				}
+				if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\' {
+					i += 2
+					break
+				}
+				i++
+			}
+		default: // a lone ESC outside a known sequence: drop it, keep scanning
+			i++
+		}
+	}
+	return b.String()
 }
 
 func (m *model) contentWidth() int {

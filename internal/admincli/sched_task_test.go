@@ -292,7 +292,7 @@ func TestListTasks_TableOutput(t *testing.T) {
 		t.Errorf("unexpected stderr note: %q", notes.String())
 	}
 	for _, want := range []string{
-		"ID", "NAME/PROMPT", "STATUS", "PRI", "SCHEDULE", "MODEL",
+		"ID", "LABEL", "STATUS", "PRI", "SCHEDULE", "MODEL",
 		"aaaaaaaa", "nightly-report", "scheduled", "0 9 * * *", "z-ai/glm-5.2",
 		"bbbbbbbb", "summarize the weekly issues backlog", "pending", "2026-07-11 09:30Z",
 	} {
@@ -306,6 +306,28 @@ func TestListTasks_TableOutput(t *testing.T) {
 	}
 	if st.gotLimit != 50 || st.gotOffset != 0 || st.gotFilter.Status != nil {
 		t.Errorf("unexpected query: filter=%+v limit=%d offset=%d", st.gotFilter, st.gotLimit, st.gotOffset)
+	}
+}
+
+// TestTaskLabelPrecedence pins the label column's fallback chain: Name wins,
+// then Title — the rung that keeps recurrence occurrences, which clear Name
+// but carry Title, from listing as raw prompt blobs — then the prompt excerpt.
+func TestTaskLabelPrecedence(t *testing.T) {
+	cases := []struct {
+		name string
+		task *models.Task
+		want string
+	}{
+		{"name wins over title", &models.Task{Name: "nightly", Title: "qa-smoke", Prompt: "check everything"}, "nightly"},
+		{"title beats prompt", &models.Task{Title: "qa-smoke-2026-09-20", Prompt: "check everything"}, "qa-smoke-2026-09-20"},
+		{"prompt fallback", &models.Task{Prompt: "check everything"}, excerpt("check everything")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := taskLabel(tc.task); got != tc.want {
+				t.Errorf("taskLabel = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

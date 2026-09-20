@@ -33,10 +33,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/robfig/cron/v3"
-
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/croncount"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -889,7 +888,7 @@ func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
 	case cron != "":
 		out["recurring"] = true
 		out["cron"] = cron
-		if n, ok := estimateRunsPerMonth(cron); ok {
+		if n, ok := croncount.EstimateRunsPerMonth(cron); ok {
 			out["runs_per_month"] = n
 		}
 	case strings.TrimSpace(p.RunAt) != "":
@@ -1016,41 +1015,6 @@ func formatTaskMutationReport(action string, res *TaskMutationResult, link strin
 		fmt.Fprintf(&b, "Review them in the Operations Center: %s", link)
 	}
 	return b.String()
-}
-
-// runsPerMonthCountCap bounds the cron-occurrence walk so a per-minute schedule
-// can't spin counting ~43k iterations; beyond the cap we report the cap as a
-// floor ("runs_per_month": 1000 means "≥1000"). The card renders it as "1000+".
-const runsPerMonthCountCap = 1000
-
-// estimateRunsPerMonth counts how many times a standard cron expression fires in
-// the next 30 days, for the approval card's frequency hint. Returns ok=false for
-// an unparseable expression (the card then omits the frequency rather than
-// guessing). Evaluated in UTC; the displayed estimate only needs to be
-// order-of-magnitude correct, and the real schedule is timezone-resolved at
-// create time by the storage path.
-func estimateRunsPerMonth(cronExpr string) (int, bool) {
-	schedule, err := cron.ParseStandard(cronExpr)
-	if err != nil {
-		return 0, false
-	}
-	// A fixed reference window keeps this deterministic-ish and free of the
-	// banned Date.now coupling concerns; time.Now is fine on the Go side. The
-	// 30-day window is the conventional "per month" approximation.
-	start := time.Now().UTC()
-	end := start.AddDate(0, 0, 30)
-	count := 0
-	for t := schedule.Next(start); !t.IsZero() && !t.After(end); t = schedule.Next(t) {
-		// A zero time means the schedule has no next firing (an impossible date
-		// like "0 0 30 2 *" / Feb 30 — cron parses it but Next() never resolves).
-		// Stop, so the card reports 0 rather than spinning to the "1000+" cap and
-		// claiming a never-firing task runs constantly.
-		count++
-		if count >= runsPerMonthCountCap {
-			break
-		}
-	}
-	return count, true
 }
 
 // summarizeBashInput extracts the command, working directory, and

@@ -327,7 +327,7 @@ func TestPreflightRuntimeNoopForPodmanDefault(t *testing.T) {
 	// An unresolvable fake podman proves the empty cases never call it.
 	podman := fakePodmanResolving(t, "never-called", "")
 	for _, rt := range []string{"", "  "} {
-		if err := PreflightRuntime(context.Background(), podman, rt); err != nil {
+		if err := PreflightRuntime(context.Background(), PodmanExec{Binary: podman}, rt); err != nil {
 			t.Errorf("PreflightRuntime(%q) = %v, want nil (podman default needs no preflight)", rt, err)
 		}
 	}
@@ -338,13 +338,13 @@ func TestPreflightRuntimeSharedKernelRequiresResolution(t *testing.T) {
 	for _, rt := range []string{"runc", "crun", "runsc"} {
 		t.Run(rt+" resolvable", func(t *testing.T) {
 			podman := fakePodmanResolving(t, rt, "/usr/bin/"+rt)
-			if err := PreflightRuntime(ctx, podman, rt); err != nil {
+			if err := PreflightRuntime(ctx, PodmanExec{Binary: podman}, rt); err != nil {
 				t.Errorf("PreflightRuntime(%q) with a resolvable runtime = %v, want nil", rt, err)
 			}
 		})
 		t.Run(rt+" unresolvable fails closed", func(t *testing.T) {
 			podman := fakePodmanResolving(t, rt, "")
-			err := PreflightRuntime(ctx, podman, rt)
+			err := PreflightRuntime(ctx, PodmanExec{Binary: podman}, rt)
 			if err == nil {
 				t.Fatalf("PreflightRuntime(%q) with an unregistered runtime = nil, want a fail-closed error", rt)
 			}
@@ -366,7 +366,7 @@ func TestPreflightRuntimeSharedKernelRequiresResolution(t *testing.T) {
 func TestPreflightRuntimeProbesTheResolvedBinary(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "definitely-not-installed")
 	podman := fakePodmanResolving(t, "krun", missing)
-	err := PreflightRuntime(context.Background(), podman, "krun")
+	err := PreflightRuntime(context.Background(), PodmanExec{Binary: podman}, "krun")
 	if err == nil {
 		t.Fatal("PreflightRuntime(krun) = nil when podman resolves it to a missing binary, want fail-closed")
 	}
@@ -381,7 +381,7 @@ func TestPreflightRuntimeProbesTheResolvedBinary(t *testing.T) {
 // "".
 func TestPreflightRuntimeEmptyResolutionFailsClosed(t *testing.T) {
 	podman := fakePodmanResolving(t, "crun", "<empty>")
-	err := PreflightRuntime(context.Background(), podman, "crun")
+	err := PreflightRuntime(context.Background(), PodmanExec{Binary: podman}, "crun")
 	if err == nil {
 		t.Fatal("PreflightRuntime with an empty resolved path = nil, want fail-closed")
 	}
@@ -398,7 +398,7 @@ func TestPreflightRuntimeEmptyResolutionFailsClosed(t *testing.T) {
 func TestPreflightRuntimeAsksPodmanForTheNormalizedName(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "absent-krun")
 	podman := fakePodmanResolving(t, "krun", missing)
-	err := PreflightRuntime(context.Background(), podman, "libkrun")
+	err := PreflightRuntime(context.Background(), PodmanExec{Binary: podman}, "libkrun")
 	if err == nil {
 		t.Fatal("PreflightRuntime(libkrun) = nil, want the missing-binary failure")
 	}
@@ -416,12 +416,12 @@ func TestPreflightRuntimeAsksPodmanForTheNormalizedName(t *testing.T) {
 // host that has it, the binary check still has to pass first, so assert the
 // error names one of the two gates rather than skipping.
 func TestPreflightRuntimeKataFailsClosedWithoutKVM(t *testing.T) {
-	if kvmAccessible() == nil {
+	if kvmAccessible(context.Background(), PodmanExec{}) == nil {
 		t.Skip("/dev/kvm is usable on this host; the KVM failure path cannot be exercised")
 	}
 	kata := fakeRuntimeBinary(t, "kata-runtime", "kata-runtime : 3.2.0")
 	podman := fakePodmanResolving(t, "kata", kata)
-	err := PreflightRuntime(context.Background(), podman, "kata")
+	err := PreflightRuntime(context.Background(), PodmanExec{Binary: podman}, "kata")
 	if err == nil {
 		t.Fatal("PreflightRuntime(kata) without KVM = nil, want fail-closed")
 	}
@@ -436,12 +436,12 @@ func TestPreflightRuntimeKataFailsClosedWithoutKVM(t *testing.T) {
 // ADR names untested for krun. Here the resolved binary exists and reports
 // +LIBKRUN, so KVM is the only thing left to fail on.
 func TestPreflightRuntimeKrunFailsClosedWithoutKVM(t *testing.T) {
-	if kvmAccessible() == nil {
+	if kvmAccessible(context.Background(), PodmanExec{}) == nil {
 		t.Skip("/dev/kvm is usable on this host; the KVM failure path cannot be exercised")
 	}
 	krun := fakeRuntimeBinary(t, "krun", "crun version 1.14 +LIBKRUN")
 	podman := fakePodmanResolving(t, "krun", krun)
-	err := PreflightRuntime(context.Background(), podman, "krun")
+	err := PreflightRuntime(context.Background(), PodmanExec{Binary: podman}, "krun")
 	if err == nil {
 		t.Fatal("PreflightRuntime(krun) without KVM = nil, want fail-closed")
 	}
@@ -466,7 +466,7 @@ func TestResolveRuntimePathDefaultsPodmanBinary(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	got, err := resolveRuntimePath(context.Background(), "", "crun")
+	got, err := resolveRuntimePath(context.Background(), PodmanExec{}, "crun")
 	if err != nil {
 		t.Fatalf("resolveRuntimePath with an empty podman binary = %v, want the PATH default to be used", err)
 	}
@@ -483,7 +483,7 @@ func TestVerifyKrunLibkrun(t *testing.T) {
 	ctx := context.Background()
 	t.Run("plain crun is rejected", func(t *testing.T) {
 		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14\ncommit: abc\nspec: 1.0.0\n+SYSTEMD +SELINUX +CAP +SECCOMP")
-		err := verifyKrunLibkrun(ctx, bin)
+		err := verifyKrunLibkrun(ctx, PodmanExec{}, bin)
 		if err == nil {
 			t.Fatal("a crun build WITHOUT +LIBKRUN was accepted — it would run as a shared-kernel container")
 		}
@@ -493,18 +493,18 @@ func TestVerifyKrunLibkrun(t *testing.T) {
 	})
 	t.Run("a real libkrun build is accepted", func(t *testing.T) {
 		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14\n+SYSTEMD +SELINUX +CAP +SECCOMP +LIBKRUN +WASM")
-		if err := verifyKrunLibkrun(ctx, bin); err != nil {
+		if err := verifyKrunLibkrun(ctx, PodmanExec{}, bin); err != nil {
 			t.Errorf("verifyKrunLibkrun with +LIBKRUN = %v, want nil", err)
 		}
 	})
 	t.Run("banner case does not matter", func(t *testing.T) {
 		bin := fakeRuntimeBinary(t, "krun", "crun version 1.14 +libkrun")
-		if err := verifyKrunLibkrun(ctx, bin); err != nil {
+		if err := verifyKrunLibkrun(ctx, PodmanExec{}, bin); err != nil {
 			t.Errorf("verifyKrunLibkrun with a lowercase banner = %v, want nil (the check is case-insensitive)", err)
 		}
 	})
 	t.Run("an unrunnable binary fails closed", func(t *testing.T) {
-		if err := verifyKrunLibkrun(ctx, filepath.Join(t.TempDir(), "nope")); err == nil {
+		if err := verifyKrunLibkrun(ctx, PodmanExec{}, filepath.Join(t.TempDir(), "nope")); err == nil {
 			t.Error("verifyKrunLibkrun on a missing binary = nil, want an error")
 		}
 	})
@@ -524,7 +524,7 @@ func TestContainerKataRuntime(t *testing.T) {
 	if _, err := exec.LookPath("kata-runtime"); err != nil {
 		t.Skip("kata-runtime not available")
 	}
-	if err := kvmAccessible(); err != nil {
+	if err := kvmAccessible(context.Background(), PodmanExec{}); err != nil {
 		t.Skipf("/dev/kvm not accessible: %v", err)
 	}
 	image := testImage()

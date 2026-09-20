@@ -959,7 +959,9 @@ func persistRoundCapPartial(session *LogSession, res agentcore.Result) {
 //     cost_ceiling failure class fires for free-form tasks exactly as it
 //     already does for structured-output ones. (With a declared OutputSchema
 //     agentcore returns the sentinel itself and Execute errors before reaching
-//     here — no double handling.) The reason carries the audit facts
+//     here — no double handling.) The message prefers the guard's own
+//     sentence (BudgetStopReason — which ceiling fired, the count, the limit)
+//     over a cost-only reconstruction, and carries the audit facts
 //     (budgetStopFacts, #1532): a ceiling that fired after every declared
 //     critical action executed is a deliverable that most likely landed with
 //     its finish checks skipped, and the DLQ must not describe it as a run
@@ -982,8 +984,16 @@ func persistRoundCapPartial(session *LogSession, res agentcore.Result) {
 func scheduledTerminalError(ctx context.Context, res agentcore.Result) error {
 	switch {
 	case res.StoppedByBudget:
-		return fmt.Errorf("%w: run stopped after $%.4f spent, before it finished. %s",
-			agentcore.ErrCostCeilingExceeded, res.Usage.CostUSD, budgetStopFacts(res))
+		// Prefer the guard's own sentence — it names WHICH ceiling fired and
+		// the numbers — over a cost-only reconstruction, which made a
+		// token-ceiling stop read as a cost message against the deployment
+		// ceiling. Results from before the field existed (and any path that
+		// left it empty) keep the historic wording.
+		reason := strings.TrimSpace(res.BudgetStopReason)
+		if reason == "" {
+			reason = fmt.Sprintf("run stopped after $%.4f spent, before it finished.", res.Usage.CostUSD)
+		}
+		return fmt.Errorf("%w: %s %s", agentcore.ErrCostCeilingExceeded, reason, budgetStopFacts(res))
 	case res.Cancelled:
 		if cause := context.Cause(ctx); cause != nil {
 			return fmt.Errorf("%w: %w", agentcore.ErrRunCancelled, cause)

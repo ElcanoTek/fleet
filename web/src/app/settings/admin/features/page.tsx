@@ -583,6 +583,7 @@ function UrlControl({
   return (
     <>
       <input
+        id={`input-${setting.key}`}
         type="url"
         value={value}
         disabled={busy}
@@ -686,6 +687,7 @@ function IntControl({
     <span className="flex flex-col items-end gap-[0.3rem] @max-[34rem]:items-start">
       <span className="flex flex-wrap items-center gap-[0.45rem]">
         <input
+          id={`input-${setting.key}`}
           type="number"
           inputMode={setting.kind === "float" ? "decimal" : "numeric"}
           step={setting.kind === "float" ? "0.01" : undefined}

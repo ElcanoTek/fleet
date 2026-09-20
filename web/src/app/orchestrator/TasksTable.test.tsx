@@ -451,6 +451,33 @@ describe("TasksTable zero-row states", () => {
     renderEmpty({});
     expect(screen.getAllByText("No tasks created yet").length).toBeGreaterThan(0);
   });
+
+  it("says 'no match' instead of 'No tasks created yet' when a filter is set", () => {
+    // The operator who just deleted the only task matching their search is
+    // told the truth — the filters matched nothing — not that the account
+    // holding hundreds of other tasks is empty.
+    renderEmpty({ filters: { ...FILTERS, status: "running" } });
+    expect(screen.getAllByTestId("tasks-no-match").length).toBeGreaterThan(0);
+    expect(screen.queryByText("No tasks created yet")).toBeNull();
+  });
+
+  it("offers the wired Clear filters affordance from the no-match state", () => {
+    const onClearFilters = vi.fn();
+    renderEmpty({ filters: { ...FILTERS, query: "qa-smoke" }, onClearFilters });
+    // One in the filter bar, one in the no-match line — same parent handler.
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear filters" })[0]);
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+  });
+
+  it("still lets error and loading win over the no-match state", () => {
+    renderEmpty({ filters: { ...FILTERS, status: "running" }, error: "HTTP 503" });
+    expect(screen.getAllByTestId("tasks-load-error").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("tasks-no-match")).toBeNull();
+    cleanup();
+    renderEmpty({ filters: { ...FILTERS, status: "running" }, loading: true });
+    expect(screen.getAllByTestId("tasks-loading").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("tasks-no-match")).toBeNull();
+  });
 });
 
 describe("TasksTable Clear filters", () => {
@@ -650,5 +677,70 @@ describe("TasksTable tags", () => {
   it("renders no chip row for an untagged task", () => {
     renderTags({ tasks: [{ ...tagged, tags: undefined }] });
     expect(screen.queryByLabelText(/^Filter by tag /)).toBeNull();
+  });
+});
+
+// ── Per-row control accessible names ─────────────────────────────────────
+// A non-visual user heard "View task 8f3c8ab1" for every control on the row:
+// the aria-labels were built from the raw id, and the title the row displays
+// was visual-only. Destructive controls (Stop/Delete) are the worst case —
+// confirming the right task requires knowing which task it is. Each control's
+// name now carries the same title-or-prompt label a sighted operator reads,
+// plus the short id to disambiguate same-titled jobs.
+describe("TasksTable control accessible names", () => {
+  const titled: Task = {
+    id: "8f3c8ab1-2222-3333-4444-555555555555",
+    title: "qa-smoke-2026-09-20",
+    prompt: "check everything",
+    status: "scheduled",
+  };
+
+  function renderControls(overrides: Partial<TasksTableProps> = {}) {
+    return render(
+      <TasksTable
+        tasks={[titled]}
+        total={1}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={() => {}}
+        onRunNow={() => {}}
+        onEdit={() => {}}
+        onStop={() => {}}
+        onDelete={() => {}}
+        {...overrides}
+      />,
+    );
+  }
+
+  it("names every per-row control by the task's title plus the short id", () => {
+    renderControls();
+    const names = [
+      /^View task qa-smoke-2026-09-20 \(8f3c8ab1\)$/,
+      /^Run task qa-smoke-2026-09-20 \(8f3c8ab1\) now$/,
+      /^Edit task qa-smoke-2026-09-20 \(8f3c8ab1\)$/,
+      /^Stop task qa-smoke-2026-09-20 \(8f3c8ab1\)$/,
+      /^Delete task qa-smoke-2026-09-20 \(8f3c8ab1\)$/,
+    ];
+    for (const name of names) {
+      // Desktop row and phone card both render the control (CSS picks one).
+      expect(screen.getAllByRole("button", { name }).length).toBe(2);
+    }
+  });
+
+  it("falls back to the short id for an untitled task", () => {
+    renderControls({ tasks: [{ ...titled, title: undefined, prompt: "" }] });
+    expect(screen.getAllByRole("button", { name: "View task 8f3c8ab1" }).length).toBe(2);
+  });
+
+  it("bounds a very long title in the accessible name", () => {
+    renderControls({ tasks: [{ ...titled, title: "x".repeat(500) }] });
+    const [view] = screen.getAllByRole("button", { name: /^View task / });
+    // 10 ("View task ") + 61 (truncate at 60 + ellipsis) + 11 (" (8f3c8ab1)")
+    // is the worst case; anything wildly larger means the bound was lost.
+    expect(view.getAttribute("aria-label")!.length).toBeLessThan(120);
   });
 });

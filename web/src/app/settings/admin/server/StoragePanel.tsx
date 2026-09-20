@@ -239,9 +239,13 @@ export function StoragePanel() {
               </span>
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]">
+              <label
+                className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
+                htmlFor="cleanupDays"
+              >
                 Idle more than
                 <input
+                  id="cleanupDays"
                   type="number"
                   min={1}
                   value={days}
@@ -250,12 +254,28 @@ export function StoragePanel() {
                 />
                 days
               </label>
-              <label className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]">
-                <input type="checkbox" checked={deleteChats} onChange={(e) => setDeleteChats(e.target.checked)} />
+              <label
+                className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
+                htmlFor="cleanupDeleteChats"
+              >
+                <input
+                  id="cleanupDeleteChats"
+                  type="checkbox"
+                  checked={deleteChats}
+                  onChange={(e) => setDeleteChats(e.target.checked)}
+                />
                 Delete unpinned chats
               </label>
-              <label className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]">
-                <input type="checkbox" checked={sweepFiles} onChange={(e) => setSweepFiles(e.target.checked)} />
+              <label
+                className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
+                htmlFor="cleanupSweepFiles"
+              >
+                <input
+                  id="cleanupSweepFiles"
+                  type="checkbox"
+                  checked={sweepFiles}
+                  onChange={(e) => setSweepFiles(e.target.checked)}
+                />
                 Sweep aged upload files
               </label>
               {/* Cleanup deletes chats and files for good, so it takes the
