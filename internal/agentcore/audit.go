@@ -68,8 +68,19 @@ var pagesTransportPairs = [][2]string{
 	{"deploy_page", "deploy_page_upload"},
 }
 
-// transportAliasSatisfies reports whether committedSuffix and executedSuffix
-// are a configured same-write transport pair. Bidirectional.
+// SCOPE RULE for alias discharge — all four must hold, else the obligation
+// stays pending until the model re-audits (fail closed):
+//
+//	(a) the pair is declared in critical_tool_transport_aliases (or a pages
+//	    pair the bundle already gated as critical);
+//	(b) the committed inline call was REJECTED by the server (tool error,
+//	    nothing written);
+//	(c) the alias call carries the SAME identity key names with the SAME
+//	    values as that rejected call;
+//	(d) the record set is identical (no subsets).
+//
+// Subsets, overlapping/transitive groups, different key names (slug vs
+// page_id), and partial discharge are deliberately not handled.
 func transportAliasSatisfies(committedSuffix, executedSuffix string) bool {
 	if committedSuffix == "" || executedSuffix == "" || committedSuffix == executedSuffix {
 		return false

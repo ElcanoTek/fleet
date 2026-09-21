@@ -156,20 +156,12 @@ func installTransportAliases(p AgentPolicy, criticalSeen map[string]bool) (map[s
 		if k == "" {
 			continue
 		}
-		family := []string{k}
 		for _, v := range vs {
 			v = strings.TrimSpace(v)
 			if v == "" || v == k {
 				continue
 			}
-			family = append(family, v)
-		}
-		// One declaration is an equivalence class: foo: [foo_upload, foo_file]
-		// makes every pair mutually reachable, not only edges through foo.
-		for i := 0; i < len(family); i++ {
-			for j := i + 1; j < len(family); j++ {
-				addAlias(family[i], family[j])
-			}
+			addAlias(k, v)
 		}
 	}
 	// A bundle that gates BOTH transports of a pages write has already

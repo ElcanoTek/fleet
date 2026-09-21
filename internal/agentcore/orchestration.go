@@ -116,6 +116,11 @@ type orchestrationState struct {
 	// loop endlessly under one audit envelope.
 	criticalToolFailureAttempts map[string]int
 
+	// rejectedCriticalCalls are post-audit tool errors (nothing written).
+	// Alias discharge requires a matching reject of the committed tool
+	// (SCOPE RULE (b)+(c)+(d)).
+	rejectedCriticalCalls []rejectedCriticalCall
+
 	// ── repeat-call loop guard (both modes) ──
 	lastCallKey     string
 	lastCallRepeats int
@@ -216,7 +221,13 @@ type orchestrationState struct {
 type pendingCriticalAction struct {
 	toolName  string
 	argsHash  string
-	recordSet string // canonical resource identity (deal_ids / deal_id / slug)
+	recordSet string // identityMapKey of identityKeyValues (key names included)
+}
+
+// rejectedCriticalCall is a post-audit tool error used by SCOPE RULE (b).
+type rejectedCriticalCall struct {
+	toolName string
+	ident    map[string]string
 }
 
 // ApprovalStager is the narrow interface the orchestration layer uses to stage
@@ -1111,6 +1122,10 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			o.criticalToolFailureAttempts[key]++
 			log.Printf("Critical action failed: %s (attempt %d/%d for these args)",
 				toolName, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
+			o.rejectedCriticalCalls = append(o.rejectedCriticalCalls, rejectedCriticalCall{
+				toolName: toolName,
+				ident:    identityKeyValues(rawInput),
+			})
 		}
 
 		// Consume the audit token only when no committed work remains. With no

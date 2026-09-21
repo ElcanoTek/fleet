@@ -156,37 +156,22 @@ func (c *typedCommitment) allowsDeal(dealID string) bool {
 	}
 }
 
-// allowsResource reports whether a TRANSPORT-ALIAS call targets a record set
-// that is a subset of this commitment's bound ids. Exact-name and
-// critical_tool_substitutes calls skip this (existing semantics). An unbound
-// commitment is one tool-level obligation, so any alias call may ride it.
-func (c *typedCommitment) allowsResource(toolName, rawInput string) bool {
+// aliasScopeOK reports whether an alias call may ride this commitment under
+// the SCOPE RULE in transportAliasSatisfies. Exact-name and
+// critical_tool_substitutes skip it.
+func (o *orchestrationState) aliasScopeOK(c *typedCommitment, toolName, rawInput string) bool {
 	execSuffix := criticalSuffixFor(toolName)
 	if toolName == c.tool || !transportAliasSatisfies(c.suffix, execSuffix) {
 		return true
 	}
-	if !c.hasDealBinding() {
-		return true
-	}
-	return c.coversCallRecords(rawInput)
-}
-
-// coversCallRecords reports whether every record id the call names is in this
-// commitment's remaining bound set (a subset, so a partial batch may resume).
-func (c *typedCommitment) coversCallRecords(rawInput string) bool {
-	if ids, ok := batchDealIDs(rawInput); ok {
-		if len(ids) == 0 {
-			return false
+	want := identityKeyValues(rawInput)
+	for _, r := range o.rejectedCriticalCalls {
+		if r.toolName != c.tool {
+			continue
 		}
-		for _, id := range ids {
-			if !c.allowsDeal(id) {
-				return false
-			}
+		if identityMapsEqual(r.ident, want) {
+			return true
 		}
-		return true
-	}
-	if id := callDealID(rawInput); id != "" {
-		return c.allowsDeal(id)
 	}
 	return false
 }
@@ -211,33 +196,6 @@ func (c *typedCommitment) supersedeableBy(fresh *typedCommitment) bool {
 	}
 	sameShape := c.hasDealBinding() == fresh.hasDealBinding() && (!fresh.hasDealBinding() || c.sameDealSet(fresh))
 	return sameShape || c.correctsRefusal(fresh)
-}
-
-// coalesceSameEnvelopeAlias reports whether tc is the same write (transport
-// alias, same record set) as an entry already registered in this envelope.
-// Exact-name repeats are left alone so multi-record creation can declare
-// several unbound same-tool commitments at once.
-func (o *orchestrationState) coalesceSameEnvelopeAlias(preExisting int, tc *typedCommitment) bool {
-	for i := preExisting; i < len(o.typedCommitments); i++ {
-		old := o.typedCommitments[i]
-		if old.remaining <= 0 {
-			continue
-		}
-		if old.tool == tc.tool {
-			continue
-		}
-		if !sameToolServer(old.tool, tc.tool) || !transportAliasSatisfies(old.suffix, tc.suffix) {
-			continue
-		}
-		if old.hasDealBinding() != tc.hasDealBinding() {
-			continue
-		}
-		if tc.hasDealBinding() && !old.sameDealSet(tc) {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 // sameDealSet reports whether two commitments target the identical record
@@ -380,38 +338,74 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 	return ids, true
 }
 
-// pendingRecordSet is the resource identity used to pair a blocked inline
-// call with a later success on its transport alias. Alias transports do not
-// share a JSON envelope (inline content vs. a workspace-file reference), so
-// argsHash cannot identify the same write. Batch deal_ids win, then a single
-// record id, then any configured identity key (slug for pages pairs, plus
-// bundle-declared keys).
-func pendingRecordSet(rawInput string) string {
-	if ids, ok := batchDealIDs(rawInput); ok {
-		sort.Strings(ids)
-		return "ids:" + strings.Join(ids, ",")
-	}
-	if id := callDealID(rawInput); id != "" {
-		return "id:" + id
-	}
-	args, err := unmarshalArgs(rawInput)
-	if err != nil {
-		return ""
-	}
-	for _, key := range identityArgKeys() {
-		if v, ok := args[key]; ok {
-			if s := normalizeDealID(v); s != "" {
-				return key + ":" + s
-			}
-		}
-	}
-	return ""
-}
-
 func identityArgKeys() []string {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
 	return append([]string(nil), activeIdentityKeys...)
+}
+
+// identityKeyValues is the SCOPE RULE (c)+(d) identity: every present
+// record-id argument key and its value. Key names are part of the identity
+// (slug≠page_id). deal_ids is the sorted join, so a subset is a different map.
+func identityKeyValues(rawInput string) map[string]string {
+	args, err := unmarshalArgs(rawInput)
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	extra := identityArgKeys()
+	keys := make([]string, 0, 6+len(extra))
+	keys = append(keys, "deal_id", "internal_deal_id", "curated_id", "curated_deal_id", "rtd_id", "slug")
+	keys = append(keys, extra...)
+	seen := map[string]bool{}
+	for _, key := range keys {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if v, ok := args[key]; ok {
+			if s := normalizeDealID(v); s != "" {
+				out[key] = s
+			}
+		}
+	}
+	if ids, ok := batchDealIDs(rawInput); ok {
+		sort.Strings(ids)
+		out["deal_ids"] = strings.Join(ids, ",")
+	}
+	return out
+}
+
+func identityMapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func identityMapKey(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+m[k])
+	}
+	return strings.Join(parts, ",")
+}
+
+func pendingRecordSet(rawInput string) string {
+	return identityMapKey(identityKeyValues(rawInput))
 }
 
 // commitmentIdentity is the bound record set for a typed entry. The
@@ -619,6 +613,7 @@ func (o *orchestrationState) resetBatchApprovals() {
 	// Discharge ledger is envelope-scoped too: a prior transport's
 	// already-done record must not hide a fresh alias commitment.
 	o.dischargedDeals = make(map[string]map[string]bool)
+	o.rejectedCriticalCalls = nil
 }
 
 // registerCommittedActionsTyped records commitments from the typed
@@ -733,16 +728,6 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			tc.dealID = dealID
 		}
 		tc.identity = commitmentIdentity(dealIDs, dealID)
-		if o.coalesceSameEnvelopeAlias(preExisting, tc) {
-			if o.committedCriticalActions[suffix] >= n {
-				o.committedCriticalActions[suffix] -= n
-			} else {
-				o.committedCriticalActions[suffix] = 0
-			}
-			registered -= n
-			log.Printf("Enforcement: coalesced %q into an already-registered transport alias (same write, same record set)", tool)
-			continue
-		}
 		// Supersede any OUTSTANDING prior-envelope commitment with the SAME
 		// full tool name AND SAME record-set. A re-audit that corrects the
 		// values_digest (same tool + same records, different digest) registers
@@ -843,7 +828,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 // the same record.
 func (o *orchestrationState) typedStillOwes(toolName, dealID, callDigest, rawInput string) bool {
 	for _, c := range o.typedCommitments {
-		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) || !c.allowsResource(toolName, rawInput) {
+		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) || !o.aliasScopeOK(c, toolName, rawInput) {
 			continue
 		}
 		if c.digest != "" && c.digest != callDigest {
@@ -859,7 +844,7 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest, raw
 	chosenIdx, best := -1, 0
 	chosenDigestMatch := false
 	for i, c := range o.typedCommitments {
-		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) || !c.allowsResource(toolName, rawInput) {
+		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) || !o.aliasScopeOK(c, toolName, rawInput) {
 			continue
 		}
 		// A nonempty digest that does not match this call is a different
@@ -1080,7 +1065,7 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		if c.remaining <= 0 || !c.nameMatches(toolName) {
 			continue
 		}
-		if !c.allowsResource(toolName, rawInput) {
+		if !o.aliasScopeOK(c, toolName, rawInput) {
 			refusedBy = append(refusedBy, c)
 			continue
 		}

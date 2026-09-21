@@ -6,58 +6,45 @@ A scheduled `confirm_audit` binds each typed `critical_actions` entry to a full
 server-qualified tool name. Finish is refused until every declared action
 succeeds. On 2026-09-21, task `<task>` committed to
 `mcp_pages_update_page_data`, had the inline call rejected (payload too large),
-then published the same data through `mcp_pages_update_page_data_upload`
-(live version for slug `<slug>`). Enforcement still demanded the inline name, and the only
-exit was a self-audit abort recorded as a run ERROR.
+then published the same data through `mcp_pages_update_page_data_upload`.
+Enforcement still demanded the inline name; the only exit was a self-audit
+abort recorded as a run ERROR.
 
-This change treats a small, bundle-gated set of **same-write, different-transport**
-pairs as one obligation:
+**SCOPE RULE** — an alias discharge happens only when all four hold:
 
-- `update_page_data` / `update_page_data_upload`
-- `deploy_page` / `deploy_page_upload`
+- **(a)** the pair is declared in `critical_tool_transport_aliases` (pages
+  pairs also count when the bundle already listed both names as critical);
+- **(b)** the committed inline call was **rejected by the server** (tool error,
+  nothing written);
+- **(c)** the alias call carries the **same identity key names** with the
+  **same values** as that rejected call;
+- **(d)** the record set is **identical** (no subsets).
 
-A pair is enabled only when the installed `critical_tools` list already contains
-**both** names (the bundle opted both into the gate). Extra pairs are declared
-only in `agent_policy.critical_tool_transport_aliases`. One declaration is an
-equivalence class (`foo: [foo_upload, foo_file]` makes every pair mutually
-reachable). `critical_tool_substitutes` is a different contract and is never
-treated as a transport alias.
-
-Identity for alias discharge is the **record-id arguments** the bundle already
-uses for commitments (`deal_id` / `deal_ids`, plus `slug` and any
-`critical_tool_identity_keys` on the *call*). The confirm_audit `identifier`
-field stays log-only. A successful alias call discharges only when its record
-set is a subset of the committed set; a partial batch resumes the same way as
-the inline path. An unbound commitment (no record ids) is one tool-level
-obligation, which is the original pages incident.
-
-When one `confirm_audit` envelope lists both transport names for the same
-record set, they coalesce to **one** obligation.
-
-The alias does **not** change which tools are critical.
+Anything else stays pending exactly as before until the model re-audits
+(fail closed). The alias does not change which tools are critical.
+`critical_tool_substitutes` is a different contract.
 
 ## Deviations
 
 None from the incident fix. Codex asked not to infer every `_upload` suffix
 and not to make the pages pairs unconditional engine policy; both are honored.
 
-## Deliberately not handled
+## Deliberately not handled (requires re-audit)
 
-These still require a re-audit (or a later, narrower change):
-
-- Two unbound writes to different pages in one envelope, distinguished only by
-  the log-only `identifier` or by call-side `slug` that the audit entry does
-  not carry as `deal_id` / `deal_ids`. The engine cannot tell them apart
-  without using `identifier` as authorization identity, which it does not.
-- Different value digests on the two transports of the same record set in one
-  envelope. They coalesce to one obligation; a digest-bound sibling is not
-  kept.
-- Treating `critical_tool_substitutes` as transport aliases. Substitutes keep
-  their existing discharge rules.
-- Inferring every `_upload` suffix as an alias. Only declared families match.
+- **Transitive overlapping groups** (`foo: [bar]` and `bar: [baz]`): each
+  declaration is a direct pair only, so `foo` and `baz` stay unrelated — a
+  retry that jumps the gap is blocked until the model re-audits the name it
+  actually used.
+- **Subset re-audit superseding**: after a batch `[A,B]` partially discharges
+  `A`, re-auditing the alias for remaining `[B]` does not retire the old
+  commitment (`sameDealSet` compares the original map); finish still owes `B`
+  until a re-audit of the same full set, or of the exact remaining tool name.
+- **Cross-key canonicalization** (`slug: "home"` vs `page_id: "home"`): key
+  names are part of the identity, so different keys with the same value are
+  not the same write and stay pending until re-audit.
 
 ## Deferred
 
 Bundles that already list both names in `critical_tools` get the pages pairs
-without a YAML change. Bundles that want additional pairs must set
+without a YAML change. Extra pairs must be listed in
 `agent_policy.critical_tool_transport_aliases`; no other pairs are inferred.
