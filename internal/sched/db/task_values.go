@@ -42,10 +42,11 @@ func createdByTaskIDValue(id *uuid.UUID) any {
 // chain as a lost spawn and mass-spawn duplicate successors. Rows born in
 // any other status stay FALSE: live rows settle through the normal spawn on
 // their own terminal transition, and cancelled rows never spawn (the sweep
-// never selects them). Replay re-arms the flag only when no successor
-// exists (see ReplayDeadLetteredTask). Like effective_priority, the column
-// is insert-only here — it is excluded from the upsert/UpdateTaskTx so a
-// status write can never clobber the spawn claim.
+// never selects them). Replay re-arms the flag only when no later
+// occurrence exists in the chain (see ReplayDeadLetteredTask). Like
+// effective_priority, the column is insert-only here — it is excluded
+// from the upsert/UpdateTaskTx so a status write can never clobber the
+// spawn claim.
 func recurrenceSpawnedInsertValue(t *models.Task) bool {
 	for _, s := range models.RecurrenceSpawnTaskStatuses {
 		if t.Status == s {

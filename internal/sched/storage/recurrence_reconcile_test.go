@@ -247,9 +247,9 @@ func TestReconcileRecurrencesDoesNotRespawnBackfilledDeadLetter(t *testing.T) {
 		t.Fatal("setup: backfill must settle the credit")
 	}
 
-	// The lineage already continued: a later success (production shape:
-	// lineage ef49b641 — dead-lettered occurrence, then successes and a live
-	// head). Born-terminal so ITS spawn credit is settled too.
+	// The lineage already continued: a later success (dead-lettered
+	// occurrence, then successes and a live head). Born-terminal so ITS
+	// spawn credit is settled too.
 	started := time.Now().Add(-11 * time.Minute).UTC()
 	completed := time.Now().Add(-10 * time.Minute).UTC()
 	later := &models.Task{

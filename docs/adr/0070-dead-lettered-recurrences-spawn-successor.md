@@ -13,12 +13,11 @@ the next occurrence of a recurring task. The quarantined row awaited
 completion claimed the spawn credit. Cancel still ended the chain; that part
 was right. Dead-letter was treated like cancel.
 
-Production on 2026-09-19 showed the cost. Two daily jobs ("Raptive seller
-view page refresh", lineage `5089a219`; "Rainbarrel page update", lineage
-`6a811210`) were each dead-lettered once — one for a transient upstream
-"Provider returned error", one for "completion verification unresolved"
-after the page had actually been published. No successor row was inserted.
-Nobody noticed for days. A one-off bad day ended a daily job.
+Production on 2026-09-19 showed the cost. Two daily dashboard-refresh jobs
+on a production deployment were each dead-lettered once — one for a
+transient provider error, one for an unresolved completion verification
+after the write had already landed. No successor row was inserted. Nobody
+noticed for days. A one-off bad day ended a daily job.
 
 The same argument was already accepted for ask-pause expiry
 (`storage.ExpirePausedTasks`, #1116) and stranded-wake expiry
@@ -49,11 +48,14 @@ helper it calls) — so both the post-commit path and the reconcile sweep
 agree. `db.GetUnspawnedRecurringTasks` therefore selects `dead_lettered`
 rows as well as `success`/`error`. Cancel still ends the chain.
 
-`ReplayDeadLetteredTask` re-arms `recurrence_spawned` only when no successor
-exists (`NOT EXISTS (SELECT 1 FROM tasks WHERE previous_occurrence_id = $1)`).
-When the DLQ path already spawned, the flag stays `TRUE` so the replayed
+`ReplayDeadLetteredTask` re-arms `recurrence_spawned` only when no later
+occurrence exists in the same chain (same `lineage_id`, or a surviving
+row still pointing at this one via `previous_occurrence_id`, and
+`created_at` newer — retention prunes old rows, so a continued chain
+always has a newer one). When the DLQ path already spawned, or the
+lineage continued some other way, the flag stays `TRUE` so the replayed
 run's completion cannot fork a second parallel chain. A breaker-parked
-chain (no successor) re-arms and continues on replay.
+chain with nothing newer re-arms and continues on replay.
 
 ## Enforcement
 
@@ -65,7 +67,9 @@ chain (no successor) re-arms and continues on replay.
   (`success`, `error`, `dead_lettered`); `db.recurrenceSpawnedInsertValue`
   settles born-terminal rows in that same set.
 - `storage.ReplayDeadLetteredTask` re-arms the spawn credit only when no
-  successor row exists.
+  later occurrence exists in the chain.
+- The DLQ-breaker settle requires `status = dead_lettered` so it cannot
+  clobber a replay that already committed.
 - Migration 071 backfill-settles existing `dead_lettered` rows before it
   widens the unspawned-recurrence index, so the sweep cannot fork a
   pre-upgrade lineage.
@@ -83,7 +87,8 @@ chain (no successor) re-arms and continues on replay.
   a lineage that already continued (a later success, a "run now", a live
   scheduled head) or resurrect a chain parked weeks ago. Chains parked
   **before** the upgrade are not auto-resumed; they continue via replay
-  exactly as today (replay re-arms because they have no successor).
+  exactly as today (replay re-arms because they have no later occurrence
+  in the chain).
 - Two consecutive dead-letters still park the chain. Operators replay to
   continue; that is unchanged for the parked case.
 - Replaying a dead-lettered occurrence that already has a successor re-runs

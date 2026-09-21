@@ -17,8 +17,8 @@
 -- and resurrect long-dead chains. ADR-0070 therefore applies only to
 -- dead-letters that happen AFTER this lands. Pre-upgrade parked chains
 -- continue via replay exactly as today (replay re-arms because they have
--- no successor). Non-recurring DLQ rows are settled too; the flag is inert
--- there (the sweep only selects recurrence <> '').
+-- no later occurrence in the chain). Non-recurring DLQ rows are settled
+-- too; the flag is inert there (the sweep only selects recurrence <> '').
 UPDATE tasks SET recurrence_spawned = TRUE
 WHERE status = 'dead_lettered' AND NOT recurrence_spawned;
 

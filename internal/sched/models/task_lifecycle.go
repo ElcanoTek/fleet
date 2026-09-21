@@ -293,7 +293,7 @@ var TaskLifecycle = []TaskTransition{
 	{TaskStatusPausedAwaitingWake, TaskStatusCancelled, TaskWriterCancel, ""},
 
 	// ── DLQ replay (#253) ───────────────────────────────────────────────
-	{TaskStatusDeadLettered, TaskStatusPending, TaskWriterDLQReplay, "fresh slate: attempts/DLQ columns/SLA artifacts cleared; spawn credit re-armed only when no successor exists"},
+	{TaskStatusDeadLettered, TaskStatusPending, TaskWriterDLQReplay, "fresh slate: attempts/DLQ columns/SLA artifacts cleared; spawn credit re-armed only when no later occurrence exists in the chain"},
 
 	// ── Edits: re-derive the dispatch state within {pending, scheduled} ─
 	{TaskStatusPending, TaskStatusPending, TaskWriterEdit, ""},

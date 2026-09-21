@@ -1674,13 +1674,14 @@ func (s *Storage) MarkBudgetSoftAlert(ctx context.Context, id uuid.UUID, windowS
 // in the dead_lettered state (ErrTaskNotDeadLettered otherwise), mirroring the
 // editability guards on the other operator mutations.
 //
-// Recurrence spawn credit (ADR-0070): re-armed to FALSE only when no successor
-// row exists. If DeadLetterTaskWithContext already spawned the next occurrence,
-// the flag stays TRUE so this replayed run cannot mint a second chain. If the
-// consecutive-dead-letter breaker parked the chain (no successor), replay
-// re-arms and the replayed run's completion continues the schedule — the same
-// "replay is how it continues" semantics as before, scoped to parked chains.
-// Returns the updated task.
+// Recurrence spawn credit (ADR-0070): re-armed to FALSE only when no LATER
+// occurrence exists in the same chain. If DeadLetterTaskWithContext already
+// spawned (or the lineage continued some other way), the flag stays TRUE so
+// this replayed run cannot mint a second chain. Retention may have pruned the
+// immediate successor; a continued chain always has a newer row (pruning
+// removes OLD rows), so created_at ordering survives that. A breaker-parked
+// chain with nothing newer re-arms and the replayed run's completion continues
+// the schedule. Returns the updated task.
 func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -1721,21 +1722,32 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	// error_analysis (it's write-once against status updates), so clear it
 	// explicitly in the same tx rather than through the task struct.
 	//
-	// recurrence_spawned is re-armed ONLY when no successor exists (ADR-0070):
-	// the DLQ path now spawns the next occurrence itself, and a replay of that
-	// row must not let the replayed run's own completion fork a second parallel
-	// chain. A breaker-parked chain (two consecutive dead-letters, no successor)
-	// still re-arms — replay remains how a parked schedule continues. The
-	// EXISTS is against previous_occurrence_id, the same stamp
-	// scheduleNextRecurrence writes on the successor.
+	// recurrence_spawned is re-armed ONLY when no later occurrence exists in
+	// this chain (ADR-0070). Matching solely on previous_occurrence_id is not
+	// durable: CleanupOldRuns / DeleteOldHistory prune OLD rows, so the
+	// immediate successor can vanish while a newer descendant or live head
+	// remains — re-arming then lets the replayed run fork a second chain.
+	// created_at > this row is the durable signal (a continued chain always
+	// has a newer row). lineage_id is the job key; a NULL lineage_id (a
+	// pre-069 row) must not equal every other NULL, so the lineage arm is
+	// skipped and previous_occurrence_id still catches a surviving immediate
+	// child (TEXT, like the other lineage pointers).
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE tasks SET error_analysis = NULL,
+		UPDATE tasks AS t SET error_analysis = NULL,
 		    recurrence_spawned = CASE
-		        WHEN EXISTS (SELECT 1 FROM tasks WHERE previous_occurrence_id = $1)
-		        THEN recurrence_spawned
+		        WHEN EXISTS (
+		            SELECT 1 FROM tasks x
+		            WHERE x.id <> t.id
+		              AND x.created_at > t.created_at
+		              AND (
+		                    (t.lineage_id IS NOT NULL AND x.lineage_id = t.lineage_id)
+		                    OR x.previous_occurrence_id = t.id::text
+		                  )
+		        )
+		        THEN t.recurrence_spawned
 		        ELSE FALSE
 		    END
-		WHERE id = $2`, taskID.String(), taskID); err != nil {
+		WHERE t.id = $1`, taskID); err != nil {
 		return nil, err
 	}
 	task.ErrorAnalysis = nil
@@ -1828,7 +1840,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		}
 		if parked {
 			log.Printf("Recurrence for task %s parked after 2 consecutive dead-lettered occurrences; replay to continue", task.ID)
-			s.settleRecurrenceSpawn(ctx, task.ID)
+			s.settleDeadLetteredRecurrenceSpawn(ctx, task.ID)
 			return false
 		}
 	}
@@ -1932,15 +1944,29 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 }
 
 // settleRecurrenceSpawn marks a completing occurrence's successor question
-// resolved WITHOUT spawning (#1116): the chain legitimately ended, its
-// definition is permanently unspawnable, or the consecutive-dead-letter
-// breaker parked it (ADR-0070). Keeps the reconciliation sweep from
-// re-driving a spawn that must never (or can never) happen. Best-effort: on a
-// write failure the flag stays FALSE and the sweep simply re-evaluates the same
-// end condition next tick — idempotent either way.
+// resolved WITHOUT spawning (#1116): the chain legitimately ended, or its
+// definition is permanently unspawnable. Unguarded on purpose: those callers
+// run against success/error (or a still-terminal invalid definition), which
+// ReplayDeadLetteredTask cannot touch. Best-effort: on a write failure the
+// flag stays FALSE and the sweep simply re-evaluates the same end condition
+// next tick — idempotent either way.
 func (s *Storage) settleRecurrenceSpawn(ctx context.Context, taskID uuid.UUID) {
 	if _, err := s.db.Conn().ExecContext(ctx,
 		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, taskID); err != nil {
+		log.Printf("Failed to settle recurrence spawn for task %s: %v", taskID, err)
+	}
+}
+
+// settleDeadLetteredRecurrenceSpawn is the DLQ-breaker settle (ADR-0070). It
+// requires the row still be dead_lettered so an operator replay that already
+// committed (status=pending, credit re-armed) cannot be clobbered back to
+// TRUE — that would make the replayed run's completion a no-op spawn and
+// leave the parked chain dead. Other settleRecurrenceSpawn call sites stay
+// unguarded (see that comment).
+func (s *Storage) settleDeadLetteredRecurrenceSpawn(ctx context.Context, taskID uuid.UUID) {
+	if _, err := s.db.Conn().ExecContext(ctx,
+		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1 AND status = $2`,
+		taskID, string(models.TaskStatusDeadLettered)); err != nil {
 		log.Printf("Failed to settle recurrence spawn for task %s: %v", taskID, err)
 	}
 }
