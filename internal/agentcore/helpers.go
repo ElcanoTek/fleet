@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -113,8 +114,23 @@ func emailDedupKey(rawInput string) string {
 }
 
 // sendEmailFingerprint builds a semantic fingerprint from normalized
-// recipients/subject/body. Returns ok=false when the args lack the fields the
-// fingerprint needs.
+// recipients/subject/body and the attachment set. Returns ok=false when the
+// args lack the fields the fingerprint needs.
+//
+// Attachments are part of the identity on purpose. A production run sent a
+// weekly report whose first send failed on an attachment path, then sent the
+// same body WITHOUT the CSV (queued), then retried WITH the CSV — and the guard
+// suppressed that corrective resend as a duplicate, so the client got the
+// report without its deliverable and the run dead-lettered on verification.
+// An email that carries a file is not the same email as one that does not.
+// Attachments are keyed by their cleaned path (case and directories preserved,
+// sorted), and inline attachments additionally by the content id the body
+// references them through: two workspace files that differ only by directory
+// or case can hold entirely different bytes, and an inline image re-sent under
+// a corrected cid is a materially different email. The guard therefore errs
+// toward letting a differently-referenced attachment send rather than
+// silently suppressing a corrective resend — a byte-identical loop still
+// dedupes exactly as before.
 func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 	toEmails := parseRecipientArg(args["to_email"])
 	if len(toEmails) == 0 {
@@ -144,8 +160,73 @@ func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 		"bcc=" + strings.Join(bccEmails, ","),
 		"subject=" + strings.ToLower(subject),
 		bodyReference,
+		"attachments=" + joinIdentities(attachmentNames(args["attachments"])),
+		"inline=" + joinIdentities(attachmentNames(args["inline_attachments"])),
 	}, "|")
 	return hashString(fingerprintSource), true
+}
+
+// joinIdentities joins the (already per-component hashed) identities; the
+// entries are fixed-width hex, so the list delimiter can never be forged by
+// path or cid content.
+func joinIdentities(ids []string) string {
+	return strings.Join(ids, ",")
+}
+
+// attachmentNames normalizes a send_email attachments argument into a sorted
+// list of identities. The wire shape is a list of objects with a "path" key
+// (the form tools.MaterializeAttachmentPaths consumes) and, for inline
+// attachments, a "cid" or "content_id"; bare strings and a single string are
+// accepted too, since models emit both. The identity is the cleaned path with
+// case and directory components intact (files that differ only there can hold
+// different bytes), prefixed by the content id when one is present (the body's
+// cid: reference decides whether the recipient sees the image at all).
+func attachmentNames(value interface{}) []string {
+	type entry struct{ path, cid string }
+	var raw []entry
+	switch typed := value.(type) {
+	case string:
+		raw = []entry{{path: typed}}
+	case []interface{}:
+		for _, item := range typed {
+			switch e := item.(type) {
+			case string:
+				raw = append(raw, entry{path: e})
+			case map[string]interface{}:
+				p, _ := e["path"].(string)
+				if p == "" {
+					// The inline shape also accepts the "file" alias
+					// (httpapi expandCidImagesToDataURLs reads both).
+					p, _ = e["file"].(string)
+				}
+				cid, _ := e["cid"].(string)
+				if cid == "" {
+					cid, _ = e["content_id"].(string)
+				}
+				raw = append(raw, entry{path: p, cid: cid})
+			}
+		}
+	case []string:
+		for _, p := range typed {
+			raw = append(raw, entry{path: p})
+		}
+	}
+	names := make([]string, 0, len(raw))
+	for _, e := range raw {
+		p := strings.TrimSpace(e.path)
+		if p == "" {
+			continue
+		}
+		// Each component is hashed on its own before they are combined, so no
+		// character inside a cid or a path can move the boundary between them.
+		id := hashString(filepath.Clean(p))
+		if cid := strings.TrimSpace(e.cid); cid != "" {
+			id = hashString(cid) + ":" + id
+		}
+		names = append(names, id)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func parseRecipientArg(value interface{}) []string {
