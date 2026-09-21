@@ -49,10 +49,11 @@ endpoint was at 80% uptime on the day of the switch and it costs $2/M in.
 ## What did not change
 
 - The routing pins (`canonicalUpstream`): `openai/` and `anthropic/` were
-  already soft-pinned to their vendors. The table gains an `officialPool` flag
-  so the "default must be strictly pinned or floored" guard can state the third
-  safe shape explicitly — a pool made only of official weights — instead of
-  being loosened. See [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
+  already soft-pinned to their vendors. `officialPoolSlugs` lists the two exact
+  default slugs whose endpoint pools were checked (vendor + cloud resellers of
+  the official weights) so the "default must be strictly pinned or floored"
+  guard can state the third safe shape explicitly — per slug, never per family
+  — instead of being loosened. See [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
 - There is no compiled-in scheduled-task fallback: form-created tasks carry the
   form's pre-filled `deepseek/deepseek-v4.1-flash` as their own pinned
   fallback, and API/imported tasks without one use `FLEET_TASK_FALLBACK_MODEL`

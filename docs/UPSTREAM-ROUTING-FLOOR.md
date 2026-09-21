@@ -41,15 +41,18 @@ floor needed) and then, on 2026-09-21, to **`openai/gpt-5.6-luna-pro`** with
 [MODEL-DEFAULTS.md](MODEL-DEFAULTS.md)). Both are soft-pinned to their vendor
 with cloud resellers of the *official* weights as the only fallbacks (OpenAI →
 Azure, Amazon Bedrock; Anthropic → AWS, Bedrock, Azure, Google), so neither has
-a third-party quantized pool to degrade onto; `canonicalUpstream` records that
-as `officialPool` and the guard test accepts it as the third safe shape. The
+a third-party quantized pool to degrade onto; `officialPoolSlugs` records those
+two exact slugs with the endpoint list that was checked, and the guard test
+accepts a listed slug as the third safe shape — per slug, never per family, so a
+future model in the same family does not inherit the exemption. The
 floor below is unchanged and still applies to the DeepSeek family (production's
 scheduled-task fallback): those slugs remain selectable, and the pin plus the
 floor are what make selecting them safe.
 `TestDefaultCoreModelCannotBeServedAtArbitraryPrecision` asserts the general
-property for both default-tier slugs — strictly pinned, official-weights pool,
-or a serving-precision floor — and `TestOfficialPoolExemptionIsNarrow` keeps the
-exemption off every family with third-party hosts.
+property for both default-tier slugs — strictly pinned, a validated
+official-weights pool, or a serving-precision floor — and
+`TestOfficialPoolExemptionIsNarrow` keeps the exemption off every other slug,
+siblings included.
 
 ## What shipped
 

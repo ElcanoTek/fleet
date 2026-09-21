@@ -122,8 +122,8 @@ func TestDefaultCoreModelCannotBeServedAtArbitraryPrecision(t *testing.T) {
 		if strict {
 			continue // one upstream: no pool, so no precision to vary
 		}
-		if pinFamilyServesOfficialWeightsOnly(slug) {
-			continue // whole pool is the vendor's official weights: nothing to floor
+		if pinServesOfficialWeightsOnly(slug) {
+			continue // this exact slug's whole pool is the vendor's official weights: nothing to floor
 		}
 		if len(p.Quantizations) == 0 {
 			t.Errorf("upstreamPinFor(%q) = %+v: a soft-pinned default over a mixed pool needs a serving-precision floor", slug, p)
@@ -131,19 +131,25 @@ func TestDefaultCoreModelCannotBeServedAtArbitraryPrecision(t *testing.T) {
 	}
 }
 
-// The official-pool exemption is a claim about a family's whole endpoint pool
-// and must stay narrow: only families whose OpenRouter list is the vendor plus
-// its cloud resellers. A family served by third-party quantized hosts (DeepSeek,
-// Z.AI, Moonshot) must never carry it.
+// The official-pool exemption is a claim about one slug's whole endpoint pool
+// and must stay per slug: a sibling in the same family (a future OpenAI model
+// picked up by third-party hosts, or one nobody checked) must not inherit it,
+// and families served by quantized third parties never qualify.
 func TestOfficialPoolExemptionIsNarrow(t *testing.T) {
-	for _, slug := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.2", "moonshotai/kimi-k2.6", "google/gemini-3.8-flash"} {
-		if pinFamilyServesOfficialWeightsOnly(slug) {
-			t.Errorf("%q must not be marked officialPool", slug)
+	for _, slug := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.2", "moonshotai/kimi-k2.6", "google/gemini-3.8-flash",
+		"openai/gpt-5.6-sol", "openai/gpt-6-astra", "anthropic/claude-sonnet-5", "anthropic/claude-opus-4.8"} {
+		if pinServesOfficialWeightsOnly(slug) {
+			t.Errorf("%q must not be exempt: only validated slugs are", slug)
 		}
 	}
-	for _, slug := range []string{"openai/gpt-5.6-luna-pro", "anthropic/claude-opus-5"} {
-		if !pinFamilyServesOfficialWeightsOnly(slug) {
-			t.Errorf("%q should be marked officialPool", slug)
+	for _, slug := range []string{"openai/gpt-5.6-luna-pro", "~openai/gpt-5.6-luna-pro", "anthropic/claude-opus-5"} {
+		if !pinServesOfficialWeightsOnly(slug) {
+			t.Errorf("%q should be exempt (validated endpoint pool)", slug)
+		}
+	}
+	for slug := range officialPoolSlugs {
+		if upstreamPinFor(slug) == nil {
+			t.Errorf("%q is exempt from the floor but has no upstream pin at all", slug)
 		}
 	}
 }
