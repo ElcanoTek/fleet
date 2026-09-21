@@ -122,6 +122,25 @@ type TerminalPolicy interface {
 	TerminalError() error
 }
 
+// RoundFinalTextReceiver is an optional Policy capability for policies that
+// gate on the run's answer. Before CanFinish is consulted at the end of each
+// round, Run hands the policy the closing assistant text of THE ROUND THAT
+// JUST ENDED — computed exactly as the result's FinalText (per-round stream
+// accumulation, the completed response preferred), so the value is provably
+// tied to the round boundary. The transcript does not carry the round's text
+// yet (drivers persist the completed response only after Run returns), and a
+// textless round MUST yield "" — a policy that falls back to earlier rounds'
+// text would combine a rejected draft with the current round's evidence.
+//
+// Scope note: for tasks with an output schema this is the round's free-form
+// closing text. The terminal structured-output phase (completeRun) runs AFTER
+// the finish gates and replaces the persisted FinalText with the schema-valid
+// JSON — the gates never see that JSON, and the JSON itself is validated
+// against the schema, not re-judged by the gates.
+type RoundFinalTextReceiver interface {
+	SetRoundFinalText(text string)
+}
+
 // Note is the minimal injection shape for the admin-curated knowledge base
 // (the full model lives in internal/sched). It carries only what the prompt
 // assembly needs.

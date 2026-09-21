@@ -79,7 +79,7 @@ func TestRunEndOfRunVerifier_RecordsAuxUsage(t *testing.T) {
 	model := &itMockModel{generateText: `{"missing_actions": [], "reasoning": "complete"}`}
 	a := &Agent{fallbackModel: model, logSession: NewLogSession()}
 
-	missing, err := a.runEndOfRunVerifier(context.Background(), "send the report", nil)
+	missing, err := a.runEndOfRunVerifier(context.Background(), "send the report", "", nil)
 	if err != nil {
 		t.Fatalf("runEndOfRunVerifier: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestRunEndOfRunVerifier_RecordsAuxUsage(t *testing.T) {
 func TestWriteLogFile_PersistsAuxUsage(t *testing.T) {
 	model := &itMockModel{generateText: `{"missing_actions": [], "reasoning": "complete"}`}
 	a := &Agent{fallbackModel: model, logSession: NewLogSession()}
-	if _, err := a.runEndOfRunVerifier(context.Background(), "send the report", nil); err != nil {
+	if _, err := a.runEndOfRunVerifier(context.Background(), "send the report", "", nil); err != nil {
 		t.Fatalf("runEndOfRunVerifier: %v", err)
 	}
 

@@ -1,7 +1,12 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
+	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 )
 
 func TestToolResultLooksFailed(t *testing.T) {
@@ -81,5 +86,107 @@ func TestBuildToolExecSummary_FantasyErrorResultsCountAsFailed(t *testing.T) {
 	}
 	if !byName["view_file"] {
 		t.Fatal("ordinary text result must be reported as succeeded")
+	}
+}
+
+// promptCapturingVerifierModel records the verifier prompt so a test can assert
+// exactly what the fallback model was shown, across the real Agent seam.
+type promptCapturingVerifierModel struct {
+	itMockModel
+	prompt string
+}
+
+func (m *promptCapturingVerifierModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	m.prompt = string(raw)
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: `{"missing_actions":[],"reasoning":"The final response reports the outcome and the publish succeeded."}`}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// TestRunEndOfRunVerifierIncludesFinalResponse pins the fix for the production
+// dead-letters: a task step phrased "Report X" is fulfilled in the run's
+// closing assistant message, which the verifier never saw — so it re-demanded
+// the report on every check and a run that did the work and said so still
+// dead-lettered as unverified. The verifier prompt must carry the final
+// response as its own clearly delimited section, exactly as Gate 1 passes it.
+func TestRunEndOfRunVerifierIncludesFinalResponse(t *testing.T) {
+	session := NewLogSession()
+	callID := "c1"
+	session.Messages = []LogMessage{
+		{Role: roleAssistant, ToolCalls: []LogToolCall{{ID: callID, Name: "mcp_pages_publish", Arguments: `{"version":856}`}}},
+		{Role: roleTool, ToolCallID: &callID, Content: `{"published":true,"version":856}`},
+		{Role: roleAssistant, Content: "Report: refreshed to version 856, verified live and published. Coverage window 2026-09-01 through 2026-09-15."},
+	}
+	finalText := latestAssistantText(session)
+	if finalText == "" {
+		t.Fatal("setup: expected a final assistant message")
+	}
+
+	model := &promptCapturingVerifierModel{}
+	a := &Agent{fallbackModel: model, logSession: session}
+	missing, err := a.runEndOfRunVerifier(context.Background(), "Refresh the page and report the outcome", finalText, buildToolExecSummary(session))
+	if err != nil || len(missing) != 0 {
+		t.Fatalf("verifier result: %v, %v", missing, err)
+	}
+	for _, want := range []string{
+		"ORIGINAL TASK",
+		"TOOL EXECUTIONS",
+		"FINAL RESPONSE (the agent's closing message",
+		finalText,
+	} {
+		if !strings.Contains(model.prompt, want) {
+			t.Errorf("verifier prompt missing %q", want)
+		}
+	}
+}
+
+// TestRunEndOfRunVerifierEmptyFinalResponseMarked: when the run left no
+// assistant text, the verifier must see an EXPLICIT marker — a blank section
+// would read as "nothing to check" and a task that demanded a report could
+// never be flagged for the absence.
+func TestRunEndOfRunVerifierEmptyFinalResponseMarked(t *testing.T) {
+	model := &promptCapturingVerifierModel{}
+	a := &Agent{fallbackModel: model, logSession: NewLogSession()}
+	missing, err := a.runEndOfRunVerifier(context.Background(), "Report the outcome", "", nil)
+	if err != nil || len(missing) != 0 {
+		t.Fatalf("verifier result: %v, %v", missing, err)
+	}
+	if !strings.Contains(model.prompt, verifierNoFinalResponseMarker) {
+		t.Errorf("verifier prompt missing the explicit empty marker %q", verifierNoFinalResponseMarker)
+	}
+}
+
+// TestTruncateFinalResponseForVerifier pins the bound: empty/whitespace becomes
+// the explicit marker, a short response passes through unchanged, and an
+// oversized one keeps the head AND the tail with the cut marked — the opening
+// summary and the closing details are both evidence.
+func TestTruncateFinalResponseForVerifier(t *testing.T) {
+	if got := truncateFinalResponseForVerifier(""); got != verifierNoFinalResponseMarker {
+		t.Errorf("empty = %q, want %q", got, verifierNoFinalResponseMarker)
+	}
+	if got := truncateFinalResponseForVerifier("   \n\t "); got != verifierNoFinalResponseMarker {
+		t.Errorf("whitespace-only = %q, want %q", got, verifierNoFinalResponseMarker)
+	}
+	short := "Published version 856; coverage window 2026-09-01..2026-09-15."
+	if got := truncateFinalResponseForVerifier(short); got != short {
+		t.Errorf("short response = %q, want unchanged %q", got, short)
+	}
+	if got := truncateFinalResponseForVerifier("  " + short + "\n"); got != short {
+		t.Errorf("padded response = %q, want trimmed %q", got, short)
+	}
+
+	long := strings.Repeat("a", verifierMaxFinalResponseChars+500)
+	got := truncateFinalResponseForVerifier(long)
+	marker := "\n…[middle truncated for verifier]\n"
+	if len(got) != verifierMaxFinalResponseChars+len(marker) {
+		t.Errorf("truncated length = %d, want %d (%d head+tail + marked cut)", len(got), verifierMaxFinalResponseChars+len(marker), verifierMaxFinalResponseChars)
+	}
+	if !strings.HasPrefix(got, strings.Repeat("a", verifierMaxFinalResponseChars/2)) {
+		t.Error("truncation lost the head")
+	}
+	if !strings.HasSuffix(got, strings.Repeat("a", verifierMaxFinalResponseChars/2)) {
+		t.Error("truncation lost the tail")
+	}
+	if !strings.Contains(got, "middle truncated for verifier") {
+		t.Error("truncation must mark the cut")
 	}
 }

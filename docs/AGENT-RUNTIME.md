@@ -1030,10 +1030,34 @@ wording.
 Scheduled runs layer an extra host-side LLM re-check on top of the shared
 audit/finish enforcement. When the scheduled policy clears a run, the
 `runEndOfRunVerifier` runs on fleet's fallback model (host-side creds — the
-verifier's model call is just another host LLM call) and returns any missing
+verifier's model call is just another host LLM call) over three inputs — the
+original task text, the bounded redacted tool-execution summary, and the run's
+**final response** (the closing assistant message) — and returns any missing
 required actions, which the loop turns into a repair round before it
-is allowed to finish. Repairs are checked again, up to three verifier calls in
-total. A verifier error keeps completion blocked; the third unsuccessful check
+is allowed to finish. The final response matters because a task step phrased
+"report/summarize/state X" is fulfilled in that closing message, not in a tool
+call: without it the verifier can never see the report, re-demands it on every
+check, and a run that did the work and said so still dead-letters as
+`ErrCompletionUnverified`. The core hands the policy the closing text of the
+round that just ended before each `CanFinish` consultation (the
+`RoundFinalTextReceiver` seam), because the session log only gains the closing
+message after `agentcore.Run` returns — and because the value is computed
+per round, a repair round that produces no text yields the explicit marker
+rather than an earlier round's rejected draft. For tasks with an output
+schema this is the round's free-form closing text: the terminal
+structured-output phase runs after the gates and the JSON it persists is
+schema-validated there, not judged by the verifier (the draft is what carries
+the prose the task asked to be reported). The text is bounded (8,000
+chars, head+tail) and presented
+as evidence, never instructions, and when a run leaves no assistant text an
+explicit `(no final response text)` marker stands in so a genuinely missing
+report stays flaggable. Tool-backed deliverables (email send, deal creation,
+page write, file upload, ...) still require their tool call — a prose report
+never substitutes for one. Repairs are checked again, up to three verifier calls in
+total — the cap counts every verification, including the re-check a
+reviewer-forced repair triggers, and a repair that cannot be re-verified
+within the cap ends the run unverified rather than extending it. A verifier
+error keeps completion blocked; the third unsuccessful check
 returns `ErrCompletionUnverified` through the core without asking the model to
 abort. Partial work and completed critical actions remain recorded, and the
 transcript identifies the verification failure without claiming external actions
@@ -1121,7 +1145,12 @@ sends the original task, the agent's final answer/work, and the executed-tool
 summary to the reviewer and asks for a JSON verdict
 (`{"needs_revision", "issues", "reasoning"}`); when the reviewer flags material
 problems, the loop turns the issue list into **one more enforcement round** so
-the agent revises before finishing.
+the agent revises before finishing. That repair invalidates the verifier's
+approval: the reviewer is single-shot (a run is reviewed at most once), but the
+revised answer has not been verified, so the next `CanFinish` re-runs the
+verifier against the repaired round's own closing text before the run may
+finish — counting against the same three-call cap, so a repair that cannot be
+re-verified within it ends the run unverified.
 
 What it is and is **not**, stated plainly (honesty in docs):
 

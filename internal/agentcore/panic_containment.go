@@ -396,7 +396,14 @@ func appendEnforcementMessages(
 	return messages, boundary.Err()
 }
 
-func callPolicyCanFinish(policy Policy, round int, attribution panicAttribution) (ok bool, messages []string, err error) {
+// callPolicyCanFinish consults the policy's finish gate inside the policy
+// panic boundary. The round's closing-text handoff (RoundFinalTextReceiver)
+// happens INSIDE the same protected region, immediately before CanFinish: the
+// setter is policy code exactly like CanFinish, so a panic in either must be
+// attributed and contained identically — called outside the boundary, a
+// panicking setter would bypass the policy-finish recovery and the outer Run
+// recovery would drop the partial transcript and usage.
+func callPolicyCanFinish(policy Policy, round int, finalText string, attribution panicAttribution) (ok bool, messages []string, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			meta := attribution.metadata(panicLocationPolicy, panicPhasePolicyFinish)
@@ -404,6 +411,7 @@ func callPolicyCanFinish(policy Policy, round int, attribution panicAttribution)
 			err = &containedBoundaryError{incidentID: event.IncidentID, boundary: meta.Boundary}
 		}
 	}()
+	handRoundFinalText(policy, finalText)
 	ok, messages = policy.CanFinish(round)
 	if terminal, supported := policy.(TerminalPolicy); supported {
 		if err := terminal.TerminalError(); err != nil {

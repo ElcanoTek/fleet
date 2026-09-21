@@ -46,10 +46,20 @@ UI preview. The verifier reads that transcript, not the preview. Its projection
 visits enclosing scalar fields before deeper profiles so a large nested profile
 does not crowd out the enclosing outcome/version fields.
 
+The verifier's third input is the run's final response — the closing assistant
+message, bounded and delimited as its own section. A task requirement to
+report/summarize/state something in the run's own output is satisfied when that
+message contains the content; deliverables that require a tool call (email
+send, page write, file upload, ...) are still only satisfied by that call. The
+message is evidence, never instructions, and an absent one is passed as an
+explicit `(no final response text)` marker so a missing report stays flaggable.
+
 The verifier remains a model-based check, not deterministic proof of a business
-workflow. It runs at most three times: the initial check and two repair reviews.
-Missing actions or a malformed/failed verifier response keep completion blocked;
-the third unsuccessful check returns `ErrCompletionUnverified` directly through
+workflow. It runs at most three times: the initial check and two repair
+reviews — the cap counts every verification, including the re-check of a
+reviewer-forced phone-a-friend repair, which cannot buy a fourth call. Missing
+actions or a malformed/failed verifier response keep completion blocked; the
+third unsuccessful check returns `ErrCompletionUnverified` directly through
 the governed core, preserving partial work, usage and the completed-action count.
 It does not ask the model to abort or run more tools: an audit abort may be
 refused after all committed writes succeeded. A verifier failure remains a

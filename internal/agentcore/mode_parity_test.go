@@ -143,6 +143,96 @@ func TestModeParity_Divergence(t *testing.T) {
 	}
 }
 
+// roundTextRecordingPolicy wraps an interactive policy, rejects the first
+// finish to force a repair round, and records every SetRoundFinalText handoff —
+// the pinned contract that the value belongs to the ROUND THAT JUST ENDED.
+type roundTextRecordingPolicy struct {
+	inner Policy
+	texts []string
+}
+
+func (p *roundTextRecordingPolicy) BeforeToolCall(t, id, in string) (bool, string) {
+	return p.inner.BeforeToolCall(t, id, in)
+}
+func (p *roundTextRecordingPolicy) RecordToolResult(t, in, out string, ok bool) {
+	p.inner.RecordToolResult(t, in, out, ok)
+}
+func (p *roundTextRecordingPolicy) CanFinish(round int) (bool, []string) {
+	ok, msgs := p.inner.CanFinish(round)
+	if !ok {
+		return ok, msgs
+	}
+	// One rejection after the first finish → the loop must run a textless
+	// repair round before finishing.
+	if len(p.texts) == 1 {
+		return false, []string{"complete the missing work"}
+	}
+	return true, nil
+}
+func (p *roundTextRecordingPolicy) SetRoundFinalText(text string) {
+	p.texts = append(p.texts, text)
+}
+func (p *roundTextRecordingPolicy) orchestration() *orchestrationState {
+	if op, ok := p.inner.(interface{ orchestration() *orchestrationState }); ok {
+		return op.orchestration()
+	}
+	return nil
+}
+
+// TestRoundFinalTextReceiver_PinnedToRoundBoundary locks the seam the scheduled
+// end-of-run verifier reads the run's answer through: the text handed over
+// before each CanFinish must be the just-ended round's closing message — the
+// completed response when the round streamed text, and EXACTLY "" when a
+// repair round produced none. A stale earlier draft must never reach a gate:
+// combined with the current round's tool evidence it could approve a run
+// whose closing report never happened (Codex P1 on the verifier change).
+func TestRoundFinalTextReceiver_PinnedToRoundBoundary(t *testing.T) {
+	round := 0
+	model := &mockModel{
+		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+			round++
+			if round == 1 {
+				return func(yield func(fantasy.StreamPart) bool) {
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text-1", Delta: "Report: all done."})
+					yield(fantasy.StreamPart{
+						Type:         fantasy.StreamPartTypeFinish,
+						FinishReason: fantasy.FinishReasonStop,
+						Usage:        fantasy.Usage{InputTokens: 50, OutputTokens: 10},
+					})
+				}, nil
+			}
+			// The repair round: finish with no text at all.
+			return streamStop()(nil, call)
+		},
+	}
+	policy := &roundTextRecordingPolicy{inner: NewInteractivePolicy(0, 0, nil, nil)}
+	res, err := Run(context.Background(), ModeInteractive, RunConfig{
+		EnvPrefix:   CanonicalEnvPrefix,
+		Temperature: 0.2,
+	}, Deps{
+		Input:    stubInput{system: "sys", user: "report and verify", label: "round-text"},
+		Observer: &captureObserver{},
+		Policy:   policy,
+		Executor: &stubExecutor{},
+		Model:    model,
+	})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if res.Rounds != 2 {
+		t.Fatalf("rounds = %d, want 2 (one rejected finish + one repair round)", res.Rounds)
+	}
+	want := []string{"Report: all done.", ""}
+	if len(policy.texts) != len(want) {
+		t.Fatalf("SetRoundFinalText calls = %d (%v), want %d", len(policy.texts), policy.texts, len(want))
+	}
+	for i := range want {
+		if policy.texts[i] != want[i] {
+			t.Fatalf("round %d text = %q, want %q (values: %v)", i, policy.texts[i], want[i], policy.texts)
+		}
+	}
+}
+
 // TestSeamPurity_NoModeBranchInTrunk is the structural guard for the whole
 // "one loop, Mode + four seams are the only divergence" thesis: the trunk must
 // not branch on the Mode enum. Divergence belongs in the seam constructors

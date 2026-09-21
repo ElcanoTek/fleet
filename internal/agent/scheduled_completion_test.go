@@ -122,6 +122,225 @@ func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing
 	}
 }
 
+// gateOneCapturingVerifier approves every verification but captures each
+// prompt it was handed, so a test can pin exactly what Gate 1 saw.
+type gateOneCapturingVerifier struct {
+	itMockModel
+	prompts []string
+}
+
+func (m *gateOneCapturingVerifier) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	m.prompts = append(m.prompts, string(raw))
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: `{"missing_actions":[]}`}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// reviewerForcesRepair returns a needs_revision verdict with one actionable
+// issue. Gate 2 is single-shot, so this is called at most once per run.
+type reviewerForcesRepair struct {
+	itMockModel
+	t *testing.T
+}
+
+func (m *reviewerForcesRepair) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	if !strings.Contains(string(raw), "First answer.") {
+		m.t.Errorf("reviewer should critique the first answer, prompt missing it")
+	}
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: `{"needs_revision":true,"issues":["the summary omits the coverage window"],"reasoning":"the first answer is incomplete"}`}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// TestScheduledReviewerRepairReverifies pins the Gate 2 → Gate 1 invalidation:
+// the reviewer approves nothing here — it forces a repair, and the repaired
+// round's closing text must go through the verifier again. Pre-fix the verifier
+// ran once (verified stayed true after the reviewer's repair round), so a
+// repair could swap in an unverified answer and still finish.
+func TestScheduledReviewerRepairReverifies(t *testing.T) {
+	verifier := &gateOneCapturingVerifier{}
+	reviewer := &reviewerForcesRepair{t: t}
+	calls := 0
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		return func(yield func(fantasy.StreamPart) bool) {
+			switch step {
+			case 0:
+				input := `{"success":true,"critical_actions":[],"reasoning":"Reconciled report","artifacts_checked":["report"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			case 1:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "First answer."})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			default:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Revised answer with the coverage window 2026-09-01..2026-09-15."})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+	a.reviewerModel = reviewer
+	a.phoneAFriendEnabled = true
+
+	err := a.Execute(context.Background(), "Summarise the report and state the coverage window.")
+	if err != nil {
+		t.Fatalf("run rejected: %v", err)
+	}
+	if len(verifier.prompts) != 2 {
+		t.Fatalf("verifier calls = %d, want 2 — the reviewer-forced repair must be re-verified", len(verifier.prompts))
+	}
+	if !strings.Contains(verifier.prompts[0], "First answer.") {
+		t.Error("first verification must judge the first answer")
+	}
+	if !strings.Contains(verifier.prompts[1], "Revised answer with the coverage window") {
+		t.Error("second verification must judge the repaired round's own text")
+	}
+	if strings.Contains(verifier.prompts[1], "First answer.") {
+		t.Error("second verification carried the pre-repair answer — the gate must see the current round's text only")
+	}
+}
+
+// issuesOnceReviewer flags needs_revision with one actionable issue, exactly
+// once — Gate 2 is single-shot per run, so it is never called again.
+type issuesOnceReviewer struct {
+	itMockModel
+	calls int
+}
+
+func (m *issuesOnceReviewer) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Response, error) {
+	m.calls++
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: `{"needs_revision":true,"issues":["the summary omits the coverage window"],"reasoning":"incomplete"}`}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// TestScheduledReviewerRepairExhaustsVerificationCap pins the cap arithmetic
+// across a reviewer-forced repair: reject, reject, accept (the 3-call cap is
+// spent), the reviewer forces a repair, and the re-check must NOT call the
+// verifier a fourth time — the run ends as ErrCompletionUnverified through the
+// exhaustion path, because exhaustion never grants success.
+func TestScheduledReviewerRepairExhaustsVerificationCap(t *testing.T) {
+	verifier := &repairVerifierModel{verdicts: []string{
+		`{"missing_actions":["run the read-only verification"]}`,
+		`{"missing_actions":["run the read-only verification"]}`,
+		`{"missing_actions":[]}`,
+	}}
+	reviewer := &issuesOnceReviewer{}
+	calls := 0
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		return func(yield func(fantasy.StreamPart) bool) {
+			if step == 0 {
+				input := `{"success":true,"critical_actions":[],"reasoning":"Reconciled report","artifacts_checked":["report"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				return
+			}
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Answer, revised."})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+	a.reviewerModel = reviewer
+	a.phoneAFriendEnabled = true
+
+	err := a.Execute(context.Background(), "Summarise the report and state the coverage window.")
+	if !errors.Is(err, agentcore.ErrCompletionUnverified) {
+		t.Fatalf("run error = %v, want ErrCompletionUnverified", err)
+	}
+	if !strings.Contains(err.Error(), "could not be re-verified within the cap") {
+		t.Errorf("exhausted repair reason = %v, want the reviewer-repair detail", err)
+	}
+	if verifier.calls != 3 {
+		t.Fatalf("verifier calls = %d, want exactly 3 — a reviewer-forced repair must not buy a fourth verification", verifier.calls)
+	}
+	if reviewer.calls != 1 {
+		t.Fatalf("reviewer calls = %d, want 1 (single-shot)", reviewer.calls)
+	}
+}
+
+// textlessRepairVerifierModel rejects the first verification (demanding a
+// read-only check) and approves the second, capturing every prompt it was
+// handed so the test can pin exactly what the verifier saw at each gate.
+type textlessRepairVerifierModel struct {
+	itMockModel
+	t       *testing.T
+	prompts []string
+}
+
+func (m *textlessRepairVerifierModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	m.prompts = append(m.prompts, string(raw))
+	verdict := `{"missing_actions":[]}`
+	if len(m.prompts) == 1 {
+		verdict = `{"missing_actions":["run the read-only verification read"]}`
+	}
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: verdict}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker is the Codex P1
+// reproduction: round 1 closes with a prose report and the verifier rejects it
+// for a missing action; the repair round makes ONLY the tool call and leaves no
+// assistant text. The next gate must see the explicit "(no final response
+// text)" marker — never the rejected round's draft, which combined with the
+// fresh tool evidence could approve a run whose closing report never happened
+// (completeRun would persist the textless round's empty FinalText as success).
+func TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker(t *testing.T) {
+	verifier := &textlessRepairVerifierModel{t: t}
+	calls := 0
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		return func(yield func(fantasy.StreamPart) bool) {
+			switch step {
+			case 0:
+				input := `{"success":true,"critical_actions":[],"reasoning":"Reconciled report","artifacts_checked":["report"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			case 1:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Report: all done, v856 live."})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			default:
+				// The repair tail: the model makes the tool call (step 2) and any
+				// follow-up rounds produce NO assistant text at all.
+				if step == 2 {
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "verify", ToolCallName: "mcp_reports_verify", ToolCallInput: `{"revision":92}`})
+				}
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			}
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+	a.mcpBroker = completionBroker{`{"ok":true,"revision":92}`}
+	a.mcpCatalog = []mcp.ServerTool{
+		{ServerName: "reports", Tool: mcp.Tool{Name: "verify", Description: "Verify the live report"}},
+	}
+
+	err := a.Execute(context.Background(), "Publish the report and verify the resulting revision.")
+	if err != nil {
+		t.Fatalf("run rejected: %v", err)
+	}
+	if len(verifier.prompts) != 2 {
+		t.Fatalf("verifier calls = %d, want 2 (reject, then re-check)", len(verifier.prompts))
+	}
+	// Gate 1 after the prose round sees the report.
+	if !strings.Contains(verifier.prompts[0], "Report: all done, v856 live.") {
+		t.Error("first gate must carry the round's closing report")
+	}
+	// Gate 2 after the textless repair round sees the explicit marker, NOT the
+	// rejected round's stale draft.
+	if !strings.Contains(verifier.prompts[1], verifierNoFinalResponseMarker) {
+		t.Errorf("second gate missing the %q marker", verifierNoFinalResponseMarker)
+	}
+	if strings.Contains(verifier.prompts[1], "Report: all done, v856 live.") {
+		t.Error("second gate carried the rejected round's stale report — a textless repair round must not reuse earlier prose")
+	}
+	if !strings.Contains(verifier.prompts[1], "/ok") || !strings.Contains(verifier.prompts[1], "/revision") {
+		t.Error("second gate must still carry the repair round's fresh tool evidence")
+	}
+}
+
 // A generic bundle-declared write exercises the same audited mutation path as
 // a scheduled report refresh. The broker never touches an external service.
 type reportCompletionBroker struct{ publishes, inspections int }
@@ -147,11 +366,15 @@ func (m *reportCompletionReviewer) Generate(_ context.Context, call fantasy.Call
 	raw, _ := json.Marshal(call.Prompt)
 	// Check the actual secondary-model input, across the complete core/observer
 	// boundary, including both requested reconciliation and returned outcomes.
+	// "Report published; inspection recorded." is the run's closing assistant
+	// message: Gate 1 must hand it to the verifier as the FINAL RESPONSE
+	// section (a "report X" task step is fulfilled there, not in a tool call).
 	for _, field := range []string{
 		"/expect/date_range/rows.date", "2026-09-01", "2026-09-15",
 		"/expect/totals/rows.revenue", "1234.56789", "/expect/row_count/rows",
 		"/profile/rows/totals/rows.revenue", "/published", "/ok", "/revision",
 		"Never request replaying a successful mutation", "arguments_omitted", "result_omitted",
+		"FINAL RESPONSE (the agent's closing message", "Report published; inspection recorded.",
 	} {
 		if !strings.Contains(string(raw), field) {
 			m.t.Errorf("missing verifier evidence/instruction %q", field)

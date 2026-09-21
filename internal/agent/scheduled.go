@@ -485,12 +485,39 @@ type scheduledPolicy struct {
 	verificationAttempts int
 	terminalErr          error
 	reviewed             bool
+	// roundFinalText is the closing assistant text of the round that just
+	// ended, handed over by the core (RoundFinalTextReceiver) immediately
+	// before each CanFinish. It is provably tied to the round boundary — a
+	// textless repair round yields "" — so the finish gates never combine a
+	// previous round's rejected draft with the current round's evidence. The
+	// session cannot supply this: the driver persists the completed response
+	// only after agentcore.Run returns.
+	roundFinalText string
 	// runCtx is the run's context, captured at build time so the end-of-run
 	// verifier's and phone-a-friend reviewer's model calls honor the run's
 	// deadline/cancellation (CanFinish itself takes no ctx). Falls back to
 	// context.Background() if unset.
 	runCtx context.Context
 }
+
+// SetRoundFinalText records the round's closing assistant text for the finish
+// gates. Called by agentcore.Run before every CanFinish consultation.
+func (p *scheduledPolicy) SetRoundFinalText(text string) {
+	p.roundFinalText = text
+}
+
+// latestRunText returns the run's latest assistant text for the finish gates:
+// the closing message of the round that just ended, as handed over by the
+// core. A round that produced no text yields "", which the verifier surfaces
+// as the explicit "(no final response text)" marker — never stale prose from
+// an earlier, rejected round.
+func (p *scheduledPolicy) latestRunText() string {
+	return strings.TrimSpace(p.roundFinalText)
+}
+
+// The core hands the policy each round's closing text before consulting
+// CanFinish; this is the seam the finish gates read the run's answer through.
+var _ agentcore.RoundFinalTextReceiver = (*scheduledPolicy)(nil)
 
 func (p *scheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
 	return p.inner.BeforeToolCall(toolName, toolCallID, rawInput)
@@ -523,9 +550,16 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 
 	// Gate 1: end-of-run verifier (completeness re-check).
 	if !p.verified && p.agent != nil && p.agent.fallbackModel != nil {
+		// The three-call cap counts EVERY verification, including the re-check
+		// of a reviewer-forced repair (verified was reset). A spent cap must not
+		// buy a fourth call — exhaustion never grants success, so the
+		// unverifiable repair ends the run through the same exhaustion path.
+		if p.verificationAttempts >= maxCompletionVerifications {
+			return p.verificationFailed("a reviewer-forced repair could not be re-verified within the cap", buildToolExecSummary(p.agent.logSession))
+		}
 		p.verificationAttempts++
 		records := buildToolExecSummary(p.agent.logSession)
-		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, records)
+		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
 		if err != nil {
 			log.Printf("verifier failed: %v", err)
 			return p.verificationFailed("Completion verification could not produce a valid verdict: "+err.Error(), records)
@@ -538,15 +572,20 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	// Gate 2: phone-a-friend super-LLM review (quality re-check, part of #175).
 	// Runs only after the verifier gate has cleared, so the reviewer critiques a
 	// run that already attempted everything the task required. OFF unless both the
-	// feature flag is set and a reviewer model is configured.
+	// feature flag is set and a reviewer model is configured. Single-shot:
+	// reviewed is claimed before the call, so a reviewer-forced repair round is
+	// never re-reviewed — but it MUST be re-verified: the repair changed the
+	// answer the verifier approved, so verified is reset and Gate 1 runs again
+	// against the repaired round's own closing text.
 	if !p.reviewed && p.agent != nil && p.agent.phoneAFriendEnabled && p.agent.reviewerModel != nil {
 		p.reviewed = true
 		records := buildToolExecSummary(p.agent.logSession)
-		answer := latestAssistantText(p.agent.logSession)
+		answer := p.latestRunText()
 		issues, err := p.agent.runPhoneAFriendReview(ctx, p.agent.reviewerModel, p.task, answer, records)
 		if err != nil {
 			log.Printf("phone_a_friend review skipped: %v", err)
 		} else if len(issues) > 0 {
+			p.verified = false
 			return false, []string{fmt.Sprintf(
 				"A reviewer model (phone a friend) found problems with the current answer/work that must be "+
 					"addressed before finishing: %v. Revise the work to fix each one, or call "+
