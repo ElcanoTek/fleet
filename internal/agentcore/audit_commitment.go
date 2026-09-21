@@ -514,6 +514,9 @@ func parseDealOutcomes(resultText string) ([]dealOutcome, bool) {
 func (o *orchestrationState) resetBatchApprovals() {
 	o.approvedDealIDs = make(map[string]map[string]bool)
 	o.approvedDigest = make(map[string]string)
+	// Discharge ledger is envelope-scoped too: a prior transport's
+	// already-done record must not hide a fresh alias commitment.
+	o.dischargedDeals = make(map[string]map[string]bool)
 }
 
 // registerCommittedActionsTyped records commitments from the typed
@@ -583,8 +586,9 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			o.resetBatchApprovals()
 		}
 		// Fresh audit envelope for this suffix → clear any per-record
-		// discharge ledger left over from a prior batch on the same suffix.
-		delete(o.dischargedDeals, suffix)
+		// discharge ledger left over from a prior batch on this suffix or a
+		// same-write transport alias (the other name still keyed the old map).
+		o.clearDischargedDeals(suffix)
 		// Placeholder record ids ("n/a", "none", …) name no record: the entry
 		// registers unbound rather than bound to an id no call can carry.
 		dealIDs := declaredDealIDs(a.DealIDs)

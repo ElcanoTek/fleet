@@ -167,8 +167,9 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 				o.resetBatchApprovals()
 			}
 			// Fresh audit envelope for this suffix → clear any per-record
-			// discharge ledger left over from a prior batch on the same suffix.
-			delete(o.dischargedDeals, suffix)
+			// discharge ledger left over from a prior batch on this suffix or
+			// a same-write transport alias.
+			o.clearDischargedDeals(suffix)
 			o.committedCriticalActions[suffix]++
 			log.Printf("Enforcement: registered committed critical action %q (from %q); %d outstanding",
 				suffix, decl, o.committedCriticalActions[suffix])
@@ -284,6 +285,18 @@ func (o *orchestrationState) allCommitmentsExhausted() bool {
 
 func retryBudgetKey(toolName, argsHash string) string {
 	return toolName + ":" + argsHash
+}
+
+// clearDischargedDeals drops the per-record discharge ledger for suffix and
+// every configured transport alias. Callers must hold o.mu.
+func (o *orchestrationState) clearDischargedDeals(suffix string) {
+	if o.dischargedDeals == nil {
+		return
+	}
+	delete(o.dischargedDeals, suffix)
+	for _, alt := range transportAliasesOf(suffix) {
+		delete(o.dischargedDeals, alt)
+	}
 }
 
 // checkCriticalTool checks audit gating + email safety before a critical tool

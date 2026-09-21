@@ -943,6 +943,23 @@ func TestTypedCommitment_DigestMismatchDoesNotDischargeAlias(t *testing.T) {
 	}
 }
 
+func TestTypedCommitment_ReauditAliasClearsPriorTransportDischarge(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData, DealIDs: []string{"A"}})
+	o.recordToolResult(typedPagesUpdateData, `{"deal_ids":["A"]}`,
+		`{"results":[{"deal_id":"A","success":true}]}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
+		t.Fatalf("first inline batch should have discharged, outstanding=%d", got)
+	}
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateDataUpload, DealIDs: []string{"A"}})
+	o.recordToolResult(typedPagesUpdateData, `{"deal_ids":["A"]}`,
+		`{"results":[{"deal_id":"A","success":true}]}`, true)
+	if got := o.committedCriticalActions["update_page_data_upload"]; got != 0 {
+		t.Fatalf("re-audit of the upload alias must still discharge when the original transport succeeds again, outstanding=%d", got)
+	}
+}
+
 func TestTypedCommitment_BatchResultDoesNotDischargeUntargetedAliasRecord(t *testing.T) {
 	withPagesTransportPolicy(t)
 	o := newOrchStateForTest()
