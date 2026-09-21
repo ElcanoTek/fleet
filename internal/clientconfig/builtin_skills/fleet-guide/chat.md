@@ -209,7 +209,10 @@ and pick the one that fits the job. Models your deployment marks **recommended**
 sit at the top of the list. Typically the first is fast and inexpensive — the one
 new conversations start on, and the right choice for pulls, checks, and
 formatting — and the second is stronger, for judgment calls, retrospectives, and
-anything where depth matters more than speed. The rest of the list is marked by
+anything where depth matters more than speed. By default those two are
+**GPT-5.6 Luna Pro** (new conversations start on it) and **Claude Opus 5** (the
+model a "switch to a stronger model" suggestion offers); your admin can point
+either slot at a different model. The rest of the list is marked by
 status (**tested**, **new**, or **experimental**), and a model whose pricing the
 deployment knows shows its cost band, so you can see what you are about to
 spend. No band means the price is unknown rather than zero — worth asking about

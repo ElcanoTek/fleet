@@ -60,7 +60,7 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
     models: [],
   } }));
   await page.route("**/api/model-catalog", (route) => route.fulfill({ json: {
-    models: [{ slug: "google/gemini-3.8-flash", name: "Gemini", context_length: 100000,
+    models: [{ slug: "openai/gpt-5.6-luna-pro", name: "Luna Pro", context_length: 100000,
       price_prompt: 0.000003, price_completion: 0.000015 }],
   } }));
   let sent = "";
@@ -75,13 +75,13 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
   await page.goto("/chat");
   await page.getByRole("button", { name: "Choose a model", exact: true }).click();
   const list = page.locator("#composer-model-listbox");
-  await list.getByRole("option", { name: /router:.*Gemini/ }).click();
+  await list.getByRole("option", { name: /router:.*Luna Pro/ }).click();
   const composer = page.getByRole("textbox").first();
   await composer.fill("Check the model route");
   await composer.press("Enter");
   await expect(page.getByText("Explicit OpenRouter route selected.")).toBeVisible();
-  expect(sent).toBe("router/google/gemini-3.8-flash");
-  await expect(page.getByTestId("composer-model-label-full")).toHaveText("router: Gemini");
+  expect(sent).toBe("router/openai/gpt-5.6-luna-pro");
+  await expect(page.getByTestId("composer-model-label-full")).toHaveText("router: Luna Pro");
   await expect(page.locator("button[aria-haspopup='listbox']").first().locator(".model-cost")).toHaveAttribute("data-cost-tier", "3");
   await expect(page.getByRole("button", { name: "Context 10% full — click to compact" })).toBeVisible();
 });

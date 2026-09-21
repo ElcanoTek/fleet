@@ -62,5 +62,6 @@ func supportsExtendedThinking(slug string) bool {
 		return false
 	}
 	return strings.Contains(s, "claude-opus-4") || strings.Contains(s, "claude-sonnet-4") ||
+		strings.Contains(s, "claude-opus-5") || strings.Contains(s, "claude-sonnet-5") ||
 		strings.Contains(s, "claude-fable")
 }

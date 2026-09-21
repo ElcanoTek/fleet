@@ -6,17 +6,24 @@
 
 | Slot | Before | After |
 |---|---|---|
-| `DefaultCoreModel` (new chat conversations, scheduled tasks without a pinned model, the Operations Center create form) | `google/gemini-3.8-flash` | `openai/gpt-5.6-luna-pro` |
+| `DefaultCoreModel` (new chat conversations, the Operations Center create form's pre-filled primary, the chat "recommended" tier) | `google/gemini-3.8-flash` | `openai/gpt-5.6-luna-pro` |
 | `DefaultMaxModel` / chat's "advanced model" (`suggest_advanced_model` escalation) | `openai/gpt-5.6-sol` | `anthropic/claude-opus-5` |
 | `DefaultTitleModel` (conversation titles) | `google/gemini-3.8-flash` | `openai/gpt-5.6-luna-pro` |
-| Web `DEFAULT_MODEL` / `ADVANCED_MODEL` and the task-create form's primary/fallback placeholders | gemini-3.8-flash / gpt-5.6-sol | gpt-5.6-luna-pro / deepseek-v4.1-flash |
+| Web `DEFAULT_MODEL` / `ADVANCED_MODEL` and the task-create form's pre-filled primary/fallback (persisted as the task's pinned `model` / `fallback_model`) | gemini-3.8-flash / gpt-5.6-sol | gpt-5.6-luna-pro / deepseek-v4.1-flash |
 | Lockdown allow-list default (one slug per tier) | gemini-3.8-flash, gpt-5.6-sol | gpt-5.6-luna-pro, claude-opus-5 |
 
-Operators override all of these per deployment with `FLEET_DEFAULT_MODEL`,
-`FLEET_ADVANCED_MODEL`, `FLEET_TASK_MODEL`, `FLEET_TASK_FALLBACK_MODEL` and
-`FLEET_TITLE_MODEL` (or the Settings → Admin → Features model tiers, which
-apply live). Production and the client boxes were switched through those knobs
-on 2026-09-21 ahead of this change; this PR makes the shipped defaults match.
+Operators override the chat tiers and the title model per deployment with
+`FLEET_DEFAULT_MODEL`, `FLEET_ADVANCED_MODEL` and `FLEET_TITLE_MODEL` (or the
+Settings → Admin → Features model tiers, which apply live). **Scheduled tasks
+are different**: the scheduler resolves an unpinned task's model from
+`FLEET_TASK_MODEL` (snapshotted at boot) and refuses to run one when that is
+unset — `DefaultCoreModel` is not consulted there. Tasks created through the
+Operations Center form arrive already pinned to the form's pre-filled primary
+and fallback, so they never hit that path; tasks created through the API or an
+import without a pinned model do. `FLEET_TASK_FALLBACK_MODEL` likewise applies
+only to tasks with no pinned `fallback_model`. Production and the client boxes
+were switched through those knobs on 2026-09-21 ahead of this change; this PR
+makes the shipped defaults match.
 
 ## Why
 
@@ -46,9 +53,17 @@ endpoint was at 80% uptime on the day of the switch and it costs $2/M in.
   so the "default must be strictly pinned or floored" guard can state the third
   safe shape explicitly — a pool made only of official weights — instead of
   being loosened. See [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
-- The scheduled-task fallback is a deployment knob, not a code default;
-  production uses `deepseek/deepseek-v4.1-flash` (soft-pinned to DeepSeek with
-  the fp8 floor).
+- There is no compiled-in scheduled-task fallback: form-created tasks carry the
+  form's pre-filled `deepseek/deepseek-v4.1-flash` as their own pinned
+  fallback, and API/imported tasks without one use `FLEET_TASK_FALLBACK_MODEL`
+  (production sets it to the same slug, soft-pinned to DeepSeek with the fp8
+  floor).
+- The Claude 4 1M-context beta header (`anthropicLongContextSlug`) is not
+  extended to Opus 5: every Opus 5 endpoint on OpenRouter lists 1,000,000 as
+  its native context and the beta flag is the Claude 4 mechanism. If a >200K
+  Opus 5 request is nonetheless refused, the provider rejects it as
+  context-too-large and the existing forced-compaction recovery handles it;
+  adding the header then is a one-line follow-up with evidence.
 - Context-window table: `anthropic/claude-opus-5` and `-sonnet-5` get 1M rows
   ahead of the generic 200K Claude row; `openai/gpt-5.6*` already had 1.05M.
 

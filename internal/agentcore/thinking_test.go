@@ -11,6 +11,8 @@ func TestSupportsExtendedThinking(t *testing.T) {
 		slug string
 		want bool
 	}{
+		{"anthropic/claude-opus-5", true}, // DefaultMaxModel: the escalation target must keep its thinking budget
+		{"anthropic/claude-sonnet-5", true},
 		{"anthropic/claude-opus-4.8", true},
 		{"anthropic/claude-sonnet-4.6", true},
 		{"anthropic/claude-sonnet-4.5", true},
