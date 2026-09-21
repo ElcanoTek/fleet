@@ -158,3 +158,26 @@ func TestApplyIntOverride(t *testing.T) {
 		t.Fatal("non-integer override must be rejected")
 	}
 }
+
+// The env-derived tiers must be live even when the settings bootstrap never
+// runs its hooks (service build or boot load failure): the holders feed
+// /client-config and the lockdown allow-list default, so a FLEET_DEFAULT_MODEL
+// the operator set cannot be shadowed by the compiled-in pair.
+func TestSeedModelTiersFromConfig(t *testing.T) {
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel("")
+		agentcore.SetAdvancedModel("")
+	})
+	seedModelTiersFromConfig(&config.Config{DefaultModel: "acme/frontier-1", AdvancedModel: "acme/frontier-1-pro"})
+	if got := agentcore.CurrentDefaultModel(); got != "acme/frontier-1" {
+		t.Fatalf("default tier = %q, want the env-derived slug", got)
+	}
+	if got := agentcore.CurrentAdvancedModel(); got != "acme/frontier-1-pro" {
+		t.Fatalf("advanced tier = %q, want the env-derived slug", got)
+	}
+	// An unset env value reverts to the compiled-in constant, never blanks.
+	seedModelTiersFromConfig(&config.Config{})
+	if got := agentcore.CurrentDefaultModel(); got != agentcore.DefaultCoreModel {
+		t.Fatalf("empty config default tier = %q, want %q", got, agentcore.DefaultCoreModel)
+	}
+}

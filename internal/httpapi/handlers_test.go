@@ -520,6 +520,47 @@ func TestServerConfig_LockdownListDefaultsToLiveTiers(t *testing.T) {
 	}
 }
 
+// Compact is a user-visible action that used to be the one path where a
+// delisted lockdown model still 400ed: the web posts the conversation's stale
+// stored slug, and the summarize guard rejected it before any migration ran.
+// Now the summarize path migrates and treats the echo as no opinion, so the
+// request proceeds past the lockdown guard (here to the handler's own "no
+// history" 400) and the migration is persisted.
+func TestSummarize_LockdownDelistedModelMigrates(t *testing.T) {
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "generic", "a/b", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.LockdownAllowedModels = []string{"c/d"} // a/b delisted after creation
+
+	w := do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/summarize",
+		map[string]string{"model": "a/b"}, user)
+	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "not allowed in lockdown") {
+		t.Fatalf("summarize still rejects the stale echoed model: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "no history to summarize") {
+		t.Fatalf("expected to reach the handler's own no-history check, got %d %s", w.Code, w.Body.String())
+	}
+	got, err := s.store.Get(t.Context(), user, conv.ID)
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.Model != "c/d" {
+		t.Fatalf("migration not persisted from the summarize path: model=%q", got.Model)
+	}
+
+	// A genuinely different disallowed request is still refused.
+	w = do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/summarize",
+		map[string]string{"model": "evil/unvetted"}, user)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "not allowed in lockdown") {
+		t.Fatalf("different disallowed model should be refused, got %d %s", w.Code, w.Body.String())
+	}
+}
+
 // TestCreateConversation_Lockdown covers the conversation-create
 // endpoint's lockdown handling: rejection when the feature is
 // unavailable, model allow-list enforcement, and the LockdownOnly

@@ -95,6 +95,18 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		return
 	}
 	model := strings.TrimSpace(req.Model)
+	// Same next-action migration as a chat turn: a lockdown conversation whose
+	// persisted model was delisted moves to the lockdown default here too, and
+	// the web's echo of the stale slug is not mistaken for a request FOR it —
+	// otherwise Compact would 400 until the user sent a message.
+	prior := conv.Model
+	if err := s.reconcileLockdownModelCtx(r.Context(), user, conv); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv.Model != prior && model == prior {
+		model = ""
+	}
 	if model == "" {
 		model = strings.TrimSpace(conv.Model)
 	}
