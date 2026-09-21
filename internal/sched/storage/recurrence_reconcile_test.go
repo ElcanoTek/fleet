@@ -346,6 +346,41 @@ func TestUpsertedTerminalRecurringIsSettled(t *testing.T) {
 	}
 }
 
+// TestUpsertedLiveOverParkedDeadLetterReArms: a status-replacing import that
+// restores a parked dead-letter to scheduled must hand the credit back and
+// clear the park stamp (the mirror of the terminal settle), otherwise the
+// restored occurrence completes unable to claim the credit and the schedule
+// stays silently parked.
+func TestUpsertedLiveOverParkedDeadLetterReArms(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+
+	dl := seedTerminalRecurring(t, store, models.TaskStatusDeadLettered, 10*time.Minute, nil)
+	if _, err := store.db.Conn().ExecContext(ctx,
+		`UPDATE tasks SET recurrence_spawned = TRUE, recurrence_parked_at = now() WHERE id = $1`, dl.ID); err != nil {
+		t.Fatalf("park setup: %v", err)
+	}
+
+	when := time.Now().Add(time.Hour).UTC()
+	dl.Status = models.TaskStatusScheduled
+	dl.ScheduledFor = &when
+	dl.CompletedAt = nil
+	if _, err := store.AddTaskWithContext(ctx, dl); err != nil {
+		t.Fatalf("AddTaskWithContext(restore to scheduled): %v", err)
+	}
+	if recurrenceSpawned(t, store, dl.ID) {
+		t.Fatal("restoring a parked dead-letter to scheduled must re-arm recurrence_spawned")
+	}
+	var parked *time.Time
+	if err := store.db.Conn().QueryRowContext(ctx, `SELECT recurrence_parked_at FROM tasks WHERE id = $1`, dl.ID).Scan(&parked); err != nil {
+		t.Fatalf("read recurrence_parked_at: %v", err)
+	}
+	if parked != nil {
+		t.Fatal("restoring a parked dead-letter to scheduled must clear recurrence_parked_at")
+	}
+}
+
 // TestReimportUnclaimedDeadLetteredKeepsCreditForSweep: a same-status
 // re-import of an already-terminal unclaimed row (allowed without
 // --replace-status) must not settle the flag — the crash-window row is

@@ -221,18 +221,16 @@ func (s *Storage) AddTask(task *models.Task) (*models.Task, error) {
 // RecurrenceSpawnTaskStatuses, db.AddTaskTx settles the credit in the same
 // transaction only for a fresh insert or an upsert that replaces a
 // NONTERMINAL status (a same-status re-import of an unclaimed terminal row
-// must keep the flag FALSE so ReconcileRecurrences can still spawn).
+// must keep the flag FALSE so ReconcileRecurrences can still spawn). The
+// mirror case is handled there too: an upsert that restores a terminal row
+// (a parked dead-letter under --replace-status / --overwrite) to
+// pending/scheduled re-arms the credit and clears recurrence_parked_at, as
+// replay does, so the restored occurrence can continue its schedule.
 // db.UpdateTask / db.AddTask stay unadorned so test seeds can still land
 // an unclaimed terminal row.
 func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*models.Task, error) {
 	if err := validateStoredOutputContract(task); err != nil {
 		return nil, err
-	}
-	if !recurrenceSpawnStatus(task.Status) {
-		if err := s.db.AddTask(ctx, task); err != nil {
-			return nil, err
-		}
-		return task, nil
 	}
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -248,14 +246,6 @@ func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*m
 	return task, nil
 }
 
-func recurrenceSpawnStatus(s models.TaskStatus) bool {
-	for _, st := range models.RecurrenceSpawnTaskStatuses {
-		if s == st {
-			return true
-		}
-	}
-	return false
-}
 
 // AddTaskBatch inserts a slice of validated tasks for the batch submission
 // endpoint (#227). When atomic is true the whole insert runs inside a single

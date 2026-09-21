@@ -155,10 +155,25 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 	if _, err := tx.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...); err != nil {
 		return err
 	}
+	existingTerminal := existed && recurrenceSpawnedInsertValue(&models.Task{Status: existingStatus})
 	if !recurrenceSpawnedInsertValue(task) {
+		// The mirror image of the settle below: a status-replacing import
+		// (--replace-status / --overwrite) that restores a terminal row — in
+		// particular a parked dead-letter — to pending/scheduled must give the
+		// restored occurrence its spawn credit back and clear the park stamp,
+		// exactly as ReplayDeadLetteredTask does. Both columns are excluded from
+		// the generic upsert (a status write must never clobber a claimed
+		// credit), so without this the restored run would complete unable to
+		// claim the credit and the schedule would stay silently parked. A
+		// live-over-live upsert (an edit) is left alone: its credit is already
+		// unclaimed and there is nothing parked to clear.
+		if existingTerminal && (task.Status == models.TaskStatusPending || task.Status == models.TaskStatusScheduled) {
+			_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = FALSE, recurrence_parked_at = NULL WHERE id = $1`, task.ID)
+			return err
+		}
 		return nil
 	}
-	if existed && recurrenceSpawnedInsertValue(&models.Task{Status: existingStatus}) {
+	if existingTerminal {
 		return nil
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, task.ID)
