@@ -618,6 +618,30 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		activeModel = outcome.activeModel
 		swappedToFallback = outcome.swappedToFallback
 
+		// Resend-budget checkpoint: the tool loop stopped because a step's prompt
+		// reached FLEET_CONTEXT_RESEND_BUDGET_TOKENS, not because the model
+		// finished. Carry the round's transcript and go straight back to the top
+		// of the loop, where checkContextPressure compacts the history before
+		// the next call — no policy verdict (nothing finished), no enforcement
+		// message, and no enforcement round consumed. A pause is not an
+		// enforcement round. After maxResendCheckpoints pauses the checkpoint
+		// goes inert and the loop runs on under the cost/token ceilings alone.
+		if eng.consumeResendCheckpoint(finalResult) {
+			messages = append(messages, carryRoundMessages(finalResult)...)
+			resent := lastStepPromptTokens(finalResult)
+			eng.logSession.AddMessage(roleUser, fmt.Sprintf(
+				"[context_checkpoint] resent prompt %d tokens reached %s_CONTEXT_RESEND_BUDGET_TOKENS; the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",
+				resent, cfg.EnvPrefix.normalize(), len(finalResult.Steps), eng.resendCheckpoints), nil, nil)
+			sink.emit(evtContextCheckpoint, map[string]any{
+				evtFieldUsedTokens:   resent,
+				evtFieldResendBudget: contextResendBudgetTokens(cfg.EnvPrefix),
+				evtFieldTrigger:      "resend_budget",
+				"checkpoint":         eng.resendCheckpoints,
+			})
+			round--
+			continue
+		}
+
 		// Prefer the final completed response. The sink spans enforcement rounds:
 		// concatenating it here repeats an answer drafted before the completion
 		// audit with the answer produced after that audit. Keep streamed text as
@@ -660,40 +684,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				// output phase; copied so the loop's own slice stays the round
 				// input (completeRun appends the carry itself).
 				finalizeMessages := append(append([]fantasy.Message(nil), messages...), carryRoundMessages(finalResult)...)
-				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, FinalizeInput{
-					Mode:      mode,
-					FinalText: finalText,
-					Messages:  finalizeMessages,
-					// Any tool event committed during this round means a blind
-					// re-drive could repeat its side effects; the hook degrades
-					// to its tool-less path instead (ADR-0035's gate, extended
-					// to the finalize seam).
-					RoundToolEvents: sink.toolEventCount() - roundToolMark,
-					Tools:           fantasyTools,
-					Observer:        deps.Observer,
-					SystemPrompt:    systemPrompt,
-					OnToolCall:      finalizeToolCallCallback(sink, panicAttribution),
-					OnToolResult:    finalizeToolResultCallback(sink, panicAttribution),
-					// The retry streams under the run's own ceilings: the budget
-					// guard blocks the next paid completion once the cost/token
-					// ceiling is hit, and the step cap bounds the tool loop.
-					GuardStep: func(inner fantasy.PrepareStepFunction) fantasy.PrepareStepFunction {
-						if usageOrch == nil {
-							return inner
-						}
-						return budgetGuardedStep(usageOrch, inner)
-					},
-					StopWhen: stepStopConditions(cfg.MaxIterations),
-					// Meter a recovery model call into the SAME run accounting as
-					// the main loop, so the cost chip isn't undercounted. Capability
-					// closure over usageOrch — the state never escapes Run, and this
-					// field is set unconditionally (not a mode branch).
-					RecordUsage: func(u fantasy.Usage, md fantasy.ProviderMetadata) {
-						if usageOrch != nil {
-							usageOrch.updateUsage(slugOf(activeModel), u, md)
-						}
-					},
-				}, observerBoundary)
+				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finalizeInputFor(
+					mode, finalText, finalizeMessages, sink.toolEventCount()-roundToolMark,
+					fantasyTools, deps.Observer, systemPrompt, sink, panicAttribution, usageOrch, activeModel, cfg.MaxIterations,
+				), observerBoundary)
 				if err != nil {
 					return Result{}, err
 				}
@@ -1005,4 +999,54 @@ func policyOrchestration(p Policy) (*orchestrationState, bool) {
 // onto a built-in Policy without forking the loop.
 type PolicyUnwrapper interface {
 	Unwrap() Policy
+}
+
+// lastStepPromptTokens is the prompt size (fresh + cache-read input) of a
+// round's last step, the number the resend-budget checkpoint compared.
+func lastStepPromptTokens(result *fantasy.AgentResult) int {
+	if result == nil || len(result.Steps) == 0 {
+		return 0
+	}
+	u := result.Steps[len(result.Steps)-1].Usage
+	return int(u.InputTokens + u.CacheReadTokens)
+}
+
+// finalizeInputFor assembles the interactive finalize hook's input. The hook's
+// recovery calls must see the conversation as it stands NOW: the round's input
+// plus its completed tool transcript (the caller passes that carry as messages;
+// the input slice alone lacked the round's tool calls/results and a forced
+// summary built from it fabricated an answer from stale context, #1117).
+// roundToolEvents > 0 means a tool event committed during this round, so a blind
+// re-drive could repeat its side effects and the hook degrades to its tool-less
+// path (ADR-0035's gate, extended to the finalize seam). The retry streams under
+// the run's own ceilings (budget guard + step cap) and its usage is metered into
+// the SAME run accounting so the cost chip is not undercounted. Capability
+// closures over usageOrch: the state never escapes Run.
+func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, roundToolEvents int,
+	fantasyTools []fantasy.AgentTool, observer Observer, systemPrompt string, sink *streamSink,
+	panicAttribution panicAttribution, usageOrch *orchestrationState, activeModel fantasy.LanguageModel, maxIterations int,
+) FinalizeInput {
+	return FinalizeInput{
+		Mode:            mode,
+		FinalText:       finalText,
+		Messages:        messages,
+		RoundToolEvents: roundToolEvents,
+		Tools:           fantasyTools,
+		Observer:        observer,
+		SystemPrompt:    systemPrompt,
+		OnToolCall:      finalizeToolCallCallback(sink, panicAttribution),
+		OnToolResult:    finalizeToolResultCallback(sink, panicAttribution),
+		GuardStep: func(inner fantasy.PrepareStepFunction) fantasy.PrepareStepFunction {
+			if usageOrch == nil {
+				return inner
+			}
+			return budgetGuardedStep(usageOrch, inner)
+		},
+		StopWhen: stepStopConditions(maxIterations),
+		RecordUsage: func(u fantasy.Usage, md fantasy.ProviderMetadata) {
+			if usageOrch != nil {
+				usageOrch.updateUsage(slugOf(activeModel), u, md)
+			}
+		},
+	}
 }

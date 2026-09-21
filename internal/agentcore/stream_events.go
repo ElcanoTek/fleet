@@ -77,6 +77,9 @@ const (
 const (
 	evtContextPressure  = "fleet.context_pressure"
 	evtContextCompacted = "fleet.context_compacted"
+	// evtContextCheckpoint marks a scheduled tool loop paused at a resend-budget
+	// checkpoint so the next round starts with a compacted history (#1534 follow-up).
+	evtContextCheckpoint = "fleet.context_checkpoint"
 )
 
 // evtBudgetWindDown is emitted once per run when spend first crosses the
