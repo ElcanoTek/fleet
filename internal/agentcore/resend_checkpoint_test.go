@@ -241,18 +241,43 @@ func TestConsumeResendCheckpoint_CapTieRefusesAndAccountingResets(t *testing.T) 
 		}
 		return r
 	}
-	if !e.consumeResendCheckpoint(over(1)) || !e.consumeResendCheckpoint(over(1)) {
-		t.Fatal("two single-step pauses fit under a cap of 3")
+	if !e.consumeResendCheckpoint(over(1), 1) {
+		t.Fatal("first single-step pause fits under a cap of 3")
 	}
-	if e.consumeResendCheckpoint(over(1)) {
+	if !e.consumeResendCheckpoint(over(1), 1) {
+		t.Fatal("second single-step pause fits under a cap of 3")
+	}
+	if e.consumeResendCheckpoint(over(1), 1) {
 		t.Fatal("the third step reaches the cap: the pause must be refused so the cap wins the tie")
 	}
 	e.roundEndedOnItsOwn()
-	if !e.consumeResendCheckpoint(over(1)) {
+	if !e.consumeResendCheckpoint(over(1), 1) {
 		t.Fatal("a round that ended on its own resets the step accounting for the next logical round")
 	}
 	if e.checkpointSteps != 1 {
 		t.Errorf("checkpointSteps = %d, want 1 after the reset and one pause", e.checkpointSteps)
+	}
+}
+
+// A resilience recovery resumes past completed steps, so the final attempt's
+// result holds only the tail of the round; the checkpoint accounting must count
+// the whole round or the next stream gets nearly the full cap again.
+func TestConsumeResendCheckpoint_CountsResilienceResumedSteps(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
+	e := newMockEngine(t, &namedMockModel{name: "cp-resumed"})
+	e.envPrefix = CanonicalEnvPrefix
+	e.requireCompactionOptIn = true
+	e.maxIterations = 100
+	tail := &fantasy.AgentResult{Steps: []fantasy.StepResult{{Response: fantasy.Response{FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 1500}}}}}
+	// 99 steps completed before the recovery + 1 in the resumed attempt = the cap.
+	if e.consumeResendCheckpoint(tail, 99+len(tail.Steps)) {
+		t.Fatal("a recovered round that reached the cap must not be paused")
+	}
+	if !e.consumeResendCheckpoint(tail, 50+len(tail.Steps)) {
+		t.Fatal("a recovered round under the cap may pause")
+	}
+	if e.checkpointSteps != 51 {
+		t.Errorf("checkpointSteps = %d, want the round's TOTAL 51, not the tail's 1", e.checkpointSteps)
 	}
 }
 

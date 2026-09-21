@@ -281,6 +281,18 @@ func (e *engine) compactionSummarizeInput(droppable []fantasy.Message) Compactio
 	return in
 }
 
+// noteActiveModel records the model the run is driving from this point on.
+// Called at a round's start and at every in-round swap, so a reactive
+// compaction inside streamRoundWithResilience (a fallback that then returns
+// context_length_exceeded) already summarizes on the fallback, not on the
+// primary that just failed or is circuit-open.
+func (e *engine) noteActiveModel(m fantasy.LanguageModel) {
+	if e == nil || m == nil {
+		return
+	}
+	e.activeModel = m
+}
+
 // currentModel is the model the run is driving right now: the fallback after a
 // swap, else the configured primary.
 func (e *engine) currentModel() fantasy.LanguageModel {
@@ -880,18 +892,26 @@ func stepAtResendBudget(steps []fantasy.StepResult, budget int) bool {
 // maxIterations (counted across this logical round's checkpoints), the pause
 // is refused so the round falls through to the cap's ordinary handling — a
 // checkpoint must never turn the step cap into a per-pause allowance.
-func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult) bool {
+//
+// roundSteps is the round's TOTAL step count — the final attempt's steps plus
+// any a resilience recovery resumed past (streamRoundOutcome.completedSteps).
+// result.Steps alone undercounts a recovered round, which would hand the next
+// stream nearly the whole cap again.
+func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult, roundSteps int) bool {
 	if result == nil || !e.requireCompactionOptIn || e.resendCheckpoints >= maxResendCheckpoints {
 		return false
 	}
-	if e.maxIterations > 0 && e.checkpointSteps+len(result.Steps) >= e.maxIterations {
+	if roundSteps < len(result.Steps) {
+		roundSteps = len(result.Steps)
+	}
+	if e.maxIterations > 0 && e.checkpointSteps+roundSteps >= e.maxIterations {
 		return false
 	}
 	if !stepAtResendBudget(result.Steps, contextResendBudgetTokens(e.envPrefix)) {
 		return false
 	}
 	e.resendCheckpoints++
-	e.checkpointSteps += len(result.Steps)
+	e.checkpointSteps += roundSteps
 	return true
 }
 

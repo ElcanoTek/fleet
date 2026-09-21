@@ -352,3 +352,21 @@ func waitForSubscribers(t *testing.T, buf *taskStreamBuffer, n int) {
 	}
 	t.Fatalf("timed out waiting for %d subscriber(s)", n)
 }
+
+func TestTaskStreamBuffer_ForwardsCompactionCheckpointFrames(t *testing.T) {
+	buf := newTaskStreamBuffer()
+	buf.Observe("fleet.context_checkpoint", map[string]any{"used_tokens": 137023, "resend_budget_tokens": 80000, "trigger": "resend_budget", "checkpoint": 3})
+	buf.Observe("fleet.context_compacted", map[string]any{"removed_turns": 52, "trigger": "resend_budget"})
+	buf.Finish()
+
+	rw := newSSERecorder()
+	if err := buf.Attach(context.Background(), 0, rw); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	body := rw.Body()
+	for _, want := range []string{"event: context_checkpoint", `"used_tokens":137023`, `"checkpoint":3`, "event: context_compacted", `"removed_turns":52`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %q in stream:\n%s", want, body)
+		}
+	}
+}

@@ -627,12 +627,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// message, and no enforcement round consumed. A pause is not an
 		// enforcement round. After maxResendCheckpoints pauses the checkpoint
 		// goes inert and the loop runs on under the cost/token ceilings alone.
-		if eng.consumeResendCheckpoint(finalResult) {
+		if eng.consumeResendCheckpoint(finalResult, outcome.completedSteps+len(finalResult.Steps)) {
 			messages = append(messages, carryRoundMessages(finalResult)...)
 			resent := lastStepPromptTokens(finalResult)
 			eng.logSession.AddMessage(roleUser, fmt.Sprintf(
 				"[context_checkpoint] resent prompt %d tokens reached %s_CONTEXT_RESEND_BUDGET_TOKENS; the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",
-				resent, cfg.EnvPrefix.normalize(), len(finalResult.Steps), eng.resendCheckpoints), nil, nil)
+				resent, cfg.EnvPrefix.normalize(), outcome.completedSteps+len(finalResult.Steps), eng.resendCheckpoints), nil, nil)
 			sink.emit(evtContextCheckpoint, map[string]any{
 				evtFieldUsedTokens:   resent,
 				evtFieldResendBudget: contextResendBudgetTokens(cfg.EnvPrefix),

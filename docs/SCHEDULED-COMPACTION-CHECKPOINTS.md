@@ -35,12 +35,16 @@ dead-letters in one day. The transcripts showed why:
    `trigger=resend_budget`, `checkpoint`), and `continue`s **without** calling
    the completion policy, without enforcement messages and without consuming
    an enforcement round. The next iteration's `checkContextPressure` compacts.
+   The scheduler SSE forwards both events as `context_checkpoint` and
+   `context_compacted` frames (`internal/runner/task_stream.go`).
 3. **Caps**: `maxResendCheckpoints = 40` per run, tracked on the engine so the
    stop condition itself goes inert past the cap (otherwise every round would
    end after one step and the policy would read that as a finish). Past the
    cap the run is governed by the cost/token ceilings exactly as before. The
    **step cap** (`MaxIterations`) keeps bounding the whole tool loop: the
-   engine counts the steps its checkpoint-ended rounds consumed and subtracts
+   engine counts the steps its checkpoint-ended rounds consumed — the round's
+   TOTAL, including steps a resilience recovery resumed past
+   (`streamRoundOutcome.completedSteps`), not just the final attempt's — and subtracts
    them from the next round's `StepCountIs`, and a pause is refused when the
    step that reached the budget also reached the cap — the cap wins the tie
    and its ordinary handling takes over. The accounting resets when a round
@@ -55,8 +59,10 @@ dead-letters in one day. The transcripts showed why:
    summary is bought from the model the run is **currently driving**
    (`CompactionSummarizeInput.Model`, set by the engine to the fallback after a
    resilience swap), not the configured primary — a swapped run must not keep
-   summarizing on a model that just failed or is circuit-open. The interactive
-   summarizer honours the same field.
+   summarizing on a model that just failed or is circuit-open. The engine
+   records the model at the round's start and at every in-round swap
+   (`noteActiveModel`), so a reactive compaction inside the resilience loop is
+   covered too. The interactive summarizer honours the same field.
 
 ## What did not change
 
@@ -74,5 +80,6 @@ dead-letters in one day. The transcripts showed why:
 
 - A per-run cap that scales with the budget or the step count (40 is a flat
   guard, chosen so a 100-step run can checkpoint every few steps).
-- Surfacing `fleet.context_checkpoint` in the Operations Center run view; it is
-  in the SSE stream and the session log today.
+- Rendering the `context_checkpoint` / `context_compacted` frames in the
+  Operations Center run view; the scheduler SSE (`taskStreamBuffer`) forwards
+  both today, and the session log carries the breadcrumbs.
