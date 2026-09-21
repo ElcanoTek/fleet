@@ -132,9 +132,20 @@ func postChatJSON(t *testing.T, s *Server, user string, body map[string]any) *ht
 	return w
 }
 
+// waitForBudget bounds every waitFor poll. It is a ceiling for a condition
+// that will NEVER become true (a hung drain, a lost re-kick), not a latency
+// assertion: the queue tests pass in well under a second on an idle machine,
+// but under -race on a shared CI runner, with the package's other tests
+// running in parallel and the drained-turn path sleeping through its
+// bounded re-kick, a 5s ceiling was crossed by a run that then completed
+// normally (main run 35559272434, 2026-09-21). A generous ceiling costs
+// nothing on the happy path — the poll returns the moment the condition
+// holds — and only stretches how long a genuinely broken run takes to fail.
+const waitForBudget = 30 * time.Second
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(waitForBudget)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
