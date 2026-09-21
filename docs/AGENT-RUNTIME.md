@@ -196,6 +196,18 @@ never below the base). When the watchdog fires, the `[stream-blip-retry]`
 log line and the `turn.retry` event carry `first_chunk_timeout` and
 `prompt_tokens`, so the correlation is visible in an exported log.
 
+**An expired provider prompt cache is a stream blip, not a rejection.** Google
+evicts the implicit prompt cache a long run has been riding on and answers the
+next step with a 400 `Cache content <id> is expired.` (INVALID_ARGUMENT),
+which OpenRouter relays as a 400 "Provider returned error". The request is
+well-formed — re-sending the same messages builds a fresh cache and succeeds —
+so fleet classes it with the transient blips (one same-model retry, then the
+fallback swap) instead of as a per-request rejection under ADR-0067, whose
+path is terminal once a tool step has run. Before this, a scheduled page
+refresh was dead-lettered ten minutes in on exactly that 400. Only OpenRouter's
+structured `error.metadata.raw` and the adapter's own message are matched; the
+rest of the response body is never read.
+
 **Auxiliary model calls are metered too (#1118).** Model calls fleet makes on
 a run's behalf but outside the main step loop follow one rule — visible or
 counted, never invisible: the compaction summarizer and the model-invocable

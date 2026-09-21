@@ -3,6 +3,7 @@ package agentcore
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -135,4 +136,32 @@ func providerErrorUpstreamDetail(providerErr *fantasy.ProviderError) string {
 		parts = append(parts, fmt.Sprintf("raw=%q", truncate(raw, upstreamRawMaxLen)))
 	}
 	return strings.Join(parts, " ")
+}
+
+// expiredPromptCachePattern matches the upstream message Google returns when
+// the implicit prompt cache a long conversation was riding on has been
+// evicted between two steps: `Cache content <id> is expired.` (status
+// INVALID_ARGUMENT, relayed by OpenRouter as a 400 "Provider returned error").
+var expiredPromptCachePattern = regexp.MustCompile(`(?i)\bcache(?:d)? content\b[^"}]{0,80}\bis expired\b`)
+
+// isExpiredPromptCacheRejection reports whether a 4xx provider error is really
+// an expired server-side prompt cache. The request itself is well-formed — the
+// same messages re-sent a moment later build a fresh cache and succeed — so the
+// error is transient for THIS request, not a per-request rejection (ADR-0067)
+// that should promote the fallback model, and certainly not terminal. A
+// scheduled page refresh dead-lettered on exactly this after 10 minutes of
+// work because the 400 was classed as a rejection past a tool step, where the
+// rejection path stays terminal by design.
+//
+// Only the structured upstream detail (OpenRouter's error.metadata.raw) and
+// the adapter's own message are consulted; nothing else in the body is read.
+func isExpiredPromptCacheRejection(providerErr *fantasy.ProviderError) bool {
+	if providerErr == nil || providerErr.AuthError || providerErr.StatusCode != 400 {
+		return false
+	}
+	if expiredPromptCachePattern.MatchString(providerErr.Message) {
+		return true
+	}
+	detail := parseUpstreamErrorDetail(providerErr.ResponseBody)
+	return expiredPromptCachePattern.MatchString(detail.Raw)
 }

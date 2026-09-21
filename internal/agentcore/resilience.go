@@ -252,6 +252,13 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		if providerErr.IsContextTooLarge() {
 			return streamErrorContextTooLarge, providerErr
 		}
+		// An expired server-side prompt cache arrives as a 400, but the request
+		// is fine and a re-send rebuilds the cache: treat it as a stream blip
+		// (one same-model retry, then the fallback swap) rather than a
+		// rejection, which is terminal once a tool step has run (ADR-0067).
+		if isExpiredPromptCacheRejection(providerErr) {
+			return streamErrorStreamBlip, providerErr
+		}
 		if providerErr.IsRetryable() {
 			return streamErrorRetryExhausted, providerErr
 		}
