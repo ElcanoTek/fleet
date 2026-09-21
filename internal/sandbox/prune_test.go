@@ -61,10 +61,21 @@ func TestPruneOrphanedContainers_ScopedByInstanceLabel(t *testing.T) {
 	}, "\n") + "\n"
 	script, rmArgs := fakePrunePodman(t, psOutput)
 
-	origPidAlive := pidAlive
-	t.Cleanup(func() { pidAlive = origPidAlive })
+	origPidAlive, origPidStartedAt := pidAlive, pidStartedAtUnix
+	t.Cleanup(func() { pidAlive, pidStartedAtUnix = origPidAlive, origPidStartedAt })
 	pidAlive = func(pid int) bool {
 		return pid == os.Getpid() || pid == 31337
+	}
+	// The label says the sibling started at unix second 50. Without this seam
+	// the sweep reads /proc/31337/stat for real, and on a host where some
+	// unrelated process holds pid 31337 (a CI runner did) its start time is
+	// billions of seconds later than 50 — read as pid reuse, so "eee" was
+	// force-removed and the test failed on main while passing on the PR.
+	pidStartedAtUnix = func(pid int) (int64, bool) {
+		if pid == 31337 {
+			return 50, true
+		}
+		return 0, false
 	}
 
 	removed, err := PruneOrphanedContainers(context.Background(), script)
