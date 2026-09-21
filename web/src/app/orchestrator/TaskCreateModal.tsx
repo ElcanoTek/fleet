@@ -14,7 +14,13 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
-import { currentDefaultModel, currentTaskFallbackModel } from "@/app/lib/modelAliases";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_TASK_FALLBACK_MODEL,
+  currentDefaultModel,
+  currentTaskFallbackModel,
+} from "@/app/lib/modelAliases";
+import { useClientConfig } from "@/app/lib/useClientConfig";
 import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
 import { FileUpload, type FileUploadHandle, type FileEntry } from "@/app/shared/ui/FileUpload";
 import { CostForecastPanel } from "./CostForecastPanel";
@@ -397,6 +403,28 @@ export function TaskCreateModal({
 
   const [model, setModel] = useState(init.model);
   const [fallbackModel, setFallbackModel] = useState(init.fallbackModel);
+  // The modal mounts (closed) with the Operations Center page, usually before
+  // /api/client-config has resolved, so `init` captured the compiled-in pair.
+  // When the live pair lands, adopt it into a form the user has not touched:
+  // a create form still on the compiled-in slugs. An edited/cloned task pins
+  // its own pair; a slug the user picked stays because the values differ.
+  // Deferred to a microtask, mirroring the chat shell, so the adoption lands
+  // outside the effect's synchronous phase.
+  const { models: liveModelTiers } = useClientConfig();
+  useEffect(() => {
+    if (!liveModelTiers || editTask) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setModel((cur) => (cur === DEFAULT_MODEL ? currentDefaultModel() : cur));
+      setFallbackModel((cur) =>
+        cur === DEFAULT_TASK_FALLBACK_MODEL ? currentTaskFallbackModel() : cur,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [liveModelTiers, editTask]);
   const [maxIterations, setMaxIterations] = useState(init.maxIterations);
   const [maxCostUSD, setMaxCostUSD] = useState(init.maxCostUSD);
   const [captainsLog, setCaptainsLog] = useState(init.captainsLog);

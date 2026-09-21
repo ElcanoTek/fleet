@@ -212,10 +212,19 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
-		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) {
+		// Reconcile BEFORE the override guard: the web echoes the conversation's
+		// stored model on every turn, so a lockdown chat whose persisted model
+		// was delisted would otherwise be rejected as an "override" to that very
+		// model and never reach the migration. An echo of the stale persisted
+		// slug is "no opinion"; a genuinely different disallowed slug still 400s.
+		prior := conv.Model
+		if !s.reconcileLockdownModel(w, r, user, conv) {
 			return
 		}
-		if !s.reconcileLockdownModel(w, r, user, conv) {
+		if conv.Model != prior && reqModel == prior {
+			reqModel = ""
+		}
+		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) {
 			return
 		}
 		// Sending a message to an archived conversation un-archives it (#282) —

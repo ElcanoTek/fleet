@@ -594,9 +594,38 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		}
 	})
 
-	// An explicit per-turn override to a delisted slug is still a 400 — the
-	// migration only ever moves a conversation ONTO the list.
-	t.Run("delisted override still rejected after migration exists", func(t *testing.T) {
+	// The web echoes the stored model on every turn. That echo of the stale
+	// persisted slug must not be mistaken for an override TO the delisted
+	// model — it is the exact case the migration exists for.
+	t.Run("client echoing the delisted persisted model is migrated, not rejected", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/d"}
+		seed(st, true) // persisted a/b
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "a/b", // what the web sends: the conversation's own stored model
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		engine.mu.Lock()
+		turnModel := engine.lastModel
+		engine.mu.Unlock()
+		if model != "c/d" || turnModel != "c/d" {
+			t.Errorf("echoed delisted model should migrate to the lockdown default: stored=%q turn=%q", model, turnModel)
+		}
+	})
+
+	// A genuinely DIFFERENT disallowed slug is still a 400 — the migration only
+	// ever moves a conversation ONTO the list.
+	t.Run("different disallowed override still rejected after migration exists", func(t *testing.T) {
 		engine := &fakeEngine{}
 		st := newFakeChatStore()
 		srv := newDefaultChatServer(t, engine, st)
@@ -605,11 +634,17 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 
 		w := postChatRequest(t, srv, map[string]any{
 			"conversation_id": "conv-1",
-			"model":           "a/b",
+			"model":           "evil/unvetted-model",
 			"message":         "hello",
 		})
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		if model != "c/d" {
+			t.Errorf("the persisted delisted model should still have been migrated before the rejection: stored=%q", model)
 		}
 	})
 
