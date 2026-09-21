@@ -1035,7 +1035,7 @@ var taskColumnRegistry = []taskColumn{
 		name:       "recurrence_spawned",
 		insert:     true,
 		noRead:     "no Task field: consumed only by the guarded spawn/settle SQL predicates in storage (#1116)",
-		noUpsert:   "insert-only (#1116): after INSERT it is owned by the guarded spawn/settle statements; an upsert write could clobber a claimed spawn credit",
+		noUpsert:   "insert-only (#1116): after INSERT it is owned by the guarded spawn/settle statements; an upsert write could clobber a claimed spawn credit. Import --replace-status / --overwrite landing RecurrenceSpawnTaskStatuses on an EXISTING pending/scheduled row therefore cannot ride this SET — Storage.AddTaskWithContext wraps that write in a tx and db.AddTaskTx settles the flag in the same transaction (the same born-settled semantics recurrenceSpawnedInsertValue already gives a fresh insert). That also closes the pre-existing success/error version of the same gap. db.AddTask / UpdateTask stay unadorned so a test seed can still land an unclaimed terminal row",
 		noTxUpdate: "insert-only (#1116): same doctrine as the upsert exclusion — only the guarded spawn/settle statements may change it",
 		noExport:   "runtime settlement marker (#1116): derived at insert (recurrenceSpawnedInsertValue) so restored terminal rows land settled",
 		value:      func(t *models.Task) any { return recurrenceSpawnedInsertValue(t) },

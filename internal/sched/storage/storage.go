@@ -210,15 +210,49 @@ func (s *Storage) AddTask(task *models.Task) (*models.Task, error) {
 	return s.AddTaskWithContext(context.Background(), task)
 }
 
-// AddTaskWithContext adds a new task with context.
+// AddTaskWithContext adds a new task with context. It is the import/upsert
+// seam (`fleet sched task import --replace-status`, legacy `fleet import
+// --overwrite`): INSERT ... ON CONFLICT (id) DO UPDATE. recurrence_spawned
+// is excluded from that upsert (see task_columns.go) so a status write
+// cannot clobber a claimed spawn credit — which also means overwriting an
+// existing pending/scheduled recurring row with a spawn-bearing terminal
+// status would leave the flag FALSE and let ReconcileRecurrences treat
+// restored history as a lost spawn. When this write lands in
+// RecurrenceSpawnTaskStatuses, settle the credit in the same transaction
+// (the same "born settled" semantics recurrenceSpawnedInsertValue already
+// gives a fresh insert). db.UpdateTask / db.AddTask stay unadorned so test
+// seeds can still land an unclaimed terminal row.
 func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*models.Task, error) {
 	if err := validateStoredOutputContract(task); err != nil {
 		return nil, err
 	}
-	if err := s.db.AddTask(ctx, task); err != nil {
+	if !recurrenceSpawnStatus(task.Status) {
+		if err := s.db.AddTask(ctx, task); err != nil {
+			return nil, err
+		}
+		return task, nil
+	}
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.db.AddTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return task, nil
+}
+
+func recurrenceSpawnStatus(s models.TaskStatus) bool {
+	for _, st := range models.RecurrenceSpawnTaskStatuses {
+		if s == st {
+			return true
+		}
+	}
+	return false
 }
 
 // AddTaskBatch inserts a slice of validated tasks for the batch submission
@@ -1674,14 +1708,15 @@ func (s *Storage) MarkBudgetSoftAlert(ctx context.Context, id uuid.UUID, windowS
 // in the dead_lettered state (ErrTaskNotDeadLettered otherwise), mirroring the
 // editability guards on the other operator mutations.
 //
-// Recurrence spawn credit (ADR-0070): re-armed to FALSE only when no LATER
-// occurrence exists in the same chain. If DeadLetterTaskWithContext already
-// spawned (or the lineage continued some other way), the flag stays TRUE so
-// this replayed run cannot mint a second chain. Retention may have pruned the
-// immediate successor; a continued chain always has a newer row (pruning
-// removes OLD rows), so created_at ordering survives that. A breaker-parked
-// chain with nothing newer re-arms and the replayed run's completion continues
-// the schedule. Returns the updated task.
+// Recurrence spawn credit (ADR-0070): re-armed to FALSE only when no later
+// recurrence occurrence exists in the same chain. A row whose
+// previous_occurrence_id points at this one is definitive regardless of
+// created_at (imported/restored histories can stamp equal or out-of-order
+// timestamps). If that immediate successor was pruned, a newer row in the
+// same lineage with a non-empty recurrence is the fallback — created_at
+// ordering survives retention (pruning removes OLD rows) and a one-off
+// "Run now" copy (cleared recurrence, kept lineage_id) is ignored so a
+// parked schedule can still restart on replay. Returns the updated task.
 func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -1722,26 +1757,34 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	// error_analysis (it's write-once against status updates), so clear it
 	// explicitly in the same tx rather than through the task struct.
 	//
-	// recurrence_spawned is re-armed ONLY when no later occurrence exists in
-	// this chain (ADR-0070). Matching solely on previous_occurrence_id is not
-	// durable: CleanupOldRuns / DeleteOldHistory prune OLD rows, so the
-	// immediate successor can vanish while a newer descendant or live head
-	// remains — re-arming then lets the replayed run fork a second chain.
-	// created_at > this row is the durable signal (a continued chain always
-	// has a newer row). lineage_id is the job key; a NULL lineage_id (a
-	// pre-069 row) must not equal every other NULL, so the lineage arm is
-	// skipped and previous_occurrence_id still catches a surviving immediate
-	// child (TEXT, like the other lineage pointers).
+	// recurrence_spawned is re-armed ONLY when no later recurrence occurrence
+	// exists in this chain (ADR-0070). Two arms, combined with OR:
+	//
+	//   1. Direct link: x.previous_occurrence_id = this id. Definitive even
+	//      when created_at is equal or older (import/restore can stamp
+	//      histories out of order). Do NOT time-filter this arm.
+	//   2. Lineage fallback: same lineage_id, strictly newer created_at, and
+	//      a non-empty recurrence. Retention may have pruned the immediate
+	//      successor while a later occurrence or live head remains; pruning
+	//      removes OLD rows, so a continued chain always has a newer one.
+	//      A one-off "Run now" copy (handlers.buildRerunTaskCreate clears
+	//      Recurrence, keeps lineage_id) must NOT keep the credit — otherwise
+	//      a parked schedule could never restart on replay. NULL lineage_id
+	//      (pre-069) does not equal every other NULL.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tasks AS t SET error_analysis = NULL,
 		    recurrence_spawned = CASE
 		        WHEN EXISTS (
 		            SELECT 1 FROM tasks x
 		            WHERE x.id <> t.id
-		              AND x.created_at > t.created_at
 		              AND (
-		                    (t.lineage_id IS NOT NULL AND x.lineage_id = t.lineage_id)
-		                    OR x.previous_occurrence_id = t.id::text
+		                    x.previous_occurrence_id = t.id::text
+		                    OR (
+		                          t.lineage_id IS NOT NULL
+		                          AND x.lineage_id = t.lineage_id
+		                          AND x.created_at > t.created_at
+		                          AND x.recurrence IS NOT NULL AND x.recurrence <> ''
+		                       )
 		                  )
 		        )
 		        THEN t.recurrence_spawned

@@ -49,12 +49,14 @@ agree. `db.GetUnspawnedRecurringTasks` therefore selects `dead_lettered`
 rows as well as `success`/`error`. Cancel still ends the chain.
 
 `ReplayDeadLetteredTask` re-arms `recurrence_spawned` only when no later
-occurrence exists in the same chain (same `lineage_id`, or a surviving
-row still pointing at this one via `previous_occurrence_id`, and
-`created_at` newer — retention prunes old rows, so a continued chain
-always has a newer one). When the DLQ path already spawned, or the
-lineage continued some other way, the flag stays `TRUE` so the replayed
-run's completion cannot fork a second parallel chain. A breaker-parked
+recurrence occurrence exists in the same chain. A row pointing at this
+one via `previous_occurrence_id` is definitive regardless of `created_at`
+(imported histories can be out of order). If that successor was pruned,
+a newer row with the same `lineage_id` and a non-empty recurrence is the
+fallback (retention removes OLD rows; a one-off "Run now" copy keeps
+`lineage_id` but clears recurrence and must not block restart). When the
+DLQ path already spawned, or the lineage continued, the flag stays
+`TRUE` so the replayed run cannot fork a second chain. A breaker-parked
 chain with nothing newer re-arms and continues on replay.
 
 ## Enforcement
@@ -67,7 +69,12 @@ chain with nothing newer re-arms and continues on replay.
   (`success`, `error`, `dead_lettered`); `db.recurrenceSpawnedInsertValue`
   settles born-terminal rows in that same set.
 - `storage.ReplayDeadLetteredTask` re-arms the spawn credit only when no
-  later occurrence exists in the chain.
+  later recurrence occurrence exists in the chain (direct pointer, or a
+  newer same-lineage row that still recurs).
+- `Storage.AddTaskWithContext` / `db.AddTaskTx` settle `recurrence_spawned`
+  when the write lands in `RecurrenceSpawnTaskStatuses`, so a
+  `--replace-status` / `--overwrite` upsert over a live recurring row
+  cannot leave restored history unclaimed.
 - The DLQ-breaker settle requires `status = dead_lettered` so it cannot
   clobber a replay that already committed.
 - Migration 071 backfill-settles existing `dead_lettered` rows before it

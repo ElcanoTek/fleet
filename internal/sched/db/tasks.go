@@ -129,8 +129,23 @@ func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*mod
 // AddTaskTx inserts a single task within an existing transaction. The atomic
 // batch path (#227) uses this so a multi-row insert lands in the caller's tx.
 // It executes the same registry-derived taskInsertStatement as AddTask.
+//
+// When the write lands in a RecurrenceSpawnTaskStatuses status, it also
+// settles recurrence_spawned in this transaction. The column is excluded
+// from the ON CONFLICT set (task_columns.go) so a generic upsert cannot
+// clobber a claimed credit — which means overwriting an existing
+// pending/scheduled row with a terminal spawn-bearing status would otherwise
+// leave the flag FALSE. Fresh inserts already get TRUE from
+// recurrenceSpawnedInsertValue; the extra UPDATE is idempotent for those
+// and is what closes the upsert gap (import --replace-status / --overwrite).
 func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
-	_, err := tx.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...)
+	if _, err := tx.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...); err != nil {
+		return err
+	}
+	if !recurrenceSpawnedInsertValue(task) {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, task.ID)
 	return err
 }
 

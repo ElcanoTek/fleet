@@ -282,6 +282,60 @@ func TestReconcileRecurrencesDoesNotRespawnBackfilledDeadLetter(t *testing.T) {
 	}
 }
 
+// TestUpsertedTerminalRecurringIsSettled pins the import/upsert settle:
+// overwriting an existing scheduled recurring row with a spawn-bearing
+// terminal status (the --replace-status / --overwrite path) must land
+// recurrence_spawned TRUE, or ReconcileRecurrences would treat restored
+// history as a lost spawn.
+func TestUpsertedTerminalRecurringIsSettled(t *testing.T) {
+	for _, status := range []models.TaskStatus{models.TaskStatusDeadLettered, models.TaskStatusSuccess} {
+		t.Run(string(status), func(t *testing.T) {
+			store, _ := newTestStore(t)
+			store.SetTimezone("UTC")
+			ctx := context.Background()
+
+			when := time.Now().Add(time.Hour).UTC()
+			live := &models.Task{
+				ID:           uuid.New(),
+				Prompt:       "daily digest",
+				Status:       models.TaskStatusScheduled,
+				Priority:     10,
+				Recurrence:   "@daily",
+				Timezone:     "UTC",
+				ScheduledFor: &when,
+				CreatedAt:    time.Now().UTC(),
+			}
+			if _, err := store.AddTask(live); err != nil {
+				t.Fatalf("AddTask(live): %v", err)
+			}
+			if recurrenceSpawned(t, store, live.ID) {
+				t.Fatal("setup: a live scheduled row must not have a claimed spawn credit")
+			}
+
+			completed := time.Now().Add(-10 * time.Minute).UTC()
+			live.Status = status
+			live.CompletedAt = &completed
+			if _, err := store.AddTaskWithContext(ctx, live); err != nil {
+				t.Fatalf("AddTaskWithContext(upsert %s): %v", status, err)
+			}
+			if !recurrenceSpawned(t, store, live.ID) {
+				t.Fatalf("upsert to %s must settle recurrence_spawned", status)
+			}
+
+			repaired, err := store.ReconcileRecurrences(ctx)
+			if err != nil {
+				t.Fatalf("ReconcileRecurrences: %v", err)
+			}
+			if repaired != 0 {
+				t.Fatalf("repaired %d, want 0 — upserted terminal history must not spawn", repaired)
+			}
+			if n := len(successorsOf(t, store, map[uuid.UUID]bool{live.ID: true})); n != 0 {
+				t.Fatalf("successors = %d, want 0", n)
+			}
+		})
+	}
+}
+
 // TestReplayedDeadLetterContinuesChainOnce pins the DLQ↔recurrence contract
 // (ADR-0070): dead-lettering a recurring occurrence spawns the successor, and
 // replaying that quarantined row must NOT fork a second chain when the
