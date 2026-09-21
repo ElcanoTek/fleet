@@ -39,6 +39,17 @@ const nextConfig: NextConfig = {
   // together if a deployment lifts the per-file limit.
   experimental: {
     proxyClientMaxBodySize: "2gb",
+    // A failed App Router RSC fetch (a Link prefetch or a client navigation
+    // while the network is down) falls back to a full browser navigation to
+    // that URL — `fetch-server-response.js`: "Failed to fetch RSC payload …
+    // Falling back to browser navigation" — which on a phone that has just
+    // lost its radio reloads the page mid-turn and lands on the browser's
+    // offline error page (observed on fleetdev: three GET /chat document
+    // loads → ERR_INTERNET_DISCONNECTED while a turn was streaming; #1583).
+    // With this flag Next treats a network-error fetch as "offline", pauses
+    // prefetching, waits for connectivity and retries the same fetch instead
+    // of navigating. Aborts and timeouts still take the old path.
+    useOffline: true,
   },
 
   // Pin the Next.js build id so the hashed asset paths match the
