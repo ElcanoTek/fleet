@@ -13,24 +13,26 @@ import (
 // ~115K-token prompt on a slower provider timed out twice and swapped the run
 // to its fallback model in the audit tail (Reklaim 6bd0c212). The deadline now
 // scales with the previous step's prompt size and both ends are knobs (#1537).
+// The base is 75 s since #1585: the default model is a reasoning model whose
+// hidden thinking can run past 30 s before the first visible token.
 func TestFirstChunkTimeoutScalesWithPromptAndClamps(t *testing.T) {
 	p := EnvPrefix(CanonicalEnvPrefix)
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", "")
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", "")
 
-	if got := firstChunkTimeoutFor(p, 0); got != 30*time.Second {
-		t.Fatalf("unknown prompt size must yield the 30 s base, got %s", got)
+	if got := firstChunkTimeoutFor(p, 0); got != 75*time.Second {
+		t.Fatalf("unknown prompt size must yield the 75 s base, got %s", got)
 	}
-	if got := firstChunkTimeoutFor(p, 9_999); got != 30*time.Second {
+	if got := firstChunkTimeoutFor(p, 9_999); got != 75*time.Second {
 		t.Fatalf("under 10K tokens adds nothing, got %s", got)
 	}
-	if got := firstChunkTimeoutFor(p, 115_000); got != 52*time.Second {
-		t.Fatalf("115K tokens = 30 s + 11×2 s = 52 s, got %s", got)
+	if got := firstChunkTimeoutFor(p, 115_000); got != 97*time.Second {
+		t.Fatalf("115K tokens = 75 s + 11×2 s = 97 s, got %s", got)
 	}
 	if got := firstChunkTimeoutFor(p, 2_000_000); got != 180*time.Second {
 		t.Fatalf("a huge prompt must clamp to the 180 s default cap, got %s", got)
 	}
-	if got := firstChunkTimeoutFor(p, -5); got != 30*time.Second {
+	if got := firstChunkTimeoutFor(p, -5); got != 75*time.Second {
 		t.Fatalf("a negative estimate is treated as unknown, got %s", got)
 	}
 
@@ -55,7 +57,7 @@ func TestFirstChunkTimeoutScalesWithPromptAndClamps(t *testing.T) {
 	}
 	// Unparseable falls back to the default rather than failing the turn.
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", "soon")
-	if got := firstChunkTimeoutFor(p, 0); got != 30*time.Second {
+	if got := firstChunkTimeoutFor(p, 0); got != 75*time.Second {
 		t.Fatalf("unparseable knob must fall back to the default, got %s", got)
 	}
 }

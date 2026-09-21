@@ -80,10 +80,20 @@ const (
 	// timeouts in a row swapped a run to its fallback model in the audit
 	// tail. The timeout now grows with the prompt: base + 2 s per 10K prompt
 	// tokens (the previous step's input size), capped. Both ends are knobs:
-	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS (default 30, floor 5) and
+	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS (default 75, floor 5) and
 	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS (default 180, never
 	// below the base).
-	defaultFirstChunkTimeout      = 30 * time.Second
+	//
+	// The base moved from 30 s to 75 s on 2026-09-21 (#1585): the workspace
+	// default model is now a reasoning model (GPT-5.6 Luna Pro), and not every
+	// OpenRouter route streams its reasoning, so a model doing long hidden
+	// reasoning before its first visible token produces NO semantic event for
+	// tens of seconds. At 30 s a healthy Luna Pro on a heavy prompt tripped
+	// the watchdog twice in a row and the turn failed as "provider failing
+	// repeatedly". 75 s covers the thinking phases observed (25–40 s) with
+	// headroom; the price is a slower verdict on a genuinely dead provider,
+	// which an operator can tighten back with the base knob.
+	defaultFirstChunkTimeout      = 75 * time.Second
 	minFirstChunkTimeout          = 5 * time.Second
 	firstChunkTimeoutPer10KTokens = 2 * time.Second
 	defaultFirstChunkTimeoutMax   = 180 * time.Second

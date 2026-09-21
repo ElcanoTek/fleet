@@ -189,12 +189,26 @@ stream blip (one same-model retry, then the fallback swap). The deadline used
 to be a flat 30 s, which a ~115K-token prompt on a slower provider can
 legitimately exceed while it is still processing the prompt — two such
 timeouts in a row swapped a run to its fallback model in its audit tail. The
-wait is now `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` (default **30**,
+wait is now `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` (default **75**,
 floor 5) plus **2 s per 10K prompt tokens** of the previous step's input,
 capped at `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` (default **180**,
 never below the base). When the watchdog fires, the `[stream-blip-retry]`
 log line and the `turn.retry` event carry `first_chunk_timeout` and
 `prompt_tokens`, so the correlation is visible in an exported log.
+
+The base was 30 s until 2026-09-21 (#1585). The workspace default model is
+now a reasoning model (GPT-5.6 Luna Pro), and not every OpenRouter route
+streams reasoning, so a model doing long hidden reasoning before its first
+visible token produces no semantic event for tens of seconds — at 30 s a
+healthy Luna Pro on a heavy prompt tripped the watchdog twice in a row and the
+chat turn failed with "provider failing repeatedly". 75 s covers the thinking
+phases observed (25–40 s) with headroom. The cost is a slower verdict on a
+provider that is genuinely dead: chat waits 75 s before its error, a scheduled
+run 75 s before the same-model retry and then the fallback swap. An operator
+who runs only non-reasoning models can tighten the base knob back. When the
+watchdog is the cause of a `turn.model_required`, the message now says the
+model did not start responding within the deadline instead of "failing
+repeatedly".
 
 **An expired provider prompt cache is a stream blip, not a rejection.** Google
 evicts the implicit prompt cache a long run has been riding on and answers the

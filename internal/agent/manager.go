@@ -2072,18 +2072,26 @@ func emitModelSelectionRequired(sink EventSink, reason agentcore.StreamErrorReas
 		"reason":       string(reason),
 		"failed_model": failedModel,
 		"status_code":  status,
-		"message":      humanMessageForReason(reason, status),
+		"message":      humanMessageForReason(reason, status, streamErr),
 		"raw":          truncate(raw, 1000),
 	})
 }
 
-func humanMessageForReason(reason agentcore.StreamErrorReason, status int) string {
+// humanMessageForReason is the one sentence the card shows. streamErr lets the
+// retry-exhausted case tell a provider that FAILED apart from one that never
+// started answering: the first-chunk watchdog (#1585) fires on a healthy
+// reasoning model whose hidden thinking outlasts the deadline, and calling that
+// "failing repeatedly" sent users away from a model that was fine.
+func humanMessageForReason(reason agentcore.StreamErrorReason, status int, streamErr error) string {
 	switch reason {
 	case agentcore.ReasonContextTooLarge:
 		return "This conversation exceeds the selected model's context window. Pick a model with a larger window or start a new chat."
 	case agentcore.ReasonRetryExhausted:
 		if status == 429 {
 			return "The selected model is rate-limiting this request. Retrying did not help — pick a different model to continue."
+		}
+		if errors.Is(streamErr, agentcore.ErrFirstChunkTimeout) {
+			return "The selected model did not start responding within the time allowed, twice. Retry, or pick a different model to continue."
 		}
 		return "The selected model's provider is failing repeatedly. Pick a different model to continue."
 	default:
