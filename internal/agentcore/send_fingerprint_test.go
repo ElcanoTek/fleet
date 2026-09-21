@@ -34,20 +34,24 @@ func TestSendEmailFingerprint_AttachmentsChangeIdentity(t *testing.T) {
 	}
 }
 
-// The same file referenced through a different directory is the same
-// deliverable and must still dedupe; order must not matter either.
-func TestSendEmailFingerprint_AttachmentIdentityIsByBaseName(t *testing.T) {
-	abs, _ := sendEmailFingerprint(fpArgs([]interface{}{"/var/lib/fleet/workspace/tasks/abc/Report.CSV", "/tmp/notes.txt"}))
-	rel, _ := sendEmailFingerprint(fpArgs([]interface{}{"notes.txt", "report.csv"}))
-	if abs != rel {
-		t.Fatal("attachment identity must be by lower-cased base name, order-insensitive")
+// Attachment identity keeps directories and case (different files can share a
+// base name), is order-insensitive, and canonicalizes only path syntax.
+func TestSendEmailFingerprint_AttachmentIdentityKeepsPath(t *testing.T) {
+	a, _ := sendEmailFingerprint(fpArgs([]interface{}{"tasks/abc/report.csv", "/tmp/notes.txt"}))
+	reordered, _ := sendEmailFingerprint(fpArgs([]interface{}{"/tmp/notes.txt", "tasks/abc/./report.csv"}))
+	if a != reordered {
+		t.Fatal("order and redundant path syntax must not change the fingerprint")
 	}
-	other, _ := sendEmailFingerprint(fpArgs([]interface{}{"report.csv", "other.txt"}))
-	if other == rel {
-		t.Fatal("a different attachment set must change the fingerprint")
+	otherDir, _ := sendEmailFingerprint(fpArgs([]interface{}{"tasks/xyz/report.csv", "/tmp/notes.txt"}))
+	if otherDir == a {
+		t.Fatal("the same base name in a different directory is a different file")
 	}
-	single, _ := sendEmailFingerprint(fpArgs("report.csv"))
-	list, _ := sendEmailFingerprint(fpArgs([]interface{}{"report.csv"}))
+	otherCase, _ := sendEmailFingerprint(fpArgs([]interface{}{"tasks/abc/Report.csv", "/tmp/notes.txt"}))
+	if otherCase == a {
+		t.Fatal("case differences distinguish files on the deployment filesystem")
+	}
+	single, _ := sendEmailFingerprint(fpArgs("tasks/abc/report.csv"))
+	list, _ := sendEmailFingerprint(fpArgs([]interface{}{"tasks/abc/report.csv"}))
 	if single != list {
 		t.Fatal("a bare string attachment must fingerprint like a one-element list")
 	}
@@ -64,7 +68,7 @@ func TestSendEmailFingerprint_ObjectShapedAttachments(t *testing.T) {
 	if !ok {
 		t.Fatal("object-shaped attachments must be computable")
 	}
-	strs, _ := sendEmailFingerprint(fpArgs([]interface{}{"notes.txt", "report.csv"}))
+	strs, _ := sendEmailFingerprint(fpArgs([]interface{}{"notes.txt", "/var/lib/fleet/workspace/tasks/abc/report.csv"}))
 	if objs != strs {
 		t.Fatal("object-shaped attachments must fingerprint like the equivalent bare-string list")
 	}
@@ -72,12 +76,34 @@ func TestSendEmailFingerprint_ObjectShapedAttachments(t *testing.T) {
 	if objs == none {
 		t.Fatal("object-shaped attachments must not collapse to the no-attachment fingerprint")
 	}
-	inline, _ := sendEmailFingerprint(map[string]interface{}{
-		"to_email": []interface{}{"a@x.com", "b@x.com"}, "subject": "Weekly report", "content": "<html>body</html>",
-		"inline_attachments": []interface{}{map[string]interface{}{"path": "chart.png", "cid": "chart"}},
+}
+
+// Inline attachments carry the content id the body references them by; a
+// corrected cid for the same file is a different email.
+func TestSendEmailFingerprint_InlineAttachmentsIncludeCID(t *testing.T) {
+	base := func(cid string) map[string]interface{} {
+		return map[string]interface{}{
+			"to_email": []interface{}{"a@x.com"}, "subject": "Weekly report", "content": "<img src=\"cid:chart\">",
+			"inline_attachments": []interface{}{map[string]interface{}{"path": "chart.png", "cid": cid}},
+		}
+	}
+	chart, _ := sendEmailFingerprint(base("chart"))
+	wrong, _ := sendEmailFingerprint(base("chart-old"))
+	if chart == wrong {
+		t.Fatal("an inline attachment re-sent under a different cid is a different email")
+	}
+	viaContentID, _ := sendEmailFingerprint(map[string]interface{}{
+		"to_email": []interface{}{"a@x.com"}, "subject": "Weekly report", "content": "<img src=\"cid:chart\">",
+		"inline_attachments": []interface{}{map[string]interface{}{"path": "chart.png", "content_id": "chart"}},
 	})
-	if inline == none {
-		t.Fatal("inline attachments are part of the send identity too")
+	if viaContentID != chart {
+		t.Fatal("cid and content_id are the same field")
+	}
+	none, _ := sendEmailFingerprint(map[string]interface{}{
+		"to_email": []interface{}{"a@x.com"}, "subject": "Weekly report", "content": "<img src=\"cid:chart\">",
+	})
+	if none == chart {
+		t.Fatal("inline attachments are part of the send identity")
 	}
 }
 
@@ -87,11 +113,11 @@ func TestEmailDedupKey_AttachmentAwareThroughRawInput(t *testing.T) {
 	if a == b {
 		t.Fatal("emailDedupKey must distinguish a send with attachments from one without")
 	}
-	c := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c","attachments":[{"path":"/w/x.csv"}]}`)
+	c := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c","attachments":[{"path":"x.csv"}]}`)
 	if c == a {
 		t.Fatal("emailDedupKey must see object-shaped attachments")
 	}
 	if c != b {
-		t.Fatal("object-shaped and bare-string attachments of the same file must dedupe together")
+		t.Fatal("object-shaped and bare-string references to the same path must dedupe together")
 	}
 }

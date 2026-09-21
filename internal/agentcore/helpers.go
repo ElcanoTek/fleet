@@ -123,9 +123,14 @@ func emailDedupKey(rawInput string) string {
 // suppressed that corrective resend as a duplicate, so the client got the
 // report without its deliverable and the run dead-lettered on verification.
 // An email that carries a file is not the same email as one that does not.
-// Attachments are keyed by lower-cased base name, sorted: the same file reached
-// through a different directory (an absolute workspace path vs. a relative one
-// from the run workdir) is the same deliverable and must still dedupe.
+// Attachments are keyed by their cleaned path (case and directories preserved,
+// sorted), and inline attachments additionally by the content id the body
+// references them through: two workspace files that differ only by directory
+// or case can hold entirely different bytes, and an inline image re-sent under
+// a corrected cid is a materially different email. The guard therefore errs
+// toward letting a differently-referenced attachment send rather than
+// silently suppressing a corrective resend — a byte-identical loop still
+// dedupes exactly as before.
 func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 	toEmails := parseRecipientArg(args["to_email"])
 	if len(toEmails) == 0 {
@@ -161,38 +166,50 @@ func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 	return hashString(fingerprintSource), true
 }
 
-// attachmentNames normalizes a send_email attachments argument into sorted,
-// lower-cased base names. The wire shape is a list of objects with a "path"
-// key (the form tools.MaterializeAttachmentPaths consumes); bare strings and
-// a single string are accepted too, since models emit both. Base name rather
-// than full path: the deliverable is the file, not where the model happened to
-// reference it from.
+// attachmentNames normalizes a send_email attachments argument into a sorted
+// list of identities. The wire shape is a list of objects with a "path" key
+// (the form tools.MaterializeAttachmentPaths consumes) and, for inline
+// attachments, a "cid" or "content_id"; bare strings and a single string are
+// accepted too, since models emit both. The identity is the cleaned path with
+// case and directory components intact (files that differ only there can hold
+// different bytes), prefixed by the content id when one is present (the body's
+// cid: reference decides whether the recipient sees the image at all).
 func attachmentNames(value interface{}) []string {
-	var raw []string
+	type entry struct{ path, cid string }
+	var raw []entry
 	switch typed := value.(type) {
 	case string:
-		raw = []string{typed}
+		raw = []entry{{path: typed}}
 	case []interface{}:
 		for _, item := range typed {
-			switch entry := item.(type) {
+			switch e := item.(type) {
 			case string:
-				raw = append(raw, entry)
+				raw = append(raw, entry{path: e})
 			case map[string]interface{}:
-				if p, ok := entry["path"].(string); ok {
-					raw = append(raw, p)
+				p, _ := e["path"].(string)
+				cid, _ := e["cid"].(string)
+				if cid == "" {
+					cid, _ = e["content_id"].(string)
 				}
+				raw = append(raw, entry{path: p, cid: cid})
 			}
 		}
 	case []string:
-		raw = typed
+		for _, p := range typed {
+			raw = append(raw, entry{path: p})
+		}
 	}
 	names := make([]string, 0, len(raw))
-	for _, p := range raw {
-		p = strings.TrimSpace(p)
+	for _, e := range raw {
+		p := strings.TrimSpace(e.path)
 		if p == "" {
 			continue
 		}
-		names = append(names, strings.ToLower(filepath.Base(p)))
+		id := filepath.Clean(p)
+		if cid := strings.TrimSpace(e.cid); cid != "" {
+			id = "cid:" + cid + "=" + id
+		}
+		names = append(names, id)
 	}
 	sort.Strings(names)
 	return names
