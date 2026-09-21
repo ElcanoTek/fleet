@@ -90,9 +90,9 @@ var (
 	// substitutes. Empty by default.
 	activeCriticalSubstitutes = map[string][]string{}
 
-	// activeTransportAliases maps a critical suffix to its same-write
-	// transport counterpart. Empty by default.
-	activeTransportAliases = map[string]string{}
+	// activeTransportAliases is an adjacency set: suffix -> counterparts that
+	// are the same write over a different transport. Empty by default.
+	activeTransportAliases = map[string]map[string]bool{}
 
 	// activeCriticalTimeouts maps a critical-tool suffix -> per-tool approval
 	// default-deny window in seconds (#225). Empty by default (no per-tool
@@ -156,7 +156,17 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	}
 	activeCriticalSubstitutes = subs
 
-	aliases := make(map[string]string)
+	aliases := make(map[string]map[string]bool)
+	addAlias := func(a, b string) {
+		if aliases[a] == nil {
+			aliases[a] = map[string]bool{}
+		}
+		if aliases[b] == nil {
+			aliases[b] = map[string]bool{}
+		}
+		aliases[a][b] = true
+		aliases[b][a] = true
+	}
 	for k, vs := range p.CriticalToolTransportAliases {
 		k = strings.TrimSpace(k)
 		if k == "" {
@@ -167,8 +177,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 			if v == "" || v == k {
 				continue
 			}
-			aliases[k] = v
-			aliases[v] = k
+			addAlias(k, v)
 		}
 	}
 	// A bundle that gates BOTH transports of a pages write has already said
@@ -177,8 +186,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	// tool is unchanged, and an unrelated `_upload` suffix is not inferred.
 	for _, pair := range pagesTransportPairs {
 		if seen[pair[0]] && seen[pair[1]] {
-			aliases[pair[0]] = pair[1]
-			aliases[pair[1]] = pair[0]
+			addAlias(pair[0], pair[1])
 		}
 	}
 	activeTransportAliases = aliases

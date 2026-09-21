@@ -923,10 +923,17 @@ func (o *orchestrationState) accumulateUsage(modelSlug string, usage fantasy.Usa
 //
 // Discharging one entry per success keeps the count honest: two distinct pending
 // calls to the same tool still need two successes, exactly as before.
+// pendingTransportAlias reports whether a blocked-call pending entry for
+// pendingName is the same write as executedName over a different transport.
+func pendingTransportAlias(pendingName, executedName string) bool {
+	return sameToolServer(pendingName, executedName) &&
+		transportAliasSatisfies(criticalSuffixFor(pendingName), criticalSuffixFor(executedName))
+}
+
 func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) {
 	fallback := -1
 	for i, p := range o.pendingCriticalActions {
-		if p.toolName != toolName {
+		if p.toolName != toolName && !pendingTransportAlias(p.toolName, toolName) {
 			continue
 		}
 		if p.argsHash == argsHash {

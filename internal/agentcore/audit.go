@@ -76,14 +76,19 @@ func transportAliasSatisfies(committedSuffix, executedSuffix string) bool {
 	}
 	policyMu.RLock()
 	defer policyMu.RUnlock()
-	return activeTransportAliases[committedSuffix] == executedSuffix
+	return activeTransportAliases[committedSuffix][executedSuffix]
 }
 
-// transportAliasOf returns the configured transport counterpart of suffix, or "".
-func transportAliasOf(suffix string) string {
+// transportAliasesOf returns every configured transport counterpart of suffix.
+func transportAliasesOf(suffix string) []string {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
-	return activeTransportAliases[suffix]
+	m := activeTransportAliases[suffix]
+	out := make([]string, 0, len(m))
+	for alt := range m {
+		out = append(out, alt)
+	}
+	return out
 }
 
 func isCriticalTool(toolName string) bool {

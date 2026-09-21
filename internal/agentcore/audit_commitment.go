@@ -830,10 +830,13 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 	approved := o.approvedDealIDs[suffix]
 	digestWant := o.approvedDigest[suffix]
 	if len(approved) == 0 {
-		if alt := transportAliasOf(suffix); alt != "" {
-			approved = o.approvedDealIDs[alt]
-			if digestWant == "" {
-				digestWant = o.approvedDigest[alt]
+		for _, alt := range transportAliasesOf(suffix) {
+			if ids := o.approvedDealIDs[alt]; len(ids) > 0 {
+				approved = ids
+				if digestWant == "" {
+					digestWant = o.approvedDigest[alt]
+				}
+				break
 			}
 		}
 	}

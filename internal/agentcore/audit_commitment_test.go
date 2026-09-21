@@ -845,3 +845,33 @@ func TestTypedCommitment_BatchBindingCarriesAcrossTransportAlias(t *testing.T) {
 		t.Fatalf("upload batch must be authorized under the inline batch commitment, got blocked: %s", msg)
 	}
 }
+
+func TestTypedCommitment_PendingInlineClearedByUpload(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	args := `{"slug":"x"}`
+	if blocked, _ := o.checkCriticalTool(typedPagesUpdateData, "", args); !blocked {
+		t.Fatal("unaudited inline write must be blocked and queued as pending")
+	}
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData})
+	o.recordToolResult(typedPagesUpdateDataUpload, args, `{"ok":true,"version":860}`, true)
+	o.mu.Lock()
+	n := len(o.pendingCriticalActions)
+	o.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("upload success must clear the pending inline entry, got %d pending", n)
+	}
+}
+
+func TestTransportAliasesPreserveEveryDeclaredCounterpart(t *testing.T) {
+	p := testFixturePolicy()
+	p.CriticalToolTransportAliases = map[string][]string{
+		"create_prepared_deal": {"create_prepared_deal_upload", "create_prepared_deal_file"},
+	}
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(p)
+	if !transportAliasSatisfies("create_prepared_deal", "create_prepared_deal_upload") ||
+		!transportAliasSatisfies("create_prepared_deal", "create_prepared_deal_file") {
+		t.Fatal("every declared counterpart must remain reachable")
+	}
+}
