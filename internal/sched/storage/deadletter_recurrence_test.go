@@ -104,8 +104,8 @@ func TestDeadLetteredOccurrenceSpawnsSuccessor(t *testing.T) {
 	if next.Recurrence != "@daily" {
 		t.Errorf("successor recurrence = %q, want @daily", next.Recurrence)
 	}
-	if next.Status != models.TaskStatusPending {
-		t.Errorf("successor status = %s, want pending (live, schedulable)", next.Status)
+	if next.Status != models.TaskStatusScheduled {
+		t.Errorf("successor status = %s, want scheduled (next cron tick is in the future, matching a success/error spawn)", next.Status)
 	}
 	if next.PreviousOccurrenceID == nil || *next.PreviousOccurrenceID != orig.ID {
 		t.Errorf("successor previous_occurrence_id = %v, want %s", next.PreviousOccurrenceID, orig.ID)
@@ -439,8 +439,8 @@ func TestReplayDeadLetteredWithSuccessorKeepsSpawnSettled(t *testing.T) {
 	if len(rest) != 1 || rest[0].ID != successor.ID {
 		t.Fatalf("rows beyond orig = %d, want exactly the pre-existing successor %s — the replayed run must not fork a parallel chain", len(rest), successor.ID)
 	}
-	if got, err := store.GetTask(successor.ID); err != nil || got.Status != models.TaskStatusPending {
-		t.Errorf("the pre-existing successor must be untouched; status=%v err=%v", got.Status, err)
+	if got, err := store.GetTask(successor.ID); err != nil || got.Status != models.TaskStatusScheduled || got.ID != successor.ID {
+		t.Errorf("the pre-existing successor must be untouched and still scheduled; status=%v err=%v", got.Status, err)
 	}
 	if repaired, err := store.ReconcileRecurrences(ctx); err != nil || repaired != 0 {
 		t.Fatalf("post-replay sweep: repaired=%d err=%v, want 0", repaired, err)

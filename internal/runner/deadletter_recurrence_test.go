@@ -53,13 +53,11 @@ func recurrenceSpawnedFlag(t *testing.T, store *storage.Storage, id uuid.UUID) b
 // occurrence exactly like a success/error transition — one bad day must not
 // silently end a daily schedule.
 //
-// The seeded occurrence dead-letters and spawns its successor; the pool then
-// claims that successor too (ClaimNextPendingTask ignores scheduled_for, and
-// the failure runner fails deterministically), so the run ends in the
-// quiescent state this test waits for: BOTH occurrences dead-lettered. The
-// second dead-letter trips the consecutive-dead-letter breaker (its immediate
-// predecessor is dead_lettered), which parks the chain with no third row —
-// that fixed point is what makes the assertions deterministic.
+// The successor is born scheduled (next @daily tick is in the future), the
+// same status a success/error spawn uses. ClaimNextPendingTask only claims
+// pending rows, so the pool does not pick the successor up and run it
+// immediately. Quiescence is therefore: the original dead-lettered, exactly
+// one scheduled successor, no third row.
 func TestNonRetryableFailureOfRecurringTaskSpawnsSuccessor(t *testing.T) {
 	store := newTestStore(t)
 	orig := seedRecurringTask(t, store)
@@ -71,11 +69,10 @@ func TestNonRetryableFailureOfRecurringTaskSpawnsSuccessor(t *testing.T) {
 	done := make(chan struct{})
 	go func() { pool.Run(ctx); close(done) }()
 
-	// Quiescence: the occurrence dead-letters, its successor is spawned and in
-	// turn dead-letters (breaker parks the chain — no third row ever appears).
 	waitFor(t, 3*time.Second, func() bool {
 		d, _ := store.GetTasksByStatus(models.TaskStatusDeadLettered)
-		return len(d) == 2
+		s, _ := store.GetTasksByStatus(models.TaskStatusScheduled)
+		return len(d) == 1 && len(s) == 1
 	})
 	cancel()
 	<-done
@@ -109,9 +106,16 @@ func TestNonRetryableFailureOfRecurringTaskSpawnsSuccessor(t *testing.T) {
 	if gotOrig.DeadLetterReason == nil || !strings.Contains(*gotOrig.DeadLetterReason, "non-retryable") {
 		t.Errorf("dead_letter_reason = %v, want a non-retryable failure reason", gotOrig.DeadLetterReason)
 	}
+	if !recurrenceSpawnedFlag(t, store, orig.ID) {
+		t.Error("the dead-lettered occurrence's spawn credit must be settled")
+	}
 
 	// The successor is a real next occurrence: spawned FROM the dead-lettered
-	// row, in its job's lineage, scheduled at the next cron tick.
+	// row, in its job's lineage, scheduled at the next cron tick — not claimed
+	// or run, because ClaimNextPendingTask only leases pending rows.
+	if successor.Status != models.TaskStatusScheduled {
+		t.Errorf("successor status = %s, want scheduled", successor.Status)
+	}
 	if successor.PreviousOccurrenceID == nil || *successor.PreviousOccurrenceID != orig.ID {
 		t.Errorf("successor previous_occurrence_id = %v, want %s", successor.PreviousOccurrenceID, orig.ID)
 	}
@@ -123,14 +127,5 @@ func TestNonRetryableFailureOfRecurringTaskSpawnsSuccessor(t *testing.T) {
 	}
 	if successor.ScheduledFor == nil || !successor.ScheduledFor.After(time.Now()) {
 		t.Errorf("successor scheduled_for = %v, want the next future cron tick", successor.ScheduledFor)
-	}
-	// And it dead-lettered through the same runner path — its reason records
-	// the failure class the operator sees in the DLQ listing.
-	if successor.DeadLetterReason == nil || !strings.Contains(*successor.DeadLetterReason, "non-retryable") {
-		t.Errorf("successor dead_letter_reason = %v, want a non-retryable failure reason", successor.DeadLetterReason)
-	}
-	// The breaker settled the parked chain: no third row can be re-driven.
-	if !recurrenceSpawnedFlag(t, store, successor.ID) {
-		t.Error("the second (breaker-parked) dead-letter must settle the spawn credit")
 	}
 }
