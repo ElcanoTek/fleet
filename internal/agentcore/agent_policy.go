@@ -33,6 +33,12 @@ type AgentPolicy struct {
 	// Bidirectional at install time. Extra to the pages pairs that are
 	// auto-enabled when the bundle already gates both names as critical.
 	CriticalToolTransportAliases map[string][]string
+	// CriticalToolIdentityKeys are extra JSON argument keys (beyond deal_id
+	// and its siblings) that identify a write for transport-alias pending
+	// matching. Bundles that declare extra aliases must list the keys those
+	// tools use (page_id, document_name, …). When a pages pair auto-enables,
+	// "slug" is included.
+	CriticalToolIdentityKeys []string
 	// CriticalToolTimeouts maps a bare tool-name suffix to a per-tool approval
 	// default-deny window in seconds (#225). Matched by suffix exactly like
 	// CriticalToolSuffixes ("send_email" matches "<server>_send_email"); the
@@ -93,6 +99,10 @@ var (
 	// activeTransportAliases is an adjacency set: suffix -> counterparts that
 	// are the same write over a different transport. Empty by default.
 	activeTransportAliases = map[string]map[string]bool{}
+
+	// activeIdentityKeys are extra argument keys used by pendingRecordSet.
+	// Empty by default (deal_id variants only).
+	activeIdentityKeys = []string{}
 
 	// activeCriticalTimeouts maps a critical-tool suffix -> per-tool approval
 	// default-deny window in seconds (#225). Empty by default (no per-tool
@@ -167,6 +177,19 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		aliases[a][b] = true
 		aliases[b][a] = true
 	}
+	idKeys := make([]string, 0, len(p.CriticalToolIdentityKeys)+1)
+	seenKey := map[string]bool{}
+	addKey := func(k string) {
+		k = strings.TrimSpace(k)
+		if k == "" || seenKey[k] {
+			return
+		}
+		seenKey[k] = true
+		idKeys = append(idKeys, k)
+	}
+	for _, k := range p.CriticalToolIdentityKeys {
+		addKey(k)
+	}
 	for k, vs := range p.CriticalToolTransportAliases {
 		k = strings.TrimSpace(k)
 		if k == "" {
@@ -184,13 +207,16 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	// opted both names into the critical-tool gate, so they share blast
 	// radius for commitment discharge. Enable the alias only then — a
 	// bundle that never listed the upload tool is unchanged, and an
-	// unrelated `_upload` suffix is not inferred.
+	// unrelated `_upload` suffix is not inferred. "slug" is the pages
+	// pair's resource key.
 	for _, pair := range pagesTransportPairs {
 		if seen[pair[0]] && seen[pair[1]] {
 			addAlias(pair[0], pair[1])
+			addKey("slug")
 		}
 	}
 	activeTransportAliases = aliases
+	activeIdentityKeys = idKeys
 
 	timeouts := make(map[string]int, len(p.CriticalToolTimeouts))
 	for k, v := range p.CriticalToolTimeouts {

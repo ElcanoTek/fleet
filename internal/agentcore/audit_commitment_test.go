@@ -814,6 +814,42 @@ func TestTypedCommitment_UnlistedUploadSuffixIsNotAnAlias(t *testing.T) {
 	}
 }
 
+func TestTypedCommitment_ReauditAliasPreservesUnrelatedUnbound(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o,
+		criticalActionStruct{Tool: typedPagesUpdateData, Identifier: "page-a"},
+		criticalActionStruct{Tool: typedPagesUpdateDataUpload, Identifier: "page-b"},
+	)
+	if got := o.registerCommittedActionsTyped([]criticalActionStruct{{Tool: typedPagesUpdateDataUpload, Identifier: "page-a"}}); got != 1 {
+		t.Fatalf("re-audit registered %d units, want 1", got)
+	}
+	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
+		t.Fatalf("page-a inline should have been superseded, outstanding=%d", got)
+	}
+	if got := o.committedCriticalActions["update_page_data_upload"]; got != 2 {
+		t.Fatalf("page-b plus re-audited page-a should both be outstanding on upload, got %d", got)
+	}
+	o.mu.Lock()
+	var remaining []string
+	for _, c := range o.typedCommitments {
+		if c.remaining > 0 {
+			remaining = append(remaining, c.tool+":"+c.identity)
+		}
+	}
+	o.mu.Unlock()
+	wantB := typedPagesUpdateDataUpload + ":ident:page-b"
+	foundB := false
+	for _, r := range remaining {
+		if r == wantB {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("page-b commitment missing after re-audit of page-a, remaining=%v", remaining)
+	}
+}
+
 func TestTypedCommitment_ReauditOfUploadSupersedesInline(t *testing.T) {
 	withPagesTransportPolicy(t)
 	o := newOrchStateForTest()
@@ -978,6 +1014,31 @@ func TestTypedCommitment_BatchResultDoesNotDischargeUntargetedAliasRecord(t *tes
 	}
 	if got := o.committedCriticalActions["update_page_data_upload"]; got != 1 {
 		t.Fatalf("mis-echoed B must not discharge the upload commitment, outstanding=%d", got)
+	}
+}
+
+func TestTypedCommitment_ConfiguredIdentityKeyClearsPendingAlias(t *testing.T) {
+	p := testFixturePolicy()
+	p.CriticalToolSuffixes = append(append([]string{}, p.CriticalToolSuffixes...), "create_prepared_deal_upload")
+	p.CriticalToolTransportAliases = map[string][]string{
+		"create_prepared_deal": {"create_prepared_deal_upload"},
+	}
+	p.CriticalToolIdentityKeys = []string{"page_id"}
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(p)
+	o := newOrchStateForTest()
+	inlineArgs := `{"page_id":"doc-1","body":"inline"}`
+	uploadArgs := `{"page_id":"doc-1","workspace_file":"/workspace/doc-1.json"}`
+	if blocked, _ := o.checkCriticalTool(typedCreateToolA, "", inlineArgs); !blocked {
+		t.Fatal("unaudited write must be blocked")
+	}
+	registerTyped(t, o, criticalActionStruct{Tool: typedCreateToolA})
+	o.recordToolResult(typedCreateToolA+"_upload", uploadArgs, `{"ok":true}`, true)
+	o.mu.Lock()
+	n := len(o.pendingCriticalActions)
+	o.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("configured page_id identity must pair the alias pending, got %d pending", n)
 	}
 }
 

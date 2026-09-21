@@ -69,6 +69,10 @@ type typedCommitment struct {
 	// of those records — the binding the model actually tried — supersedes
 	// this commitment when nothing has executed under it (#1535).
 	refusedRecords map[string]bool
+	// identity distinguishes unbound writes (no deal_id) so a re-audit of
+	// one transport-alias resource cannot retire a sibling write. Derived
+	// from deal_ids / deal_id, else the entry's identifier.
+	identity string
 }
 
 // neverExecuted reports whether nothing has ever discharged any unit of this
@@ -159,6 +163,24 @@ func (c *typedCommitment) allowsDeal(dealID string) bool {
 // legitimately registers several unbound same-tool commitments in one audit.
 func (c *typedCommitment) hasDealBinding() bool {
 	return len(c.dealIDs) > 0 || c.dealID != ""
+}
+
+// supersedeableBy reports whether a fresh commitment should retire this
+// prior-envelope one: same tool (or transport alias) and same record-set /
+// unbound identity, or a refusal-correcting re-declaration.
+func (c *typedCommitment) supersedeableBy(fresh *typedCommitment) bool {
+	sameFamily := c.tool == fresh.tool ||
+		(sameToolServer(c.tool, fresh.tool) && transportAliasSatisfies(c.suffix, fresh.suffix))
+	if !sameFamily {
+		return false
+	}
+	sameShape := c.hasDealBinding() == fresh.hasDealBinding() && (!fresh.hasDealBinding() || c.sameDealSet(fresh))
+	// Unbound writes with different identifiers are different resources
+	// (page A vs page B). Empty identity still matches empty.
+	if !c.hasDealBinding() && c.identity != fresh.identity {
+		sameShape = false
+	}
+	return sameShape || c.correctsRefusal(fresh)
 }
 
 // sameDealSet reports whether two commitments target the identical record
@@ -305,7 +327,8 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 // call with a later success on its transport alias. Alias transports do not
 // share a JSON envelope (inline content vs. a workspace-file reference), so
 // argsHash cannot identify the same write. Batch deal_ids win, then a single
-// record id, then a pages slug.
+// record id, then any configured identity key (slug for pages pairs, plus
+// bundle-declared keys).
 func pendingRecordSet(rawInput string) string {
 	if ids, ok := batchDealIDs(rawInput); ok {
 		sort.Strings(ids)
@@ -318,10 +341,35 @@ func pendingRecordSet(rawInput string) string {
 	if err != nil {
 		return ""
 	}
-	if v, ok := args["slug"]; ok {
-		if s := normalizeDealID(v); s != "" {
-			return "slug:" + s
+	for _, key := range identityArgKeys() {
+		if v, ok := args[key]; ok {
+			if s := normalizeDealID(v); s != "" {
+				return key + ":" + s
+			}
 		}
+	}
+	return ""
+}
+
+func identityArgKeys() []string {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	return append([]string(nil), activeIdentityKeys...)
+}
+
+// commitmentIdentity is the re-audit identity for a typed entry: the bound
+// record set, else the human identifier (page slug, document name, …).
+func commitmentIdentity(dealIDs []string, dealID, identifier string) string {
+	if len(dealIDs) > 0 {
+		ids := append([]string(nil), dealIDs...)
+		sort.Strings(ids)
+		return "ids:" + strings.Join(ids, ",")
+	}
+	if dealID != "" {
+		return "id:" + dealID
+	}
+	if ident := strings.TrimSpace(identifier); ident != "" {
+		return "ident:" + ident
 	}
 	return ""
 }
@@ -630,6 +678,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		} else if dealID != "" {
 			tc.dealID = dealID
 		}
+		tc.identity = commitmentIdentity(dealIDs, dealID, a.Identifier)
 		// Supersede any OUTSTANDING prior-envelope commitment with the SAME
 		// full tool name AND SAME record-set. A re-audit that corrects the
 		// values_digest (same tool + same records, different digest) registers
@@ -678,13 +727,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			if old.remaining <= 0 {
 				continue
 			}
-			sameFamily := old.tool == tc.tool ||
-				(sameToolServer(old.tool, tc.tool) && transportAliasSatisfies(old.suffix, tc.suffix))
-			if !sameFamily {
-				continue
-			}
-			sameShape := old.hasDealBinding() == tc.hasDealBinding() && (!tc.hasDealBinding() || old.sameDealSet(tc))
-			if !sameShape && !old.correctsRefusal(tc) {
+			if !old.supersedeableBy(tc) {
 				continue
 			}
 			if o.committedCriticalActions[old.suffix] >= old.remaining {
@@ -694,7 +737,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			}
 			shape := "same tool+record-set"
 			switch {
-			case !sameShape:
+			case old.correctsRefusal(tc):
 				shape = "same tool, re-declared with the binding the earlier declaration refused; nothing executed under it"
 			case old.tool != tc.tool:
 				shape = "same write, different transport"

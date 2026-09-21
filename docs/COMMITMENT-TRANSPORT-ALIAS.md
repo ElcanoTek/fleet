@@ -18,8 +18,12 @@ pairs as one obligation:
 
 A pair is enabled only when the installed `critical_tools` list already contains
 **both** names (the bundle opted both into the gate). Extra pairs can be declared
-in `agent_policy.critical_tool_transport_aliases`. An unlisted `_upload` suffix
-does not ride or discharge a commitment. Cross-server matching is still refused.
+in `agent_policy.critical_tool_transport_aliases`, with
+`agent_policy.critical_tool_identity_keys` naming the JSON argument keys that
+identify the write (`page_id`, `document_name`, …). Pages pairs also match on
+`slug`. An unlisted `_upload` suffix does not ride or discharge a commitment.
+Cross-server matching is still refused. Unbound re-audit of an alias only
+supersedes a prior write that shares the same identifier.
 
 Re-audit of one name supersedes the other on the same server and record-set.
 Batch `approvedDealIDs` / digest lookup considers every alias counterpart that

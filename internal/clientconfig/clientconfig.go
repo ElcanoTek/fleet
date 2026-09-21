@@ -285,6 +285,10 @@ type AgentPolicy struct {
 	// already gate both pages write names as critical get those pairs without
 	// listing them here.
 	CriticalToolTransportAliases map[string][]string `yaml:"critical_tool_transport_aliases"`
+	// CriticalToolIdentityKeys is OPTIONAL: extra JSON argument keys that
+	// identify a write for transport-alias pending matching (beyond deal_id
+	// siblings). Pages pairs that auto-enable also get "slug".
+	CriticalToolIdentityKeys []string `yaml:"critical_tool_identity_keys"`
 	// CriticalToolTimeouts is an OPTIONAL per-tool approval default-deny window
 	// (#225): a map from bare tool-name suffix (the same suffix form as
 	// critical_tools) to seconds. It is additive and backward-compatible —
@@ -2545,6 +2549,9 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		for k, v := range b.AgentPolicyConfig.CriticalToolTransportAliases {
 			p.CriticalToolTransportAliases[k] = append([]string(nil), v...)
 		}
+	}
+	if len(b.AgentPolicyConfig.CriticalToolIdentityKeys) > 0 {
+		p.CriticalToolIdentityKeys = append([]string(nil), b.AgentPolicyConfig.CriticalToolIdentityKeys...)
 	}
 	if len(b.AgentPolicyConfig.CriticalToolTimeouts) > 0 {
 		p.CriticalToolTimeouts = make(map[string]int, len(b.AgentPolicyConfig.CriticalToolTimeouts))

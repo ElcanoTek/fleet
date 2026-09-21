@@ -401,6 +401,7 @@ func run() error {
 		CriticalToolSuffixes:         bundlePolicy.CriticalToolSuffixes,
 		CriticalToolSubstitutes:      bundlePolicy.CriticalToolSubstitutes,
 		CriticalToolTransportAliases: bundlePolicy.CriticalToolTransportAliases,
+		CriticalToolIdentityKeys:     bundlePolicy.CriticalToolIdentityKeys,
 		CriticalToolTimeouts:         bundlePolicy.CriticalToolTimeouts,
 		CriticalToolModes:            bundlePolicy.CriticalToolModes,
 		CriticalToolUndoHints:        bundlePolicy.CriticalToolUndoHints,
