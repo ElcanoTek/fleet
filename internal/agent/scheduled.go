@@ -850,6 +850,10 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		LogSession:        a.logSession,
 		MCPServersDirty:   a.mcpDirty,
 		ClearMCPDirty:     a.clearMCPDirty,
+		// A real summary for compaction (window pressure, the resend budget and
+		// its checkpoints, reactive recovery): without it the run kept a
+		// one-line placeholder in place of everything it had learned.
+		CompactionSummarizer: buildScheduledCompactionSummarizer(a.model),
 	}
 	// Per-user remote-MCP overlay (#443): wire the task owner's OAuth-connected
 	// hosted servers via the SAME compositeBroker the interactive path uses, so a

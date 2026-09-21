@@ -467,11 +467,22 @@ const interactiveForceFinalSummaryNudge = forceFinalSummaryNudge
 // brief, tagged so the cache layer treats it as a stable boundary.
 func buildInteractiveCompactionSummarizer(tc TurnConfig) func(context.Context, agentcore.CompactionSummarizeInput) fantasy.Message {
 	return func(ctx context.Context, in agentcore.CompactionSummarizeInput) fantasy.Message {
-		summary := summarizeDroppedMiddle(ctx, tc, in)
+		summary := summarizeDroppedMiddleWith(ctx, summarizerModel(in, tc.Model), in, "")
 		// Tag with the compaction prefix so promptCachingStep's optional
 		// compaction-summary breakpoint can find it.
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] " + summary)
 	}
+}
+
+// summarizerModel picks the model a compaction summary is bought from: the
+// model the run is driving right now (agentcore sets in.Model to the fallback
+// after a resilience swap), else the one the driver was configured with. A
+// summary must not be bought from a model that just failed or is circuit-open.
+func summarizerModel(in agentcore.CompactionSummarizeInput, configured fantasy.LanguageModel) fantasy.LanguageModel {
+	if in.Model != nil {
+		return in.Model
+	}
+	return configured
 }
 
 // compactionSummaryPrefix matches agentcore's compaction-summary marker so the
@@ -494,15 +505,38 @@ const compactionSummaryPrefix = "[context compaction"
 //     accounting the main loop uses (in.RecordUsage), so the cost chip and the
 //     ceilings see the summarizer's spend.
 func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, in agentcore.CompactionSummarizeInput) string {
+	return summarizeDroppedMiddleWith(ctx, tc.Model, in, "")
+}
+
+// buildScheduledCompactionSummarizer is the scheduled driver's counterpart of
+// buildInteractiveCompactionSummarizer: the same governed LLM summary (metered
+// into the run through RecordUsage), with an addendum for unattended work. It
+// exists because scheduled runs wired no summarizer at all, so every
+// compaction — reactive or cost-aware — replaced the oldest half of a run's
+// history with a one-line placeholder that carried none of its findings: a page
+// refresh that compacted at step 55 then re-derived what it had already
+// established for 78 more steps.
+func buildScheduledCompactionSummarizer(model fantasy.LanguageModel) func(context.Context, agentcore.CompactionSummarizeInput) fantasy.Message {
+	return func(ctx context.Context, in agentcore.CompactionSummarizeInput) fantasy.Message {
+		summary := summarizeDroppedMiddleWith(ctx, summarizerModel(in, model), in, compactionSummarizeScheduledAddendum)
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] " + summary)
+	}
+}
+
+// summarizeDroppedMiddleWith produces the compaction summary for the dropped
+// messages with model, appending extraPrompt (may be empty) to the summarizer's
+// system prompt. A nil model, an empty droppable set, an over-ceiling run or a
+// failed call all yield the deterministic placeholder.
+func summarizeDroppedMiddleWith(ctx context.Context, model fantasy.LanguageModel, in agentcore.CompactionSummarizeInput, extraPrompt string) string {
 	droppable := in.Droppable
-	if tc.Model == nil || len(droppable) == 0 {
+	if model == nil || len(droppable) == 0 {
 		return placeholderCompactionSummary(len(droppable))
 	}
 	if in.OverCeiling != nil && in.OverCeiling() {
 		return placeholderCompactionSummary(len(droppable))
 	}
-	systemPrompt := compactionSummarizePromptFor(droppable)
-	agent := fantasy.NewAgent(tc.Model,
+	systemPrompt := compactionSummarizePromptFor(droppable) + extraPrompt
+	agent := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(systemPrompt),
 		fantasy.WithPrepareStep(agentcore.ModelContextBudgetStep(systemPrompt, nil, 4096)),
 	)
@@ -626,6 +660,14 @@ Be specific and do not speculate. Preserve exact file paths, function names, and
 // droppable middle contains the previous summary, and the call must UPDATE it
 // rather than re-summarize from scratch (which sheds a little more early
 // detail on every round).
+// compactionSummarizeScheduledAddendum tunes the summary for an unattended
+// scheduled run: there is no user to re-ask, and the run resumes from the
+// summary plus its workspace, so completed steps and their concrete results
+// must survive verbatim or the agent redoes (and re-pays for) them.
+const compactionSummarizeScheduledAddendum = `
+
+This conversation is an UNATTENDED scheduled task: no user will answer questions, and the agent continues from this summary plus the files in its workspace. Under "Progress / Done" list every completed step WITH its concrete result (numbers computed, files written and their paths, page versions or message ids returned, checks that passed) so nothing is redone. Under "Critical Context" keep every identifier the task still needs: slugs, deal ids, dates and date ranges, expected_version values, upload ids, SHA-256 hashes, recipient addresses, and the exact wording of any error still unresolved. Record which tool calls succeeded so the agent does not repeat a write.`
+
 const compactionSummarizeUpdateAddendum = `
 
 One or more messages beginning with "` + compactionSummaryPrefix + `" are PREVIOUS compaction summaries of still-older history. Treat the newest of them as the baseline and UPDATE it against the messages that follow it:

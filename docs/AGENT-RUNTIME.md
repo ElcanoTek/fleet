@@ -381,6 +381,37 @@ measured size and the budget. The other cost lever is per result: the
 enters the context (default 64 KiB); a job that keeps rendering 40 KB documents
 into `return_vars` is better served by a 16 KiB ceiling and file references.
 
+**Checkpoints inside the tool loop.** The trigger above runs *between* rounds,
+and a scheduled run is one fantasy round of a hundred-plus tool steps until the
+completion policy rejects the finish — so on its own it compacted at most once
+per verifier round while every step in between kept resending the growing
+transcript (a prod page refresh compacted once at step 55, then ran 78 more
+steps at ~150K tokens each and dead-lettered on the token ceiling at $8). A
+scheduled engine therefore also installs a **resend-budget checkpoint** as a
+round stop condition: when a tool-calls step's prompt (fresh + cache-read input)
+reaches `FLEET_CONTEXT_RESEND_BUDGET_TOKENS`, the round stops, the run loop
+carries the round's transcript, emits `fleet.context_checkpoint` (with the
+resent size, the budget and the checkpoint count) plus a `[context_checkpoint]`
+session-log breadcrumb, and re-enters the loop **without** a policy verdict,
+without an enforcement message and without consuming an enforcement round — so
+the very next thing that happens is the resend-budget compaction, and the work
+resumes from the compacted history. A step that produced the final answer never
+pauses. At most `maxResendCheckpoints` (40) pauses per run; past that the
+condition goes inert and the run is governed by the ceilings alone. The step
+cap (`FLEET_MAX_ITERATIONS`) is counted across a logical round's checkpoints
+and wins a tie, so a pause never becomes a per-pause step allowance. See
+[SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md).
+
+**Scheduled runs summarize for real.** The scheduled driver now wires a
+`CompactionSummarizer` (the same governed LLM summary the chat path uses,
+metered into the run, with an addendum for unattended work: keep every
+completed step's concrete result, every identifier the task still needs, and
+which writes already succeeded), bought from the model the run is currently
+driving (the fallback after a swap). Before this the scheduled path wired none, so
+every compaction — window pressure, resend budget, reactive recovery — replaced
+the oldest half of a run's history with a one-line placeholder that carried
+none of its findings.
+
 **The summary call is governed (#1118).** The summarizer fires exactly when a
 run is already large, so its own model call meters into the run's usage/cost
 accounting (the same counters the ceilings and the chat cost chip read), and

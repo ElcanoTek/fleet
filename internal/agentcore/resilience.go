@@ -608,6 +608,12 @@ type streamRoundOutcome struct {
 	agent             fantasy.Agent
 	activeModel       fantasy.LanguageModel
 	swappedToFallback bool
+	// completedSteps counts the tool steps this round completed BEFORE the
+	// attempt that produced result — the steps a resilience recovery resumed
+	// past. result.Steps holds only the final attempt's steps, so a caller that
+	// needs the round's total (the resend-budget checkpoint's step-cap
+	// accounting) adds the two.
+	completedSteps int
 }
 
 // streamRoundWithResilience drives a single enforcement round through the
@@ -651,8 +657,13 @@ func (e *engine) streamRoundWithResilience(
 		log.Printf("⚡ circuit open for %s; routing to fallback %s without a primary attempt", activeModel.Model(), e.fallbackModel.Model())
 		emitProviderFailover(sink, activeModel, e.fallbackModel, streamErrorRetryExhausted, nil)
 		activeModel = e.takeFallback()
+		e.noteActiveModel(activeModel)
 		currentAgent = buildAgent(activeModel)
 		swappedToFallback = true
+	}
+
+	if e != nil {
+		e.noteActiveModel(activeModel)
 	}
 
 	recoveryLimit := maxInnerEscalations
@@ -691,6 +702,7 @@ func (e *engine) streamRoundWithResilience(
 				agent:             currentAgent,
 				activeModel:       activeModel,
 				swappedToFallback: swappedToFallback,
+				completedSteps:    completedSteps,
 			}, nil
 		}
 		// A cost/token ceiling abort (budget-guarded PrepareStep) is a clean stop,
@@ -755,6 +767,7 @@ func (e *engine) streamRoundWithResilience(
 				e.logFallbackSwap(class, providerErr)
 				emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
 				activeModel = e.takeFallback()
+				e.noteActiveModel(activeModel)
 				currentAgent = buildAgent(activeModel)
 				swappedToFallback = true
 				rollbackAttempt()
@@ -768,6 +781,7 @@ func (e *engine) streamRoundWithResilience(
 			e.logFallbackSwap(class, providerErr)
 			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
 			activeModel = e.takeFallback()
+			e.noteActiveModel(activeModel)
 			currentAgent = buildAgent(activeModel)
 			swappedToFallback = true
 			rollbackAttempt()
@@ -792,6 +806,7 @@ func (e *engine) streamRoundWithResilience(
 			e.logFallbackSwap(class, providerErr)
 			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
 			activeModel = e.takeFallback()
+			e.noteActiveModel(activeModel)
 			currentAgent = buildAgent(activeModel)
 			swappedToFallback = true
 			rollbackAttempt()
@@ -808,6 +823,7 @@ func (e *engine) streamRoundWithResilience(
 			e.logFallbackSwap(class, providerErr)
 			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
 			activeModel = e.takeFallback()
+			e.noteActiveModel(activeModel)
 			currentAgent = buildAgent(activeModel)
 			swappedToFallback = true
 			rollbackAttempt()

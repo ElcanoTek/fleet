@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -175,6 +176,16 @@ func (b *taskStreamBuffer) Observe(eventType string, payload map[string]any) {
 			"output":  payload["text"],
 			"error":   isErr,
 		})
+	case "fleet.context_checkpoint", "fleet.context_compacted":
+		// The scheduled tool loop paused at the resend budget / the history was
+		// compacted (docs/SCHEDULED-COMPACTION-CHECKPOINTS.md). Forwarded so an
+		// operator tailing the run can see why the transcript just shrank
+		// instead of only finding the breadcrumb in the session log afterwards.
+		frame := map[string]any{"type": strings.TrimPrefix(eventType, "fleet.")}
+		for k, v := range payload {
+			frame[k] = v
+		}
+		b.Emit(frame["type"].(string), frame)
 	case subagentProgressEvent:
 		// A spawned sub-agent's relabeled steps (#1043 follow-up). The child's
 		// RAW events used to reach this buffer (it inherited the run's stream
