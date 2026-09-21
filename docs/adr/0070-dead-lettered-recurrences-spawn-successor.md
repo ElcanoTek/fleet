@@ -39,8 +39,9 @@ same idempotent spawn-credit contract, `previous_occurrence_id` and
 
 If that occurrence's immediate predecessor (`previous_occurrence_id`) is
 also `dead_lettered`, do **not** spawn. Park the chain: claim the spawn
-credit via `settleRecurrenceSpawn` so `ReconcileRecurrences` does not
-re-evaluate it forever, and log clearly that replay continues the chain.
+credit (status-gated, so a concurrent replay cannot be clobbered) so
+`ReconcileRecurrences` does not re-evaluate it forever, and log clearly
+that replay continues the chain.
 Two in a row is treated as systemic.
 
 The breaker lives in **one** place — inside `scheduleNextRecurrence` (or a
@@ -50,14 +51,12 @@ rows as well as `success`/`error`. Cancel still ends the chain.
 
 `ReplayDeadLetteredTask` re-arms `recurrence_spawned` only when no later
 recurrence occurrence exists in the same chain. A row pointing at this
-one via `previous_occurrence_id` is definitive regardless of `created_at`
-(imported histories can be out of order). If that successor was pruned,
-a newer row with the same `lineage_id` and a non-empty recurrence is the
-fallback (retention removes OLD rows; a one-off "Run now" copy keeps
-`lineage_id` but clears recurrence and must not block restart). When the
-DLQ path already spawned, or the lineage continued, the flag stays
-`TRUE` so the replayed run cannot fork a second chain. A breaker-parked
-chain with nothing newer re-arms and continues on replay.
+one via `previous_occurrence_id` is definitive regardless of `created_at`.
+`dead_lettered` is not cleanup-eligible, so a parent can outlive a pruned
+success/error successor: a newer same-lineage recurring row is the
+fallback, excluding clone-created chains (ancestry root has
+`source_task_id` set). A breaker-parked chain with nothing newer re-arms
+and continues on replay.
 
 ## Enforcement
 

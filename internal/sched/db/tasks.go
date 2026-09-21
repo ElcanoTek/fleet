@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -130,22 +131,37 @@ func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*mod
 // batch path (#227) uses this so a multi-row insert lands in the caller's tx.
 // It executes the same registry-derived taskInsertStatement as AddTask.
 //
-// When the write lands in a RecurrenceSpawnTaskStatuses status, it also
-// settles recurrence_spawned in this transaction. The column is excluded
+// When the write lands in a RecurrenceSpawnTaskStatuses status, it may also
+// settle recurrence_spawned in this transaction. The column is excluded
 // from the ON CONFLICT set (task_columns.go) so a generic upsert cannot
 // clobber a claimed credit — which means overwriting an existing
 // pending/scheduled row with a terminal spawn-bearing status would otherwise
-// leave the flag FALSE. Fresh inserts already get TRUE from
-// recurrenceSpawnedInsertValue; the extra UPDATE is idempotent for those
-// and is what closes the upsert gap (import --replace-status / --overwrite).
+// leave the flag FALSE. A FRESH born-terminal insert already gets TRUE from
+// recurrenceSpawnedInsertValue. An upsert that REPLACES a nonterminal status
+// is settled here. A same-status re-import of an already-terminal row is
+// NOT: that row may be sitting unclaimed inside the reconcile grace window
+// (crash between terminal commit and spawn); settling it would hide it from
+// the sweep and silently end the schedule.
 func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
+	var existingStatus models.TaskStatus
+	err := tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id = $1 FOR UPDATE`, task.ID).Scan(&existingStatus)
+	existed := true
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		existed = false
+	}
 	if _, err := tx.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...); err != nil {
 		return err
 	}
 	if !recurrenceSpawnedInsertValue(task) {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, task.ID)
+	if existed && recurrenceSpawnedInsertValue(&models.Task{Status: existingStatus}) {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, task.ID)
 	return err
 }
 

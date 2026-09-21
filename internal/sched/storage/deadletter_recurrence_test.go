@@ -566,8 +566,10 @@ func deadLetterRecurringOccurrence(t *testing.T, store *Storage, id uuid.UUID) {
 }
 
 // TestReplayDeadLetteredKeepsCreditWhenSuccessorPrunedButLineageContinues:
-// retention can delete the immediate successor while a newer descendant or
-// live head remains. Replay must NOT re-arm — the lineage is still going.
+// dead_lettered is not cleanup-eligible, so a DLQ parent can outlive a
+// pruned success/error successor. A newer same-lineage recurring row whose
+// ancestry root is not a clone (source_task_id unset) is still a continuation
+// — replay must NOT re-arm.
 func TestReplayDeadLetteredKeepsCreditWhenSuccessorPrunedButLineageContinues(t *testing.T) {
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
@@ -805,5 +807,145 @@ func TestReplayDeadLetteredRearmsDespiteNewerRunNowCopy(t *testing.T) {
 	}
 	if recurrenceSpawned(t, store, parked.ID) {
 		t.Fatal("a newer one-off copy in the same lineage must not keep a parked chain from re-arming")
+	}
+}
+
+// TestReplayDeadLetteredRearmsDespiteCloneOfParkedTask: CloneTask copies
+// lineage_id and keeps recurrence, with source_task_id pointing at the
+// original. That clone must not count as a continuation of the parked chain.
+func TestReplayDeadLetteredRearmsDespiteCloneOfParkedTask(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+
+	first := &models.Task{
+		ID:         uuid.New(),
+		Prompt:     "daily digest",
+		Status:     models.TaskStatusPending,
+		Priority:   10,
+		Recurrence: "@daily",
+		Timezone:   "UTC",
+		CreatedAt:  time.Now().UTC(),
+	}
+	if _, err := store.AddTask(first); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	deadLetterRecurringOccurrence(t, store, first.ID)
+	succ := successorsOf(t, store, map[uuid.UUID]bool{first.ID: true})
+	if len(succ) != 1 {
+		t.Fatalf("successors = %d, want 1", len(succ))
+	}
+	parked := succ[0]
+	deadLetterRecurringOccurrence(t, store, parked.ID)
+
+	got, err := store.GetTask(parked.ID)
+	if err != nil {
+		t.Fatalf("GetTask(parked): %v", err)
+	}
+	src := parked.ID
+	clone := &models.Task{
+		ID:           uuid.New(),
+		Prompt:       "daily digest",
+		Status:       models.TaskStatusPending,
+		Priority:     10,
+		Recurrence:   "@daily",
+		Timezone:     "UTC",
+		LineageID:    got.WorkspaceLineage(),
+		SourceTaskID: &src,
+		CreatedAt:    time.Now().UTC(),
+	}
+	if _, err := store.AddTask(clone); err != nil {
+		t.Fatalf("AddTask(clone): %v", err)
+	}
+
+	if _, err := store.ReplayDeadLetteredTask(ctx, parked.ID); err != nil {
+		t.Fatalf("ReplayDeadLetteredTask: %v", err)
+	}
+	if recurrenceSpawned(t, store, parked.ID) {
+		t.Fatal("a clone of a parked task must not keep the original from re-arming")
+	}
+}
+
+// TestReplayDeadLetteredKeepsCreditWhenDescendantChainExists: a genuine
+// recurrence grandchild (successor → grandchild) is a continuation even
+// without relying on the lineage fallback.
+func TestReplayDeadLetteredKeepsCreditWhenDescendantChainExists(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+
+	orig := &models.Task{
+		ID:         uuid.New(),
+		Prompt:     "daily digest",
+		Status:     models.TaskStatusPending,
+		Priority:   10,
+		Recurrence: "@daily",
+		Timezone:   "UTC",
+		CreatedAt:  time.Now().UTC(),
+	}
+	if _, err := store.AddTask(orig); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	deadLetterRecurringOccurrence(t, store, orig.ID)
+	succ := successorsOf(t, store, map[uuid.UUID]bool{orig.ID: true})
+	if len(succ) != 1 {
+		t.Fatalf("successors = %d, want 1", len(succ))
+	}
+	successor := succ[0]
+	got, err := store.GetTask(orig.ID)
+	if err != nil {
+		t.Fatalf("GetTask(orig): %v", err)
+	}
+	grandchildID := successor.ID
+	grandchild := &models.Task{
+		ID:                   uuid.New(),
+		Prompt:               "daily digest",
+		Status:               models.TaskStatusPending,
+		Priority:             10,
+		Recurrence:           "@daily",
+		Timezone:             "UTC",
+		LineageID:            got.WorkspaceLineage(),
+		PreviousOccurrenceID: &grandchildID,
+		CreatedAt:            time.Now().UTC(),
+	}
+	if _, err := store.AddTask(grandchild); err != nil {
+		t.Fatalf("AddTask(grandchild): %v", err)
+	}
+
+	if _, err := store.ReplayDeadLetteredTask(ctx, orig.ID); err != nil {
+		t.Fatalf("ReplayDeadLetteredTask: %v", err)
+	}
+	if !recurrenceSpawned(t, store, orig.ID) {
+		t.Fatal("a genuine successor→grandchild chain must keep the spawn credit")
+	}
+}
+
+// TestScheduleNextRecurrenceIgnoresStaleRowAfterReplay: the sweep may hold a
+// dead_lettered snapshot; if replay commits first, the status-gated claim
+// must not consume the re-armed credit or mint a successor from the stale row.
+func TestScheduleNextRecurrenceIgnoresStaleRowAfterReplay(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+
+	stale := seedTerminalRecurring(t, store, models.TaskStatusDeadLettered, 10*time.Minute, nil)
+	if recurrenceSpawned(t, store, stale.ID) {
+		t.Fatal("setup: unclaimed dead-letter")
+	}
+	if _, err := store.ReplayDeadLetteredTask(ctx, stale.ID); err != nil {
+		t.Fatalf("ReplayDeadLetteredTask: %v", err)
+	}
+	if recurrenceSpawned(t, store, stale.ID) {
+		t.Fatal("setup: replay of a row with no successor must re-arm")
+	}
+
+	if spawned := store.scheduleNextRecurrence(ctx, stale); spawned {
+		t.Fatal("stale dead_lettered snapshot must not spawn after replay")
+	}
+	if recurrenceSpawned(t, store, stale.ID) {
+		t.Fatal("stale spawn must leave the re-armed credit untouched")
+	}
+	if n := len(successorsOf(t, store, map[uuid.UUID]bool{stale.ID: true})); n != 0 {
+		t.Fatalf("successors = %d, want 0", n)
 	}
 }

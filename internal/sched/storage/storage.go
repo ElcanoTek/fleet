@@ -218,10 +218,12 @@ func (s *Storage) AddTask(task *models.Task) (*models.Task, error) {
 // existing pending/scheduled recurring row with a spawn-bearing terminal
 // status would leave the flag FALSE and let ReconcileRecurrences treat
 // restored history as a lost spawn. When this write lands in
-// RecurrenceSpawnTaskStatuses, settle the credit in the same transaction
-// (the same "born settled" semantics recurrenceSpawnedInsertValue already
-// gives a fresh insert). db.UpdateTask / db.AddTask stay unadorned so test
-// seeds can still land an unclaimed terminal row.
+// RecurrenceSpawnTaskStatuses, db.AddTaskTx settles the credit in the same
+// transaction only for a fresh insert or an upsert that replaces a
+// NONTERMINAL status (a same-status re-import of an unclaimed terminal row
+// must keep the flag FALSE so ReconcileRecurrences can still spawn).
+// db.UpdateTask / db.AddTask stay unadorned so test seeds can still land
+// an unclaimed terminal row.
 func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*models.Task, error) {
 	if err := validateStoredOutputContract(task); err != nil {
 		return nil, err
@@ -1711,12 +1713,11 @@ func (s *Storage) MarkBudgetSoftAlert(ctx context.Context, id uuid.UUID, windowS
 // Recurrence spawn credit (ADR-0070): re-armed to FALSE only when no later
 // recurrence occurrence exists in the same chain. A row whose
 // previous_occurrence_id points at this one is definitive regardless of
-// created_at (imported/restored histories can stamp equal or out-of-order
-// timestamps). If that immediate successor was pruned, a newer row in the
-// same lineage with a non-empty recurrence is the fallback — created_at
-// ordering survives retention (pruning removes OLD rows) and a one-off
-// "Run now" copy (cleared recurrence, kept lineage_id) is ignored so a
-// parked schedule can still restart on replay. Returns the updated task.
+// created_at. dead_lettered rows are NOT cleanup-eligible, so a parent can
+// outlive a pruned success/error successor; the lineage fallback covers
+// that, but must ignore clone-created chains (CloneTask copies lineage_id
+// and keeps recurrence, with source_task_id set on the clone root). Returns
+// the updated task.
 func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -1761,16 +1762,16 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	// exists in this chain (ADR-0070). Two arms, combined with OR:
 	//
 	//   1. Direct link: x.previous_occurrence_id = this id. Definitive even
-	//      when created_at is equal or older (import/restore can stamp
-	//      histories out of order). Do NOT time-filter this arm.
-	//   2. Lineage fallback: same lineage_id, strictly newer created_at, and
-	//      a non-empty recurrence. Retention may have pruned the immediate
-	//      successor while a later occurrence or live head remains; pruning
-	//      removes OLD rows, so a continued chain always has a newer one.
-	//      A one-off "Run now" copy (handlers.buildRerunTaskCreate clears
-	//      Recurrence, keeps lineage_id) must NOT keep the credit — otherwise
-	//      a parked schedule could never restart on replay. NULL lineage_id
-	//      (pre-069) does not equal every other NULL.
+	//      when created_at is equal or older. Do NOT time-filter this arm.
+	//   2. Lineage fallback: same lineage_id, strictly newer created_at,
+	//      non-empty recurrence, and the candidate's previous_occurrence_id
+	//      ancestry does NOT root at a clone (source_task_id set).
+	//      dead_lettered is absent from CleanupEligibleTaskStatuses, so a
+	//      DLQ parent can outlive a pruned success/error successor; the
+	//      fallback is for that hole. A clone (or its descendants) of a
+	//      parked task shares lineage_id and recurrence, so without the
+	//      source_task_id root check replay could never re-arm. NULL
+	//      lineage_id (pre-069) does not equal every other NULL.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tasks AS t SET error_analysis = NULL,
 		    recurrence_spawned = CASE
@@ -1784,6 +1785,19 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 		                          AND x.lineage_id = t.lineage_id
 		                          AND x.created_at > t.created_at
 		                          AND x.recurrence IS NOT NULL AND x.recurrence <> ''
+		                          AND NOT EXISTS (
+		                              WITH RECURSIVE anc AS (
+		                                  SELECT x.id AS id, x.previous_occurrence_id AS prev, x.source_task_id AS src, 1 AS d
+		                                  UNION ALL
+		                                  SELECT p.id, p.previous_occurrence_id, p.source_task_id, anc.d + 1
+		                                  FROM anc
+		                                  JOIN tasks p ON p.id::text = anc.prev
+		                                  WHERE anc.d < 64
+		                              )
+		                              SELECT 1 FROM anc
+		                              WHERE anc.src IS NOT NULL
+		                                AND NOT EXISTS (SELECT 1 FROM tasks p WHERE p.id::text = anc.prev)
+		                          )
 		                       )
 		                  )
 		        )
@@ -1829,116 +1843,16 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 // spawn nothing, log that replay continues the chain. That breaker lives HERE
 // so DeadLetterTaskWithContext and ReconcileRecurrences cannot disagree.
 //
+// The credit claim requires the observed terminal status: a sweep may hold a
+// row read before the batch, and an operator replay (status now pending)
+// must not have its re-armed credit consumed by that stale spawn. After a
+// successful claim the successor is built from a re-read of the CURRENT
+// definition, and end-condition / breaker evaluation runs on that row.
+//
 // Returns whether a successor was actually spawned (the reconciliation sweep
 // counts repairs by it; the post-terminal callers ignore it).
 func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task) bool {
-	schedule, err := cron.ParseStandard(task.Recurrence)
-	if err != nil {
-		log.Printf("Error parsing recurrence for task %s: %v; settling the chain — a parse error is permanent, so retrying the spawn cannot fix it", task.ID, err)
-		s.settleRecurrenceSpawn(ctx, task.ID)
-		return false
-	}
-
-	// Evaluate the cron expression in the task's own timezone so a "9am" task
-	// fires at 9am local, not 9am UTC. Fall back to the server-global location
-	// (then UTC) if the stored name is somehow unloadable. The resulting instant
-	// is stored in UTC — scheduled_for is always an absolute UTC instant.
-	loc := s.location
-	if task.Timezone != "" {
-		if l, lerr := time.LoadLocation(task.Timezone); lerr == nil {
-			loc = l
-		} else {
-			log.Printf("Task %s has invalid timezone %q; using server timezone: %v", task.ID, task.Timezone, lerr)
-		}
-	}
-	now := time.Now().In(loc)
-	nextTime := schedule.Next(now).UTC()
-
-	// Recurrence end conditions: an end date means no occurrence may fire past
-	// it, and a remaining-runs counter of 1 means the completing occurrence was
-	// the last allowed run. Either way the chain simply stops — the completing
-	// task keeps its own terminal status.
-	if task.RecurrenceUntil != nil && nextTime.After(*task.RecurrenceUntil) {
-		log.Printf("Recurrence for task %s ended: next occurrence %s is past recurrence_until %s",
-			task.ID, nextTime.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
-		s.settleRecurrenceSpawn(ctx, task.ID)
-		return false
-	}
-	if task.RecurrenceRemaining != nil && *task.RecurrenceRemaining <= 1 {
-		log.Printf("Recurrence for task %s ended: run budget exhausted", task.ID)
-		s.settleRecurrenceSpawn(ctx, task.ID)
-		return false
-	}
-
-	// Consecutive-dead-letter breaker (ADR-0070): two dead-lettered occurrences
-	// in a row parks the chain. A missing or non-dead-lettered predecessor is
-	// not consecutive failure — spawn as a success/error would. Lookup errors
-	// leave the credit unclaimed so the sweep retries rather than parking on a
-	// transient read failure.
-	if task.Status == models.TaskStatusDeadLettered {
-		parked, err := s.predecessorIsDeadLettered(ctx, task)
-		if err != nil {
-			log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", task.ID, err)
-			return false
-		}
-		if parked {
-			log.Printf("Recurrence for task %s parked after 2 consecutive dead-lettered occurrences; replay to continue", task.ID)
-			s.settleDeadLetteredRecurrenceSpawn(ctx, task.ID)
-			return false
-		}
-	}
-
-	// Build the next occurrence from the FULL definition of the completing task
-	// via TaskToCreate — the single canonical Task→TaskCreate clone (also used by
-	// re-run/clone #270). A hand-maintained TaskCreate literal here was the
-	// structural cause of #565: every new per-task definition field (allow_network,
-	// carry_context, output_schema, sandbox_limits, delegation/task-creation/
-	// event-trigger capability bits, SLA config, …) had to be remembered here too,
-	// and any that was forgotten silently reset to its zero value on occurrence #2+.
-	// Delegating to TaskToCreate means a field is carried the moment it joins the
-	// clone recipe, and TestTaskToCreateCarriesEveryDefinitionField guards against
-	// a field being added to TaskCreate without joining that recipe.
-	tc := models.TaskToCreate(task)
-	// Count down the run budget: the clone gets one fewer allowed run than the
-	// occurrence that just completed (TaskToCreate carried the old value).
-	if task.RecurrenceRemaining != nil {
-		remaining := *task.RecurrenceRemaining - 1
-		tc.RecurrenceRemaining = &remaining
-	}
-	// Recurring occurrences are unnamed: Name is the import/export identity key
-	// with a partial unique index on non-empty names, so carrying the completing
-	// occurrence's name would collide with the row still in the table and abort
-	// the recurrence. (The pre-#565 literal already dropped Name; preserve that.)
-	tc.Name = ""
-	// Point the clone at the next fire time (TaskToCreate carried the old one).
-	tc.ScheduledFor = &nextTime
-	newTask := models.NewTask(tc)
-	newTask.CreatedBy = task.CreatedBy
-	// Carry the originating API key forward so recurring task cost keeps counting
-	// against the key's usage bucket (and any scope=key budget).
-	newTask.CreatedByKeyID = task.CreatedByKeyID
-	// Lineage (migration 068): the successor points at the occurrence that just
-	// completed, so carry_context can read THAT run's transcript. Without it
-	// the handoff looked up the successor's own (still empty) log and every
-	// genuine recurrence started cold — the feature only ever fired on a
-	// retry of the same row.
-	prev := task.ID
-	newTask.PreviousOccurrenceID = &prev
-	// Mirror AddTaskWithContext's stored-contract validation (the pre-#1116 spawn
-	// went through it): the insert below is the tx-scoped db.AddTaskTx, which
-	// does not validate.
-	if err := validateStoredOutputContract(newTask); err != nil {
-		// Permanent like a parse error (the definition itself is invalid), so
-		// settle rather than let the sweep spin on it.
-		log.Printf("Error creating next recurring task for %s: %v; settling the chain — the carried definition is invalid, so retrying the spawn cannot fix it", task.ID, err)
-		s.settleRecurrenceSpawn(ctx, task.ID)
-		return false
-	}
-
-	// Claim the spawn credit + insert the successor + carry its memory in ONE
-	// transaction. The guarded credit flip is what makes the spawn idempotent:
-	// the post-terminal caller and the reconciliation sweep can both attempt it
-	// and exactly one commits a successor.
+	observed := task.Status
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
 		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
@@ -1947,65 +1861,139 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.ExecContext(ctx,
-		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1 AND NOT recurrence_spawned`, task.ID)
+		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1 AND NOT recurrence_spawned AND status = $2`,
+		task.ID, string(observed))
 	if err != nil {
 		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
 		return false
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// Another spawner already settled this occurrence (the normal
-		// post-terminal spawn racing the reconciliation sweep) — nothing to do.
 		return false
 	}
-	if err := s.db.AddTaskTx(ctx, tx, newTask); err != nil {
+	current, err := s.db.GetTaskForUpdate(ctx, tx, task.ID)
+	if err != nil {
 		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
 		return false
 	}
-	// Carry the completing occurrence's persistent memory (#198/#285) forward to
-	// the new occurrence. Memory is keyed by task_id and each recurrence is a NEW
-	// task row, so WITHOUT this copy a recurring Captain's Log task would start
-	// cold every time — defeating the feature (e.g. "alert only if the price
-	// changed since last week"). Parameterized; the canonical task_memories data
-	// layer is internal/sched/taskmemory.go. In the spawn tx (rather than the
-	// old post-insert best-effort write) so the FK is satisfied and a successor
-	// can never exist without its carried memory — a copy failure rolls the
-	// spawn back and the reconciliation sweep re-drives the whole thing.
+	if current.Status != observed {
+		return false
+	}
+
+	schedule, err := cron.ParseStandard(current.Recurrence)
+	if err != nil {
+		log.Printf("Error parsing recurrence for task %s: %v; settling the chain — a parse error is permanent, so retrying the spawn cannot fix it", current.ID, err)
+		if cerr := tx.Commit(); cerr != nil {
+			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+			return false
+		}
+		return false
+	}
+
+	// Evaluate the cron expression in the task's own timezone so a "9am" task
+	// fires at 9am local, not 9am UTC. Fall back to the server-global location
+	// (then UTC) if the stored name is somehow unloadable. The resulting instant
+	// is stored in UTC — scheduled_for is always an absolute UTC instant.
+	loc := s.location
+	if current.Timezone != "" {
+		if l, lerr := time.LoadLocation(current.Timezone); lerr == nil {
+			loc = l
+		} else {
+			log.Printf("Task %s has invalid timezone %q; using server timezone: %v", current.ID, current.Timezone, lerr)
+		}
+	}
+	now := time.Now().In(loc)
+	nextTime := schedule.Next(now).UTC()
+
+	// Recurrence end conditions: an end date means no occurrence may fire past
+	// it, and a remaining-runs counter of 1 means the completing occurrence was
+	// the last allowed run. Either way the chain simply stops — the completing
+	// task keeps its own terminal status. The credit is already claimed.
+	if current.RecurrenceUntil != nil && nextTime.After(*current.RecurrenceUntil) {
+		log.Printf("Recurrence for task %s ended: next occurrence %s is past recurrence_until %s",
+			current.ID, nextTime.Format(time.RFC3339), current.RecurrenceUntil.Format(time.RFC3339))
+		if cerr := tx.Commit(); cerr != nil {
+			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+			return false
+		}
+		return false
+	}
+	if current.RecurrenceRemaining != nil && *current.RecurrenceRemaining <= 1 {
+		log.Printf("Recurrence for task %s ended: run budget exhausted", current.ID)
+		if cerr := tx.Commit(); cerr != nil {
+			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+			return false
+		}
+		return false
+	}
+
+	// Consecutive-dead-letter breaker (ADR-0070): two dead-lettered occurrences
+	// in a row parks the chain. Lookup errors roll back so the sweep retries
+	// rather than parking on a transient read failure.
+	if current.Status == models.TaskStatusDeadLettered {
+		parked, perr := s.predecessorIsDeadLettered(ctx, current)
+		if perr != nil {
+			log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
+			return false
+		}
+		if parked {
+			log.Printf("Recurrence for task %s parked after 2 consecutive dead-lettered occurrences; replay to continue", current.ID)
+			if cerr := tx.Commit(); cerr != nil {
+				log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+				return false
+			}
+			return false
+		}
+	}
+
+	// Build the next occurrence from the CURRENT definition (re-read under the
+	// claim lock), via TaskToCreate — the single canonical Task→TaskCreate clone.
+	tc := models.TaskToCreate(current)
+	if current.RecurrenceRemaining != nil {
+		remaining := *current.RecurrenceRemaining - 1
+		tc.RecurrenceRemaining = &remaining
+	}
+	tc.Name = ""
+	tc.ScheduledFor = &nextTime
+	newTask := models.NewTask(tc)
+	newTask.CreatedBy = current.CreatedBy
+	newTask.CreatedByKeyID = current.CreatedByKeyID
+	prev := current.ID
+	newTask.PreviousOccurrenceID = &prev
+	if err := validateStoredOutputContract(newTask); err != nil {
+		log.Printf("Error creating next recurring task for %s: %v; settling the chain — the carried definition is invalid, so retrying the spawn cannot fix it", current.ID, err)
+		if cerr := tx.Commit(); cerr != nil {
+			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
+			return false
+		}
+		return false
+	}
+	if err := s.db.AddTaskTx(ctx, tx, newTask); err != nil {
+		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, err)
+		return false
+	}
 	if _, cerr := tx.ExecContext(ctx, `
 		INSERT INTO task_memories (id, task_id, key, value, created_at, updated_at)
 		SELECT gen_random_uuid(), $1, key, value, created_at, updated_at
 		FROM task_memories WHERE task_id = $2`,
-		newTask.ID, task.ID); cerr != nil {
-		log.Printf("recurring task %s: failed to carry persistent memory forward to %s: %v (the reconciliation sweep will retry)", task.ID, newTask.ID, cerr)
+		newTask.ID, current.ID); cerr != nil {
+		log.Printf("recurring task %s: failed to carry persistent memory forward to %s: %v (the reconciliation sweep will retry)", current.ID, newTask.ID, cerr)
 		return false
 	}
 	if err := tx.Commit(); err != nil {
-		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", task.ID, err)
+		log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, err)
 		return false
 	}
-	log.Printf("Scheduled next recurrence for task %s at %s", task.ID, nextTime)
+	log.Printf("Scheduled next recurrence for task %s at %s", current.ID, nextTime)
 	return true
-}
-
-// settleRecurrenceSpawn marks a completing occurrence's successor question
-// resolved WITHOUT spawning (#1116): the chain legitimately ended, or its
-// definition is permanently unspawnable. Unguarded on purpose: those callers
-// run against success/error (or a still-terminal invalid definition), which
-// ReplayDeadLetteredTask cannot touch. Best-effort: on a write failure the
-// flag stays FALSE and the sweep simply re-evaluates the same end condition
-// next tick — idempotent either way.
-func (s *Storage) settleRecurrenceSpawn(ctx context.Context, taskID uuid.UUID) {
-	if _, err := s.db.Conn().ExecContext(ctx,
-		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, taskID); err != nil {
-		log.Printf("Failed to settle recurrence spawn for task %s: %v", taskID, err)
-	}
 }
 
 // settleDeadLetteredRecurrenceSpawn is the DLQ-breaker settle (ADR-0070). It
 // requires the row still be dead_lettered so an operator replay that already
 // committed (status=pending, credit re-armed) cannot be clobbered back to
 // TRUE — that would make the replayed run's completion a no-op spawn and
-// leave the parked chain dead. Other settleRecurrenceSpawn call sites stay
-// unguarded (see that comment).
+// leave the parked chain dead. End-of-chain settles for success/error now
+// ride scheduleNextRecurrence's status-gated credit claim inside the spawn
+// tx, so there is no unguarded settle left.
 func (s *Storage) settleDeadLetteredRecurrenceSpawn(ctx context.Context, taskID uuid.UUID) {
 	if _, err := s.db.Conn().ExecContext(ctx,
 		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1 AND status = $2`,

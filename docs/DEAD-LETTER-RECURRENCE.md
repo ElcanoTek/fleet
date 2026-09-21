@@ -16,10 +16,10 @@ credit (no forever re-evaluation) and continue when the operator replays.
 `ReplayDeadLetteredTask` re-arms `recurrence_spawned` only when no later
 recurrence occurrence exists in the same chain (direct
 `previous_occurrence_id` pointer, unfiltered by time; or a newer same-
-lineage row that still has a recurrence — not a one-off "Run now" copy).
-If the dead-letter already spawned (or the lineage continued after the
-immediate successor was pruned), replay re-runs that occurrence and
-cannot fork a second chain.
+lineage recurring row whose ancestry is not a clone). If the dead-letter
+already spawned (or the lineage continued after the immediate successor
+was pruned), replay re-runs that occurrence and cannot fork a second
+chain.
 
 Cancel still ends the chain. What makes a run fail is unchanged.
 

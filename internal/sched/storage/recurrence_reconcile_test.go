@@ -336,6 +336,38 @@ func TestUpsertedTerminalRecurringIsSettled(t *testing.T) {
 	}
 }
 
+// TestReimportUnclaimedDeadLetteredKeepsCreditForSweep: a same-status
+// re-import of an already-terminal unclaimed row (allowed without
+// --replace-status) must not settle the flag — the crash-window row is
+// still the sweep's to repair.
+func TestReimportUnclaimedDeadLetteredKeepsCreditForSweep(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+
+	dl := seedTerminalRecurring(t, store, models.TaskStatusDeadLettered, 10*time.Minute, nil)
+	if recurrenceSpawned(t, store, dl.ID) {
+		t.Fatal("setup: organic dead-letter must land unclaimed")
+	}
+	if _, err := store.AddTaskWithContext(ctx, dl); err != nil {
+		t.Fatalf("AddTaskWithContext(re-import): %v", err)
+	}
+	if recurrenceSpawned(t, store, dl.ID) {
+		t.Fatal("same-status re-import must not settle an unclaimed terminal row")
+	}
+
+	repaired, err := store.ReconcileRecurrences(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRecurrences: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired %d, want 1", repaired)
+	}
+	if n := len(successorsOf(t, store, map[uuid.UUID]bool{dl.ID: true})); n != 1 {
+		t.Fatalf("successors = %d, want 1", n)
+	}
+}
+
 // TestReplayedDeadLetterContinuesChainOnce pins the DLQ↔recurrence contract
 // (ADR-0070): dead-lettering a recurring occurrence spawns the successor, and
 // replaying that quarantined row must NOT fork a second chain when the
