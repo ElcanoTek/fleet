@@ -295,3 +295,78 @@ func TestCompactionSummarizeInput_FollowsTheActiveModel(t *testing.T) {
 		t.Fatalf("after a swap the summary input must name the fallback, got %v", in.Model)
 	}
 }
+
+// The pre-round compaction must summarize on the model the round will start on:
+// with the primary's circuit open, that is the fallback.
+func TestPreviewRoundModel_CircuitOpenPicksFallbackBeforePreRoundCompaction(t *testing.T) {
+	primary := &namedMockModel{name: "cp-primary"}
+	fallback := &namedMockModel{name: "cp-fallback"}
+	e := newMockEngine(t, primary)
+	e.fallbackModel = fallback
+	e.healthRegistry = NewProviderHealthRegistry()
+	if got := e.previewRoundModel(primary, false); got.Model() != "cp-primary" {
+		t.Fatalf("closed circuit: preview = %q, want the primary", got.Model())
+	}
+	for i := 0; i < 50 && e.healthRegistry.State("cp-primary") != CircuitOpen; i++ {
+		e.healthRegistry.RecordError("cp-primary", "503")
+	}
+	if e.healthRegistry.State("cp-primary") != CircuitOpen {
+		t.Skip("could not open the circuit through RecordError in 50 attempts")
+	}
+	if got := e.previewRoundModel(primary, false); got.Model() != "cp-fallback" {
+		t.Fatalf("open circuit: preview = %q, want the fallback", got.Model())
+	}
+	if got := e.previewRoundModel(fallback, true); got.Model() != "cp-fallback" {
+		t.Fatalf("already swapped: preview = %q, want the active model unchanged", got.Model())
+	}
+	e.noteActiveModel(e.previewRoundModel(primary, false))
+	if in := e.compactionSummarizeInput(nil); in.Model == nil || in.Model.Model() != "cp-fallback" {
+		t.Fatalf("summary input after preview = %v, want the fallback", in.Model)
+	}
+}
+
+// checkpointPanicObserver panics the first time it sees the checkpoint event,
+// standing in for a broken UI/stream subscriber.
+type checkpointPanicObserver struct {
+	payloadObserver
+	panicked bool
+}
+
+func (o *checkpointPanicObserver) Observe(eventType string, payload map[string]any) {
+	o.payloadObserver.Observe(eventType, payload)
+	if eventType == evtContextCheckpoint && !o.panicked {
+		o.panicked = true
+		panic("subscriber exploded on the checkpoint frame")
+	}
+}
+
+// An observer failure on the checkpoint emit ends the run there: no summary is
+// bought and no further tool step runs after the run is already doomed.
+func TestRun_ResendCheckpoint_ObserverFailureStopsBeforeResuming(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
+	var ticks atomic.Int32
+	tick := fantasy.NewAgentTool("tick", "advance", func(context.Context, tickInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		ticks.Add(1)
+		return fantasy.NewTextResponse("ok"), nil
+	})
+	model := newStopModel("cp-obs")
+	var calls atomic.Int32
+	model.streamFunc = func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		n := calls.Add(1)
+		if int(n) <= 5 {
+			return toolStep(fantasy.Usage{InputTokens: 1500, OutputTokens: 1}, fmt.Sprintf("o-%d", n), n), nil
+		}
+		return streamTextThenFinish("done"), nil
+	}
+	obs := &checkpointPanicObserver{}
+	session := NewLogSession()
+	_, err := Run(context.Background(), ModeScheduled,
+		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
+		Deps{Input: historyInput{system: "s", msgs: fillerMessages(1, 50), label: "sched"}, Observer: obs, Policy: finishableScheduledPolicy(session), Model: model, LogSession: session})
+	if err == nil {
+		t.Fatal("expected the run to fail once the observer failed on the checkpoint frame")
+	}
+	if got := ticks.Load(); got != 1 {
+		t.Fatalf("tool ran %d times, want exactly the 1 step before the failed checkpoint — nothing may execute after the run is doomed", got)
+	}
+}

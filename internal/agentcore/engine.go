@@ -293,6 +293,25 @@ func (e *engine) noteActiveModel(m fantasy.LanguageModel) {
 	e.activeModel = m
 }
 
+// previewRoundModel returns the model the NEXT round will actually start on:
+// the fallback when the primary's circuit is open and a swap is possible (the
+// same fast path streamRoundWithResilience takes first thing), else active.
+// The run loop notes it BEFORE the pre-round context-pressure check, so a
+// compaction summary bought there is bought from the model that will serve
+// the round — not from a primary whose circuit is open and would fail the
+// summary into the placeholder. Read-only: the swap itself still happens in
+// the resilience loop.
+func (e *engine) previewRoundModel(active fantasy.LanguageModel, swappedToFallback bool) fantasy.LanguageModel {
+	if e == nil || active == nil {
+		return active
+	}
+	if !swappedToFallback && e.healthRegistry != nil && e.fallbackModel != nil &&
+		e.healthRegistry.State(active.Model()) == CircuitOpen && canSwapFallback(e, active, swappedToFallback) {
+		return e.fallbackModel
+	}
+	return active
+}
+
 // currentModel is the model the run is driving right now: the fallback after a
 // swap, else the configured primary.
 func (e *engine) currentModel() fantasy.LanguageModel {

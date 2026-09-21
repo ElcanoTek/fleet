@@ -590,6 +590,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// threshold, proactively compact — before the provider can reject an
 		// oversized prompt. The opt-in gate is carried as RunConfig data, so the
 		// trunk stays free of Mode branches. See engine.checkContextPressure.
+		// Summaries follow the model that will serve THIS round: if the primary's
+		// circuit is open the resilience loop swaps to the fallback before its
+		// first attempt, so a compaction bought here must not be bought from the
+		// primary (it would fail into the placeholder and lose the history the
+		// compaction exists to keep).
+		eng.noteActiveModel(eng.previewRoundModel(activeModel, swappedToFallback))
 		pressure := eng.checkContextPressure(ctx, messages, activeModel, sink, pressureWarned)
 		messages = pressure.messages
 		pressureWarned = pressure.warned
@@ -639,6 +645,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				evtFieldTrigger:      "resend_budget",
 				"checkpoint":         eng.resendCheckpoints,
 			})
+			// The emit is an observer boundary like every other: an observer
+			// that failed on it has already doomed the run, so stop here rather
+			// than buy a summary and execute another tool step first.
+			if observerErr := observerBoundary.Err(); observerErr != nil {
+				return streamErrorResult(ctx, observerErr, cfg, sink, usageOrch, label, activeModel, swappedToFallback, round)
+			}
 			round--
 			continue
 		}
