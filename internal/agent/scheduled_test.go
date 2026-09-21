@@ -387,49 +387,6 @@ func TestExecute_RoundCapPersistsPartialTranscript(t *testing.T) {
 	}
 }
 
-// The observer's live text tracker is what the finish gates read: the session
-// only gains the closing message after the run returns, so during CanFinish the
-// tracker must hold the latest delta burst — closed by any non-delta event so a
-// new round's draft supersedes the previous one, with text.replace (the
-// completed response) authoritative when it arrives.
-func TestScheduledObserverTracksLatestTextForFinishGates(t *testing.T) {
-	o := &scheduledObserver{session: NewLogSession()}
-	if got := o.latestText(); got != "" {
-		t.Fatalf("initial latestText = %q, want empty", got)
-	}
-
-	// One enforcement-feedback round's draft, closed by the enforcement event
-	// that precedes the next round.
-	o.Observe("text.delta", map[string]any{"text": "Draft before audit: "})
-	o.Observe("text.delta", map[string]any{"text": "superseded."})
-	if got := o.latestText(); got != "Draft before audit: superseded." {
-		t.Fatalf("mid-burst latestText = %q", got)
-	}
-	o.Observe("enforcement", map[string]any{"message": "complete the missing work"})
-	if got := o.latestText(); got != "Draft before audit: superseded." {
-		t.Fatalf("closed-burst latestText = %q", got)
-	}
-
-	// The repair round streams the real answer; a tool call in between must not
-	// leak into the text.
-	o.Observe("text.delta", map[string]any{"text": "Report: version 856 "})
-	o.Observe("text.delta", map[string]any{"text": "live."})
-	o.Observe("tool.call", map[string]any{"id": "c1", "name": "mcp_pages_inspect"})
-	if got := o.latestText(); got != "Report: version 856 live." {
-		t.Fatalf("latestText after new burst = %q", got)
-	}
-
-	// The completed response replaces everything (fires once, post-gates).
-	o.Observe("text.replace", map[string]any{"text": "Report: version 856 live."})
-	if got := o.latestText(); got != "Report: version 856 live." {
-		t.Fatalf("latestText after text.replace = %q", got)
-	}
-	o.Observe("text.replace", map[string]any{"text": ""})
-	if got := o.latestText(); got != "" {
-		t.Fatalf("latestText after empty text.replace = %q, want empty", got)
-	}
-}
-
 // A cost-ceiling stop used to be reported as "run stopped … without finishing
 // the task" whether the run had produced nothing or had executed every declared
 // critical action and written its summary (Reklaim health scan 6bd0c212: SES

@@ -122,6 +122,88 @@ func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing
 	}
 }
 
+// textlessRepairVerifierModel rejects the first verification (demanding a
+// read-only check) and approves the second, capturing every prompt it was
+// handed so the test can pin exactly what the verifier saw at each gate.
+type textlessRepairVerifierModel struct {
+	itMockModel
+	t       *testing.T
+	prompts []string
+}
+
+func (m *textlessRepairVerifierModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	m.prompts = append(m.prompts, string(raw))
+	verdict := `{"missing_actions":[]}`
+	if len(m.prompts) == 1 {
+		verdict = `{"missing_actions":["run the read-only verification read"]}`
+	}
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: verdict}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker is the Codex P1
+// reproduction: round 1 closes with a prose report and the verifier rejects it
+// for a missing action; the repair round makes ONLY the tool call and leaves no
+// assistant text. The next gate must see the explicit "(no final response
+// text)" marker — never the rejected round's draft, which combined with the
+// fresh tool evidence could approve a run whose closing report never happened
+// (completeRun would persist the textless round's empty FinalText as success).
+func TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker(t *testing.T) {
+	verifier := &textlessRepairVerifierModel{t: t}
+	calls := 0
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		return func(yield func(fantasy.StreamPart) bool) {
+			switch step {
+			case 0:
+				input := `{"success":true,"critical_actions":[],"reasoning":"Reconciled report","artifacts_checked":["report"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			case 1:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Report: all done, v856 live."})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			default:
+				// The repair tail: the model makes the tool call (step 2) and any
+				// follow-up rounds produce NO assistant text at all.
+				if step == 2 {
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "verify", ToolCallName: "mcp_reports_verify", ToolCallInput: `{"revision":92}`})
+				}
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			}
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+	a.mcpBroker = completionBroker{`{"ok":true,"revision":92}`}
+	a.mcpCatalog = []mcp.ServerTool{
+		{ServerName: "reports", Tool: mcp.Tool{Name: "verify", Description: "Verify the live report"}},
+	}
+
+	err := a.Execute(context.Background(), "Publish the report and verify the resulting revision.")
+	if err != nil {
+		t.Fatalf("run rejected: %v", err)
+	}
+	if len(verifier.prompts) != 2 {
+		t.Fatalf("verifier calls = %d, want 2 (reject, then re-check)", len(verifier.prompts))
+	}
+	// Gate 1 after the prose round sees the report.
+	if !strings.Contains(verifier.prompts[0], "Report: all done, v856 live.") {
+		t.Error("first gate must carry the round's closing report")
+	}
+	// Gate 2 after the textless repair round sees the explicit marker, NOT the
+	// rejected round's stale draft.
+	if !strings.Contains(verifier.prompts[1], verifierNoFinalResponseMarker) {
+		t.Errorf("second gate missing the %q marker", verifierNoFinalResponseMarker)
+	}
+	if strings.Contains(verifier.prompts[1], "Report: all done, v856 live.") {
+		t.Error("second gate carried the rejected round's stale report — a textless repair round must not reuse earlier prose")
+	}
+	if !strings.Contains(verifier.prompts[1], "/ok") || !strings.Contains(verifier.prompts[1], "/revision") {
+		t.Error("second gate must still carry the repair round's fresh tool evidence")
+	}
+}
+
 // A generic bundle-declared write exercises the same audited mutation path as
 // a scheduled report refresh. The broker never touches an external service.
 type reportCompletionBroker struct{ publishes, inspections int }

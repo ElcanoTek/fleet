@@ -333,6 +333,16 @@ type RunUsage struct {
 	CostUSD             float64
 }
 
+// handRoundFinalText gives a policy that gates on the run's answer the closing
+// assistant text of the round that just ended, before its CanFinish
+// consultation. A plain function call (not an inline branch) so Run's
+// complexity budget stays flat; see RoundFinalTextReceiver for the contract.
+func handRoundFinalText(policy Policy, text string) {
+	if receiver, ok := policy.(RoundFinalTextReceiver); ok {
+		receiver.SetRoundFinalText(text)
+	}
+}
+
 // Run drives a single agent run to completion. It is the shared body both modes
 // use; Mode + the seams are the only divergence axes.
 func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Result, err error) {
@@ -620,6 +630,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				finalText = text
 			}
 		}
+		// Policies gating on the run's answer (the scheduled end-of-run verifier,
+		// the phone-a-friend reviewer) read the closing message of the round that
+		// just ended. It is not in the transcript yet — drivers persist the
+		// completed response only after Run returns — so hand it over explicitly,
+		// including "" for a textless round: a stale earlier draft must never be
+		// combined with the current round's evidence.
+		handRoundFinalText(deps.Policy, finalText)
 
 		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, panicAttribution)
 		if policyErr != nil {

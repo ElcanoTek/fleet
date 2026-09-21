@@ -1038,9 +1038,13 @@ is allowed to finish. The final response matters because a task step phrased
 "report/summarize/state X" is fulfilled in that closing message, not in a tool
 call: without it the verifier can never see the report, re-demands it on every
 check, and a run that did the work and said so still dead-letters as
-`ErrCompletionUnverified`. It is read live from the run observer's text
-tracker, because the session log only gains the closing message after
-`agentcore.Run` returns; it is bounded (8,000 chars, head+tail) and presented
+`ErrCompletionUnverified`. The core hands the policy the closing text of the
+round that just ended before each `CanFinish` consultation (the
+`RoundFinalTextReceiver` seam), because the session log only gains the closing
+message after `agentcore.Run` returns — and because the value is computed
+per round, a repair round that produces no text yields the explicit marker
+rather than an earlier round's rejected draft. The text is bounded (8,000
+chars, head+tail) and presented
 as evidence, never instructions, and when a run leaves no assistant text an
 explicit `(no final response text)` marker stands in so a genuinely missing
 report stays flaggable. Tool-backed deliverables (email send, deal creation,

@@ -26,21 +26,47 @@ DLQ. fleet.elcanotek.com hit exactly this on 2026-09-19 and 2026-09-21.
   (email send, deal creation, page write, file upload, ...) still demand one.
   Every existing rule is intact, and the section is labelled evidence, never
   instructions — the same untrusted-evidence stance as tool fields.
-- **Gate 1 (`CanFinish`) and Gate 2 (phone-a-friend) read the final text from
-  the run observer's live text tracker** (`scheduledObserver.latestText`),
-  falling back to `latestAssistantText(logSession)`. This is the part the
-  one-line reading of the fix misses: the core streams assistant text only as
-  `text.delta` events and the driver persists the completed response into the
-  session log only AFTER `agentcore.Run` returns — so at `CanFinish` time the
-  session does not contain the closing message and `latestAssistantText` alone
-  would return `""` (or a stale pre-audit draft). The tracker accumulates the
-  current delta burst in memory (any non-delta event closes it; `text.replace`
-  is authoritative), changes no persisted-log shape, and feeds both gates the
-  run's actual closing message. Gate 2 previously passed an empty answer to the
-  reviewer on every scheduled run — same blind spot, fixed by the same helper.
+- **Both finish gates read the answer through the core's round-text seam**
+  (`agentcore.RoundFinalTextReceiver`): before each `CanFinish` consultation,
+  `agentcore.Run` hands the policy the closing assistant text of the round
+  that just ended — computed exactly as the result's `FinalText` (per-round
+  stream accumulation, the completed response preferred). The session log
+  cannot supply this: the driver persists the completed response only after
+  `Run` returns, so at `CanFinish` time `latestAssistantText(session)` is
+  empty. Because the value is computed per round, a repair round that produces
+  no text yields `""` and the verifier sees the explicit marker — never a
+  previous round's rejected draft combined with the current round's fresh tool
+  evidence (see the review fix below).
+
+## Review fix: the text must belong to the CURRENT round
+
+Codex P1 on the first revision of this change: that revision tracked the run's
+text in the observer (accumulating `text.delta` bursts), and a repair round
+that produced no text left the tracker holding the PREVIOUS round's rejected
+draft. Since the loop still consults `CanFinish` after a textless repair round,
+the verifier could combine that stale report with the new tool evidence and
+approve — while `completeRun` persisted the textless round's empty `FinalText`:
+the task marked successful without its closing report.
+
+Fix: the observer tracker is gone. The value the gates read is the core's own
+per-round `finalText` (the same computation that becomes `Result.FinalText`),
+handed to the policy immediately before `CanFinish` via the optional
+`RoundFinalTextReceiver` interface — provably tied to the round boundary,
+`""` for a textless round by construction. The scheduled policy implements the
+interface (compile-time asserted) and both Gate 1 (verifier) and Gate 2
+(phone-a-friend — which had the same blind spot, reviewing an empty answer on
+every scheduled run) read it through `latestRunText()`.
 
 ## Tests
 
+- `TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker` — the P1
+  reproduction end-to-end: prose round → verifier rejects for a missing action
+  → repair round makes only the tool call → the re-check's prompt carries the
+  `(no final response text)` marker AND the fresh tool evidence, and NOT the
+  rejected round's report.
+- `TestRoundFinalTextReceiver_PinnedToRoundBoundary` (agentcore) — the seam
+  hands over the streaming round's text, then exactly `""` for a textless
+  repair round.
 - `TestRunEndOfRunVerifierIncludesFinalResponse` — the prompt the verifier
   model receives contains the FINAL RESPONSE section with the latest assistant
   text.
@@ -48,30 +74,26 @@ DLQ. fleet.elcanotek.com hit exactly this on 2026-09-19 and 2026-09-21.
   empty → explicit marker.
 - `TestRunEndOfRunVerifierEmptyFinalResponseMarked` — empty text reaches the
   verifier as `(no final response text)`.
-- `TestScheduledObserverTracksLatestTextForFinishGates` — burst accumulation,
-  close-on-non-delta, `text.replace` authority.
 - `TestScheduledCompletionAfterCommittedWrite` (extended) — the scheduled
   driver end-to-end: Gate 1's verifier prompt carries the run's closing message
-  across the real core/observer seam, in both the clean and the
+  across the real core seam, in both the clean and the
   exhausted-verification paths.
 
 ## Deviations
 
 - The brief said "pass `latestAssistantText` into `runEndOfRunVerifier`";
-  shipped as `latestRunText()`, the tracker-first helper described above,
-  because the session-only reading is a no-op at the gate seam (proven by the
-  extended driver test failing before the tracker existed). The fallback keeps
-  the session path for any policy built without a tracker.
-- Gate 2's answer source changed as a consequence (same helper). It is the
-  behavior the reviewer was always documented to have ("the answer/work the
-  reviewer critiques") and the feature is off unless an operator enables
-  phone-a-friend.
+  shipped as the core's per-round `finalText` through `RoundFinalTextReceiver`,
+  because the session-only reading is a no-op at the gate seam (the session
+  gains the closing message only after `Run` returns) and an observer-side
+  tracker is not provably tied to the round boundary (Codex P1).
+- Gate 2's answer source changed with Gate 1's (same seam). It is the behavior
+  the reviewer was always documented to have ("the answer/work the reviewer
+  critiques") and the feature is off unless an operator enables phone-a-friend.
 
 ## Deferred
 
 - No change to what makes a run fail: the verifier's demands for tool-backed
   deliverables are untouched; this only adds evidence it was blind to.
 - Interactive (chat) runs have no end-of-run verifier — unchanged.
-- The persisted captain's log shape is unchanged (drafts of failed enforcement
-  rounds are not written to the session; only the completed response lands,
-  as before).
+- The persisted captain's log shape is unchanged (only the completed response
+  lands in the session, as before).
