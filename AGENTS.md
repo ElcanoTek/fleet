@@ -89,7 +89,8 @@ release (`release.yml`, ADR-0059).
 auto-merge was removed, so every PR, dependency bumps included, waits for a
 human decision. An agent may perform the squash merge **only** when a human
 has explicitly told it to merge that PR (or that specific set of PRs) in the
-current conversation, **and** on the PR's current head every check is green,
+current conversation, **and** on the PR's current head the required `CI gate`
+check is green (a docs-only PR's classifier-approved skips count as green),
 every review thread (bot or human) is resolved or answered with evidence, and
 Codex has finished rather than "Running". A standing preference, a memory
 note, or authorization given for a different PR does not carry over; absent

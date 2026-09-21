@@ -43,8 +43,8 @@ print `PASS`, not `SKIP`.
   ([ADR-0061](docs/adr/0061-retire-the-changelog.md)).
 - Every PR waits for a human decision to merge. Nothing merges itself; an
   agent may merge only when a human explicitly tells it to merge that PR and
-  every check and review thread on the current head is addressed (see
-  `AGENTS.md`).
+  the `CI gate` check is green and every review thread on the current head is
+  addressed (see `AGENTS.md`).
 - After it is open, the PR is driven to green by whoever holds it — red
   checks, review threads, conflicts, whatever caused them. The procedure is
   the steward skill, [`.agents/skills/steward/SKILL.md`](.agents/skills/steward/SKILL.md),
