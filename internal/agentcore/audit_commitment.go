@@ -69,9 +69,9 @@ type typedCommitment struct {
 	// of those records — the binding the model actually tried — supersedes
 	// this commitment when nothing has executed under it (#1535).
 	refusedRecords map[string]bool
-	// identity distinguishes unbound writes (no deal_id) so a re-audit of
-	// one transport-alias resource cannot retire a sibling write. Derived
-	// from deal_ids / deal_id, else the entry's identifier.
+	// identity is the bound record set (deal_ids / deal_id). Empty when the
+	// entry is an unbound tool-level obligation. The confirm_audit identifier
+	// field is log-only and is not stored here.
 	identity string
 }
 
@@ -156,26 +156,39 @@ func (c *typedCommitment) allowsDeal(dealID string) bool {
 	}
 }
 
-func identityValue(s string) string {
-	if i := strings.IndexByte(s, ':'); i >= 0 {
-		return s[i+1:]
-	}
-	return s
-}
-
-// allowsResource reports whether a transport-alias call targets the same
-// resource this commitment was bound to. Exact-name calls skip this (existing
-// unbound exact-tool semantics). Empty identity means the audit named no
-// resource, so any alias call may still ride.
+// allowsResource reports whether a TRANSPORT-ALIAS call targets a record set
+// that is a subset of this commitment's bound ids. Exact-name and
+// critical_tool_substitutes calls skip this (existing semantics). An unbound
+// commitment is one tool-level obligation, so any alias call may ride it.
 func (c *typedCommitment) allowsResource(toolName, rawInput string) bool {
-	if c.tool == toolName || c.identity == "" {
+	execSuffix := criticalSuffixFor(toolName)
+	if toolName == c.tool || !transportAliasSatisfies(c.suffix, execSuffix) {
 		return true
 	}
-	callSet := pendingRecordSet(rawInput)
-	if callSet == "" {
-		return false
+	if !c.hasDealBinding() {
+		return true
 	}
-	return identityValue(c.identity) == identityValue(callSet)
+	return c.coversCallRecords(rawInput)
+}
+
+// coversCallRecords reports whether every record id the call names is in this
+// commitment's remaining bound set (a subset, so a partial batch may resume).
+func (c *typedCommitment) coversCallRecords(rawInput string) bool {
+	if ids, ok := batchDealIDs(rawInput); ok {
+		if len(ids) == 0 {
+			return false
+		}
+		for _, id := range ids {
+			if !c.allowsDeal(id) {
+				return false
+			}
+		}
+		return true
+	}
+	if id := callDealID(rawInput); id != "" {
+		return c.allowsDeal(id)
+	}
+	return false
 }
 
 // hasDealBinding reports whether this commitment is bound to specific
@@ -197,12 +210,34 @@ func (c *typedCommitment) supersedeableBy(fresh *typedCommitment) bool {
 		return false
 	}
 	sameShape := c.hasDealBinding() == fresh.hasDealBinding() && (!fresh.hasDealBinding() || c.sameDealSet(fresh))
-	// Unbound writes with different identifiers are different resources
-	// (page A vs page B). Empty identity still matches empty.
-	if !c.hasDealBinding() && c.identity != fresh.identity {
-		sameShape = false
-	}
 	return sameShape || c.correctsRefusal(fresh)
+}
+
+// coalesceSameEnvelopeAlias reports whether tc is the same write (transport
+// alias, same record set) as an entry already registered in this envelope.
+// Exact-name repeats are left alone so multi-record creation can declare
+// several unbound same-tool commitments at once.
+func (o *orchestrationState) coalesceSameEnvelopeAlias(preExisting int, tc *typedCommitment) bool {
+	for i := preExisting; i < len(o.typedCommitments); i++ {
+		old := o.typedCommitments[i]
+		if old.remaining <= 0 {
+			continue
+		}
+		if old.tool == tc.tool {
+			continue
+		}
+		if !sameToolServer(old.tool, tc.tool) || !transportAliasSatisfies(old.suffix, tc.suffix) {
+			continue
+		}
+		if old.hasDealBinding() != tc.hasDealBinding() {
+			continue
+		}
+		if tc.hasDealBinding() && !old.sameDealSet(tc) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // sameDealSet reports whether two commitments target the identical record
@@ -379,9 +414,9 @@ func identityArgKeys() []string {
 	return append([]string(nil), activeIdentityKeys...)
 }
 
-// commitmentIdentity is the re-audit identity for a typed entry: the bound
-// record set, else the human identifier (page slug, document name, …).
-func commitmentIdentity(dealIDs []string, dealID, identifier string) string {
+// commitmentIdentity is the bound record set for a typed entry. The
+// confirm_audit identifier field is log-only and is not used.
+func commitmentIdentity(dealIDs []string, dealID string) string {
 	if len(dealIDs) > 0 {
 		ids := append([]string(nil), dealIDs...)
 		sort.Strings(ids)
@@ -389,9 +424,6 @@ func commitmentIdentity(dealIDs []string, dealID, identifier string) string {
 	}
 	if dealID != "" {
 		return "id:" + dealID
-	}
-	if ident := strings.TrimSpace(identifier); ident != "" {
-		return "ident:" + ident
 	}
 	return ""
 }
@@ -700,7 +732,17 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		} else if dealID != "" {
 			tc.dealID = dealID
 		}
-		tc.identity = commitmentIdentity(dealIDs, dealID, a.Identifier)
+		tc.identity = commitmentIdentity(dealIDs, dealID)
+		if o.coalesceSameEnvelopeAlias(preExisting, tc) {
+			if o.committedCriticalActions[suffix] >= n {
+				o.committedCriticalActions[suffix] -= n
+			} else {
+				o.committedCriticalActions[suffix] = 0
+			}
+			registered -= n
+			log.Printf("Enforcement: coalesced %q into an already-registered transport alias (same write, same record set)", tool)
+			continue
+		}
 		// Supersede any OUTSTANDING prior-envelope commitment with the SAME
 		// full tool name AND SAME record-set. A re-audit that corrects the
 		// values_digest (same tool + same records, different digest) registers

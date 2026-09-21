@@ -817,56 +817,40 @@ func TestTypedCommitment_UnlistedUploadSuffixIsNotAnAlias(t *testing.T) {
 func TestTypedCommitment_AliasDoesNotAuthorizeDifferentResource(t *testing.T) {
 	withPagesTransportPolicy(t)
 	o := newOrchStateForTest()
-	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData, Identifier: "page-a"})
-	if blocked, _ := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"slug":"page-b"}`); !blocked {
-		t.Fatal("upload of a different page must not ride the inline page-a commitment")
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData, DealIDs: []string{"A"}})
+	if blocked, _ := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"deal_ids":["B"]}`); !blocked {
+		t.Fatal("upload of a different record must not ride the inline A commitment")
 	}
-	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"slug":"page-a"}`); blocked {
-		t.Fatalf("upload of the same page must be authorized, got blocked: %s", msg)
+	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"deal_ids":["A"]}`); blocked {
+		t.Fatalf("upload of the committed record must be authorized, got blocked: %s", msg)
 	}
-	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"page-b"}`, `{"ok":true}`, true)
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"deal_ids":["B"]}`,
+		`{"results":[{"deal_id":"B","success":true}]}`, true)
 	if got := o.committedCriticalActions["update_page_data"]; got != 1 {
-		t.Fatalf("page-b success must not discharge page-a, outstanding=%d", got)
+		t.Fatalf("record B must not discharge A, outstanding=%d", got)
 	}
-	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"page-a"}`, `{"ok":true}`, true)
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"deal_ids":["A"]}`,
+		`{"results":[{"deal_id":"A","success":true}]}`, true)
 	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
-		t.Fatalf("page-a upload should discharge the inline commitment, outstanding=%d", got)
+		t.Fatalf("upload of A should discharge the inline commitment, outstanding=%d", got)
 	}
 }
 
-func TestTypedCommitment_ReauditAliasPreservesUnrelatedUnbound(t *testing.T) {
+func TestTypedCommitment_ReauditAliasPreservesUnrelatedRecord(t *testing.T) {
 	withPagesTransportPolicy(t)
 	o := newOrchStateForTest()
 	registerTyped(t, o,
-		criticalActionStruct{Tool: typedPagesUpdateData, Identifier: "page-a"},
-		criticalActionStruct{Tool: typedPagesUpdateDataUpload, Identifier: "page-b"},
+		criticalActionStruct{Tool: typedPagesUpdateData, DealIDs: []string{"A"}},
+		criticalActionStruct{Tool: typedPagesUpdateDataUpload, DealIDs: []string{"B"}},
 	)
-	if got := o.registerCommittedActionsTyped([]criticalActionStruct{{Tool: typedPagesUpdateDataUpload, Identifier: "page-a"}}); got != 1 {
+	if got := o.registerCommittedActionsTyped([]criticalActionStruct{{Tool: typedPagesUpdateDataUpload, DealIDs: []string{"A"}}}); got != 1 {
 		t.Fatalf("re-audit registered %d units, want 1", got)
 	}
 	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
-		t.Fatalf("page-a inline should have been superseded, outstanding=%d", got)
+		t.Fatalf("record A inline should have been superseded, outstanding=%d", got)
 	}
 	if got := o.committedCriticalActions["update_page_data_upload"]; got != 2 {
-		t.Fatalf("page-b plus re-audited page-a should both be outstanding on upload, got %d", got)
-	}
-	o.mu.Lock()
-	var remaining []string
-	for _, c := range o.typedCommitments {
-		if c.remaining > 0 {
-			remaining = append(remaining, c.tool+":"+c.identity)
-		}
-	}
-	o.mu.Unlock()
-	wantB := typedPagesUpdateDataUpload + ":ident:page-b"
-	foundB := false
-	for _, r := range remaining {
-		if r == wantB {
-			foundB = true
-		}
-	}
-	if !foundB {
-		t.Fatalf("page-b commitment missing after re-audit of page-a, remaining=%v", remaining)
+		t.Fatalf("record B plus re-audited A should both be outstanding on upload, got %d", got)
 	}
 }
 
@@ -977,31 +961,38 @@ func TestTypedCommitment_PendingAliasDifferentRecordNotCleared(t *testing.T) {
 	}
 }
 
-func TestTypedCommitment_DigestMismatchDoesNotDischargeAlias(t *testing.T) {
+func TestTypedCommitment_SameEnvelopeAliasesCoalesce(t *testing.T) {
 	withPagesTransportPolicy(t)
 	o := newOrchStateForTest()
-	const digestY = "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66"
 	registerTyped(t, o,
-		criticalActionStruct{Tool: typedPagesUpdateData, DealIDs: []string{"1"}},
-		criticalActionStruct{Tool: typedPagesUpdateDataUpload, DealIDs: []string{"1"}, ValuesDigest: digestY},
+		criticalActionStruct{Tool: typedPagesUpdateData, DealIDs: []string{"A"}},
+		criticalActionStruct{Tool: typedPagesUpdateDataUpload, DealIDs: []string{"A"}},
 	)
-	args := `{"deal_ids":["1"],"values_sha256":"deadbeef"}`
+	if got := o.committedCriticalActions["update_page_data"]; got != 1 {
+		t.Fatalf("coalesced envelope should keep one inline unit, got %d", got)
+	}
+	if got := o.committedCriticalActions["update_page_data_upload"]; got != 0 {
+		t.Fatalf("upload entry should have coalesced into the inline obligation, got %d", got)
+	}
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"deal_ids":["A"]}`,
+		`{"results":[{"deal_id":"A","success":true}]}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
+		t.Fatalf("one upload success must discharge the coalesced obligation, outstanding=%d", got)
+	}
+}
+
+func TestTypedCommitment_AliasBatchSubsetDischargesOnlyThoseRecords(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData, DealIDs: []string{"A", "B"}})
+	args := `{"deal_ids":["A"]}`
 	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", args); blocked {
-		t.Fatalf("mismatched digest must still be authorized by the unconstrained inline commitment, got blocked: %s", msg)
+		t.Fatalf("alias subset [A] of committed [A,B] must be authorized, got blocked: %s", msg)
 	}
 	o.recordToolResult(typedPagesUpdateDataUpload, args,
-		`{"results":[{"deal_id":"1","success":true}]}`, true)
-	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
-		t.Fatalf("unconstrained inline commitment should have discharged, outstanding=%d", got)
-	}
-	if got := o.committedCriticalActions["update_page_data_upload"]; got != 1 {
-		t.Fatalf("digest-bound upload commitment must remain outstanding, got %d", got)
-	}
-	good := fmt.Sprintf(`{"deal_ids":["1"],"values_sha256":%q}`, digestY)
-	o.recordToolResult(typedPagesUpdateDataUpload, good,
-		`{"results":[{"deal_id":"1","success":true}]}`, true)
-	if got := o.committedCriticalActions["update_page_data_upload"]; got != 0 {
-		t.Fatalf("correct-digest retry must still discharge the upload commitment, outstanding=%d", got)
+		`{"results":[{"deal_id":"A","success":true}]}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 1 {
+		t.Fatalf("subset success should leave B outstanding, got %d", got)
 	}
 }
 
@@ -1078,5 +1069,19 @@ func TestTransportAliasesPreserveEveryDeclaredCounterpart(t *testing.T) {
 	if !transportAliasSatisfies("create_prepared_deal", "create_prepared_deal_upload") ||
 		!transportAliasSatisfies("create_prepared_deal", "create_prepared_deal_file") {
 		t.Fatal("every declared counterpart must remain reachable")
+	}
+	if !transportAliasSatisfies("create_prepared_deal_upload", "create_prepared_deal_file") {
+		t.Fatal("one declaration must be a transitive family")
+	}
+}
+
+func TestTypedCommitment_SubstituteDoesNotUseAliasResourceGate(t *testing.T) {
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{
+		Tool:       "mcp_openx_mcp_ox_execute_deal_from_prompt_inputs",
+		Identifier: "Homepage campaign",
+	})
+	if blocked, msg := o.checkCriticalTool(typedCreateToolA, "", `{"deal":"x"}`); blocked {
+		t.Fatalf("configured substitute must still ride, got blocked: %s", msg)
 	}
 }

@@ -126,6 +126,67 @@ var nonReversibleSuffixes = map[string]bool{
 	"send_template_email": true,
 }
 
+func installTransportAliases(p AgentPolicy, criticalSeen map[string]bool) (map[string]map[string]bool, []string) {
+	aliases := make(map[string]map[string]bool)
+	addAlias := func(a, b string) {
+		if aliases[a] == nil {
+			aliases[a] = map[string]bool{}
+		}
+		if aliases[b] == nil {
+			aliases[b] = map[string]bool{}
+		}
+		aliases[a][b] = true
+		aliases[b][a] = true
+	}
+	idKeys := make([]string, 0, len(p.CriticalToolIdentityKeys)+1)
+	seenKey := map[string]bool{}
+	addKey := func(k string) {
+		k = strings.TrimSpace(k)
+		if k == "" || seenKey[k] {
+			return
+		}
+		seenKey[k] = true
+		idKeys = append(idKeys, k)
+	}
+	for _, k := range p.CriticalToolIdentityKeys {
+		addKey(k)
+	}
+	for k, vs := range p.CriticalToolTransportAliases {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		family := []string{k}
+		for _, v := range vs {
+			v = strings.TrimSpace(v)
+			if v == "" || v == k {
+				continue
+			}
+			family = append(family, v)
+		}
+		// One declaration is an equivalence class: foo: [foo_upload, foo_file]
+		// makes every pair mutually reachable, not only edges through foo.
+		for i := 0; i < len(family); i++ {
+			for j := i + 1; j < len(family); j++ {
+				addAlias(family[i], family[j])
+			}
+		}
+	}
+	// A bundle that gates BOTH transports of a pages write has already
+	// opted both names into the critical-tool gate, so they share blast
+	// radius for commitment discharge. Enable the alias only then — a
+	// bundle that never listed the upload tool is unchanged, and an
+	// unrelated `_upload` suffix is not inferred. "slug" is the pages
+	// pair's resource key.
+	for _, pair := range pagesTransportPairs {
+		if criticalSeen[pair[0]] && criticalSeen[pair[1]] {
+			addAlias(pair[0], pair[1])
+			addKey("slug")
+		}
+	}
+	return aliases, idKeys
+}
+
 // ConfigureAgentPolicy installs the client bundle's tool-behavior policy. Call
 // once at startup (cmd/fleet) before any turn runs. The base critical suffixes
 // are always merged in (deduped, base-first). Safe to call with a zero
@@ -166,57 +227,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	}
 	activeCriticalSubstitutes = subs
 
-	aliases := make(map[string]map[string]bool)
-	addAlias := func(a, b string) {
-		if aliases[a] == nil {
-			aliases[a] = map[string]bool{}
-		}
-		if aliases[b] == nil {
-			aliases[b] = map[string]bool{}
-		}
-		aliases[a][b] = true
-		aliases[b][a] = true
-	}
-	idKeys := make([]string, 0, len(p.CriticalToolIdentityKeys)+1)
-	seenKey := map[string]bool{}
-	addKey := func(k string) {
-		k = strings.TrimSpace(k)
-		if k == "" || seenKey[k] {
-			return
-		}
-		seenKey[k] = true
-		idKeys = append(idKeys, k)
-	}
-	for _, k := range p.CriticalToolIdentityKeys {
-		addKey(k)
-	}
-	for k, vs := range p.CriticalToolTransportAliases {
-		k = strings.TrimSpace(k)
-		if k == "" {
-			continue
-		}
-		for _, v := range vs {
-			v = strings.TrimSpace(v)
-			if v == "" || v == k {
-				continue
-			}
-			addAlias(k, v)
-		}
-	}
-	// A bundle that gates BOTH transports of a pages write has already
-	// opted both names into the critical-tool gate, so they share blast
-	// radius for commitment discharge. Enable the alias only then — a
-	// bundle that never listed the upload tool is unchanged, and an
-	// unrelated `_upload` suffix is not inferred. "slug" is the pages
-	// pair's resource key.
-	for _, pair := range pagesTransportPairs {
-		if seen[pair[0]] && seen[pair[1]] {
-			addAlias(pair[0], pair[1])
-			addKey("slug")
-		}
-	}
-	activeTransportAliases = aliases
-	activeIdentityKeys = idKeys
+	activeTransportAliases, activeIdentityKeys = installTransportAliases(p, seen)
 
 	timeouts := make(map[string]int, len(p.CriticalToolTimeouts))
 	for k, v := range p.CriticalToolTimeouts {

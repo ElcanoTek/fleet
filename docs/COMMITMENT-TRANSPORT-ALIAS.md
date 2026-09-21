@@ -17,20 +17,22 @@ pairs as one obligation:
 - `deploy_page` / `deploy_page_upload`
 
 A pair is enabled only when the installed `critical_tools` list already contains
-**both** names (the bundle opted both into the gate). Extra pairs can be declared
-in `agent_policy.critical_tool_transport_aliases`, with
-`agent_policy.critical_tool_identity_keys` naming the JSON argument keys that
-identify the write (`page_id`, `document_name`, …). Pages pairs also match on
-`slug`. An unlisted `_upload` suffix does not ride or discharge a commitment.
-Cross-server matching is still refused. Unbound re-audit of an alias only
-supersedes a prior write that shares the same identifier.
+**both** names (the bundle opted both into the gate). Extra pairs are declared
+only in `agent_policy.critical_tool_transport_aliases`. One declaration is an
+equivalence class (`foo: [foo_upload, foo_file]` makes every pair mutually
+reachable). `critical_tool_substitutes` is a different contract and is never
+treated as a transport alias.
 
-Re-audit of one name supersedes the other on the same server and record-set.
-Batch `approvedDealIDs` / digest lookup considers every alias counterpart that
-covers the call; result accounting then intersects that authorizing set with
-the request's `deal_ids`. A successful call also clears pending blocked-call
-rows for the alias family whose record set matches (inline content vs.
-workspace-file arguments are not byte-identical).
+Identity for alias discharge is the **record-id arguments** the bundle already
+uses for commitments (`deal_id` / `deal_ids`, plus `slug` and any
+`critical_tool_identity_keys` on the *call*). The confirm_audit `identifier`
+field stays log-only. A successful alias call discharges only when its record
+set is a subset of the committed set; a partial batch resumes the same way as
+the inline path. An unbound commitment (no record ids) is one tool-level
+obligation, which is the original pages incident.
+
+When one `confirm_audit` envelope lists both transport names for the same
+record set, they coalesce to **one** obligation.
 
 The alias does **not** change which tools are critical.
 
@@ -38,6 +40,21 @@ The alias does **not** change which tools are critical.
 
 None from the incident fix. Codex asked not to infer every `_upload` suffix
 and not to make the pages pairs unconditional engine policy; both are honored.
+
+## Deliberately not handled
+
+These still require a re-audit (or a later, narrower change):
+
+- Two unbound writes to different pages in one envelope, distinguished only by
+  the log-only `identifier` or by call-side `slug` that the audit entry does
+  not carry as `deal_id` / `deal_ids`. The engine cannot tell them apart
+  without using `identifier` as authorization identity, which it does not.
+- Different value digests on the two transports of the same record set in one
+  envelope. They coalesce to one obligation; a digest-bound sibling is not
+  kept.
+- Treating `critical_tool_substitutes` as transport aliases. Substitutes keep
+  their existing discharge rules.
+- Inferring every `_upload` suffix as an alias. Only declared families match.
 
 ## Deferred
 
