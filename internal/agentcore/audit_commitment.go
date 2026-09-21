@@ -114,9 +114,11 @@ func (c *typedCommitment) correctsRefusal(fresh *typedCommitment) bool {
 }
 
 // nameMatches reports whether an executed toolName satisfies this
-// commitment's tool binding: the exact declared full name, or a
+// commitment's tool binding: the exact declared full name, a
 // policy-approved substitute (criticalToolSubstitutes) on the SAME
-// server/variant. Cross-server matching is refused: an approval for one
+// server/variant, or the `_upload` transport alias of the committed
+// suffix on the same server (inline vs. workspace-file chunks — same
+// write). Cross-server matching is refused: an approval for one
 // server never matches another server's call even though both names end in
 // the same critical suffix, and a base-server approval never matches a
 // client-variant call.
@@ -128,7 +130,10 @@ func (c *typedCommitment) nameMatches(toolName string) bool {
 	if toolName == c.tool {
 		return true
 	}
-	return substituteSatisfies(c.suffix, execSuffix) && sameToolServer(c.tool, toolName)
+	if !sameToolServer(c.tool, toolName) {
+		return false
+	}
+	return substituteSatisfies(c.suffix, execSuffix) || transportAliasSatisfies(c.suffix, execSuffix)
 }
 
 // allowsDeal reports whether this commitment's record binding covers a
@@ -735,8 +740,12 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest stri
 	if o.committedCriticalActions[chosen.suffix] > 0 {
 		o.committedCriticalActions[chosen.suffix]--
 	}
-	log.Printf("Enforcement: typed commitment %q discharged via %q (record %q; %d left on this commitment, "+
-		"%d outstanding on suffix %q)", chosen.describe(), toolName, dealID, chosen.remaining,
+	via := fmt.Sprintf("%q", toolName)
+	if chosen.tool != toolName && transportAliasSatisfies(chosen.suffix, criticalSuffixFor(toolName)) {
+		via = fmt.Sprintf("%q (same write, different transport)", toolName)
+	}
+	log.Printf("Enforcement: typed commitment %q discharged via %s (record %q; %d left on this commitment, "+
+		"%d outstanding on suffix %q)", chosen.describe(), via, dealID, chosen.remaining,
 		o.committedCriticalActions[chosen.suffix], chosen.suffix)
 	return true
 }
@@ -769,7 +778,10 @@ func (o *orchestrationState) legacySuffixAuthorized(execSuffix string) bool {
 		return true
 	}
 	for suffix := range o.committedCriticalActions {
-		if substituteSatisfies(suffix, execSuffix) && o.legacyHeadroomFor(suffix) > 0 {
+		if o.legacyHeadroomFor(suffix) <= 0 {
+			continue
+		}
+		if substituteSatisfies(suffix, execSuffix) || transportAliasSatisfies(suffix, execSuffix) {
 			return true
 		}
 	}

@@ -59,6 +59,21 @@ func substituteSatisfies(committedSuffix, executedSuffix string) bool {
 	return false
 }
 
+// transportAliasSatisfies reports whether committedSuffix and executedSuffix
+// are the same write over a different transport: `<tool>` vs `<tool>_upload`
+// (inline arguments vs. workspace-file chunks). The pages contract lists both
+// names as critical independently — this alias only matches them for
+// commitment discharge / authorization, never for deciding whether a tool is
+// critical. Bidirectional: an upload success discharges an inline commitment
+// and vice versa.
+func transportAliasSatisfies(committedSuffix, executedSuffix string) bool {
+	if committedSuffix == "" || executedSuffix == "" || committedSuffix == executedSuffix {
+		return false
+	}
+	const upload = "_upload"
+	return executedSuffix == committedSuffix+upload || committedSuffix == executedSuffix+upload
+}
+
 func isCriticalTool(toolName string) bool {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
@@ -187,11 +202,21 @@ func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest 
 		return
 	}
 	// Pass 3: discharge a legacy substitute if the executed tool is an
-	// allowed fallback for an outstanding free-text commitment.
+	// allowed fallback for an outstanding free-text commitment, or the
+	// `_upload` transport alias of the committed suffix.
 	for suffix := range o.committedCriticalActions {
-		if substituteSatisfies(suffix, executedSuffix) && o.legacyHeadroomFor(suffix) > 0 {
+		if o.legacyHeadroomFor(suffix) <= 0 {
+			continue
+		}
+		if substituteSatisfies(suffix, executedSuffix) {
 			o.committedCriticalActions[suffix]--
 			log.Printf("Enforcement: committed %q discharged via substitute %q (%d remaining)",
+				suffix, toolName, o.committedCriticalActions[suffix])
+			return
+		}
+		if transportAliasSatisfies(suffix, executedSuffix) {
+			o.committedCriticalActions[suffix]--
+			log.Printf("Enforcement: committed %q discharged via %q (same write, different transport) (%d remaining)",
 				suffix, toolName, o.committedCriticalActions[suffix])
 			return
 		}

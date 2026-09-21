@@ -707,3 +707,84 @@ func TestConfirmAudit_MissingOrNullActionsStillRejected(t *testing.T) {
 		}
 	}
 }
+
+const (
+	typedPagesUpdateData       = "mcp_pages_update_page_data"
+	typedPagesUpdateDataUpload = "mcp_pages_update_page_data_upload"
+	typedPagesDeployUpload     = "mcp_pages_deploy_page_upload"
+	typedPagesOtherServer      = "mcp_other_update_page_data_upload"
+)
+
+func withPagesTransportPolicy(t *testing.T) {
+	t.Helper()
+	p := testFixturePolicy()
+	p.CriticalToolSuffixes = append(append([]string{}, p.CriticalToolSuffixes...),
+		"update_page_data", "update_page_data_upload",
+		"deploy_page", "deploy_page_upload",
+	)
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(p)
+}
+
+func TestTransportAliasSatisfies(t *testing.T) {
+	cases := []struct {
+		committed, executed string
+		want                bool
+	}{
+		{"update_page_data", "update_page_data_upload", true},
+		{"update_page_data_upload", "update_page_data", true},
+		{"deploy_page", "deploy_page_upload", true},
+		{"update_page_data", "deploy_page_upload", false},
+		{"update_page_data", "update_page_data", false},
+		{"update_page", "update_page_data_upload", false},
+		{"", "update_page_data_upload", false},
+	}
+	for _, tc := range cases {
+		if got := transportAliasSatisfies(tc.committed, tc.executed); got != tc.want {
+			t.Errorf("transportAliasSatisfies(%q, %q) = %v, want %v", tc.committed, tc.executed, got, tc.want)
+		}
+	}
+}
+
+// TestTypedCommitment_UploadTransportDischargesInline pins the 2026-09-21
+// ultima-elc00179-twc failure (task 8486611d): the model committed to the
+// inline pages write, the server rejected the payload as too large, then the
+// same data published successfully via the by-reference `_upload` transport —
+// but finish still demanded the inline name until the model aborted.
+func TestTypedCommitment_UploadTransportDischargesInline(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData})
+
+	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"slug":"ultima-elc00179-twc"}`); blocked {
+		t.Fatalf("upload transport must be authorized under the inline commitment, got blocked: %s", msg)
+	}
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"ultima-elc00179-twc"}`, `{"ok":true,"version":860}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
+		t.Fatalf("upload success did not discharge the inline commitment: outstanding=%d, want 0", got)
+	}
+	o.mu.Lock()
+	o.selfAuditRequested, o.selfAuditConfirmedOnce = true, true
+	o.mu.Unlock()
+	if allowed, msgs := o.checkFinishEnforcement(); !allowed {
+		t.Fatalf("finish must be allowed once the upload discharged the inline commitment, got %v", msgs)
+	}
+}
+
+func TestTypedCommitment_UnrelatedToolDoesNotDischargeTransportAlias(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData})
+
+	if blocked, _ := o.checkCriticalTool(typedPagesDeployUpload, "", `{"slug":"x"}`); !blocked {
+		t.Fatal("deploy_page_upload must not ride an update_page_data commitment")
+	}
+	o.recordToolResult(typedPagesDeployUpload, `{"slug":"x"}`, `{"ok":true}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 1 {
+		t.Fatalf("unrelated upload discharged the commitment: outstanding=%d, want 1", got)
+	}
+	o.recordToolResult(typedPagesOtherServer, `{"slug":"x"}`, `{"ok":true}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 1 {
+		t.Fatalf("other-server upload discharged the commitment: outstanding=%d, want 1", got)
+	}
+}
