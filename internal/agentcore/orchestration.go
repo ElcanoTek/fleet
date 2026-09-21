@@ -1070,9 +1070,12 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 					continue
 				}
 				switch {
-				case oc.success && !done[oc.dealID]:
-					done[oc.dealID] = true
-					o.markCommittedExecuted(toolName, oc.dealID, callDigest)
+				case oc.success:
+					if done[id] && !o.typedStillOwes(toolName, id, callDigest, rawInput) {
+						break
+					}
+					done[id] = true
+					o.markCommittedExecuted(toolName, id, callDigest, rawInput)
 					newly++
 				case !oc.success:
 					failed++
@@ -1100,7 +1103,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				o.selfAuditRequested = true
 			}
 			log.Printf("Critical action succeeded: %s", toolName)
-			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput))
+			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput), rawInput)
 		} else {
 			// Ran but reported failure (transport-level, resp.IsError, or a
 			// payload-level failure per mcpReportedFailure) → counts against

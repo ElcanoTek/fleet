@@ -814,6 +814,26 @@ func TestTypedCommitment_UnlistedUploadSuffixIsNotAnAlias(t *testing.T) {
 	}
 }
 
+func TestTypedCommitment_AliasDoesNotAuthorizeDifferentResource(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData, Identifier: "page-a"})
+	if blocked, _ := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"slug":"page-b"}`); !blocked {
+		t.Fatal("upload of a different page must not ride the inline page-a commitment")
+	}
+	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"slug":"page-a"}`); blocked {
+		t.Fatalf("upload of the same page must be authorized, got blocked: %s", msg)
+	}
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"page-b"}`, `{"ok":true}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 1 {
+		t.Fatalf("page-b success must not discharge page-a, outstanding=%d", got)
+	}
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"page-a"}`, `{"ok":true}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
+		t.Fatalf("page-a upload should discharge the inline commitment, outstanding=%d", got)
+	}
+}
+
 func TestTypedCommitment_ReauditAliasPreservesUnrelatedUnbound(t *testing.T) {
 	withPagesTransportPolicy(t)
 	o := newOrchStateForTest()
@@ -976,6 +996,12 @@ func TestTypedCommitment_DigestMismatchDoesNotDischargeAlias(t *testing.T) {
 	}
 	if got := o.committedCriticalActions["update_page_data_upload"]; got != 1 {
 		t.Fatalf("digest-bound upload commitment must remain outstanding, got %d", got)
+	}
+	good := fmt.Sprintf(`{"deal_ids":["1"],"values_sha256":%q}`, digestY)
+	o.recordToolResult(typedPagesUpdateDataUpload, good,
+		`{"results":[{"deal_id":"1","success":true}]}`, true)
+	if got := o.committedCriticalActions["update_page_data_upload"]; got != 0 {
+		t.Fatalf("correct-digest retry must still discharge the upload commitment, outstanding=%d", got)
 	}
 }
 

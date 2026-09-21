@@ -156,6 +156,28 @@ func (c *typedCommitment) allowsDeal(dealID string) bool {
 	}
 }
 
+func identityValue(s string) string {
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		return s[i+1:]
+	}
+	return s
+}
+
+// allowsResource reports whether a transport-alias call targets the same
+// resource this commitment was bound to. Exact-name calls skip this (existing
+// unbound exact-tool semantics). Empty identity means the audit named no
+// resource, so any alias call may still ride.
+func (c *typedCommitment) allowsResource(toolName, rawInput string) bool {
+	if c.tool == toolName || c.identity == "" {
+		return true
+	}
+	callSet := pendingRecordSet(rawInput)
+	if callSet == "" {
+		return false
+	}
+	return identityValue(c.identity) == identityValue(callSet)
+}
+
 // hasDealBinding reports whether this commitment is bound to specific
 // record(s) — a single deal_id or a deal_ids batch. Unbound commitments
 // (creation tools with no record id) return false and are never superseded on
@@ -773,12 +795,29 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 // then the freshest (latest-registered) commitment — re-audit superseding
 // already retires a stale same-family commitment at registration, so a live
 // tie should not arise; this keeps discharge correct even if one ever did.
-func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest string) bool {
+// typedStillOwes reports whether a matching typed commitment still has an
+// outstanding unit for this call. Used so dischargedDeals keyed by the
+// executed suffix cannot hide a sibling alias commitment that still owes
+// the same record.
+func (o *orchestrationState) typedStillOwes(toolName, dealID, callDigest, rawInput string) bool {
+	for _, c := range o.typedCommitments {
+		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) || !c.allowsResource(toolName, rawInput) {
+			continue
+		}
+		if c.digest != "" && c.digest != callDigest {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest, rawInput string) bool {
 	var chosen *typedCommitment
 	chosenIdx, best := -1, 0
 	chosenDigestMatch := false
 	for i, c := range o.typedCommitments {
-		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) {
+		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) || !c.allowsResource(toolName, rawInput) {
 			continue
 		}
 		// A nonempty digest that does not match this call is a different
@@ -997,6 +1036,10 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 	var refusedBy []*typedCommitment
 	for _, c := range o.typedCommitments {
 		if c.remaining <= 0 || !c.nameMatches(toolName) {
+			continue
+		}
+		if !c.allowsResource(toolName, rawInput) {
+			refusedBy = append(refusedBy, c)
 			continue
 		}
 		if isBatch {

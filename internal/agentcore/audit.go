@@ -203,9 +203,9 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 //     committed high-level execute tool discharged by its documented
 //     lower-level create fallback), again within legacy headroom; same-server
 //     typed substitutes are handled in pass 1.
-func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest string) {
+func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest, rawInput string) {
 	// Pass 1: typed full-name-bound commitments.
-	if o.markTypedExecuted(toolName, dealID, callDigest) {
+	if o.markTypedExecuted(toolName, dealID, callDigest, rawInput) {
 		return
 	}
 	executedSuffix := criticalSuffixFor(toolName)
@@ -327,7 +327,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 			if len(o.pendingCriticalActions) == 0 {
 				o.selfAuditRequested = true
 			}
-			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput))
+			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput), rawInput)
 			if o.allCommitmentsExhausted() {
 				o.auditConfirmed = false
 			}
