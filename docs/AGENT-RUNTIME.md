@@ -950,10 +950,10 @@ dead-letter columns cleared) and the normal claim path re-runs it. If the task
 is **recurring**, dead-lettering does **not** end the schedule (ADR-0070): the
 next occurrence is spawned after the quarantine commits, the same way a
 success or error does. Two consecutive dead-lettered occurrences park the
-chain instead — the spawn credit is settled, no successor is inserted, and
-replay is how it continues. Replay of a row that already has a later
-occurrence in the same chain keeps that credit claimed so the replayed
-run cannot fork a second chain.
+chain instead — `recurrence_parked_at` is stamped, no successor is
+inserted, and replay is how it continues. Replay of a row that already
+spawned (not parked) keeps the spawn credit claimed so the replayed run
+cannot fork a second chain.
 Cancel still ends the chain. This spawn applies to dead-letters **after**
 the upgrade; existing `dead_lettered` rows are settled at migrate time and
 are not auto-resumed. A chain parked before the upgrade continues only if

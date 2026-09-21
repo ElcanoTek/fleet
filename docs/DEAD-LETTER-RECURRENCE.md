@@ -10,24 +10,22 @@ silently ends the schedule.
 
 Two consecutive dead-lettered occurrences park the chain instead. The
 breaker lives in `scheduleNextRecurrence`, so the post-commit path and
-`ReconcileRecurrences` cannot disagree. Parked chains settle the spawn
-credit (no forever re-evaluation) and continue when the operator replays.
-
-`ReplayDeadLetteredTask` re-arms `recurrence_spawned` only when no later
-recurrence occurrence exists in the same chain (direct
-`previous_occurrence_id` pointer, unfiltered by time; or a newer same-
-lineage recurring row whose ancestry is not a clone). If the dead-letter
-already spawned (or the lineage continued after the immediate successor
-was pruned), replay re-runs that occurrence and cannot fork a second
-chain.
+`ReconcileRecurrences` cannot disagree. Parking stamps
+`recurrence_parked_at` in the same transaction that claims the spawn
+credit (no successor is inserted). Replay re-arms iff that stamp is set
+or the spawn credit is still unclaimed, and clears the stamp. If the
+DLQ path already spawned, replay keeps the credit claimed and cannot
+fork a second chain.
 
 Cancel still ends the chain. What makes a run fail is unchanged.
 
 Upgrade does **not** auto-resume chains parked before it. Migration 071
 settles every existing `dead_lettered` row so the reconcile sweep cannot
 fork a duplicate chain next to a lineage that already continued, and cannot
-resurrect long-dead schedules. Those parked rows continue via replay, as
-they did before.
+resurrect long-dead schedules. Recurring DLQ rows with no successor
+pointer also get `recurrence_parked_at` (one-time best effort; that is
+the only time the pointer is consulted for park/replay). Those rows
+continue via replay.
 
 See [ADR-0070](adr/0070-dead-lettered-recurrences-spawn-successor.md).
 Production evidence: two daily dashboard-refresh jobs on a production

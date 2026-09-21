@@ -1710,14 +1710,11 @@ func (s *Storage) MarkBudgetSoftAlert(ctx context.Context, id uuid.UUID, windowS
 // in the dead_lettered state (ErrTaskNotDeadLettered otherwise), mirroring the
 // editability guards on the other operator mutations.
 //
-// Recurrence spawn credit (ADR-0070): re-armed to FALSE only when no later
-// recurrence occurrence exists in the same chain. A row whose
-// previous_occurrence_id points at this one is definitive regardless of
-// created_at. dead_lettered rows are NOT cleanup-eligible, so a parent can
-// outlive a pruned success/error successor; the lineage fallback covers
-// that, but must ignore clone-created chains (CloneTask copies lineage_id
-// and keeps recurrence, with source_task_id set on the clone root). Returns
-// the updated task.
+// Recurrence spawn credit (ADR-0070): re-armed to FALSE iff the chain is
+// parked (recurrence_parked_at set) or the spawn credit is still unclaimed.
+// Otherwise the DLQ path already spawned (or the row is settled history)
+// and replay must not fork a second chain. recurrence_parked_at is cleared
+// either way. Returns the updated task.
 func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -1758,53 +1755,17 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	// error_analysis (it's write-once against status updates), so clear it
 	// explicitly in the same tx rather than through the task struct.
 	//
-	// recurrence_spawned is re-armed ONLY when no later recurrence occurrence
-	// exists in this chain (ADR-0070). Two arms, combined with OR:
-	//
-	//   1. Direct link: x.previous_occurrence_id = this id. Definitive even
-	//      when created_at is equal or older. Do NOT time-filter this arm.
-	//   2. Lineage fallback: same lineage_id, strictly newer created_at,
-	//      non-empty recurrence, and the candidate's previous_occurrence_id
-	//      ancestry does NOT root at a clone (source_task_id set).
-	//      dead_lettered is absent from CleanupEligibleTaskStatuses, so a
-	//      DLQ parent can outlive a pruned success/error successor; the
-	//      fallback is for that hole. A clone (or its descendants) of a
-	//      parked task shares lineage_id and recurrence, so without the
-	//      source_task_id root check replay could never re-arm. NULL
-	//      lineage_id (pre-069) does not equal every other NULL.
+	// Recurrence spawn credit (ADR-0070): re-arm iff parked OR still unclaimed.
+	// The parked stamp is the chain-specific durable signal — no successor
+	// pointer or lineage walk. Always clear recurrence_parked_at on replay.
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE tasks AS t SET error_analysis = NULL,
+		UPDATE tasks SET error_analysis = NULL,
 		    recurrence_spawned = CASE
-		        WHEN EXISTS (
-		            SELECT 1 FROM tasks x
-		            WHERE x.id <> t.id
-		              AND (
-		                    x.previous_occurrence_id = t.id::text
-		                    OR (
-		                          t.lineage_id IS NOT NULL
-		                          AND x.lineage_id = t.lineage_id
-		                          AND x.created_at > t.created_at
-		                          AND x.recurrence IS NOT NULL AND x.recurrence <> ''
-		                          AND NOT EXISTS (
-		                              WITH RECURSIVE anc AS (
-		                                  SELECT x.id AS id, x.previous_occurrence_id AS prev, x.source_task_id AS src, 1 AS d
-		                                  UNION ALL
-		                                  SELECT p.id, p.previous_occurrence_id, p.source_task_id, anc.d + 1
-		                                  FROM anc
-		                                  JOIN tasks p ON p.id::text = anc.prev
-		                                  WHERE anc.d < 64
-		                              )
-		                              SELECT 1 FROM anc
-		                              WHERE anc.src IS NOT NULL
-		                                AND NOT EXISTS (SELECT 1 FROM tasks p WHERE p.id::text = anc.prev)
-		                          )
-		                       )
-		                  )
-		        )
-		        THEN t.recurrence_spawned
-		        ELSE FALSE
-		    END
-		WHERE t.id = $1`, taskID); err != nil {
+		        WHEN recurrence_parked_at IS NOT NULL OR NOT recurrence_spawned THEN FALSE
+		        ELSE recurrence_spawned
+		    END,
+		    recurrence_parked_at = NULL
+		WHERE id = $1`, taskID); err != nil {
 		return nil, err
 	}
 	task.ErrorAnalysis = nil
@@ -1930,13 +1891,19 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// in a row parks the chain. Lookup errors roll back so the sweep retries
 	// rather than parking on a transient read failure.
 	if current.Status == models.TaskStatusDeadLettered {
-		parked, perr := s.predecessorIsDeadLettered(ctx, current)
+		parked, perr := predecessorIsDeadLettered(ctx, tx, current)
 		if perr != nil {
 			log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
 			return false
 		}
 		if parked {
 			log.Printf("Recurrence for task %s parked after 2 consecutive dead-lettered occurrences; replay to continue", current.ID)
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE tasks SET recurrence_parked_at = now() WHERE id = $1 AND status = $2`,
+				current.ID, string(models.TaskStatusDeadLettered)); err != nil {
+				log.Printf("Error parking recurrence for task %s: %v (the reconciliation sweep will retry)", current.ID, err)
+				return false
+			}
 			if cerr := tx.Commit(); cerr != nil {
 				log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
 				return false
@@ -1996,7 +1963,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 // tx, so there is no unguarded settle left.
 func (s *Storage) settleDeadLetteredRecurrenceSpawn(ctx context.Context, taskID uuid.UUID) {
 	if _, err := s.db.Conn().ExecContext(ctx,
-		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1 AND status = $2`,
+		`UPDATE tasks SET recurrence_spawned = TRUE, recurrence_parked_at = now() WHERE id = $1 AND status = $2`,
 		taskID, string(models.TaskStatusDeadLettered)); err != nil {
 		log.Printf("Failed to settle recurrence spawn for task %s: %v", taskID, err)
 	}
@@ -2004,15 +1971,16 @@ func (s *Storage) settleDeadLetteredRecurrenceSpawn(ctx context.Context, taskID 
 
 // predecessorIsDeadLettered reports whether this occurrence's immediate
 // predecessor is currently dead_lettered — the consecutive-DLQ breaker
-// (ADR-0070). A missing predecessor (first occurrence of the chain, or the
-// prior row was pruned by retention) is not consecutive failure; the chain
-// continues. Callers must already know the current task is dead_lettered.
-func (s *Storage) predecessorIsDeadLettered(ctx context.Context, task *models.Task) (bool, error) {
+// (ADR-0070). Queried through the caller's tx so it cannot deadlock against
+// BeginTx's reserved connection when FLEET_SCHED_DB_MAX_CONNS=1. A missing
+// predecessor (first occurrence, or the prior row was pruned) is not
+// consecutive failure; the chain continues.
+func predecessorIsDeadLettered(ctx context.Context, tx *sql.Tx, task *models.Task) (bool, error) {
 	if task.PreviousOccurrenceID == nil {
 		return false, nil
 	}
 	var status models.TaskStatus
-	err := s.db.Conn().QueryRowContext(ctx,
+	err := tx.QueryRowContext(ctx,
 		`SELECT status FROM tasks WHERE id = $1`, *task.PreviousOccurrenceID).Scan(&status)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

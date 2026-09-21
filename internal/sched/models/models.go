@@ -1250,6 +1250,12 @@ type Task struct {
 	// non-recurring tasks and for the first occurrence. Persisted; immutable
 	// lineage stamped at spawn, never exported, not settable by clients.
 	PreviousOccurrenceID *uuid.UUID `json:"previous_occurrence_id,omitempty"`
+	// RecurrenceParkedAt is when the consecutive-dead-letter breaker parked
+	// this occurrence's chain (ADR-0070). nil means not parked: either the
+	// DLQ path spawned a successor, or the row is unclaimed history. Replay
+	// re-arms the spawn credit iff this is set or recurrence_spawned is still
+	// FALSE. Persisted; never exported; not settable by clients.
+	RecurrenceParkedAt *time.Time `json:"recurrence_parked_at,omitempty"`
 	// LineageID is the key every run of one JOB shares — recurrence occurrences,
 	// re-runs and clones all carry the original task's id here — and so the name
 	// of the job's working directory under the workspace root

@@ -38,25 +38,23 @@ same idempotent spawn-credit contract, `previous_occurrence_id` and
 `lineage_id` stamped, task memory carried.
 
 If that occurrence's immediate predecessor (`previous_occurrence_id`) is
-also `dead_lettered`, do **not** spawn. Park the chain: claim the spawn
-credit (status-gated, so a concurrent replay cannot be clobbered) so
-`ReconcileRecurrences` does not re-evaluate it forever, and log clearly
-that replay continues the chain.
-Two in a row is treated as systemic.
+also `dead_lettered`, do **not** spawn. Park the chain: in the same
+status-gated claim transaction, set `recurrence_spawned = TRUE` and
+`recurrence_parked_at = now()`, insert no successor, and log that replay
+continues the chain. Two in a row is treated as systemic.
 
-The breaker lives in **one** place — inside `scheduleNextRecurrence` (or a
-helper it calls) — so both the post-commit path and the reconcile sweep
-agree. `db.GetUnspawnedRecurringTasks` therefore selects `dead_lettered`
-rows as well as `success`/`error`. Cancel still ends the chain.
+The breaker lives in **one** place — inside `scheduleNextRecurrence` —
+so both the post-commit path and the reconcile sweep agree. The
+predecessor lookup runs on the spawn transaction, not a second pool
+connection. `db.GetUnspawnedRecurringTasks` selects `dead_lettered` rows
+as well as `success`/`error`. Cancel still ends the chain.
 
-`ReplayDeadLetteredTask` re-arms `recurrence_spawned` only when no later
-recurrence occurrence exists in the same chain. A row pointing at this
-one via `previous_occurrence_id` is definitive regardless of `created_at`.
-`dead_lettered` is not cleanup-eligible, so a parent can outlive a pruned
-success/error successor: a newer same-lineage recurring row is the
-fallback, excluding clone-created chains (ancestry root has
-`source_task_id` set). A breaker-parked chain with nothing newer re-arms
-and continues on replay.
+`ReplayDeadLetteredTask` re-arms `recurrence_spawned` to FALSE iff
+`recurrence_parked_at IS NOT NULL` (the breaker parked) **or**
+`recurrence_spawned` is still FALSE (unclaimed), and always clears
+`recurrence_parked_at`. Otherwise the credit stays TRUE: the DLQ path
+already spawned, or the row is settled history. No successor pointer or
+lineage walk.
 
 ## Enforcement
 
@@ -67,9 +65,8 @@ and continues on replay.
 - `db.GetUnspawnedRecurringTasks` selects `models.RecurrenceSpawnTaskStatuses`
   (`success`, `error`, `dead_lettered`); `db.recurrenceSpawnedInsertValue`
   settles born-terminal rows in that same set.
-- `storage.ReplayDeadLetteredTask` re-arms the spawn credit only when no
-  later recurrence occurrence exists in the chain (direct pointer, or a
-  newer same-lineage row that still recurs).
+- `storage.ReplayDeadLetteredTask` re-arms iff `recurrence_parked_at` is
+  set or the spawn credit is still unclaimed, and clears the park stamp.
 - `Storage.AddTaskWithContext` / `db.AddTaskTx` settle `recurrence_spawned`
   when the write lands in `RecurrenceSpawnTaskStatuses`, so a
   `--replace-status` / `--overwrite` upsert over a live recurring row

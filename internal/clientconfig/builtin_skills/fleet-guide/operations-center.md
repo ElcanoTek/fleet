@@ -44,7 +44,7 @@ Replaying a dead-lettered task returns that row to `PENDING` and clears its
 completion time, so it leaves the count; deleting the task removes it the same
 way. Replay re-runs that occurrence. If the task is recurring and the
 dead-letter already queued the next run, replay does not queue another; if the
-schedule parked after two consecutive dead-letters, replay is how it continues.
+schedule is parked (two consecutive dead-letters), replay is how it continues.
 A zero therefore means nothing is sitting failed from today — which is what
 you usually want to know, but it is not the same as nothing having gone wrong.
 

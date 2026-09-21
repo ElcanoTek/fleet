@@ -22,6 +22,16 @@ func recurrenceSpawned(t *testing.T, store *Storage, id uuid.UUID) bool {
 	return settled
 }
 
+func recurrenceParked(t *testing.T, store *Storage, id uuid.UUID) bool {
+	t.Helper()
+	var parked bool
+	if err := store.DB().Conn().QueryRowContext(context.Background(),
+		`SELECT recurrence_parked_at IS NOT NULL FROM tasks WHERE id = $1`, id).Scan(&parked); err != nil {
+		t.Fatalf("read recurrence_parked_at: %v", err)
+	}
+	return parked
+}
+
 // seedTerminalRecurring builds a terminal recurring occurrence whose
 // post-completion spawn never happened — the exact row a transient spawn
 // error or a crash in the terminal-commit→spawn window leaves behind. It

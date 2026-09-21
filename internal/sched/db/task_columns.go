@@ -130,6 +130,7 @@ type taskScanBuf struct {
 	pausedAt               sql.NullTime
 	a2aDelegationDepth     int
 	previousOccurrenceID   sql.NullString
+	recurrenceParkedAt     sql.NullTime
 }
 
 // taskColumn is one row of the task-column registry: one tasks-table column,
@@ -1074,6 +1075,23 @@ var taskColumnRegistry = []taskColumn{
 				} else {
 					log.Printf("Warning: invalid previous_occurrence_id %q: %v", b.previousOccurrenceID.String, perr)
 				}
+			}
+		},
+	},
+	{
+		name: "recurrence_parked_at",
+		read: true,
+		// Consecutive-dead-letter park stamp (ADR-0070): written only by the
+		// breaker in the spawn-claim tx; cleared by ReplayDeadLetteredTask.
+		noInsert:   "runtime park stamp (ADR-0070): stamped only by the consecutive-dead-letter breaker; a task insert must never set or clear it",
+		noUpsert:   "runtime park stamp (ADR-0070): a status write routed through the upsert must never clobber a parked chain or stamp one",
+		noTxUpdate: "runtime park stamp (ADR-0070): UpdateTaskTx must never clear or set the park; ReplayDeadLetteredTask and the breaker own it",
+		noExport:   "runtime settlement (ADR-0070): park is per-deployment; a re-imported definition is not parked",
+		dest:       func(b *taskScanBuf) any { return &b.recurrenceParkedAt },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.recurrenceParkedAt.Valid {
+				v := b.recurrenceParkedAt.Time
+				t.RecurrenceParkedAt = &v
 			}
 		},
 	},
