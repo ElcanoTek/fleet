@@ -156,14 +156,17 @@ func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 		"subject=" + strings.ToLower(subject),
 		bodyReference,
 		"attachments=" + strings.Join(attachmentNames(args["attachments"]), ","),
+		"inline=" + strings.Join(attachmentNames(args["inline_attachments"]), ","),
 	}, "|")
 	return hashString(fingerprintSource), true
 }
 
-// attachmentNames normalizes a send_email attachments argument (a string, a
-// list of strings, or absent) into sorted, lower-cased base names. Base name
-// rather than full path: the deliverable is the file, not where the model
-// happened to reference it from.
+// attachmentNames normalizes a send_email attachments argument into sorted,
+// lower-cased base names. The wire shape is a list of objects with a "path"
+// key (the form tools.MaterializeAttachmentPaths consumes); bare strings and
+// a single string are accepted too, since models emit both. Base name rather
+// than full path: the deliverable is the file, not where the model happened to
+// reference it from.
 func attachmentNames(value interface{}) []string {
 	var raw []string
 	switch typed := value.(type) {
@@ -171,8 +174,13 @@ func attachmentNames(value interface{}) []string {
 		raw = []string{typed}
 	case []interface{}:
 		for _, item := range typed {
-			if s, ok := item.(string); ok {
-				raw = append(raw, s)
+			switch entry := item.(type) {
+			case string:
+				raw = append(raw, entry)
+			case map[string]interface{}:
+				if p, ok := entry["path"].(string); ok {
+					raw = append(raw, p)
+				}
 			}
 		}
 	case []string:

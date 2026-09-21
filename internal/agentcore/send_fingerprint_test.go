@@ -53,10 +53,45 @@ func TestSendEmailFingerprint_AttachmentIdentityIsByBaseName(t *testing.T) {
 	}
 }
 
+// The real wire shape is a list of {"path": ...} objects
+// (tools.MaterializeAttachmentPaths); it must fingerprint exactly like the
+// equivalent bare-string list, and must not collapse to the no-attachment key.
+func TestSendEmailFingerprint_ObjectShapedAttachments(t *testing.T) {
+	objs, ok := sendEmailFingerprint(fpArgs([]interface{}{
+		map[string]interface{}{"path": "/var/lib/fleet/workspace/tasks/abc/report.csv"},
+		map[string]interface{}{"path": "notes.txt", "mime_type": "text/plain"},
+	}))
+	if !ok {
+		t.Fatal("object-shaped attachments must be computable")
+	}
+	strs, _ := sendEmailFingerprint(fpArgs([]interface{}{"notes.txt", "report.csv"}))
+	if objs != strs {
+		t.Fatal("object-shaped attachments must fingerprint like the equivalent bare-string list")
+	}
+	none, _ := sendEmailFingerprint(fpArgs(nil))
+	if objs == none {
+		t.Fatal("object-shaped attachments must not collapse to the no-attachment fingerprint")
+	}
+	inline, _ := sendEmailFingerprint(map[string]interface{}{
+		"to_email": []interface{}{"a@x.com", "b@x.com"}, "subject": "Weekly report", "content": "<html>body</html>",
+		"inline_attachments": []interface{}{map[string]interface{}{"path": "chart.png", "cid": "chart"}},
+	})
+	if inline == none {
+		t.Fatal("inline attachments are part of the send identity too")
+	}
+}
+
 func TestEmailDedupKey_AttachmentAwareThroughRawInput(t *testing.T) {
 	a := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c"}`)
 	b := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c","attachments":["x.csv"]}`)
 	if a == b {
 		t.Fatal("emailDedupKey must distinguish a send with attachments from one without")
+	}
+	c := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c","attachments":[{"path":"/w/x.csv"}]}`)
+	if c == a {
+		t.Fatal("emailDedupKey must see object-shaped attachments")
+	}
+	if c != b {
+		t.Fatal("object-shaped and bare-string attachments of the same file must dedupe together")
 	}
 }
