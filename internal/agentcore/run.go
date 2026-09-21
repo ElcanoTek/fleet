@@ -617,6 +617,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		agent = outcome.agent
 		activeModel = outcome.activeModel
 		swappedToFallback = outcome.swappedToFallback
+		eng.activeModel = activeModel
 
 		// Resend-budget checkpoint: the tool loop stopped because a step's prompt
 		// reached FLEET_CONTEXT_RESEND_BUDGET_TOKENS, not because the model
@@ -641,6 +642,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			round--
 			continue
 		}
+		eng.roundEndedOnItsOwn()
 
 		// Prefer the final completed response. The sink spans enforcement rounds:
 		// concatenating it here repeats an answer drafted before the completion

@@ -467,11 +467,22 @@ const interactiveForceFinalSummaryNudge = forceFinalSummaryNudge
 // brief, tagged so the cache layer treats it as a stable boundary.
 func buildInteractiveCompactionSummarizer(tc TurnConfig) func(context.Context, agentcore.CompactionSummarizeInput) fantasy.Message {
 	return func(ctx context.Context, in agentcore.CompactionSummarizeInput) fantasy.Message {
-		summary := summarizeDroppedMiddle(ctx, tc, in)
+		summary := summarizeDroppedMiddleWith(ctx, summarizerModel(in, tc.Model), in, "")
 		// Tag with the compaction prefix so promptCachingStep's optional
 		// compaction-summary breakpoint can find it.
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] " + summary)
 	}
+}
+
+// summarizerModel picks the model a compaction summary is bought from: the
+// model the run is driving right now (agentcore sets in.Model to the fallback
+// after a resilience swap), else the one the driver was configured with. A
+// summary must not be bought from a model that just failed or is circuit-open.
+func summarizerModel(in agentcore.CompactionSummarizeInput, configured fantasy.LanguageModel) fantasy.LanguageModel {
+	if in.Model != nil {
+		return in.Model
+	}
+	return configured
 }
 
 // compactionSummaryPrefix matches agentcore's compaction-summary marker so the
@@ -507,7 +518,7 @@ func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, in agentcore.Com
 // established for 78 more steps.
 func buildScheduledCompactionSummarizer(model fantasy.LanguageModel) func(context.Context, agentcore.CompactionSummarizeInput) fantasy.Message {
 	return func(ctx context.Context, in agentcore.CompactionSummarizeInput) fantasy.Message {
-		summary := summarizeDroppedMiddleWith(ctx, model, in, compactionSummarizeScheduledAddendum)
+		summary := summarizeDroppedMiddleWith(ctx, summarizerModel(in, model), in, compactionSummarizeScheduledAddendum)
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] " + summary)
 	}
 }

@@ -397,14 +397,17 @@ without an enforcement message and without consuming an enforcement round — so
 the very next thing that happens is the resend-budget compaction, and the work
 resumes from the compacted history. A step that produced the final answer never
 pauses. At most `maxResendCheckpoints` (40) pauses per run; past that the
-condition goes inert and the run is governed by the ceilings alone. See
+condition goes inert and the run is governed by the ceilings alone. The step
+cap (`FLEET_MAX_ITERATIONS`) is counted across a logical round's checkpoints
+and wins a tie, so a pause never becomes a per-pause step allowance. See
 [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md).
 
 **Scheduled runs summarize for real.** The scheduled driver now wires a
 `CompactionSummarizer` (the same governed LLM summary the chat path uses,
 metered into the run, with an addendum for unattended work: keep every
 completed step's concrete result, every identifier the task still needs, and
-which writes already succeeded). Before this the scheduled path wired none, so
+which writes already succeeded), bought from the model the run is currently
+driving (the fallback after a swap). Before this the scheduled path wired none, so
 every compaction — window pressure, resend budget, reactive recovery — replaced
 the oldest half of a run's history with a one-line placeholder that carried
 none of its findings.

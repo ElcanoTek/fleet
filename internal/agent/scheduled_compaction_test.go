@@ -75,3 +75,22 @@ func TestBuildScheduledCompactionSummarizer_NilModelDegradesToPlaceholder(t *tes
 		t.Fatalf("nil-model summary = %q, want the tagged placeholder", text)
 	}
 }
+
+func TestScheduledCompactionSummarizer_FollowsTheActiveModel(t *testing.T) {
+	configured := &promptCapturingModel{itMockModel: itMockModel{generateText: "from primary"}}
+	active := &promptCapturingModel{itMockModel: itMockModel{generateText: "from fallback"}}
+	in := agentcore.CompactionSummarizeInput{
+		Droppable: []fantasy.Message{fantasy.NewUserMessage("a"), fantasy.NewUserMessage("b")},
+		Model:     active,
+	}
+	text := msgTextOf(buildScheduledCompactionSummarizer(configured)(context.Background(), in))
+	if !strings.Contains(text, "from fallback") {
+		t.Fatalf("summary = %q, want the ACTIVE model's text after a swap", text)
+	}
+	configured.mu.Lock()
+	n := configured.generateCount
+	configured.mu.Unlock()
+	if n != 0 {
+		t.Errorf("configured model was called %d times; a swapped run must not summarize on it", n)
+	}
+}

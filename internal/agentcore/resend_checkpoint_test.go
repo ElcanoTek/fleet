@@ -189,3 +189,84 @@ func TestRun_ResendCheckpoint_CapDoesNotStrandTheRun(t *testing.T) {
 		t.Errorf("checkpoints = %d, want exactly the cap %d", checkpoints, maxResendCheckpoints)
 	}
 }
+
+// The step cap is a run-wide bound on the tool loop, not a per-pause allowance:
+// with MaxIterations=4 and every step over the budget, exactly four steps run
+// and the fourth pause is refused so the cap's own handling takes over.
+func TestRun_ResendCheckpoint_StepCapHoldsAcrossCheckpoints(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
+	var ticks atomic.Int32
+	tick := fantasy.NewAgentTool("tick", "advance", func(context.Context, tickInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		ticks.Add(1)
+		return fantasy.NewTextResponse("ok"), nil
+	})
+	model := newStopModel("cp-stepcap")
+	var calls atomic.Int32
+	model.streamFunc = func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		n := calls.Add(1)
+		if int(n) <= 20 {
+			return toolStep(fantasy.Usage{InputTokens: 1500, OutputTokens: 1}, fmt.Sprintf("s-%d", n), n), nil
+		}
+		return streamTextThenFinish("never reached"), nil
+	}
+	obs := &payloadObserver{}
+	session := NewLogSession()
+	_, _ = Run(context.Background(), ModeScheduled,
+		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, MaxIterations: 4, NativeTools: []fantasy.AgentTool{tick}},
+		Deps{Input: historyInput{system: "s", msgs: fillerMessages(1, 50), label: "sched"}, Observer: obs, Policy: finishableScheduledPolicy(session), Model: model, LogSession: session})
+	checkpoints := 0
+	for _, e := range obs.events {
+		if e == evtContextCheckpoint {
+			checkpoints++
+		}
+	}
+	if got := ticks.Load(); got > 4 {
+		t.Fatalf("tool ran %d times with MaxIterations=4 — checkpoints must not reset the step cap", got)
+	}
+	if checkpoints != 3 {
+		t.Errorf("checkpoints = %d, want 3 (the fourth step is the cap's, not a pause)", checkpoints)
+	}
+}
+
+func TestConsumeResendCheckpoint_CapTieRefusesAndAccountingResets(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
+	e := newMockEngine(t, &namedMockModel{name: "cp-tie"})
+	e.envPrefix = CanonicalEnvPrefix
+	e.requireCompactionOptIn = true
+	e.maxIterations = 3
+	over := func(n int) *fantasy.AgentResult {
+		r := &fantasy.AgentResult{}
+		for i := 0; i < n; i++ {
+			r.Steps = append(r.Steps, fantasy.StepResult{Response: fantasy.Response{FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 1500}}})
+		}
+		return r
+	}
+	if !e.consumeResendCheckpoint(over(1)) || !e.consumeResendCheckpoint(over(1)) {
+		t.Fatal("two single-step pauses fit under a cap of 3")
+	}
+	if e.consumeResendCheckpoint(over(1)) {
+		t.Fatal("the third step reaches the cap: the pause must be refused so the cap wins the tie")
+	}
+	e.roundEndedOnItsOwn()
+	if !e.consumeResendCheckpoint(over(1)) {
+		t.Fatal("a round that ended on its own resets the step accounting for the next logical round")
+	}
+	if e.checkpointSteps != 1 {
+		t.Errorf("checkpointSteps = %d, want 1 after the reset and one pause", e.checkpointSteps)
+	}
+}
+
+// Compaction summaries follow the model the run is driving: after a swap the
+// input names the fallback, not the configured primary.
+func TestCompactionSummarizeInput_FollowsTheActiveModel(t *testing.T) {
+	primary := &namedMockModel{name: "primary"}
+	fallback := &namedMockModel{name: "fallback"}
+	e := newMockEngine(t, primary)
+	if in := e.compactionSummarizeInput(nil); in.Model == nil || in.Model.Model() != "primary" {
+		t.Fatalf("before any swap the summary input must name the primary, got %v", in.Model)
+	}
+	e.activeModel = fallback
+	if in := e.compactionSummarizeInput(nil); in.Model == nil || in.Model.Model() != "fallback" {
+		t.Fatalf("after a swap the summary input must name the fallback, got %v", in.Model)
+	}
+}

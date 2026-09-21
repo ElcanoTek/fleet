@@ -35,16 +35,28 @@ dead-letters in one day. The transcripts showed why:
    `trigger=resend_budget`, `checkpoint`), and `continue`s **without** calling
    the completion policy, without enforcement messages and without consuming
    an enforcement round. The next iteration's `checkContextPressure` compacts.
-3. **Cap**: `maxResendCheckpoints = 40` per run, tracked on the engine so the
+3. **Caps**: `maxResendCheckpoints = 40` per run, tracked on the engine so the
    stop condition itself goes inert past the cap (otherwise every round would
    end after one step and the policy would read that as a finish). Past the
-   cap the run is governed by the cost/token ceilings exactly as before.
+   cap the run is governed by the cost/token ceilings exactly as before. The
+   **step cap** (`MaxIterations`) keeps bounding the whole tool loop: the
+   engine counts the steps its checkpoint-ended rounds consumed and subtracts
+   them from the next round's `StepCountIs`, and a pause is refused when the
+   step that reached the budget also reached the cap — the cap wins the tie
+   and its ordinary handling takes over. The accounting resets when a round
+   ends on its own (finish or enforcement), so enforcement rounds keep their
+   full budget as before (`TestRun_ResendCheckpoint_StepCapHoldsAcrossCheckpoints`).
 4. **A real summarizer for scheduled runs** (`internal/agent/interactive.go`,
    `buildScheduledCompactionSummarizer`; wired in `scheduled.go`): the chat
    path's governed LLM summary, metered through `RecordUsage`, plus an addendum
    for unattended work (completed steps with their concrete results, every
    identifier the task still needs, which writes already succeeded). Nil model
-   or an over-ceiling run still degrade to the deterministic placeholder.
+   or an over-ceiling run still degrade to the deterministic placeholder. The
+   summary is bought from the model the run is **currently driving**
+   (`CompactionSummarizeInput.Model`, set by the engine to the fallback after a
+   resilience swap), not the configured primary — a swapped run must not keep
+   summarizing on a model that just failed or is circuit-open. The interactive
+   summarizer honours the same field.
 
 ## What did not change
 

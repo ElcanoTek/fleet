@@ -95,6 +95,16 @@ type engine struct {
 	// stop condition goes inert so the loop cannot end every round after one
 	// step forever.
 	resendCheckpoints int
+	// checkpointSteps counts the tool steps consumed by the checkpoint-ended
+	// rounds of the CURRENT logical round, so maxIterations keeps bounding the
+	// whole tool loop across checkpoints instead of restarting per pause. Reset
+	// when a round ends on its own (finish or enforcement).
+	checkpointSteps int
+	// activeModel is the model the run loop is currently driving — the primary,
+	// or the fallback after a resilience swap. Compaction summaries follow it
+	// (a swapped run must not keep summarizing on a model that just failed or
+	// is circuit-open). nil until Run sets it; readers fall back to model.
+	activeModel fantasy.LanguageModel
 
 	// usageReporter, when set, is called after each step with the run's
 	// accumulated usage so a driver can ship it out-of-band to an external
@@ -219,6 +229,11 @@ func snapCutBackward(messages []fantasy.Message, idx int) int {
 type CompactionSummarizeInput struct {
 	// Droppable is the middle slice being summarized away.
 	Droppable []fantasy.Message
+	// Model is the model the run is currently driving (the fallback after a
+	// resilience swap). A driver summarizer should prefer it over the model it
+	// was configured with, so the summary is not bought from a model that just
+	// failed or is circuit-open. Nil when the engine has none (direct tests).
+	Model fantasy.LanguageModel
 	// RecordUsage meters the summarizer's own model call into the SAME run
 	// accounting the main loop uses (the counters checkCeilings and
 	// Result.Usage read) — the same capability-closure contract as
@@ -247,12 +262,12 @@ func (e *engine) bindRunUsage(orch *orchestrationState) { e.runOrch = orch }
 // the engine's primary model slug — the model the interactive summarizer
 // calls (tc.Model) — which is what selects a per-model price override (#297).
 func (e *engine) compactionSummarizeInput(droppable []fantasy.Message) CompactionSummarizeInput {
-	in := CompactionSummarizeInput{Droppable: droppable}
+	in := CompactionSummarizeInput{Droppable: droppable, Model: e.currentModel()}
 	orch := e.runOrch
 	if orch == nil {
 		return in
 	}
-	modelSlug := slugOf(e.model)
+	modelSlug := slugOf(e.currentModel())
 	// updateAuxUsage, not updateUsage: the summarizer's spend counts toward the
 	// ceilings/totals but its prompt size is not the run's context fill, so the
 	// LastStep* signals (context pressure, chat context meter) stay untouched.
@@ -264,6 +279,15 @@ func (e *engine) compactionSummarizeInput(droppable []fantasy.Message) Compactio
 		return blocked
 	}
 	return in
+}
+
+// currentModel is the model the run is driving right now: the fallback after a
+// swap, else the configured primary.
+func (e *engine) currentModel() fantasy.LanguageModel {
+	if e.activeModel != nil {
+		return e.activeModel
+	}
+	return e.model
 }
 
 // forceCompactMessageHistory runs a head/summary/tail compaction unconditionally
@@ -851,15 +875,31 @@ func stepAtResendBudget(steps []fantasy.StepResult, budget int) bool {
 // it did, counts the pause against maxResendCheckpoints. Past the cap it
 // returns false and the StopCondition is already inert, so the round falls
 // through to the ordinary finish/enforcement path.
+//
+// The step cap wins a tie: when the round's last step also reached
+// maxIterations (counted across this logical round's checkpoints), the pause
+// is refused so the round falls through to the cap's ordinary handling — a
+// checkpoint must never turn the step cap into a per-pause allowance.
 func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult) bool {
 	if result == nil || !e.requireCompactionOptIn || e.resendCheckpoints >= maxResendCheckpoints {
+		return false
+	}
+	if e.maxIterations > 0 && e.checkpointSteps+len(result.Steps) >= e.maxIterations {
 		return false
 	}
 	if !stepAtResendBudget(result.Steps, contextResendBudgetTokens(e.envPrefix)) {
 		return false
 	}
 	e.resendCheckpoints++
+	e.checkpointSteps += len(result.Steps)
 	return true
+}
+
+// roundEndedOnItsOwn resets the checkpoint step accounting: the logical round
+// is over (the model finished, or the policy is about to open an enforcement
+// round), so the next round starts with the full step budget as before.
+func (e *engine) roundEndedOnItsOwn() {
+	e.checkpointSteps = 0
 }
 
 // roundStopConditions is the round's StopWhen: the step cap (a model that
@@ -901,7 +941,15 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	markFirst := watchdog.markFirst
 	stepLimit := r.engine.maxIterations
 	if stepLimit > 0 {
-		stepLimit -= r.priorSteps
+		// The cap spans the resilience attempts of this round AND the
+		// checkpoint-ended rounds before it (see engine.checkpointSteps); a run
+		// that has spent its whole budget still gets exactly one more step so
+		// the cap fires instead of vanishing (stepStopConditions treats <= 0
+		// as "no cap").
+		stepLimit -= r.priorSteps + r.engine.checkpointSteps
+		if stepLimit < 1 {
+			stepLimit = 1
+		}
 	}
 	// Sentry breadcrumb (#193): the LLM request trail so a captured exception's
 	// event shows which model the agent was driving immediately before the
