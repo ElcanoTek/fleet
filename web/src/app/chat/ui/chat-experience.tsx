@@ -167,6 +167,28 @@ export type ServerConfig = {
   uploadMaxBytes: number;
 };
 
+// parseServerConfigPayload maps GET /api/server-config onto ServerConfig.
+// Shared by the mount-time fetch and the live refreshes (tab return, network
+// return, a model-tier change), so every path reads the payload identically.
+export function parseServerConfigPayload(cfg: {
+  lockdown_available?: boolean;
+  lockdown_only?: boolean;
+  lockdown_allowed_models?: string[] | null;
+  upload_max_bytes?: number;
+}): ServerConfig {
+  return {
+    lockdownAvailable: cfg.lockdown_available === true,
+    lockdownOnly: cfg.lockdown_only === true,
+    lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
+    // Older servers don't advertise the cap — keep the client-side default
+    // rather than treating it as 0.
+    uploadMaxBytes:
+      typeof cfg.upload_max_bytes === "number" && cfg.upload_max_bytes > 0
+        ? cfg.upload_max_bytes
+        : DEFAULT_UPLOAD_MAX_BYTES,
+  };
+}
+
 export type PendingDeleteConversation = {
   id: string;
   title: string;
@@ -700,6 +722,30 @@ export function ChatExperience({
         uploadMaxBytes: DEFAULT_UPLOAD_MAX_BYTES,
       },
   );
+  // refreshServerConfig re-reads the capability payload. Besides mount it runs
+  // on tab/network return and whenever the workspace model tiers change: with
+  // FLEET_LOCKDOWN_ALLOWED_MODELS unset the lockdown allow-list IS the live
+  // tiers, so an admin moving a tier changes what the server accepts for
+  // lockdown chats immediately — a stale snapshot here would keep offering a
+  // now-refused model and hide the newly allowed one until a reload.
+  // Best-effort: a 404 / network error means an older server or a blip, so
+  // the current snapshot stays.
+  const refreshServerConfig = useCallback(async () => {
+    try {
+      const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
+      if (!cfgRes.ok) return;
+      const cfg = (await cfgRes.json()) as Parameters<typeof parseServerConfigPayload>[0];
+      setServerConfig(parseServerConfigPayload(cfg));
+    } catch {
+      // Optional capability — leave the snapshot as it is.
+    }
+  }, []);
+  // The lockdown allow-list follows the live tiers server-side (see
+  // refreshServerConfig); re-read it whenever a tier payload lands.
+  useEffect(() => {
+    if (!workspaceModelTiers) return;
+    void refreshServerConfig();
+  }, [workspaceModelTiers, refreshServerConfig]);
   // pendingLockdown is set when the user clicks "New lockdown chat"
   // and cleared once the conversation is actually created. The flag
   // rides along on the first /api/chat POST as `lockdown: true`.
@@ -1293,6 +1339,7 @@ export function ChatExperience({
     };
     const handle = () => {
       void probe();
+      void refreshServerConfig();
     };
     // Fire once on mount in case the user left the tab open across a
     // deploy and we're starting fresh against an already-updated
@@ -1309,7 +1356,7 @@ export function ChatExperience({
       window.removeEventListener("online", handle);
       window.clearInterval(interval);
     };
-  }, []);
+  }, [refreshServerConfig]);
 
   // (Initial-load mount effect moved below its callback dependencies — see
   // "mount effects, hoisted below their callback dependencies".)
@@ -4270,38 +4317,11 @@ export function ChatExperience({
       }
     };
 
-    // Capability fetch — currently just lockdown availability.
-    // Best-effort: a 404 / network error means the older server
-    // doesn't expose this endpoint, so we keep the feature off.
+    // Capability fetch (lockdown availability, allow-list, upload cap) — the
+    // same refresher the live paths use.
     const loadServerConfig = async () => {
-      try {
-        const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
-        if (cfgRes.ok) {
-          const cfg = (await cfgRes.json()) as {
-            lockdown_available: boolean;
-            lockdown_only: boolean;
-            lockdown_allowed_models: string[] | null;
-            upload_max_bytes?: number;
-          };
-          if (!cancelled) {
-            setServerConfig({
-              lockdownAvailable: cfg.lockdown_available === true,
-              lockdownOnly: cfg.lockdown_only === true,
-              lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
-              // Older servers don't advertise the cap — keep the
-              // client-side default rather than treating it as 0.
-              uploadMaxBytes:
-                typeof cfg.upload_max_bytes === "number" &&
-                cfg.upload_max_bytes > 0
-                  ? cfg.upload_max_bytes
-                  : DEFAULT_UPLOAD_MAX_BYTES,
-            });
-          }
-        }
-      } catch {
-        // Optional capability — leave lockdown off when the server
-        // is too old to advertise it.
-      }
+      if (cancelled) return;
+      await refreshServerConfig();
     };
 
     const loadInitialState = async () => {
@@ -4481,7 +4501,7 @@ export function ChatExperience({
     // above). initialUserEmail is a per-mount constant (the server component
     // resolves it per request), so listing it keeps exhaustive-deps honest
     // without changing the mount-once behavior.
-  }, [initialUserEmail]);
+  }, [initialUserEmail, refreshServerConfig]);
 
   const toggleShowStats = () => {
     setShowStats((prev) => {

@@ -522,11 +522,12 @@ func TestServerConfig_LockdownListDefaultsToLiveTiers(t *testing.T) {
 
 // Compact is a user-visible action that used to be the one path where a
 // delisted lockdown model still 400ed: the web posts the conversation's stale
-// stored slug, and the summarize guard rejected it before any migration ran.
-// Now the summarize path migrates and treats the echo as no opinion, so the
-// request proceeds past the lockdown guard (here to the handler's own "no
-// history" 400) and the migration is persisted.
-func TestSummarize_LockdownDelistedModelMigrates(t *testing.T) {
+// stored slug, and the summarize guard rejected it. Now that echo is run on
+// the lockdown default, so the request proceeds past the lockdown guard (here
+// to the handler's own "no history" 400) — WITHOUT persisting: the
+// conversation migrates when its next turn launches, which is also when the
+// client is told.
+func TestSummarize_LockdownDelistedModelRunsOnTheDefault(t *testing.T) {
 	s := serverFixture(t)
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
@@ -549,8 +550,8 @@ func TestSummarize_LockdownDelistedModelMigrates(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if got.Model != "c/d" {
-		t.Fatalf("migration not persisted from the summarize path: model=%q", got.Model)
+	if got.Model != "a/b" {
+		t.Fatalf("Compact must not persist the migration (the launching turn does, and tells the client): model=%q", got.Model)
 	}
 
 	// A genuinely different disallowed request is still refused.

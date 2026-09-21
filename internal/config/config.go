@@ -1899,7 +1899,7 @@ func (c *Config) LockdownAllows(slug string) bool {
 // rest of the workspace treats as its defaults, and an admin override applied
 // live in Settings reaches lockdown at the same moment. The first entry is the
 // lockdown default: what a conversation is moved to when its persisted model
-// falls off the list (see httpapi.reconcileLockdownModel).
+// falls off the list (see httpapi.reconcileLockdownModelCtx).
 func (c *Config) LockdownModels() []string {
 	if len(c.LockdownAllowedModels) > 0 {
 		return c.LockdownAllowedModels

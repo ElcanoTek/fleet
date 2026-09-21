@@ -643,8 +643,8 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		st.mu.Lock()
 		model := st.convs["conv-1"].Model
 		st.mu.Unlock()
-		if model != "c/d" {
-			t.Errorf("the persisted delisted model should still have been migrated before the rejection: stored=%q", model)
+		if model != "a/b" {
+			t.Errorf("a rejected submission launches no turn, so nothing should have been migrated: stored=%q", model)
 		}
 	})
 

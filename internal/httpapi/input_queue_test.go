@@ -231,12 +231,25 @@ func TestQueue_DrainedLockdownTurnMigratesDelistedModel(t *testing.T) {
 		t.Fatalf("busy submit: status=%d body=%s", w.Code, w.Body.String())
 	}
 
-	// The admin narrows the allow-list before the queue drains.
+	// The admin narrows the allow-list before the queue drains, and the user
+	// sends another follow-up echoing the (now delisted) stored model. A
+	// busy-path submission launches no turn, so it must be accepted (the echo
+	// is no opinion, not an override) and must NOT migrate the model behind
+	// the running stream's back — the client would keep echoing a slug the
+	// server had already replaced.
 	s.cfg.LockdownAllowedModels = []string{"c/d"}
+	w = postChatJSON(t, s, user, map[string]any{"message": "third question", "conversation_id": conv.ID, "input_id": "cli-3", "model": "a/b"})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("busy submit echoing the stored model: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got, gerr := s.store.Get(context.Background(), user, conv.ID); gerr != nil || got == nil || got.Model != "a/b" {
+		t.Fatalf("busy-path submission must not migrate the model before a turn launches: %v %+v", gerr, got)
+	}
 
 	eng.release <- struct{}{}
 	eng.release <- struct{}{}
-	waitFor(t, "queued turn to drain", func() bool { return eng.turns.Load() == 2 })
+	eng.release <- struct{}{}
+	waitFor(t, "queued turns to drain", func() bool { return eng.turns.Load() == 3 })
 	waitFor(t, "queue row completed", func() bool {
 		items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID)
 		return len(items) == 0
@@ -245,8 +258,8 @@ func TestQueue_DrainedLockdownTurnMigratesDelistedModel(t *testing.T) {
 	eng.mu.Lock()
 	models := append([]string(nil), eng.models...)
 	eng.mu.Unlock()
-	if len(models) != 2 || models[0] != "a/b" || models[1] != "c/d" {
-		t.Fatalf("drained lockdown turn should run on the lockdown default: models=%v, want [a/b c/d]", models)
+	if len(models) != 3 || models[0] != "a/b" || models[1] != "c/d" || models[2] != "c/d" {
+		t.Fatalf("drained lockdown turns should run on the lockdown default: models=%v, want [a/b c/d c/d]", models)
 	}
 	got, err := s.store.Get(context.Background(), user, conv.ID)
 	if err != nil || got == nil {

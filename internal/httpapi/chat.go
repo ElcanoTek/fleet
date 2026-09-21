@@ -158,7 +158,7 @@ func lockdownDefaultSlug(allowed []string) string {
 	return ""
 }
 
-// reconcileLockdownModel moves a lockdown conversation whose PERSISTED model is
+// reconcileLockdownModelCtx moves a lockdown conversation whose PERSISTED model is
 // no longer on the allow-list onto the lockdown default — the first entry of
 // config.LockdownModels — and persists that choice. A conversation pins its
 // model at creation and the manager re-validates it on every turn, so without
@@ -168,23 +168,14 @@ func lockdownDefaultSlug(allowed []string) string {
 // turn with "model not allowed in lockdown mode" until the user found the
 // picker. This is a migration IN FRONT of the guard, not a bypass of it: the
 // manager still rejects whatever it is handed if it is not allow-listed, and
-// the explicit per-turn override above still 400s on a disallowed slug. A
-// glob-only list (no literal slug to move to) is left to the guard; a list that
-// merely STARTS with a glob moves to its first literal slug. Reports false
-// after writing the HTTP error.
-func (s *Server) reconcileLockdownModel(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation) bool {
-	if err := s.reconcileLockdownModelCtx(r.Context(), user, conv); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return false
-	}
-	return true
-}
-
-// reconcileLockdownModelCtx is the transport-free core of the migration, so
-// the queue-drain launch path (no ResponseWriter; #785) gets the same
-// next-turn migration as a direct submission: a follow-up queued before an
-// admin moved the tiers must not fail on the delisted persisted model when it
-// drains. Idempotent — a conversation already on an allowed model is untouched.
+// the explicit per-turn override in postChat still 400s on a disallowed slug.
+// A glob-only list (no literal slug to move to) is left to the guard; a list
+// that merely STARTS with a glob moves to its first literal slug.
+// reconcileLockdownModelCtx is the migration itself. It runs on the shared
+// launch path (startTurn), so a direct submission and a queue-drained
+// follow-up (#785) get the same treatment, and the `conversation` event the
+// launching turn emits carries the new model to the client. Idempotent — a
+// conversation already on an allowed model is untouched.
 func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, conv *store.Conversation) error {
 	if !conv.Lockdown || conv.Model == "" || s.cfg.LockdownAllows(conv.Model) {
 		return nil
@@ -240,16 +231,16 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
-		// Reconcile BEFORE the override guard: the web echoes the conversation's
-		// stored model on every turn, so a lockdown chat whose persisted model
-		// was delisted would otherwise be rejected as an "override" to that very
-		// model and never reach the migration. An echo of the stale persisted
-		// slug is "no opinion"; a genuinely different disallowed slug still 400s.
-		prior := conv.Model
-		if !s.reconcileLockdownModel(w, r, user, conv) {
-			return
-		}
-		if conv.Model != prior && reqModel == prior {
+		// The web echoes the conversation's stored model on every turn. An echo
+		// is "no opinion" — it can never be an override — so it must not trip
+		// the lockdown guard when that stored model has since been delisted.
+		// The migration itself happens where the turn LAUNCHES (startTurn, the
+		// path shared by direct and queue-drained turns), whose `conversation`
+		// event then tells the client the new model. Doing it here would also
+		// run for a busy-path steer, which launches no turn and so would leave
+		// the browser holding a slug the server had already replaced. A
+		// genuinely different disallowed slug still 400s below.
+		if reqModel == conv.Model {
 			reqModel = ""
 		}
 		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) {

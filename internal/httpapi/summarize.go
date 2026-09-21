@@ -95,24 +95,25 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		return
 	}
 	model := strings.TrimSpace(req.Model)
-	// Same next-action migration as a chat turn: a lockdown conversation whose
-	// persisted model was delisted moves to the lockdown default here too, and
-	// the web's echo of the stale slug is not mistaken for a request FOR it —
-	// otherwise Compact would 400 until the user sent a message.
-	prior := conv.Model
-	if err := s.reconcileLockdownModelCtx(r.Context(), user, conv); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv.Model != prior && model == prior {
-		model = ""
-	}
 	if model == "" {
 		model = strings.TrimSpace(conv.Model)
 	}
 	if model == "" {
 		http.Error(w, "model required (no body field, conversation has no stored slug)", http.StatusBadRequest)
 		return
+	}
+	// A lockdown conversation whose persisted model was delisted (the tiers or
+	// the allow-list moved under it): run the summary on the lockdown default
+	// instead of 400ing until the user sends a message. Deliberately NOT
+	// persisted here — the conversation migrates where its next turn launches
+	// (startTurn), whose `conversation` event tells the client the new model;
+	// persisting from Compact would leave the browser echoing a slug the
+	// server had already replaced. The web's echo of the stored slug is the
+	// only thing substituted; a genuinely different disallowed slug still 400s.
+	if conv.Lockdown && model == conv.Model && !s.cfg.LockdownAllows(model) {
+		if next := lockdownDefaultSlug(s.cfg.LockdownModels()); next != "" {
+			model = next
+		}
 	}
 	if conv.Lockdown && !s.cfg.LockdownAllows(model) {
 		http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
