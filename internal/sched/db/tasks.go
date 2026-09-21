@@ -143,6 +143,15 @@ func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*mod
 // (crash between terminal commit and spawn); settling it would hide it from
 // the sweep and silently end the schedule.
 func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
+	// Serialize same-id writers for the rest of this transaction. Two imports
+	// of a UUID that does not exist yet would both see "no row" from the
+	// SELECT ... FOR UPDATE below, and the loser's settle/re-arm decision would
+	// then be made against a row it never observed. The advisory lock (keyed on
+	// the id, released at commit/rollback) makes the second writer wait until
+	// the first has committed, so its SELECT sees the real row.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, task.ID.String()); err != nil {
+		return err
+	}
 	var existingStatus models.TaskStatus
 	var existingRecurrence sql.NullString
 	err := tx.QueryRowContext(ctx, `SELECT status, recurrence FROM tasks WHERE id = $1 FOR UPDATE`, task.ID).Scan(&existingStatus, &existingRecurrence)
@@ -157,6 +166,33 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 		return err
 	}
 	existingTerminal := existed && recurrenceSpawnedInsertValue(&models.Task{Status: existingStatus})
+	// A freshly inserted successor proves its predecessor's chain continued:
+	// clear any park stamp the predecessor carries (an import may land the
+	// parent before the child; the runtime never spawns from a parked row, so
+	// this only ever fires for restored history).
+	if !existed && task.PreviousOccurrenceID != nil {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tasks SET recurrence_parked_at = NULL WHERE id = $1 AND recurrence_parked_at IS NOT NULL`,
+			*task.PreviousOccurrenceID); err != nil {
+			return err
+		}
+	}
+	// A recurring dead-letter born terminal through an import (a legacy bundle
+	// carries no recurrence_parked_at) lands settled below, and a settled,
+	// unparked row is one replay cannot re-arm — the restored schedule would
+	// be silently stopped. Stamp it parked unless a successor already points
+	// at it (then the chain demonstrably continued and replay must keep the
+	// credit). The pointer is definitive evidence either way, and the mirror
+	// rule above covers the successor arriving later.
+	if !existed && task.Status == models.TaskStatusDeadLettered && strings.TrimSpace(task.Recurrence) != "" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET recurrence_parked_at = COALESCE(dead_lettered_at, completed_at, now())
+			WHERE id = $1 AND recurrence_parked_at IS NULL
+			  AND NOT EXISTS (SELECT 1 FROM tasks s WHERE s.previous_occurrence_id = $2)`,
+			task.ID, task.ID.String()); err != nil {
+			return err
+		}
+	}
 	if !recurrenceSpawnedInsertValue(task) {
 		// The mirror image of the settle below: a status-replacing import
 		// (--replace-status / --overwrite) that restores a terminal row — in

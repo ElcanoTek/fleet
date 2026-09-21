@@ -463,6 +463,73 @@ func TestReimportedOneOffGainingRecurrenceIsSettled(t *testing.T) {
 	}
 }
 
+// TestImportedDeadLetterIsParkedUnlessSuccessorExists: a recurring
+// dead-letter restored through an import (no park marker in the bundle) must
+// be replayable — stamped parked — unless a successor points at it, in
+// either insert order.
+func TestImportedDeadLetterIsParkedUnlessSuccessorExists(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+	parkedAt := func(id uuid.UUID) *time.Time {
+		var p *time.Time
+		if err := store.db.Conn().QueryRowContext(ctx, `SELECT recurrence_parked_at FROM tasks WHERE id = $1`, id).Scan(&p); err != nil {
+			t.Fatalf("read recurrence_parked_at: %v", err)
+		}
+		return p
+	}
+	completed := time.Now().Add(-2 * time.Hour).UTC()
+	mk := func(prev *uuid.UUID) *models.Task {
+		return &models.Task{ID: uuid.New(), Prompt: "restored", Status: models.TaskStatusDeadLettered, Priority: 10,
+			Recurrence: "@daily", Timezone: "UTC", CreatedAt: completed, CompletedAt: &completed, PreviousOccurrenceID: prev}
+	}
+
+	lone := mk(nil)
+	if _, err := store.AddTaskWithContext(ctx, lone); err != nil {
+		t.Fatalf("import lone: %v", err)
+	}
+	if parkedAt(lone.ID) == nil {
+		t.Fatal("an imported recurring dead-letter with no successor must be parked so replay can continue it")
+	}
+	if !recurrenceSpawned(t, store, lone.ID) {
+		t.Fatal("an imported terminal row must still land settled")
+	}
+
+	// parent first, then child: the child's arrival clears the parent's park.
+	parent := mk(nil)
+	if _, err := store.AddTaskWithContext(ctx, parent); err != nil {
+		t.Fatalf("import parent: %v", err)
+	}
+	pid := parent.ID
+	child := mk(&pid)
+	if _, err := store.AddTaskWithContext(ctx, child); err != nil {
+		t.Fatalf("import child: %v", err)
+	}
+	if parkedAt(parent.ID) != nil {
+		t.Fatal("a successor inserted after its parent must clear the parent's park stamp")
+	}
+
+	// child first, then parent: the parent sees the pointer and is not parked.
+	parent2 := mk(nil)
+	p2 := parent2.ID
+	child2 := mk(&p2)
+	if _, err := store.AddTaskWithContext(ctx, child2); err != nil {
+		t.Fatalf("import child2: %v", err)
+	}
+	if _, err := store.AddTaskWithContext(ctx, parent2); err != nil {
+		t.Fatalf("import parent2: %v", err)
+	}
+	if parkedAt(parent2.ID) != nil {
+		t.Fatal("a parent inserted after its successor must not be parked")
+	}
+	if n := len(successorsOf(t, store, map[uuid.UUID]bool{lone.ID: true, parent.ID: true, parent2.ID: true})); n != 2 {
+		t.Fatalf("successors = %d, want exactly the two imported children", n)
+	}
+	if repaired, err := store.ReconcileRecurrences(ctx); err != nil || repaired != 0 {
+		t.Fatalf("ReconcileRecurrences = %d, %v; imported history must not spawn", repaired, err)
+	}
+}
+
 // TestReimportUnclaimedDeadLetteredKeepsCreditForSweep: a same-status
 // re-import of an already-terminal unclaimed row (allowed without
 // --replace-status) must not settle the flag — the crash-window row is
