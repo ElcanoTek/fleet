@@ -377,15 +377,6 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// submission on this conversation (possibly forever).
 		s.rekickDrainAfter(conv.ID, 3*time.Second)
 	}
-	// Shared launch path: both direct and queue-drained turns re-check that a
-	// lockdown conversation's persisted model is still allowed and migrate it
-	// otherwise (postChat already did this for direct submissions; here it is
-	// a no-op for them and the real migration for a drained queue row).
-	if err := s.reconcileLockdownModelCtx(reqCtx, user, conv); err != nil {
-		fail(http.StatusInternalServerError, err)
-		return true
-	}
-
 	// Load history before we even allocate a buffer — if this errors, the
 	// client never sees a partial SSE stream.
 	history, err := s.store.LoadHistory(reqCtx, conv.ID)
@@ -529,6 +520,19 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// the set the turn runs with — not only the creation-time request seed,
 	// which later turns never carry.
 	injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
+
+	// Lockdown model migration, at the last moment before the client can be
+	// TOLD about it: every fallible preparation above (history, memories,
+	// turn registration) has succeeded, and the `conversation` event below
+	// carries conv.Model to the browser, so a stored model that fell off the
+	// allow-list is replaced only on a turn that actually launches. Migrating
+	// earlier and then failing a preparation would leave the browser echoing
+	// a slug the server had already replaced — a transient 500 turned into
+	// 400s until reload. A failed write here is logged and the turn goes on
+	// with the stored model; the manager's own guard then decides.
+	if err := s.reconcileLockdownModelCtx(turnCtx, user, conv); err != nil {
+		log.Printf("lockdown: conversation %s: model migration write failed, running with the stored model: %v", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+	}
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The

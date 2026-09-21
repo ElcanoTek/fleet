@@ -29,7 +29,7 @@ import {
   largeUploadWarning,
   screenFilesForUpload,
 } from "@/app/lib/uploadLimits";
-import { useClientConfig } from "@/app/lib/useClientConfig";
+import { refreshClientConfig, useClientConfig } from "@/app/lib/useClientConfig";
 import {
   filterConversations,
   visibleConversationOrder,
@@ -1339,7 +1339,11 @@ export function ChatExperience({
     };
     const handle = () => {
       void probe();
-      void refreshServerConfig();
+      // Tiers and the lockdown list they drive move as one snapshot: refresh
+      // client-config first (it publishes the live tiers module-wide), then
+      // server-config, so a new lockdown chat never starts on a default the
+      // server has stopped accepting.
+      void refreshClientConfig().then(() => refreshServerConfig());
     };
     // Fire once on mount in case the user left the tab open across a
     // deploy and we're starting fresh against an already-updated

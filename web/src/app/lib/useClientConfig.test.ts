@@ -11,6 +11,7 @@ import {
   useClientConfig,
   DEFAULT_BRANDING,
   __resetClientConfigCacheForTests,
+  refreshClientConfig,
 } from "./useClientConfig";
 import {
   _resetModelTiersForTests,
@@ -124,6 +125,30 @@ describe("useClientConfig shared cache is observable", () => {
     await waitFor(() => expect(form.result.current.models?.defaultModel).toBe("acme/frontier-1"));
     expect(form.result.current.branding.app_name).toBe("Elcano");
     expect(form.result.current.loading).toBe(false);
+  });
+});
+
+describe("refreshClientConfig", () => {
+  // The chat shell calls this on tab/network return so an admin's tier change
+  // reaches an open tab together with the lockdown list it drives.
+  it("re-fetches and publishes the new tiers to a mounted instance", async () => {
+    fetchMock.mockResolvedValueOnce(
+      okResponse({ models: { default_model: "acme/frontier-1", advanced_model: "acme/frontier-1-pro" } }),
+    );
+    const { result } = renderHook(() => useClientConfig());
+    await waitFor(() => expect(result.current.models?.defaultModel).toBe("acme/frontier-1"));
+
+    fetchMock.mockResolvedValueOnce(
+      okResponse({ models: { default_model: "acme/frontier-2", advanced_model: "acme/frontier-2-pro" } }),
+    );
+    await expect(refreshClientConfig()).resolves.toBe(true);
+    await waitFor(() => expect(result.current.models?.defaultModel).toBe("acme/frontier-2"));
+    expect(currentDefaultModel()).toBe("acme/frontier-2");
+
+    // A failed refresh keeps the last good payload.
+    fetchMock.mockRejectedValueOnce(new Error("network"));
+    await expect(refreshClientConfig()).resolves.toBe(false);
+    expect(result.current.models?.defaultModel).toBe("acme/frontier-2");
   });
 });
 

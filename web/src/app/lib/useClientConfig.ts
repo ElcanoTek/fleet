@@ -101,6 +101,42 @@ export function __resetClientConfigCacheForTests() {
   cachedConfig = null;
 }
 
+// refreshClientConfig fetches /api/client-config once and publishes the result
+// to every mounted hook instance. The hook calls it on mount; the chat shell
+// also calls it on tab / network return and on its periodic probe, so an
+// admin's model-tier change reaches an open tab together with the lockdown
+// allow-list it drives (server-config) — the two snapshots must move as one,
+// or a new lockdown chat could start on a default the server no longer
+// accepts. Resolves true when a payload landed, false on any failure (the
+// caller keeps whatever it had).
+export async function refreshClientConfig(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/client-config", { cache: "no-store" });
+    if (!res.ok) throw new Error(`client-config ${res.status}`);
+    const data = (await res.json()) as ClientConfigResponse;
+    // Merge over neutral defaults so a partial branding block still renders.
+    const cards = data.empty_state?.cards;
+    // Install the workspace tier pair module-wide BEFORE any state update,
+    // so the re-render this triggers already reads the live slugs.
+    setModelTiers(data.models);
+    cachedConfig = {
+      branding: { ...DEFAULT_BRANDING, ...(data.branding ?? {}) },
+      pills: Array.isArray(cards) && cards.length > 0 ? cards : DEFAULT_PILLS,
+      models: {
+        defaultModel: currentDefaultModel(),
+        advancedModel: currentAdvancedModel(),
+      },
+    };
+    publishCachedConfig();
+    return true;
+  } catch {
+    // Keep whatever the state was seeded with — the cached config on a
+    // remount, the neutral defaults otherwise. Never blank, never
+    // client-specific by accident.
+    return false;
+  }
+}
+
 export function useClientConfig(enabled = true): UseClientConfig {
   const [branding, setBranding] = useState<ClientBranding>(
     () => readCachedConfig()?.branding ?? DEFAULT_BRANDING,
@@ -116,33 +152,8 @@ export function useClientConfig(enabled = true): UseClientConfig {
     let cancelled = false;
 
     void (async () => {
-      try {
-        const res = await fetch("/api/client-config", { cache: "no-store" });
-        if (!res.ok) throw new Error(`client-config ${res.status}`);
-        const data = (await res.json()) as ClientConfigResponse;
-        if (cancelled) return;
-        // Merge over neutral defaults so a partial branding block still renders.
-        const cards = data.empty_state?.cards;
-        // Install the workspace tier pair module-wide BEFORE any state update,
-        // so the re-render this triggers already reads the live slugs.
-        setModelTiers(data.models);
-        const next = {
-          branding: { ...DEFAULT_BRANDING, ...(data.branding ?? {}) },
-          pills: Array.isArray(cards) && cards.length > 0 ? cards : DEFAULT_PILLS,
-          models: {
-            defaultModel: currentDefaultModel(),
-            advancedModel: currentAdvancedModel(),
-          },
-        };
-        cachedConfig = next;
-        publishCachedConfig();
-      } catch {
-        // Keep whatever the state was seeded with — the cached config on a
-        // remount, the neutral defaults otherwise. Never blank, never
-        // client-specific by accident.
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      await refreshClientConfig();
+      if (!cancelled) setLoading(false);
     })();
 
     return () => {
