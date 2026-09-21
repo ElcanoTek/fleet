@@ -224,7 +224,12 @@ named provider. Recommended and public-catalog choices that the workspace cannot
 route are hidden once provider information loads. A saved conversation or default
 that is no longer available stays visible with an explanation: use **Choose a
 model**, pick an available workspace model, then retry. Fleet does not silently
-switch an existing conversation to another provider. Admins can fix the provider
+switch an existing conversation to another provider, with one exception: a
+**lockdown** conversation may only run on the models your admin allows for
+lockdown (by default the workspace's default and stronger models), so if that
+list changes under it, its next turn runs on the lockdown default and the
+conversation keeps that model from then on. The model picker shows the switch
+when the turn starts. Admins can fix the provider
 configuration under **Settings → Admin → Model providers**, and set the default
 and stronger model under **Settings → Admin → Features → Model tiers**.
 If a direct provider takes precedence over OpenRouter, available OpenRouter

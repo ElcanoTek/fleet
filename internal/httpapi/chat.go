@@ -173,20 +173,32 @@ func lockdownDefaultSlug(allowed []string) string {
 // merely STARTS with a glob moves to its first literal slug. Reports false
 // after writing the HTTP error.
 func (s *Server) reconcileLockdownModel(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation) bool {
-	if !conv.Lockdown || conv.Model == "" || s.cfg.LockdownAllows(conv.Model) {
-		return true
-	}
-	next := lockdownDefaultSlug(s.cfg.LockdownModels())
-	if next == "" {
-		return true
-	}
-	if err := s.store.SetModel(r.Context(), user, conv.ID, next); err != nil {
+	if err := s.reconcileLockdownModelCtx(r.Context(), user, conv); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return false
 	}
-	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", logSafe(conv.ID), logSafe(conv.Model), logSafe(next))
-	conv.Model = next
 	return true
+}
+
+// reconcileLockdownModelCtx is the transport-free core of the migration, so
+// the queue-drain launch path (no ResponseWriter; #785) gets the same
+// next-turn migration as a direct submission: a follow-up queued before an
+// admin moved the tiers must not fail on the delisted persisted model when it
+// drains. Idempotent — a conversation already on an allowed model is untouched.
+func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, conv *store.Conversation) error {
+	if !conv.Lockdown || conv.Model == "" || s.cfg.LockdownAllows(conv.Model) {
+		return nil
+	}
+	next := lockdownDefaultSlug(s.cfg.LockdownModels())
+	if next == "" {
+		return nil
+	}
+	if err := s.store.SetModel(ctx, user, conv.ID, next); err != nil {
+		return err
+	}
+	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", logSafe(conv.ID), logSafe(conv.Model), logSafe(next)) //nolint:gosec // G706: logSafe strips CR/LF from the conversation id and both slugs.
+	conv.Model = next
+	return nil
 }
 
 func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +385,14 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// explicit re-kick a 202-acknowledged row stalls until the next
 		// submission on this conversation (possibly forever).
 		s.rekickDrainAfter(conv.ID, 3*time.Second)
+	}
+	// Shared launch path: both direct and queue-drained turns re-check that a
+	// lockdown conversation's persisted model is still allowed and migrate it
+	// otherwise (postChat already did this for direct submissions; here it is
+	// a no-op for them and the real migration for a drained queue row).
+	if err := s.reconcileLockdownModelCtx(reqCtx, user, conv); err != nil {
+		fail(http.StatusInternalServerError, err)
+		return true
 	}
 
 	// Load history before we even allocate a buffer — if this errors, the

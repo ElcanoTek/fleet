@@ -87,6 +87,16 @@ let cachedConfig: {
 // same pattern as nowMs in chat-experience.tsx).
 const readCachedConfig = () => cachedConfig;
 
+// Every mounted hook instance subscribes to cache updates, so ONE successful
+// fetch — the shell's, say — reaches every consumer on the page. Without this
+// each instance depended on its own request: a second consumer (the task
+// form) whose duplicate fetch transiently failed kept `models: null` while the
+// module-wide tiers had already moved, and never adopted them.
+const subscribers = new Set<() => void>();
+function publishCachedConfig(): void {
+  for (const notify of subscribers) notify();
+}
+
 export function __resetClientConfigCacheForTests() {
   cachedConfig = null;
 }
@@ -125,9 +135,7 @@ export function useClientConfig(enabled = true): UseClientConfig {
           },
         };
         cachedConfig = next;
-        setBranding(next.branding);
-        setPills(next.pills);
-        setModels(next.models);
+        publishCachedConfig();
       } catch {
         // Keep whatever the state was seeded with — the cached config on a
         // remount, the neutral defaults otherwise. Never blank, never
@@ -141,6 +149,22 @@ export function useClientConfig(enabled = true): UseClientConfig {
       cancelled = true;
     };
   }, [enabled]);
+
+  // Apply any instance's successful fetch to this instance's state.
+  useEffect(() => {
+    const apply = () => {
+      const cached = readCachedConfig();
+      if (!cached) return;
+      setBranding(cached.branding);
+      setPills(cached.pills);
+      setModels(cached.models);
+      setLoading(false);
+    };
+    subscribers.add(apply);
+    return () => {
+      subscribers.delete(apply);
+    };
+  }, []);
 
   return { branding, pills, models, loading };
 }

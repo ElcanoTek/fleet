@@ -34,10 +34,16 @@ type gatedEngine struct {
 
 	turns     atomic.Int32
 	cancelled atomic.Int32
+
+	mu     sync.Mutex
+	models []string // in.Model per RunTurn, in start order
 }
 
 func (f *gatedEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
 	f.turns.Add(1)
+	f.mu.Lock()
+	f.models = append(f.models, in.Model)
+	f.mu.Unlock()
 	select {
 	case f.started <- struct{}{}:
 	default:
@@ -197,6 +203,58 @@ func TestQueue_SecondSubmitQueuesThenDrainsAsSeparateTurn(t *testing.T) {
 		items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID)
 		return len(items) == 0
 	})
+}
+
+// A lockdown follow-up queued BEFORE the admin moved the allow-list must not
+// fail when it drains: the queue-drain launch path goes through startTurn, not
+// postChat, so the next-turn migration has to live on the shared path
+// (reconcileLockdownModelCtx) for the accepted 202 row to run at all.
+func TestQueue_DrainedLockdownTurnMigratesDelistedModel(t *testing.T) {
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "a/b", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	// Turn 1 starts on a/b and blocks.
+	go postChatJSON(t, s, user, map[string]any{"message": "first question", "conversation_id": conv.ID})
+	<-eng.started
+
+	// Turn 2 queues while busy — accepted with the conversation still on a/b.
+	w := postChatJSON(t, s, user, map[string]any{"message": "second question", "conversation_id": conv.ID, "input_id": "cli-2"})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("busy submit: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// The admin narrows the allow-list before the queue drains.
+	s.cfg.LockdownAllowedModels = []string{"c/d"}
+
+	eng.release <- struct{}{}
+	eng.release <- struct{}{}
+	waitFor(t, "queued turn to drain", func() bool { return eng.turns.Load() == 2 })
+	waitFor(t, "queue row completed", func() bool {
+		items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID)
+		return len(items) == 0
+	})
+
+	eng.mu.Lock()
+	models := append([]string(nil), eng.models...)
+	eng.mu.Unlock()
+	if len(models) != 2 || models[0] != "a/b" || models[1] != "c/d" {
+		t.Fatalf("drained lockdown turn should run on the lockdown default: models=%v, want [a/b c/d]", models)
+	}
+	got, err := s.store.Get(context.Background(), user, conv.ID)
+	if err != nil || got == nil {
+		t.Fatalf("reload conversation: %v", err)
+	}
+	if got.Model != "c/d" {
+		t.Fatalf("migration must persist: stored model=%q, want c/d", got.Model)
+	}
 }
 
 // sweepHoldStore forces the race Stop scope=all has to win: its queue sweep

@@ -100,6 +100,33 @@ describe("useClientConfig module-scope cache", () => {
 // The models block (#1187) rides the same payload: it must install the live
 // tier pair module-wide and expose it on the hook, and an older server's
 // payload (no models field) must leave the compiled-in pair untouched.
+describe("useClientConfig shared cache is observable", () => {
+  // The Operations Center shell and the task form each mount the hook. When
+  // the shell's fetch succeeds and the form's duplicate fetch fails, the form
+  // must still receive the tiers — otherwise it never adopts the admin's pair.
+  it("propagates one instance's successful fetch to an instance whose own fetch failed", async () => {
+    let calls = 0;
+    fetchMock.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) {
+        return Promise.resolve(
+          okResponse({
+            branding: CLIENT_BRANDING,
+            models: { default_model: "acme/frontier-1", advanced_model: "acme/frontier-1-pro" },
+          }),
+        );
+      }
+      return Promise.reject(new Error("network"));
+    });
+    const shell = renderHook(() => useClientConfig());
+    const form = renderHook(() => useClientConfig());
+    await waitFor(() => expect(shell.result.current.models?.defaultModel).toBe("acme/frontier-1"));
+    await waitFor(() => expect(form.result.current.models?.defaultModel).toBe("acme/frontier-1"));
+    expect(form.result.current.branding.app_name).toBe("Elcano");
+    expect(form.result.current.loading).toBe(false);
+  });
+});
+
 describe("useClientConfig model tiers", () => {
   it("installs the workspace tier pair and returns it", async () => {
     fetchMock.mockResolvedValue(
