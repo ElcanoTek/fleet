@@ -709,7 +709,7 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest stri
 		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) {
 			continue
 		}
-		exact := c.tool == toolName
+		exact := c.tool == toolName || transportAliasSatisfies(c.suffix, criticalSuffixFor(toolName))
 		bound := c.hasDealBinding()
 		rank := 1
 		switch {

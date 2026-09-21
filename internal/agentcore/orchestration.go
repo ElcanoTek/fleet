@@ -942,7 +942,7 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) 
 			} else if fallback < 0 {
 				fallback = i
 			}
-		case pendingTransportAlias(p.toolName, toolName):
+		case pendingTransportAlias(p.toolName, toolName) && p.argsHash == argsHash:
 			aliases = append(aliases, i)
 		}
 	}
@@ -1021,8 +1021,17 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				done = make(map[string]bool)
 				o.dischargedDeals[suffix] = done
 			}
+			approved := map[string]bool{}
+			for id := range o.approvedDealIDs[suffix] {
+				approved[id] = true
+			}
+			for _, alt := range transportAliasesOf(suffix) {
+				for id := range o.approvedDealIDs[alt] {
+					approved[id] = true
+				}
+			}
 			// When the audit batch-bound an approved record set for this
-			// suffix, ONLY a record in that set may discharge a commitment. A
+			// suffix (or a transport alias), ONLY a record in that set may discharge a commitment. A
 			// success reported for an id the audit never approved — a server
 			// results[] echoing an unexpected id, or any future path that
 			// bypassed the input batch-binding gate — must NOT discharge a
@@ -1031,7 +1040,6 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// auto-lock early). With no approved set (non-batch / legacy
 			// audit) behavior is unchanged: discharge per succeeded record by
 			// suffix.
-			approved := o.approvedDealIDs[suffix]
 			callDigest := valuesDigestArg(rawInput)
 			newly, failed := 0, 0
 			for _, oc := range outcomes {
