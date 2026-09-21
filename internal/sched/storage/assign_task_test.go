@@ -9,12 +9,15 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// leaseTaskToOwner atomically leases a pending task to a synthetic lease owner.
-// It is the crash-recovery TEST SUBSTRATE: the lease/recovery tests need a task
-// in the leased state so they can exercise RecoverExpiredLeases without the
-// production claim path. It mirrors what ClaimNextPendingTask does — set
-// status=leased, stamp lease_owner, set lease_expires_at — but takes the owner
-// id explicitly so a test can drive expiry/ownership directly.
+// leaseTaskToOwner atomically leases a pending or scheduled task to a synthetic
+// lease owner. It is the crash-recovery TEST SUBSTRATE: the lease/recovery
+// tests need a task in the leased state so they can exercise
+// RecoverExpiredLeases without the production claim path. It mirrors what
+// ClaimNextPendingTask does — set status=leased, stamp lease_owner, set
+// lease_expires_at — but takes the owner id explicitly so a test can drive
+// expiry/ownership directly. Recurrence successors are born scheduled (next
+// cron tick in the future), so the helper also leases that status; production
+// claim still waits for scheduled→pending promotion.
 //
 // It lives in a _test.go file (package storage, white-box) so it compiles into
 // the test binary only and never ships. The worker-node registry was removed
@@ -36,7 +39,7 @@ func (s *Storage) leaseTaskToOwner(taskID uuid.UUID, owner uuid.UUID) (*models.T
 		return nil, err
 	}
 
-	if task.Status != models.TaskStatusPending {
+	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
 		return nil, nil
 	}
 

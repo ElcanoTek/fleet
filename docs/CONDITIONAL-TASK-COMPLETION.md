@@ -113,7 +113,10 @@ a producer application. This does not edit existing tasks or add a scheduling
 UI/import API. Regenerate producer prompts to gain the prerequisite check.
 Existing recurrence, retry and sandbox permissions are unchanged.
 Existing dead-letter records are not rewritten, and deploying this fix does not
-replay them. Check completed tool results before rerunning a failed task.
+replay them. A dead-lettered *recurring* occurrence still queues the next run
+(ADR-0070) unless two consecutive occurrences were dead-lettered; that is a
+change to the schedule, not to what this verifier treats as success. Check
+completed tool results before rerunning a failed task.
 Provider recovery is described in [completed-step recovery](COMPLETED-STEP-RECOVERY.md).
 It never blindly retries an external mutation. Customer source-grain migrations
 remain outside the generic engine.

@@ -80,30 +80,36 @@ func (db *Database) SettleGatedTask(ctx context.Context, taskID uuid.UUID, obser
 }
 
 // GetUnspawnedRecurringTasks returns terminal recurring occurrences whose
-// next-occurrence spawn is still unsettled (#1116): status success/error (the
-// only statuses that spawn — cancel and dead-letter deliberately end/park the
-// chain), a non-empty recurrence, recurrence_spawned still FALSE, and
-// completed_at older than olderThan (a grace window so the sweep never races
-// the normal post-commit spawn that is usually milliseconds behind the
-// terminal commit — the guarded spawn is idempotent regardless, this just
-// avoids pointless contention). Ordered oldest-first and bounded by limit so
-// one sweep can never balloon a tick. Backed by idx_tasks_recurrence_unspawned
-// (migration 065).
+// next-occurrence spawn is still unsettled (#1116, ADR-0070): status in
+// models.RecurrenceSpawnTaskStatuses (success, error, and dead_lettered —
+// cancel still ends the chain; a consecutive-dead-letter park is decided
+// inside storage.scheduleNextRecurrence so this sweep and the post-commit
+// path cannot disagree), a non-empty recurrence, recurrence_spawned still
+// FALSE, and completed_at older than olderThan (a grace window so the sweep
+// never races the normal post-commit spawn that is usually milliseconds
+// behind the terminal commit — the guarded spawn is idempotent regardless,
+// this just avoids pointless contention). Ordered oldest-first and bounded
+// by limit so one sweep can never balloon a tick. Backed by
+// idx_tasks_recurrence_unspawned (migration 065, predicate widened in 071).
 func (db *Database) GetUnspawnedRecurringTasks(ctx context.Context, olderThan time.Time, limit int) ([]*models.Task, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+	spawnStatuses := models.RecurrenceSpawnTaskStatuses
+	statusStrs := make([]string, len(spawnStatuses))
+	for i, s := range spawnStatuses {
+		statusStrs[i] = string(s)
+	}
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
-		WHERE status IN ($1, $2)
+		WHERE status = ANY($1::text[])
 		  AND recurrence IS NOT NULL AND recurrence <> ''
 		  AND NOT recurrence_spawned
 		  AND completed_at IS NOT NULL
-		  AND completed_at < $3
+		  AND completed_at < $2
 		ORDER BY completed_at ASC
-		LIMIT $4`,
-		string(models.TaskStatusSuccess),
-		string(models.TaskStatusError),
+		LIMIT $3`,
+		statusStrs,
 		olderThan, limit)
 	if err != nil {
 		return nil, err

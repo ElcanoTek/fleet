@@ -31,21 +31,29 @@ func createdByTaskIDValue(id *uuid.UUID) any {
 }
 
 // recurrenceSpawnedInsertValue derives the recurrence spawn-settlement flag
-// (#1116, migration 065) for a freshly INSERTED row. A row born success/error
-// — restored history from `fleet import` (#713 preserves status/recurrence/
-// completed_at verbatim), or any future insert of an already-completed row —
-// must land SETTLED: its successor question was answered in the deployment it
-// came from, and an unsettled flag would make the reconciliation sweep treat
-// every restored occurrence of a recurring chain as a lost spawn and
-// mass-spawn duplicate successors. Rows born in any other status stay FALSE:
-// live rows settle through the normal spawn on their own success/error
-// transition, cancelled rows never spawn (the sweep never selects them), and
-// dead_lettered rows deliberately stay unsettled so a DLQ replay can continue
-// the chain (see ReplayDeadLetteredTask). Like effective_priority, the column
-// is insert-only here — it is excluded from the upsert/UpdateTaskTx so a
-// status write can never clobber the spawn claim.
+// (#1116, migration 065, ADR-0070) for a freshly INSERTED row. A row born in
+// a spawn-bearing terminal status (models.RecurrenceSpawnTaskStatuses:
+// success, error, dead_lettered) — restored history from `fleet import`
+// (#713 preserves status/recurrence/completed_at verbatim), or any future
+// insert of an already-completed row — must land SETTLED: its successor
+// question was answered in the deployment it came from (spawned, or parked
+// by the consecutive-dead-letter breaker), and an unsettled flag would make
+// the reconciliation sweep treat every restored occurrence of a recurring
+// chain as a lost spawn and mass-spawn duplicate successors. Rows born in
+// any other status stay FALSE: live rows settle through the normal spawn on
+// their own terminal transition, and cancelled rows never spawn (the sweep
+// never selects them). Replay re-arms the flag iff the chain is parked
+// or the credit is still unclaimed (see ReplayDeadLetteredTask). Like
+// effective_priority, the column is insert-only here — it is excluded
+// from the upsert/UpdateTaskTx so a status write can never clobber the
+// spawn claim.
 func recurrenceSpawnedInsertValue(t *models.Task) bool {
-	return t.Status == models.TaskStatusSuccess || t.Status == models.TaskStatusError
+	for _, s := range models.RecurrenceSpawnTaskStatuses {
+		if t.Status == s {
+			return true
+		}
+	}
+	return false
 }
 
 // marshalTags serializes task tags for the JSONB column, ALWAYS as a JSON array

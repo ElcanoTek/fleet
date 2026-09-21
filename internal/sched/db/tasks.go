@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -129,9 +130,109 @@ func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*mod
 // AddTaskTx inserts a single task within an existing transaction. The atomic
 // batch path (#227) uses this so a multi-row insert lands in the caller's tx.
 // It executes the same registry-derived taskInsertStatement as AddTask.
+//
+// When the write lands in a RecurrenceSpawnTaskStatuses status, it may also
+// settle recurrence_spawned in this transaction. The column is excluded
+// from the ON CONFLICT set (task_columns.go) so a generic upsert cannot
+// clobber a claimed credit — which means overwriting an existing
+// pending/scheduled row with a terminal spawn-bearing status would otherwise
+// leave the flag FALSE. A FRESH born-terminal insert already gets TRUE from
+// recurrenceSpawnedInsertValue. An upsert that REPLACES a nonterminal status
+// is settled here. A same-status re-import of an already-terminal row is
+// NOT: that row may be sitting unclaimed inside the reconcile grace window
+// (crash between terminal commit and spawn); settling it would hide it from
+// the sweep and silently end the schedule.
 func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
-	_, err := tx.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...)
+	// Serialize same-id writers for the rest of this transaction. Two imports
+	// of a UUID that does not exist yet would both see "no row" from the
+	// SELECT ... FOR UPDATE below, and the loser's settle/re-arm decision would
+	// then be made against a row it never observed. The advisory lock (keyed on
+	// the id, released at commit/rollback) makes the second writer wait until
+	// the first has committed, so its SELECT sees the real row.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, task.ID.String()); err != nil {
+		return err
+	}
+	var existingStatus models.TaskStatus
+	var existingRecurrence sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT status, recurrence FROM tasks WHERE id = $1 FOR UPDATE`, task.ID).Scan(&existingStatus, &existingRecurrence)
+	existed := true
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		existed = false
+	}
+	if _, err := tx.ExecContext(ctx, taskInsertStatement, taskInsertArgs(task)...); err != nil {
+		return err
+	}
+	existingTerminal := existed && recurrenceSpawnedInsertValue(&models.Task{Status: existingStatus})
+	// A freshly inserted successor proves its predecessor's chain continued:
+	// clear any park stamp the predecessor carries (an import may land the
+	// parent before the child; the runtime never spawns from a parked row, so
+	// this only ever fires for restored history).
+	if !existed && task.PreviousOccurrenceID != nil {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tasks SET recurrence_parked_at = NULL WHERE id = $1 AND recurrence_parked_at IS NOT NULL`,
+			*task.PreviousOccurrenceID); err != nil {
+			return err
+		}
+	}
+	// A recurring dead-letter born terminal through an import (a legacy bundle
+	// carries no recurrence_parked_at) lands settled below, and a settled,
+	// unparked row is one replay cannot re-arm — the restored schedule would
+	// be silently stopped. Stamp it parked unless a successor already points
+	// at it (then the chain demonstrably continued and replay must keep the
+	// credit). The pointer is definitive evidence either way, and the mirror
+	// rule above covers the successor arriving later.
+	if !existed && task.Status == models.TaskStatusDeadLettered && strings.TrimSpace(task.Recurrence) != "" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET recurrence_parked_at = COALESCE(dead_lettered_at, completed_at, now())
+			WHERE id = $1 AND recurrence_parked_at IS NULL
+			  AND NOT EXISTS (SELECT 1 FROM tasks s WHERE s.previous_occurrence_id = $2)`,
+			task.ID, task.ID.String()); err != nil {
+			return err
+		}
+	}
+	if !recurrenceSpawnedInsertValue(task) {
+		// The mirror image of the settle below: a status-replacing import
+		// (--replace-status / --overwrite) that restores a terminal row — in
+		// particular a parked dead-letter — to pending/scheduled must give the
+		// restored occurrence its spawn credit back and clear the park stamp,
+		// exactly as ReplayDeadLetteredTask does. Both columns are excluded from
+		// the generic upsert (a status write must never clobber a claimed
+		// credit), so without this the restored run would complete unable to
+		// claim the credit and the schedule would stay silently parked. A
+		// live-over-live upsert (an edit) is left alone: its credit is already
+		// unclaimed and there is nothing parked to clear. Any OTHER prior
+		// status counts — not just the spawn-bearing ones — because restore
+		// surgery can happen in stages (a parked dead-letter imported as
+		// cancelled, then restored to scheduled) and the persisted credit and
+		// park stamp survive every intermediate status; the row being restored
+		// to a live status is the signal, not what it was restored from.
+		if existed && !liveTaskStatus(existingStatus) && liveTaskStatus(task.Status) {
+			_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = FALSE, recurrence_parked_at = NULL WHERE id = $1`, task.ID)
+			return err
+		}
+		return nil
+	}
+	// A same-status re-import of an already-terminal RECURRING row keeps its
+	// flag: an unclaimed credit there is the crash-window case the sweep must
+	// still repair. A terminal one-off row that acquires a recurrence through
+	// the import is different — its FALSE flag only means "one-offs never
+	// spawn", not "a spawn was lost" — so it is settled like any other row born
+	// terminal, or the sweep would mint a successor from imported history.
+	if existingTerminal && strings.TrimSpace(existingRecurrence.String) != "" {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, task.ID)
 	return err
+}
+
+// liveTaskStatus reports the two dispatchable statuses a restored row can be
+// upserted into; AddTaskTx re-arms a spawn credit only on a move INTO one of
+// them from anything else.
+func liveTaskStatus(s models.TaskStatus) bool {
+	return s == models.TaskStatusPending || s == models.TaskStatusScheduled
 }
 
 // scanTask scans one tasks row into a models.Task. The scan destinations and

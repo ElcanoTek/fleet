@@ -206,6 +206,11 @@ due gets woken on that same tick and is never a candidate. Like the
 awaiting-input expiry, it preserves the recurrence chain: a stranded occurrence
 of a daily task spawns its successor rather than silently ending the schedule.
 
+A dead-lettered occurrence of a recurring task does the same (ADR-0070): the
+next run is queued unless the previous occurrence was also dead-lettered, in
+which case the chain parks until an operator replays. Cancel still ends the
+chain. See [`DEAD-LETTER-RECURRENCE.md`](DEAD-LETTER-RECURRENCE.md).
+
 There is no disable knob. An unreachable parked row is a broken row, not an
 operator policy choice.
 
