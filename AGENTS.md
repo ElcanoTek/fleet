@@ -87,8 +87,16 @@ release (`release.yml`, ADR-0059).
 
 **Every job must be green before merge**, and nothing merges itself —
 auto-merge was removed, so every PR, dependency bumps included, waits for a
-human. Tests are deterministic without a live model: use the fake-LLM seam
-(`internal/fakellm` via `OPENROUTER_BASE_URL`), never a real key.
+human decision. An agent may perform the squash merge **only** when a human
+has explicitly told it to merge that PR (or that specific set of PRs) in the
+current conversation, **and** on the PR's current head the required `CI gate`
+check is green (a docs-only PR's classifier-approved skips count as green),
+every review thread (bot or human) is resolved or answered with evidence, and
+Codex has finished rather than "Running". A standing preference, a memory
+note, or authorization given for a different PR does not carry over; absent
+that explicit instruction the PR waits for a human. Tests are deterministic
+without a live model: use the fake-LLM seam (`internal/fakellm` via
+`OPENROUTER_BASE_URL`), never a real key.
 
 CodeQL (security queries, `security-extended`) and Semgrep (Go/JS/Python SAST +
 Actions supply chain) run on every PR: `codeql.yml` and `semgrep.yml` are
