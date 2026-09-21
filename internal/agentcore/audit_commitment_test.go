@@ -737,6 +737,7 @@ func TestTransportAliasSatisfies(t *testing.T) {
 		{"update_page_data", "deploy_page_upload", false},
 		{"update_page_data", "update_page_data", false},
 		{"update_page", "update_page_data_upload", false},
+		{"create_prepared_deal", "create_prepared_deal_upload", false}, // not in the explicit pair table
 		{"", "update_page_data_upload", false},
 	}
 	for _, tc := range cases {
@@ -786,5 +787,37 @@ func TestTypedCommitment_UnrelatedToolDoesNotDischargeTransportAlias(t *testing.
 	o.recordToolResult(typedPagesOtherServer, `{"slug":"x"}`, `{"ok":true}`, true)
 	if got := o.committedCriticalActions["update_page_data"]; got != 1 {
 		t.Fatalf("other-server upload discharged the commitment: outstanding=%d, want 1", got)
+	}
+}
+
+func TestTypedCommitment_ReauditOfUploadSupersedesInline(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData})
+	if got := o.registerCommittedActionsTyped([]criticalActionStruct{{Tool: typedPagesUpdateDataUpload}}); got != 1 {
+		t.Fatalf("re-audit registered %d units, want 1", got)
+	}
+	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
+		t.Fatalf("stale inline commitment not superseded: update_page_data outstanding=%d, want 0", got)
+	}
+	if got := o.committedCriticalActions["update_page_data_upload"]; got != 1 {
+		t.Fatalf("fresh upload commitment missing: outstanding=%d, want 1", got)
+	}
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"x"}`, `{"ok":true,"version":860}`, true)
+	if missing := o.unexecutedCommitments(); len(missing) != 0 {
+		t.Fatalf("expected no outstanding commitments after the upload, got %v", missing)
+	}
+}
+
+func TestTypedCommitment_BatchBindingCarriesAcrossTransportAlias(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{
+		Tool:    typedPagesUpdateData,
+		DealIDs: []string{"1", "2"},
+	})
+	args := `{"deal_ids":["1","2"]}`
+	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", args); blocked {
+		t.Fatalf("upload batch must be authorized under the inline batch commitment, got blocked: %s", msg)
 	}
 }

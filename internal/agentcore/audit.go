@@ -59,19 +59,44 @@ func substituteSatisfies(committedSuffix, executedSuffix string) bool {
 	return false
 }
 
+// transportAliasPairs is the explicit list of same-write, different-transport
+// suffix pairs (inline arguments vs. workspace-file chunks). Only these pairs
+// — not every `_upload` suffix — are treated as one obligation. Both names
+// remain independently critical in the bundle; the alias only matches them
+// for commitment discharge / authorization.
+var transportAliasPairs = [][2]string{
+	{"update_page_data", "update_page_data_upload"},
+	{"deploy_page", "deploy_page_upload"},
+}
+
 // transportAliasSatisfies reports whether committedSuffix and executedSuffix
-// are the same write over a different transport: `<tool>` vs `<tool>_upload`
-// (inline arguments vs. workspace-file chunks). The pages contract lists both
-// names as critical independently — this alias only matches them for
-// commitment discharge / authorization, never for deciding whether a tool is
-// critical. Bidirectional: an upload success discharges an inline commitment
-// and vice versa.
+// are an explicit same-write transport pair. Bidirectional.
 func transportAliasSatisfies(committedSuffix, executedSuffix string) bool {
 	if committedSuffix == "" || executedSuffix == "" || committedSuffix == executedSuffix {
 		return false
 	}
-	const upload = "_upload"
-	return executedSuffix == committedSuffix+upload || committedSuffix == executedSuffix+upload
+	for _, p := range transportAliasPairs {
+		if committedSuffix == p[0] && executedSuffix == p[1] {
+			return true
+		}
+		if committedSuffix == p[1] && executedSuffix == p[0] {
+			return true
+		}
+	}
+	return false
+}
+
+// transportAliasOf returns the other suffix in an explicit transport pair, or "".
+func transportAliasOf(suffix string) string {
+	for _, p := range transportAliasPairs {
+		switch suffix {
+		case p[0]:
+			return p[1]
+		case p[1]:
+			return p[0]
+		}
+	}
+	return ""
 }
 
 func isCriticalTool(toolName string) bool {

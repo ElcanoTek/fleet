@@ -116,9 +116,9 @@ func (c *typedCommitment) correctsRefusal(fresh *typedCommitment) bool {
 // nameMatches reports whether an executed toolName satisfies this
 // commitment's tool binding: the exact declared full name, a
 // policy-approved substitute (criticalToolSubstitutes) on the SAME
-// server/variant, or the `_upload` transport alias of the committed
-// suffix on the same server (inline vs. workspace-file chunks — same
-// write). Cross-server matching is refused: an approval for one
+// server/variant, or an explicit same-write transport pair
+// (update_page_data / update_page_data_upload, deploy_page /
+// deploy_page_upload) on the same server. Cross-server matching is refused: an approval for one
 // server never matches another server's call even though both names end in
 // the same critical suffix, and a base-server approval never matches a
 // client-variant call.
@@ -646,7 +646,12 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// obligation, and retiring it would let the run finish without it.
 		for i := 0; i < preExisting; i++ {
 			old := o.typedCommitments[i]
-			if old.remaining <= 0 || old.tool != tc.tool {
+			if old.remaining <= 0 {
+				continue
+			}
+			sameFamily := old.tool == tc.tool ||
+				(sameToolServer(old.tool, tc.tool) && transportAliasSatisfies(old.suffix, tc.suffix))
+			if !sameFamily {
 				continue
 			}
 			sameShape := old.hasDealBinding() == tc.hasDealBinding() && (!tc.hasDealBinding() || old.sameDealSet(tc))
@@ -662,6 +667,8 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			switch {
 			case !sameShape:
 				shape = "same tool, re-declared with the binding the earlier declaration refused; nothing executed under it"
+			case old.tool != tc.tool:
+				shape = "same write, different transport"
 			case !tc.hasDealBinding():
 				shape = "same unbound tool"
 			}
@@ -821,6 +828,15 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 	}
 	suffix := criticalSuffixFor(toolName)
 	approved := o.approvedDealIDs[suffix]
+	digestWant := o.approvedDigest[suffix]
+	if len(approved) == 0 {
+		if alt := transportAliasOf(suffix); alt != "" {
+			approved = o.approvedDealIDs[alt]
+			if digestWant == "" {
+				digestWant = o.approvedDigest[alt]
+			}
+		}
+	}
 	for _, id := range dealIDs {
 		if !approved[id] {
 			log.Printf("Enforcement: Blocking batch %s — record %q not in the approved set", toolName, id)
@@ -830,9 +846,9 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 				toolName, id)
 		}
 	}
-	if want := o.approvedDigest[suffix]; want != "" {
-		if got := valuesDigestArg(rawInput); got != want {
-			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q != approved %q", toolName, got, want)
+	if digestWant != "" {
+		if got := valuesDigestArg(rawInput); got != digestWant {
+			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q != approved %q", toolName, got, digestWant)
 			return true, fmt.Sprintf("BLOCKED: batch '%s' values_sha256 does not match the "+
 				"audit-approved digest. The approved value list differs from the one being applied — "+
 				"re-audit with the correct values_digest.", toolName)
