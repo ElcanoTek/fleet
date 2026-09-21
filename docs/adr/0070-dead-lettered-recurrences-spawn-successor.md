@@ -66,15 +66,24 @@ chain (no successor) re-arms and continues on replay.
   settles born-terminal rows in that same set.
 - `storage.ReplayDeadLetteredTask` re-arms the spawn credit only when no
   successor row exists.
+- Migration 071 backfill-settles existing `dead_lettered` rows before it
+  widens the unspawned-recurrence index, so the sweep cannot fork a
+  pre-upgrade lineage.
 - Tests: `internal/sched/storage/deadletter_recurrence_test.go`,
-  `internal/runner/deadletter_recurrence_test.go`, and the existing
-  reconcile/DLQ tests updated for the new contract.
+  `internal/runner/deadletter_recurrence_test.go`,
+  `TestReconcileRecurrencesDoesNotRespawnBackfilledDeadLetter`, and the
+  existing reconcile/DLQ tests updated for the new contract.
 
 ## Consequences
 
-- A single dead-letter no longer silently ends a recurring schedule. Existing
-  `dead_lettered` recurring rows with an unclaimed spawn credit are repaired
-  by the first `ReconcileRecurrences` sweep after this lands.
+- A single dead-letter no longer silently ends a recurring schedule. This
+  applies to dead-letters **after** the upgrade. Migration 071 backfill-settles
+  every existing `dead_lettered` row (`recurrence_spawned = TRUE`) so the
+  first `ReconcileRecurrences` sweep cannot insert a duplicate successor for
+  a lineage that already continued (a later success, a "run now", a live
+  scheduled head) or resurrect a chain parked weeks ago. Chains parked
+  **before** the upgrade are not auto-resumed; they continue via replay
+  exactly as today (replay re-arms because they have no successor).
 - Two consecutive dead-letters still park the chain. Operators replay to
   continue; that is unchanged for the parked case.
 - Replaying a dead-lettered occurrence that already has a successor re-runs

@@ -953,7 +953,10 @@ success or error does. Two consecutive dead-lettered occurrences park the
 chain instead — the spawn credit is settled, no successor is inserted, and
 replay is how it continues. Replay of a row that already has a successor
 keeps that credit claimed so the replayed run cannot fork a second chain.
-Cancel still ends the chain.
+Cancel still ends the chain. This spawn applies to dead-letters **after**
+the upgrade; existing `dead_lettered` rows are settled at migrate time and
+are not auto-resumed. A chain parked before the upgrade continues only if
+an operator replays it.
 
 Entry into the DLQ also increments the
 `fleet_dead_letter_queued_total{reason}` counter (reason is the bounded class

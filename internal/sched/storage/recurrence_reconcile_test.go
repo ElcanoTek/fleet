@@ -218,6 +218,70 @@ func TestImportedTerminalRecurringHistoryIsInert(t *testing.T) {
 	}
 }
 
+// TestReconcileRecurrencesDoesNotRespawnBackfilledDeadLetter pins migration
+// 071's backfill: every organic pre-upgrade dead_lettered row had
+// recurrence_spawned=FALSE (only success/error claimed the credit), including
+// rows whose lineage ALREADY continued. The consecutive-DLQ breaker does not
+// catch that (the predecessor was a success), so an unsettled flag would make
+// the first sweep insert a second successor — a duplicate chain. After the
+// backfill the sweep must leave the lineage alone.
+func TestReconcileRecurrencesDoesNotRespawnBackfilledDeadLetter(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+
+	// Pre-upgrade organic DLQ: inserted live, then transitioned dead_lettered
+	// (UpdateTaskTx does not claim the spawn credit). Age it past the grace
+	// window so the sweep WOULD select it if the flag stayed FALSE.
+	dl := seedTerminalRecurring(t, store, models.TaskStatusDeadLettered, 10*time.Minute, nil)
+	if recurrenceSpawned(t, store, dl.ID) {
+		t.Fatal("setup: organic dead-letter must land with an unclaimed spawn credit")
+	}
+
+	// Migration 071 backfill: settle existing dead_lettered rows.
+	if _, err := store.DB().Conn().ExecContext(ctx,
+		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, dl.ID); err != nil {
+		t.Fatalf("backfill settle: %v", err)
+	}
+	if !recurrenceSpawned(t, store, dl.ID) {
+		t.Fatal("setup: backfill must settle the credit")
+	}
+
+	// The lineage already continued: a later success (production shape:
+	// lineage ef49b641 — dead-lettered occurrence, then successes and a live
+	// head). Born-terminal so ITS spawn credit is settled too.
+	started := time.Now().Add(-11 * time.Minute).UTC()
+	completed := time.Now().Add(-10 * time.Minute).UTC()
+	later := &models.Task{
+		ID:                   uuid.New(),
+		Prompt:               "daily digest",
+		Status:               models.TaskStatusSuccess,
+		Priority:             10,
+		Recurrence:           "@daily",
+		Timezone:             "UTC",
+		LineageID:            dl.ID,
+		PreviousOccurrenceID: &dl.ID,
+		CreatedAt:            time.Now().Add(-24 * time.Hour).UTC(),
+		StartedAt:            &started,
+		CompletedAt:          &completed,
+	}
+	if _, err := store.AddTaskWithContext(ctx, later); err != nil {
+		t.Fatalf("AddTaskWithContext(later success): %v", err)
+	}
+
+	repaired, err := store.ReconcileRecurrences(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRecurrences: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repaired %d, want 0 — a backfilled pre-upgrade dead-letter must not grow a duplicate chain", repaired)
+	}
+	got := successorsOf(t, store, map[uuid.UUID]bool{dl.ID: true})
+	if len(got) != 1 || got[0].ID != later.ID {
+		t.Fatalf("rows besides the dead-letter = %d, want exactly the later success %s (no duplicate spawn)", len(got), later.ID)
+	}
+}
+
 // TestReplayedDeadLetterContinuesChainOnce pins the DLQ↔recurrence contract
 // (ADR-0070): dead-lettering a recurring occurrence spawns the successor, and
 // replaying that quarantined row must NOT fork a second chain when the
