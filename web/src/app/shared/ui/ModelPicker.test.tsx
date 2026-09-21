@@ -31,7 +31,7 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => {
-      expect(screen.getByText("OpenAI: GPT-5.6 Sol")).toBeInTheDocument();
+      expect(screen.getByText("Anthropic: Claude Opus 5")).toBeInTheDocument();
     });
     expect(input).toHaveAttribute("aria-expanded", "true");
   });
@@ -40,21 +40,21 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Sol"));
-    fireEvent.change(input, { target: { value: "gemini" } });
+    await waitFor(() => screen.getByText("Anthropic: Claude Opus 5"));
+    fireEvent.change(input, { target: { value: "luna" } });
     await waitFor(() => {
-      expect(screen.getByText("Google: Gemini 3.8 Flash")).toBeInTheDocument();
+      expect(screen.getByText("OpenAI: GPT-5.6 Luna Pro")).toBeInTheDocument();
     });
-    expect(screen.queryByText("OpenAI: GPT-5.6 Sol")).not.toBeInTheDocument();
+    expect(screen.queryByText("Anthropic: Claude Opus 5")).not.toBeInTheDocument();
   });
 
   it("commits a clicked option into the input value", async () => {
     render(<Harness />);
     const input = screen.getByRole("combobox") as HTMLInputElement;
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Google: Gemini 3.8 Flash"));
-    fireEvent.click(screen.getByText("Google: Gemini 3.8 Flash"));
-    expect(input.value).toBe("google/gemini-3.8-flash");
+    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Luna Pro"));
+    fireEvent.click(screen.getByText("OpenAI: GPT-5.6 Luna Pro"));
+    expect(input.value).toBe("openai/gpt-5.6-luna-pro");
   });
 
   it("renders the restaurant-style cost tier for priced catalog models", async () => {
@@ -94,7 +94,7 @@ describe("ModelPicker", () => {
     // Seed fallback (fetch rejects) — no prices anywhere, so no glyphs.
     render(<Harness />);
     fireEvent.focus(screen.getByRole("combobox"));
-    await waitFor(() => screen.getByText("Google: Gemini 3.8 Flash"));
+    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Luna Pro"));
     expect(document.querySelectorAll(".model-cost")).toHaveLength(0);
   });
 
@@ -102,7 +102,7 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Sol"));
+    await waitFor(() => screen.getByText("Anthropic: Claude Opus 5"));
     fireEvent.change(input, { target: { value: "zzz-nope" } });
     await waitFor(() => {
       expect(
