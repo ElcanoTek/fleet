@@ -107,6 +107,15 @@ func TestSendEmailFingerprint_InlineAttachmentsIncludeCID(t *testing.T) {
 	}
 }
 
+// A path containing the list delimiter must not alias a different list.
+func TestSendEmailFingerprint_NoDelimiterCollision(t *testing.T) {
+	one, _ := sendEmailFingerprint(fpArgs([]interface{}{"a,b"}))
+	two, _ := sendEmailFingerprint(fpArgs([]interface{}{"a", "b"}))
+	if one == two {
+		t.Fatal("one attachment named \"a,b\" must not fingerprint like attachments \"a\" and \"b\"")
+	}
+}
+
 func TestEmailDedupKey_AttachmentAwareThroughRawInput(t *testing.T) {
 	a := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c"}`)
 	b := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c","attachments":["x.csv"]}`)

@@ -160,10 +160,21 @@ func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 		"bcc=" + strings.Join(bccEmails, ","),
 		"subject=" + strings.ToLower(subject),
 		bodyReference,
-		"attachments=" + strings.Join(attachmentNames(args["attachments"]), ","),
-		"inline=" + strings.Join(attachmentNames(args["inline_attachments"]), ","),
+		"attachments=" + joinIdentities(attachmentNames(args["attachments"])),
+		"inline=" + joinIdentities(attachmentNames(args["inline_attachments"])),
 	}, "|")
 	return hashString(fingerprintSource), true
+}
+
+// joinIdentities encodes a sorted identity list so that no path character can
+// forge a boundary: each entry is hashed before joining, so "a,b" as one
+// attachment and "a" + "b" as two never collide.
+func joinIdentities(ids []string) string {
+	hashed := make([]string, 0, len(ids))
+	for _, id := range ids {
+		hashed = append(hashed, hashString(id))
+	}
+	return strings.Join(hashed, ",")
 }
 
 // attachmentNames normalizes a send_email attachments argument into a sorted
