@@ -102,6 +102,12 @@ const makeHarness = (opts: {
   streamBodies: Array<(signal?: AbortSignal) => ReadableStream<Uint8Array>>;
   // Consumed in order; the last entry is reused for any further probe.
   inflight: InflightInfo[];
+  // Zero-based indexes of /inflight probes that THROW (TypeError "Failed to
+  // fetch") instead of answering — the radio is still off. Such a probe still
+  // consumes its slot in the count but not an entry of `inflight`.
+  inflightRejectAt?: number[];
+  // Same for the persisted-transcript fetch (GET /api/conversations/<id>).
+  persistedRejectAt?: number[];
   onLoaded?: () => void;
   // Advertised keepalive cadence, in ms. Omit to send no header at all.
   heartbeatMs?: number;
@@ -119,6 +125,8 @@ const makeHarness = (opts: {
   const streaming = new Set<string>();
   let attaches = 0;
   let probes = 0;
+  let persistedFetches = 0;
+  let answeredProbes = 0;
 
   const setConvMessages = (
     convId: string,
@@ -167,8 +175,13 @@ const makeHarness = (opts: {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/inflight")) {
-        const info = nth(opts.inflight, probes);
+        const idx = probes;
         probes += 1;
+        if ((opts.inflightRejectAt ?? []).includes(idx)) {
+          throw new TypeError("Failed to fetch");
+        }
+        const info = nth(opts.inflight, answeredProbes);
+        answeredProbes += 1;
         return new Response(JSON.stringify(info), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -196,6 +209,11 @@ const makeHarness = (opts: {
         });
       }
       if (url.includes("/api/conversations/")) {
+        const idx = persistedFetches;
+        persistedFetches += 1;
+        if ((opts.persistedRejectAt ?? []).includes(idx)) {
+          throw new TypeError("Failed to fetch");
+        }
         return new Response(JSON.stringify({ history: opts.persisted }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -380,6 +398,127 @@ describe("reattachToConv recovery when the socket dies mid-turn", () => {
     expect(last.failed).toBeUndefined();
     expect(last.content).toBe("Done — here are the results.");
   });
+});
+
+// The phone-unlock signature (#1583): the OS severed the socket while the
+// radio was off, and the page wakes — and its probes run — before the network
+// is back. "Could not ask the server" must never be reported as "the server
+// said the turn is gone": the turn is usually still running, and a refresh a
+// moment later shows the full reply. Reproduced on fleetdev with the network
+// offline and the proxy restarted mid-turn.
+describe("an unreachable server is not a failed turn", () => {
+  it("leaves the slot mid-flight and recovers once the probes reach the server", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        // 1. the socket dies after a partial answer (the OS killed it).
+        () =>
+          severedStream([
+            sse(1, "turn.started", { turn_id: "t1" }),
+            sse(2, "text.delta", { text: "partial " }),
+          ]),
+        // 2. once the radio is back, the replacement replays the rest.
+        () =>
+          truncatedStream([
+            sse(3, "text.delta", { text: "and the rest" }),
+            sse(4, "turn.completed", { cost_usd: 0.02, duration_ms: 20 }),
+          ]),
+      ],
+      // probe 0: the initial reattach's own probe (answers);
+      // probe 1: the first backoff re-probe (+1 s), radio still off (throws);
+      // probe 2: the second re-probe (+2 s), radio back (answers);
+      // probe 3: the replacement reattach's own probe (answers).
+      inflightRejectAt: [1],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      // The pump's finally asks Postgres while the radio is still off.
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The old behaviour stamped `failed: true` with the raw "network error"
+    // right here. The slot must instead still look mid-flight, keeping the
+    // partial answer, so every recovery path keeps treating it as recoverable.
+    let last = lastOf(h);
+    expect(last.failed).toBeUndefined();
+    expect(last.state).toBe("streaming");
+    expect(last.content).toBe("partial ");
+    expect(h.loadConversationCalls).toEqual([]);
+
+    // First backoff tick (+1 s): still unreachable — nothing changes, no
+    // verdict. Second tick (+2 s): the server answers "still generating" —
+    // reattach, and the replacement finishes the same slot.
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(lastOf(h).state).toBe("streaming");
+    expect(lastOf(h).failed).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.attachCount()).toBe(2);
+    expect(h.streamRequests[1].lastEventId).toBe("2");
+    last = lastOf(h);
+    expect(last.id).toBe(2);
+    expect(last.content).toBe("partial and the rest");
+    expect(last.state).toBe("done");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+
+  it("adopts the persisted answer when the turn finished while the radio was off", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: answeredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      // probe 0 answers (reattach); probe 1 (+1 s) throws, radio off; probe 2
+      // (+2 s) answers "nothing in flight, nothing retained" — the long job
+      // finished and its buffer is gone; Postgres has the reply.
+      inflightRejectAt: [1],
+      inflight: [{ inflight: true, turn_id: "t1" }, { inflight: false }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).failed).toBeUndefined();
+    expect(lastOf(h).state).toBe("streaming");
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(2100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.loadConversationCalls).toEqual([CONV]);
+    expect(lastOf(h).content).toBe("Done — here are the results.");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+
+  it("never stamps failed while the server stays unreachable; the chain is bounded", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      // Every probe after the initial reattach throws — the radio never comes
+      // back within the retry window.
+      inflightRejectAt: [1, 2, 3, 4, 5, 6, 7, 8],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    // Well past the whole backoff chain (1+2+4+8+16 s).
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const last = lastOf(h);
+    expect(last.failed).toBeUndefined();
+    expect(last.state).toBe("streaming");
+    // Bounded: one probe per backoff step, then it stops asking.
+    expect(h.inflightProbes).toBeLessThanOrEqual(1 + 1 + 5);
+    expect(h.loadConversationCalls).toEqual([]);
+  }, 20000);
 });
 
 describe("settling a slot that is waiting on the user", () => {

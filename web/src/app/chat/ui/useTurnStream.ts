@@ -139,6 +139,20 @@ const streamDeadSilenceMs = (heartbeatMs: number): number =>
 // bytes well inside this window; a severed one delivers nothing, ever.
 const streamLivenessGraceMs = 2500;
 
+// Backoff for re-asking the server about a slot whose stream died while the
+// server was unreachable (#1583). Short and bounded: ~31 s in total, after
+// which the event-driven recovery paths (online / visibilitychange / focus /
+// the watchdog) remain the way back.
+const recoveryRetryDelaysMs = [1000, 2000, 4000, 8000, 16000];
+
+// What reconcileFromPersisted learned from Postgres about the turn we hold open.
+type PersistedReconcile = "adopted" | "absent" | "unreachable";
+
+// What /inflight said — or that it could not be asked.
+type InflightProbe =
+  | { kind: "answer"; inflight: boolean; turnID: string }
+  | { kind: "unreachable" };
+
 // Ceiling on waiting for a superseded stream's own teardown to unwind before
 // the replacement attaches. Bounded so a wedged unwind degrades to "no
 // reconnect this round" (the watchdog retries) instead of hanging.
@@ -391,6 +405,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // One drain-follower per conversation (followQueueDrain re-enters itself
   // through the reattach it awaits).
   const queueFollowInFlightRef = useRef<Set<string>>(new Set<string>());
+  // One pending recovery re-probe per conversation (#1583); see
+  // scheduleRecoveryRetry.
+  const recoveryRetriesRef = useRef<Map<string, number>>(new Map<string, number>());
   const refreshQueue = async (convId: string): Promise<QueuedInput[] | null> => {
     try {
       const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/queue`);
@@ -443,17 +460,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   // reconcileFromPersisted adopts the canonical transcript when it already
   // answers the turn we are holding open — programmatically what the user's
-  // manual refresh does. Returns true when the swap happened.
-  const reconcileFromPersisted = async (convId: string): Promise<boolean> => {
-    if (isPendingKey(convId)) return false;
+  // manual refresh does.
+  //
+  // Three outcomes, and the third is the one that matters (#1583):
+  //   "adopted"     — Postgres answered this turn; the swap happened.
+  //   "absent"      — Postgres answered and has NO completed reply for it.
+  //   "unreachable" — we could not ask (thrown fetch, 5xx from the proxy).
+  // A phone that wakes before its radio is back throws here, and "could not
+  // ask" used to be reported exactly like "no answer" — which is how a turn
+  // still running on the server got stamped "Turn failed" until a refresh.
+  const reconcileFromPersisted = async (convId: string): Promise<PersistedReconcile> => {
+    if (isPendingKey(convId)) return "absent";
     try {
       const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}`, {
         cache: "no-store",
       });
-      if (!res.ok) return false;
+      if (res.status >= 500) return "unreachable";
+      if (!res.ok) return "absent";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
       const local = messagesByConvRef.current[convId] ?? [];
-      if (!persistedAnswersLocalTurn(data.history, local)) return false;
+      if (!persistedAnswersLocalTurn(data.history, local)) return "absent";
       // Release the attach handle first: loadConversation deliberately
       // short-circuits for a conversation it believes is still streaming
       // (the in-memory copy is newer than the DB in that case). Here the
@@ -464,11 +490,66 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         background: true,
         restore: true,
       });
-      return true;
+      return "adopted";
     } catch {
-      // Best-effort: the caller falls back to an honest failure marker.
-      return false;
+      // The server did not answer — the caller must NOT read this as "no
+      // answer exists". It leaves the slot mid-flight and re-asks later.
+      return "unreachable";
     }
+  };
+
+  // probeInflightTurn asks the server whether the conversation's turn is still
+  // running (or finished within the SSE retain window). Like
+  // reconcileFromPersisted it separates "the server said" from "we could not
+  // ask": only an `answer` may drive a terminal verdict on the slot.
+  const probeInflightTurn = async (convId: string): Promise<InflightProbe> => {
+    if (isPendingKey(convId)) return { kind: "answer", inflight: false, turnID: "" };
+    try {
+      const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/inflight`, {
+        cache: "no-store",
+      });
+      if (res.status >= 500) return { kind: "unreachable" };
+      if (!res.ok) return { kind: "answer", inflight: false, turnID: "" };
+      const info = (await res.json()) as { inflight?: boolean; turn_id?: string };
+      return { kind: "answer", inflight: Boolean(info?.inflight), turnID: info?.turn_id ?? "" };
+    } catch {
+      return { kind: "unreachable" };
+    }
+  };
+
+  // scheduleRecoveryRetry re-asks the server about a slot we had to leave
+  // mid-flight because the server was unreachable when its stream died. The
+  // online / visibilitychange / focus handlers and the liveness watchdog also
+  // recover such a slot — this is the belt to their braces, for the radio that
+  // comes back without firing any of them. One chain per conversation, short
+  // backoff, and it stops the moment the slot is no longer mid-flight or a
+  // stream owns the conversation again. Exhausting the chain leaves the slot
+  // as it is: still mid-flight, still recoverable by the event handlers —
+  // never a verdict the server did not give.
+  const scheduleRecoveryRetry = (convId: string, attempt = 0): void => {
+    if (attempt >= recoveryRetryDelaysMs.length) return;
+    if (recoveryRetriesRef.current.has(convId)) return;
+    const timer = window.setTimeout(() => {
+      recoveryRetriesRef.current.delete(convId);
+      void (async () => {
+        const msgs = messagesByConvRef.current[convId] ?? [];
+        const last = msgs[msgs.length - 1];
+        if (!last || last.role !== "assistant") return;
+        if (last.state !== "streaming" && last.state !== "thinking") return;
+        if (attachedConvIdsRef.current.has(convId)) return;
+        const probe = await probeInflightTurn(convId);
+        if (probe.kind === "unreachable") {
+          scheduleRecoveryRetry(convId, attempt + 1);
+          return;
+        }
+        if (probe.inflight || probe.turnID) {
+          await reattachToConv(convId);
+          if (attachedConvIdsRef.current.has(convId)) return;
+        }
+        await settleStreamedSlot(convId, last.id, false, attempt + 1);
+      })();
+    }, recoveryRetryDelaysMs[attempt]);
+    recoveryRetriesRef.current.set(convId, timer);
   };
 
   // settleStreamedSlot finalizes the assistant slot a drained/severed stream
@@ -484,6 +565,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     convId: string,
     assistantId: number,
     gap: boolean,
+    retryAttempt = 0,
   ): Promise<void> => {
     const slot = (messagesByConvRef.current[convId] ?? []).find((m) => m.id === assistantId);
     if (!slot) return;
@@ -497,7 +579,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       !slot.content.trim() &&
       !(slot.toolCalls && slot.toolCalls.length > 0);
     if (!midFlight && !emptyAfterGap) return;
-    if (await reconcileFromPersisted(convId)) return;
+    const persisted = await reconcileFromPersisted(convId);
+    if (persisted === "adopted") return;
+    if (persisted === "unreachable") {
+      // Could not ask Postgres. Leave the slot mid-flight (it stays visible
+      // to every recovery path that way) and come back to it.
+      scheduleRecoveryRetry(convId, retryAttempt);
+      return;
+    }
     if (!midFlight) return;
     // A slot holding a pending approval or memory proposal is waiting on the
     // USER, not on the network: resolving the card resumes the turn. Settle
@@ -1684,7 +1773,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (!inflight) {
         // The turn is over. Postgres is authoritative; adopt it and retire the
         // socket. reconcileFromPersisted releases the attach handle itself.
-        if (!(await reconcileFromPersisted(convId))) return "healthy";
+        if ((await reconcileFromPersisted(convId)) !== "adopted") return "healthy";
         // If something else has claimed the conversation since we started
         // (loadConversation ends by re-probing for an in-flight turn), that
         // stream owns the streaming flag — leave it be. Otherwise the turn is
@@ -2202,21 +2291,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         //     window. The replay carries turn.finished + any events
         //     the dead SSE missed; the slot lands at state="done"
         //     instead of "failed".
-        let probeInflight = false;
-        let probeTurnID = "";
-        if (!isPendingKey(target)) {
-          try {
-            const probe = await fetch(`/api/conversations/${target}/inflight`, { cache: "no-store" });
-            if (probe.ok) {
-              const info = (await probe.json()) as { inflight?: boolean; turn_id?: string };
-              probeInflight = Boolean(info?.inflight);
-              probeTurnID = info?.turn_id ?? "";
-            }
-          } catch {
-            /* probe failed — fall through to the failed marker */
-          }
-        }
-        if (probeInflight || probeTurnID) {
+        const probe = await probeInflightTurn(target);
+        if (probe.kind === "unreachable") {
+          // The socket died AND the server cannot be reached right now — the
+          // phone-unlock signature: the OS severed the stream while the radio
+          // was off, and the page woke before the network was back. "Could
+          // not ask" is not "the server said no": the turn is very likely
+          // still running (reproduced on fleetdev — /inflight answered
+          // inflight=true the moment the network returned, while the bubble
+          // already read "Turn failed"). Leave the slot mid-flight, which is
+          // what keeps the online / visibilitychange / focus handlers and the
+          // watchdog treating it as recoverable; release the attach handle so
+          // a reattach can claim it; and re-probe on a short backoff so a
+          // radio that comes back without any of those events still heals.
+          // Only a definitive server answer may stamp `failed` (#1583).
+          patchAssistantMessage(target, assistantId, (m) =>
+            m.state === "done" ? m : { ...m, state: "streaming" },
+          );
+          attachedConvIdsRef.current.delete(target);
+          scheduleRecoveryRetry(target);
+        } else if (probe.inflight || probe.turnID) {
           patchAssistantMessage(target, assistantId, (m) => ({
             ...m,
             state: "streaming",
@@ -2247,8 +2341,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           if (resolved && resolved.state === "done" && !resolved.failed) {
             // Already settled successfully by another path — leave it.
           } else {
-            // The probe found nothing in-flight and no retained buffer. For a
-            // LONG job that finished while the phone was locked, the turn has
+            // The server says nothing is in flight and no retained buffer. For
+            // a LONG job that finished while the phone was locked, the turn has
             // already been persisted to Postgres and its retain buffer
             // (server.go:bufferRetainTTL) has since expired — so /inflight
             // legitimately reports nothing even though the full answer exists
@@ -2256,8 +2350,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             // manual refresh recovers it because it reads Postgres. Do the
             // same here BEFORE declaring failure — only stamp "failed" when
             // the DB confirms there's no completed answer for THIS turn.
-            const recovered = await reconcileFromPersisted(target);
-            if (!recovered) {
+            const persisted = await reconcileFromPersisted(target);
+            if (persisted === "unreachable") {
+              // Same rule as above: no verdict without an answer.
+              patchAssistantMessage(target, assistantId, (m) =>
+                m.state === "done" ? m : { ...m, state: "streaming" },
+              );
+              attachedConvIdsRef.current.delete(target);
+              scheduleRecoveryRetry(target);
+            } else if (persisted === "absent") {
               // The premature-EOF sentinel is an internal signal, never a
               // user-facing string — only reachable when the turn is genuinely
               // gone (not inflight, no buffer, nothing completed in the DB).

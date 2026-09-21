@@ -88,10 +88,44 @@ Order of resolution:
 3. **Otherwise, say what happened.** `failed: true` plus *"The connection
    dropped before the response finished."*, keeping any partial answer that did
    arrive. This is honest and it offers Retry — as opposed to a blank bubble
-   asserting the assistant said nothing.
+   asserting the assistant said nothing. This step is reached only on a
+   definitive answer from the server; see the next section for what happens
+   when the server could not be asked at all.
 
 Every finalizer routes through it: the reattach pump's `finally`, the live
 `streamTurn` tail, and both the catch and the `finally` in `submitPrompt`.
+
+### "Could not ask" is not "the server said no" (#1583)
+
+Step 1 above has a third outcome. `reconcileFromPersisted` returns `"adopted"`,
+`"absent"`, or **`"unreachable"`** (a thrown fetch, or a 5xx from the proxy),
+and the `/inflight` probe the `submitPrompt` catch runs first
+(`probeInflightTurn`) distinguishes an `answer` from `unreachable` the same
+way. Only an *answer* may drive a terminal verdict.
+
+The case this protects is the phone unlock. The OS severs the SSE socket while
+the radio is off; the page wakes, its `reader.read()` rejects, and the probes
+run **before the network is back** — every one of them throws. Before this,
+a thrown probe took the same branch as a definitive "nothing in flight, nothing
+persisted" and the slot was stamped `failed: true` with the raw `network
+error`, while `/inflight` — asked the moment the network returned — reported
+`inflight: true`. Reproduced on fleetdev by taking Chromium offline and
+restarting the proxy mid-turn; a page reload then showed the finished reply,
+exactly the "Turn failed until I refresh" report.
+
+On `unreachable` the slot is **left mid-flight** (`state: "streaming"`, partial
+content kept), the attach handle is released so a reattach can claim the
+conversation, and `scheduleRecoveryRetry` re-probes on a short bounded backoff
+(1, 2, 4, 8, 16 s — one chain per conversation). Each tick asks `/inflight`
+again: still unreachable → next tick; live or retained → `reattachToConv`;
+otherwise `settleStreamedSlot`, which asks Postgres and applies the same rule.
+Leaving the slot mid-flight is what keeps the existing recovery paths — the
+`online` / `visibilitychange` / `focus` handler in `chat-experience.tsx` and
+the liveness watchdog — treating it as recoverable: a slot already stamped
+`done + failed` is terminal to all of them, which is why the old page could
+never self-heal. If the chain is exhausted with the server still unreachable,
+the slot stays mid-flight and those handlers remain the way back; the page
+never invents a verdict the server did not give.
 
 ## `checkStreamLiveness` — the zombie socket
 
