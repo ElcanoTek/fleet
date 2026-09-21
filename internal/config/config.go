@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -1278,8 +1279,13 @@ type Config struct {
 	// "persistent". 0 disables the cap.
 	PythonREPLMaxSessions int
 
-	WorkspaceRoot         string
-	LockdownOnly          bool
+	WorkspaceRoot string
+	LockdownOnly  bool
+	// LockdownAllowedModels is the operator's explicit lockdown allow-list
+	// (FLEET_LOCKDOWN_ALLOWED_MODELS), nil when unset. Read the EFFECTIVE list
+	// through LockdownModels(): unset means "the workspace's live model tiers",
+	// so the default lockdown models track the admin's default/advanced
+	// settings instead of a second, drifting copy of the same slugs.
 	LockdownAllowedModels []string
 
 	// MockMode short-circuits LLM calls (e2e). FLEET_MOCK_MODE / CHAT_MOCK_MODE.
@@ -1882,7 +1888,27 @@ func (c *Config) LockdownAvailable() bool {
 // the historical exact-string behavior, so an entry with no wildcard still
 // matches exactly as before.
 func (c *Config) LockdownAllows(slug string) bool {
-	return ModelAllowed(slug, c.LockdownAllowedModels)
+	return ModelAllowed(slug, c.LockdownModels())
+}
+
+// LockdownModels returns the effective lockdown allow-list, first entry first:
+// the operator's FLEET_LOCKDOWN_ALLOWED_MODELS when set, otherwise the two live
+// model tiers — the workspace default and the advanced model, exactly as the
+// admin settings (or their env defaults) currently have them. A lockdown
+// conversation therefore starts on, and may switch between, the same models the
+// rest of the workspace treats as its defaults, and an admin override applied
+// live in Settings reaches lockdown at the same moment. The first entry is the
+// lockdown default: what a conversation is moved to when its persisted model
+// falls off the list (see httpapi.reconcileLockdownModel).
+func (c *Config) LockdownModels() []string {
+	if len(c.LockdownAllowedModels) > 0 {
+		return c.LockdownAllowedModels
+	}
+	def, adv := agentcore.CurrentDefaultModel(), agentcore.CurrentAdvancedModel()
+	if adv == "" || adv == def {
+		return []string{def}
+	}
+	return []string{def, adv}
 }
 
 // ModelAllowed reports whether slug matches any pattern in the allow-list.
@@ -2029,23 +2055,14 @@ func buildDatabaseURL() string {
 	return fmt.Sprintf("postgres://%s@%s:%s/%s?sslmode=%s", auth, host, port, name, ssl)
 }
 
-// splitLockdownModels parses the lockdown allow-list. Empty input returns the
-// default: one slug per product tier slot, plus the slugs the previous
-// defaults named. A lockdown conversation persists the model it was created
-// with and re-validates it against this list on every later turn, so dropping
-// a slug from the default list would make every conversation still on it
-// fail with "model not allowed in lockdown mode" the moment the new binary
-// starts. Operators who want a stricter list set FLEET_LOCKDOWN_ALLOWED_MODELS
-// explicitly; the default only ever grows.
+// splitLockdownModels parses the operator's lockdown allow-list. Empty input
+// returns nil — "unset" — and LockdownModels then serves the live model tiers.
+// There is deliberately no compiled-in slug list here: the one we shipped
+// before drifted from the tier defaults every time those moved.
 func splitLockdownModels(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return []string{
-			"openai/gpt-5.6-luna-pro", // recommended default
-			"anthropic/claude-opus-5", // strong tier
-			"google/gemini-3.8-flash", // previous recommended default (existing conversations)
-			"openai/gpt-5.6-sol",      // previous strong tier (existing conversations)
-		}
+		return nil
 	}
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))

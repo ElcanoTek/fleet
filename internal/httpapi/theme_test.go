@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 func TestRenderThemeCSS_EmitsValidTokensInStableOrder(t *testing.T) {
@@ -280,5 +281,18 @@ func TestClientConfig_CarriesLiveModelTiers(t *testing.T) {
 	want = `"models":{"default_model":"acme/frontier-1","advanced_model":"acme/frontier-1-pro"}`
 	if !strings.Contains(w.Body.String(), want) {
 		t.Errorf("body %s must carry the overridden tier pair %s", w.Body.String(), want)
+	}
+
+	// The operator's scheduler fallback rides along for the task-create form;
+	// unset, the key is omitted so the web keeps its compiled-in fallback.
+	if s.cfg == nil {
+		s.cfg = &config.Config{}
+	}
+	s.cfg.TaskFallbackModel = " acme/cheap-1 "
+	w = httptest.NewRecorder()
+	s.clientConfigHandler(w, req)
+	want = `"task_fallback_model":"acme/cheap-1"`
+	if !strings.Contains(w.Body.String(), want) {
+		t.Errorf("body %s must carry the operator's task fallback %s", w.Body.String(), want)
 	}
 }

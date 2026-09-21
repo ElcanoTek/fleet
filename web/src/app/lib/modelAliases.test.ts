@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ADVANCED_MODEL,
   DEFAULT_MODEL,
+  DEFAULT_TASK_FALLBACK_MODEL,
   TIER_MODELS,
   _resetModelTiersForTests,
   currentAdvancedModel,
   currentDefaultModel,
+  currentTaskFallbackModel,
   currentTierModels,
   labelForModel,
   setModelTiers,
@@ -83,6 +85,16 @@ describe("setModelTiers", () => {
     // A tier that IS a compiled-in slug keeps its friendly label.
     setModelTiers({ default_model: ADVANCED_MODEL, advanced_model: "acme/frontier-1" });
     expect(currentTierModels()[0]).toEqual({ slug: ADVANCED_MODEL, label: "Anthropic: Claude Opus 5" });
+  });
+
+  it("carries the operator's scheduler fallback for the task form, else the compiled-in one", () => {
+    expect(currentTaskFallbackModel()).toBe(DEFAULT_TASK_FALLBACK_MODEL);
+    setModelTiers({ default_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" });
+    expect(currentTaskFallbackModel()).toBe("acme/cheap-1");
+    // The task fallback is its own slot: it never shadows the chat tiers.
+    expect(currentAdvancedModel()).toBe(ADVANCED_MODEL);
+    setModelTiers({ task_fallback_model: "  " });
+    expect(currentTaskFallbackModel()).toBe(DEFAULT_TASK_FALLBACK_MODEL);
   });
 
   it("keeps the fallback for missing, empty, or whitespace fields", () => {

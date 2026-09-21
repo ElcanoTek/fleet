@@ -14,6 +14,7 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
+import { currentDefaultModel, currentTaskFallbackModel } from "@/app/lib/modelAliases";
 import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
 import { FileUpload, type FileUploadHandle, type FileEntry } from "@/app/shared/ui/FileUpload";
 import { CostForecastPanel } from "./CostForecastPanel";
@@ -54,8 +55,14 @@ const PROMPT_AUTOGROW_MAX_PX = 240;
 // protocol prompts wants the tall pane every time, not once per modal.
 const PROMPT_EXPANDED_STORAGE_KEY = "fleet-task-prompt-expanded";
 
-const DEFAULT_PRIMARY_MODEL = "openai/gpt-5.6-luna-pro";
-const DEFAULT_FALLBACK_MODEL = "deepseek/deepseek-v4.1-flash";
+// The form's pre-filled model pair is LIVE, not compiled in: the primary is the
+// workspace default tier (an admin override in Settings → Model tiers reaches a
+// new task exactly as it reaches a new chat) and the fallback is the operator's
+// scheduler fallback when one is set. Both arrive with /api/client-config, which
+// the Operations Center shell fetches on mount; before it lands the compiled-in
+// pair (modelAliases.ts) stands in.
+const defaultPrimaryModel = () => currentDefaultModel();
+const defaultFallbackModel = () => currentTaskFallbackModel();
 
 const SCHEDULE_PRESETS = [
   { label: "Weekdays 9am", cron: "0 9 * * 1-5" },
@@ -211,8 +218,8 @@ function taskToFormValues(task: Task | null) {
     simpleFrequency: parsed?.frequency ?? ("weekdays" as SimpleFrequency),
     simpleTime: parsed?.time ?? "09:00",
     simpleWeekdays: parsed?.weekdays ?? ["1"],
-    model: task?.model || DEFAULT_PRIMARY_MODEL,
-    fallbackModel: task?.fallback_model || DEFAULT_FALLBACK_MODEL,
+    model: task?.model || defaultPrimaryModel(),
+    fallbackModel: task?.fallback_model || defaultFallbackModel(),
     maxIterations:
       typeof task?.max_iterations === "number" ? String(task.max_iterations) : "",
     maxCostUSD: typeof task?.max_cost_usd === "number" ? String(task.max_cost_usd) : "",
@@ -520,8 +527,8 @@ export function TaskCreateModal({
     (mcpSelectionOverride !== null &&
       JSON.stringify(mcpSelectionOverride) !== JSON.stringify(defaultMcpSelection)) ||
     fileCount > 0 ||
-    model !== DEFAULT_PRIMARY_MODEL ||
-    fallbackModel !== DEFAULT_FALLBACK_MODEL ||
+    model !== defaultPrimaryModel() ||
+    fallbackModel !== defaultFallbackModel() ||
     maxIterations.trim() !== "" ||
     maxCostUSD.trim() !== "" ||
     expectedDuration.trim() !== "" ||
@@ -638,8 +645,8 @@ export function TaskCreateModal({
     setContextOpen(false);
     setToolsOpen(false);
     setAdvancedOpen(false);
-    setModel(DEFAULT_PRIMARY_MODEL);
-    setFallbackModel(DEFAULT_FALLBACK_MODEL);
+    setModel(defaultPrimaryModel());
+    setFallbackModel(defaultFallbackModel());
     setMaxIterations("");
     setMaxCostUSD("");
     setCaptainsLog(false);
@@ -732,8 +739,8 @@ export function TaskCreateModal({
     }
     setScheduleMode(t.recurrence ? "repeat" : "now");
     setScheduledDate("");
-    setModel(t.model ?? DEFAULT_PRIMARY_MODEL);
-    setFallbackModel(t.fallback_model ?? DEFAULT_FALLBACK_MODEL);
+    setModel(t.model ?? defaultPrimaryModel());
+    setFallbackModel(t.fallback_model ?? defaultFallbackModel());
     setAllowNetwork(Boolean(t.allow_network));
     setAllowDelegation(t.allow_delegation !== false);
     setCarryContext(Boolean(t.carry_context));
@@ -870,8 +877,8 @@ export function TaskCreateModal({
   const contextCount = [description, tagsInput, persona].filter((v) => v.trim() !== "").length;
 
   const advancedCount = [
-    model !== DEFAULT_PRIMARY_MODEL,
-    fallbackModel !== DEFAULT_FALLBACK_MODEL,
+    model !== defaultPrimaryModel(),
+    fallbackModel !== defaultFallbackModel(),
     maxIterations.trim() !== "",
     maxCostUSD.trim() !== "",
     expectedDuration.trim() !== "",

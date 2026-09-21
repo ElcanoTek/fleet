@@ -9,8 +9,9 @@
 | `DefaultCoreModel` (new chat conversations, the Operations Center create form's pre-filled primary, the chat "recommended" tier) | `google/gemini-3.8-flash` | `openai/gpt-5.6-luna-pro` |
 | `DefaultMaxModel` / chat's "advanced model" (`suggest_advanced_model` escalation) | `openai/gpt-5.6-sol` | `anthropic/claude-opus-5` |
 | `DefaultTitleModel` (conversation titles) | `google/gemini-3.8-flash` | `openai/gpt-5.6-luna-pro` |
-| Web `DEFAULT_MODEL` / `ADVANCED_MODEL` and the task-create form's pre-filled primary/fallback (persisted as the task's pinned `model` / `fallback_model`) | gemini-3.8-flash / gpt-5.6-sol | gpt-5.6-luna-pro / deepseek-v4.1-flash |
-| Lockdown allow-list default | gemini-3.8-flash, gpt-5.6-sol | gpt-5.6-luna-pro, claude-opus-5, **plus** gemini-3.8-flash and gpt-5.6-sol, so lockdown conversations created under the old defaults keep validating after the upgrade (`FLEET_LOCKDOWN_ALLOWED_MODELS` set explicitly overrides the whole list) |
+| Web `DEFAULT_MODEL` / `ADVANCED_MODEL` (compiled-in fallbacks) | gemini-3.8-flash / gpt-5.6-sol | gpt-5.6-luna-pro / claude-opus-5 |
+| Task-create form pre-fill (persisted as the task's pinned `model` / `fallback_model`) | hard-coded gemini-3.8-flash / gpt-5.6-sol, blind to admin settings | **live**: primary = the workspace default tier (`/client-config` `default_model`, i.e. the admin's Settings → Model tiers override or `FLEET_DEFAULT_MODEL`), fallback = `FLEET_TASK_FALLBACK_MODEL` when set (`/client-config` `task_fallback_model`), else deepseek-v4.1-flash |
+| Lockdown allow-list default (`FLEET_LOCKDOWN_ALLOWED_MODELS` unset) | a second compiled-in copy of the tier slugs (gemini-3.8-flash, gpt-5.6-sol) | **the live model tiers** — `config.LockdownModels()` returns the current default and advanced models, so lockdown defaults to gpt-5.6-luna-pro / claude-opus-5 and follows an admin tier override live; no retired slug lingers. A lockdown conversation whose persisted model fell off the list is moved to the lockdown default (the first entry) on its next turn (`httpapi.reconcileLockdownModel`) instead of failing with "model not allowed in lockdown mode". An explicit operator list still wins verbatim. |
 
 Operators override the chat tiers and the title model per deployment with
 `FLEET_DEFAULT_MODEL`, `FLEET_ADVANCED_MODEL` and `FLEET_TITLE_MODEL` (or the

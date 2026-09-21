@@ -34,6 +34,7 @@ import (
 type fakeEngine struct {
 	mu             sync.Mutex
 	lastHistory    []agent.HistoryEntry
+	lastModel      string
 	turns          int
 	providerHealth []agentcore.ModelHealth
 }
@@ -41,6 +42,7 @@ type fakeEngine struct {
 func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
 	f.mu.Lock()
 	f.lastHistory = in.History
+	f.lastModel = in.Model
 	f.turns++
 	f.mu.Unlock()
 
@@ -558,6 +560,76 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		st.mu.Unlock()
 		if model != "c/d" {
 			t.Errorf("allow-listed override not persisted: stored model = %q, want c/d", model)
+		}
+	})
+
+	// The persisted model fell off the allow-list (operator narrowed it, or the
+	// tier defaults moved on an upgrade / admin override): the turn must still
+	// run — on the lockdown default, persisted — instead of 400ing forever.
+	t.Run("lockdown conversation on a delisted model moves to the lockdown default", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/d", "e/f"}
+		seed(st, true) // persisted model a/b, no longer allowed
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model, setModels := st.convs["conv-1"].Model, st.setModels
+		st.mu.Unlock()
+		if model != "c/d" || setModels != 1 {
+			t.Errorf("delisted lockdown model not moved to the lockdown default: stored model = %q, SetModel calls = %d", model, setModels)
+		}
+		engine.mu.Lock()
+		turns, turnModel := engine.turns, engine.lastModel
+		engine.mu.Unlock()
+		if turns != 1 || turnModel != "c/d" {
+			t.Errorf("turn should have run once on the lockdown default: turns=%d model=%q", turns, turnModel)
+		}
+	})
+
+	// An explicit per-turn override to a delisted slug is still a 400 — the
+	// migration only ever moves a conversation ONTO the list.
+	t.Run("delisted override still rejected after migration exists", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/d"}
+		seed(st, true)
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "a/b",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// A glob-only list has no literal slug to move to: leave it to the guard.
+	t.Run("glob-only allow-list does not invent a model", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/*"}
+		seed(st, true)
+
+		postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"message":         "hello",
+		})
+		st.mu.Lock()
+		model, setModels := st.convs["conv-1"].Model, st.setModels
+		st.mu.Unlock()
+		if model != "a/b" || setModels != 0 {
+			t.Errorf("glob-only list must not rewrite the model: stored=%q SetModel calls=%d", model, setModels)
 		}
 	})
 

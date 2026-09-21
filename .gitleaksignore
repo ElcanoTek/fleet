@@ -46,11 +46,11 @@ internal/agentcore/mcp_fastio_response_test.go:jwt:117
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithQuotedEnvFromPodman
 # (double-quote-stripping test).
-internal/config/config_test.go:generic-api-key:1263
+internal/config/config_test.go:generic-api-key:1304
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithSingleQuotedEnvFromPodman
 # (single-quote-stripping test).
-internal/config/config_test.go:generic-api-key:1281
+internal/config/config_test.go:generic-api-key:1322
 
 # fake: fabricated fixtures in the redact package's own pattern tests — a
 # classic glpat- token whose literal shape is what the rule matches, and the

@@ -44,9 +44,12 @@ type modelsResponse struct {
 }
 
 // handleModels serves the live (cached) OpenRouter catalog, optionally filtered
-// by the lockdown allow-list. The allow-list seam is reused here so an operator
-// who already restricts models in lockdown mode sees the same restriction on the
-// picker; when the list is empty the full catalog is returned unfiltered.
+// by the operator's EXPLICIT lockdown allow-list (FLEET_LOCKDOWN_ALLOWED_MODELS).
+// The allow-list seam is reused here so an operator who restricts models in
+// lockdown mode sees the same restriction on the picker; with no explicit list
+// the full catalog is returned unfiltered. Deliberately not LockdownModels():
+// the live-tier default that stands in for an unset list is what a lockdown
+// chat may run on, not a catalog restriction for the whole workspace.
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

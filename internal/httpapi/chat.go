@@ -142,6 +142,37 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 	return true
 }
 
+// reconcileLockdownModel moves a lockdown conversation whose PERSISTED model is
+// no longer on the allow-list onto the lockdown default — the first entry of
+// config.LockdownModels — and persists that choice. A conversation pins its
+// model at creation and the manager re-validates it on every turn, so without
+// this step every lockdown chat created before the allow-list changed (the
+// operator narrowed FLEET_LOCKDOWN_ALLOWED_MODELS, the shipped tier defaults
+// moved on an upgrade, or an admin overrode a tier in Settings) would fail each
+// turn with "model not allowed in lockdown mode" until the user found the
+// picker. This is a migration IN FRONT of the guard, not a bypass of it: the
+// manager still rejects whatever it is handed if it is not allow-listed, and
+// the explicit per-turn override above still 400s on a disallowed slug. A
+// glob-only list (no literal slug to move to) is left to the guard. Reports
+// false after writing the HTTP error.
+func (s *Server) reconcileLockdownModel(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation) bool {
+	if !conv.Lockdown || conv.Model == "" || s.cfg.LockdownAllows(conv.Model) {
+		return true
+	}
+	allowed := s.cfg.LockdownModels()
+	if len(allowed) == 0 || strings.ContainsAny(allowed[0], "*?[") {
+		return true
+	}
+	next := allowed[0]
+	if err := s.store.SetModel(r.Context(), user, conv.ID, next); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", logSafe(conv.ID), logSafe(conv.Model), logSafe(next))
+	conv.Model = next
+	return true
+}
+
 func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -182,6 +213,9 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) {
+			return
+		}
+		if !s.reconcileLockdownModel(w, r, user, conv) {
 			return
 		}
 		// Sending a message to an archived conversation un-archives it (#282) —

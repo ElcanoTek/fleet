@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -477,6 +479,44 @@ func TestServerConfig_LockdownAvailability(t *testing.T) {
 				t.Errorf("LockdownAllowedModels non-empty = %v, want %v (got=%v)", gotNonNil, tc.wantAllowedNonNil, resp.LockdownAllowedModels)
 			}
 		})
+	}
+}
+
+// With no operator allow-list, /server-config advertises the LIVE model tiers
+// as the lockdown list — default first — so the lockdown picker leads with the
+// same model a regular chat starts on, and an admin tier override shows up in
+// lockdown on the next fetch without a restart.
+func TestServerConfig_LockdownListDefaultsToLiveTiers(t *testing.T) {
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel("")
+		agentcore.SetAdvancedModel("")
+	})
+	agentcore.SetDefaultModel("")
+	agentcore.SetAdvancedModel("")
+
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = nil
+
+	get := func() []string {
+		w := do(t, s.Routes(), http.MethodGet, "/server-config", nil, "alice@x.com")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status: %d body: %s", w.Code, w.Body.String())
+		}
+		var resp serverConfigResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return resp.LockdownAllowedModels
+	}
+	want := []string{agentcore.DefaultCoreModel, agentcore.DefaultMaxModel}
+	if got := get(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lockdown_allowed_models = %v, want the compiled-in tiers %v", got, want)
+	}
+	agentcore.SetDefaultModel("acme/frontier-1")
+	want = []string{"acme/frontier-1", agentcore.DefaultMaxModel}
+	if got := get(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after an admin default override lockdown_allowed_models = %v, want %v", got, want)
 	}
 }
 
