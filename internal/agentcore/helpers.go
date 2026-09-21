@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"strconv"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -57,7 +58,22 @@ func openrouterServedProvider(metadata fantasy.ProviderMetadata) string {
 	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(opts.Provider)
+	served := strings.TrimSpace(opts.Provider)
+	// fantasy's openrouter adapter copies the response's `provider` field
+	// verbatim as raw JSON (`p.Raw()`), so the name arrives still wearing its
+	// JSON quotes: `"Google"`, not `Google`. Compared against the pin table's
+	// plain names that never matched, so every step on the pinned upstream
+	// was logged as a cache-cold fallback and ServedFallback was set on runs
+	// that never left their upstream (19 such warnings on one prod day, all
+	// `pinned=Google served="Google"`). Unquote before anyone compares it.
+	if len(served) >= 2 && served[0] == '"' && served[len(served)-1] == '"' {
+		if unquoted, err := strconv.Unquote(served); err == nil {
+			served = strings.TrimSpace(unquoted)
+		} else {
+			served = strings.TrimSpace(served[1 : len(served)-1])
+		}
+	}
+	return served
 }
 
 // preferredUpstreamFor returns the upstream name a slug is pinned to (""

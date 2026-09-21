@@ -33,6 +33,25 @@ func TestOpenrouterServedProvider(t *testing.T) {
 	if got := openrouterServedProvider(fantasy.ProviderMetadata{}); got != "" {
 		t.Errorf("served provider = %q, want empty for absent metadata", got)
 	}
+	// fantasy copies OpenRouter's `provider` field as raw JSON, quotes included.
+	for raw, want := range map[string]string{`"Google"`: "Google", ` "Z.AI" `: "Z.AI", `"Amazon Bedrock"`: "Amazon Bedrock", `""`: ""} {
+		if got := openrouterServedProvider(orMetadata(raw)); got != want {
+			t.Errorf("served provider for raw %s = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestUpdateUsage_QuotedServedNameIsNotAFallback(t *testing.T) {
+	// The exact shape the adapter produces on prod: pinned=Google, served
+	// `"Google"` (raw JSON). That is the pinned upstream, not a fallback.
+	o := newOrchestrationState(nil, 0)
+	o.updateUsage("google/gemini-3.8-flash", fantasy.Usage{InputTokens: 10}, orMetadata(`"Google"`))
+	if o.ServedFallback {
+		t.Error("ServedFallback = true for a step served by the pinned upstream under its raw-JSON name")
+	}
+	if o.LastServedUpstream != "Google" {
+		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "Google")
+	}
 }
 
 // A run served by its canonical upstream is not a fallback.
