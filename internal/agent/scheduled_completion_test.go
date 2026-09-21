@@ -147,11 +147,15 @@ func (m *reportCompletionReviewer) Generate(_ context.Context, call fantasy.Call
 	raw, _ := json.Marshal(call.Prompt)
 	// Check the actual secondary-model input, across the complete core/observer
 	// boundary, including both requested reconciliation and returned outcomes.
+	// "Report published; inspection recorded." is the run's closing assistant
+	// message: Gate 1 must hand it to the verifier as the FINAL RESPONSE
+	// section (a "report X" task step is fulfilled there, not in a tool call).
 	for _, field := range []string{
 		"/expect/date_range/rows.date", "2026-09-01", "2026-09-15",
 		"/expect/totals/rows.revenue", "1234.56789", "/expect/row_count/rows",
 		"/profile/rows/totals/rows.revenue", "/published", "/ok", "/revision",
 		"Never request replaying a successful mutation", "arguments_omitted", "result_omitted",
+		"FINAL RESPONSE (the agent's closing message", "Report published; inspection recorded.",
 	} {
 		if !strings.Contains(string(raw), field) {
 			m.t.Errorf("missing verifier evidence/instruction %q", field)

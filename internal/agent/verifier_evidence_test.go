@@ -142,7 +142,7 @@ func TestVerifierReceivesConditionalResultEvidence(t *testing.T) {
 			model := &evidenceVerifierModel{t: t, fields: []string{tc.field}}
 			a := &Agent{fallbackModel: model, logSession: NewLogSession()}
 			records := []toolExecRecord{{Name: tc.tool, Succeeded: true, Result: verifierEvidence(tc.result)}}
-			missing, err := a.runEndOfRunVerifier(context.Background(), tc.task, records)
+			missing, err := a.runEndOfRunVerifier(context.Background(), tc.task, "", records)
 			if err != nil || len(missing) != 0 {
 				t.Fatalf("verifier result: %v, %v", missing, err)
 			}

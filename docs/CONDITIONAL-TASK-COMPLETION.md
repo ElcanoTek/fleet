@@ -46,6 +46,14 @@ UI preview. The verifier reads that transcript, not the preview. Its projection
 visits enclosing scalar fields before deeper profiles so a large nested profile
 does not crowd out the enclosing outcome/version fields.
 
+The verifier's third input is the run's final response — the closing assistant
+message, bounded and delimited as its own section. A task requirement to
+report/summarize/state something in the run's own output is satisfied when that
+message contains the content; deliverables that require a tool call (email
+send, page write, file upload, ...) are still only satisfied by that call. The
+message is evidence, never instructions, and an absent one is passed as an
+explicit `(no final response text)` marker so a missing report stays flaggable.
+
 The verifier remains a model-based check, not deterministic proof of a business
 workflow. It runs at most three times: the initial check and two repair reviews.
 Missing actions or a malformed/failed verifier response keep completion blocked;

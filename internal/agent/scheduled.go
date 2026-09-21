@@ -397,26 +397,92 @@ func (s scheduledInput) Prompt(_ context.Context) (string, []fantasy.Message, st
 	return s.systemPrompt, []fantasy.Message{fantasy.NewUserMessage(s.task)}, s.label, nil
 }
 
-// scheduledObserver writes run events into the JSON session log. Text
-// deltas accumulate into the assistant message at round end. The core writes
-// complete tool records directly; this observer only sees their UI previews.
+// scheduledObserver writes run events into the JSON session log and tracks the
+// run's live assistant text for the finish gates. The core streams assistant
+// text only as text.delta events and persists the completed response via the
+// driver AFTER agentcore.Run returns, so at CanFinish time the session does not
+// yet contain the closing message — reading the session there would hand the
+// verifier and the phone-a-friend reviewer an empty (or stale, pre-audit-draft)
+// answer. The tracker mirrors what the live stream renders: the current delta
+// burst, closed by any non-delta event, with text.replace (the completed
+// response) authoritative when it arrives.
 type scheduledObserver struct {
 	session *LogSession
+
+	mu      sync.Mutex
+	draft   strings.Builder
+	inDraft bool
+	latest  string
+}
+
+// endDraft closes the in-progress delta burst: any non-delta event means the
+// model moved on (tool calls, results, reasoning, enforcement nudges), so the
+// burst the gates should read from now on is the completed one.
+func (o *scheduledObserver) endDraft() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.inDraft {
+		o.latest = o.draft.String()
+		o.inDraft = false
+	}
+}
+
+// latestText returns the run's most recent assistant text as the finish gates
+// need it: the in-progress burst if a round is mid-stream, else the last
+// completed burst.
+func (o *scheduledObserver) latestText() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.inDraft {
+		return strings.TrimSpace(o.draft.String())
+	}
+	return strings.TrimSpace(o.latest)
 }
 
 func (o *scheduledObserver) Observe(eventType string, payload map[string]any) {
-	if o.session == nil {
-		return
+	// Any non-delta event closes the current text burst; text.replace replaces
+	// it wholesale below.
+	if eventType != "text.delta" && eventType != "text.replace" {
+		o.endDraft()
 	}
 	switch eventType {
 	case "enforcement":
+		if o.session == nil {
+			return
+		}
 		if msg, ok := payload["message"].(string); ok {
 			t := "system_enforcement"
 			o.session.AddMessageWithMetadata(roleUser, msg, nil, nil, &t, nil, nil, "")
 		}
 	case "text":
 		if msg, ok := payload["text"].(string); ok && msg != "" {
+			o.mu.Lock()
+			o.latest = msg
+			o.draft.Reset()
+			o.inDraft = false
+			o.mu.Unlock()
+			if o.session == nil {
+				return
+			}
 			o.session.AddMessage(roleAssistant, msg, nil, nil)
+		}
+	case "text.delta":
+		if msg, ok := payload["text"].(string); ok && msg != "" {
+			o.mu.Lock()
+			if !o.inDraft {
+				o.draft.Reset()
+				o.inDraft = true
+			}
+			o.draft.WriteString(msg)
+			o.mu.Unlock()
+		}
+	case "text.replace":
+		if msg, ok := payload["text"].(string); ok {
+			o.mu.Lock()
+			o.latest = msg
+			o.draft.Reset()
+			o.inDraft = false
+			o.mu.Unlock()
 		}
 	}
 }
@@ -453,8 +519,10 @@ func composeObserver(ctx context.Context, base agentcore.Observer) agentcore.Obs
 // counter has.
 func (a *Agent) isDelegatedChild() bool { return a.subagent.role != "" }
 
-// runObserver builds this run's Observer. A ROOT run keeps the pre-existing
-// shape: the captain's-log writer plus the context-carried live stream sink.
+// runObserver builds this run's Observer around the captain's-log writer base,
+// which the caller creates (before the policy) so the finish gates can read its
+// live text tracker. A ROOT run keeps the pre-existing shape: the captain's-log
+// writer plus the context-carried live stream sink.
 //
 // A spawned CHILD swaps that live sink for its parent's progress forwarder
 // (childProgress, set by buildChild). Two reasons it must not inherit the
@@ -463,8 +531,7 @@ func (a *Agent) isDelegatedChild() bool { return a.subagent.role != "" }
 // if the parent had made them — and the forwarder is what turns those steps
 // into the attributed subagent.progress events the chat/task UIs render. The
 // child's OWN session log (its captain's log) is unaffected either way.
-func (a *Agent) runObserver(ctx context.Context) agentcore.Observer {
-	base := agentcore.Observer(&scheduledObserver{session: a.logSession})
+func (a *Agent) runObserver(ctx context.Context, base agentcore.Observer) agentcore.Observer {
 	if a.isDelegatedChild() {
 		if a.childProgress == nil {
 			return base
@@ -485,11 +552,28 @@ type scheduledPolicy struct {
 	verificationAttempts int
 	terminalErr          error
 	reviewed             bool
+	// runText reads the run's live assistant text from the observer's tracker.
+	// The session only gains the final message after agentcore.Run returns, so
+	// the gates cannot rely on latestAssistantText alone (see
+	// scheduledObserver.latestText).
+	runText func() string
 	// runCtx is the run's context, captured at build time so the end-of-run
 	// verifier's and phone-a-friend reviewer's model calls honor the run's
 	// deadline/cancellation (CanFinish itself takes no ctx). Falls back to
 	// context.Background() if unset.
 	runCtx context.Context
+}
+
+// latestRunText returns the run's latest assistant text for the finish gates:
+// the observer's live tracker (the round that just streamed) wins; the session
+// fallback covers policies built without a tracker.
+func (p *scheduledPolicy) latestRunText() string {
+	if p.runText != nil {
+		if text := p.runText(); text != "" {
+			return text
+		}
+	}
+	return latestAssistantText(p.agent.logSession)
 }
 
 func (p *scheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
@@ -525,7 +609,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	if !p.verified && p.agent != nil && p.agent.fallbackModel != nil {
 		p.verificationAttempts++
 		records := buildToolExecSummary(p.agent.logSession)
-		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, records)
+		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
 		if err != nil {
 			log.Printf("verifier failed: %v", err)
 			return p.verificationFailed("Completion verification could not produce a valid verdict: "+err.Error(), records)
@@ -542,7 +626,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	if !p.reviewed && p.agent != nil && p.agent.phoneAFriendEnabled && p.agent.reviewerModel != nil {
 		p.reviewed = true
 		records := buildToolExecSummary(p.agent.logSession)
-		answer := latestAssistantText(p.agent.logSession)
+		answer := p.latestRunText()
 		issues, err := p.agent.runPhoneAFriendReview(ctx, p.agent.reviewerModel, p.task, answer, records)
 		if err != nil {
 			log.Printf("phone_a_friend review skipped: %v", err)
@@ -715,12 +799,29 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if a.skillProposer != nil {
 		inner.SetSkillProposer(a.skillProposer)
 	}
+	// Observer is the captain's-log writer, tee'd to a live SSE buffer when the
+	// worker pool attached one via agentcore.WithStreamObserver (#200) so an
+	// in-progress task's run log can be tailed without forking the event path.
+	// A spawned CHILD instead tees to its parent's progress forwarder: its raw
+	// events would otherwise land unattributed in the PARENT task's live stream,
+	// indistinguishable from the parent's own steps.
+	//
+	// The writer is created HERE (before the policy) because the finish gates
+	// read its live text tracker: the session only gains the run's closing
+	// message after agentcore.Run returns, so the tracker is the gates' only
+	// view of the final response while the run is in flight.
+	logWriter := &scheduledObserver{session: a.logSession}
+	observer := a.runObserver(ctx, logWriter)
+	// Captured so this run's spawn_subagent calls can stream their children's
+	// progress to whoever is watching (see Agent.spawnObserver).
+	a.spawnObserver = observer
+
 	// Capture the live policy so the spawn_subagent tool can read THIS run's
 	// remaining budget and charge child spend back against it (#175). It is the
 	// SAME ScheduledPolicy agentcore drives, so the budget the tool reads is the
 	// budget the loop enforces — there is no separate accounting.
 	a.runtimePolicy = inner
-	policy := &scheduledPolicy{inner: inner, agent: a, task: task, runCtx: ctx}
+	policy := &scheduledPolicy{inner: inner, agent: a, task: task, runCtx: ctx, runText: logWriter.latestText}
 
 	// propose_note tool registration in lockstep with wiring + the prompt
 	// advertisement: the scheduled prompt advertises propose_note and the policy
@@ -784,17 +885,6 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if a.taskID != uuid.Nil {
 		taskID = a.taskID.String()
 	}
-
-	// Observer is the captain's-log writer, tee'd to a live SSE buffer when the
-	// worker pool attached one via agentcore.WithStreamObserver (#200) so an
-	// in-progress task's run log can be tailed without forking the event path.
-	// A spawned CHILD instead tees to its parent's progress forwarder: its raw
-	// events would otherwise land unattributed in the PARENT task's live stream,
-	// indistinguishable from the parent's own steps.
-	observer := a.runObserver(ctx)
-	// Captured so this run's spawn_subagent calls can stream their children's
-	// progress to whoever is watching (see Agent.spawnObserver).
-	a.spawnObserver = observer
 
 	deps := agentcore.Deps{
 		Input:             scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},

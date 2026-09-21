@@ -1030,9 +1030,22 @@ wording.
 Scheduled runs layer an extra host-side LLM re-check on top of the shared
 audit/finish enforcement. When the scheduled policy clears a run, the
 `runEndOfRunVerifier` runs on fleet's fallback model (host-side creds — the
-verifier's model call is just another host LLM call) and returns any missing
+verifier's model call is just another host LLM call) over three inputs — the
+original task text, the bounded redacted tool-execution summary, and the run's
+**final response** (the closing assistant message) — and returns any missing
 required actions, which the loop turns into a repair round before it
-is allowed to finish. Repairs are checked again, up to three verifier calls in
+is allowed to finish. The final response matters because a task step phrased
+"report/summarize/state X" is fulfilled in that closing message, not in a tool
+call: without it the verifier can never see the report, re-demands it on every
+check, and a run that did the work and said so still dead-letters as
+`ErrCompletionUnverified`. It is read live from the run observer's text
+tracker, because the session log only gains the closing message after
+`agentcore.Run` returns; it is bounded (8,000 chars, head+tail) and presented
+as evidence, never instructions, and when a run leaves no assistant text an
+explicit `(no final response text)` marker stands in so a genuinely missing
+report stays flaggable. Tool-backed deliverables (email send, deal creation,
+page write, file upload, ...) still require their tool call — a prose report
+never substitutes for one. Repairs are checked again, up to three verifier calls in
 total. A verifier error keeps completion blocked; the third unsuccessful check
 returns `ErrCompletionUnverified` through the core without asking the model to
 abort. Partial work and completed critical actions remain recorded, and the

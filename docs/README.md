@@ -296,6 +296,7 @@ above fails otherwise.
 - [`UPSTREAM-ROUTING-FLOOR.md`](UPSTREAM-ROUTING-FLOOR.md) — Upstream routing: precision floor + served-upstream attribution
 - [`USAGE-ANALYTICS.md`](USAGE-ANALYTICS.md) — Usage analytics & budgets (#601)
 - [`USER-GUIDES.md`](USER-GUIDES.md) — The user guides: /help and the `fleet-guide` skill
+- [`VERIFIER-FINAL-RESPONSE.md`](VERIFIER-FINAL-RESPONSE.md) — The end-of-run verifier sees the run's final response
 - [`VERSIONING.md`](VERSIONING.md) — Versioning and releases
 - [`WEB-TIER-SHUTDOWN.md`](WEB-TIER-SHUTDOWN.md) — Web-tier shutdown — why `systemctl restart fleet-web` was dumping core
 - [`WEBHOOK-SIGNING.md`](WEBHOOK-SIGNING.md) — Webhook signing (verifying fleet's outbound webhooks)
