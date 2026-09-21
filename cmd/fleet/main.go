@@ -397,12 +397,13 @@ func run() error {
 	// turn starts.
 	bundlePolicy := bundle.AgentPolicy()
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
-		ParallelSafeTools:       bundlePolicy.ParallelSafeTools,
-		CriticalToolSuffixes:    bundlePolicy.CriticalToolSuffixes,
-		CriticalToolSubstitutes: bundlePolicy.CriticalToolSubstitutes,
-		CriticalToolTimeouts:    bundlePolicy.CriticalToolTimeouts,
-		CriticalToolModes:       bundlePolicy.CriticalToolModes,
-		CriticalToolUndoHints:   bundlePolicy.CriticalToolUndoHints,
+		ParallelSafeTools:            bundlePolicy.ParallelSafeTools,
+		CriticalToolSuffixes:         bundlePolicy.CriticalToolSuffixes,
+		CriticalToolSubstitutes:      bundlePolicy.CriticalToolSubstitutes,
+		CriticalToolTransportAliases: bundlePolicy.CriticalToolTransportAliases,
+		CriticalToolTimeouts:         bundlePolicy.CriticalToolTimeouts,
+		CriticalToolModes:            bundlePolicy.CriticalToolModes,
+		CriticalToolUndoHints:        bundlePolicy.CriticalToolUndoHints,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child

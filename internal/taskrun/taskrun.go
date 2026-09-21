@@ -126,9 +126,10 @@ func run(argv []string, progName string) error {
 	// Install the bundle's agent tool-behavior policy before any turn runs.
 	bp := bundle.AgentPolicy()
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
-		ParallelSafeTools:       bp.ParallelSafeTools,
-		CriticalToolSuffixes:    bp.CriticalToolSuffixes,
-		CriticalToolSubstitutes: bp.CriticalToolSubstitutes,
+		ParallelSafeTools:            bp.ParallelSafeTools,
+		CriticalToolSuffixes:         bp.CriticalToolSuffixes,
+		CriticalToolSubstitutes:      bp.CriticalToolSubstitutes,
+		CriticalToolTransportAliases: bp.CriticalToolTransportAliases,
 	})
 
 	// Install the bundle's custom model-pricing overrides (#297) before any turn

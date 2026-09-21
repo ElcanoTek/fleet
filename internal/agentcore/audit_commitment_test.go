@@ -727,6 +727,7 @@ func withPagesTransportPolicy(t *testing.T) {
 }
 
 func TestTransportAliasSatisfies(t *testing.T) {
+	withPagesTransportPolicy(t)
 	cases := []struct {
 		committed, executed string
 		want                bool
@@ -787,6 +788,29 @@ func TestTypedCommitment_UnrelatedToolDoesNotDischargeTransportAlias(t *testing.
 	o.recordToolResult(typedPagesOtherServer, `{"slug":"x"}`, `{"ok":true}`, true)
 	if got := o.committedCriticalActions["update_page_data"]; got != 1 {
 		t.Fatalf("other-server upload discharged the commitment: outstanding=%d, want 1", got)
+	}
+}
+
+func TestTypedCommitment_UnlistedUploadSuffixIsNotAnAlias(t *testing.T) {
+	// Gating create_prepared_deal_upload as critical must NOT make it a
+	// transport alias of create_prepared_deal — only the pages pairs (when
+	// both names are gated) and explicit CriticalToolTransportAliases.
+	p := testFixturePolicy()
+	p.CriticalToolSuffixes = append(append([]string{}, p.CriticalToolSuffixes...), "create_prepared_deal_upload")
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	ConfigureAgentPolicy(p)
+	if transportAliasSatisfies("create_prepared_deal", "create_prepared_deal_upload") {
+		t.Fatal("unlisted _upload suffix must not alias")
+	}
+	o := newOrchStateForTest()
+	registerTyped(t, o, criticalActionStruct{Tool: typedCreateToolA})
+	upload := typedCreateToolA + "_upload"
+	if blocked, _ := o.checkCriticalTool(upload, "", `{"deal":"x"}`); !blocked {
+		t.Fatal("unlisted upload must not ride the inline commitment")
+	}
+	o.recordToolResult(upload, `{"deal":"x"}`, `{"ok":true}`, true)
+	if got := o.committedCriticalActions["create_prepared_deal"]; got != 1 {
+		t.Fatalf("unlisted upload discharged the commitment: outstanding=%d, want 1", got)
 	}
 }
 

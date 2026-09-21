@@ -28,6 +28,11 @@ type AgentPolicy struct {
 	// suffixes that may discharge its commitment (e.g. a high-level
 	// execute_deal_from_prompt_inputs discharged by a lower-level create_deal).
 	CriticalToolSubstitutes map[string][]string
+	// CriticalToolTransportAliases maps a committed suffix to the same write
+	// over a different transport (inline vs. `_upload` workspace-file chunks).
+	// Bidirectional at install time. Extra to the pages pairs that are
+	// auto-enabled when the bundle already gates both names as critical.
+	CriticalToolTransportAliases map[string][]string
 	// CriticalToolTimeouts maps a bare tool-name suffix to a per-tool approval
 	// default-deny window in seconds (#225). Matched by suffix exactly like
 	// CriticalToolSuffixes ("send_email" matches "<server>_send_email"); the
@@ -84,6 +89,10 @@ var (
 	// activeCriticalSubstitutes maps committed suffix -> allowed executed
 	// substitutes. Empty by default.
 	activeCriticalSubstitutes = map[string][]string{}
+
+	// activeTransportAliases maps a critical suffix to its same-write
+	// transport counterpart. Empty by default.
+	activeTransportAliases = map[string]string{}
 
 	// activeCriticalTimeouts maps a critical-tool suffix -> per-tool approval
 	// default-deny window in seconds (#225). Empty by default (no per-tool
@@ -146,6 +155,33 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		subs[k] = append([]string(nil), v...)
 	}
 	activeCriticalSubstitutes = subs
+
+	aliases := make(map[string]string)
+	for k, vs := range p.CriticalToolTransportAliases {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		for _, v := range vs {
+			v = strings.TrimSpace(v)
+			if v == "" || v == k {
+				continue
+			}
+			aliases[k] = v
+			aliases[v] = k
+		}
+	}
+	// A bundle that gates BOTH transports of a pages write has already said
+	// they share blast radius (elcano-config: "identical blast radius").
+	// Enable the alias only then — a bundle that never listed the upload
+	// tool is unchanged, and an unrelated `_upload` suffix is not inferred.
+	for _, pair := range pagesTransportPairs {
+		if seen[pair[0]] && seen[pair[1]] {
+			aliases[pair[0]] = pair[1]
+			aliases[pair[1]] = pair[0]
+		}
+	}
+	activeTransportAliases = aliases
 
 	timeouts := make(map[string]int, len(p.CriticalToolTimeouts))
 	for k, v := range p.CriticalToolTimeouts {

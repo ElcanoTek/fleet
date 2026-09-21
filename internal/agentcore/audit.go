@@ -59,44 +59,31 @@ func substituteSatisfies(committedSuffix, executedSuffix string) bool {
 	return false
 }
 
-// transportAliasPairs is the explicit list of same-write, different-transport
-// suffix pairs (inline arguments vs. workspace-file chunks). Only these pairs
-// — not every `_upload` suffix — are treated as one obligation. Both names
-// remain independently critical in the bundle; the alias only matches them
-// for commitment discharge / authorization.
-var transportAliasPairs = [][2]string{
+// pagesTransportPairs are same-write, different-transport suffix pairs
+// (inline arguments vs. workspace-file chunks). ConfigureAgentPolicy enables
+// each pair only when the installed critical-suffix list already contains
+// BOTH names — the bundle opted both into the gate.
+var pagesTransportPairs = [][2]string{
 	{"update_page_data", "update_page_data_upload"},
 	{"deploy_page", "deploy_page_upload"},
 }
 
 // transportAliasSatisfies reports whether committedSuffix and executedSuffix
-// are an explicit same-write transport pair. Bidirectional.
+// are a configured same-write transport pair. Bidirectional.
 func transportAliasSatisfies(committedSuffix, executedSuffix string) bool {
 	if committedSuffix == "" || executedSuffix == "" || committedSuffix == executedSuffix {
 		return false
 	}
-	for _, p := range transportAliasPairs {
-		if committedSuffix == p[0] && executedSuffix == p[1] {
-			return true
-		}
-		if committedSuffix == p[1] && executedSuffix == p[0] {
-			return true
-		}
-	}
-	return false
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	return activeTransportAliases[committedSuffix] == executedSuffix
 }
 
-// transportAliasOf returns the other suffix in an explicit transport pair, or "".
+// transportAliasOf returns the configured transport counterpart of suffix, or "".
 func transportAliasOf(suffix string) string {
-	for _, p := range transportAliasPairs {
-		switch suffix {
-		case p[0]:
-			return p[1]
-		case p[1]:
-			return p[0]
-		}
-	}
-	return ""
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	return activeTransportAliases[suffix]
 }
 
 func isCriticalTool(toolName string) bool {

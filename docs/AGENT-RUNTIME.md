@@ -1038,16 +1038,18 @@ byte-for-byte unchanged unless an operator opts in.
 
 A scheduled `confirm_audit` that supplies typed `critical_actions` binds each
 approval to the full server-qualified tool name. Finish is refused until every
-declared action has succeeded. One exception is transport, and only for the
-pages write pairs fleet names explicitly (`update_page_data` /
-`update_page_data_upload`, `deploy_page` / `deploy_page_upload`): those are
+declared action has succeeded. One exception is transport, and only when the
+bundle already gates both names as critical: `update_page_data` /
+`update_page_data_upload` and `deploy_page` / `deploy_page_upload` are then
 the same write over a different channel (inline arguments vs. workspace-file
 chunks). A succeeded `mcp_pages_update_page_data_upload` therefore discharges
 an outstanding `mcp_pages_update_page_data` commitment. The alias does not
 change which tools are critical — the bundle's `critical_tools` list still
 names both independently — only whether a successful call of one satisfies a
-commitment to the other. An unrelated tool, an unlisted `_upload` suffix, or
-the same suffix on a different server, does not discharge it.
+commitment to the other. Bundles may declare extra pairs via
+`agent_policy.critical_tool_transport_aliases`. An unrelated tool, an
+`_upload` suffix that is not paired, or the same suffix on a different
+server, does not discharge it.
 
 ## The self-audit protocol is named only when the bundle ships it
 

@@ -280,6 +280,11 @@ type AgentPolicy struct {
 	ParallelSafeTools       []string            `yaml:"parallel_safe_tools"`
 	CriticalToolSuffixes    []string            `yaml:"critical_tools"`
 	CriticalToolSubstitutes map[string][]string `yaml:"critical_tool_substitutes"`
+	// CriticalToolTransportAliases is OPTIONAL and additive: committed-suffix ->
+	// same-write transport counterparts (inline vs. `_upload`). Bundles that
+	// already gate both pages write names as critical get those pairs without
+	// listing them here.
+	CriticalToolTransportAliases map[string][]string `yaml:"critical_tool_transport_aliases"`
 	// CriticalToolTimeouts is an OPTIONAL per-tool approval default-deny window
 	// (#225): a map from bare tool-name suffix (the same suffix form as
 	// critical_tools) to seconds. It is additive and backward-compatible —
@@ -2533,6 +2538,12 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		p.CriticalToolSubstitutes = make(map[string][]string, len(b.AgentPolicyConfig.CriticalToolSubstitutes))
 		for k, v := range b.AgentPolicyConfig.CriticalToolSubstitutes {
 			p.CriticalToolSubstitutes[k] = append([]string(nil), v...)
+		}
+	}
+	if len(b.AgentPolicyConfig.CriticalToolTransportAliases) > 0 {
+		p.CriticalToolTransportAliases = make(map[string][]string, len(b.AgentPolicyConfig.CriticalToolTransportAliases))
+		for k, v := range b.AgentPolicyConfig.CriticalToolTransportAliases {
+			p.CriticalToolTransportAliases[k] = append([]string(nil), v...)
 		}
 	}
 	if len(b.AgentPolicyConfig.CriticalToolTimeouts) > 0 {
