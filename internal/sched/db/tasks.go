@@ -144,7 +144,8 @@ func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*mod
 // the sweep and silently end the schedule.
 func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
 	var existingStatus models.TaskStatus
-	err := tx.QueryRowContext(ctx, `SELECT status FROM tasks WHERE id = $1 FOR UPDATE`, task.ID).Scan(&existingStatus)
+	var existingRecurrence sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT status, recurrence FROM tasks WHERE id = $1 FOR UPDATE`, task.ID).Scan(&existingStatus, &existingRecurrence)
 	existed := true
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -178,7 +179,13 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 		}
 		return nil
 	}
-	if existingTerminal {
+	// A same-status re-import of an already-terminal RECURRING row keeps its
+	// flag: an unclaimed credit there is the crash-window case the sweep must
+	// still repair. A terminal one-off row that acquires a recurrence through
+	// the import is different — its FALSE flag only means "one-offs never
+	// spawn", not "a spawn was lost" — so it is settled like any other row born
+	// terminal, or the sweep would mint a successor from imported history.
+	if existingTerminal && strings.TrimSpace(existingRecurrence.String) != "" {
 		return nil
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, task.ID)

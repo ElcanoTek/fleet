@@ -415,6 +415,54 @@ func TestUpsertedLiveOverCancelledParkedRowReArms(t *testing.T) {
 	}
 }
 
+// TestReimportedOneOffGainingRecurrenceIsSettled: a terminal one-off row
+// re-imported with the same status but a NEW recurrence must land settled —
+// its FALSE flag never meant a lost spawn — or the sweep would mint a
+// successor from imported history.
+func TestReimportedOneOffGainingRecurrenceIsSettled(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+
+	completed := time.Now().Add(-10 * time.Minute).UTC()
+	oneOff := &models.Task{
+		ID:          uuid.New(),
+		Prompt:      "one-off digest",
+		Status:      models.TaskStatusPending,
+		Priority:    10,
+		Timezone:    "UTC",
+		CreatedAt:   time.Now().Add(-time.Hour).UTC(),
+		CompletedAt: nil,
+	}
+	if _, err := store.AddTask(oneOff); err != nil {
+		t.Fatalf("AddTask(one-off): %v", err)
+	}
+	if _, err := store.db.Conn().ExecContext(ctx,
+		`UPDATE tasks SET status = 'dead_lettered', completed_at = $2 WHERE id = $1`, oneOff.ID, completed); err != nil {
+		t.Fatalf("terminal setup: %v", err)
+	}
+	if recurrenceSpawned(t, store, oneOff.ID) {
+		t.Fatal("setup: an organic terminal one-off has an unclaimed flag")
+	}
+
+	oneOff.Status = models.TaskStatusDeadLettered
+	oneOff.CompletedAt = &completed
+	oneOff.Recurrence = "@daily"
+	if _, err := store.AddTaskWithContext(ctx, oneOff); err != nil {
+		t.Fatalf("AddTaskWithContext(re-import with recurrence): %v", err)
+	}
+	if !recurrenceSpawned(t, store, oneOff.ID) {
+		t.Fatal("a terminal one-off that gains a recurrence through import must land settled")
+	}
+	repaired, err := store.ReconcileRecurrences(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileRecurrences: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repaired %d, want 0 — imported history must not spawn", repaired)
+	}
+}
+
 // TestReimportUnclaimedDeadLetteredKeepsCreditForSweep: a same-status
 // re-import of an already-terminal unclaimed row (allowed without
 // --replace-status) must not settle the flag — the crash-window row is

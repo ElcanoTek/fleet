@@ -43,19 +43,24 @@ WHERE status = 'dead_lettered' AND NOT recurrence_spawned;
 --       that already continued lets a replay fork duplicates and repeat
 --       external side effects — the conservative side is not to park.
 -- Rows with neither signal are parked so `dlq replay` can continue them,
--- matching the pre-upgrade "replay is how a parked chain continues" — EXCEPT
--- rows in the pre-069 shape (previous_occurrence_id NULL and lineage_id equal
--- to the row's own id). Migration 069 backfilled every pre-existing row with
--- its own id as lineage and 068 left previous_occurrence_id NULL there, so
--- for that history neither signal can prove a chain did NOT continue. Those
--- ambiguous legacy rows are left unparked (conservative side, see above); a
--- genuinely dead pre-069 chain is re-created by hand rather than risked as a
--- duplicate.
+-- matching the pre-upgrade "replay is how a parked chain continues".
+--
+-- Known residual, deliberately accepted: history from before migration 069
+-- carries its own id as lineage_id (069's backfill) and no predecessor
+-- pointer (068 added the column later), which is also the shape of every
+-- genuine chain root created since. For such a pre-069 dead-letter whose
+-- immediate successor was later pruned by retention while descendants live
+-- on, neither signal fires and the row IS stamped parked; a replay of it
+-- would re-arm the credit and could spawn next to the surviving chain. The
+-- migration has no discriminator for that case (schema_migrations records no
+-- apply time), and refusing to park the whole root shape would instead break
+-- replay for every post-069 first-run dead-letter. The residual is bounded:
+-- it needs a pre-069 row, a successor old enough to have been pruned, AND an
+-- explicit operator replay of that old occurrence.
 UPDATE tasks SET recurrence_parked_at = COALESCE(dead_lettered_at, completed_at, now())
 WHERE status = 'dead_lettered'
   AND recurrence IS NOT NULL AND recurrence <> ''
   AND recurrence_parked_at IS NULL
-  AND NOT (previous_occurrence_id IS NULL AND lineage_id = id::text)
   AND NOT EXISTS (
       SELECT 1 FROM tasks s WHERE s.previous_occurrence_id = tasks.id::text
   )
