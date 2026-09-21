@@ -121,8 +121,9 @@ func TestReconcileRecurrencesRepairsLostSpawn(t *testing.T) {
 
 // TestReconcileRecurrencesRespectsGraceAndStatus pins the sweep's selection:
 // a row completed inside the grace window is left for the normal post-commit
-// spawn, and cancelled / dead-lettered rows never spawn (a deliberate stop and
-// a quarantine-awaiting-replay must not resurrect the chain).
+// spawn, and cancelled rows never spawn (a deliberate stop must not resurrect
+// the chain). Dead-lettered rows DO spawn (ADR-0070); that path is covered by
+// the dedicated dead-letter recurrence tests, not this grace/status pin.
 func TestReconcileRecurrencesRespectsGraceAndStatus(t *testing.T) {
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
@@ -130,16 +131,15 @@ func TestReconcileRecurrencesRespectsGraceAndStatus(t *testing.T) {
 
 	fresh := seedTerminalRecurring(t, store, models.TaskStatusSuccess, 0, nil) // just completed
 	cancelled := seedTerminalRecurring(t, store, models.TaskStatusCancelled, 10*time.Minute, nil)
-	deadLettered := seedTerminalRecurring(t, store, models.TaskStatusDeadLettered, 10*time.Minute, nil)
 
 	repaired, err := store.ReconcileRecurrences(ctx)
 	if err != nil {
 		t.Fatalf("ReconcileRecurrences: %v", err)
 	}
 	if repaired != 0 {
-		t.Fatalf("repaired %d, want 0 (inside grace / non-spawning statuses)", repaired)
+		t.Fatalf("repaired %d, want 0 (inside grace / cancelled)", repaired)
 	}
-	exclude := map[uuid.UUID]bool{fresh.ID: true, cancelled.ID: true, deadLettered.ID: true}
+	exclude := map[uuid.UUID]bool{fresh.ID: true, cancelled.ID: true}
 	if n := len(successorsOf(t, store, exclude)); n != 0 {
 		t.Fatalf("successors = %d, want 0", n)
 	}
@@ -219,10 +219,10 @@ func TestImportedTerminalRecurringHistoryIsInert(t *testing.T) {
 }
 
 // TestReplayedDeadLetterContinuesChainOnce pins the DLQ↔recurrence contract
-// (#1116 review): dead-lettering parks the chain (never spawns), and REPLAYING
-// the quarantined occurrence must let the chain continue EXACTLY ONCE when the
-// replayed run completes — no silent end (a stale settled flag surviving the
-// replay would make the spawn claim a no-op) and no double-spawn.
+// (ADR-0070): dead-lettering a recurring occurrence spawns the successor, and
+// replaying that quarantined row must NOT fork a second chain when the
+// replayed run completes — the spawn credit stays claimed because a successor
+// already exists.
 func TestReplayedDeadLetterContinuesChainOnce(t *testing.T) {
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
@@ -247,24 +247,22 @@ func TestReplayedDeadLetterContinuesChainOnce(t *testing.T) {
 	if _, err := store.DeadLetterTaskWithContext(ctx, orig.ID, owner, "boom", 1); err != nil {
 		t.Fatalf("DeadLetterTaskWithContext: %v", err)
 	}
-	// Dead-lettering parks the chain: no successor, and the spawn question is
-	// deliberately NOT settled (the chain awaits the replay).
-	if n := len(successorsOf(t, store, map[uuid.UUID]bool{orig.ID: true})); n != 0 {
-		t.Fatalf("successors after dead-letter = %d, want 0 (quarantine parks the chain)", n)
+	// Dead-lettering continues the chain: exactly one successor, spawn credit claimed.
+	if n := len(successorsOf(t, store, map[uuid.UUID]bool{orig.ID: true})); n != 1 {
+		t.Fatalf("successors after dead-letter = %d, want 1 (quarantine spawns the next occurrence)", n)
 	}
-	// Simulate a settled flag reaching the quarantined row anyway — e.g. a row
-	// restored by import (inserted already-terminal → settled). The replay must
-	// re-arm the spawn regardless, or the chain ends silently.
-	if _, err := store.DB().Conn().ExecContext(ctx,
-		`UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, orig.ID); err != nil {
-		t.Fatalf("settle flag: %v", err)
+	if !recurrenceSpawned(t, store, orig.ID) {
+		t.Fatal("dead-lettering a recurring occurrence must settle the spawn credit")
 	}
 
 	if _, err := store.ReplayDeadLetteredTask(ctx, orig.ID); err != nil {
 		t.Fatalf("ReplayDeadLetteredTask: %v", err)
 	}
+	if !recurrenceSpawned(t, store, orig.ID) {
+		t.Fatal("replay must keep the spawn credit claimed when a successor already exists")
+	}
 
-	// The replayed run completes: the chain continues with exactly one successor.
+	// The replayed run completes: it must not mint a second successor.
 	owner2 := uuid.New()
 	if _, err := store.leaseTaskToOwner(orig.ID, owner2); err != nil {
 		t.Fatalf("re-lease: %v", err)
@@ -276,7 +274,7 @@ func TestReplayedDeadLetterContinuesChainOnce(t *testing.T) {
 	}
 	succ := successorsOf(t, store, map[uuid.UUID]bool{orig.ID: true})
 	if len(succ) != 1 {
-		t.Fatalf("successors after replayed completion = %d, want exactly 1 (chain continues once)", len(succ))
+		t.Fatalf("successors after replayed completion = %d, want exactly 1 (no forked chain)", len(succ))
 	}
 
 	// And only once: the sweep finds nothing more even past the grace window.

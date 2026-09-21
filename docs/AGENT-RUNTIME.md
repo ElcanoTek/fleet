@@ -946,12 +946,21 @@ fleet sched dlq replay <task_id>   # reset to pending; the scheduler re-runs it
 ```
 
 `replay` resets the same task to a fresh pending slate (`attempt_count = 0`, the
-dead-letter columns cleared) and the normal claim path re-runs it. Entry into the
-DLQ also increments the `fleet_dead_letter_queued_total{reason}` counter (reason
-is the bounded class `retry_exhausted` or `non_retryable` — deliberately not a
-per-task label, to avoid unbounded metric cardinality). Dead-lettered tasks are
-**not** subject to the automatic retention sweep — quarantine is for review, so a
-DLQ task persists until it is replayed (or explicitly removed).
+dead-letter columns cleared) and the normal claim path re-runs it. If the task
+is **recurring**, dead-lettering does **not** end the schedule (ADR-0070): the
+next occurrence is spawned after the quarantine commits, the same way a
+success or error does. Two consecutive dead-lettered occurrences park the
+chain instead — the spawn credit is settled, no successor is inserted, and
+replay is how it continues. Replay of a row that already has a successor
+keeps that credit claimed so the replayed run cannot fork a second chain.
+Cancel still ends the chain.
+
+Entry into the DLQ also increments the
+`fleet_dead_letter_queued_total{reason}` counter (reason is the bounded class
+`retry_exhausted` or `non_retryable` — deliberately not a per-task label, to
+avoid unbounded metric cardinality). Dead-lettered tasks are **not** subject
+to the automatic retention sweep — quarantine is for review, so a DLQ task
+persists until it is replayed (or explicitly removed).
 
 ---
 

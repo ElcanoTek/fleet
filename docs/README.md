@@ -213,6 +213,7 @@ above fails otherwise.
 - [`CONTEXT-HANDLES.md`](CONTEXT-HANDLES.md) — Composer context handles (#517)
 - [`CUTOVER.md`](CUTOVER.md) — v1 → fleet cutover runbook (a box already running the legacy chat + moc stack)
 - [`DATASETS.md`](DATASETS.md) — Dataset / table agent
+- [`DEAD-LETTER-RECURRENCE.md`](DEAD-LETTER-RECURRENCE.md) — A dead-lettered recurring occurrence spawns its successor (ADR-0070)
 - [`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md) — Deploying fleet on Kubernetes
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Deploying fleet
 - [`DISCUSS-RUN.md`](DISCUSS-RUN.md) — Discuss this run

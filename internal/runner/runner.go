@@ -1314,7 +1314,9 @@ func classifyFailure(err error) string {
 // and the post-run atomic output+success commit. Structured formatting and
 // persistence have separate explicit classes and are non-retryable by default;
 // an operator may opt either into retry_on with the same whole-task side-effect
-// caveat as every other explicit retry class.
+// caveat as every other explicit retry class. The non-retryable and
+// retry-exhausted branches call sendToDeadLetter; a recurring occurrence's
+// successor is spawned (or parked) by that storage write, not here.
 func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, runErr error, leaseOwner uuid.UUID, start time.Time) {
 	class := classifyFailure(runErr)
 	if task.RetryPolicy.ShouldRetryClass(class) && task.AttemptCount < task.MaxRetries {
@@ -1390,14 +1392,20 @@ func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
 // sendToDeadLetter routes a terminally-failed task to the dead-letter queue
 // (#253): it transitions the task to TaskStatusDeadLettered (recording the
 // failure reason + total attempt count), writes the run log, and increments the
-// DLQ metric labeled by the bounded reason class. If the storage transition fails
-// (e.g. the lease was recovered out from under us), it falls back to a plain
-// terminal error so the task never strands as running — preserving the
-// invariant that every finished run lands in SOME terminal state. It reports
-// whether a terminal state actually landed (dead-lettered, or the fallback
-// error) so the caller can gate the failure notification + diagnosis on it
-// (#580): when even the fallback is rejected the DB no longer records this
-// run's outcome and no external side effect may fire.
+// DLQ metric labeled by the bounded reason class. The storage transition is
+// what preserves a recurring schedule (ADR-0070): DeadLetterTaskWithContext
+// spawns the next occurrence after it commits, unless the consecutive-dead-
+// letter breaker parks the chain — this function does not add a second spawn.
+// If the storage transition fails (e.g. the lease was recovered out from under
+// us), it falls back to a plain terminal error so the task never strands as
+// running — preserving the invariant that every finished run lands in SOME
+// terminal state. The error fallback still spawns via
+// UpdateTaskStatusAtomicWithContext, so a recurring chain does not die just
+// because the DLQ write lost the race. It reports whether a terminal state
+// actually landed (dead-lettered, or the fallback error) so the caller can
+// gate the failure notification + diagnosis on it (#580): when even the
+// fallback is rejected the DB no longer records this run's outcome and no
+// external side effect may fire.
 func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass string, leaseOwner uuid.UUID, start time.Time) bool {
 	attempts := task.AttemptCount + 1
 	if _, err := p.store.DeadLetterTaskWithContext(context.Background(), task.ID, leaseOwner, reason, attempts); err != nil {

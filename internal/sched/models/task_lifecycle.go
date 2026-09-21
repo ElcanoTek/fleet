@@ -262,8 +262,8 @@ var TaskLifecycle = []TaskTransition{
 	// ── Retry / dead-letter (runner-driven, lease-guarded) ──────────────
 	{TaskStatusLeased, TaskStatusScheduled, TaskWriterRetryRequeue, "retryable failure before the running report landed"},
 	{TaskStatusRunning, TaskStatusScheduled, TaskWriterRetryRequeue, "retryable failure: same occurrence, backoff scheduled_for, attempt++"},
-	{TaskStatusLeased, TaskStatusDeadLettered, TaskWriterRunnerDeadLetter, "non-retryable/exhausted before the running report landed"},
-	{TaskStatusRunning, TaskStatusDeadLettered, TaskWriterRunnerDeadLetter, "retries exhausted or non-retryable class (#253)"},
+	{TaskStatusLeased, TaskStatusDeadLettered, TaskWriterRunnerDeadLetter, "non-retryable/exhausted before the running report landed; recurring: spawn successor post-commit unless the predecessor is also dead_lettered"},
+	{TaskStatusRunning, TaskStatusDeadLettered, TaskWriterRunnerDeadLetter, "retries exhausted or non-retryable class (#253); recurring: spawn successor post-commit unless the predecessor is also dead_lettered"},
 
 	// ── Crash recovery (#1116) ──────────────────────────────────────────
 	{TaskStatusLeased, TaskStatusPending, TaskWriterLeaseRecovery, "expired lease, attempt budget remains: requeue (attempt++)"},
@@ -293,7 +293,7 @@ var TaskLifecycle = []TaskTransition{
 	{TaskStatusPausedAwaitingWake, TaskStatusCancelled, TaskWriterCancel, ""},
 
 	// ── DLQ replay (#253) ───────────────────────────────────────────────
-	{TaskStatusDeadLettered, TaskStatusPending, TaskWriterDLQReplay, "fresh slate: attempts/DLQ columns/SLA artifacts cleared, spawn credit re-armed"},
+	{TaskStatusDeadLettered, TaskStatusPending, TaskWriterDLQReplay, "fresh slate: attempts/DLQ columns/SLA artifacts cleared; spawn credit re-armed only when no successor exists"},
 
 	// ── Edits: re-derive the dispatch state within {pending, scheduled} ─
 	{TaskStatusPending, TaskStatusPending, TaskWriterEdit, ""},
@@ -366,12 +366,17 @@ var CleanupEligibleTaskStatuses = []TaskStatus{
 }
 
 // RecurrenceSpawnTaskStatuses are the terminal statuses that spawn the next
-// occurrence of a recurring task (#1116): cancel ends the chain, dead-letter
-// parks it for replay. Pinned to db.recurrenceSpawnedInsertValue and
-// db.GetUnspawnedRecurringTasks by the lifecycle drift test.
+// occurrence of a recurring task (#1116, ADR-0070): success and error always
+// spawn; dead_lettered also spawns unless the occurrence's immediate
+// predecessor is itself dead_lettered (the consecutive-failure breaker lives
+// in storage.scheduleNextRecurrence, so the post-commit path and the
+// ReconcileRecurrences sweep agree). Cancel still ends the chain. Pinned to
+// db.recurrenceSpawnedInsertValue and db.GetUnspawnedRecurringTasks by the
+// lifecycle drift test.
 var RecurrenceSpawnTaskStatuses = []TaskStatus{
 	TaskStatusSuccess,
 	TaskStatusError,
+	TaskStatusDeadLettered,
 }
 
 // RetiredTaskStatuses are statuses that once existed and must never reappear

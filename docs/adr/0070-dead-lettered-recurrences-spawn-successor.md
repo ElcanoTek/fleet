@@ -1,0 +1,99 @@
+# ADR-0070: A dead-lettered recurring occurrence spawns its successor
+
+- **Status:** Accepted
+- **Date:** 2026-09-20
+- **Deciders:** fleet maintainers
+
+## Context
+
+Dead-lettering (#253) is a terminal quarantine: retries exhausted, or a
+non-retryable failure. Until this decision it deliberately did **not** spawn
+the next occurrence of a recurring task. The quarantined row awaited
+`ReplayDeadLetteredTask`, and the schedule resumed only if that replay's own
+completion claimed the spawn credit. Cancel still ended the chain; that part
+was right. Dead-letter was treated like cancel.
+
+Production on 2026-09-19 showed the cost. Two daily jobs ("Raptive seller
+view page refresh", lineage `5089a219`; "Rainbarrel page update", lineage
+`6a811210`) were each dead-lettered once — one for a transient upstream
+"Provider returned error", one for "completion verification unresolved"
+after the page had actually been published. No successor row was inserted.
+Nobody noticed for days. A one-off bad day ended a daily job.
+
+The same argument was already accepted for ask-pause expiry
+(`storage.ExpirePausedTasks`, #1116) and stranded-wake expiry
+(`ExpireStrandedWakeTasks`): an unattended pause on a recurring occurrence
+must not silently kill the schedule. Dead-letter is another terminal
+failure of a single occurrence. The schedule is not the occurrence.
+
+Two consecutive dead-letters is a different signal: the job is broken, not
+unlucky. Parking then is the right backstop, and replay remains how a
+parked chain continues.
+
+## Decision
+
+When a recurring occurrence is dead-lettered (`runner.sendToDeadLetter` →
+`storage.DeadLetterTaskWithContext`), spawn its successor exactly as a
+success or error transition does: post-commit `scheduleNextRecurrence`, the
+same idempotent spawn-credit contract, `previous_occurrence_id` and
+`lineage_id` stamped, task memory carried.
+
+If that occurrence's immediate predecessor (`previous_occurrence_id`) is
+also `dead_lettered`, do **not** spawn. Park the chain: claim the spawn
+credit via `settleRecurrenceSpawn` so `ReconcileRecurrences` does not
+re-evaluate it forever, and log clearly that replay continues the chain.
+Two in a row is treated as systemic.
+
+The breaker lives in **one** place — inside `scheduleNextRecurrence` (or a
+helper it calls) — so both the post-commit path and the reconcile sweep
+agree. `db.GetUnspawnedRecurringTasks` therefore selects `dead_lettered`
+rows as well as `success`/`error`. Cancel still ends the chain.
+
+`ReplayDeadLetteredTask` re-arms `recurrence_spawned` only when no successor
+exists (`NOT EXISTS (SELECT 1 FROM tasks WHERE previous_occurrence_id = $1)`).
+When the DLQ path already spawned, the flag stays `TRUE` so the replayed
+run's completion cannot fork a second parallel chain. A breaker-parked
+chain (no successor) re-arms and continues on replay.
+
+## Enforcement
+
+- `storage.DeadLetterTaskWithContext` calls `scheduleNextRecurrence` after
+  the quarantine commit.
+- `storage.scheduleNextRecurrence` applies the consecutive-dead-letter
+  breaker and settles without spawning when it trips.
+- `db.GetUnspawnedRecurringTasks` selects `models.RecurrenceSpawnTaskStatuses`
+  (`success`, `error`, `dead_lettered`); `db.recurrenceSpawnedInsertValue`
+  settles born-terminal rows in that same set.
+- `storage.ReplayDeadLetteredTask` re-arms the spawn credit only when no
+  successor row exists.
+- Tests: `internal/sched/storage/deadletter_recurrence_test.go`,
+  `internal/runner/deadletter_recurrence_test.go`, and the existing
+  reconcile/DLQ tests updated for the new contract.
+
+## Consequences
+
+- A single dead-letter no longer silently ends a recurring schedule. Existing
+  `dead_lettered` recurring rows with an unclaimed spawn credit are repaired
+  by the first `ReconcileRecurrences` sweep after this lands.
+- Two consecutive dead-letters still park the chain. Operators replay to
+  continue; that is unchanged for the parked case.
+- Replaying a dead-lettered occurrence that already has a successor re-runs
+  **that** occurrence and does not mint a parallel chain.
+- Crash-recovery quarantine (`db.RecoverExpiredLeases`) writes `dead_lettered`
+  in bulk without calling `DeadLetterTaskWithContext`. Those rows are
+  repaired by the same reconcile sweep (after the grace window), not by a
+  second spawn path in the recovery UPDATE.
+- What makes a run fail is unchanged. This only changes what happens to the
+  schedule after a dead-letter.
+
+## Alternatives considered
+
+- **Keep parking on every dead-letter; page harder.** The production miss
+  was "nobody looked," not "the DLQ listing was empty." Paging does not
+  restore the missed days.
+- **Always spawn, no breaker.** A permanently broken job would then produce
+  a new dead-lettered row every tick. Two in a row is the smallest systemic
+  signal that still lets a one-off bad day through.
+- **Spawn from the runner, not storage.** That would fork a second opinion
+  from `ReconcileRecurrences` and from any other `DeadLetterTaskWithContext`
+  caller. The spawn belongs next to the other terminal transitions.
