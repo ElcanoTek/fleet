@@ -116,6 +116,31 @@ func TestSendEmailFingerprint_NoDelimiterCollision(t *testing.T) {
 	}
 }
 
+// cid and path are encoded as separate components: moving characters across
+// the boundary must change the identity, and the "file" alias is honored.
+func TestSendEmailFingerprint_InlineComponentsAreSeparate(t *testing.T) {
+	mk := func(cid, key, path string) map[string]interface{} {
+		return map[string]interface{}{
+			"to_email": []interface{}{"a@x.com"}, "subject": "s", "content": "<img src=\"cid:x\">",
+			"inline_attachments": []interface{}{map[string]interface{}{key: path, "cid": cid}},
+		}
+	}
+	a, _ := sendEmailFingerprint(mk("a", "path", "b=c"))
+	b, _ := sendEmailFingerprint(mk("a=b", "path", "c"))
+	if a == b {
+		t.Fatal("cid and path must be encoded as separate components")
+	}
+	viaPath, _ := sendEmailFingerprint(mk("x", "path", "chart.png"))
+	viaFile, _ := sendEmailFingerprint(mk("x", "file", "chart.png"))
+	if viaPath != viaFile {
+		t.Fatal("the file alias must identify the same attachment as path")
+	}
+	none, _ := sendEmailFingerprint(map[string]interface{}{"to_email": []interface{}{"a@x.com"}, "subject": "s", "content": "<img src=\"cid:x\">"})
+	if viaFile == none {
+		t.Fatal("a file-alias inline attachment must not collapse to the no-attachment key")
+	}
+}
+
 func TestEmailDedupKey_AttachmentAwareThroughRawInput(t *testing.T) {
 	a := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c"}`)
 	b := emailDedupKey(`{"to_email":["a@x.com"],"subject":"s","content":"c","attachments":["x.csv"]}`)

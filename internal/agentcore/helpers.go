@@ -166,15 +166,11 @@ func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 	return hashString(fingerprintSource), true
 }
 
-// joinIdentities encodes a sorted identity list so that no path character can
-// forge a boundary: each entry is hashed before joining, so "a,b" as one
-// attachment and "a" + "b" as two never collide.
+// joinIdentities joins the (already per-component hashed) identities; the
+// entries are fixed-width hex, so the list delimiter can never be forged by
+// path or cid content.
 func joinIdentities(ids []string) string {
-	hashed := make([]string, 0, len(ids))
-	for _, id := range ids {
-		hashed = append(hashed, hashString(id))
-	}
-	return strings.Join(hashed, ",")
+	return strings.Join(ids, ",")
 }
 
 // attachmentNames normalizes a send_email attachments argument into a sorted
@@ -198,6 +194,11 @@ func attachmentNames(value interface{}) []string {
 				raw = append(raw, entry{path: e})
 			case map[string]interface{}:
 				p, _ := e["path"].(string)
+				if p == "" {
+					// The inline shape also accepts the "file" alias
+					// (httpapi expandCidImagesToDataURLs reads both).
+					p, _ = e["file"].(string)
+				}
 				cid, _ := e["cid"].(string)
 				if cid == "" {
 					cid, _ = e["content_id"].(string)
@@ -216,9 +217,11 @@ func attachmentNames(value interface{}) []string {
 		if p == "" {
 			continue
 		}
-		id := filepath.Clean(p)
+		// Each component is hashed on its own before they are combined, so no
+		// character inside a cid or a path can move the boundary between them.
+		id := hashString(filepath.Clean(p))
 		if cid := strings.TrimSpace(e.cid); cid != "" {
-			id = "cid:" + cid + "=" + id
+			id = hashString(cid) + ":" + id
 		}
 		names = append(names, id)
 	}
