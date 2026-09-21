@@ -310,7 +310,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 			// only two exits: abort a task whose work is done, or mutate the
 			// content until the fingerprint no longer matches (observed: a
 			// body re-rendered 110 bytes larger purely to get past this line).
-			o.markPendingCriticalDone(toolName, hashString(rawInput))
+			o.markPendingCriticalDone(toolName, hashString(rawInput), rawInput)
 			if len(o.pendingCriticalActions) == 0 {
 				o.selfAuditRequested = true
 			}
@@ -346,8 +346,9 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 		}
 		if !alreadyPending {
 			o.pendingCriticalActions = append(o.pendingCriticalActions, pendingCriticalAction{
-				toolName: toolName,
-				argsHash: argsHash,
+				toolName:  toolName,
+				argsHash:  argsHash,
+				recordSet: pendingRecordSet(rawInput),
 			})
 		}
 		instruction := o.auditInstruction()

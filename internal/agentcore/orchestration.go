@@ -214,8 +214,9 @@ type orchestrationState struct {
 
 // pendingCriticalAction tracks a critical tool call blocked by audit gating.
 type pendingCriticalAction struct {
-	toolName string
-	argsHash string
+	toolName  string
+	argsHash  string
+	recordSet string // canonical resource identity (deal_ids / deal_id / slug)
 }
 
 // ApprovalStager is the narrow interface the orchestration layer uses to stage
@@ -931,9 +932,10 @@ func pendingTransportAlias(pendingName, executedName string) bool {
 		transportAliasSatisfies(criticalSuffixFor(pendingName), criticalSuffixFor(executedName))
 }
 
-func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) {
+func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash, rawInput string) {
 	exact, fallback := -1, -1
 	var aliases []int
+	execSet := pendingRecordSet(rawInput)
 	for i, p := range o.pendingCriticalActions {
 		switch {
 		case p.toolName == toolName:
@@ -942,7 +944,11 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) 
 			} else if fallback < 0 {
 				fallback = i
 			}
-		case pendingTransportAlias(p.toolName, toolName) && p.argsHash == argsHash:
+		// Alias transports necessarily carry different JSON (inline content vs
+		// a workspace-file reference), so argsHash cannot identify the same
+		// write. Match the shared record set instead.
+		case pendingTransportAlias(p.toolName, toolName) &&
+			p.recordSet != "" && p.recordSet == execSet:
 			aliases = append(aliases, i)
 		}
 	}
@@ -1021,12 +1027,22 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 				done = make(map[string]bool)
 				o.dischargedDeals[suffix] = done
 			}
+			callDigest := valuesDigestArg(rawInput)
+			requested, isBatch := batchDealIDs(rawInput)
 			approved := map[string]bool{}
-			for id := range o.approvedDealIDs[suffix] {
-				approved[id] = true
-			}
-			for _, alt := range transportAliasesOf(suffix) {
-				for id := range o.approvedDealIDs[alt] {
+			var requestedSet map[string]bool
+			if isBatch {
+				// Only the approval set(s) that covered THIS call, intersected
+				// with the request's deal_ids. Unioning every alias set would
+				// let a mis-echoed row for a sibling alias's records discharge
+				// work the call never targeted.
+				approved = o.authorizingBatchIDs(suffix, requested, callDigest)
+				requestedSet = make(map[string]bool, len(requested))
+				for _, id := range requested {
+					requestedSet[id] = true
+				}
+			} else {
+				for id := range o.approvedDealIDs[suffix] {
 					approved[id] = true
 				}
 			}
@@ -1040,10 +1056,15 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// auto-lock early). With no approved set (non-batch / legacy
 			// audit) behavior is unchanged: discharge per succeeded record by
 			// suffix.
-			callDigest := valuesDigestArg(rawInput)
 			newly, failed := 0, 0
 			for _, oc := range outcomes {
-				if len(approved) > 0 && oc.success && !approved[strings.TrimSpace(oc.dealID)] {
+				id := strings.TrimSpace(oc.dealID)
+				if requestedSet != nil && oc.success && !requestedSet[id] {
+					log.Printf("Enforcement: ignoring batch result for record id %q on %q (not in this call's deal_ids)",
+						oc.dealID, toolName)
+					continue
+				}
+				if len(approved) > 0 && oc.success && !approved[id] {
 					log.Printf("Enforcement: ignoring batch result for unapproved record id %q on %q (not in the audit's approved set)",
 						oc.dealID, toolName)
 					continue
@@ -1060,7 +1081,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			if newly > 0 {
 				o.criticalExecutedCount++
 				delete(o.criticalToolFailureAttempts, key)
-				o.markPendingCriticalDone(toolName, argsHash)
+				o.markPendingCriticalDone(toolName, argsHash, rawInput)
 				if len(o.pendingCriticalActions) == 0 {
 					o.selfAuditRequested = true
 				}
@@ -1074,7 +1095,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// Single-call critical tool (no per-record results[]).
 			o.criticalExecutedCount++
 			delete(o.criticalToolFailureAttempts, key)
-			o.markPendingCriticalDone(toolName, argsHash)
+			o.markPendingCriticalDone(toolName, argsHash, rawInput)
 			if len(o.pendingCriticalActions) == 0 {
 				o.selfAuditRequested = true
 			}

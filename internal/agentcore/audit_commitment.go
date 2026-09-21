@@ -301,6 +301,31 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 	return ids, true
 }
 
+// pendingRecordSet is the resource identity used to pair a blocked inline
+// call with a later success on its transport alias. Alias transports do not
+// share a JSON envelope (inline content vs. a workspace-file reference), so
+// argsHash cannot identify the same write. Batch deal_ids win, then a single
+// record id, then a pages slug.
+func pendingRecordSet(rawInput string) string {
+	if ids, ok := batchDealIDs(rawInput); ok {
+		sort.Strings(ids)
+		return "ids:" + strings.Join(ids, ",")
+	}
+	if id := callDealID(rawInput); id != "" {
+		return "id:" + id
+	}
+	args, err := unmarshalArgs(rawInput)
+	if err != nil {
+		return ""
+	}
+	if v, ok := args["slug"]; ok {
+		if s := normalizeDealID(v); s != "" {
+			return "slug:" + s
+		}
+	}
+	return ""
+}
+
 // recordIDPlaceholders are the strings a model writes when an action names no
 // record at all ("deal_id": "n/a" on a send_email audit). None of them can ever
 // identify a real record, so binding a commitment to one produces an
@@ -709,6 +734,13 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest stri
 		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) {
 			continue
 		}
+		// A nonempty digest that does not match this call is a different
+		// approved value list: it must not be a discharge candidate, even as
+		// an equally-ranked alias. The unconstrained sibling (empty digest)
+		// is what authorized the call.
+		if c.digest != "" && c.digest != callDigest {
+			continue
+		}
 		exact := c.tool == toolName || transportAliasSatisfies(c.suffix, criticalSuffixFor(toolName))
 		bound := c.hasDealBinding()
 		rank := 1
@@ -821,6 +853,53 @@ func (o *orchestrationState) outstandingCommitmentSummary() []string {
 // carry no deal_ids and skip this entirely. Callers must hold o.mu and have
 // verified auditConfirmed (the audit gate already blocked unaudited critical
 // calls).
+type batchApprovalSet struct {
+	ids    map[string]bool
+	digest string
+}
+
+func (o *orchestrationState) batchApprovalSets(suffix string) []batchApprovalSet {
+	alts := transportAliasesOf(suffix)
+	sets := make([]batchApprovalSet, 0, 1+len(alts))
+	sets = append(sets, batchApprovalSet{o.approvedDealIDs[suffix], o.approvedDigest[suffix]})
+	for _, alt := range alts {
+		sets = append(sets, batchApprovalSet{o.approvedDealIDs[alt], o.approvedDigest[alt]})
+	}
+	return sets
+}
+
+func approvalSetCovers(ids map[string]bool, dealIDs []string) bool {
+	if len(ids) == 0 {
+		return false
+	}
+	for _, id := range dealIDs {
+		if !ids[id] {
+			return false
+		}
+	}
+	return true
+}
+
+// authorizingBatchIDs is the union of record ids from approval sets that
+// cover this call (every requested id, compatible digest). Empty when no
+// set covers — the caller then treats the call as unbound for result
+// accounting. Callers must hold o.mu.
+func (o *orchestrationState) authorizingBatchIDs(suffix string, dealIDs []string, gotDigest string) map[string]bool {
+	out := map[string]bool{}
+	for _, set := range o.batchApprovalSets(suffix) {
+		if !approvalSetCovers(set.ids, dealIDs) {
+			continue
+		}
+		if set.digest != "" && gotDigest != set.digest {
+			continue
+		}
+		for id := range set.ids {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool, string) {
 	dealIDs, isBatch := batchDealIDs(rawInput)
 	if !isBatch {
@@ -828,28 +907,9 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 	}
 	suffix := criticalSuffixFor(toolName)
 	gotDigest := valuesDigestArg(rawInput)
-	type approvalSet struct {
-		ids    map[string]bool
-		digest string
-	}
-	sets := []approvalSet{{o.approvedDealIDs[suffix], o.approvedDigest[suffix]}}
-	for _, alt := range transportAliasesOf(suffix) {
-		sets = append(sets, approvalSet{o.approvedDealIDs[alt], o.approvedDigest[alt]})
-	}
-	coversIDs := func(ids map[string]bool) bool {
-		if len(ids) == 0 {
-			return false
-		}
-		for _, id := range dealIDs {
-			if !ids[id] {
-				return false
-			}
-		}
-		return true
-	}
 	digestMismatch := false
-	for _, set := range sets {
-		if !coversIDs(set.ids) {
+	for _, set := range o.batchApprovalSets(suffix) {
+		if !approvalSetCovers(set.ids, dealIDs) {
 			continue
 		}
 		if set.digest != "" && gotDigest != set.digest {

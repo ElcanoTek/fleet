@@ -749,19 +749,19 @@ func TestTransportAliasSatisfies(t *testing.T) {
 }
 
 // TestTypedCommitment_UploadTransportDischargesInline pins the 2026-09-21
-// ultima-elc00179-twc failure (task 8486611d): the model committed to the
-// inline pages write, the server rejected the payload as too large, then the
-// same data published successfully via the by-reference `_upload` transport —
-// but finish still demanded the inline name until the model aborted.
+// failure: the model committed to the inline pages write, the server rejected
+// the payload as too large, then the same data published successfully via the
+// by-reference `_upload` transport — but finish still demanded the inline name
+// until the model aborted.
 func TestTypedCommitment_UploadTransportDischargesInline(t *testing.T) {
 	withPagesTransportPolicy(t)
 	o := newOrchStateForTest()
 	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData})
 
-	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"slug":"ultima-elc00179-twc"}`); blocked {
+	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", `{"slug":"page-a"}`); blocked {
 		t.Fatalf("upload transport must be authorized under the inline commitment, got blocked: %s", msg)
 	}
-	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"ultima-elc00179-twc"}`, `{"ok":true,"version":860}`, true)
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"page-a"}`, `{"ok":true,"version":860}`, true)
 	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
 		t.Fatalf("upload success did not discharge the inline commitment: outstanding=%d, want 0", got)
 	}
@@ -880,6 +880,87 @@ func TestTypedCommitment_BothTransportsPendingClearedByUpload(t *testing.T) {
 	o.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("upload success must clear both pending transports, got %d pending", n)
+	}
+}
+
+func TestTypedCommitment_PendingAliasDifferentArgsSameRecord(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	inlineArgs := `{"slug":"page-a","data":{"html":"<p>inline</p>"}}`
+	uploadArgs := `{"slug":"page-a","workspace_file":"/workspace/page-a.json"}`
+	if blocked, _ := o.checkCriticalTool(typedPagesUpdateData, "", inlineArgs); !blocked {
+		t.Fatal("unaudited inline write must be blocked")
+	}
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData})
+	o.recordToolResult(typedPagesUpdateDataUpload, uploadArgs, `{"ok":true,"version":860}`, true)
+	o.mu.Lock()
+	n := len(o.pendingCriticalActions)
+	o.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("upload success must clear the pending inline entry even with different JSON args, got %d pending", n)
+	}
+}
+
+func TestTypedCommitment_PendingAliasDifferentRecordNotCleared(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	if blocked, _ := o.checkCriticalTool(typedPagesUpdateData, "", `{"slug":"page-a"}`); !blocked {
+		t.Fatal("unaudited inline write must be blocked")
+	}
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateDataUpload})
+	o.recordToolResult(typedPagesUpdateDataUpload, `{"slug":"page-b","workspace_file":"/workspace/page-b.json"}`, `{"ok":true}`, true)
+	o.mu.Lock()
+	n := len(o.pendingCriticalActions)
+	remaining := ""
+	if n > 0 {
+		remaining = o.pendingCriticalActions[0].toolName
+	}
+	o.mu.Unlock()
+	if n != 1 || remaining != typedPagesUpdateData {
+		t.Fatalf("upload of a different page must leave the inline pending, got n=%d remaining=%q", n, remaining)
+	}
+}
+
+func TestTypedCommitment_DigestMismatchDoesNotDischargeAlias(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	const digestY = "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66"
+	registerTyped(t, o,
+		criticalActionStruct{Tool: typedPagesUpdateData, DealIDs: []string{"1"}},
+		criticalActionStruct{Tool: typedPagesUpdateDataUpload, DealIDs: []string{"1"}, ValuesDigest: digestY},
+	)
+	args := `{"deal_ids":["1"],"values_sha256":"deadbeef"}`
+	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", args); blocked {
+		t.Fatalf("mismatched digest must still be authorized by the unconstrained inline commitment, got blocked: %s", msg)
+	}
+	o.recordToolResult(typedPagesUpdateDataUpload, args,
+		`{"results":[{"deal_id":"1","success":true}]}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
+		t.Fatalf("unconstrained inline commitment should have discharged, outstanding=%d", got)
+	}
+	if got := o.committedCriticalActions["update_page_data_upload"]; got != 1 {
+		t.Fatalf("digest-bound upload commitment must remain outstanding, got %d", got)
+	}
+}
+
+func TestTypedCommitment_BatchResultDoesNotDischargeUntargetedAliasRecord(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	registerTyped(t, o,
+		criticalActionStruct{Tool: typedPagesUpdateData, DealIDs: []string{"A"}},
+		criticalActionStruct{Tool: typedPagesUpdateDataUpload, DealIDs: []string{"B"}},
+	)
+	args := `{"deal_ids":["A"]}`
+	if blocked, msg := o.checkCriticalTool(typedPagesUpdateDataUpload, "", args); blocked {
+		t.Fatalf("upload targeting A must be authorized via the inline alias set, got blocked: %s", msg)
+	}
+	o.recordToolResult(typedPagesUpdateDataUpload, args,
+		`{"results":[{"deal_id":"A","success":true},{"deal_id":"B","success":true}]}`, true)
+	if got := o.committedCriticalActions["update_page_data"]; got != 0 {
+		t.Fatalf("record A should have discharged, outstanding=%d", got)
+	}
+	if got := o.committedCriticalActions["update_page_data_upload"]; got != 1 {
+		t.Fatalf("mis-echoed B must not discharge the upload commitment, outstanding=%d", got)
 	}
 }
 

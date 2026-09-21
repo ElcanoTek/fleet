@@ -180,10 +180,11 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 			addAlias(k, v)
 		}
 	}
-	// A bundle that gates BOTH transports of a pages write has already said
-	// they share blast radius (elcano-config: "identical blast radius").
-	// Enable the alias only then — a bundle that never listed the upload
-	// tool is unchanged, and an unrelated `_upload` suffix is not inferred.
+	// A bundle that gates BOTH transports of a pages write has already
+	// opted both names into the critical-tool gate, so they share blast
+	// radius for commitment discharge. Enable the alias only then — a
+	// bundle that never listed the upload tool is unchanged, and an
+	// unrelated `_upload` suffix is not inferred.
 	for _, pair := range pagesTransportPairs {
 		if seen[pair[0]] && seen[pair[1]] {
 			addAlias(pair[0], pair[1])
