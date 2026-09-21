@@ -15,8 +15,6 @@ import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
 import {
-  DEFAULT_MODEL,
-  DEFAULT_TASK_FALLBACK_MODEL,
   currentDefaultModel,
   currentTaskFallbackModel,
 } from "@/app/lib/modelAliases";
@@ -410,16 +408,20 @@ export function TaskCreateModal({
   // its own pair; a slug the user picked stays because the values differ.
   // Deferred to a microtask, mirroring the chat shell, so the adoption lands
   // outside the effect's synchronous phase.
+  // "Touched" is explicit state, not a comparison against the compiled-in
+  // constants: the module cache may already hold an OLDER admin slug from a
+  // previous mount, and a comparison against the constants would leave a
+  // pristine form on that stale value when the refresh brings a newer one.
+  const modelTouched = useRef(false);
+  const fallbackTouched = useRef(false);
   const { models: liveModelTiers } = useClientConfig();
   useEffect(() => {
     if (!liveModelTiers || editTask) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setModel((cur) => (cur === DEFAULT_MODEL ? currentDefaultModel() : cur));
-      setFallbackModel((cur) =>
-        cur === DEFAULT_TASK_FALLBACK_MODEL ? currentTaskFallbackModel() : cur,
-      );
+      if (!modelTouched.current) setModel(currentDefaultModel());
+      if (!fallbackTouched.current) setFallbackModel(currentTaskFallbackModel());
     });
     return () => {
       cancelled = true;
@@ -675,6 +677,8 @@ export function TaskCreateModal({
     setAdvancedOpen(false);
     setModel(defaultPrimaryModel());
     setFallbackModel(defaultFallbackModel());
+    modelTouched.current = false;
+    fallbackTouched.current = false;
     setMaxIterations("");
     setMaxCostUSD("");
     setCaptainsLog(false);
@@ -769,6 +773,10 @@ export function TaskCreateModal({
     setScheduledDate("");
     setModel(t.model ?? defaultPrimaryModel());
     setFallbackModel(t.fallback_model ?? defaultFallbackModel());
+    // A template that pins a model is a deliberate choice the live pair must
+    // not overwrite; one that leaves it blank stays on the live default.
+    modelTouched.current = !!t.model;
+    fallbackTouched.current = !!t.fallback_model;
     setAllowNetwork(Boolean(t.allow_network));
     setAllowDelegation(t.allow_delegation !== false);
     setCarryContext(Boolean(t.carry_context));
@@ -2173,7 +2181,10 @@ export function TaskCreateModal({
                         <ModelPicker
                           id="taskModelInput"
                           value={model}
-                          onChange={setModel}
+                          onChange={(v) => {
+                            modelTouched.current = true;
+                            setModel(v);
+                          }}
                           placeholder="openai/gpt-5.6-luna-pro"
                         />
                         {errors.model ? (
@@ -2189,7 +2200,10 @@ export function TaskCreateModal({
                         <ModelPicker
                           id="taskFallbackModelInput"
                           value={fallbackModel}
-                          onChange={setFallbackModel}
+                          onChange={(v) => {
+                            fallbackTouched.current = true;
+                            setFallbackModel(v);
+                          }}
                           placeholder="moonshotai/kimi-k2.6"
                         />
                         {errors.fallback_model ? (

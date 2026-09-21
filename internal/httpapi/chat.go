@@ -142,6 +142,22 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 	return true
 }
 
+// lockdownDefaultSlug picks the slug a delisted lockdown conversation is moved
+// to: the first LITERAL entry of the allow-list. A glob (`anthropic/*`) names a
+// family, not a model, so it is skipped rather than persisted as a model; an
+// operator list made only of globs yields "" and the conversation is left to
+// the guard.
+func lockdownDefaultSlug(allowed []string) string {
+	for _, slug := range allowed {
+		slug = strings.TrimSpace(slug)
+		if slug == "" || strings.ContainsAny(slug, "*?[") {
+			continue
+		}
+		return slug
+	}
+	return ""
+}
+
 // reconcileLockdownModel moves a lockdown conversation whose PERSISTED model is
 // no longer on the allow-list onto the lockdown default — the first entry of
 // config.LockdownModels — and persists that choice. A conversation pins its
@@ -153,17 +169,17 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 // picker. This is a migration IN FRONT of the guard, not a bypass of it: the
 // manager still rejects whatever it is handed if it is not allow-listed, and
 // the explicit per-turn override above still 400s on a disallowed slug. A
-// glob-only list (no literal slug to move to) is left to the guard. Reports
-// false after writing the HTTP error.
+// glob-only list (no literal slug to move to) is left to the guard; a list that
+// merely STARTS with a glob moves to its first literal slug. Reports false
+// after writing the HTTP error.
 func (s *Server) reconcileLockdownModel(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation) bool {
 	if !conv.Lockdown || conv.Model == "" || s.cfg.LockdownAllows(conv.Model) {
 		return true
 	}
-	allowed := s.cfg.LockdownModels()
-	if len(allowed) == 0 || strings.ContainsAny(allowed[0], "*?[") {
+	next := lockdownDefaultSlug(s.cfg.LockdownModels())
+	if next == "" {
 		return true
 	}
-	next := allowed[0]
 	if err := s.store.SetModel(r.Context(), user, conv.ID, next); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return false

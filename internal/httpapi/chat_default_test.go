@@ -648,6 +648,30 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		}
 	})
 
+	// A list that starts with a glob still has a literal slug further along:
+	// that is the lockdown default, not the glob.
+	t.Run("glob-first allow-list migrates to its first literal slug", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/*", "e/f", "g/h"}
+		seed(st, true)
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		if model != "e/f" {
+			t.Errorf("glob-first list should migrate to the first literal slug e/f, got %q", model)
+		}
+	})
+
 	// A glob-only list has no literal slug to move to: leave it to the guard.
 	t.Run("glob-only allow-list does not invent a model", func(t *testing.T) {
 		engine := &fakeEngine{}

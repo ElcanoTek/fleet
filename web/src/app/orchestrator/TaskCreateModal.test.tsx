@@ -117,6 +117,27 @@ describe("TaskCreateModal — default model pair", () => {
     });
   });
 
+  // The module cache can hold an OLDER admin slug from a previous mount; the
+  // mount-time refresh must still move a pristine form to the newer one.
+  it("refreshes a pristine form from a stale cached admin default", async () => {
+    setModelTiers({ default_model: "acme/old-default", task_fallback_model: "acme/old-cheap" });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        models: { default_model: "acme/new-default", task_fallback_model: "acme/new-cheap" },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    expect((screen.getByLabelText("Primary") as HTMLInputElement).value).toBe("acme/old-default");
+    await waitFor(() =>
+      expect((screen.getByLabelText("Primary") as HTMLInputElement).value).toBe("acme/new-default"),
+    );
+    expect((screen.getByLabelText("Fallback") as HTMLInputElement).value).toBe("acme/new-cheap");
+  });
+
   it("does not overwrite a model the user already picked when config lands", async () => {
     let resolveConfig: (v: unknown) => void = () => {};
     const fetchMock = vi.fn().mockReturnValue(
