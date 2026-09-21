@@ -360,3 +360,57 @@ func TestFatalProviderErrorNamesUpstreamCause(t *testing.T) {
 		t.Fatalf("untyped error = %q", untyped)
 	}
 }
+
+// openRouterExpiredCacheBody is the relay envelope for the Google 400 that
+// dead-lettered a scheduled page refresh on 2026-09-21: the implicit prompt
+// cache had been evicted between two steps.
+const openRouterExpiredCacheBody = "HTTP/2.0 400 Bad Request\r\nContent-Type: application/json\r\n\r\n" +
+	`{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"{ \"error\": { \"code\": 400, \"message\": \"Cache content 2946923576004968448 is expired.\", \"status\": \"INVALID_ARGUMENT\" } }","provider_name":"Google"}}}`
+
+func TestExpiredPromptCacheIsAStreamBlipNotARejection(t *testing.T) {
+	expired := &fantasy.ProviderError{
+		StatusCode:   http.StatusBadRequest,
+		Title:        "bad request",
+		Message:      "Provider returned error",
+		ResponseBody: []byte(openRouterExpiredCacheBody),
+	}
+	if !isExpiredPromptCacheRejection(expired) {
+		t.Fatal("relayed 'Cache content ... is expired.' 400 must be recognised as an expired prompt cache")
+	}
+	if class, _ := classifyStreamError(expired); class != streamErrorStreamBlip {
+		t.Fatalf("expired prompt cache must classify as a stream blip (same-model retry rebuilds the cache), got %v", class)
+	}
+
+	t.Run("bare SSE envelope", func(t *testing.T) {
+		pe := &fantasy.ProviderError{StatusCode: http.StatusBadRequest, Message: "Provider returned error",
+			ResponseBody: []byte(`{"error":{"code":400,"message":"Provider returned error","metadata":{"provider_name":"Google","raw":{"error":{"code":400,"message":"Cache content 42 is expired.","status":"INVALID_ARGUMENT"}}}}}`)}
+		if class, _ := classifyStreamError(pe); class != streamErrorStreamBlip {
+			t.Fatalf("object-shaped raw: got %v, want stream blip", class)
+		}
+	})
+	t.Run("adapter message without a relay body", func(t *testing.T) {
+		pe := &fantasy.ProviderError{StatusCode: http.StatusBadRequest, Message: "Cache content abc is expired."}
+		if class, _ := classifyStreamError(pe); class != streamErrorStreamBlip {
+			t.Fatalf("message-only: got %v, want stream blip", class)
+		}
+	})
+	t.Run("other INVALID_ARGUMENT 400s stay rejections", func(t *testing.T) {
+		if isExpiredPromptCacheRejection(openRouterRelayed400()) {
+			t.Fatal("the function-call-turn 400 is a real rejection, not an expired cache")
+		}
+		if class, _ := classifyStreamError(openRouterRelayed400()); class != streamErrorProviderRejected {
+			t.Fatalf("got %v, want provider rejection", class)
+		}
+	})
+	t.Run("not a 400, or a credential failure, is never an expired cache", func(t *testing.T) {
+		for name, pe := range map[string]*fantasy.ProviderError{
+			"500 with the words": {StatusCode: http.StatusInternalServerError, Message: "Cache content 1 is expired."},
+			"auth-flagged 400":   {StatusCode: http.StatusBadRequest, AuthError: true, Message: "Cache content 1 is expired."},
+			"nil":                nil,
+		} {
+			if isExpiredPromptCacheRejection(pe) {
+				t.Errorf("%s: must not be treated as an expired prompt cache", name)
+			}
+		}
+	})
+}
