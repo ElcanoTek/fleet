@@ -10,7 +10,7 @@
 | `DefaultMaxModel` / chat's "advanced model" (`suggest_advanced_model` escalation) | `openai/gpt-5.6-sol` | `anthropic/claude-opus-5` |
 | `DefaultTitleModel` (conversation titles) | `google/gemini-3.8-flash` | `openai/gpt-5.6-luna-pro` |
 | Web `DEFAULT_MODEL` / `ADVANCED_MODEL` and the task-create form's pre-filled primary/fallback (persisted as the task's pinned `model` / `fallback_model`) | gemini-3.8-flash / gpt-5.6-sol | gpt-5.6-luna-pro / deepseek-v4.1-flash |
-| Lockdown allow-list default (one slug per tier) | gemini-3.8-flash, gpt-5.6-sol | gpt-5.6-luna-pro, claude-opus-5 |
+| Lockdown allow-list default | gemini-3.8-flash, gpt-5.6-sol | gpt-5.6-luna-pro, claude-opus-5, **plus** gemini-3.8-flash and gpt-5.6-sol, so lockdown conversations created under the old defaults keep validating after the upgrade (`FLEET_LOCKDOWN_ALLOWED_MODELS` set explicitly overrides the whole list) |
 
 Operators override the chat tiers and the title model per deployment with
 `FLEET_DEFAULT_MODEL`, `FLEET_ADVANCED_MODEL` and `FLEET_TITLE_MODEL` (or the

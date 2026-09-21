@@ -2030,13 +2030,21 @@ func buildDatabaseURL() string {
 }
 
 // splitLockdownModels parses the lockdown allow-list. Empty input returns the
-// default (one slug per product tier slot).
+// default: one slug per product tier slot, plus the slugs the previous
+// defaults named. A lockdown conversation persists the model it was created
+// with and re-validates it against this list on every later turn, so dropping
+// a slug from the default list would make every conversation still on it
+// fail with "model not allowed in lockdown mode" the moment the new binary
+// starts. Operators who want a stricter list set FLEET_LOCKDOWN_ALLOWED_MODELS
+// explicitly; the default only ever grows.
 func splitLockdownModels(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return []string{
 			"openai/gpt-5.6-luna-pro", // recommended default
 			"anthropic/claude-opus-5", // strong tier
+			"google/gemini-3.8-flash", // previous recommended default (existing conversations)
+			"openai/gpt-5.6-sol",      // previous strong tier (existing conversations)
 		}
 	}
 	parts := strings.Split(raw, ",")

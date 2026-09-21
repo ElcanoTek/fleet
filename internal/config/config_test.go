@@ -518,6 +518,10 @@ func TestSplitLockdownModels_DefaultsWhenEmpty(t *testing.T) {
 	wantContains := []string{
 		"openai/gpt-5.6-luna-pro",
 		"anthropic/claude-opus-5",
+		// The previous tier defaults stay allowed so lockdown conversations
+		// created before the defaults changed keep working after an upgrade.
+		"google/gemini-3.8-flash",
+		"openai/gpt-5.6-sol",
 	}
 	for _, w := range wantContains {
 		found := false
