@@ -28,20 +28,36 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_parked_at TIMESTAMPTZ;
 UPDATE tasks SET recurrence_spawned = TRUE
 WHERE status = 'dead_lettered' AND NOT recurrence_spawned;
 
--- One-time best effort at upgrade: stamp park on recurring DLQ rows that
--- have no successor pointer. This is the ONLY place previous_occurrence_id
--- is consulted for park/replay. Acceptable at migration time because it
--- runs once against the live table; a live successor (or a later
--- occurrence that still points here) means the chain already continued,
--- so we must NOT park those. Rows with no pointer are treated as parked
--- so replay can continue them, matching pre-upgrade "replay is how a
--- parked chain continues".
+-- One-time best effort at upgrade: stamp park on recurring DLQ rows whose
+-- chain shows NO sign of having continued. This is the ONLY place chain
+-- continuation is inferred from other rows (the runtime uses the stamp
+-- alone). Two signals, either one means "already continued, do not park":
+--   (a) a row still points here through previous_occurrence_id (the direct
+--       successor survived retention), or
+--   (b) a LATER recurring occurrence exists in the same lineage — the
+--       durable signal when the immediate successor was pruned by
+--       CleanupOldRuns / DeleteOldHistory (retention removes OLD rows, so a
+--       chain that went on always has a newer row). Clones share lineage_id
+--       and are deliberately counted too: the failure mode of NOT parking is
+--       a stale chain an operator re-creates by hand, while parking a chain
+--       that already continued lets a replay fork duplicates and repeat
+--       external side effects — the conservative side is not to park.
+-- Rows with neither signal are parked so `dlq replay` can continue them,
+-- matching the pre-upgrade "replay is how a parked chain continues".
 UPDATE tasks SET recurrence_parked_at = COALESCE(dead_lettered_at, completed_at, now())
 WHERE status = 'dead_lettered'
   AND recurrence IS NOT NULL AND recurrence <> ''
   AND recurrence_parked_at IS NULL
   AND NOT EXISTS (
       SELECT 1 FROM tasks s WHERE s.previous_occurrence_id = tasks.id::text
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM tasks l
+      WHERE tasks.lineage_id IS NOT NULL
+        AND l.lineage_id = tasks.lineage_id
+        AND l.id <> tasks.id
+        AND l.created_at > tasks.created_at
+        AND l.recurrence IS NOT NULL AND l.recurrence <> ''
   );
 
 DROP INDEX IF EXISTS idx_tasks_recurrence_unspawned;

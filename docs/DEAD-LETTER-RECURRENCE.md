@@ -22,10 +22,14 @@ Cancel still ends the chain. What makes a run fail is unchanged.
 Upgrade does **not** auto-resume chains parked before it. Migration 071
 settles every existing `dead_lettered` row so the reconcile sweep cannot
 fork a duplicate chain next to a lineage that already continued, and cannot
-resurrect long-dead schedules. Recurring DLQ rows with no successor
-pointer also get `recurrence_parked_at` (one-time best effort; that is
-the only time the pointer is consulted for park/replay). Those rows
-continue via replay.
+resurrect long-dead schedules. Recurring DLQ rows whose chain shows no
+sign of having continued — no row points at them through
+`previous_occurrence_id` and no later recurring occurrence exists in their
+lineage — also get `recurrence_parked_at` (one-time best effort; that is
+the only time continuation is inferred from other rows, and it errs toward
+NOT parking, because a wrongly parked row lets a replay fork duplicates
+while a wrongly unparked one is only a stale chain to re-create). Those
+rows continue via replay.
 
 See [ADR-0070](adr/0070-dead-lettered-recurrences-spawn-successor.md).
 Production evidence: two daily dashboard-refresh jobs on a production
