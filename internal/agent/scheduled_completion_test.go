@@ -122,6 +122,84 @@ func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing
 	}
 }
 
+// gateOneCapturingVerifier approves every verification but captures each
+// prompt it was handed, so a test can pin exactly what Gate 1 saw.
+type gateOneCapturingVerifier struct {
+	itMockModel
+	prompts []string
+}
+
+func (m *gateOneCapturingVerifier) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	m.prompts = append(m.prompts, string(raw))
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: `{"missing_actions":[]}`}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// reviewerForcesRepair returns a needs_revision verdict with one actionable
+// issue. Gate 2 is single-shot, so this is called at most once per run.
+type reviewerForcesRepair struct {
+	itMockModel
+	t *testing.T
+}
+
+func (m *reviewerForcesRepair) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	if !strings.Contains(string(raw), "First answer.") {
+		m.t.Errorf("reviewer should critique the first answer, prompt missing it")
+	}
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: `{"needs_revision":true,"issues":["the summary omits the coverage window"],"reasoning":"the first answer is incomplete"}`}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// TestScheduledReviewerRepairReverifies pins the Gate 2 → Gate 1 invalidation:
+// the reviewer approves nothing here — it forces a repair, and the repaired
+// round's closing text must go through the verifier again. Pre-fix the verifier
+// ran once (verified stayed true after the reviewer's repair round), so a
+// repair could swap in an unverified answer and still finish.
+func TestScheduledReviewerRepairReverifies(t *testing.T) {
+	verifier := &gateOneCapturingVerifier{}
+	reviewer := &reviewerForcesRepair{t: t}
+	calls := 0
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		return func(yield func(fantasy.StreamPart) bool) {
+			switch step {
+			case 0:
+				input := `{"success":true,"critical_actions":[],"reasoning":"Reconciled report","artifacts_checked":["report"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			case 1:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "First answer."})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			default:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Revised answer with the coverage window 2026-09-01..2026-09-15."})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+	a.reviewerModel = reviewer
+	a.phoneAFriendEnabled = true
+
+	err := a.Execute(context.Background(), "Summarise the report and state the coverage window.")
+	if err != nil {
+		t.Fatalf("run rejected: %v", err)
+	}
+	if len(verifier.prompts) != 2 {
+		t.Fatalf("verifier calls = %d, want 2 — the reviewer-forced repair must be re-verified", len(verifier.prompts))
+	}
+	if !strings.Contains(verifier.prompts[0], "First answer.") {
+		t.Error("first verification must judge the first answer")
+	}
+	if !strings.Contains(verifier.prompts[1], "Revised answer with the coverage window") {
+		t.Error("second verification must judge the repaired round's own text")
+	}
+	if strings.Contains(verifier.prompts[1], "First answer.") {
+		t.Error("second verification carried the pre-repair answer — the gate must see the current round's text only")
+	}
+}
+
 // textlessRepairVerifierModel rejects the first verification (demanding a
 // read-only check) and approves the second, capturing every prompt it was
 // handed so the test can pin exactly what the verifier saw at each gate.

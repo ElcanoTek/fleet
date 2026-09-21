@@ -565,7 +565,11 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	// Gate 2: phone-a-friend super-LLM review (quality re-check, part of #175).
 	// Runs only after the verifier gate has cleared, so the reviewer critiques a
 	// run that already attempted everything the task required. OFF unless both the
-	// feature flag is set and a reviewer model is configured.
+	// feature flag is set and a reviewer model is configured. Single-shot:
+	// reviewed is claimed before the call, so a reviewer-forced repair round is
+	// never re-reviewed — but it MUST be re-verified: the repair changed the
+	// answer the verifier approved, so verified is reset and Gate 1 runs again
+	// against the repaired round's own closing text.
 	if !p.reviewed && p.agent != nil && p.agent.phoneAFriendEnabled && p.agent.reviewerModel != nil {
 		p.reviewed = true
 		records := buildToolExecSummary(p.agent.logSession)
@@ -574,6 +578,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		if err != nil {
 			log.Printf("phone_a_friend review skipped: %v", err)
 		} else if len(issues) > 0 {
+			p.verified = false
 			return false, []string{fmt.Sprintf(
 				"A reviewer model (phone a friend) found problems with the current answer/work that must be "+
 					"addressed before finishing: %v. Revise the work to fix each one, or call "+

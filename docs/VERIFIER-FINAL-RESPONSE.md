@@ -37,6 +37,20 @@ DLQ. fleet.elcanotek.com hit exactly this on 2026-09-19 and 2026-09-21.
   no text yields `""` and the verifier sees the explicit marker — never a
   previous round's rejected draft combined with the current round's fresh tool
   evidence (see the review fix below).
+- **A reviewer-forced repair invalidates the verifier's approval.** Gate 2
+  (phone-a-friend) is single-shot per run, but when its issue list forces a
+  repair round, `verified` is reset: the revised answer has not been verified,
+  so the next `CanFinish` re-runs Gate 1 against the repaired round's own
+  closing text. Pre-fix the repaired answer shipped unverified.
+- **Scope note (structured-output tasks):** the gates judge the round's
+  free-form closing text. The terminal structured-output phase
+  (`completeRun`) runs AFTER the finish gates and replaces the persisted
+  `FinalText` with the schema-valid JSON; that JSON is validated against the
+  schema, not re-judged by the gates. Running the gates against the structured
+  value would mean moving a paid terminal generation inside the finish gate
+  with undefined repair semantics — not a small change, so the behavior is
+  documented rather than forced. The draft is in any case the text that
+  carries the prose a "Report X" step demands.
 
 ## Review fix: the text must belong to the CURRENT round
 
@@ -59,6 +73,10 @@ every scheduled run) read it through `latestRunText()`.
 
 ## Tests
 
+- `TestScheduledReviewerRepairReverifies` — Gate 2 forces a repair; the
+  repaired round's closing text goes through the verifier again (the second
+  prompt carries the revised answer, not the pre-repair one). Pre-fix the
+  verifier ran once and the repaired answer shipped unverified.
 - `TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker` — the P1
   reproduction end-to-end: prose round → verifier rejects for a missing action
   → repair round makes only the tool call → the re-check's prompt carries the
@@ -85,7 +103,15 @@ every scheduled run) read it through `latestRunText()`.
   shipped as the core's per-round `finalText` through `RoundFinalTextReceiver`,
   because the session-only reading is a no-op at the gate seam (the session
   gains the closing message only after `Run` returns) and an observer-side
-  tracker is not provably tied to the round boundary (Codex P1).
+  tracker is not provably tied to the round boundary (Codex P1, fixed in
+  commit 2).
+- Codex P2 (round 2): running the finish gates against the terminal
+  structured-output JSON was evaluated and rejected as too invasive — it would
+  move a paid terminal generation inside the finish gate and leave repair
+  semantics undefined. Chosen instead: the behavior is documented honestly
+  (contract comment, this note, AGENT-RUNTIME.md) — structured-output tasks
+  are verified on their free-form closing text, and the JSON is
+  schema-validated by the terminal phase.
 - Gate 2's answer source changed with Gate 1's (same seam). It is the behavior
   the reviewer was always documented to have ("the answer/work the reviewer
   critiques") and the feature is off unless an operator enables phone-a-friend.

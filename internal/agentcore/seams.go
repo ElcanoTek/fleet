@@ -131,6 +131,12 @@ type TerminalPolicy interface {
 // yet (drivers persist the completed response only after Run returns), and a
 // textless round MUST yield "" — a policy that falls back to earlier rounds'
 // text would combine a rejected draft with the current round's evidence.
+//
+// Scope note: for tasks with an output schema this is the round's free-form
+// closing text. The terminal structured-output phase (completeRun) runs AFTER
+// the finish gates and replaces the persisted FinalText with the schema-valid
+// JSON — the gates never see that JSON, and the JSON itself is validated
+// against the schema, not re-judged by the gates.
 type RoundFinalTextReceiver interface {
 	SetRoundFinalText(text string)
 }

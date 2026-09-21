@@ -1043,7 +1043,11 @@ round that just ended before each `CanFinish` consultation (the
 `RoundFinalTextReceiver` seam), because the session log only gains the closing
 message after `agentcore.Run` returns — and because the value is computed
 per round, a repair round that produces no text yields the explicit marker
-rather than an earlier round's rejected draft. The text is bounded (8,000
+rather than an earlier round's rejected draft. For tasks with an output
+schema this is the round's free-form closing text: the terminal
+structured-output phase runs after the gates and the JSON it persists is
+schema-validated there, not judged by the verifier (the draft is what carries
+the prose the task asked to be reported). The text is bounded (8,000
 chars, head+tail) and presented
 as evidence, never instructions, and when a run leaves no assistant text an
 explicit `(no final response text)` marker stands in so a genuinely missing
@@ -1138,7 +1142,11 @@ sends the original task, the agent's final answer/work, and the executed-tool
 summary to the reviewer and asks for a JSON verdict
 (`{"needs_revision", "issues", "reasoning"}`); when the reviewer flags material
 problems, the loop turns the issue list into **one more enforcement round** so
-the agent revises before finishing.
+the agent revises before finishing. That repair invalidates the verifier's
+approval: the reviewer is single-shot (a run is reviewed at most once), but the
+revised answer has not been verified, so the next `CanFinish` re-runs the
+verifier against the repaired round's own closing text before the run may
+finish.
 
 What it is and is **not**, stated plainly (honesty in docs):
 
