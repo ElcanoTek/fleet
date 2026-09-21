@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -113,8 +114,18 @@ func emailDedupKey(rawInput string) string {
 }
 
 // sendEmailFingerprint builds a semantic fingerprint from normalized
-// recipients/subject/body. Returns ok=false when the args lack the fields the
-// fingerprint needs.
+// recipients/subject/body and the attachment set. Returns ok=false when the
+// args lack the fields the fingerprint needs.
+//
+// Attachments are part of the identity on purpose. A production run sent a
+// weekly report whose first send failed on an attachment path, then sent the
+// same body WITHOUT the CSV (queued), then retried WITH the CSV — and the guard
+// suppressed that corrective resend as a duplicate, so the client got the
+// report without its deliverable and the run dead-lettered on verification.
+// An email that carries a file is not the same email as one that does not.
+// Attachments are keyed by lower-cased base name, sorted: the same file reached
+// through a different directory (an absolute workspace path vs. a relative one
+// from the run workdir) is the same deliverable and must still dedupe.
 func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 	toEmails := parseRecipientArg(args["to_email"])
 	if len(toEmails) == 0 {
@@ -144,8 +155,39 @@ func sendEmailFingerprint(args map[string]interface{}) (string, bool) {
 		"bcc=" + strings.Join(bccEmails, ","),
 		"subject=" + strings.ToLower(subject),
 		bodyReference,
+		"attachments=" + strings.Join(attachmentNames(args["attachments"]), ","),
 	}, "|")
 	return hashString(fingerprintSource), true
+}
+
+// attachmentNames normalizes a send_email attachments argument (a string, a
+// list of strings, or absent) into sorted, lower-cased base names. Base name
+// rather than full path: the deliverable is the file, not where the model
+// happened to reference it from.
+func attachmentNames(value interface{}) []string {
+	var raw []string
+	switch typed := value.(type) {
+	case string:
+		raw = []string{typed}
+	case []interface{}:
+		for _, item := range typed {
+			if s, ok := item.(string); ok {
+				raw = append(raw, s)
+			}
+		}
+	case []string:
+		raw = typed
+	}
+	names := make([]string, 0, len(raw))
+	for _, p := range raw {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		names = append(names, strings.ToLower(filepath.Base(p)))
+	}
+	sort.Strings(names)
+	return names
 }
 
 func parseRecipientArg(value interface{}) []string {
