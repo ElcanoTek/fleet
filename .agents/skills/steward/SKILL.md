@@ -100,8 +100,11 @@ not the event that woke you. Events arrive late and out of order.
 
 ## Never
 
-- **Merge, approve, or enable auto-merge.** Every PR waits for a human; your
-  job ends at green + mergeable + every thread addressed.
+- **Approve, or enable auto-merge.** And never merge on your own initiative:
+  a PR waits for a human decision. The one exception is an explicit, in-
+  conversation instruction from a human to merge that PR — and even then only
+  once the "Done" list below holds on the current head. A standing preference
+  or an authorization for a different PR is not that instruction.
 - Skip, disable, quarantine or loosen a test to get green.
 - Waive a gitleaks finding you have not verified is fake. A scanner made green
   over a live secret is worse than a red one.
@@ -122,4 +125,6 @@ not the event that woke you. Events arrive late and out of order.
 
 All of these on the current head: CI green in its lane · mergeable · every
 thread resolved or answered with evidence · Codex finished, not "Running" ·
-verification section current. Then it waits for a human, and for nothing else.
+verification section current. Then it waits for a human decision — either
+the human merges it, or the human explicitly tells you to (the AGENTS.md
+merge rule), and for nothing else.
