@@ -1054,7 +1054,10 @@ explicit `(no final response text)` marker stands in so a genuinely missing
 report stays flaggable. Tool-backed deliverables (email send, deal creation,
 page write, file upload, ...) still require their tool call — a prose report
 never substitutes for one. Repairs are checked again, up to three verifier calls in
-total. A verifier error keeps completion blocked; the third unsuccessful check
+total — the cap counts every verification, including the re-check a
+reviewer-forced repair triggers, and a repair that cannot be re-verified
+within the cap ends the run unverified rather than extending it. A verifier
+error keeps completion blocked; the third unsuccessful check
 returns `ErrCompletionUnverified` through the core without asking the model to
 abort. Partial work and completed critical actions remain recorded, and the
 transcript identifies the verification failure without claiming external actions
@@ -1146,7 +1149,8 @@ the agent revises before finishing. That repair invalidates the verifier's
 approval: the reviewer is single-shot (a run is reviewed at most once), but the
 revised answer has not been verified, so the next `CanFinish` re-runs the
 verifier against the repaired round's own closing text before the run may
-finish.
+finish — counting against the same three-call cap, so a repair that cannot be
+re-verified within it ends the run unverified.
 
 What it is and is **not**, stated plainly (honesty in docs):
 

@@ -841,6 +841,33 @@ func TestPolicyCanFinishPanic_IsContainedAsRunError(t *testing.T) {
 	}
 }
 
+type roundTextPanicPolicy struct{ passPolicy }
+
+func (roundTextPanicPolicy) SetRoundFinalText(string) { panic("round text raw panic") }
+
+// TestPolicyRoundTextPanic_IsContainedAsRunError pins the round-text handoff
+// inside the SAME protected region as CanFinish: a panicking setter must be
+// contained and attributed identically (policy-finish boundary, partial
+// transcript + usage preserved), not escape to the outer Run recovery.
+func TestPolicyRoundTextPanic_IsContainedAsRunError(t *testing.T) {
+	collector := capturePanicEvents(t)
+	_, err := Run(context.Background(), ModeScheduled, RunConfig{
+		EnvPrefix: CanonicalEnvPrefix,
+		TaskID:    "task-round-text",
+	}, Deps{
+		Input:  stubInput{system: "sys", user: "roundtext", label: "roundtext"},
+		Policy: roundTextPanicPolicy{},
+		Model:  &mockModel{streamFunc: streamStop()},
+	})
+	if err == nil || !errors.Is(err, ErrRunBoundaryPanic) || strings.Contains(err.Error(), "round text raw panic") {
+		t.Fatalf("SetRoundFinalText panic error = %v", err)
+	}
+	events := collector.snapshot()
+	if len(events) != 1 || events[0].Boundary != panicPhasePolicyFinish || events[0].TaskID != "task-round-text" {
+		t.Fatalf("SetRoundFinalText panic events = %+v", events)
+	}
+}
+
 type synchronousPanicTool struct{ phase string }
 
 func (t synchronousPanicTool) Info() fantasy.ToolInfo {

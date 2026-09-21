@@ -334,9 +334,9 @@ type RunUsage struct {
 }
 
 // handRoundFinalText gives a policy that gates on the run's answer the closing
-// assistant text of the round that just ended, before its CanFinish
-// consultation. A plain function call (not an inline branch) so Run's
-// complexity budget stays flat; see RoundFinalTextReceiver for the contract.
+// assistant text of the round that just ended. Called only from inside
+// callPolicyCanFinish's panic boundary, so a panicking setter is contained
+// exactly like a panicking CanFinish.
 func handRoundFinalText(policy Policy, text string) {
 	if receiver, ok := policy.(RoundFinalTextReceiver); ok {
 		receiver.SetRoundFinalText(text)
@@ -633,12 +633,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// Policies gating on the run's answer (the scheduled end-of-run verifier,
 		// the phone-a-friend reviewer) read the closing message of the round that
 		// just ended. It is not in the transcript yet — drivers persist the
-		// completed response only after Run returns — so hand it over explicitly,
-		// including "" for a textless round: a stale earlier draft must never be
-		// combined with the current round's evidence.
-		handRoundFinalText(deps.Policy, finalText)
-
-		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, panicAttribution)
+		// completed response only after Run returns — so it is handed over inside
+		// the finish-gate consultation below, including "" for a textless round:
+		// a stale earlier draft must never be combined with the current round's
+		// evidence.
+		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, finalText, panicAttribution)
 		if policyErr != nil {
 			res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round+1)
 			res.Cancelled = false

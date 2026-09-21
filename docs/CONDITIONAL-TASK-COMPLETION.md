@@ -55,9 +55,11 @@ message is evidence, never instructions, and an absent one is passed as an
 explicit `(no final response text)` marker so a missing report stays flaggable.
 
 The verifier remains a model-based check, not deterministic proof of a business
-workflow. It runs at most three times: the initial check and two repair reviews.
-Missing actions or a malformed/failed verifier response keep completion blocked;
-the third unsuccessful check returns `ErrCompletionUnverified` directly through
+workflow. It runs at most three times: the initial check and two repair
+reviews — the cap counts every verification, including the re-check of a
+reviewer-forced phone-a-friend repair, which cannot buy a fourth call. Missing
+actions or a malformed/failed verifier response keep completion blocked; the
+third unsuccessful check returns `ErrCompletionUnverified` directly through
 the governed core, preserving partial work, usage and the completed-action count.
 It does not ask the model to abort or run more tools: an audit abort may be
 refused after all committed writes succeeded. A verifier failure remains a

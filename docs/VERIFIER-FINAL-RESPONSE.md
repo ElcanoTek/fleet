@@ -41,7 +41,11 @@ DLQ. fleet.elcanotek.com hit exactly this on 2026-09-19 and 2026-09-21.
   (phone-a-friend) is single-shot per run, but when its issue list forces a
   repair round, `verified` is reset: the revised answer has not been verified,
   so the next `CanFinish` re-runs Gate 1 against the repaired round's own
-  closing text. Pre-fix the repaired answer shipped unverified.
+  closing text. The re-check counts against the SAME three-call cap — Gate 1
+  refuses a fourth verification and routes through the exhaustion path
+  (`ErrCompletionUnverified`, detail naming the reviewer-forced repair), so
+  exhaustion never grants success. Pre-fix the repaired answer shipped
+  unverified.
 - **Scope note (structured-output tasks):** the gates judge the round's
   free-form closing text. The terminal structured-output phase
   (`completeRun`) runs AFTER the finish gates and replaces the persisted
@@ -73,6 +77,13 @@ every scheduled run) read it through `latestRunText()`.
 
 ## Tests
 
+- `TestScheduledReviewerRepairExhaustsVerificationCap` — reject, reject,
+  accept (cap spent), reviewer forces a repair → NO fourth verifier call; the
+  run ends as `ErrCompletionUnverified` naming the unverifiable repair.
+- `TestPolicyRoundTextPanic_IsContainedAsRunError` (agentcore) — a panicking
+  `SetRoundFinalText` is contained exactly like a panicking `CanFinish`:
+  `ErrRunBoundaryPanic`, one policy-finish panic event, partial transcript and
+  usage preserved.
 - `TestScheduledReviewerRepairReverifies` — Gate 2 forces a repair; the
   repaired round's closing text goes through the verifier again (the second
   prompt carries the revised answer, not the pre-repair one). Pre-fix the

@@ -200,6 +200,65 @@ func TestScheduledReviewerRepairReverifies(t *testing.T) {
 	}
 }
 
+// issuesOnceReviewer flags needs_revision with one actionable issue, exactly
+// once — Gate 2 is single-shot per run, so it is never called again.
+type issuesOnceReviewer struct {
+	itMockModel
+	calls int
+}
+
+func (m *issuesOnceReviewer) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Response, error) {
+	m.calls++
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: `{"needs_revision":true,"issues":["the summary omits the coverage window"],"reasoning":"incomplete"}`}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// TestScheduledReviewerRepairExhaustsVerificationCap pins the cap arithmetic
+// across a reviewer-forced repair: reject, reject, accept (the 3-call cap is
+// spent), the reviewer forces a repair, and the re-check must NOT call the
+// verifier a fourth time — the run ends as ErrCompletionUnverified through the
+// exhaustion path, because exhaustion never grants success.
+func TestScheduledReviewerRepairExhaustsVerificationCap(t *testing.T) {
+	verifier := &repairVerifierModel{verdicts: []string{
+		`{"missing_actions":["run the read-only verification"]}`,
+		`{"missing_actions":["run the read-only verification"]}`,
+		`{"missing_actions":[]}`,
+	}}
+	reviewer := &issuesOnceReviewer{}
+	calls := 0
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		return func(yield func(fantasy.StreamPart) bool) {
+			if step == 0 {
+				input := `{"success":true,"critical_actions":[],"reasoning":"Reconciled report","artifacts_checked":["report"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				return
+			}
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Answer, revised."})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+	a.reviewerModel = reviewer
+	a.phoneAFriendEnabled = true
+
+	err := a.Execute(context.Background(), "Summarise the report and state the coverage window.")
+	if !errors.Is(err, agentcore.ErrCompletionUnverified) {
+		t.Fatalf("run error = %v, want ErrCompletionUnverified", err)
+	}
+	if !strings.Contains(err.Error(), "could not be re-verified within the cap") {
+		t.Errorf("exhausted repair reason = %v, want the reviewer-repair detail", err)
+	}
+	if verifier.calls != 3 {
+		t.Fatalf("verifier calls = %d, want exactly 3 — a reviewer-forced repair must not buy a fourth verification", verifier.calls)
+	}
+	if reviewer.calls != 1 {
+		t.Fatalf("reviewer calls = %d, want 1 (single-shot)", reviewer.calls)
+	}
+}
+
 // textlessRepairVerifierModel rejects the first verification (demanding a
 // read-only check) and approves the second, capturing every prompt it was
 // handed so the test can pin exactly what the verifier saw at each gate.

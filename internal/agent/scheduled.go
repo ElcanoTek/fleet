@@ -550,6 +550,13 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 
 	// Gate 1: end-of-run verifier (completeness re-check).
 	if !p.verified && p.agent != nil && p.agent.fallbackModel != nil {
+		// The three-call cap counts EVERY verification, including the re-check
+		// of a reviewer-forced repair (verified was reset). A spent cap must not
+		// buy a fourth call — exhaustion never grants success, so the
+		// unverifiable repair ends the run through the same exhaustion path.
+		if p.verificationAttempts >= maxCompletionVerifications {
+			return p.verificationFailed("a reviewer-forced repair could not be re-verified within the cap", buildToolExecSummary(p.agent.logSession))
+		}
 		p.verificationAttempts++
 		records := buildToolExecSummary(p.agent.logSession)
 		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
