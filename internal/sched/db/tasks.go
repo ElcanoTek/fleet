@@ -166,8 +166,13 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 		// credit), so without this the restored run would complete unable to
 		// claim the credit and the schedule would stay silently parked. A
 		// live-over-live upsert (an edit) is left alone: its credit is already
-		// unclaimed and there is nothing parked to clear.
-		if existingTerminal && (task.Status == models.TaskStatusPending || task.Status == models.TaskStatusScheduled) {
+		// unclaimed and there is nothing parked to clear. Any OTHER prior
+		// status counts — not just the spawn-bearing ones — because restore
+		// surgery can happen in stages (a parked dead-letter imported as
+		// cancelled, then restored to scheduled) and the persisted credit and
+		// park stamp survive every intermediate status; the row being restored
+		// to a live status is the signal, not what it was restored from.
+		if existed && !liveTaskStatus(existingStatus) && liveTaskStatus(task.Status) {
 			_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = FALSE, recurrence_parked_at = NULL WHERE id = $1`, task.ID)
 			return err
 		}
@@ -178,6 +183,13 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = TRUE WHERE id = $1`, task.ID)
 	return err
+}
+
+// liveTaskStatus reports the two dispatchable statuses a restored row can be
+// upserted into; AddTaskTx re-arms a spawn credit only on a move INTO one of
+// them from anything else.
+func liveTaskStatus(s models.TaskStatus) bool {
+	return s == models.TaskStatusPending || s == models.TaskStatusScheduled
 }
 
 // scanTask scans one tasks row into a models.Task. The scan destinations and

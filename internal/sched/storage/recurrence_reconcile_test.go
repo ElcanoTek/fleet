@@ -381,6 +381,40 @@ func TestUpsertedLiveOverParkedDeadLetterReArms(t *testing.T) {
 	}
 }
 
+// TestUpsertedLiveOverCancelledParkedRowReArms: staged restore surgery — a
+// parked dead-letter imported as cancelled, then restored to scheduled — must
+// still hand the credit back and clear the stamp; the move INTO a live status
+// is the signal, not the status it came from.
+func TestUpsertedLiveOverCancelledParkedRowReArms(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+
+	dl := seedTerminalRecurring(t, store, models.TaskStatusDeadLettered, 10*time.Minute, nil)
+	if _, err := store.db.Conn().ExecContext(ctx,
+		`UPDATE tasks SET recurrence_spawned = TRUE, recurrence_parked_at = now(), status = 'cancelled' WHERE id = $1`, dl.ID); err != nil {
+		t.Fatalf("staged-restore setup: %v", err)
+	}
+
+	when := time.Now().Add(time.Hour).UTC()
+	dl.Status = models.TaskStatusScheduled
+	dl.ScheduledFor = &when
+	dl.CompletedAt = nil
+	if _, err := store.AddTaskWithContext(ctx, dl); err != nil {
+		t.Fatalf("AddTaskWithContext(restore cancelled -> scheduled): %v", err)
+	}
+	if recurrenceSpawned(t, store, dl.ID) {
+		t.Fatal("restoring a cancelled-but-parked row to scheduled must re-arm recurrence_spawned")
+	}
+	var parked *time.Time
+	if err := store.db.Conn().QueryRowContext(ctx, `SELECT recurrence_parked_at FROM tasks WHERE id = $1`, dl.ID).Scan(&parked); err != nil {
+		t.Fatalf("read recurrence_parked_at: %v", err)
+	}
+	if parked != nil {
+		t.Fatal("restoring a cancelled-but-parked row to scheduled must clear recurrence_parked_at")
+	}
+}
+
 // TestReimportUnclaimedDeadLetteredKeepsCreditForSweep: a same-status
 // re-import of an already-terminal unclaimed row (allowed without
 // --replace-status) must not settle the flag — the crash-window row is

@@ -28,8 +28,10 @@ sign of having continued — no row points at them through
 lineage — also get `recurrence_parked_at` (one-time best effort; that is
 the only time continuation is inferred from other rows, and it errs toward
 NOT parking, because a wrongly parked row lets a replay fork duplicates
-while a wrongly unparked one is only a stale chain to re-create). Those
-rows continue via replay.
+while a wrongly unparked one is only a stale chain to re-create). Rows in
+the pre-migration-069 shape (no predecessor pointer, lineage equal to their
+own id) are never stamped, because for that history neither signal can prove
+the chain did not continue. Stamped rows continue via replay.
 
 See [ADR-0070](adr/0070-dead-lettered-recurrences-spawn-successor.md).
 Production evidence: two daily dashboard-refresh jobs on a production
