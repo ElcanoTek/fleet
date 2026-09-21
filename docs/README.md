@@ -246,6 +246,7 @@ above fails otherwise.
 - [`MEMORY.md`](MEMORY.md) — User memory: typed, provenanced, reviewable
 - [`MIGRATIONS.md`](MIGRATIONS.md) — Database migrations
 - [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
+- [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — GPT-5.6 Luna Pro as the everyday default, Claude Opus 5 as the strong tier (2026-09-21), and why
 - [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) — The node toolchain handoff (`fleet update` ⇄ `fleet doctor --node`)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections

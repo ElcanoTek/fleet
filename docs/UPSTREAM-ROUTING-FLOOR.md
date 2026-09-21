@@ -35,14 +35,21 @@ model is broken* rather than *the route changed*. And because the run threw
 away the served-upstream field, there was no way to tell those two apart after
 the fact.
 
-**The default has since moved to `google/gemini-3.8-flash`**, which Google
-serves alone and which is therefore pinned *strictly* (`Only`, no fallbacks) —
-one upstream means no pool to vary precision across, so it needs no floor. The
-floor below is unchanged and still applies to the DeepSeek family: those slugs
-remain selectable, and the pin plus the floor are what make selecting them safe.
-`TestDefaultCoreModelCannotBeServedAtArbitraryPrecision` now asserts the general
-property — whichever family holds the default slot is either strictly pinned or
-carries a floor — so a future default swap cannot silently drop the guarantee.
+**The default moved to `google/gemini-3.8-flash`** (strict pin, one upstream, no
+floor needed) and then, on 2026-09-21, to **`openai/gpt-5.6-luna-pro`** with
+**`anthropic/claude-opus-5`** as the strong tier (see
+[MODEL-DEFAULTS.md](MODEL-DEFAULTS.md)). Both are soft-pinned to their vendor
+with cloud resellers of the *official* weights as the only fallbacks (OpenAI →
+Azure, Amazon Bedrock; Anthropic → AWS, Bedrock, Azure, Google), so neither has
+a third-party quantized pool to degrade onto; `canonicalUpstream` records that
+as `officialPool` and the guard test accepts it as the third safe shape. The
+floor below is unchanged and still applies to the DeepSeek family (production's
+scheduled-task fallback): those slugs remain selectable, and the pin plus the
+floor are what make selecting them safe.
+`TestDefaultCoreModelCannotBeServedAtArbitraryPrecision` asserts the general
+property for both default-tier slugs — strictly pinned, official-weights pool,
+or a serving-precision floor — and `TestOfficialPoolExemptionIsNarrow` keeps the
+exemption off every family with third-party hosts.
 
 ## What shipped
 

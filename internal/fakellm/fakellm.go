@@ -148,6 +148,10 @@ func New() *Server {
 		models: []string{
 			"z-ai/glm-5.2",
 			"anthropic/claude-fable-5",
+			"openai/gpt-5.6-luna-pro",
+			"openai/gpt-5.6-luna",
+			"anthropic/claude-opus-5",
+			"deepseek/deepseek-v4.1-flash",
 			"openai/gpt-5.6-sol",
 			"anthropic/claude-opus-4.8",
 			"anthropic/claude-sonnet-4.6",

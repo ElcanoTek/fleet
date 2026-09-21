@@ -31,11 +31,11 @@
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04).
-export const DEFAULT_MODEL = "google/gemini-3.8-flash";
-export const DEFAULT_MODEL_LABEL = "Google: Gemini 3.8 Flash";
+export const DEFAULT_MODEL = "openai/gpt-5.6-luna-pro";
+export const DEFAULT_MODEL_LABEL = "OpenAI: GPT-5.6 Luna Pro";
 
-export const ADVANCED_MODEL = "openai/gpt-5.6-sol";
-export const ADVANCED_MODEL_LABEL = "OpenAI: GPT-5.6 Sol";
+export const ADVANCED_MODEL = "anthropic/claude-opus-5";
+export const ADVANCED_MODEL_LABEL = "Anthropic: Claude Opus 5";
 
 // Display names for slugs we know by heart. An admin-configured tier
 // slug outside this map renders as itself — honest, and the pickers'

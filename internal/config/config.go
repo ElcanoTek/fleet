@@ -55,7 +55,7 @@ const (
 
 // DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL.
 // Mirrors the frontend's DEFAULT_MODEL (the recommended everyday pick).
-const DefaultTitleModel = "google/gemini-3.8-flash"
+const DefaultTitleModel = "openai/gpt-5.6-luna-pro"
 
 // Sub-agent caps (#175, tightened for delegation #264): deliberately SMALL
 // defaults. Depth bounds recursion; fan-out bounds how many children one parent
@@ -2035,8 +2035,8 @@ func splitLockdownModels(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return []string{
-			"google/gemini-3.8-flash", // recommended default
-			"openai/gpt-5.6-sol",      // strong tier
+			"openai/gpt-5.6-luna-pro", // recommended default
+			"anthropic/claude-opus-5", // strong tier
 		}
 	}
 	parts := strings.Split(raw, ",")

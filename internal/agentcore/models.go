@@ -20,24 +20,31 @@ const (
 	// DefaultCoreModel is the cost-efficient primary (scheduled tasks + the
 	// Operations Center default). No :nitro variant and no `~…-latest` alias:
 	// throughput-priority routing sprays requests across providers, and prompt
-	// caches are per-upstream — so the implicit-cache discount (~80% on cached
-	// input) almost never hit; and an alias slug defeats the send-side
-	// reasoning reconstruction (see isAliasModel).
+	// caches are per-upstream — so the cache discount almost never hit; and an
+	// alias slug defeats the send-side reasoning reconstruction (see
+	// isAliasModel).
 	//
-	// Google serves this family themselves, so canonicalUpstream pins it STRICT
-	// (Only, no fallbacks): there is no provider spread to degrade across, which
-	// is also why it carries no serving-precision floor — the fp8 floor under
-	// the previous DeepSeek default existed because 28 OpenRouter endpoints
-	// served that family at fp4-to-fp8. One upstream also means one prompt
-	// cache and one context length: the full 1,048,576.
-	DefaultCoreModel = "google/gemini-3.8-flash"
-	// DefaultMaxModel is the strong/fallback tier — the model escalation
-	// (suggest_advanced_model) and task fallback resolve to. Exact slug, never a
-	// `~latest` alias. Unlike the previous xAI occupant of this slot, this one
-	// DOES match a canonicalUpstream entry (the `openai/` soft pin), so the
-	// escalation path inherits the same per-upstream prompt-cache locality the
-	// rest of that family gets.
-	DefaultMaxModel = "openai/gpt-5.6-sol"
+	// GPT-5.6 Luna Pro (2026-09-21, replacing google/gemini-3.8-flash): the
+	// same Luna model served with reasoning.mode=pro, $0.20/M in, $1.20/M out,
+	// cache reads at a tenth of that, a 1,050,000-token window and OpenAI's
+	// single-family endpoints. The switch was measured on production's
+	// scheduled jobs on one day: gemini-3.8-flash averaged 9.4M prompt tokens
+	// at a 46% cache-hit rate and $4.76 per run with seven dead-letters
+	// (Google's implicit cache kept going cold across provider hops); the same
+	// jobs on Luna Pro ran in 4–10 minutes at $0.16–0.62 with 89–95% cache
+	// hits. The `openai/` soft pin in canonicalUpstream keeps the prompt cache
+	// on one upstream with graceful degradation.
+	DefaultCoreModel = "openai/gpt-5.6-luna-pro"
+	// DefaultMaxModel is the strong tier — the model escalation
+	// (suggest_advanced_model, chat's "advanced model") resolves to. Exact slug,
+	// never a `~latest` alias. Claude Opus 5 (2026-09-21, replacing
+	// openai/gpt-5.6-sol): 1M window, 11 healthy OpenRouter endpoints across
+	// four clouds, and a different provider family from the default so an
+	// escalation is also a provider change. It matches the `anthropic/` soft pin
+	// in canonicalUpstream, so the escalation path keeps per-upstream prompt-cache
+	// locality. The scheduled-task FALLBACK is configured separately
+	// (FLEET_TASK_FALLBACK_MODEL; production uses deepseek/deepseek-v4.1-flash).
+	DefaultMaxModel = "anthropic/claude-opus-5"
 	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel
@@ -94,6 +101,10 @@ var modelContextWindows = []struct {
 	{"openai/gpt-4.1", 1_000_000},
 	{"openai/o1", 200_000},
 	{modelOpenAIGPT5, 400_000},
+	// Claude 5 ships a 1M window (Opus 5 is DefaultMaxModel); the generic row
+	// below keeps the Claude 4 family at 200K. Longest prefix first.
+	{"anthropic/claude-opus-5", 1_000_000},
+	{"anthropic/claude-sonnet-5", 1_000_000},
 	{"anthropic/claude", 200_000},
 	// 4.6 is 500K; the generic grok entry below is the old 131K line and still
 	// covers earlier builds. Longer prefix first, as above. (4.6 held the strong

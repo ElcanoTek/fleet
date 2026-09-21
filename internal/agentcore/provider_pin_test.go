@@ -15,7 +15,7 @@ func TestUpstreamPinFor(t *testing.T) {
 	}{
 		// The everyday default: Google serves this family alone, so the pin is
 		// strict — there is no second upstream to fall back to.
-		{DefaultCoreModel, "Google", true},
+		{DefaultCoreModel, "OpenAI", false}, // everyday default: soft pin to OpenAI, official-weights pool
 		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
@@ -25,7 +25,7 @@ func TestUpstreamPinFor(t *testing.T) {
 		// per-upstream prompt-cache locality as every other OpenAI slug. The
 		// second row keeps the family's pin covered independently of whichever
 		// slug currently holds the tier.
-		{DefaultMaxModel, "OpenAI", false},
+		{DefaultMaxModel, "Anthropic", false}, // strong tier: soft pin to Anthropic
 		{"openai/gpt-5.4", "OpenAI", false},
 		// x-ai/ has no entry: it held the strong tier for one release and was
 		// deliberately left unpinned (xAI is its only upstream).
@@ -113,16 +113,38 @@ func TestUpstreamPinQuantizationFloor(t *testing.T) {
 // the property rather than the current lab, so swapping the default cannot
 // quietly drop the guarantee.
 func TestDefaultCoreModelCannotBeServedAtArbitraryPrecision(t *testing.T) {
-	p := upstreamPinFor(DefaultCoreModel)
-	if p == nil {
-		t.Fatalf("upstreamPinFor(%q) = nil: the default must be pinned", DefaultCoreModel)
+	for _, slug := range []string{DefaultCoreModel, DefaultMaxModel} {
+		p := upstreamPinFor(slug)
+		if p == nil {
+			t.Fatalf("upstreamPinFor(%q) = nil: a default-tier slug must be pinned", slug)
+		}
+		strict := len(p.Only) > 0 && p.AllowFallbacks != nil && !*p.AllowFallbacks
+		if strict {
+			continue // one upstream: no pool, so no precision to vary
+		}
+		if pinFamilyServesOfficialWeightsOnly(slug) {
+			continue // whole pool is the vendor's official weights: nothing to floor
+		}
+		if len(p.Quantizations) == 0 {
+			t.Errorf("upstreamPinFor(%q) = %+v: a soft-pinned default over a mixed pool needs a serving-precision floor", slug, p)
+		}
 	}
-	strict := len(p.Only) > 0 && p.AllowFallbacks != nil && !*p.AllowFallbacks
-	if strict {
-		return // one upstream: no pool, so no precision to vary
+}
+
+// The official-pool exemption is a claim about a family's whole endpoint pool
+// and must stay narrow: only families whose OpenRouter list is the vendor plus
+// its cloud resellers. A family served by third-party quantized hosts (DeepSeek,
+// Z.AI, Moonshot) must never carry it.
+func TestOfficialPoolExemptionIsNarrow(t *testing.T) {
+	for _, slug := range []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.2", "moonshotai/kimi-k2.6", "google/gemini-3.8-flash"} {
+		if pinFamilyServesOfficialWeightsOnly(slug) {
+			t.Errorf("%q must not be marked officialPool", slug)
+		}
 	}
-	if len(p.Quantizations) == 0 {
-		t.Errorf("upstreamPinFor(%q) = %+v: a soft-pinned default needs a serving-precision floor", DefaultCoreModel, p)
+	for _, slug := range []string{"openai/gpt-5.6-luna-pro", "anthropic/claude-opus-5"} {
+		if !pinFamilyServesOfficialWeightsOnly(slug) {
+			t.Errorf("%q should be marked officialPool", slug)
+		}
 	}
 }
 
@@ -152,12 +174,12 @@ func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
 // fallback; it must agree with upstreamPinFor on which family owns a slug.
 func TestPreferredUpstreamFor(t *testing.T) {
 	cases := map[string]string{
-		DefaultCoreModel:    "Google",
+		DefaultCoreModel:    "OpenAI",
 		"deepseek/v3":       "DeepSeek",
 		"~z-ai/glm-latest":  "Z.AI",
 		"openai/gpt-5.4":    "OpenAI",
-		DefaultMaxModel:     "OpenAI", // strong tier rejoined the pinned openai/ family
-		"x-ai/grok-4.6":     "",       // xAI is unpinned: single upstream already
+		DefaultMaxModel:     "Anthropic", // strong tier: Claude Opus 5 on the anthropic/ soft pin
+		"x-ai/grok-4.6":     "",          // xAI is unpinned: single upstream already
 		"mistralai/mixtral": "",
 	}
 	for slug, want := range cases {

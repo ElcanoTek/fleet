@@ -36,8 +36,8 @@ describe("tierForModel", () => {
 
 describe("labelForModel", () => {
   it("returns the display name for pinned slots (never an alias)", () => {
-    expect(labelForModel(DEFAULT_MODEL)).toBe("Google: Gemini 3.8 Flash");
-    expect(labelForModel(ADVANCED_MODEL)).toBe("OpenAI: GPT-5.6 Sol");
+    expect(labelForModel(DEFAULT_MODEL)).toBe("OpenAI: GPT-5.6 Luna Pro");
+    expect(labelForModel(ADVANCED_MODEL)).toBe("Anthropic: Claude Opus 5");
   });
 
   it("returns the raw slug for non-tier models", () => {
@@ -52,7 +52,7 @@ describe("TIER_MODELS", () => {
   it("pins the recommended pick first, the strong tier second", () => {
     // The picker pins this order at the top of the dropdown; the
     // sequence is product-meaningful (everyday pick → strongest).
-    expect(TIER_MODELS.map((t) => t.label)).toEqual(["Google: Gemini 3.8 Flash", "OpenAI: GPT-5.6 Sol"]);
+    expect(TIER_MODELS.map((t) => t.label)).toEqual(["OpenAI: GPT-5.6 Luna Pro", "Anthropic: Claude Opus 5"]);
     expect(TIER_MODELS.map((t) => t.slug)).toEqual([DEFAULT_MODEL, ADVANCED_MODEL]);
   });
 });
@@ -82,7 +82,7 @@ describe("setModelTiers", () => {
     ]);
     // A tier that IS a compiled-in slug keeps its friendly label.
     setModelTiers({ default_model: ADVANCED_MODEL, advanced_model: "acme/frontier-1" });
-    expect(currentTierModels()[0]).toEqual({ slug: ADVANCED_MODEL, label: "OpenAI: GPT-5.6 Sol" });
+    expect(currentTierModels()[0]).toEqual({ slug: ADVANCED_MODEL, label: "Anthropic: Claude Opus 5" });
   });
 
   it("keeps the fallback for missing, empty, or whitespace fields", () => {

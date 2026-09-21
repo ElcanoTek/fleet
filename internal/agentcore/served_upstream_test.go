@@ -57,13 +57,13 @@ func TestUpdateUsage_QuotedServedNameIsNotAFallback(t *testing.T) {
 // A run served by its canonical upstream is not a fallback.
 func TestUpdateUsage_CanonicalUpstreamIsNotAFallback(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 50)
-	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
+	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("OpenAI"))
 
 	if o.ServedFallback {
 		t.Error("ServedFallback = true for a step served by the pinned upstream")
 	}
-	if o.LastServedUpstream != "Google" {
-		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "Google")
+	if o.LastServedUpstream != "OpenAI" {
+		t.Errorf("LastServedUpstream = %q, want %q", o.LastServedUpstream, "OpenAI")
 	}
 }
 

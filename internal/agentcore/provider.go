@@ -149,17 +149,33 @@ var canonicalUpstream = []struct {
 	name          string
 	strict        bool
 	quantizations []string
+	// officialPool marks a family whose entire OpenRouter endpoint pool serves
+	// the vendor's official weights (the vendor itself plus its cloud
+	// resellers), so a soft pin needs no serving-precision floor: there is no
+	// third-party quantized serving to degrade onto. It is the third way a
+	// default may satisfy TestDefaultCoreModelCannotBeServedAtArbitraryPrecision
+	// — set it only after checking the live endpoint list.
+	officialPool bool
 }{
 	// Google serves this family alone, so the pin is STRICT (Only, no
 	// fallbacks) and needs no serving-precision floor — there is no second
-	// upstream to degrade onto. This family carries the recommended everyday
-	// default (DefaultCoreModel), so this is the hot path for ordinary chat
-	// turns and every scheduled run.
-	{"google/", upstreamProviderGoogle, true, nil},
-	{"anthropic/", upstreamProviderAnthropic, false, nil},
-	{"openai/", upstreamProviderOpenAI, false, nil},
-	{"moonshotai/", upstreamProviderMoonshot, false, nil},
-	{"z-ai/", upstreamProviderZAI, false, nil},
+	// upstream to degrade onto.
+	{"google/", upstreamProviderGoogle, true, nil, false},
+	// The strong tier (DefaultMaxModel, Claude Opus 5) lives here: a soft pin
+	// to Anthropic's own endpoint with graceful degradation onto the cloud
+	// resellers of the same weights (Anthropic, Claude Platform on AWS, Amazon
+	// Bedrock, Azure, Google — all official, quantization unspecified).
+	{"anthropic/", upstreamProviderAnthropic, false, nil, true},
+	// This family carries the recommended everyday default (DefaultCoreModel,
+	// GPT-5.6 Luna Pro), so this is the hot path for ordinary chat turns and
+	// every scheduled run. Soft pin: OpenAI first, Azure and Amazon Bedrock as
+	// fallbacks — the whole pool is official weights (OpenRouter endpoint list,
+	// 2026-09-21: OpenAI ×3, Azure ×3, Amazon Bedrock ×1, quantization
+	// unspecified on all), so a precision floor would only exclude every
+	// endpoint while guarding against a spread that does not exist.
+	{"openai/", upstreamProviderOpenAI, false, nil, true},
+	{"moonshotai/", upstreamProviderMoonshot, false, nil, false},
+	{"z-ai/", upstreamProviderZAI, false, nil, false},
 	// DeepSeek's own endpoint, non-strict. 28 OpenRouter endpoints serve this
 	// family at context lengths from 131K to 1M and quantizations from fp4 to
 	// fp8, so an unpinned route varies in both window and quality run to run —
@@ -173,7 +189,19 @@ var canonicalUpstream = []struct {
 	// the floor costs nothing on the preferred route. This family is no longer
 	// the everyday default, but the pin and the floor stay: operators still
 	// select these slugs explicitly, and they are the reason it is safe to.
-	{"deepseek/", upstreamProviderDeepSeek, false, fp8AndAbove},
+	{"deepseek/", upstreamProviderDeepSeek, false, fp8AndAbove, false},
+}
+
+// pinFamilyServesOfficialWeightsOnly reports whether the slug's family is
+// marked officialPool in canonicalUpstream (see that field).
+func pinFamilyServesOfficialWeightsOnly(modelSlug string) bool {
+	matchSlug := strings.TrimPrefix(modelSlug, "~")
+	for _, c := range canonicalUpstream {
+		if strings.HasPrefix(matchSlug, c.prefix) {
+			return c.officialPool
+		}
+	}
+	return false
 }
 
 // upstreamPinFor returns the OpenRouter provider routing policy for a model
