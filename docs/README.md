@@ -202,6 +202,7 @@ above fails otherwise.
 - [`BUILDING-ON-FLEET.md`](BUILDING-ON-FLEET.md) — Building on fleet: the API as your automation substrate
 - [`BUNDLE-PREFLIGHT.md`](BUNDLE-PREFLIGHT.md) — Bundle preflight in CI — the reusable gate and the `mcp_catalog` check
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
+- [`COMMITMENT-TRANSPORT-ALIAS.md`](COMMITMENT-TRANSPORT-ALIAS.md) — Same-write transport alias for typed critical commitments
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
 - [`COMPLETED-STEP-RECOVERY.md`](COMPLETED-STEP-RECOVERY.md) — Provider recovery after completed tool steps and preservation of verifier evidence.

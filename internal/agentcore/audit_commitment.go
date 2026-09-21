@@ -827,37 +827,48 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 		return false, ""
 	}
 	suffix := criticalSuffixFor(toolName)
-	approved := o.approvedDealIDs[suffix]
-	digestWant := o.approvedDigest[suffix]
-	if len(approved) == 0 {
-		for _, alt := range transportAliasesOf(suffix) {
-			if ids := o.approvedDealIDs[alt]; len(ids) > 0 {
-				approved = ids
-				if digestWant == "" {
-					digestWant = o.approvedDigest[alt]
-				}
-				break
+	gotDigest := valuesDigestArg(rawInput)
+	type approvalSet struct {
+		ids    map[string]bool
+		digest string
+	}
+	sets := []approvalSet{{o.approvedDealIDs[suffix], o.approvedDigest[suffix]}}
+	for _, alt := range transportAliasesOf(suffix) {
+		sets = append(sets, approvalSet{o.approvedDealIDs[alt], o.approvedDigest[alt]})
+	}
+	coversIDs := func(ids map[string]bool) bool {
+		if len(ids) == 0 {
+			return false
+		}
+		for _, id := range dealIDs {
+			if !ids[id] {
+				return false
 			}
 		}
+		return true
 	}
-	for _, id := range dealIDs {
-		if !approved[id] {
-			log.Printf("Enforcement: Blocking batch %s — record %q not in the approved set", toolName, id)
-			return true, fmt.Sprintf("BLOCKED: batch '%s' targets record %q, which is not in the "+
-				"confirm_audit-approved set for this tool. Re-run confirm_audit declaring every "+
-				"deal_id in a typed critical_actions entry, or narrow the batch to the approved records.",
-				toolName, id)
+	digestMismatch := false
+	for _, set := range sets {
+		if !coversIDs(set.ids) {
+			continue
 		}
-	}
-	if digestWant != "" {
-		if got := valuesDigestArg(rawInput); got != digestWant {
-			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q != approved %q", toolName, got, digestWant)
-			return true, fmt.Sprintf("BLOCKED: batch '%s' values_sha256 does not match the "+
-				"audit-approved digest. The approved value list differs from the one being applied — "+
-				"re-audit with the correct values_digest.", toolName)
+		if set.digest != "" && gotDigest != set.digest {
+			digestMismatch = true
+			continue
 		}
+		return false, ""
 	}
-	return false, ""
+	if digestMismatch {
+		log.Printf("Enforcement: Blocking batch %s — values_sha256 does not match any covering approval digest", toolName)
+		return true, fmt.Sprintf("BLOCKED: batch '%s' values_sha256 does not match the "+
+			"audit-approved digest. The approved value list differs from the one being applied — "+
+			"re-audit with the correct values_digest.", toolName)
+	}
+	log.Printf("Enforcement: Blocking batch %s — records %v not covered by any approved set (incl. transport aliases)", toolName, dealIDs)
+	return true, fmt.Sprintf("BLOCKED: batch '%s' targets record %q, which is not in the "+
+		"confirm_audit-approved set for this tool. Re-run confirm_audit declaring every "+
+		"deal_id in a typed critical_actions entry, or narrow the batch to the approved records.",
+		toolName, dealIDs[0])
 }
 
 // commitmentAuthorizes reports whether an outstanding commitment covers a

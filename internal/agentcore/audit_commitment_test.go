@@ -863,6 +863,26 @@ func TestTypedCommitment_PendingInlineClearedByUpload(t *testing.T) {
 	}
 }
 
+func TestTypedCommitment_BothTransportsPendingClearedByUpload(t *testing.T) {
+	withPagesTransportPolicy(t)
+	o := newOrchStateForTest()
+	args := `{"slug":"x"}`
+	if blocked, _ := o.checkCriticalTool(typedPagesUpdateData, "", args); !blocked {
+		t.Fatal("unaudited inline write must be blocked")
+	}
+	if blocked, _ := o.checkCriticalTool(typedPagesUpdateDataUpload, "", args); !blocked {
+		t.Fatal("unaudited upload write must be blocked")
+	}
+	registerTyped(t, o, criticalActionStruct{Tool: typedPagesUpdateData})
+	o.recordToolResult(typedPagesUpdateDataUpload, args, `{"ok":true,"version":860}`, true)
+	o.mu.Lock()
+	n := len(o.pendingCriticalActions)
+	o.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("upload success must clear both pending transports, got %d pending", n)
+	}
+}
+
 func TestTransportAliasesPreserveEveryDeclaredCounterpart(t *testing.T) {
 	p := testFixturePolicy()
 	p.CriticalToolTransportAliases = map[string][]string{

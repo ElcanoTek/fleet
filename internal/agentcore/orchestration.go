@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -931,22 +932,39 @@ func pendingTransportAlias(pendingName, executedName string) bool {
 }
 
 func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) {
-	fallback := -1
+	exact, fallback := -1, -1
+	var aliases []int
 	for i, p := range o.pendingCriticalActions {
-		if p.toolName != toolName && !pendingTransportAlias(p.toolName, toolName) {
-			continue
-		}
-		if p.argsHash == argsHash {
-			o.dischargePendingCriticalAt(i)
-			return
-		}
-		if fallback < 0 {
-			fallback = i
+		switch {
+		case p.toolName == toolName:
+			if p.argsHash == argsHash {
+				exact = i
+			} else if fallback < 0 {
+				fallback = i
+			}
+		case pendingTransportAlias(p.toolName, toolName):
+			aliases = append(aliases, i)
 		}
 	}
-	if fallback >= 0 {
-		log.Printf("Enforcement: discharging pending %s against corrected arguments (blocked-call hash no longer matches)", toolName)
-		o.dischargePendingCriticalAt(fallback)
+	primary := exact
+	if primary < 0 {
+		primary = fallback
+		if primary >= 0 {
+			log.Printf("Enforcement: discharging pending %s against corrected arguments (blocked-call hash no longer matches)", toolName)
+		}
+	}
+	seen := map[int]bool{}
+	var drop []int
+	for _, i := range append([]int{primary}, aliases...) {
+		if i < 0 || seen[i] {
+			continue
+		}
+		seen[i] = true
+		drop = append(drop, i)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(drop)))
+	for _, i := range drop {
+		o.dischargePendingCriticalAt(i)
 	}
 }
 
