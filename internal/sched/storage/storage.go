@@ -246,7 +246,6 @@ func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*m
 	return task, nil
 }
 
-
 // AddTaskBatch inserts a slice of validated tasks for the batch submission
 // endpoint (#227). When atomic is true the whole insert runs inside a single
 // transaction (BeginTx/Commit): a DB failure rolls every row back and the
