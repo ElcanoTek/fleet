@@ -1164,6 +1164,11 @@ func (w *firstChunkWatchdog) markFirst() {
 // any chunk arrived. Idempotent in effect; the last status wins.
 func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderError) {
 	w.providerErrSeen.Store(true)
+	// The status describes the LAST provider error, so it is cleared on every
+	// callback. Fantasy passes nil for a retryable transport failure (DNS, TCP,
+	// HTTP/2), and leaving a previous 429 cached there would have the card call
+	// a connection reset a rate limit.
+	w.providerErrStatus.Store(0)
 	if providerErr == nil {
 		return
 	}

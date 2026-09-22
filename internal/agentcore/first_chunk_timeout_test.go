@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"charm.land/fantasy"
 )
 
 // The first-chunk watchdog was a flat 30 s regardless of prompt size, so a
@@ -81,5 +83,31 @@ func TestFirstChunkTimeoutErrorClassifiesAsBlipAndCarriesDetail(t *testing.T) {
 	}
 	if _, _, ok := firstChunkTimeoutDetail(cause); ok {
 		t.Fatal("a plain error must carry no watchdog detail")
+	}
+}
+
+// The status belongs to the LAST provider error. Fantasy passes nil for a
+// retryable transport failure, and a cached 429 would then have the card call
+// a connection reset a rate limit (#1585).
+func TestWatchdogProviderErrorStatusTracksTheLatestCallback(t *testing.T) {
+	w := newFirstChunkWatchdog(time.Hour, func() {})
+	defer w.stop()
+
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429})
+	if got := w.providerErrorStatus(); got != 429 {
+		t.Fatalf("status = %d, want 429", got)
+	}
+	// A transport error carries no status: the 429 must not linger.
+	w.noteProviderError(nil)
+	if !w.sawProviderError() {
+		t.Errorf("a transport error is still a provider error")
+	}
+	if got := w.providerErrorStatus(); got != 0 {
+		t.Fatalf("stale status survived a statusless retry: %d", got)
+	}
+	// An out-of-range code is not a status worth reporting either.
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 99_999})
+	if got := w.providerErrorStatus(); got != 0 {
+		t.Fatalf("out-of-range status was stored: %d", got)
 	}
 }
