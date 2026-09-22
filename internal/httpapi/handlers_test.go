@@ -567,11 +567,11 @@ func TestSummarize_LockdownDelistedModelRunsOnTheDefault(t *testing.T) {
 // The migration persists the replacement and announces it on the `conversation`
 // event — but emitting an event is not proof the browser received it, and the
 // socket dying in that instant is the very situation the migration exists for.
-// The next submission then echoes a slug the allow-list refuses. On a lockdown
-// conversation that is a stale echo by construction (the picker only offers
-// allowed models), so it is ignored in favour of the stored model rather than
-// refused with a 400 the user can only escape by reloading. The rule is
-// stateless on purpose: it holds across a process restart, for a second tab,
+// The next submission then carries a slug the allow-list refuses. It is refused
+// — a model the operator excluded never runs, and a caller that asked for one
+// is told so (#1588) — but the refusal names the model the conversation may
+// use, so the client adopts it and resends instead of being stranded. The rule
+// is stateless on purpose: it holds across a process restart, for a second tab,
 // and after any number of migrations.
 func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing.T) {
 	s := serverFixture(t)
@@ -600,37 +600,45 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 		return got
 	}
 
-	// The stale echo: accepted, and it does not drag the conversation back.
+	// The stale echo: refused, told which model to use, and the conversation
+	// is not dragged back to the delisted slug.
 	fresh := reload()
 	w := httptest.NewRecorder()
-	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
-		t.Fatalf("the pre-migration echo must be accepted, got %d %s", w.Code, w.Body.String())
+	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
+		t.Fatalf("the pre-migration echo must be refused, got %d %s", w.Code, w.Body.String())
+	}
+	if got := decodeLockdownRefusal(t, w)["model"]; got != "c/d" {
+		t.Fatalf("the refusal must name the migrated model c/d, got %v", got)
 	}
 	if fresh.Model != "c/d" {
 		t.Fatalf("the echo must not change the stored model, got %q", fresh.Model)
 	}
 
 	// Any other disallowed slug is treated the same way — it cannot be run,
-	// and the conversation has a perfectly good allowed model to proceed on.
+	// and the conversation has a perfectly good allowed model to name.
 	fresh = reload()
 	w = httptest.NewRecorder()
-	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "evil/unvetted") {
-		t.Fatalf("a disallowed slug must be ignored, not refused: %d %s", w.Code, w.Body.String())
+	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "evil/unvetted") {
+		t.Fatalf("a disallowed slug must be refused: %d %s", w.Code, w.Body.String())
+	}
+	if got := decodeLockdownRefusal(t, w)["model"]; got != "c/d" {
+		t.Fatalf("the refusal must name the stored model c/d, got %v", got)
 	}
 	if fresh.Model != "c/d" {
-		t.Fatalf("the ignored slug must not be stored, got %q", fresh.Model)
+		t.Fatalf("the refused slug must not be stored, got %q", fresh.Model)
 	}
 
-	// Only when the STORED model is disallowed too is there nothing safe to
-	// run, and the caller has to choose.
+	// When the STORED model is disallowed too, echoing it back would refuse
+	// the client's retry as well: the correction is the lockdown default the
+	// next launch would migrate this conversation to anyway.
 	stranded := reload()
 	stranded.Model = "a/b"
 	w = httptest.NewRecorder()
 	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, stranded, "evil/unvetted") {
 		t.Fatalf("with no allowed stored model the request must be refused")
 	}
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if got := decodeLockdownRefusal(t, w)["model"]; got != "c/d" {
+		t.Fatalf("the refusal must correct to the lockdown default c/d, got %v", got)
 	}
 
 	// Once the operator puts that slug back on the allow-list it stops being
@@ -653,8 +661,11 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 	restarted.cfg.LockdownAllowedModels = []string{"c/d"}
 	afterRestart := &store.Conversation{ID: conv.ID, UserEmail: user, Model: "c/d", Lockdown: true}
 	w = httptest.NewRecorder()
-	if !restarted.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, afterRestart, "a/b") {
-		t.Fatalf("a restarted server must still ignore the stale echo: %d %s", w.Code, w.Body.String())
+	if restarted.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, afterRestart, "a/b") {
+		t.Fatalf("a restarted server must still refuse the stale echo: %d %s", w.Code, w.Body.String())
+	}
+	if got := decodeLockdownRefusal(t, w)["model"]; got != "c/d" {
+		t.Fatalf("a restarted server must still correct to c/d, got %v", got)
 	}
 	if afterRestart.Model != "c/d" {
 		t.Fatalf("the restarted server must keep the stored model, got %q", afterRestart.Model)

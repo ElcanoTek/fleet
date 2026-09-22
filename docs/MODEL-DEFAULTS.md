@@ -78,3 +78,42 @@ endpoint was at 80% uptime on the day of the switch and it costs $2/M in.
 - Retiring `google/gemini-3.8-flash` and `openai/gpt-5.6-sol` from the fake-LLM
   catalog and test fixtures: they stay selectable and several tests use them as
   fixture slugs, so they remain listed.
+
+## Follow-up: a refused lockdown model names its replacement (#1588)
+
+The allow-list guard on `POST /chat`'s per-turn model override spent a release
+*ignoring* a disallowed slug and running the turn on the conversation's stored
+model. That kept a stale browser working, but it also meant a deliberate API
+client that asked for a model this deployment forbids got a turn on a different
+one and was never told. The guard now **refuses** such an override — 400, no
+`SetModel`, no turn — and the body names the model the caller may use instead:
+
+```json
+{ "error": "model not allowed in lockdown mode",
+  "code": "lockdown_model_not_allowed",
+  "model": "openai/gpt-5.6-luna-pro" }
+```
+
+`code` is the field to branch on; the prose is free to change. `model` is the
+conversation's own slug when the allow-list still permits it, otherwise the
+lockdown default that `reconcileLockdownModelCtx` would migrate the
+conversation to on its next launch — never a slug that would be refused again,
+so a client that adopts it and retries gets a turn rather than a second 400. An
+allow-list made only of globs has no literal slug to name, so the field is
+omitted and the caller has to choose. The web (`useTurnStream`) does exactly
+what an API client should: adopts the named model into the picker and resends
+the submission **once**, so a tab holding a slug the server has moved past
+self-corrects without the user reloading the page.
+
+Nothing is remembered server-side to make this work — the correction is derived
+from the allow-list on each request — so it holds across a process restart, for
+a second tab, and after any number of migrations. The alternative, a
+per-conversation memo of the exact pre-migration slug, failed all three.
+
+What is deliberately unchanged: a client echoing the conversation's **own**
+stored slug is still "no opinion" (`postChat` maps it to an empty override), so
+a conversation whose persisted model was delisted still migrates on the
+turn-launch path instead of 400ing at its owner; and Compact
+(`POST /conversations/{id}/summarize`) still substitutes an allowed model
+rather than refusing, because it is a button in the UI rather than a model
+choice.

@@ -129,29 +129,38 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		return true
 	}
 	if conv.Lockdown && !s.cfg.LockdownAllows(reqModel) {
-		// A lockdown conversation's picker only ever offers allow-listed
-		// models, so a disallowed slug arriving on one is a client echoing
-		// something the server itself told it before the list — or the tiers
-		// behind it — moved. It is not a request for that model, and it could
-		// not be honoured in any case. Ignore it and run the conversation's
-		// stored model, which is allowed; the `conversation` event carries the
-		// truth back, and the turn is not lost to a 400 the user can only
-		// escape by reloading.
+		// A model the operator excluded is refused, never quietly swapped for
+		// another one: a caller that asked for a specific model and got a turn
+		// on a different one was told nothing, and a deliberate API client has
+		// no way to learn that this deployment forbids the slug it sends
+		// (#1588).
 		//
-		// This replaced a per-conversation memo of the exact pre-migration
-		// slug. The memo could not survive a process restart, could not speak
-		// for a second tab, and lost the first hop when a conversation was
-		// migrated twice — three ways to strand a client, all of which this
-		// rule dissolves, because it needs no memory at all. The invariant is
-		// untouched: the model that RUNS is one the allow-list permits.
-		if s.cfg.LockdownAllows(conv.Model) {
-			log.Printf("lockdown: conversation %s ignored a disallowed model %q from the client and ran on its stored %q", logSafe(conv.ID), logSafe(reqModel), logSafe(conv.Model))
-			return true
-		}
-		// The stored model is disallowed too, so there is nothing safe to run
-		// and the caller must choose. (reconcileLockdownModelCtx migrates this
-		// conversation when its turn launches, which is the usual way out.)
-		http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
+		// A bare 400 was not enough on its own, which is why this path spent a
+		// release ignoring the slug instead. A lockdown picker only ever offers
+		// allow-listed models, so a disallowed slug usually means a browser is
+		// echoing something the server itself told it before the list — or the
+		// tiers behind it — moved, and refusing that browser with nothing but
+		// "no" leaves it looping on a stale slug until the user reloads the
+		// page. So the refusal NAMES the model to use instead
+		// (lockdownCorrectedModel): an API client gets a real error carrying
+		// the answer, and the web adopts that slug and retries the turn once.
+		//
+		// Both halves are stateless on purpose. The alternative considered and
+		// rejected was a per-conversation memo of the exact pre-migration slug:
+		// it could not survive a process restart, could not speak for a second
+		// tab, and lost the first hop when a conversation was migrated twice.
+		// Correcting the client from the allow-list needs no memory at all.
+		// The invariant is untouched either way: a disallowed model is never
+		// persisted and never runs.
+		//
+		// What deliberately does NOT reach here: postChat maps a client's echo
+		// of the conversation's OWN stored slug to "no opinion" (reqModel ==
+		// conv.Model → ""), so a conversation whose persisted model was
+		// delisted still migrates on the launch path
+		// (reconcileLockdownModelCtx) rather than 400ing at its owner.
+		next := s.lockdownCorrectedModel(conv)
+		log.Printf("lockdown: conversation %s refused a disallowed model %q from the client and offered %q instead", logSafe(conv.ID), logSafe(reqModel), logSafe(next))
+		writeLockdownModelRefusal(w, next)
 		return false
 	}
 	if reqModel != conv.Model {
@@ -162,6 +171,42 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		conv.Model = reqModel
 	}
 	return true
+}
+
+// lockdownModelRefusalCode is the machine-readable marker on the body of a
+// refused lockdown model override. A client keys its self-correction off this
+// rather than off the prose, which is free to change.
+const lockdownModelRefusalCode = "lockdown_model_not_allowed"
+
+// writeLockdownModelRefusal answers a refused lockdown model override with 400
+// AND, when there is one, the slug the caller should adopt (#1588) — so the
+// refusal carries its own remedy instead of being a dead end the caller can
+// only escape by reloading the page. The body stays a superset of the plain
+// error text every other lockdown guard writes: `error` is the same sentence,
+// `code` identifies the refusal, `model` is the correction.
+func writeLockdownModelRefusal(w http.ResponseWriter, model string) {
+	body := map[string]any{
+		"error": "model not allowed in lockdown mode",
+		"code":  lockdownModelRefusalCode,
+	}
+	if model != "" {
+		body["model"] = model
+	}
+	writeJSONStatus(w, http.StatusBadRequest, body)
+}
+
+// lockdownCorrectedModel names the model a refused override should be replaced
+// with: the conversation's own when the allow-list still permits it, otherwise
+// the lockdown default its next turn launch would migrate it to anyway
+// (reconcileLockdownModelCtx). It is NEVER a slug the allow-list forbids —
+// handing one back would put a retrying client straight into the loop this
+// mechanism exists to break — so an operator list with no literal slug at all
+// yields "" and the refusal carries no correction: the caller must choose.
+func (s *Server) lockdownCorrectedModel(conv *store.Conversation) string {
+	if s.cfg.LockdownAllows(conv.Model) {
+		return conv.Model
+	}
+	return lockdownDefaultSlug(s.cfg.LockdownModels())
 }
 
 // lockdownDefaultSlug picks the slug a delisted lockdown conversation is moved

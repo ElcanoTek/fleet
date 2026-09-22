@@ -203,6 +203,41 @@ export function classifyQueueSubmitResponse(res: {
     : "queued";
 }
 
+// Reads a refused lockdown model override off a /api/chat rejection (#1588).
+//
+// A lockdown deployment refuses a model its allow-list forbids with 400 rather
+// than quietly running the turn on a different one — a deliberate API client
+// has to be told — and names the slug to use instead in the same body. A
+// browser can hold a stale slug through no fault of the user (the operator
+// narrowed the allow-list, the tiers behind it moved, or the server migrated
+// the conversation while this tab was asleep and the `conversation` event never
+// arrived), and for it a bare refusal is a loop it can only escape by
+// reloading. So we read the correction out and resend the turn once with it.
+//
+//   null  — not a lockdown model refusal: handle it like any other error.
+//   model — "" when the server offered no correction (an allow-list made only
+//           of globs has no literal slug to name); then the user must pick.
+export function parseLockdownModelRefusal(
+  status: number,
+  bodyText: string,
+): { message: string; model: string } | null {
+  if (status !== 400) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const body = parsed as { code?: unknown; error?: unknown; model?: unknown };
+  // Keyed off the machine-readable code, never the prose.
+  if (body.code !== "lockdown_model_not_allowed") return null;
+  return {
+    message: typeof body.error === "string" ? body.error : "",
+    model: typeof body.model === "string" ? body.model.trim() : "",
+  };
+}
+
 // persistedAnswersLocalTurn reports whether the CANONICAL (Postgres) copy of a
 // conversation already contains a finished assistant reply for the turn the
 // client is still holding open — i.e. whether hitting refresh right now would
@@ -2969,7 +3004,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // reports (a previous turn still inside its retain window, say) would
     // replay the wrong turn into this slot (#1584).
     accepted?: { value: boolean },
-  ) => {
+    // Set on the one resend a lockdown model refusal is allowed to trigger
+    // (#1588), so a server that refuses the very slug it just named cannot
+    // bounce the turn between us forever.
+    isModelRetry?: boolean,
+    // Annotated because the body references streamTurn (that resend) and TS
+    // cannot infer the type of a const that appears in its own initializer.
+  ): Promise<void> => {
     const thinkingStartedAt = nowMs();
     let hasStartedStreaming = false;
     // Which conversation slot do this turn's events write to? Caller
@@ -2993,6 +3034,28 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const retry = response.headers.get("Retry-After") ?? "a moment";
         throw new Error(
           `Rate limit reached. Try again in ${retry.replace(/\D/g, "")}s.`,
+        );
+      }
+      const refusal = parseLockdownModelRefusal(response.status, errorText);
+      if (refusal) {
+        // The server refused our model and named the one this conversation may
+        // use. Adopt it — so the picker stops showing a slug the deployment
+        // forbids — and resend the turn once, which is the whole reason the
+        // refusal carries a model at all. Nothing was accepted, so no turn is
+        // lost: this POST is the submission, retried.
+        if (refusal.model && !isModelRetry) {
+          setSelectedModel(refusal.model);
+          return streamTurn(
+            assistantId,
+            abortController,
+            { ...body, model: refusal.model },
+            target,
+            accepted,
+            true,
+          );
+        }
+        throw new Error(
+          refusal.message || "That model is not allowed in lockdown mode.",
         );
       }
       throw new Error(errorText || "Unable to reach the chat server.");
