@@ -121,11 +121,9 @@ func TestWatchdogProviderErrorExpiresWithItsBackoff(t *testing.T) {
 	defer w.stop()
 
 	// A retry whose backoff has since elapsed: the next attempt is under way,
-	// so its silence is the model's own. (Set directly rather than sleeping
-	// out the real grace period — the semantics under test are the expiry,
-	// not the clock.)
-	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, time.Second)
-	w.providerErrUntil.Store(time.Now().Add(-time.Millisecond).UnixNano())
+	// so its silence is the model's own. A zero delay is enough to show it —
+	// the record covers the sleep it bought and not a moment more.
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, 0)
 	if w.sawProviderError() {
 		t.Fatalf("a lapsed provider-error record still explained the silence")
 	}

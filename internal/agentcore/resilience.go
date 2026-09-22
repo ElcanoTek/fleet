@@ -99,10 +99,14 @@ const (
 	minFirstChunkTimeout          = 5 * time.Second
 	firstChunkTimeoutPer10KTokens = 2 * time.Second
 	defaultFirstChunkTimeoutMax   = 180 * time.Second
-	// providerErrorGrace extends a retry's provider-error record just past the
-	// backoff it bought, so a watchdog expiry landing on the boundary is still
-	// attributed to the provider rather than to a model that never started.
-	providerErrorGrace       = 2 * time.Second
+	// providerErrorGrace is deliberately zero: the record explains exactly the
+	// sleep it bought and not a moment more. A grace period was tried and is
+	// worse than the boundary case it covered — a 429 at 69 s with a 5 s
+	// backoff starts a new attempt at 74 s, and an expiry at 75 s belongs to
+	// THAT attempt, which may be a model reasoning in silence. Mis-attributing
+	// it would send the user off a model that is fine, which is the very thing
+	// this watchdog work exists to stop.
+	providerErrorGrace       = 0
 	firstChunkTimeoutBaseEnv = "PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS"
 	firstChunkTimeoutMaxEnv  = "PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS"
 )
