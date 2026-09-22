@@ -458,9 +458,14 @@ export function ChatExperience({
   // an in-flight stream without losing the streaming UI state — the
   // stream events keep landing in the originating conv's slot whether
   // it's currently displayed or not.
-  const [messagesByConv, setMessagesByConv] = useState<
-    Record<string, Message[]>
-  >(() => restoredSession?.messagesByConv ?? {});
+  // A Map rather than a Record keyed by conv id: the key is server-issued,
+  // so writing it as an object property name is remote property injection
+  // (CodeQL js/remote-property-injection, security-severity 7.5) and a conv
+  // id of `__proto__` would reach Object.prototype. A Map entry is just an
+  // entry, so the sink is gone rather than reasoned about.
+  const [messagesByConv, setMessagesByConv] = useState<Map<string, Message[]>>(
+    () => new Map(restoredSession?.messagesByConv ?? []),
+  );
   // True once the initial bootstrap (cold start) or the rehydration (warm
   // return) has established a snapshot worth persisting. Gates the mirror
   // effect below so a mid-cold-start unmount never saves a half-empty snapshot
@@ -967,8 +972,8 @@ export function ChatExperience({
   // render (streamTurn callbacks, the visibility-refresh listener) see the
   // warm cache immediately, not empty values that the sync effects below only
   // catch up to after the first commit.
-  const messagesByConvRef = useRef<Record<string, Message[]>>(
-    restoredSession?.messagesByConv ?? {},
+  const messagesByConvRef = useRef<ReadonlyMap<string, Message[]>>(
+    new Map(restoredSession?.messagesByConv ?? []),
   );
   const activeConversationIdRef = useRef<string | null>(
     restoredSession?.activeConversationId ?? null,
@@ -1078,12 +1083,12 @@ export function ChatExperience({
     updater: Message[] | ((prev: Message[]) => Message[]),
   ) => {
     setMessagesByConv((prev) => {
-      const cur = prev[convId] ?? [];
+      const cur = prev.get(convId) ?? [];
       const next =
         typeof updater === "function"
           ? (updater as (p: Message[]) => Message[])(cur)
           : updater;
-      const merged = { ...prev, [convId]: next };
+      const merged = new Map(prev).set(convId, next);
       messagesByConvRef.current = merged;
       return merged;
     });
@@ -1093,17 +1098,18 @@ export function ChatExperience({
   // CURRENT value (post-recent-setConvMessages) without going through
   // React state.
   const getConvMessages = (convId: string): Message[] =>
-    messagesByConvRef.current[convId] ?? [];
+    messagesByConvRef.current.get(convId) ?? [];
 
   // renameConvKey moves a slot's array from one key to another. Used to
   // promote PENDING_CONV_KEY → the real conversation id once the server
   // emits the "conversation" event.
   const renameConvKey = (oldKey: string, newKey: string) => {
     setMessagesByConv((prev) => {
-      if (oldKey === newKey || !(oldKey in prev)) return prev;
-      const next = { ...prev };
-      next[newKey] = next[oldKey];
-      delete next[oldKey];
+      const slot = prev.get(oldKey);
+      if (oldKey === newKey || slot === undefined) return prev;
+      const next = new Map(prev);
+      next.set(newKey, slot);
+      next.delete(oldKey);
       messagesByConvRef.current = next;
       return next;
     });
@@ -1114,9 +1120,9 @@ export function ChatExperience({
   // long-lived sessions don't accumulate slots forever.
   const clearConvSlot = (convId: string) => {
     setMessagesByConv((prev) => {
-      if (!(convId in prev)) return prev;
-      const next = { ...prev };
-      delete next[convId];
+      if (!prev.has(convId)) return prev;
+      const next = new Map(prev);
+      next.delete(convId);
       messagesByConvRef.current = next;
       return next;
     });
@@ -1127,7 +1133,7 @@ export function ChatExperience({
   // (currentConvKey is declared up top so the per-conv composer derivations
   // can use it.)
   const messages = useMemo(() => {
-    return messagesByConv[currentConvKey] ?? [];
+    return messagesByConv.get(currentConvKey) ?? [];
   }, [currentConvKey, messagesByConv]);
 
   // Context-usage signal. Hoisted up here so both the conversation
@@ -4384,7 +4390,7 @@ export function ChatExperience({
       // transient UI state (open dropdowns, in-progress edits) every
       // single time the user flips tabs — which made the chat feel like
       // it was reloading on every return.
-      const localMsgs = messagesByConvRef.current[convId];
+      const localMsgs = messagesByConvRef.current.get(convId);
       const hasStaleStream = localMsgs?.some(
         (m) => m.state === "streaming" || m.state === "thinking",
       );

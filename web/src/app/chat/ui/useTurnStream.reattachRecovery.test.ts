@@ -23,7 +23,14 @@ import type { HistoryEntry, Message } from "./history";
 
 const CONV = "conv-1";
 
-type Store = Record<string, Message[]>;
+// The component's messagesByConvRef is a Map (a conv id is server-issued,
+// so it must not be used as an object property name — CodeQL
+// js/remote-property-injection). The harness mirrors that shape.
+type Store = Map<string, Message[]>;
+
+// Read one conversation's slot out of the Map-backed store.
+const convSlot = (h: Harness, convId: string): Message[] =>
+  h.store.get(convId) ?? [];
 type InflightInfo = {
   inflight: boolean;
   turn_id?: string;
@@ -135,9 +142,9 @@ const makeHarness = (opts: {
   // sweep. Keyed by conv id; each gets its own mid-flight transcript.
   extraConvs?: string[];
 }): Harness => {
-  const store: Store = { [CONV]: opts.initial };
+  const store: Store = new Map([[CONV, opts.initial]]);
   for (const extra of opts.extraConvs ?? []) {
-    store[extra] = midTurnTranscript();
+    store.set(extra, midTurnTranscript());
   }
   const messagesByConvRef = { current: store };
   const loadConversationCalls: string[] = [];
@@ -153,8 +160,8 @@ const makeHarness = (opts: {
     convId: string,
     updater: Message[] | ((prev: Message[]) => Message[]),
   ) => {
-    const prev = store[convId] ?? [];
-    store[convId] = typeof updater === "function" ? updater(prev) : updater;
+    const prev = store.get(convId) ?? [];
+    store.set(convId, typeof updater === "function" ? updater(prev) : updater);
   };
 
   const patchAssistantMessage = (
@@ -162,8 +169,9 @@ const makeHarness = (opts: {
     assistantId: number,
     updater: (m: Message) => Message,
   ) => {
-    store[convId] = (store[convId] ?? []).map((m) =>
-      m.id === assistantId ? updater(m) : m,
+    store.set(
+      convId,
+      (store.get(convId) ?? []).map((m) => (m.id === assistantId ? updater(m) : m)),
     );
   };
 
@@ -172,7 +180,7 @@ const makeHarness = (opts: {
   const loadConversation = async (convId: string) => {
     loadConversationCalls.push(convId);
     const { historyToMessages } = await import("./history");
-    store[convId] = historyToMessages(opts.persisted);
+    store.set(convId, historyToMessages(opts.persisted));
     // loadConversation ends by re-probing for an in-flight turn; onLoaded lets
     // a test stand in for that trailing reattach claiming the conversation.
     opts.onLoaded?.();
@@ -273,7 +281,7 @@ const makeHarness = (opts: {
   // compile error in this harness instead.
   const deps: TurnStreamDeps = {
     setConvMessages,
-    getConvMessages: (convId: string) => store[convId] ?? [],
+    getConvMessages: (convId: string) => store.get(convId) ?? [],
     renameConvKey: noop,
     patchAssistantMessage,
     startThinkingCrossfade: noop,
@@ -372,7 +380,7 @@ const unansweredHistory = (): HistoryEntry[] => [
   { role: "user", type: "text", content: { text: "run the long job" } },
 ];
 
-const lastOf = (h: Harness) => h.store[CONV][h.store[CONV].length - 1];
+const lastOf = (h: Harness) => convSlot(h, CONV)[convSlot(h, CONV).length - 1];
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -531,7 +539,7 @@ describe("an unreachable server is not a failed turn", () => {
     expect(last.id).toBe(2);
     expect(last.content).toBe("partial and the rest");
     expect(last.state).toBe("done");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("adopts the persisted answer when the turn finished while the radio was off", async () => {
@@ -561,7 +569,7 @@ describe("an unreachable server is not a failed turn", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(h.loadConversationCalls).toEqual([CONV]);
     expect(lastOf(h).content).toBe("Done — here are the results.");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("never stamps failed while the server stays unreachable; the chain is bounded", async () => {
@@ -631,7 +639,7 @@ describe("the recovery chain owns the unsettled slot", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(lastOf(h).content).toBe("the answer");
     expect(lastOf(h).state).toBe("done");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("recovers a replay-gap slot, which already reads as done", async () => {
@@ -665,7 +673,7 @@ describe("the recovery chain owns the unsettled slot", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(h.loadConversationCalls).toEqual([CONV]);
     expect(lastOf(h).content).toBe("Done — here are the results.");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("treats an in-progress reattach as ownership instead of settling", async () => {
@@ -920,9 +928,9 @@ describe("the recovery chain hands the conversation back", () => {
     // happened and no replay was appended to our slot.)
     expect(h.loadConversationCalls[0]).toBe(CONV);
     expect(
-      h.store[CONV].some((m) => m.content === "Done — here are the results."),
+      convSlot(h, CONV).some((m) => m.content === "Done — here are the results."),
     ).toBe(true);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     // The successor is then followed, because a turn the server is running
     // with no stream on screen is the other half of this bug: it would show
     // nothing until a reload — and its answer lands in its OWN slot, below
@@ -998,7 +1006,7 @@ describe("a fresh turn does not inherit the previous turn's identity", () => {
     expect(h.loadConversationCalls).toEqual([]);
     expect(lastOf(h).content).toBe("the answer");
     expect(lastOf(h).state).toBe("done");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -1034,9 +1042,9 @@ describe("an unidentified turn is resolved by the transcript, not by guessing", 
     // instead of the successor's replay being appended to our bubble...
     expect(h.loadConversationCalls[0]).toBe(CONV);
     expect(
-      h.store[CONV].some((m) => m.content === "Done — here are the results."),
+      convSlot(h, CONV).some((m) => m.content === "Done — here are the results."),
     ).toBe(true);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     // ...and the successor is still followed, into its own slot.
     expect(h.attachCount()).toBe(attachesBefore + 1);
     expect(lastOf(h).content).toBe("the successor's answer");
@@ -1068,7 +1076,7 @@ describe("an unidentified turn is resolved by the transcript, not by guessing", 
     await vi.advanceTimersByTimeAsync(10);
     expect(lastOf(h).content).toBe("ours after all");
     expect(lastOf(h).state).toBe("done");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -1156,7 +1164,7 @@ describe("a live turn is trusted even when the POST response was lost", () => {
 
     expect(h.attachCount()).toBeGreaterThan(0);
     expect(lastOf(h).content).toBe("it was ours");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -1323,7 +1331,7 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(h.deps.attachedConvIdsRef.current.has(CONV)).toBe(true);
     expect(h.attachCount()).toBe(1);
-    expect(h.store[CONV][1].content).toBe("partial ");
+    expect(convSlot(h, CONV)[1].content).toBe("partial ");
 
     // Let the socket go genuinely silent — a fresh stream is never suspected.
     await vi.advanceTimersByTimeAsync(3000);
@@ -1340,7 +1348,7 @@ describe("checkStreamLiveness — the turn is still generating", () => {
 
     // The turn finished on the replacement, into the SAME assistant slot: the
     // partial answer is still there and the rest is appended to it.
-    expect(h.store[CONV]).toHaveLength(2);
+    expect(convSlot(h, CONV)).toHaveLength(2);
     const last = lastOf(h);
     expect(last.id).toBe(2);
     expect(last.content).toBe("partial and the rest");
@@ -1350,8 +1358,8 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     // replacement's back. Without the superseded marker its teardown fires a
     // "connection dropped" failure into the transcript and forces the
     // replacement onto a second, duplicate assistant bubble.
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
-    expect(h.store[CONV].some((m) => m.cancelled)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.cancelled)).toBe(false);
     expect(h.loadConversationCalls).toEqual([]);
   }, 20000);
 
@@ -1482,7 +1490,7 @@ describe("checkStreamLiveness over a live POST /chat stream", () => {
 
     // The POST is streaming into its assistant slot.
     expect(h.deps.attachedConvIdsRef.current.has(CONV)).toBe(true);
-    const assistant = h.store[CONV][h.store[CONV].length - 1];
+    const assistant = convSlot(h, CONV)[convSlot(h, CONV).length - 1];
     expect(assistant.content).toBe("partial ");
 
     // …and then the phone locks: the socket goes quiet and stays quiet.
@@ -1499,8 +1507,8 @@ describe("checkStreamLiveness over a live POST /chat stream", () => {
     expect(last.id).toBe(assistant.id);
     expect(last.content).toBe("partial and the rest");
     expect(last.state).toBe("done");
-    expect(h.store[CONV].some((m) => m.cancelled)).toBe(false);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.cancelled)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     expect(h.loadConversationCalls).toEqual([]);
   }, 20000);
 });
@@ -1557,7 +1565,7 @@ describe("checkStreamLiveness — silence during a quiet stretch", () => {
     expect(h.attachCount()).toBe(2);
     expect(h.streamRequests[1].lastEventId).toBe("2");
     expect(lastOf(h).content).toBe("tool finished, here is the answer");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 30000);
 
   it("does not declare it dead before the promised keepalives are actually missed", async () => {
@@ -1654,7 +1662,7 @@ describe("sweepStreamLiveness", () => {
     expect(h.deps.attachedConvIdsRef.current.has(OTHER)).toBe(false);
     expect(h.streaming.has(OTHER)).toBe(false);
     expect(lastOf(h).content).toBe("Done — here are the results.");
-    expect(h.store[OTHER][h.store[OTHER].length - 1].content).toBe(
+    expect(convSlot(h, OTHER)[convSlot(h, OTHER).length - 1].content).toBe(
       "Done — here are the results.",
     );
   });
@@ -1689,13 +1697,14 @@ describe("sweepStreamLiveness", () => {
     });
     h.deps.attachedConvIdsRef.current.add(CONV);
     h.deps.attachedConvIdsRef.current.add(OTHER);
-    // CONV's transcript is corrupt in a way that makes its check throw.
-    Object.defineProperty(h.store, CONV, {
-      get() {
-        throw new Error("boom");
-      },
-      configurable: true,
-    });
+    // CONV's transcript is corrupt in a way that makes its check throw. The
+    // store is a Map, so the fault goes on the read itself rather than on an
+    // object property getter.
+    const realGet = h.store.get.bind(h.store);
+    h.store.get = (convId: string) => {
+      if (convId === CONV) throw new Error("boom");
+      return realGet(convId);
+    };
 
     const { result } = renderHook(() => useTurnStream(h.deps));
     await expect(
@@ -1770,7 +1779,7 @@ describe("chasing a successor is owned, gated and cancellable", () => {
     // The answer came from the database, so no turn is running and the
     // composer must stop offering Stop.
     expect(h.streaming.has(CONV)).toBe(false);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("stops chasing when the user presses Stop", async () => {
@@ -1843,7 +1852,7 @@ describe("a reattach is bound to the turn its caller identified", () => {
     // slot is still open for the chain's next tick rather than stamped.
     expect(h.attachCount()).toBe(attachesBefore);
     expect(lastOf(h).content).toBe("");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     expect(h.streaming.has(CONV)).toBe(true);
   }, 20000);
 });
@@ -1881,7 +1890,7 @@ describe("ownership holds through a chase and across nudged ticks", () => {
     // answers the PREDECESSOR and thrown the successor's text away.
     expect(lastOf(h).content).toBe("partial");
     expect(lastOf(h).state).toBe("streaming");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     expect(h.streaming.has(CONV)).toBe(true);
   }, 20000);
 
@@ -2010,7 +2019,7 @@ describe("a reattach that never connects does not strand its slot", () => {
     // Busy, not idle: the chain owns an unknown outcome, so Stop stays
     // offered rather than Send over a spinning bubble.
     expect(h.streaming.has(CONV)).toBe(true);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
 
     // And the chain does the work the generic caller could not.
     const attachesBefore = h.attachCount();
@@ -2065,7 +2074,7 @@ describe("a successor that ends in the replay-gap shape is still recovered", () 
     await vi.advanceTimersByTimeAsync(20);
     expect(h.loadConversationCalls.length).toBeGreaterThan(1);
     expect(lastOf(h).content).toBe("Done — here are the results.");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -2112,7 +2121,7 @@ describe("a chase follows the successor it discovered", () => {
     await vi.advanceTimersByTimeAsync(20);
     expect(h.attachCount()).toBe(attachesBefore + 1);
     expect(lastOf(h).content).toBe("the second successor's answer");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -2140,13 +2149,13 @@ describe("an authentication failure is indeterminate, not an answer", () => {
     await vi.advanceTimersByTimeAsync(1100);
     await vi.advanceTimersByTimeAsync(20);
     // Nothing was settled and nothing was stamped: the chain comes back.
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     expect(h.streaming.has(CONV)).toBe(true);
 
     // And it recovers once the session is good again.
     await vi.advanceTimersByTimeAsync(2100);
     await vi.advanceTimersByTimeAsync(20);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -2193,7 +2202,7 @@ describe("liveness hands an unreachable reconcile to recovery", () => {
     // And the chain finishes the job once the database can be read.
     await vi.advanceTimersByTimeAsync(1100);
     await vi.advanceTimersByTimeAsync(20);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     void zombie;
   }, 20000);
 });

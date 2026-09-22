@@ -317,7 +317,7 @@ export interface TurnStreamDeps {
   getPendingAttachmentsForKey: PerConvComposerState["getPendingAttachmentsForKey"];
   promoteComposerKey: PerConvComposerState["promoteComposerKey"];
   // Component state setters.
-  setMessagesByConv: Dispatch<SetStateAction<Record<string, Message[]>>>;
+  setMessagesByConv: Dispatch<SetStateAction<Map<string, Message[]>>>;
   setConversations: Dispatch<SetStateAction<ConversationSummary[]>>;
   setActiveConversationId: Dispatch<SetStateAction<string | null>>;
   setSelectedPersona: Dispatch<SetStateAction<string>>;
@@ -329,7 +329,7 @@ export interface TurnStreamDeps {
   setSpreadsheetNudgeDismissed: Dispatch<SetStateAction<boolean>>;
   // Component-owned refs the loop reads/mutates.
   activeConversationIdRef: RefObject<string | null>;
-  messagesByConvRef: RefObject<Record<string, Message[]>>;
+  messagesByConvRef: RefObject<ReadonlyMap<string, Message[]>>;
   pendingApprovalScrollRef: RefObject<string | null>;
   // Component state values (read-only in the loop).
   selectedModel: string;
@@ -692,7 +692,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (indeterminateStatus(res.status)) return "unreachable";
       if (!res.ok) return "absent";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
-      const local = messagesByConvRef.current[convId] ?? [];
+      const local = messagesByConvRef.current.get(convId) ?? [];
       if (!persistedAnswersLocalTurn(data.history, local, options))
         return "absent";
       // Awaited, not returned: loadConversation makes its own request, and a
@@ -763,7 +763,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     assistantId: number,
     gap: boolean,
   ): { slot: Message; midFlight: boolean } | null => {
-    const slot = (messagesByConvRef.current[convId] ?? []).find(
+    const slot = (messagesByConvRef.current.get(convId) ?? []).find(
       (m) => m.id === assistantId,
     );
     if (!slot) return null;
@@ -863,7 +863,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const lastUnsettledAssistant = (
     convId: string,
   ): { assistantId: number; gap: boolean } | null => {
-    const messages = messagesByConvRef.current[convId] ?? [];
+    const messages = messagesByConvRef.current.get(convId) ?? [];
     const last = messages[messages.length - 1];
     if (!last || last.role !== "assistant") return null;
     if (slotNeedsSettling(convId, last.id, false))
@@ -932,7 +932,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // there would let a later turn be attached over a transcript missing
     // ours. Wait until our prompt is the newest question on record.
     const submitted = pendingDirectHandoffRef.current.get(convId);
-    const local = messagesByConvRef.current[convId] ?? [];
+    const local = messagesByConvRef.current.get(convId) ?? [];
     const lastAsked = [...local].reverse().find((m) => m.role === "user");
     const landed = lastAsked?.content === submitted;
     if (adopted !== "adopted" || !landed) {
@@ -2005,7 +2005,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (event.event === "tool.approval_superseded") {
       const p = payload as { tool: string };
       setMessagesByConv((prev) => {
-        const existing = prev[ctx.target];
+        const existing = prev.get(ctx.target);
         if (!existing) return prev;
         const next = existing.map((msg) => {
           if (!msg.approvals?.length) return msg;
@@ -2020,9 +2020,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           );
           return { ...msg, approvals: touched };
         });
-        const nextByConv = new Map(Object.entries(prev));
-        nextByConv.set(ctx.target, next);
-        return Object.fromEntries(nextByConv);
+        return new Map(prev).set(ctx.target, next);
       });
       return;
     }
@@ -2413,7 +2411,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           currentTurnIdByConvRef.current.get(convId) === info.turn_id &&
           (lastEventIdByConvRef.current.get(convId) ?? 0) > 0;
         if (!info.inflight || alreadyStreamedThisTurn) {
-          const existing = messagesByConvRef.current[convId] ?? [];
+          const existing = messagesByConvRef.current.get(convId) ?? [];
           const last = existing[existing.length - 1];
           if (last && last.role === "assistant" && last.state === "done")
             return false;
@@ -2435,7 +2433,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
 
       // Find or create the assistant slot for this turn.
-      const existing = messagesByConvRef.current[convId] ?? [];
+      const existing = messagesByConvRef.current.get(convId) ?? [];
       const last = existing[existing.length - 1];
       let assistantId: number;
       if (
@@ -2801,7 +2799,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (isPendingKey(convId)) return "idle";
     if (!attachedConvIdsRef.current.has(convId)) return "idle";
     if (livenessInFlightRef.current.has(convId)) return "idle";
-    const local = messagesByConvRef.current[convId] ?? [];
+    const local = messagesByConvRef.current.get(convId) ?? [];
     const last = local[local.length - 1];
     if (!last || last.role !== "assistant") return "idle";
     if (last.state !== "thinking" && last.state !== "streaming") return "idle";
@@ -2911,7 +2909,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Re-check the preconditions: the grace window is long enough for the
       // turn to have ended, or for another path to have settled the slot.
       if (!attachedConvIdsRef.current.has(convId)) return "idle";
-      const stillLocal = messagesByConvRef.current[convId] ?? [];
+      const stillLocal = messagesByConvRef.current.get(convId) ?? [];
       const stillLast = stillLocal[stillLocal.length - 1];
       if (
         !stillLast ||
@@ -3536,7 +3534,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // Stamping `failed` here is the bug behind a fully-rendered
           // answer that flips to "Turn failed" a beat later. If another
           // path already finalized the turn successfully, leave it.
-          const resolved = messagesByConvRef.current[target]?.find(
+          const resolved = messagesByConvRef.current.get(target)?.find(
             (m) => m.id === assistantId,
           );
           if (resolved && resolved.state === "done" && !resolved.failed) {
