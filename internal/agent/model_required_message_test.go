@@ -22,6 +22,11 @@ func TestHumanMessageForReason_FirstChunkTimeoutIsNotAProviderFailure(t *testing
 	if !strings.Contains(got, "did not start responding within the time allowed") {
 		t.Fatalf("watchdog cause must be named, got %q", got)
 	}
+	// streamErr is the last attempt's error, not a history: the card must not
+	// claim a number of expiries it cannot know.
+	if strings.Contains(got, "twice") {
+		t.Fatalf("the card must not count watchdog expiries: %q", got)
+	}
 	if strings.Contains(got, "failing repeatedly") {
 		t.Fatalf("a healthy-but-slow model must not be called a failing provider: %q", got)
 	}

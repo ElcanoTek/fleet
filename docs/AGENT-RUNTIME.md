@@ -196,19 +196,29 @@ never below the base). When the watchdog fires, the `[stream-blip-retry]`
 log line and the `turn.retry` event carry `first_chunk_timeout` and
 `prompt_tokens`, so the correlation is visible in an exported log.
 
-The base was 30 s until 2026-09-21 (#1585). The workspace default model is
-now a reasoning model (GPT-5.6 Luna Pro), and not every OpenRouter route
-streams reasoning, so a model doing long hidden reasoning before its first
-visible token produces no semantic event for tens of seconds — at 30 s a
-healthy Luna Pro on a heavy prompt tripped the watchdog twice in a row and the
-chat turn failed with "provider failing repeatedly". 75 s covers the thinking
-phases observed (25–40 s) with headroom. The cost is a slower verdict on a
-provider that is genuinely dead: chat waits 75 s before its error, a scheduled
-run 75 s before the same-model retry and then the fallback swap. An operator
-who runs only non-reasoning models can tighten the base knob back. When the
-watchdog is the cause of a `turn.model_required`, the message now says the
-model did not start responding within the deadline instead of "failing
-repeatedly".
+The base was 30 s until 2026-09-21 (#1585). A **reasoning model** can spend
+tens of seconds on hidden thinking before its first visible token, and a
+provider route that does not stream reasoning emits no semantic event for the
+whole of it — indistinguishable, to the watchdog, from a provider that died.
+At 30 s a healthy reasoning model on a heavy prompt tripped the watchdog on
+both attempts and the turn ended on the model-required card. 75 s covers the
+thinking phases observed (25–40 s) with headroom. A deployment whose models
+all start streaming promptly can set the base back to 30 with
+`FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS`.
+
+The deadline is **per attempt**, not the time to a terminal verdict. A
+provider that is genuinely dead costs one expiry, the 3 s stream-blip pause,
+and a second expiry on the same model before the run is out of attempts — so
+with the 75 s base a chat turn shows its error after roughly 153 s where it
+used to take about 63 s, and a scheduled run reaches its fallback swap that
+much later. A configured fallback model adds its own attempts on top. That
+latency is the price of not failing a reasoning model that was working.
+
+When the watchdog is what exhausted the retries, the `turn.model_required`
+message says the model did not start responding in time instead of calling the
+provider a repeated failure. It describes the last attempt only: the resilience
+result carries the final error, not a per-attempt history, so the card never
+claims a number of expiries.
 
 **An expired provider prompt cache is a stream blip, not a rejection.** Google
 evicts the implicit prompt cache a long run has been riding on and answers the

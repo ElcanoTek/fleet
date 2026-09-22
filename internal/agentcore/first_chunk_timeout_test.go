@@ -13,8 +13,9 @@ import (
 // ~115K-token prompt on a slower provider timed out twice and swapped the run
 // to its fallback model in the audit tail (Reklaim 6bd0c212). The deadline now
 // scales with the previous step's prompt size and both ends are knobs (#1537).
-// The base is 75 s since #1585: the default model is a reasoning model whose
-// hidden thinking can run past 30 s before the first visible token.
+// The base is 75 s since #1585: a reasoning model's hidden thinking can run
+// past 30 s before its first visible token, on a route that streams no
+// reasoning to prove the model is alive.
 func TestFirstChunkTimeoutScalesWithPromptAndClamps(t *testing.T) {
 	p := EnvPrefix(CanonicalEnvPrefix)
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", "")

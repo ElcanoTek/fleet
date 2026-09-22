@@ -2082,6 +2082,10 @@ func emitModelSelectionRequired(sink EventSink, reason agentcore.StreamErrorReas
 // started answering: the first-chunk watchdog (#1585) fires on a healthy
 // reasoning model whose hidden thinking outlasts the deadline, and calling that
 // "failing repeatedly" sent users away from a model that was fine.
+//
+// streamErr is the LAST attempt's error, not a history, so the wording says
+// what that attempt hit and counts nothing: a reset followed by one expiry,
+// or an expiry followed by a reset, must not be reported as two timeouts.
 func humanMessageForReason(reason agentcore.StreamErrorReason, status int, streamErr error) string {
 	switch reason {
 	case agentcore.ReasonContextTooLarge:
@@ -2091,7 +2095,7 @@ func humanMessageForReason(reason agentcore.StreamErrorReason, status int, strea
 			return "The selected model is rate-limiting this request. Retrying did not help — pick a different model to continue."
 		}
 		if errors.Is(streamErr, agentcore.ErrFirstChunkTimeout) {
-			return "The selected model did not start responding within the time allowed, twice. Retry, or pick a different model to continue."
+			return "The selected model did not start responding within the time allowed. Retrying did not help — retry again, or pick a different model to continue."
 		}
 		return "The selected model's provider is failing repeatedly. Pick a different model to continue."
 	default:

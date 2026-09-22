@@ -84,15 +84,17 @@ const (
 	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS (default 180, never
 	// below the base).
 	//
-	// The base moved from 30 s to 75 s on 2026-09-21 (#1585): the workspace
-	// default model is now a reasoning model (GPT-5.6 Luna Pro), and not every
-	// OpenRouter route streams its reasoning, so a model doing long hidden
-	// reasoning before its first visible token produces NO semantic event for
-	// tens of seconds. At 30 s a healthy Luna Pro on a heavy prompt tripped
-	// the watchdog twice in a row and the turn failed as "provider failing
-	// repeatedly". 75 s covers the thinking phases observed (25–40 s) with
-	// headroom; the price is a slower verdict on a genuinely dead provider,
-	// which an operator can tighten back with the base knob.
+	// The base moved from 30 s to 75 s on 2026-09-21 (#1585). A reasoning
+	// model can spend tens of seconds on hidden thinking before its first
+	// visible token, and a provider route that does not stream reasoning
+	// emits NO semantic event for the whole of it — indistinguishable, to
+	// this watchdog, from a provider that died. At 30 s a healthy reasoning
+	// model on a heavy prompt tripped it on both attempts and the turn ended
+	// on the model-required card. 75 s covers the thinking phases observed
+	// (25–40 s) with headroom. The deadline is per attempt, so the price is a
+	// later verdict on a genuinely dead provider (two expiries plus the blip
+	// pause); a deployment whose models all start promptly tightens the base
+	// knob back.
 	defaultFirstChunkTimeout      = 75 * time.Second
 	minFirstChunkTimeout          = 5 * time.Second
 	firstChunkTimeoutPer10KTokens = 2 * time.Second

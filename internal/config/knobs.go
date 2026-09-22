@@ -367,10 +367,11 @@ var envKnobs = []envKnob{
 	{key: "FLEET_BUDGET_WINDDOWN_FRACTION", fleet: true, kind: kindFloat,
 		scope: scopeExternal, readBy: "internal/agentcore (budget wind-down notice)"},
 	// First-chunk watchdog (#1537): base deadline (default 75 s since #1585 —
-	// the default model is a reasoning model whose hidden thinking can pass
-	// 30 s before the first visible token; floor 5 s applied by the consumer)
-	// and cap (default 180 s, never below the base) for the prompt-scaled wait
-	// on a provider's first streamed event.
+	// a reasoning model's hidden thinking can pass 30 s before its first
+	// visible token, and a route that does not stream reasoning shows the
+	// watchdog nothing meanwhile; floor 5 s applied by the consumer) and cap
+	// (default 180 s, never below the base) for the prompt-scaled wait on a
+	// provider's first streamed event.
 	{key: "FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", fleet: true, kind: kindFloat, min: bound(0),
 		scope: scopeExternal, readBy: "internal/agentcore (provider first-chunk watchdog)"},
 	{key: "FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", fleet: true, kind: kindFloat, min: bound(0),
