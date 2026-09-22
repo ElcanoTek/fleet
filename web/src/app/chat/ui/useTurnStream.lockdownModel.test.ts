@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseLockdownModelRefusal } from "./useTurnStream";
+import {
+  correctedModelAdoption,
+  parseLockdownModelRefusal,
+} from "./useTurnStream";
 
 // #1588: a lockdown deployment refuses a model its allow-list forbids instead
 // of quietly running the turn on another one, and names the slug to use in the
@@ -69,5 +72,61 @@ describe("parseLockdownModelRefusal", () => {
         refusal({ code: "lockdown_model_not_allowed", model: 7 }),
       ),
     ).toEqual({ message: "", model: "" });
+  });
+});
+
+// The picker belongs to the conversation on screen; the resend belongs to the
+// submission. Conflating them loses one or the other: guard nothing and
+// submitting in lockdown conversation A then navigating to B rewrites B's
+// model, guard both and a user who navigates away has their message silently
+// dropped.
+describe("correctedModelAdoption", () => {
+  const base = {
+    refusalModel: "vendor/allowed-model",
+    isModelRetry: false,
+    activeConvKey: "conv-a",
+    target: "conv-a",
+  };
+
+  it("adopts and resends while the refused conversation is still on screen", () => {
+    expect(correctedModelAdoption(base)).toEqual({
+      resend: true,
+      adoptIntoPicker: true,
+    });
+  });
+
+  it("still resends after the user navigates away, without touching that conversation's picker", () => {
+    expect(
+      correctedModelAdoption({ ...base, activeConvKey: "conv-b" }),
+    ).toEqual({ resend: true, adoptIntoPicker: false });
+  });
+
+  it("does not touch the picker from a background submission with no active conversation", () => {
+    expect(correctedModelAdoption({ ...base, activeConvKey: null })).toEqual({
+      resend: true,
+      adoptIntoPicker: false,
+    });
+  });
+
+  it("a refusal naming no model corrects nothing — the user must pick", () => {
+    expect(correctedModelAdoption({ ...base, refusalModel: "" })).toEqual({
+      resend: false,
+      adoptIntoPicker: false,
+    });
+  });
+
+  it("a retry that is itself refused is not retried again", () => {
+    expect(correctedModelAdoption({ ...base, isModelRetry: true })).toEqual({
+      resend: false,
+      adoptIntoPicker: false,
+    });
+  });
+
+  // How the FIRST attempt actually calls it — streamTurn's parameter is
+  // optional and omitted on the way in.
+  it("an omitted retry flag is a first attempt, not a retry", () => {
+    expect(
+      correctedModelAdoption({ ...base, isModelRetry: undefined }),
+    ).toEqual({ resend: true, adoptIntoPicker: true });
   });
 });

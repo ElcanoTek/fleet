@@ -306,6 +306,42 @@ export function parseLockdownModelRefusal(
   };
 }
 
+// correctedModelAdoption decides what to do with a lockdown refusal that names
+// a replacement model. Two independent answers, and keeping them independent is
+// the point:
+//
+//   resend          — retry this submission with the corrected model. Nothing
+//                     was accepted by the server, so the POST *is* the
+//                     submission; not resending silently drops the user's
+//                     message. It must not depend on what the user is looking
+//                     at now.
+//   adoptIntoPicker — write the corrected model into the model picker. The
+//                     picker belongs to the conversation on screen, not to the
+//                     one this response answers, so this is allowed only while
+//                     the refused turn's conversation is still the active one.
+//                     Background and parallel streams are supported, so submit
+//                     in lockdown conversation A, navigate to B, and an
+//                     unguarded write would rewrite B's model to A's
+//                     correction.
+//
+// A refusal that names no model (a glob-only allow-list has no literal slug)
+// corrects nothing and is surfaced as an error instead; a retry that is itself
+// refused is not retried again.
+export function correctedModelAdoption(args: {
+  refusalModel: string;
+  // Optional because streamTurn's own parameter is: the first attempt simply
+  // omits it. Absent means "not a retry".
+  isModelRetry?: boolean;
+  activeConvKey: string | null;
+  target: string;
+}): { resend: boolean; adoptIntoPicker: boolean } {
+  const canCorrect = args.refusalModel !== "" && !args.isModelRetry;
+  return {
+    resend: canCorrect,
+    adoptIntoPicker: canCorrect && args.activeConvKey === args.target,
+  };
+}
+
 // persistedAnswersLocalTurn reports whether the CANONICAL (Postgres) copy of a
 // conversation already contains a finished assistant reply for the turn the
 // client is still holding open — i.e. whether hitting refresh right now would
@@ -1691,6 +1727,57 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     };
   }, []);
 
+  // consultTurnOutcome asks the server what became of the turn a slot is
+  // holding open, and reduces the answer to the three things a caller can do
+  // about it. Shared by settleStreamedSlot and submitPrompt's catch because
+  // both finalize a slot whose transcript is ambiguous by construction — a
+  // turn that FAILED before it could reply leaves exactly the transcript a
+  // turn that merely produced nothing leaves.
+  //
+  // Sharing it is the fix, not a tidy-up. The catch used to stamp its own
+  // verdict without asking, and its `finally` then found an already-terminal
+  // slot and skipped settleStreamedSlot entirely — so after a phone slept past
+  // the retain TTL, a pre-answer turn.model_required settled as the generic
+  // "connection dropped" instead of restoring the model-picker banner, with
+  // the design note claiming the finalizer had asked (#1593).
+  //
+  //   "wait"    — could not ask, or the turn is still generating. Not a
+  //               verdict: the caller leaves the slot mid-flight and re-arms.
+  //   "settled" — the server named a terminal cause and it is now stamped.
+  //   "silent"  — nothing to ask about, or a completed turn whose answer
+  //               Postgres does not hold yet. The caller applies its own
+  //               fallback, which is the pre-#1593 behavior.
+  const consultTurnOutcome = async (
+    convId: string,
+    assistantId: number,
+  ): Promise<"wait" | "settled" | "silent"> => {
+    const outcome = await fetchTurnOutcome(
+      convId,
+      recoveryOwnedRef.current.get(convId)?.turnID ??
+        currentTurnIdByConvRef.current.get(convId) ??
+        "",
+    );
+    if (
+      outcome.kind === "unreachable" ||
+      (outcome.kind === "answer" && outcome.state === "running")
+    ) {
+      return "wait";
+    }
+    if (
+      outcome.kind === "answer" &&
+      (outcome.state === "failed" || outcome.state === "cancelled")
+    ) {
+      // Stamp it even on a slot that is not mid-flight: a gap slot reads
+      // `done` already, and returning would leave a real failure rendered as
+      // a blank reply with nothing to retry.
+      patchAssistantMessage(convId, assistantId, (m) =>
+        applyTurnOutcome(m, outcome),
+      );
+      return "settled";
+    }
+    return "silent";
+  };
+
   // settleStreamedSlot finalizes the assistant slot a drained/severed stream
   // was writing to. Two slots need help:
   //   - one still mid-flight (`thinking`/`streaming`): the socket ended
@@ -1762,35 +1849,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // guess was "the connection dropped", and for a slot that already reads
     // `done` after a replay gap there was no guess at all, just a blank reply
     // with no Retry under it.
-    const outcome = await fetchTurnOutcome(
-      convId,
-      recoveryOwnedRef.current.get(convId)?.turnID ??
-        currentTurnIdByConvRef.current.get(convId) ??
-        "",
-    );
-    if (
-      outcome.kind === "unreachable" ||
-      (outcome.kind === "answer" && outcome.state === "running")
-    ) {
+    const consulted = await consultTurnOutcome(convId, assistantId);
+    if (consulted === "wait") {
       // Could not ask, or the turn is still generating. Neither is a verdict,
       // so leave the slot unsettled and come back — exactly what an
       // unreachable Postgres gets above.
       scheduleRecoveryRetry(convId, assistantId, gap, retryAttempt);
       return;
     }
-    if (
-      outcome.kind === "answer" &&
-      (outcome.state === "failed" || outcome.state === "cancelled")
-    ) {
-      // The server says this turn is over and why. Stamp it, including on a
-      // slot that is not mid-flight: a gap slot reads `done` already, and
-      // returning below would leave a real failure rendered as a blank reply
-      // with nothing to retry.
-      patchAssistantMessage(convId, assistantId, (m) =>
-        applyTurnOutcome(m, outcome),
-      );
-      return;
-    }
+    if (consulted === "settled") return;
     // Either the server reported a COMPLETED turn whose answer Postgres does
     // not (yet) hold, or there was nothing to ask about. Both land on the
     // pre-#1593 behavior below.
@@ -3283,8 +3350,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // forbids — and resend the turn once, which is the whole reason the
         // refusal carries a model at all. Nothing was accepted, so no turn is
         // lost: this POST is the submission, retried.
-        if (refusal.model && !isModelRetry) {
-          setSelectedModel(refusal.model);
+        const adoption = correctedModelAdoption({
+          refusalModel: refusal.model,
+          isModelRetry,
+          activeConvKey: activeConversationIdRef.current,
+          target,
+        });
+        if (adoption.adoptIntoPicker) setSelectedModel(refusal.model);
+        if (adoption.resend) {
           return streamTurn(
             assistantId,
             abortController,
@@ -3903,30 +3976,56 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
               attachedConvIdsRef.current.delete(target);
               scheduleRecoveryRetry(target, assistantId, false);
             } else if (persisted === "absent") {
-              // The premature-EOF sentinel is an internal signal, never a
-              // user-facing string — only reachable when the turn is genuinely
-              // gone (not inflight, no buffer, nothing completed in the DB).
-              const rawMsg =
-                error instanceof Error
-                  ? error.message
-                  : "Something went wrong.";
-              const msg =
-                rawMsg === "__stream_closed_before_turn_end__"
-                  ? "The connection dropped before the response finished."
-                  : rawMsg;
-              // Re-check inside the patch: never downgrade a slot that reached
-              // a successful terminal state between our read and this write
-              // (the reattach pump runs concurrently).
-              patchAssistantMessage(target, assistantId, (m) =>
-                m.state === "done" && !m.failed
-                  ? m
-                  : {
-                      ...m,
-                      content: m.content || msg,
-                      state: "done",
-                      failed: true,
-                    },
-              );
+              // Postgres holding no answer is not a cause, only an absence —
+              // so ask the server what became of THIS turn before stamping a
+              // verdict on it (#1593). Without this the branch below wrote its
+              // own guess and the `finally` then saw a terminal slot and
+              // skipped settleStreamedSlot, which is where the question used
+              // to be asked: a pre-answer turn.model_required that outlived
+              // the retain TTL settled as "the connection dropped", with no
+              // model picker offered and nothing naming the real cause.
+              const consulted = await consultTurnOutcome(target, assistantId);
+              if (consulted === "wait") {
+                // The server could not be asked, or says the turn is still
+                // running. Same rule as an unreachable Postgres above: no
+                // verdict without an answer.
+                patchAssistantMessage(target, assistantId, (m) =>
+                  m.state === "done" ? m : { ...m, state: "streaming" },
+                );
+                attachedConvIdsRef.current.delete(target);
+                scheduleRecoveryRetry(target, assistantId, false);
+              } else if (consulted === "silent") {
+                // Nothing to ask about. Fall back to this stream's own error,
+                // which is more specific than anything the server would add.
+                //
+                // The premature-EOF sentinel is an internal signal, never a
+                // user-facing string — only reachable when the turn is
+                // genuinely gone (not inflight, no buffer, nothing completed
+                // in the DB).
+                const rawMsg =
+                  error instanceof Error
+                    ? error.message
+                    : "Something went wrong.";
+                const msg =
+                  rawMsg === "__stream_closed_before_turn_end__"
+                    ? "The connection dropped before the response finished."
+                    : rawMsg;
+                // Re-check inside the patch: never downgrade a slot that
+                // reached a successful terminal state between our read and
+                // this write (the reattach pump runs concurrently).
+                patchAssistantMessage(target, assistantId, (m) =>
+                  m.state === "done" && !m.failed
+                    ? m
+                    : {
+                        ...m,
+                        content: m.content || msg,
+                        state: "done",
+                        failed: true,
+                      },
+                );
+              }
+              // "settled": the server named the cause and consultTurnOutcome
+              // has already stamped it.
             }
           }
         }

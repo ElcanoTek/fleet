@@ -566,6 +566,55 @@ describe("reattachToConv recovery when the socket dies mid-turn", () => {
 // no Retry at all. The server has recorded the answer all along; these drive
 // asking it.
 describe("a turn's outcome comes from the server, not from inference", () => {
+  // The same question has to be asked on the DIRECT submit path, not only on
+  // reattach. submitPrompt's catch used to stamp its own verdict when
+  // /inflight held nothing and the transcript was unanswered; its `finally`
+  // then found an already-terminal slot and skipped settleStreamedSlot, which
+  // is where the outcome was asked for. So a phone that slept past the retain
+  // TTL turned a named failure into "the connection dropped" and offered no
+  // picker — the one path where the design note's claim was false.
+  it("asks for the outcome on a direct submit whose stream died, not just on reattach", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      // The turn announced itself and THEN the socket died, so the client
+      // knows which turn to ask about — without a turn id there is nothing to
+      // ask and the pre-#1593 fallback is correct.
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      // Nothing live and nothing retained: the retain buffer has expired,
+      // which is exactly the phone-slept-past-the-TTL shape.
+      inflight: [{ inflight: false, turn_id: "" }],
+      turnOutcome: {
+        state: "failed",
+        reason: "model_required",
+        detail: {
+          reason: "retry_exhausted",
+          failed_model: "anthropic/claude-sonnet-4.6",
+          status_code: 429,
+          message: "The selected model is rate-limiting this request.",
+        },
+        user_committed: true,
+      },
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(h.turnOutcomeProbes).toBeGreaterThan(0);
+    const last = convSlot(h, CONV).at(-1);
+    expect(last?.failed).toBe(true);
+    // The real cause, not "the connection dropped" — which blames the network
+    // for a model the server refused to keep retrying.
+    expect(last?.modelRequired?.reason).toBe("retry_exhausted");
+    expect(last?.modelRequired?.failedModel).toBe(
+      "anthropic/claude-sonnet-4.6",
+    );
+  }, 20000);
+
   it("recovers the model-picker banner for a turn that failed before replying", async () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
