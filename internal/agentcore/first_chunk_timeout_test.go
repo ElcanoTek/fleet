@@ -93,12 +93,12 @@ func TestWatchdogProviderErrorStatusTracksTheLatestCallback(t *testing.T) {
 	w := newFirstChunkWatchdog(time.Hour, func() {})
 	defer w.stop()
 
-	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429})
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, time.Minute)
 	if got := w.providerErrorStatus(); got != 429 {
 		t.Fatalf("status = %d, want 429", got)
 	}
 	// A transport error carries no status: the 429 must not linger.
-	w.noteProviderError(nil)
+	w.noteProviderError(nil, time.Minute)
 	if !w.sawProviderError() {
 		t.Errorf("a transport error is still a provider error")
 	}
@@ -106,8 +106,44 @@ func TestWatchdogProviderErrorStatusTracksTheLatestCallback(t *testing.T) {
 		t.Fatalf("stale status survived a statusless retry: %d", got)
 	}
 	// An out-of-range code is not a status worth reporting either.
-	w.noteProviderError(&fantasy.ProviderError{StatusCode: 99_999})
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 99_999}, time.Minute)
 	if got := w.providerErrorStatus(); got != 0 {
 		t.Fatalf("out-of-range status was stored: %d", got)
+	}
+}
+
+// The record explains the silence of the backoff it bought, not the whole
+// round. Two quick 429s followed by an attempt that reasons silently past the
+// deadline is a silent model, and must not be reported as rate limiting
+// (#1585).
+func TestWatchdogProviderErrorExpiresWithItsBackoff(t *testing.T) {
+	w := newFirstChunkWatchdog(time.Hour, func() {})
+	defer w.stop()
+
+	// A retry whose backoff has since elapsed: the next attempt is under way,
+	// so its silence is the model's own. (Set directly rather than sleeping
+	// out the real grace period — the semantics under test are the expiry,
+	// not the clock.)
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, time.Second)
+	w.providerErrUntil.Store(time.Now().Add(-time.Millisecond).UnixNano())
+	if w.sawProviderError() {
+		t.Fatalf("a lapsed provider-error record still explained the silence")
+	}
+	if got := w.providerErrorStatus(); got != 0 {
+		t.Fatalf("a lapsed record still reported status %d", got)
+	}
+
+	// Inside the backoff it is the explanation.
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 503}, time.Minute)
+	if !w.sawProviderError() || w.providerErrorStatus() != 503 {
+		t.Fatalf("inside its backoff the record must stand: seen=%v status=%d",
+			w.sawProviderError(), w.providerErrorStatus())
+	}
+
+	// A watchdog that never saw one reports nothing.
+	fresh := newFirstChunkWatchdog(time.Hour, func() {})
+	defer fresh.stop()
+	if fresh.sawProviderError() {
+		t.Fatalf("a watchdog with no provider error must report none")
 	}
 }

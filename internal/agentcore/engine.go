@@ -1012,7 +1012,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// backoff (5+10+20+40 s) can outlast the watchdog deadline, so
 			// without this the rate-limit / provider-failure card would be
 			// replaced by "the model did not start responding" (#1585).
-			watchdog.noteProviderError(providerErr)
+			watchdog.noteProviderError(providerErr, delay)
 			emitTurnRetry(sink, providerErr, delay, nil)
 			if cb := r.engine.onRetry; cb != nil {
 				cb(providerErr, delay)
@@ -1127,12 +1127,18 @@ type firstChunkWatchdog struct {
 	timer    *time.Timer
 	onExpire func()
 
-	// A provider error seen before the first chunk (the inner retry loop is
-	// backing off). It does not disarm the watchdog — a provider that errors
-	// once and then hangs must still be cut off — but it records that the
-	// silence was NOT the model thinking, so the run can report what really
-	// happened instead of the watchdog's own sentinel (#1585).
-	providerErrSeen   atomic.Bool
+	// A provider error seen before the first chunk, valid only for the BACKOFF
+	// it bought. It does not disarm the watchdog — a provider that errors once
+	// and then hangs must still be cut off — but while the retry loop is
+	// sleeping it records that the silence is not a model thinking, so the run
+	// reports what really happened instead of the watchdog's sentinel (#1585).
+	//
+	// Tied to the backoff rather than the round: fantasy announces a retry and
+	// the delay it will sleep, but nothing when the next attempt begins. Two
+	// quick 429s followed by an attempt that reasons silently past the
+	// deadline must be reported as a silent model, not as rate limiting — so
+	// the record expires with the sleep that justified it.
+	providerErrUntil  atomic.Int64 // unix nanos; 0 = never seen one
 	providerErrStatus atomic.Int32
 }
 
@@ -1162,8 +1168,14 @@ func (w *firstChunkWatchdog) markFirst() {
 
 // noteProviderError records that the provider answered with an error before
 // any chunk arrived. Idempotent in effect; the last status wins.
-func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderError) {
-	w.providerErrSeen.Store(true)
+func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderError, delay time.Duration) {
+	// Valid for the sleep this retry is about to take, plus a small grace so a
+	// watchdog firing at the very end of the backoff still reads as the
+	// provider's failure rather than as a model that never started.
+	if delay < 0 {
+		delay = 0
+	}
+	w.providerErrUntil.Store(time.Now().Add(delay + providerErrorGrace).UnixNano())
 	// The status describes the LAST provider error, so it is cleared on every
 	// callback. Fantasy passes nil for a retryable transport failure (DNS, TCP,
 	// HTTP/2), and leaving a previous 429 cached there would have the card call
@@ -1179,11 +1191,19 @@ func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderErro
 	}
 }
 
-// sawProviderError reports whether the provider errored before the first chunk.
-func (w *firstChunkWatchdog) sawProviderError() bool { return w.providerErrSeen.Load() }
+// sawProviderError reports whether a provider error is still the explanation
+// for the current silence — i.e. the retry loop is inside the backoff that
+// error bought. Once the next attempt has begun, silence is the model's own.
+func (w *firstChunkWatchdog) sawProviderError() bool {
+	until := w.providerErrUntil.Load()
+	return until != 0 && time.Now().UnixNano() < until
+}
 
 // providerErrorStatus is the last pre-first-chunk provider status, or 0.
 func (w *firstChunkWatchdog) providerErrorStatus() int {
+	if !w.sawProviderError() {
+		return 0
+	}
 	return int(w.providerErrStatus.Load())
 }
 

@@ -99,8 +99,12 @@ const (
 	minFirstChunkTimeout          = 5 * time.Second
 	firstChunkTimeoutPer10KTokens = 2 * time.Second
 	defaultFirstChunkTimeoutMax   = 180 * time.Second
-	firstChunkTimeoutBaseEnv      = "PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS"
-	firstChunkTimeoutMaxEnv       = "PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS"
+	// providerErrorGrace extends a retry's provider-error record just past the
+	// backoff it bought, so a watchdog expiry landing on the boundary is still
+	// attributed to the provider rather than to a model that never started.
+	providerErrorGrace       = 2 * time.Second
+	firstChunkTimeoutBaseEnv = "PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS"
+	firstChunkTimeoutMaxEnv  = "PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS"
 )
 
 // firstChunkTimeoutFor resolves the watchdog deadline for a provider call
