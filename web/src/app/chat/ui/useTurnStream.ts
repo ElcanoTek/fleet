@@ -872,6 +872,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       void followQueueDrain(convId);
       return;
     }
+    // The hand-off is recovery work until it lands: a turn IS running on the
+    // server, so the conversation stays busy rather than offering Send —
+    // endSuccessorChase has just idled it — and isRecoveringConv covers it,
+    // so the tab-return handler's generic unbound reattach cannot take a
+    // later turn before ours is adopted.
+    markConvStreaming(convId);
     void performDirectHandoff(convId, 0);
   };
 
@@ -913,7 +919,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
     pendingDirectHandoffRef.current.delete(convId);
-    // Then take whatever is running, which is the newest turn.
+    bumpRecoveryEpoch(convId);
+    // Then take whatever is running, which is the newest turn. It inherits
+    // the busy flag the hand-off has been holding.
     void followSuccessor(convId, 0);
   };
 
@@ -954,26 +962,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     attempt = 0,
     expectTurnID?: string,
   ): Promise<void> => {
-    try {
-      await chaseSuccessorOnce(convId, attempt, expectTurnID);
-    } catch {
-      if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
-      scheduleSuccessorRetry(convId, attempt);
-    }
-  };
-
-  const chaseSuccessorOnce = async (
-    convId: string,
-    attempt: number,
-    expectTurnID?: string,
-  ): Promise<void> => {
     if (recoveryUnmountedRef.current) return;
-    if (attachedConvIdsRef.current.has(convId)) {
-      endSuccessorChase(convId);
-      return;
-    }
-    // Registered BEFORE the first await, so Stop and unmount reach a chase
-    // that is inside a request and not only one waiting on a timer.
+    // Registered HERE, before the try, so this frame holds the chase's token
+    // and its catch can tell its own chase from a replacement. Stop can drop
+    // a chase while one of its requests is in flight and a new chase can be
+    // registered before that request rejects; rescheduling on the newcomer
+    // would clear its timer or start a second tick beside it.
     if (!recoveryChaseRef.current.has(convId)) {
       bumpRecoveryEpoch(convId);
       recoveryChaseRef.current.set(convId, {
@@ -981,13 +975,33 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         gen: ++recoveryGenSeqRef.current,
       });
     }
-    // This chase's own unrepeatable token. Stop can delete a chase while one
-    // of its bounded requests is in flight and a NEW chase can be registered
-    // before that request resumes, so presence alone would let the old
-    // callback end, retarget or reschedule a chase that is not its own.
     const myChase = recoveryChaseRef.current.get(convId)?.gen;
+    try {
+      await chaseSuccessorOnce(convId, attempt, myChase);
+    } catch {
+      if (recoveryUnmountedRef.current) return;
+      if (recoveryChaseRef.current.get(convId)?.gen !== myChase) return;
+      scheduleSuccessorRetry(convId, attempt);
+    }
+  };
+
+  const chaseSuccessorOnce = async (
+    convId: string,
+    attempt: number,
+    myChase: number | undefined,
+  ): Promise<void> => {
+    if (recoveryUnmountedRef.current) return;
+    // This chase's own unrepeatable token, handed down by followSuccessor,
+    // which registers the chase before its try so its catch holds the token
+    // too. Presence alone would let a callback resuming after Stop end,
+    // retarget or reschedule the chase that replaced it.
     const stillMine = (): boolean =>
       recoveryChaseRef.current.get(convId)?.gen === myChase;
+    if (!stillMine()) return;
+    if (attachedConvIdsRef.current.has(convId)) {
+      endSuccessorChase(convId);
+      return;
+    }
     // The turn this chase is FOR. Two queued successors can drain in quick
     // succession, so an unbound attach could take the later one and replay
     // its answer under the earlier one's committed prompt — the first answer
@@ -1359,7 +1373,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const cancelRecovery = (convId: string): void => {
     const owned = recoveryOwnedRef.current.get(convId);
     const chasing = chasingSuccessor(convId);
-    if (!owned && !chasing) return;
+    const pendingHandoff = pendingDirectHandoffRef.current.has(convId);
+    if (!owned && !chasing && !pendingHandoff) return;
     // A chase's turn belongs to a later submission, so the ownership record
     // names no slot for it — but a chase that already attached HAS a slot,
     // created by its reattach, whose finalizer deliberately deferred to the
@@ -1370,8 +1385,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // reattaching after the cancellation, or polling for ever once the
     // cancelled turn's buffer expires.
     // The user has stopped waiting for this conversation, so a hand-off
-    // recorded for it is dropped rather than performed.
-    pendingDirectHandoffRef.current.delete(convId);
+    // recorded for it is dropped rather than performed. That also ends its
+    // retry, which checks the record before every step.
+    if (pendingDirectHandoffRef.current.delete(convId))
+      bumpRecoveryEpoch(convId);
     endSuccessorChase(convId);
     if (owned) releaseRecovery(convId);
     // slotNeedsSettling, not a state test: a replay-gap slot already reads as
@@ -3223,7 +3240,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // our turn is running rather than queued. Record the hand-off and
           // let the chase perform it when it ends.
           if (chasingSuccessor(convId)) {
-            pendingDirectHandoffRef.current.add(convId);
+            if (!pendingDirectHandoffRef.current.has(convId)) {
+              pendingDirectHandoffRef.current.add(convId);
+              bumpRecoveryEpoch(convId);
+            }
             return;
           }
           await reattachToConv(convId);
@@ -3574,7 +3594,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // its slot gone.
     isRecoveringConv: (convId: string) =>
       recoveryOwnedRef.current.has(convId) ||
-      recoveryChaseRef.current.has(convId),
+      recoveryChaseRef.current.has(convId) ||
+      pendingDirectHandoffRef.current.has(convId),
     // The token a long-running load compares against to notice that recovery
     // took the conversation while it was in flight. 0 = nobody owns it. It is
     // the chain's monotonic generation, so a chain that was released and
