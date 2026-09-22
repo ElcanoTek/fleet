@@ -1,5 +1,5 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   applyContextCompacted,
   applyContextPressure,
@@ -517,40 +517,99 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
   };
 
+  // slotNeedsSettling is the ONE definition of "this slot has no outcome yet",
+  // shared by settleStreamedSlot and the recovery chain so the two can never
+  // disagree about which slots are still in play:
+  //   - mid-flight (`thinking`/`streaming`): the socket ended without a
+  //     terminal event, so we never learned the outcome; or
+  //   - already `done` but empty after a replay GAP (see the `reconnect`
+  //     handler): the terminal event arrived, the answer did not. Terminal to
+  //     look at, unresolved in fact — which is why the retry has to accept it.
+  const slotNeedsSettling = (
+    convId: string,
+    assistantId: number,
+    gap: boolean,
+  ): { slot: Message; midFlight: boolean } | null => {
+    const slot = (messagesByConvRef.current[convId] ?? []).find((m) => m.id === assistantId);
+    if (!slot) return null;
+    const midFlight = slot.state === "thinking" || slot.state === "streaming";
+    const emptyAfterGap =
+      gap &&
+      slot.state === "done" &&
+      !slot.cancelled &&
+      !slot.failed &&
+      !slot.modelRequired &&
+      !slot.content.trim() &&
+      !(slot.toolCalls && slot.toolCalls.length > 0);
+    if (!midFlight && !emptyAfterGap) return null;
+    return { slot, midFlight };
+  };
+
   // scheduleRecoveryRetry re-asks the server about a slot we had to leave
-  // mid-flight because the server was unreachable when its stream died. The
+  // unsettled because the server was unreachable when its stream died. The
   // online / visibilitychange / focus handlers and the liveness watchdog also
   // recover such a slot — this is the belt to their braces, for the radio that
   // comes back without firing any of them. One chain per conversation, short
-  // backoff, and it stops the moment the slot is no longer mid-flight or a
-  // stream owns the conversation again. Exhausting the chain leaves the slot
-  // as it is: still mid-flight, still recoverable by the event handlers —
-  // never a verdict the server did not give.
-  const scheduleRecoveryRetry = (convId: string, attempt = 0): void => {
+  // backoff, and it stops the moment the slot has an outcome or a stream owns
+  // the conversation again. Exhausting the chain leaves the slot as it is:
+  // still unsettled, still recoverable by the event handlers — never a verdict
+  // the server did not give.
+  //
+  // The chain carries the SLOT it is recovering (assistantId) and whether that
+  // slot is the replay-gap shape, because a gap slot already reads as `done`:
+  // re-deriving "the last mid-flight message" would skip it and leave an empty
+  // bubble for good.
+  const scheduleRecoveryRetry = (
+    convId: string,
+    assistantId: number,
+    gap: boolean,
+    attempt = 0,
+  ): void => {
     if (attempt >= recoveryRetryDelaysMs.length) return;
     if (recoveryRetriesRef.current.has(convId)) return;
     const timer = window.setTimeout(() => {
       recoveryRetriesRef.current.delete(convId);
       void (async () => {
-        const msgs = messagesByConvRef.current[convId] ?? [];
-        const last = msgs[msgs.length - 1];
-        if (!last || last.role !== "assistant") return;
-        if (last.state !== "streaming" && last.state !== "thinking") return;
+        if (!slotNeedsSettling(convId, assistantId, gap)) return;
         if (attachedConvIdsRef.current.has(convId)) return;
         const probe = await probeInflightTurn(convId);
         if (probe.kind === "unreachable") {
-          scheduleRecoveryRetry(convId, attempt + 1);
+          scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
           return;
         }
         if (probe.inflight || probe.turnID) {
           await reattachToConv(convId);
           if (attachedConvIdsRef.current.has(convId)) return;
         }
-        await settleStreamedSlot(convId, last.id, false, attempt + 1);
+        // reattachToConv also returns false when ANOTHER path is already
+        // inside it (an online/focus/visibility handler that has not yet
+        // claimed the conversation). That is ownership, not absence: settling
+        // now would stamp `failed` on the very turn whose stream is being
+        // opened, and the flag would survive the events that follow. Hand the
+        // slot to that reattach and come back only if it does not take it.
+        if (reattachInFlightRef.current.has(convId)) {
+          scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
+          return;
+        }
+        await settleStreamedSlot(convId, assistantId, gap, attempt + 1);
       })();
     }, recoveryRetryDelaysMs[attempt]);
     recoveryRetriesRef.current.set(convId, timer);
   };
+
+  // Drop every pending recovery timer when the hook goes away. Without this a
+  // timer outliving /chat would probe, reattach, and open an SSE stream that
+  // the unmounted parent's AbortController cleanup can no longer abort —
+  // an orphan socket writing state next to a freshly mounted chat.
+  useEffect(
+    () => () => {
+      for (const timer of recoveryRetriesRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      recoveryRetriesRef.current.clear();
+    },
+    [],
+  );
 
   // settleStreamedSlot finalizes the assistant slot a drained/severed stream
   // was writing to. Two slots need help:
@@ -567,24 +626,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     gap: boolean,
     retryAttempt = 0,
   ): Promise<void> => {
-    const slot = (messagesByConvRef.current[convId] ?? []).find((m) => m.id === assistantId);
-    if (!slot) return;
-    const midFlight = slot.state === "thinking" || slot.state === "streaming";
-    const emptyAfterGap =
-      gap &&
-      slot.state === "done" &&
-      !slot.cancelled &&
-      !slot.failed &&
-      !slot.modelRequired &&
-      !slot.content.trim() &&
-      !(slot.toolCalls && slot.toolCalls.length > 0);
-    if (!midFlight && !emptyAfterGap) return;
+    // A recovery chain already owns this slot's unknown outcome (#1583): it
+    // re-asks on a backoff and settles when the server actually answers.
+    // Settling here as well — the stream's `finally` runs right behind the
+    // catch that armed the chain — would race it: if connectivity returns in
+    // that instant, our persisted read succeeds, finds no completed answer
+    // for a turn that is STILL RUNNING, and stamps `failed`, after which the
+    // chain sees a terminal slot and gives up. The chain deletes its entry
+    // before calling back in, so its own settle passes this guard.
+    if (recoveryRetriesRef.current.has(convId)) return;
+    const eligible = slotNeedsSettling(convId, assistantId, gap);
+    if (!eligible) return;
+    const { slot, midFlight } = eligible;
     const persisted = await reconcileFromPersisted(convId);
     if (persisted === "adopted") return;
     if (persisted === "unreachable") {
-      // Could not ask Postgres. Leave the slot mid-flight (it stays visible
-      // to every recovery path that way) and come back to it.
-      scheduleRecoveryRetry(convId, retryAttempt);
+      // Could not ask Postgres. Leave the slot as it is (unsettled, and so
+      // visible to every recovery path) and come back to it — carrying the
+      // gap shape, since a gap slot already looks terminal.
+      scheduleRecoveryRetry(convId, assistantId, gap, retryAttempt);
       return;
     }
     if (!midFlight) return;
@@ -2309,7 +2369,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             m.state === "done" ? m : { ...m, state: "streaming" },
           );
           attachedConvIdsRef.current.delete(target);
-          scheduleRecoveryRetry(target);
+          scheduleRecoveryRetry(target, assistantId, false);
         } else if (probe.inflight || probe.turnID) {
           patchAssistantMessage(target, assistantId, (m) => ({
             ...m,
@@ -2357,7 +2417,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
                 m.state === "done" ? m : { ...m, state: "streaming" },
               );
               attachedConvIdsRef.current.delete(target);
-              scheduleRecoveryRetry(target);
+              scheduleRecoveryRetry(target, assistantId, false);
             } else if (persisted === "absent") {
               // The premature-EOF sentinel is an internal signal, never a
               // user-facing string — only reachable when the turn is genuinely

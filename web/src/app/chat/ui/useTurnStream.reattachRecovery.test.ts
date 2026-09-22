@@ -521,6 +521,140 @@ describe("an unreachable server is not a failed turn", () => {
   }, 20000);
 });
 
+// Codex on #1584 found four ways the recovery chain could still lose a turn.
+// Each of these drives one of them.
+describe("the recovery chain owns the unsettled slot", () => {
+  it("no other finalizer stamps failed while a chain is pending", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      // A fresh submission, not a reattach: this is the path where the catch
+      // arms the chain and the stream's own finally runs right behind it.
+      initial: [],
+      // Postgres is REACHABLE and holds no completed answer — the turn is
+      // still running. Settling on that read would call a live turn failed,
+      // and the chain would then find a terminal slot and give up.
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+        () =>
+          truncatedStream([
+            sse(2, "text.delta", { text: "the answer" }),
+            sse(3, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflightRejectAt: [0], // the catch's probe: the radio is still off
+      inflight: [{ inflight: true, turn_id: "t1" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+    const slot = lastOf(h);
+    expect(slot.role).toBe("assistant");
+    expect(slot.failed).toBeUndefined();
+    expect(slot.state).toBe("streaming");
+
+    // The chain settles it later, on an answer the server actually gave.
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).content).toBe("the answer");
+    expect(lastOf(h).state).toBe("done");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+
+  it("recovers a replay-gap slot, which already reads as done", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: answeredHistory(),
+      streamBodies: [
+        // The terminal event arrives after a gap, but the answer does not:
+        // the slot lands `done` and empty. Re-deriving "the last mid-flight
+        // message" would skip it and leave the empty bubble for good.
+        () =>
+          truncatedStream([
+            sse(1, "reconnect", { type: "resumed", missed_events: 4 }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }, { inflight: false }],
+      persistedRejectAt: [0], // the gap settle cannot reach Postgres
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).content).toBe("");
+    expect(lastOf(h).failed).toBeUndefined();
+
+    // The chain carries the gap shape, so the retry accepts this terminal
+    // slot and adopts the answer Postgres had all along.
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.loadConversationCalls).toEqual([CONV]);
+    expect(lastOf(h).content).toBe("Done — here are the results.");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+
+  it("treats an in-progress reattach as ownership instead of settling", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      inflight: [
+        { inflight: true, turn_id: "t1" }, // reattach's own probe
+        { inflight: true, turn_id: "t1" }, // first retry tick: turn is alive
+        { inflight: false }, // second tick: finished, nothing retained
+      ],
+      persistedRejectAt: [0], // the settle that arms the chain
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).failed).toBeUndefined();
+
+    // An online/focus handler is inside reattachToConv but has not claimed the
+    // conversation yet. reattachToConv answers false for that reason alone;
+    // settling on it would stamp failed over the stream being opened.
+    h.deps.reattachInFlightRef.current.add(CONV);
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).failed).toBeUndefined();
+    expect(lastOf(h).state).toBe("streaming");
+
+    // It releases without claiming; the next tick settles honestly.
+    h.deps.reattachInFlightRef.current.delete(CONV);
+    await vi.advanceTimersByTimeAsync(2100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).failed).toBe(true);
+  }, 20000);
+
+  it("clears pending recovery timers when the hook unmounts", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0], // the settle that arms the chain
+    });
+
+    const { result, unmount } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    const probesAtUnmount = h.inflightProbes;
+
+    // A timer outliving /chat could open an SSE stream the unmounted parent
+    // can no longer abort.
+    unmount();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.inflightProbes).toBe(probesAtUnmount);
+    expect(h.attachCount()).toBe(1);
+  }, 20000);
+});
+
 describe("settling a slot that is waiting on the user", () => {
   it("does not stamp 'Turn failed' over a pending approval card", async () => {
     const h = makeHarness({
