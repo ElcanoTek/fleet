@@ -1007,6 +1007,12 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		// recovery resets accumulated text on it) and the engine's session-log
 		// mirror (newRetryLogger).
 		OnRetry: func(providerErr *fantasy.ProviderError, delay time.Duration) {
+			// The provider ANSWERED — with an error. That is a different
+			// story from a model that never starts, and the inner retry
+			// backoff (5+10+20+40 s) can outlast the watchdog deadline, so
+			// without this the rate-limit / provider-failure card would be
+			// replaced by "the model did not start responding" (#1585).
+			watchdog.noteProviderError(providerErr)
 			emitTurnRetry(sink, providerErr, delay, nil)
 			if cb := r.engine.onRetry; cb != nil {
 				cb(providerErr, delay)
@@ -1097,7 +1103,13 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		)),
 	})
 	if err != nil && watchdog.timedOut() && ctx.Err() == nil {
-		return nil, &firstChunkTimeoutError{timeout: firstChunkTimeout, promptTokens: promptTokens, cause: err}
+		return nil, &firstChunkTimeoutError{
+			timeout:        firstChunkTimeout,
+			promptTokens:   promptTokens,
+			cause:          err,
+			providerErr:    watchdog.sawProviderError(),
+			providerStatus: watchdog.providerErrorStatus(),
+		}
 	}
 	return result, err
 }
@@ -1114,6 +1126,14 @@ type firstChunkWatchdog struct {
 	fired    atomic.Bool // true only when the TIMER won
 	timer    *time.Timer
 	onExpire func()
+
+	// A provider error seen before the first chunk (the inner retry loop is
+	// backing off). It does not disarm the watchdog — a provider that errors
+	// once and then hangs must still be cut off — but it records that the
+	// silence was NOT the model thinking, so the run can report what really
+	// happened instead of the watchdog's own sentinel (#1585).
+	providerErrSeen   atomic.Bool
+	providerErrStatus atomic.Int32
 }
 
 func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWatchdog {
@@ -1138,6 +1158,28 @@ func (w *firstChunkWatchdog) markFirst() {
 	if w.settled.CompareAndSwap(false, true) {
 		w.timer.Stop()
 	}
+}
+
+// noteProviderError records that the provider answered with an error before
+// any chunk arrived. Idempotent in effect; the last status wins.
+func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderError) {
+	w.providerErrSeen.Store(true)
+	if providerErr == nil {
+		return
+	}
+	// An HTTP status is three digits. Anything outside that is not a status
+	// worth reporting, and clamping keeps the atomic's int32 honest.
+	if code := providerErr.StatusCode; code > 0 && code <= 599 {
+		w.providerErrStatus.Store(int32(code))
+	}
+}
+
+// sawProviderError reports whether the provider errored before the first chunk.
+func (w *firstChunkWatchdog) sawProviderError() bool { return w.providerErrSeen.Load() }
+
+// providerErrorStatus is the last pre-first-chunk provider status, or 0.
+func (w *firstChunkWatchdog) providerErrorStatus() int {
+	return int(w.providerErrStatus.Load())
 }
 
 // timedOut reports whether the timer won the decision.

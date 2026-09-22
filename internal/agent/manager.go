@@ -2091,6 +2091,15 @@ func humanMessageForReason(reason agentcore.StreamErrorReason, status int, strea
 	case agentcore.ReasonContextTooLarge:
 		return "This conversation exceeds the selected model's context window. Pick a model with a larger window or start a new chat."
 	case agentcore.ReasonRetryExhausted:
+		// A watchdog expiry that FOLLOWED provider errors is the provider's
+		// failure, not a silent model: the inner retry backoff simply outlasted
+		// the deadline. Report what the provider actually said (#1585).
+		if providerStatus, afterProviderErr := agentcore.FirstChunkTimeoutAfterProviderError(streamErr); afterProviderErr {
+			if providerStatus == 429 || status == 429 {
+				return "The selected model is rate-limiting this request. Retrying did not help — pick a different model to continue."
+			}
+			return "The selected model's provider is failing repeatedly. Pick a different model to continue."
+		}
 		if status == 429 {
 			return "The selected model is rate-limiting this request. Retrying did not help — pick a different model to continue."
 		}

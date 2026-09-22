@@ -146,6 +146,11 @@ type firstChunkTimeoutError struct {
 	timeout      time.Duration
 	promptTokens int
 	cause        error
+	// providerErr records that the provider answered with an error before the
+	// deadline (its retry backoff outlasted the watchdog). The silence was
+	// not a model thinking, and the run must not report it as one (#1585).
+	providerErr    bool
+	providerStatus int
 }
 
 func (e *firstChunkTimeoutError) Error() string {
@@ -153,6 +158,32 @@ func (e *firstChunkTimeoutError) Error() string {
 }
 
 func (e *firstChunkTimeoutError) Unwrap() []error { return []error{ErrFirstChunkTimeout, e.cause} }
+
+// FirstChunkTimeoutAfterProviderError reports whether err is a first-chunk
+// timeout that followed one or more PROVIDER errors — a rate limit or a 5xx
+// whose backoff ran past the deadline — and the last status seen. Callers use
+// it to keep reporting the provider's own failure instead of the watchdog's
+// "never started" wording, which would be wrong and would send the user off a
+// model that is merely being throttled.
+func FirstChunkTimeoutAfterProviderError(err error) (status int, ok bool) {
+	var fc *firstChunkTimeoutError
+	if !errors.As(err, &fc) || !fc.providerErr {
+		return 0, false
+	}
+	return fc.providerStatus, true
+}
+
+// NewFirstChunkTimeoutAfterProviderErrorForTest builds the error shape a
+// watchdog expiry takes when provider errors preceded it, so packages outside
+// agentcore can exercise their handling of it without a live provider.
+func NewFirstChunkTimeoutAfterProviderErrorForTest(status int) error {
+	return &firstChunkTimeoutError{
+		timeout:        75 * time.Second,
+		cause:          context.Canceled,
+		providerErr:    true,
+		providerStatus: status,
+	}
+}
 
 // firstChunkTimeoutDetail extracts the watchdog detail from a stream error,
 // when it was one.
