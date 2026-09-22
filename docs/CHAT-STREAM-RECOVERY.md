@@ -88,10 +88,114 @@ Order of resolution:
 3. **Otherwise, say what happened.** `failed: true` plus *"The connection
    dropped before the response finished."*, keeping any partial answer that did
    arrive. This is honest and it offers Retry — as opposed to a blank bubble
-   asserting the assistant said nothing.
+   asserting the assistant said nothing. This step is reached only on a
+   definitive answer from the server; see the next section for what happens
+   when the server could not be asked at all.
 
 Every finalizer routes through it: the reattach pump's `finally`, the live
 `streamTurn` tail, and both the catch and the `finally` in `submitPrompt`.
+
+### "Could not ask" is not "the server said no" (#1583)
+
+Step 1 above has a third outcome. `reconcileFromPersisted` returns `"adopted"`,
+`"absent"`, or **`"unreachable"`** (a thrown fetch, or a 5xx from the proxy),
+and the `/inflight` probe the `submitPrompt` catch runs first
+(`probeInflightTurn`) distinguishes an `answer` from `unreachable` the same
+way. Only an *answer* may drive a terminal verdict.
+
+The case this protects is the phone unlock. The OS severs the SSE socket while
+the radio is off; the page wakes, its `reader.read()` rejects, and the probes
+run **before the network is back** — every one of them throws. Before this,
+a thrown probe took the same branch as a definitive "nothing in flight, nothing
+persisted" and the slot was stamped `failed: true` with the raw `network
+error`, while `/inflight` — asked the moment the network returned — reported
+`inflight: true`. Reproduced on fleetdev by taking Chromium offline and
+restarting the proxy mid-turn; a page reload then showed the finished reply,
+exactly the "Turn failed until I refresh" report.
+
+On `unreachable` the slot is **left mid-flight** (`state: "streaming"`, partial
+content kept), the attach handle is released so a reattach can claim the
+conversation, and `scheduleRecoveryRetry` re-probes: 1, 2, 4, 8, 16 s and then
+a steady 30 s beat, one chain per conversation, for as long as the outcome
+stays unknown. It does **not** give up — a conversation left unsettled is no
+longer in `attachedConvIdsRef`, so `sweepStreamLiveness` does not visit it, and
+an outage longer than the backoff would otherwise strand the slot until the
+user happened to switch tabs. A hidden tab reschedules without probing (the
+tab-return handler covers that, and background polling is waste), and every
+recovery request is bounded by a timeout so a blackholed connection costs one
+beat rather than the whole chain.
+
+Each tick asks `/inflight`: still unreachable → next tick; a **different**
+turn id than the one the chain is recovering → our turn is over, adopt its
+answer from Postgres and chase the new turn (below); live or retained →
+`reattachToConv`, bound to the turn id this tick saw and judged afterwards by
+whether the slot still needs settling (the await spans the whole replay, so
+the attach handle is already gone when a replay ran to its terminal event);
+otherwise `settleStreamedSlot`, which asks Postgres and applies the same rule.
+
+That binding matters. `reattachToConv` takes its own `/inflight` look, and
+between the two the recovered turn can finish and a queued successor start.
+Without an expected turn id it would attach to that successor and reuse the
+caller's still-open assistant slot, pouring one turn's replay into another
+turn's bubble. **The chase is bound too**: it carries the successor id the
+chain discovered, because two queued inputs can drain in quick succession and
+an unbound attach would take the later turn and replay its answer under the
+earlier one's committed prompt.
+
+Two callers attach **unbound**, and both are deliberate. The queue follower
+looks for whatever ran a queued row, and stands down entirely while recovery
+owns the conversation. And a chase ending with a **deferred direct hand-off**
+takes whatever the server is running: that is a submission the server started
+directly while the chase was busy with another turn, and its id never reaches
+the client, because the direct response's body is cancelled unread. That
+hand-off reloads the canonical transcript before it attaches, so a submission
+that finished in the meantime keeps its prompt and its answer rather than
+being replaced by the next turn.
+
+## Chasing a successor
+
+A different turn is not handed back to the ordinary paths; it is chased. The
+chain settles its own slot from Postgres, releases ownership and calls
+`followSuccessor`, which holds the conversation busy and retries attachment on
+the same backoff and steady cadence — indefinitely, because a released chain
+is no longer swept by the liveness watchdog and nothing else would put that
+turn on screen without a focus event or a reload.
+
+When the server reports a live turn that is *not* the one being chased, the
+chase first reloads the canonical transcript — putting the finished turn's
+answer on screen — and only then re-targets to the new id. It re-targets only
+if that reload actually landed: the reload is bounded, and accepting its
+timeout as success would attach the new turn's replay to a transcript still
+ending in the old turn's prompt.
+
+The chase is tracked in its own map, registered **before** its first request,
+so three things can reach it: **Stop** (`cancelRecovery` drops it, so it stops
+re-marking the conversation busy and stops polling for a turn the user has
+killed), the tab-return nudge, and unmount. It has no assistant slot of its
+own to settle — the turn it follows belongs to a later submission — which is
+why it does not live in `recoveryOwnedRef`. Ending it frees the conversation
+unless a live stream has taken over, and an unexpected throw books the next
+tick rather than stranding a registered chase with no timer.
+
+It may adopt the persisted transcript **only** when `/inflight` reports
+nothing live and nothing retained. A turn is registered and exposed before its
+user message is committed, so during that window the canonical transcript
+still ends at the predecessor's completed answer and reads exactly like a
+finished successor; adopting there would abandon a turn that is running.
+
+Ownership (`recoveryOwnedRef`) spans the chain's whole life, not merely a
+pending timer: it is set when the chain is armed and released only when the
+outcome is known. While it holds, no other finalizer may settle the slot and
+neither stream finalizer marks the conversation idle — the turn may still be
+running, so Stop stays offered and a follow-up queues instead of racing. The
+chain therefore owes the conversation its `markConvIdle`, which
+`releaseRecovery` performs unless a live stream has re-claimed it.
+
+Leaving the slot mid-flight is also what keeps the existing recovery paths —
+the `online` / `visibilitychange` / `focus` handler in `chat-experience.tsx`
+and the liveness watchdog — treating it as recoverable: a slot already stamped
+`done + failed` is terminal to all of them, which is why the old page could
+never self-heal. The page never invents a verdict the server did not give.
 
 ## `checkStreamLiveness` — the zombie socket
 

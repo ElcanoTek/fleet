@@ -40,7 +40,12 @@ import type { ContextUsage } from "@/app/lib/contextUsage";
 import type { NudgeDecision } from "@/app/lib/spreadsheetNudge";
 import type { Message } from "./history";
 import type { MCPServerInfo, RankedModel } from "./chat-experience";
-import { completeSkill, filterSkills, skillSlashQuery, type SkillInfo } from "./skillSlash";
+import {
+  completeSkill,
+  filterSkills,
+  skillSlashQuery,
+  type SkillInfo,
+} from "./skillSlash";
 import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 
 // isNewlyReleased was a module-level helper in chat-experience; its only
@@ -118,7 +123,8 @@ const POP_ROW = `${POP_ROW_BASE} px-[0.6rem] py-[0.45rem]`;
 const POP_ROW_TIGHT = `${POP_ROW_BASE} items-start px-[0.6rem] py-[0.3rem]`;
 const POP_STATUS_ROW_TIGHT =
   "flex w-full items-start justify-between gap-2 rounded-[0.5rem] px-[0.6rem] py-[0.3rem] text-left text-[0.82rem] text-[var(--color-text-secondary)]";
-const POP_ROW_SELECTED = "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]";
+const POP_ROW_SELECTED =
+  "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]";
 const POP_TITLE = "text-[0.82rem] font-medium text-[var(--color-text-primary)]";
 const POP_DESC = "text-[0.7rem] text-[var(--color-text-muted)]";
 
@@ -136,7 +142,7 @@ function MiniSwitch({ state }: { state: MiniSwitchState }) {
           ? "bg-[var(--color-primary)]"
           : state === "always-on"
             ? "bg-[var(--color-connector-always-on-track)]"
-          : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]"
+            : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]"
       }`}
     >
       <span
@@ -199,6 +205,8 @@ export type ComposerProps = {
   // Model picker
   selectedModel: string;
   setSelectedModel: Dispatch<SetStateAction<string>>;
+  // Ends a recovery chain when the user presses Stop (see the Stop handler).
+  cancelRecovery: (convId: string) => void;
   // Display label for the chip: the tier alias ("default"/"advanced") or the
   // catalog display name for a known slug — the same string the menu row
   // shows — falling back to the raw slug/typed text. Resolved by
@@ -232,7 +240,10 @@ export type ComposerProps = {
   mcpPickerRef: RefObject<HTMLDivElement | null>;
   isLoadingMcpServers: boolean;
   loadMcpServerCatalog: (conversationId: string) => void | Promise<void>;
-  toggleMcpServer: (conversationId: string | null, name: string) => void | Promise<void>;
+  toggleMcpServer: (
+    conversationId: string | null,
+    name: string,
+  ) => void | Promise<void>;
   // Credential-seat override for one server in this conversation (#988);
   // "" = back to the user's default seat.
   setMcpServerAccount: (
@@ -283,6 +294,7 @@ export function Composer({
   personaPickerRef,
   selectedModel,
   setSelectedModel,
+  cancelRecovery,
   selectedModelLabel,
   selectedModelPrices,
   modelError,
@@ -340,8 +352,12 @@ export function Composer({
   const [skillIndex, setSkillIndex] = useState(0);
   const [skillPopoverDismissed, setSkillPopoverDismissed] = useState(false);
   const skillQuery = skillSlashQuery(prompt);
-  const skillMatches = skillQuery === null ? [] : filterSkills(skills, skillQuery);
-  const skillHighlight = Math.min(skillIndex, Math.max(skillMatches.length - 1, 0));
+  const skillMatches =
+    skillQuery === null ? [] : filterSkills(skills, skillQuery);
+  const skillHighlight = Math.min(
+    skillIndex,
+    Math.max(skillMatches.length - 1, 0),
+  );
   const skillPopoverOpen =
     skillMatches.length > 0 && !skillPopoverDismissed && !isStreaming;
   const [sendOnEnter, setSendOnEnter] = useState<boolean>(() => {
@@ -380,7 +396,10 @@ export function Composer({
   // (Safari) and we don't want a settings toggle to take down the chat.
   useEffect(() => {
     try {
-      localStorage.setItem(SEND_KEY_STORAGE, sendOnEnter ? "enter" : "ctrl+enter");
+      localStorage.setItem(
+        SEND_KEY_STORAGE,
+        sendOnEnter ? "enter" : "ctrl+enter",
+      );
     } catch {
       /* private mode / quota — preference stays session-only, which is fine */
     }
@@ -391,7 +410,10 @@ export function Composer({
   // directly and the cleanup here is a no-op once it's already false.
   useEffect(() => {
     if (!showCodeNudge) return;
-    const timer = window.setTimeout(() => setShowCodeNudge(false), CODE_NUDGE_TIMEOUT_MS);
+    const timer = window.setTimeout(
+      () => setShowCodeNudge(false),
+      CODE_NUDGE_TIMEOUT_MS,
+    );
     return () => window.clearTimeout(timer);
   }, [showCodeNudge]);
 
@@ -409,388 +431,400 @@ export function Composer({
 
   return (
     <>
-            <form
-              // p-0 shell per the design: the textarea and toolbar own their
-              // padding. The image: hint matters because --composer-surface
-              // is a gradient — the un-hinted arbitrary-value form emits
-              // background-color, which drops gradient values.
-              className={`relative mx-auto w-full max-w-[53rem] rounded-[var(--radius-xl)] border bg-[image:var(--composer-surface)] shadow-[var(--shadow-md)] transition-colors ${
-                isDraggingOver
-                  ? "border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30"
-                  : sealed
-                    ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border))]"
-                    : "border-[var(--color-border)]"
-              }`}
-              // The form carries no accessible name, so it is not exposed as a
-              // form landmark anyway; role="presentation" (explicitly allowed on
-              // <form> by ARIA in HTML) says so, and lets the drop-zone handlers
-              // below sit on the element the user actually drags onto without
-              // claiming the composer is a widget a keyboard user can operate.
-              // Drag-and-drop is pointer-only by nature; the keyboard/AT path to
-              // the same action is the "Attach files" button in the toolbar.
-              // Submission behavior is untouched — role never changes it.
-              role="presentation"
-              suppressHydrationWarning
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitPrompt(prompt);
-              }}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                dragCounterRef.current += 1;
-                if (dragCounterRef.current === 1) setIsDraggingOver(true);
-              }}
-              onDragOver={(event) => { event.preventDefault(); }}
-              onDragLeave={() => {
-                dragCounterRef.current -= 1;
-                if (dragCounterRef.current === 0) setIsDraggingOver(false);
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                dragCounterRef.current = 0;
-                setIsDraggingOver(false);
-                addAttachmentFiles(event.dataTransfer.files);
-              }}
-            >
-              {isDraggingOver && (
-                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[var(--radius-xl)] bg-[var(--color-accent)]/10">
-                  <span className="text-[0.8rem] font-medium text-[var(--color-accent)]">Drop to attach</span>
-                </div>
-              )}
-              {/* Sealed strip along the composer's top edge (the design's
+      <form
+        // p-0 shell per the design: the textarea and toolbar own their
+        // padding. The image: hint matters because --composer-surface
+        // is a gradient — the un-hinted arbitrary-value form emits
+        // background-color, which drops gradient values.
+        className={`relative mx-auto w-full max-w-[53rem] rounded-[var(--radius-xl)] border bg-[image:var(--composer-surface)] shadow-[var(--shadow-md)] transition-colors ${
+          isDraggingOver
+            ? "border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30"
+            : sealed
+              ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border))]"
+              : "border-[var(--color-border)]"
+        }`}
+        // The form carries no accessible name, so it is not exposed as a
+        // form landmark anyway; role="presentation" (explicitly allowed on
+        // <form> by ARIA in HTML) says so, and lets the drop-zone handlers
+        // below sit on the element the user actually drags onto without
+        // claiming the composer is a widget a keyboard user can operate.
+        // Drag-and-drop is pointer-only by nature; the keyboard/AT path to
+        // the same action is the "Attach files" button in the toolbar.
+        // Submission behavior is untouched — role never changes it.
+        role="presentation"
+        suppressHydrationWarning
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitPrompt(prompt);
+        }}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          dragCounterRef.current += 1;
+          if (dragCounterRef.current === 1) setIsDraggingOver(true);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+        }}
+        onDragLeave={() => {
+          dragCounterRef.current -= 1;
+          if (dragCounterRef.current === 0) setIsDraggingOver(false);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          dragCounterRef.current = 0;
+          setIsDraggingOver(false);
+          addAttachmentFiles(event.dataTransfer.files);
+        }}
+      >
+        {isDraggingOver && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[var(--radius-xl)] bg-[var(--color-accent)]/10">
+            <span className="text-[0.8rem] font-medium text-[var(--color-accent)]">
+              Drop to attach
+            </span>
+          </div>
+        )}
+        {/* Sealed strip along the composer's top edge (the design's
                   .composer-sealed-strip). First child of the p-0 shell, so it
                   runs edge-to-edge with its top corners following the
                   container radius. */}
-              {sealed ? (
-                <div className="flex items-center gap-[0.45rem] rounded-t-[calc(var(--radius-xl)-1px)] border-b border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-[1.05rem] py-[0.45rem] text-[0.75rem] text-[var(--color-text-secondary)]">
-                  <Icon name="lock" className="size-[0.8rem] shrink-0 text-[var(--color-accent)]" />
-                  <span>Sealed — your data and an approved model stay in this sandbox. Nothing leaves.</span>
-                </div>
-              ) : null}
-              {/* Skill "/" autocomplete popover (#513). Anchored above the
+        {sealed ? (
+          <div className="flex items-center gap-[0.45rem] rounded-t-[calc(var(--radius-xl)-1px)] border-b border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-[1.05rem] py-[0.45rem] text-[0.75rem] text-[var(--color-text-secondary)]">
+            <Icon
+              name="lock"
+              className="size-[0.8rem] shrink-0 text-[var(--color-accent)]"
+            />
+            <span>
+              Sealed — your data and an approved model stay in this sandbox.
+              Nothing leaves.
+            </span>
+          </div>
+        ) : null}
+        {/* Skill "/" autocomplete popover (#513). Anchored above the
                   composer like the persona/model dropdowns and reusing their
                   visual language. Rows complete to "/name " (via keyboard
                   Enter/Tab or click); the appended space keeps the caret
                   ready for arguments and closes the popover (whitespace ends
                   the slash context — see skillSlashQuery). */}
-              {skillPopoverOpen ? (
-                <div
-                  role="listbox"
-                  aria-label="Skills"
-                  className="motion-safe:animate-pop-up absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-full max-w-[24rem] overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
-                >
-                  <div className="max-h-72 overflow-y-auto py-1">
-                    {skillMatches.map((skill, i) => {
-                      const highlighted = i === skillHighlight;
-                      return (
-                        <button
-                          key={skill.name}
-                          type="button"
-                          role="option"
-                          aria-selected={highlighted}
-                          className={`flex w-full flex-col gap-0.5 px-3 py-2 text-left text-[0.74rem] transition hover:bg-[var(--color-overlay-soft)] ${
-                            highlighted
-                              ? "bg-[var(--color-overlay-soft)]"
-                              : ""
-                          }`}
-                          // preventDefault on mousedown keeps the textarea
-                          // focused, matching the persona/model pickers.
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => setPrompt(completeSkill(skill.name))}
-                        >
-                          <span
-                            className={`font-medium ${
-                              highlighted
-                                ? "text-[var(--color-accent)]"
-                                : "text-[var(--color-text-primary)]"
-                            }`}
-                          >
-                            /{skill.name}
-                          </span>
-                          {skill.description ? (
-                            <span className="line-clamp-2 text-[0.7rem] leading-snug text-[var(--color-text-muted)]">
-                              {skill.description}
-                            </span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-[0.65rem] text-[var(--color-text-muted)]">
-                    ↑↓ to navigate · Enter/Tab to insert · Esc to dismiss
-                  </div>
-                </div>
-              ) : null}
-              <label className="sr-only" htmlFor="promptInput">
-                Message
-              </label>
-              <textarea
-                id="promptInput"
-                ref={promptRef}
-                className="min-h-[68px] w-full resize-none overflow-y-auto bg-transparent px-[1.05rem] pt-[0.85rem] pb-[0.35rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
-                placeholder={
-                  pendingAttachments.length > 0
-                    ? "Add a message to send your attachments…"
-                    : promptPlaceholder
-                }
-                rows={1}
-                suppressHydrationWarning
-                value={prompt}
-                onFocus={() => setIsComposerFocused(true)}
-                onBlur={() => setIsComposerFocused(false)}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setPrompt(value);
-                  // Every edit resets the skill-popover highlight to the top
-                  // row; an edit that leaves the slash context re-arms the Esc
-                  // latch so the next "/" reopens the popover.
-                  setSkillIndex(0);
-                  if (skillSlashQuery(value) === null) setSkillPopoverDismissed(false);
-                }}
-                onKeyDown={(event) => {
-                  // Skill "/" autocomplete steals its navigation keys while
-                  // open — most importantly Enter, which completes the
-                  // highlighted skill instead of sending, so accepting a
-                  // suggestion can never fire a half-typed message.
-                  if (skillPopoverOpen) {
-                    if (event.key === "ArrowDown") {
-                      event.preventDefault();
-                      setSkillIndex((skillHighlight + 1) % skillMatches.length);
-                      return;
-                    }
-                    if (event.key === "ArrowUp") {
-                      event.preventDefault();
-                      setSkillIndex((skillHighlight - 1 + skillMatches.length) % skillMatches.length);
-                      return;
-                    }
-                    if (event.key === "Enter" || event.key === "Tab") {
-                      event.preventDefault();
-                      const pick = skillMatches[skillHighlight];
-                      if (pick) setPrompt(completeSkill(pick.name));
-                      return;
-                    }
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      setSkillPopoverDismissed(true);
-                      return;
-                    }
-                  }
-                  // Enter sends according to the user's send-key preference:
-                  //   - "enter" (default): bare Enter sends, Shift+Enter is
-                  //     a natural newline (textarea default).
-                  //   - "ctrl+enter": Enter is always a newline; only
-                  //     Cmd/Ctrl+Enter sends.
-                  // Touch devices are special-cased: their soft keyboards
-                  // send a bare Enter to insert a newline, so we never
-                  // intercept Enter there — submission stays on the Send
-                  // button. Cmd/Ctrl+Enter still works on a touch device
-                  // with a hardware keyboard attached (rare but cheap to
-                  // support).
-                  if (event.key !== "Enter") return;
-                  const isTouchDevice =
-                    typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
-                  const modifierSend = event.metaKey || event.ctrlKey;
-                  if (isTouchDevice && !modifierSend) return; // let the IME insert its newline
-                  const shouldSend = sendOnEnter
-                    ? !event.shiftKey
-                    : modifierSend;
-                  if (shouldSend) {
-                    event.preventDefault();
-                    void submitPrompt(prompt);
-                  }
-                }}
-                onPaste={(event) => {
-                  // Pasting files / screenshots from clipboard runs
-                  // through the same addAttachmentFiles path as the
-                  // file-picker and drag-and-drop. Only intercept when
-                  // there are real files on the clipboard — plain-text
-                  // paste must still land in the textarea normally.
-                  // Modern browsers populate `files` for both browser
-                  // "Copy image" and OS-level screenshot pastes
-                  // (Cmd+Shift+Ctrl+4 on macOS, Win+Shift+S, etc.).
-                  const files = event.clipboardData?.files;
-                  if (files && files.length > 0) {
-                    event.preventDefault();
-                    addAttachmentFiles(files);
-                    return;
-                  }
-                  // Plain-text paste: let the browser insert it, then
-                  // (next tick, after React has committed the new value)
-                  // surface a "Format as code" nudge if it looks like
-                  // source. The autosize `useEffect` in ChatExperience
-                  // already grows the textarea in response to the prompt
-                  // state change, so no manual resize is needed here.
-                  const text = event.clipboardData?.getData("text/plain") ?? "";
-                  if (looksLikeCode(text)) {
-                    setTimeout(() => setShowCodeNudge(true), 0);
-                  }
-                }}
-              />
+        {skillPopoverOpen ? (
+          <div
+            role="listbox"
+            aria-label="Skills"
+            className="motion-safe:animate-pop-up absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-full max-w-[24rem] overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
+          >
+            <div className="max-h-72 overflow-y-auto py-1">
+              {skillMatches.map((skill, i) => {
+                const highlighted = i === skillHighlight;
+                return (
+                  <button
+                    key={skill.name}
+                    type="button"
+                    role="option"
+                    aria-selected={highlighted}
+                    className={`flex w-full flex-col gap-0.5 px-3 py-2 text-left text-[0.74rem] transition hover:bg-[var(--color-overlay-soft)] ${
+                      highlighted ? "bg-[var(--color-overlay-soft)]" : ""
+                    }`}
+                    // preventDefault on mousedown keeps the textarea
+                    // focused, matching the persona/model pickers.
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setPrompt(completeSkill(skill.name))}
+                  >
+                    <span
+                      className={`font-medium ${
+                        highlighted
+                          ? "text-[var(--color-accent)]"
+                          : "text-[var(--color-text-primary)]"
+                      }`}
+                    >
+                      /{skill.name}
+                    </span>
+                    {skill.description ? (
+                      <span className="line-clamp-2 text-[0.7rem] leading-snug text-[var(--color-text-muted)]">
+                        {skill.description}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-[0.65rem] text-[var(--color-text-muted)]">
+              ↑↓ to navigate · Enter/Tab to insert · Esc to dismiss
+            </div>
+          </div>
+        ) : null}
+        <label className="sr-only" htmlFor="promptInput">
+          Message
+        </label>
+        <textarea
+          id="promptInput"
+          ref={promptRef}
+          className="min-h-[68px] w-full resize-none overflow-y-auto bg-transparent px-[1.05rem] pt-[0.85rem] pb-[0.35rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
+          placeholder={
+            pendingAttachments.length > 0
+              ? "Add a message to send your attachments…"
+              : promptPlaceholder
+          }
+          rows={1}
+          suppressHydrationWarning
+          value={prompt}
+          onFocus={() => setIsComposerFocused(true)}
+          onBlur={() => setIsComposerFocused(false)}
+          onChange={(event) => {
+            const value = event.target.value;
+            setPrompt(value);
+            // Every edit resets the skill-popover highlight to the top
+            // row; an edit that leaves the slash context re-arms the Esc
+            // latch so the next "/" reopens the popover.
+            setSkillIndex(0);
+            if (skillSlashQuery(value) === null)
+              setSkillPopoverDismissed(false);
+          }}
+          onKeyDown={(event) => {
+            // Skill "/" autocomplete steals its navigation keys while
+            // open — most importantly Enter, which completes the
+            // highlighted skill instead of sending, so accepting a
+            // suggestion can never fire a half-typed message.
+            if (skillPopoverOpen) {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setSkillIndex((skillHighlight + 1) % skillMatches.length);
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setSkillIndex(
+                  (skillHighlight - 1 + skillMatches.length) %
+                    skillMatches.length,
+                );
+                return;
+              }
+              if (event.key === "Enter" || event.key === "Tab") {
+                event.preventDefault();
+                const pick = skillMatches[skillHighlight];
+                if (pick) setPrompt(completeSkill(pick.name));
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setSkillPopoverDismissed(true);
+                return;
+              }
+            }
+            // Enter sends according to the user's send-key preference:
+            //   - "enter" (default): bare Enter sends, Shift+Enter is
+            //     a natural newline (textarea default).
+            //   - "ctrl+enter": Enter is always a newline; only
+            //     Cmd/Ctrl+Enter sends.
+            // Touch devices are special-cased: their soft keyboards
+            // send a bare Enter to insert a newline, so we never
+            // intercept Enter there — submission stays on the Send
+            // button. Cmd/Ctrl+Enter still works on a touch device
+            // with a hardware keyboard attached (rare but cheap to
+            // support).
+            if (event.key !== "Enter") return;
+            const isTouchDevice =
+              typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
+            const modifierSend = event.metaKey || event.ctrlKey;
+            if (isTouchDevice && !modifierSend) return; // let the IME insert its newline
+            const shouldSend = sendOnEnter ? !event.shiftKey : modifierSend;
+            if (shouldSend) {
+              event.preventDefault();
+              void submitPrompt(prompt);
+            }
+          }}
+          onPaste={(event) => {
+            // Pasting files / screenshots from clipboard runs
+            // through the same addAttachmentFiles path as the
+            // file-picker and drag-and-drop. Only intercept when
+            // there are real files on the clipboard — plain-text
+            // paste must still land in the textarea normally.
+            // Modern browsers populate `files` for both browser
+            // "Copy image" and OS-level screenshot pastes
+            // (Cmd+Shift+Ctrl+4 on macOS, Win+Shift+S, etc.).
+            const files = event.clipboardData?.files;
+            if (files && files.length > 0) {
+              event.preventDefault();
+              addAttachmentFiles(files);
+              return;
+            }
+            // Plain-text paste: let the browser insert it, then
+            // (next tick, after React has committed the new value)
+            // surface a "Format as code" nudge if it looks like
+            // source. The autosize `useEffect` in ChatExperience
+            // already grows the textarea in response to the prompt
+            // state change, so no manual resize is needed here.
+            const text = event.clipboardData?.getData("text/plain") ?? "";
+            if (looksLikeCode(text)) {
+              setTimeout(() => setShowCodeNudge(true), 0);
+            }
+          }}
+        />
 
-              {/* Code-paste nudge — surfaced when a paste looks like source
+        {/* Code-paste nudge — surfaced when a paste looks like source
                   (see `looksLikeCode`). Auto-dismisses after
                   CODE_NUDGE_TIMEOUT_MS; the ✕ and "Format as code" actions
                   clear it immediately. "Format as code" wraps the entire
                   draft in a fenced block so the model renders it as code
                   rather than inlining the snippet as prose. */}
-              {showCodeNudge ? (
-                <div className="mx-[1.05rem] mt-1.5 flex items-center gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]">
-                  <span>Pasted code? Wrap in triple backticks for better formatting.</span>
-                  <button
-                    type="button"
-                    className="font-medium text-[var(--color-accent)] hover:underline"
-                    onClick={() => {
-                      setPrompt((p) => `\`\`\`\n${p}\n\`\`\``);
-                      setShowCodeNudge(false);
-                    }}
-                  >
-                    Format as code
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Dismiss code-format suggestion"
-                    className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
-                    onClick={() => setShowCodeNudge(false)}
-                  >
-                    <Icon name="close" className="size-3" />
-                  </button>
-                </div>
-              ) : null}
+        {showCodeNudge ? (
+          <div className="mx-[1.05rem] mt-1.5 flex items-center gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]">
+            <span>
+              Pasted code? Wrap in triple backticks for better formatting.
+            </span>
+            <button
+              type="button"
+              className="font-medium text-[var(--color-accent)] hover:underline"
+              onClick={() => {
+                setPrompt((p) => `\`\`\`\n${p}\n\`\`\``);
+                setShowCodeNudge(false);
+              }}
+            >
+              Format as code
+            </button>
+            <button
+              type="button"
+              aria-label="Dismiss code-format suggestion"
+              className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
+              onClick={() => setShowCodeNudge(false)}
+            >
+              <Icon name="close" className="size-3" />
+            </button>
+          </div>
+        ) : null}
 
-              {pendingAttachments.length > 0 || attachmentError ? (
-                <div className="mx-[1.05rem] mb-2 flex flex-wrap items-center gap-1.5">
-                  {pendingAttachments.map((a) => (
-                    <PendingAttachmentChip
-                      key={a.clientId}
-                      attachment={a}
-                      onRemove={() => removePendingAttachment(a.clientId)}
-                      removalDisabled={isStreaming || isUploadingAttachments}
-                    />
-                  ))}
-                  {attachmentError ? (
-                    <span
-                      role="alert"
-                      className="basis-full rounded-[0.6rem] border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2.5 py-1.5 text-[0.75rem] text-[var(--color-danger)]"
-                    >
-                      {attachmentError}
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {uploadSizeWarning ? (
-                <div
-                  role="status"
-                  className="mx-[1.05rem] mb-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
-                >
-                  {uploadSizeWarning}
-                </div>
-              ) : null}
-
-              {spreadsheetNudge.show ? (
-                <div
-                  role="status"
-                  className="mx-[1.05rem] mb-2 flex flex-wrap items-center justify-between gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
-                >
-                  <span>
-                    Spreadsheets analyze better on{" "}
-                    <span className="font-medium text-[var(--color-text-primary)]">
-                      {currentAdvancedModelLabel()}
-                    </span>
-                    .
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="rounded-full border border-[var(--color-accent)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                      disabled={isStreaming}
-                      onClick={() => {
-                        setSelectedModel(spreadsheetNudge.recommendedModel);
-                        setSpreadsheetNudgeDismissed(true);
-                      }}
-                    >
-                      Switch
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Dismiss model suggestion"
-                      className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
-                      onClick={() => setSpreadsheetNudgeDismissed(true)}
-                    >
-                      <Icon name="close" className="size-3" />
-                    </button>
-                  </span>
-                </div>
-              ) : null}
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  addAttachmentFiles(event.target.files);
-                  // Reset so picking the same file twice in a row still fires onChange.
-                  event.target.value = "";
-                }}
+        {pendingAttachments.length > 0 || attachmentError ? (
+          <div className="mx-[1.05rem] mb-2 flex flex-wrap items-center gap-1.5">
+            {pendingAttachments.map((a) => (
+              <PendingAttachmentChip
+                key={a.clientId}
+                attachment={a}
+                onRemove={() => removePendingAttachment(a.clientId)}
+                removalDisabled={isStreaming || isUploadingAttachments}
               />
+            ))}
+            {attachmentError ? (
+              <span
+                role="alert"
+                className="basis-full rounded-[0.6rem] border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2.5 py-1.5 text-[0.75rem] text-[var(--color-danger)]"
+              >
+                {attachmentError}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
 
-              <div className="flex items-center justify-between gap-2 px-[0.7rem] pt-[0.45rem] pb-[0.6rem]">
-                {/* One row, always. The icon buttons are fixed-width and never
+        {uploadSizeWarning ? (
+          <div
+            role="status"
+            className="mx-[1.05rem] mb-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
+          >
+            {uploadSizeWarning}
+          </div>
+        ) : null}
+
+        {spreadsheetNudge.show ? (
+          <div
+            role="status"
+            className="mx-[1.05rem] mb-2 flex flex-wrap items-center justify-between gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
+          >
+            <span>
+              Spreadsheets analyze better on{" "}
+              <span className="font-medium text-[var(--color-text-primary)]">
+                {currentAdvancedModelLabel()}
+              </span>
+              .
+            </span>
+            <span className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-[var(--color-accent)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                disabled={isStreaming}
+                onClick={() => {
+                  setSelectedModel(spreadsheetNudge.recommendedModel);
+                  setSpreadsheetNudgeDismissed(true);
+                }}
+              >
+                Switch
+              </button>
+              <button
+                type="button"
+                aria-label="Dismiss model suggestion"
+                className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
+                onClick={() => setSpreadsheetNudgeDismissed(true)}
+              >
+                <Icon name="close" className="size-3" />
+              </button>
+            </span>
+          </div>
+        ) : null}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            addAttachmentFiles(event.target.files);
+            // Reset so picking the same file twice in a row still fires onChange.
+            event.target.value = "";
+          }}
+        />
+
+        <div className="flex items-center justify-between gap-2 px-[0.7rem] pt-[0.45rem] pb-[0.6rem]">
+          {/* One row, always. The icon buttons are fixed-width and never
                     shrink; the model chip is the single elastic item, so a
                     narrow (phone) toolbar squeezes the model label instead of
                     wrapping the trailing controls onto a second line. */}
-                <div className="flex min-w-0 flex-1 items-center gap-[0.15rem] overflow-visible sm:gap-[0.35rem]">
-                  {/* Model chip (the design's .model-chip): icon + current
+          <div className="flex min-w-0 flex-1 items-center gap-[0.15rem] overflow-visible sm:gap-[0.35rem]">
+            {/* Model chip (the design's .model-chip): icon + current
                       model + caret opening the .composer-pop listbox. The
                       search field at the top of the popover preserves the
                       old inline input's type-to-search-the-catalog and free
                       slug entry; Esc closes and returns focus to the chip. */}
-                  {/* The wrapper is a CSS positioning anchor and nothing else —
+            {/* The wrapper is a CSS positioning anchor and nothing else —
                       role="presentation" states that rather than inventing a
                       widget role for it. Escape is delegated here on purpose:
                       the trigger button, the search field and the listbox rows
                       are all real controls inside it, and a composite widget's
                       Escape has to work from whichever one holds focus. */}
-                  <div
-                    ref={modelPickerRef}
-                    role="presentation"
-                    className="relative inline-flex min-w-0"
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape" && modelPickerOpen) {
-                        event.stopPropagation();
-                        closeModelPicker(true);
-                      }
-                    }}
-                  >
-                    <button
-                      ref={modelChipRef}
-                      type="button"
-                      aria-haspopup="listbox"
-                      aria-expanded={modelPickerOpen}
-                      disabled={isStreaming}
-                      title={
-                        modelError
-                          ? modelError.message
-                          : `OpenRouter model slug — e.g. ${currentDefaultModel()} (recommended) or ${currentAdvancedModel()} (strongest)`
-                      }
-                      className={`inline-flex h-[1.95rem] min-w-0 items-center gap-[0.25rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.4rem] pr-[0.3rem] text-[0.78rem] font-medium transition sm:gap-[0.4rem] sm:pl-[0.6rem] sm:pr-[0.5rem] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
-                        modelError
-                          ? "text-[var(--color-danger)]"
-                          : modelPickerOpen
-                            ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-text-primary)]"
-                            : "text-[var(--color-text-secondary)] hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)]"
-                      }`}
-                      onClick={() => {
-                        if (modelPickerOpen) closeModelPicker(false);
-                        else openModelPicker();
-                      }}
-                    >
-                      <Icon
-                        name="model"
-                        className={`size-[0.85rem] shrink-0 ${modelError ? "" : "text-[var(--color-accent)]"}`}
-                      />
-                      {/* Two renderings of the same label, one visible at a
+            <div
+              ref={modelPickerRef}
+              role="presentation"
+              className="relative inline-flex min-w-0"
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && modelPickerOpen) {
+                  event.stopPropagation();
+                  closeModelPicker(true);
+                }
+              }}
+            >
+              <button
+                ref={modelChipRef}
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={modelPickerOpen}
+                disabled={isStreaming}
+                title={
+                  modelError
+                    ? modelError.message
+                    : `OpenRouter model slug — e.g. ${currentDefaultModel()} (recommended) or ${currentAdvancedModel()} (strongest)`
+                }
+                className={`inline-flex h-[1.95rem] min-w-0 items-center gap-[0.25rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.4rem] pr-[0.3rem] text-[0.78rem] font-medium transition sm:gap-[0.4rem] sm:pl-[0.6rem] sm:pr-[0.5rem] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
+                  modelError
+                    ? "text-[var(--color-danger)]"
+                    : modelPickerOpen
+                      ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-text-primary)]"
+                      : "text-[var(--color-text-secondary)] hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)]"
+                }`}
+                onClick={() => {
+                  if (modelPickerOpen) closeModelPicker(false);
+                  else openModelPicker();
+                }}
+              >
+                <Icon
+                  name="model"
+                  className={`size-[0.85rem] shrink-0 ${modelError ? "" : "text-[var(--color-accent)]"}`}
+                />
+                {/* Two renderings of the same label, one visible at a
                           time: phones/small tablets get the vendor prefix
                           dropped ("Z.AI: GLM 5.2" → "GLM 5.2") so the model
                           is still readable in the space left after the icon
@@ -798,21 +832,21 @@ export function Composer({
                           truncate with an ellipsis rather than pushing the
                           toolbar wider. aria-hidden on the short one so the
                           accessible name stays the full label exactly once. */}
-                      <span
-                        aria-hidden="true"
-                        data-testid="composer-model-label-short"
-                        className="truncate sm:hidden"
-                      >
-                        {compactModelLabel(selectedModelLabel)}
-                      </span>
-                      <span
-                        data-testid="composer-model-label-full"
-                        className="hidden max-w-[11rem] truncate sm:inline"
-                      >
-                        {selectedModelLabel}
-                      </span>
-                      <span className="sr-only sm:hidden">{selectedModelLabel}</span>
-                      {/* Cost tier for the *selected* model, so the running
+                <span
+                  aria-hidden="true"
+                  data-testid="composer-model-label-short"
+                  className="truncate sm:hidden"
+                >
+                  {compactModelLabel(selectedModelLabel)}
+                </span>
+                <span
+                  data-testid="composer-model-label-full"
+                  className="hidden max-w-[11rem] truncate sm:inline"
+                >
+                  {selectedModelLabel}
+                </span>
+                <span className="sr-only sm:hidden">{selectedModelLabel}</span>
+                {/* Cost tier for the *selected* model, so the running
                           price band is visible without opening the picker.
                           Hidden below sm — four glyphs are the widest thing
                           on the chip that isn't the model's name, and the
@@ -820,564 +854,678 @@ export function Composer({
                           The wrapper carries the responsive display because
                           .model-cost sets `display: inline-flex` outside
                           Tailwind's utility layer and would win otherwise. */}
-                      <span className="hidden shrink-0 items-center sm:inline-flex">
-                        <ModelCostIndicator prices={selectedModelPrices} />
-                      </span>
-                      <Icon name="selector" className="size-[0.8rem] shrink-0 text-[var(--color-text-muted)]" />
-                    </button>
-                    {modelPickerOpen && !isStreaming ? (
-                      <div className={COMPOSER_POP_WIDE}>
-                        <input
-                          ref={modelInputRef}
-                          type="text"
-                          spellCheck={false}
-                          autoCapitalize="off"
-                          autoCorrect="off"
-                          placeholder="Search models…"
-                          aria-label="Model"
-                          role="combobox"
-                          aria-expanded="true"
-                          aria-controls="composer-model-listbox"
-                          aria-activedescendant={
-                            filteredRankedModels.length > 0
-                              ? `composer-model-opt-${Math.min(modelHighlight, filteredRankedModels.length - 1)}`
-                              : undefined
-                          }
-                          className="w-full rounded-[0.5rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.6rem] py-[0.32rem] text-[0.82rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-border-strong)]"
-                          value={modelSearchQuery}
-                          onChange={(event) => {
-                            // Typing only filters the catalog. The text is a
-                            // draft, NOT the selected model: it used to be
-                            // written straight into selectedModel on every
-                            // keystroke, so typing "cla" and then pressing
-                            // Escape (or clicking away — both only close the
-                            // popover) left "cla" as the model and the next
-                            // send failed. selectedModel changes only on a
-                            // commit (Enter or a row pick, below); a dismiss
-                            // leaves whatever was selected before untouched.
-                            setModelSearchQuery(event.target.value);
-                            setModelHighlight(0);
-                          }}
-                          onKeyDown={(event) => {
-                            const count = filteredRankedModels.length;
-                            if (event.key === "ArrowDown" && count > 0) {
-                              event.preventDefault();
-                              setModelHighlight((h) => (Math.min(h, count - 1) + 1) % count);
-                            } else if (event.key === "ArrowUp" && count > 0) {
-                              event.preventDefault();
-                              setModelHighlight((h) => (Math.min(h, count - 1) - 1 + count) % count);
-                            } else if (event.key === "Enter") {
-                              event.preventDefault();
-                              // Commit: the highlighted row when there is one;
-                              // otherwise the typed text itself, which keeps
-                              // free slug entry working (a slug the catalog
-                              // doesn't list has no row to pick). Empty text
-                              // commits nothing and just closes.
-                              const pick = filteredRankedModels[Math.min(modelHighlight, count - 1)];
-                              const typed = modelSearchQuery.trim();
-                              if (pick) setSelectedModel(pick.slug);
-                              else if (typed) setSelectedModel(typed);
-                              closeModelPicker(true);
+                <span className="hidden shrink-0 items-center sm:inline-flex">
+                  <ModelCostIndicator prices={selectedModelPrices} />
+                </span>
+                <Icon
+                  name="selector"
+                  className="size-[0.8rem] shrink-0 text-[var(--color-text-muted)]"
+                />
+              </button>
+              {modelPickerOpen && !isStreaming ? (
+                <div className={COMPOSER_POP_WIDE}>
+                  <input
+                    ref={modelInputRef}
+                    type="text"
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    placeholder="Search models…"
+                    aria-label="Model"
+                    role="combobox"
+                    aria-expanded="true"
+                    aria-controls="composer-model-listbox"
+                    aria-activedescendant={
+                      filteredRankedModels.length > 0
+                        ? `composer-model-opt-${Math.min(modelHighlight, filteredRankedModels.length - 1)}`
+                        : undefined
+                    }
+                    className="w-full rounded-[0.5rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.6rem] py-[0.32rem] text-[0.82rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-border-strong)]"
+                    value={modelSearchQuery}
+                    onChange={(event) => {
+                      // Typing only filters the catalog. The text is a
+                      // draft, NOT the selected model: it used to be
+                      // written straight into selectedModel on every
+                      // keystroke, so typing "cla" and then pressing
+                      // Escape (or clicking away — both only close the
+                      // popover) left "cla" as the model and the next
+                      // send failed. selectedModel changes only on a
+                      // commit (Enter or a row pick, below); a dismiss
+                      // leaves whatever was selected before untouched.
+                      setModelSearchQuery(event.target.value);
+                      setModelHighlight(0);
+                    }}
+                    onKeyDown={(event) => {
+                      const count = filteredRankedModels.length;
+                      if (event.key === "ArrowDown" && count > 0) {
+                        event.preventDefault();
+                        setModelHighlight(
+                          (h) => (Math.min(h, count - 1) + 1) % count,
+                        );
+                      } else if (event.key === "ArrowUp" && count > 0) {
+                        event.preventDefault();
+                        setModelHighlight(
+                          (h) => (Math.min(h, count - 1) - 1 + count) % count,
+                        );
+                      } else if (event.key === "Enter") {
+                        event.preventDefault();
+                        // Commit: the highlighted row when there is one;
+                        // otherwise the typed text itself, which keeps
+                        // free slug entry working (a slug the catalog
+                        // doesn't list has no row to pick). Empty text
+                        // commits nothing and just closes.
+                        const pick =
+                          filteredRankedModels[
+                            Math.min(modelHighlight, count - 1)
+                          ];
+                        const typed = modelSearchQuery.trim();
+                        if (pick) setSelectedModel(pick.slug);
+                        else if (typed) setSelectedModel(typed);
+                        closeModelPicker(true);
+                      }
+                    }}
+                  />
+                  <div
+                    id="composer-model-listbox"
+                    role="listbox"
+                    aria-label="Model options"
+                    className="grid max-h-72 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto"
+                  >
+                    {isLoadingRankedModels ||
+                    (isLoadingCatalog && modelSearchQuery.trim() !== "") ? (
+                      <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">
+                        Loading...
+                      </div>
+                    ) : filteredRankedModels.length === 0 ? (
+                      <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">
+                        No matches
+                      </div>
+                    ) : (
+                      filteredRankedModels.map((model, i) => {
+                        // One pill per row, picked from a strict
+                        // hierarchy so the listbox stays uncluttered:
+                        //   recommended > workspace > tested > ✨ new >
+                        //   experimental. recommended = one of the two
+                        //   pinned slugs, styled as the design's
+                        //   .rec-tag; workspace = a slug served by an
+                        //   admin-configured provider.
+                        const tier = model.slug
+                          ? tierForModel(model.slug)
+                          : null;
+                        const isTier =
+                          tier === "default" || tier === "advanced";
+                        const isFresh = isNewlyReleased(model.created);
+                        let pill: ReactNode = null;
+                        if (isTier) {
+                          // Same size/case as the tested/experimental
+                          // badges — green is the only differentiator.
+                          pill = (
+                            <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-success)_40%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-success)]">
+                              recommended
+                            </span>
+                          );
+                        } else if (model.workspace) {
+                          pill = (
+                            <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-accent)]">
+                              workspace
+                            </span>
+                          );
+                        } else if (tier === "tested") {
+                          pill = <ModelValidationBadge tier="tested" />;
+                        } else if (isFresh) {
+                          pill = <NewModelBadge />;
+                        } else if (tier === "experimental") {
+                          pill = <ModelValidationBadge tier="experimental" />;
+                        }
+                        const isSelected = model.slug === selectedModel;
+                        const isHighlighted =
+                          i ===
+                          Math.min(
+                            modelHighlight,
+                            filteredRankedModels.length - 1,
+                          );
+                        return (
+                          <button
+                            key={model.slug || "__default__"}
+                            id={`composer-model-opt-${i}`}
+                            type="button"
+                            role="option"
+                            aria-selected={isSelected}
+                            title={
+                              model.slug
+                                ? `${model.name} (${model.slug})`
+                                : "Use the server-configured default model"
                             }
-                          }}
-                        />
-                        <div
-                          id="composer-model-listbox"
-                          role="listbox"
-                          aria-label="Model options"
-                          className="grid max-h-72 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto"
-                        >
-                          {isLoadingRankedModels || (isLoadingCatalog && modelSearchQuery.trim() !== "") ? (
-                            <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
-                          ) : filteredRankedModels.length === 0 ? (
-                            <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">No matches</div>
-                          ) : (
-                            filteredRankedModels.map((model, i) => {
-                              // One pill per row, picked from a strict
-                              // hierarchy so the listbox stays uncluttered:
-                              //   recommended > workspace > tested > ✨ new >
-                              //   experimental. recommended = one of the two
-                              //   pinned slugs, styled as the design's
-                              //   .rec-tag; workspace = a slug served by an
-                              //   admin-configured provider.
-                              const tier = model.slug ? tierForModel(model.slug) : null;
-                              const isTier = tier === "default" || tier === "advanced";
-                              const isFresh = isNewlyReleased(model.created);
-                              let pill: ReactNode = null;
-                              if (isTier) {
-                                // Same size/case as the tested/experimental
-                                // badges — green is the only differentiator.
-                                pill = (
-                                  <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-success)_40%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-success)]">
-                                    recommended
-                                  </span>
-                                );
-                              } else if (model.workspace) {
-                                pill = (
-                                  <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-accent)]">
-                                    workspace
-                                  </span>
-                                );
-                              } else if (tier === "tested") {
-                                pill = <ModelValidationBadge tier="tested" />;
-                              } else if (isFresh) {
-                                pill = <NewModelBadge />;
-                              } else if (tier === "experimental") {
-                                pill = <ModelValidationBadge tier="experimental" />;
-                              }
-                              const isSelected = model.slug === selectedModel;
-                              const isHighlighted =
-                                i === Math.min(modelHighlight, filteredRankedModels.length - 1);
-                              return (
-                                <button
-                                  key={model.slug || "__default__"}
-                                  id={`composer-model-opt-${i}`}
-                                  type="button"
-                                  role="option"
-                                  aria-selected={isSelected}
-                                  title={model.slug ? `${model.name} (${model.slug})` : "Use the server-configured default model"}
-                                  className={`${POP_ROW} ${isSelected ? POP_ROW_SELECTED : ""} ${
-                                    isHighlighted && !isSelected ? "bg-[var(--rail-hover)]" : ""
-                                  }`}
-                                  onClick={() => {
-                                    setSelectedModel(model.slug);
-                                    closeModelPicker(true);
-                                  }}
-                                >
-                                  <span className={`${POP_TITLE} min-w-0 break-words`}>{model.name}</span>
-                                  {/* Right-side meta cluster: the single
+                            className={`${POP_ROW} ${isSelected ? POP_ROW_SELECTED : ""} ${
+                              isHighlighted && !isSelected
+                                ? "bg-[var(--rail-hover)]"
+                                : ""
+                            }`}
+                            onClick={() => {
+                              setSelectedModel(model.slug);
+                              closeModelPicker(true);
+                            }}
+                          >
+                            <span
+                              className={`${POP_TITLE} min-w-0 break-words`}
+                            >
+                              {model.name}
+                            </span>
+                            {/* Right-side meta cluster: the single
                                       status pill (if any) plus the cost tier.
                                       Grouped so the row's justify-between
                                       keeps them together at the trailing
                                       edge instead of spreading them apart. */}
-                                  <span className="flex shrink-0 items-center gap-[0.35rem]">
-                                    {pill}
-                                    <ModelCostIndicator
-                                      prices={{
-                                        pricePrompt: model.pricePrompt,
-                                        priceCompletion: model.priceCompletion,
-                                      }}
-                                    />
-                                  </span>
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
+                            <span className="flex shrink-0 items-center gap-[0.35rem]">
+                              {pill}
+                              <ModelCostIndicator
+                                prices={{
+                                  pricePrompt: model.pricePrompt,
+                                  priceCompletion: model.priceCompletion,
+                                }}
+                              />
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
-                  {/* The design's .composer-div divider between the model
+                </div>
+              ) : null}
+            </div>
+            {/* The design's .composer-div divider between the model
                       chip and the icon-button cluster. */}
-                  <span
-                    aria-hidden="true"
-                    className="mx-[0.05rem] h-[1.1rem] w-px shrink-0 bg-[var(--color-border-strong)] sm:mx-[0.15rem]"
-                  />
-                  {(() => {
-                    // Persona is locked server-side once a conversation has any
-                    // turns, so once the chat is underway the picker is read-only
-                    // noise. Hide it entirely after the first turn (and during
-                    // the very first stream) to keep the composer toolbar tidy.
-                    const personaLocked =
-                      isStreaming || (activeConversationId !== null && messages.length > 0);
-                    if (personaLocked) return null;
-                    const personaOptions = personas.length > 0 ? personas : [selectedPersona];
-                    const formatPersona = (p: string) =>
-                      p.charAt(0).toUpperCase() + p.slice(1);
-                    return (
-                      // Positioning anchor only (see the model picker above):
-                      // presentational wrapper, Escape delegated so it works from
-                      // the trigger button or from any row of the open popover.
-                      <div
-                        ref={personaPickerRef}
-                        role="presentation"
-                        className="relative inline-flex"
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape" && personaPickerOpen) {
-                            event.stopPropagation();
-                            setPersonaPickerOpen(false);
-                            personaButtonRef.current?.focus();
-                          }
-                        }}
-                      >
-                        {/* Icon-only .tool-btn (the design has no persona
+            <span
+              aria-hidden="true"
+              className="mx-[0.05rem] h-[1.1rem] w-px shrink-0 bg-[var(--color-border-strong)] sm:mx-[0.15rem]"
+            />
+            {(() => {
+              // Persona is locked server-side once a conversation has any
+              // turns, so once the chat is underway the picker is read-only
+              // noise. Hide it entirely after the first turn (and during
+              // the very first stream) to keep the composer toolbar tidy.
+              const personaLocked =
+                isStreaming ||
+                (activeConversationId !== null && messages.length > 0);
+              if (personaLocked) return null;
+              const personaOptions =
+                personas.length > 0 ? personas : [selectedPersona];
+              const formatPersona = (p: string) =>
+                p.charAt(0).toUpperCase() + p.slice(1);
+              return (
+                // Positioning anchor only (see the model picker above):
+                // presentational wrapper, Escape delegated so it works from
+                // the trigger button or from any row of the open popover.
+                <div
+                  ref={personaPickerRef}
+                  role="presentation"
+                  className="relative inline-flex"
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape" && personaPickerOpen) {
+                      event.stopPropagation();
+                      setPersonaPickerOpen(false);
+                      personaButtonRef.current?.focus();
+                    }
+                  }}
+                >
+                  {/* Icon-only .tool-btn (the design has no persona
                             control; it joins the icon cluster per review).
                             The active persona is announced via the
                             aria-label and shown in the hover tip; the
                             popover marks it with the selected state. */}
-                        <button
-                          ref={personaButtonRef}
-                          type="button"
-                          aria-haspopup="listbox"
-                          aria-expanded={personaPickerOpen}
-                          aria-label={`Persona — ${formatPersona(selectedPersona)}`}
-                          data-tip-top={`Persona — ${formatPersona(selectedPersona)}`}
-                          className={`${TOOL_BTN} ${personaPickerOpen ? TOOL_BTN_ACTIVE : ""}`}
-                          onClick={() => setPersonaPickerOpen((open) => !open)}
-                        >
-                          <Icon name="persona" className="size-3.5" />
-                        </button>
-                        {personaPickerOpen ? (
-                          <div role="listbox" aria-label="Persona" className={COMPOSER_POP}>
-                            {personaOptions.map((p) => {
-                              const selected = p === selectedPersona;
-                              return (
-                                <button
-                                  key={p}
-                                  type="button"
-                                  role="option"
-                                  aria-selected={selected}
-                                  className={`${POP_ROW} ${selected ? POP_ROW_SELECTED : ""}`}
-                                  onClick={() => {
-                                    setSelectedPersona(p);
-                                    setPersonaPickerOpen(false);
-                                    personaButtonRef.current?.focus();
-                                  }}
-                                >
-                                  <span className={`${POP_TITLE} truncate`}>{formatPersona(p)}</span>
-                                  {selected ? (
-                                    <span
-                                      aria-hidden="true"
-                                      className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
-                                    />
-                                  ) : null}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
-                  <PromptLibrary currentText={prompt} onInsert={setPrompt} compact />
                   <button
+                    ref={personaButtonRef}
                     type="button"
-                    aria-label="Attach files"
-                    data-tip-top="Attach files"
-                    className={TOOL_BTN}
-                    disabled={isStreaming || isUploadingAttachments}
-                    onClick={() => fileInputRef.current?.click()}
+                    aria-haspopup="listbox"
+                    aria-expanded={personaPickerOpen}
+                    aria-label={`Persona — ${formatPersona(selectedPersona)}`}
+                    data-tip-top={`Persona — ${formatPersona(selectedPersona)}`}
+                    className={`${TOOL_BTN} ${personaPickerOpen ? TOOL_BTN_ACTIVE : ""}`}
+                    onClick={() => setPersonaPickerOpen((open) => !open)}
                   >
-                    <Icon name="paperclip" className="size-3.5" />
+                    <Icon name="persona" className="size-3.5" />
                   </button>
-                  {mcpServers.length > 0 ? (
-                    // Positioning anchor only (see the model picker above):
-                    // presentational wrapper, Escape delegated so it works from
-                    // the trigger button or from any row of the open popover.
+                  {personaPickerOpen ? (
                     <div
-                      ref={mcpPickerRef}
-                      role="presentation"
-                      className="relative inline-flex"
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape" && mcpPickerOpen) {
-                          event.stopPropagation();
-                          setMcpPickerOpen(false);
-                          mcpButtonRef.current?.focus();
-                        }
-                      }}
+                      role="listbox"
+                      aria-label="Persona"
+                      className={COMPOSER_POP}
                     >
-                      {(() => {
-                        // The badge counts choices the user made. Always-on rows
-                        // remain visible in the popover but do not inflate it.
-                        const enabledCount = mcpServers.filter((s) => s.enabled && !s.always_on).length;
+                      {personaOptions.map((p) => {
+                        const selected = p === selectedPersona;
                         return (
                           <button
-                            ref={mcpButtonRef}
+                            key={p}
                             type="button"
-                            aria-label="Connectors"
-                            aria-haspopup="true"
-                            aria-expanded={mcpPickerOpen}
-                            disabled={isStreaming}
-                            data-tip-top="Connectors for this conversation"
-                            className={`${TOOL_BTN} ${enabledCount > 0 ? TOOL_BTN_ACTIVE : ""}`}
+                            role="option"
+                            aria-selected={selected}
+                            className={`${POP_ROW} ${selected ? POP_ROW_SELECTED : ""}`}
                             onClick={() => {
-                              const next = !mcpPickerOpen;
-                              setMcpPickerOpen(next);
-                              // Pre-chat: the preview catalog loaded at
-                              // startup is already in state — no per-conv
-                              // row to fetch yet.
-                              if (next && activeConversationId) {
-                                void loadMcpServerCatalog(activeConversationId);
-                              }
+                              setSelectedPersona(p);
+                              setPersonaPickerOpen(false);
+                              personaButtonRef.current?.focus();
                             }}
                           >
-                            <Icon name="wrench" className="size-3.5" />
-                            {/* The design's .tool-badge: enabled-count bubble
-                                pinned to the button's top-right corner. */}
-                            {enabledCount > 0 ? (
-                              <span className="pointer-events-none absolute right-0 top-0 inline-flex h-[0.875rem] min-w-[0.875rem] -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent)] px-[2px] font-[family-name:var(--font-code)] text-[0.56rem] font-medium tabular-nums text-[var(--color-bg)]">
-                                {enabledCount}
-                              </span>
+                            <span className={`${POP_TITLE} truncate`}>
+                              {formatPersona(p)}
+                            </span>
+                            {selected ? (
+                              <span
+                                aria-hidden="true"
+                                className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
+                              />
                             ) : null}
                           </button>
                         );
-                      })()}
-                      {mcpPickerOpen && !isStreaming ? (
-                        <div className={COMPOSER_POP}>
-                          {/* Optional rows remain per-conversation controls;
-                              always-on rows are locked live-status indicators. */}
-                          <div className="grid max-h-80 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto">
-                            {isLoadingMcpServers ? (
-                              <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
-                            ) : (
-                              mcpServers.map((server) => {
-                                const seats = server.accounts ?? [];
-                                if (server.always_on) {
-                                  const available = server.enabled;
-                                  return (
-                                    <div
-                                      key={server.name}
-                                      className={POP_STATUS_ROW_TIGHT}
-                                      aria-label={`${server.display_name || server.name}: ${available ? "always on" : "unavailable"}`}
-                                      data-testid={`chat-mcp-always-on-${server.name}`}
-                                    >
-                                      <span className="grid min-w-0 gap-[0.1rem]">
-                                        <span className="flex items-center gap-1.5">
-                                          <span className={POP_TITLE}>{server.display_name || server.name}</span>
-                                          <span
-                                            className={`text-[0.55rem] font-semibold uppercase tracking-wider ${
-                                              available ? "text-[var(--color-success)]" : "text-[var(--color-danger)]"
-                                            }`}
-                                          >
-                                            {available ? "Always on" : "Unavailable"}
-                                          </span>
-                                        </span>
-                                        {server.description ? (
-                                          <span className={`${POP_DESC} leading-snug`}>{server.description}</span>
-                                        ) : null}
-                                        {available ? (
-                                          <span className="text-[0.65rem] text-[var(--color-text-muted)]">
-                                            {server.tool_count} tool{server.tool_count === 1 ? "" : "s"}
-                                          </span>
-                                        ) : (
-                                          <span className="text-[0.65rem] text-[var(--color-danger)]">
-                                            Connector did not expose any tools
-                                          </span>
-                                        )}
-                                      </span>
-                                      <MiniSwitch state={available ? "always-on" : "off"} />
-                                    </div>
-                                  );
-                                }
-                                const row = (
-                                  <button
-                                    key={server.name}
-                                    type="button"
-                                    aria-pressed={server.enabled}
-                                    title={(server.tools ?? []).join(", ")}
-                                    className={POP_ROW_TIGHT}
-                                    onClick={() => {
-                                      void toggleMcpServer(activeConversationId, server.name);
-                                    }}
-                                  >
-                                    <span className="grid min-w-0 gap-[0.1rem]">
-                                      <span className="flex items-center gap-1.5">
-                                        <span className={POP_TITLE}>{server.display_name || server.name}</span>
-                                        {server.beta ? (
-                                          <span
-                                            className="rounded-sm border border-[var(--color-border-strong)] px-1 py-px text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]"
-                                            title="This connector is in beta — it works but still has rough edges."
-                                          >
-                                            beta
-                                          </span>
-                                        ) : null}
-                                      </span>
-                                      {server.description ? (
-                                        <span className={`${POP_DESC} leading-snug`}>{server.description}</span>
-                                      ) : null}
-                                      <span className="text-[0.65rem] text-[var(--color-text-muted)]">
-                                        {server.tool_count} tool{server.tool_count === 1 ? "" : "s"}
-                                      </span>
-                                    </span>
-                                    <MiniSwitch state={server.enabled ? "on" : "off"} />
-                                  </button>
-                                );
-                                if (seats.length === 0) return row;
-                                // Seat picker (#988): which login this server
-                                // uses in THIS conversation. Rendered as a
-                                // sibling under the toggle row — a <select>
-                                // nested inside the row <button> would be
-                                // invalid interactive content that browsers
-                                // handle inconsistently — and shielded with
-                                // stopPropagation so picking a seat never
-                                // flips the toggle or closes the popover.
-                                return (
-                                  <div key={server.name} className="grid">
-                                    {row}
-                                    <label className="flex items-center gap-1.5 px-[0.6rem] pb-[0.35rem] text-[0.65rem] text-[var(--color-text-muted)]">
-                                      <span>Account</span>
-                                      <select
-                                        className="min-w-0 max-w-[10rem] flex-1 truncate rounded-sm border border-[var(--color-border)] bg-transparent px-1 py-px text-[0.68rem] text-[var(--color-text-secondary)] outline-none focus-visible:border-[var(--color-border-strong)]"
-                                        value={server.account ?? ""}
-                                        aria-label={`Account for ${server.display_name || server.name}`}
-                                        data-testid={`mcp-seat-${server.name}`}
-                                        onClick={(event) => event.stopPropagation()}
-                                        onChange={(event) => {
-                                          event.stopPropagation();
-                                          void setMcpServerAccount(
-                                            activeConversationId,
-                                            server.name,
-                                            event.target.value,
-                                          );
-                                        }}
-                                      >
-                                        <option value="">
-                                          Default{server.default_account ? ` (${server.default_account})` : ""}
-                                        </option>
-                                        {seats.map((seat) => (
-                                          <option key={seat} value={seat}>
-                                            {seat}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                  </div>
-                                );
-                              })
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {activeConversationId && messages.length >= 2 ? (
-                    <div className="relative inline-flex">
-                      {/* One-shot toast above the ring. Absolute so the */}
-                      {/* toolbar layout doesn't reflow as it appears /  */}
-                      {/* disappears. pointer-events-none so it can      */}
-                      {/* never steal a click meant for the ring below. */}
-                      {compactToastVisible && !isSummarizing ? (
-                        <div
-                          role="status"
-                          aria-live="polite"
-                          className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
-                        >
-                          Token limit hit — you should compact
-                        </div>
-                      ) : null}
-                      <ContextRing
-                        usage={contextUsage}
-                        isSummarizing={isSummarizing}
-                        disabled={isStreaming || isSummarizing}
-                        onClick={() => setConfirmSummarize(true)}
-                      />
+                      })}
                     </div>
                   ) : null}
                 </div>
-
-                <div className="flex shrink-0 items-center gap-[0.35rem]">
-                  {isStreaming ? (
+              );
+            })()}
+            <PromptLibrary currentText={prompt} onInsert={setPrompt} compact />
+            <button
+              type="button"
+              aria-label="Attach files"
+              data-tip-top="Attach files"
+              className={TOOL_BTN}
+              disabled={isStreaming || isUploadingAttachments}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Icon name="paperclip" className="size-3.5" />
+            </button>
+            {mcpServers.length > 0 ? (
+              // Positioning anchor only (see the model picker above):
+              // presentational wrapper, Escape delegated so it works from
+              // the trigger button or from any row of the open popover.
+              <div
+                ref={mcpPickerRef}
+                role="presentation"
+                className="relative inline-flex"
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && mcpPickerOpen) {
+                    event.stopPropagation();
+                    setMcpPickerOpen(false);
+                    mcpButtonRef.current?.focus();
+                  }
+                }}
+              >
+                {(() => {
+                  // The badge counts choices the user made. Always-on rows
+                  // remain visible in the popover but do not inflate it.
+                  const enabledCount = mcpServers.filter(
+                    (s) => s.enabled && !s.always_on,
+                  ).length;
+                  return (
                     <button
-                      aria-label="Stop generating"
-                      data-tip-top="Stop generating"
-                      className="inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                      ref={mcpButtonRef}
                       type="button"
+                      aria-label="Connectors"
+                      aria-haspopup="true"
+                      aria-expanded={mcpPickerOpen}
+                      disabled={isStreaming}
+                      data-tip-top="Connectors for this conversation"
+                      className={`${TOOL_BTN} ${enabledCount > 0 ? TOOL_BTN_ACTIVE : ""}`}
                       onClick={() => {
-                        // Tell the server to actually stop the turn.
-                        // The server now keeps generating after the SSE
-                        // drops (so phone-lock + long turns don't lose
-                        // work), so an explicit cancel signal is the
-                        // only thing that brings the work to a halt.
-                        // Per-conv: only the chat the user is currently
-                        // looking at — other in-flight chats keep going.
-                        const convKey =
-                          activeConversationIdRef.current ?? PENDING_CONV_KEY;
-                        if (!isPendingKey(convKey)) {
-                          void fetch(`/api/conversations/${convKey}/cancel`, {
-                            method: "POST",
-                          }).catch(() => {
-                            /* non-fatal — server will time out the turn anyway */
-                          });
+                        const next = !mcpPickerOpen;
+                        setMcpPickerOpen(next);
+                        // Pre-chat: the preview catalog loaded at
+                        // startup is already in state — no per-conv
+                        // row to fetch yet.
+                        if (next && activeConversationId) {
+                          void loadMcpServerCatalog(activeConversationId);
                         }
-                        abortControllersRef.current.get(convKey)?.abort();
                       }}
                     >
-                      <Icon name="stop" className="size-[1.125rem]" />
-                      <span className="sr-only">Stop</span>
+                      <Icon name="wrench" className="size-3.5" />
+                      {/* The design's .tool-badge: enabled-count bubble
+                                pinned to the button's top-right corner. */}
+                      {enabledCount > 0 ? (
+                        <span className="pointer-events-none absolute right-0 top-0 inline-flex h-[0.875rem] min-w-[0.875rem] -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent)] px-[2px] font-[family-name:var(--font-code)] text-[0.56rem] font-medium tabular-nums text-[var(--color-bg)]">
+                          {enabledCount}
+                        </span>
+                      ) : null}
                     </button>
-                  ) : null}
-                  {/* Send-key preference toggle (issue #315), restyled as the
+                  );
+                })()}
+                {mcpPickerOpen && !isStreaming ? (
+                  <div className={COMPOSER_POP}>
+                    {/* Optional rows remain per-conversation controls;
+                              always-on rows are locked live-status indicators. */}
+                    <div className="grid max-h-80 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto">
+                      {isLoadingMcpServers ? (
+                        <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">
+                          Loading...
+                        </div>
+                      ) : (
+                        mcpServers.map((server) => {
+                          const seats = server.accounts ?? [];
+                          if (server.always_on) {
+                            const available = server.enabled;
+                            return (
+                              <div
+                                key={server.name}
+                                className={POP_STATUS_ROW_TIGHT}
+                                aria-label={`${server.display_name || server.name}: ${available ? "always on" : "unavailable"}`}
+                                data-testid={`chat-mcp-always-on-${server.name}`}
+                              >
+                                <span className="grid min-w-0 gap-[0.1rem]">
+                                  <span className="flex items-center gap-1.5">
+                                    <span className={POP_TITLE}>
+                                      {server.display_name || server.name}
+                                    </span>
+                                    <span
+                                      className={`text-[0.55rem] font-semibold uppercase tracking-wider ${
+                                        available
+                                          ? "text-[var(--color-success)]"
+                                          : "text-[var(--color-danger)]"
+                                      }`}
+                                    >
+                                      {available ? "Always on" : "Unavailable"}
+                                    </span>
+                                  </span>
+                                  {server.description ? (
+                                    <span
+                                      className={`${POP_DESC} leading-snug`}
+                                    >
+                                      {server.description}
+                                    </span>
+                                  ) : null}
+                                  {available ? (
+                                    <span className="text-[0.65rem] text-[var(--color-text-muted)]">
+                                      {server.tool_count} tool
+                                      {server.tool_count === 1 ? "" : "s"}
+                                    </span>
+                                  ) : (
+                                    <span className="text-[0.65rem] text-[var(--color-danger)]">
+                                      Connector did not expose any tools
+                                    </span>
+                                  )}
+                                </span>
+                                <MiniSwitch
+                                  state={available ? "always-on" : "off"}
+                                />
+                              </div>
+                            );
+                          }
+                          const row = (
+                            <button
+                              key={server.name}
+                              type="button"
+                              aria-pressed={server.enabled}
+                              title={(server.tools ?? []).join(", ")}
+                              className={POP_ROW_TIGHT}
+                              onClick={() => {
+                                void toggleMcpServer(
+                                  activeConversationId,
+                                  server.name,
+                                );
+                              }}
+                            >
+                              <span className="grid min-w-0 gap-[0.1rem]">
+                                <span className="flex items-center gap-1.5">
+                                  <span className={POP_TITLE}>
+                                    {server.display_name || server.name}
+                                  </span>
+                                  {server.beta ? (
+                                    <span
+                                      className="rounded-sm border border-[var(--color-border-strong)] px-1 py-px text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]"
+                                      title="This connector is in beta — it works but still has rough edges."
+                                    >
+                                      beta
+                                    </span>
+                                  ) : null}
+                                </span>
+                                {server.description ? (
+                                  <span className={`${POP_DESC} leading-snug`}>
+                                    {server.description}
+                                  </span>
+                                ) : null}
+                                <span className="text-[0.65rem] text-[var(--color-text-muted)]">
+                                  {server.tool_count} tool
+                                  {server.tool_count === 1 ? "" : "s"}
+                                </span>
+                              </span>
+                              <MiniSwitch
+                                state={server.enabled ? "on" : "off"}
+                              />
+                            </button>
+                          );
+                          if (seats.length === 0) return row;
+                          // Seat picker (#988): which login this server
+                          // uses in THIS conversation. Rendered as a
+                          // sibling under the toggle row — a <select>
+                          // nested inside the row <button> would be
+                          // invalid interactive content that browsers
+                          // handle inconsistently — and shielded with
+                          // stopPropagation so picking a seat never
+                          // flips the toggle or closes the popover.
+                          return (
+                            <div key={server.name} className="grid">
+                              {row}
+                              <label className="flex items-center gap-1.5 px-[0.6rem] pb-[0.35rem] text-[0.65rem] text-[var(--color-text-muted)]">
+                                <span>Account</span>
+                                <select
+                                  className="min-w-0 max-w-[10rem] flex-1 truncate rounded-sm border border-[var(--color-border)] bg-transparent px-1 py-px text-[0.68rem] text-[var(--color-text-secondary)] outline-none focus-visible:border-[var(--color-border-strong)]"
+                                  value={server.account ?? ""}
+                                  aria-label={`Account for ${server.display_name || server.name}`}
+                                  data-testid={`mcp-seat-${server.name}`}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onChange={(event) => {
+                                    event.stopPropagation();
+                                    void setMcpServerAccount(
+                                      activeConversationId,
+                                      server.name,
+                                      event.target.value,
+                                    );
+                                  }}
+                                >
+                                  <option value="">
+                                    Default
+                                    {server.default_account
+                                      ? ` (${server.default_account})`
+                                      : ""}
+                                  </option>
+                                  {seats.map((seat) => (
+                                    <option key={seat} value={seat}>
+                                      {seat}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {activeConversationId && messages.length >= 2 ? (
+              <div className="relative inline-flex">
+                {/* One-shot toast above the ring. Absolute so the */}
+                {/* toolbar layout doesn't reflow as it appears /  */}
+                {/* disappears. pointer-events-none so it can      */}
+                {/* never steal a click meant for the ring below. */}
+                {compactToastVisible && !isSummarizing ? (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
+                  >
+                    Token limit hit — you should compact
+                  </div>
+                ) : null}
+                <ContextRing
+                  usage={contextUsage}
+                  isSummarizing={isSummarizing}
+                  disabled={isStreaming || isSummarizing}
+                  onClick={() => setConfirmSummarize(true)}
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex shrink-0 items-center gap-[0.35rem]">
+            {isStreaming ? (
+              <button
+                aria-label="Stop generating"
+                data-tip-top="Stop generating"
+                className="inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                type="button"
+                onClick={() => {
+                  // Tell the server to actually stop the turn.
+                  // The server now keeps generating after the SSE
+                  // drops (so phone-lock + long turns don't lose
+                  // work), so an explicit cancel signal is the
+                  // only thing that brings the work to a halt.
+                  // Per-conv: only the chat the user is currently
+                  // looking at — other in-flight chats keep going.
+                  const convKey =
+                    activeConversationIdRef.current ?? PENDING_CONV_KEY;
+                  // Local first: aborting our own stream needs no
+                  // server round trip and must not wait on one.
+                  abortControllersRef.current.get(convKey)?.abort();
+                  if (isPendingKey(convKey)) return;
+                  void (async () => {
+                    let cancelled = false;
+                    try {
+                      const res = await fetch(
+                        `/api/conversations/${convKey}/cancel`,
+                        { method: "POST" },
+                      );
+                      cancelled = res.ok;
+                    } catch {
+                      cancelled = false;
+                    }
+                    // A turn whose stream died while the server was
+                    // unreachable is held open by the recovery chain,
+                    // and by then there is no controller left to abort.
+                    // Stop must end that chain too, or the conversation
+                    // stays busy while it probes for a turn the user has
+                    // just cancelled (#1584).
+                    //
+                    // Only once the server CONFIRMS the cancellation.
+                    // Stop is pressed most often during exactly the
+                    // outage that created the chain, and a cancel
+                    // request that never landed leaves the turn running
+                    // for its full timeout — discarding the chain there
+                    // would throw away the only way back to its answer.
+                    // An unconfirmed Stop therefore leaves recovery in
+                    // place, and the chain resolves the turn's real
+                    // outcome, cancelled or not.
+                    if (cancelled) cancelRecovery(convKey);
+                  })();
+                }}
+              >
+                <Icon name="stop" className="size-[1.125rem]" />
+                <span className="sr-only">Stop</span>
+              </button>
+            ) : null}
+            {/* Send-key preference toggle (issue #315), restyled as the
                       design's .tool-btn with the return-key glyph; the active
                       state marks "Send on Enter" on. The mode is announced
                       via aria-label and the hover tip; clicking flips +
                       persists it. Sits right next to Send so the toggle is
                       in the same glance as the key it configures. */}
-                  <button
-                    type="button"
-                    aria-label={
-                      sendOnEnter
-                        ? "Send on Enter (click to switch to Ctrl+Enter)"
-                        : "Send on Ctrl+Enter (click to switch to Enter)"
-                    }
-                    data-tip-top={sendOnEnter ? "Send on Enter" : "Send on Ctrl+Enter"}
-                    aria-pressed={sendOnEnter}
-                    className={`${TOOL_BTN} ${sendOnEnter ? TOOL_BTN_ACTIVE : ""}`}
-                    onClick={() => setSendOnEnter((v) => !v)}
-                  >
-                    <Icon name="return-key" className="size-3.5" />
-                    <span className="sr-only">{sendOnEnter ? "Enter" : "Ctrl+Enter"}</span>
-                  </button>
-                  {/* The design's .send-btn: a 2.1rem circle that lights up
+            <button
+              type="button"
+              aria-label={
+                sendOnEnter
+                  ? "Send on Enter (click to switch to Ctrl+Enter)"
+                  : "Send on Ctrl+Enter (click to switch to Enter)"
+              }
+              data-tip-top={
+                sendOnEnter ? "Send on Enter" : "Send on Ctrl+Enter"
+              }
+              aria-pressed={sendOnEnter}
+              className={`${TOOL_BTN} ${sendOnEnter ? TOOL_BTN_ACTIVE : ""}`}
+              onClick={() => setSendOnEnter((v) => !v)}
+            >
+              <Icon name="return-key" className="size-3.5" />
+              <span className="sr-only">
+                {sendOnEnter ? "Enter" : "Ctrl+Enter"}
+              </span>
+            </button>
+            {/* The design's .send-btn: a 2.1rem circle that lights up
                       with the action gradient once there is content to send
                       (the image: hint keeps the gradient token in
                       background-image). */}
-                  <button
-                    aria-label="Send message"
-                    className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
-                      prompt.trim() && !isStreaming && !isUploadingAttachments && !modelError
-                        ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary)] hover:-translate-y-px"
-                        : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
-                    }`}
-                    type="submit"
-                    // modelError: submitPrompt refuses to send while the
-                    // model is rejected, so an enabled button here was a
-                    // click that did nothing. Disable it and put the reason
-                    // in the title, the same text the model chip shows.
-                    disabled={!prompt.trim() || isUploadingAttachments || modelError !== null}
-                    title={
-                      modelError
-                        ? modelError.message
-                        : isUploadingAttachments
-                          ? "Uploading attachments…"
-                          : !prompt.trim() && pendingAttachments.length > 0
-                            ? "Type a message to send your attachments"
-                            : isStreaming
-                              ? "Queue message (runs after the current turn)"
-                              : "Send message"
-                    }
-                  >
-                    {isUploadingAttachments ? (
-                      <span aria-hidden="true">…</span>
-                    ) : (
-                      <Icon name="arrow-up" className="size-4" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </form>
-            {/* Keyboard hint (the design's .composer-hint): fades in while
+            <button
+              aria-label="Send message"
+              className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
+                prompt.trim() &&
+                !isStreaming &&
+                !isUploadingAttachments &&
+                !modelError
+                  ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary)] hover:-translate-y-px"
+                  : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
+              }`}
+              type="submit"
+              // modelError: submitPrompt refuses to send while the
+              // model is rejected, so an enabled button here was a
+              // click that did nothing. Disable it and put the reason
+              // in the title, the same text the model chip shows.
+              disabled={
+                !prompt.trim() || isUploadingAttachments || modelError !== null
+              }
+              title={
+                modelError
+                  ? modelError.message
+                  : isUploadingAttachments
+                    ? "Uploading attachments…"
+                    : !prompt.trim() && pendingAttachments.length > 0
+                      ? "Type a message to send your attachments"
+                      : isStreaming
+                        ? "Queue message (runs after the current turn)"
+                        : "Send message"
+              }
+            >
+              {isUploadingAttachments ? (
+                <span aria-hidden="true">…</span>
+              ) : (
+                <Icon name="arrow-up" className="size-4" />
+              )}
+            </button>
+          </div>
+        </div>
+      </form>
+      {/* Keyboard hint (the design's .composer-hint): fades in while
                 the textarea is focused and out on blur, riding the fast
                 motion token. Wording adapts to the send-key preference so
                 Ctrl+Enter mode is self-documenting. aria-hidden — it
                 duplicates what the keys already do. */}
-            <p
-              aria-hidden="true"
-              className={`mx-auto mt-2 h-4 select-none text-center text-[0.7rem] text-[var(--color-text-muted)] transition-opacity duration-fast ${
-                isComposerFocused ? "opacity-100" : "opacity-0"
-              }`}
-            >
-              {sendOnEnter ? (
-                <>
-                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> to send ·{" "}
-                  <b className="font-semibold text-[var(--color-text-secondary)]">Shift+Enter</b> for a new line
-                </>
-              ) : (
-                <>
-                  <b className="font-semibold text-[var(--color-text-secondary)]">Ctrl+Enter</b> to send ·{" "}
-                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> for a new line
-                </>
-              )}
-            </p>
+      <p
+        aria-hidden="true"
+        className={`mx-auto mt-2 h-4 select-none text-center text-[0.7rem] text-[var(--color-text-muted)] transition-opacity duration-fast ${
+          isComposerFocused ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        {sendOnEnter ? (
+          <>
+            <b className="font-semibold text-[var(--color-text-secondary)]">
+              Enter
+            </b>{" "}
+            to send ·{" "}
+            <b className="font-semibold text-[var(--color-text-secondary)]">
+              Shift+Enter
+            </b>{" "}
+            for a new line
+          </>
+        ) : (
+          <>
+            <b className="font-semibold text-[var(--color-text-secondary)]">
+              Ctrl+Enter
+            </b>{" "}
+            to send ·{" "}
+            <b className="font-semibold text-[var(--color-text-secondary)]">
+              Enter
+            </b>{" "}
+            for a new line
+          </>
+        )}
+      </p>
     </>
   );
 }

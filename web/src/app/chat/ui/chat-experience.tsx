@@ -81,7 +81,13 @@ import { TeamChatViewer } from "./TeamChatViewer";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
-import { catalogModelRoutes, catalogModelSlug, modelIsAvailable, unavailableModelMessage, type ModelRouting } from "@/app/shared/lib/modelRouting";
+import {
+  catalogModelRoutes,
+  catalogModelSlug,
+  modelIsAvailable,
+  unavailableModelMessage,
+  type ModelRouting,
+} from "@/app/shared/lib/modelRouting";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
@@ -687,10 +693,18 @@ export function ChatExperience({
   } | null>(null);
   // Keep saved selections visible instead of silently changing the provider of
   // an existing conversation. The user repairs it by picking a workspace row.
-  const modelError = !modelIsAvailable(selectedModel, modelRouting,
-    currentTierModels().some((tier) => tier.slug === selectedModel))
-    ? { message: unavailableModelMessage(selectedModel), modelsUrl: "/settings/admin/providers" }
-    : checkedModelError?.slug === selectedModel.trim() ? checkedModelError : null;
+  const modelError = !modelIsAvailable(
+    selectedModel,
+    modelRouting,
+    currentTierModels().some((tier) => tier.slug === selectedModel),
+  )
+    ? {
+        message: unavailableModelMessage(selectedModel),
+        modelsUrl: "/settings/admin/providers",
+      }
+    : checkedModelError?.slug === selectedModel.trim()
+      ? checkedModelError
+      : null;
   // Optional MCP servers the user can toggle on per-conversation. The
   // MCPServerInfo shape is declared at module scope (and exported) so the
   // extracted Composer can type its prop against it.
@@ -1154,11 +1168,14 @@ export function ChatExperience({
     return 0;
   }, [messages]);
   const selectedCatalogSlug = catalogModelSlug(selectedModel, modelRouting);
-  const selectedCatalogModel = useMemo(() =>
-    catalogModels.find((m) => m.slug === selectedCatalogSlug) ??
-    rankedModels.find((m) => m.slug === selectedCatalogSlug),
-  [catalogModels, rankedModels, selectedCatalogSlug]);
-  const contextLength = selectedCatalogModel?.contextLength ??
+  const selectedCatalogModel = useMemo(
+    () =>
+      catalogModels.find((m) => m.slug === selectedCatalogSlug) ??
+      rankedModels.find((m) => m.slug === selectedCatalogSlug),
+    [catalogModels, rankedModels, selectedCatalogSlug],
+  );
+  const contextLength =
+    selectedCatalogModel?.contextLength ??
     workspaceModels.find((m) => m.slug === selectedModel.trim())?.contextLength;
   // Display label for the model chip: tier alias ("default"/"advanced") >
   // catalog/ranked display name > the raw slug (or in-progress typed text).
@@ -1172,9 +1189,15 @@ export function ChatExperience({
     if (selectedCatalogModel && selectedCatalogSlug !== slug) {
       return `${slug.slice(0, slug.indexOf("/"))}: ${selectedCatalogModel.name}`;
     }
-    const known = selectedCatalogModel ?? workspaceModels.find((m) => m.slug === slug);
+    const known =
+      selectedCatalogModel ?? workspaceModels.find((m) => m.slug === slug);
     return known?.name ?? selectedModel;
-  }, [selectedModel, selectedCatalogModel, selectedCatalogSlug, workspaceModels]);
+  }, [
+    selectedModel,
+    selectedCatalogModel,
+    selectedCatalogSlug,
+    workspaceModels,
+  ]);
   // Prices for the currently selected slug, feeding the cost indicator on the
   // composer's model chip. Unknown slugs (a half-typed custom slug, a
   // workspace-provider model) resolve to null and the chip shows no tier.
@@ -1528,16 +1551,27 @@ export function ChatExperience({
       name: labelForModel(slug),
       ...pricesFor(slug),
     }));
-    const defaults = tierModels.filter((model) => modelIsAvailable(model.slug, modelRouting, true));
-    const publicCatalog = new Set([...catalogModels, ...rankedModels].map((model) => model.slug));
-    const catalogChoices = (models: RankedModel[]): RankedModel[] => models.flatMap((model) =>
-      catalogModelRoutes(model.slug, modelRouting, publicCatalog.has(model.slug)).map((route) => ({
-        ...model,
-        slug: route.slug,
-        name: route.provider ? `${route.provider}: ${model.name}` : model.name,
-        workspace: !!route.provider,
-      })),
+    const defaults = tierModels.filter((model) =>
+      modelIsAvailable(model.slug, modelRouting, true),
     );
+    const publicCatalog = new Set(
+      [...catalogModels, ...rankedModels].map((model) => model.slug),
+    );
+    const catalogChoices = (models: RankedModel[]): RankedModel[] =>
+      models.flatMap((model) =>
+        catalogModelRoutes(
+          model.slug,
+          modelRouting,
+          publicCatalog.has(model.slug),
+        ).map((route) => ({
+          ...model,
+          slug: route.slug,
+          name: route.provider
+            ? `${route.provider}: ${model.name}`
+            : model.name,
+          workspace: !!route.provider,
+        })),
+      );
 
     // Lockdown chats are pinned to the operator-configured allow-list.
     // Build a fixed list that mirrors that allow-list (default first,
@@ -1573,7 +1607,11 @@ export function ChatExperience({
       // rankings), then the ranked list.
       const seen = new Set<string>();
       const out: RankedModel[] = [];
-      for (const m of [...defaults, ...workspaceModels, ...catalogChoices([...tierModels, ...rankedModels])]) {
+      for (const m of [
+        ...defaults,
+        ...workspaceModels,
+        ...catalogChoices([...tierModels, ...rankedModels]),
+      ]) {
         if (!modelIsAvailable(m.slug, modelRouting, !m.workspace)) continue;
         if (seen.has(m.slug)) continue;
         seen.add(m.slug);
@@ -1581,13 +1619,19 @@ export function ChatExperience({
       }
       return out;
     }
-    const source = catalogChoices(catalogModels.length > 0 ? catalogModels : rankedModels);
+    const source = catalogChoices(
+      catalogModels.length > 0 ? catalogModels : rankedModels,
+    );
     const matchesQuery = (m: RankedModel) =>
       m.slug.toLowerCase().includes(query) ||
       m.name.toLowerCase().includes(query);
     const seen = new Set<string>();
     const matches: RankedModel[] = [];
-    for (const d of [...defaults, ...workspaceModels, ...catalogChoices(tierModels)]) {
+    for (const d of [
+      ...defaults,
+      ...workspaceModels,
+      ...catalogChoices(tierModels),
+    ]) {
       if (seen.has(d.slug)) continue;
       if (matchesQuery(d)) {
         seen.add(d.slug);
@@ -2151,6 +2195,16 @@ export function ChatExperience({
       preserveScroll?: boolean;
       background?: boolean;
       restore?: boolean;
+      // Set ONLY by the recovery reconciler, which is deliberately swapping
+      // in the canonical copy. Every other load leaves a recovery-owned
+      // conversation alone (#1584).
+      adopt?: boolean;
+      // Retires the request itself on a timeout. Recovery bounds its WAIT on
+      // this load, and without a signal the request lives on: a long outage
+      // at the steady 30 s beat would pile up history fetches until the
+      // browser's per-origin pool is full and no probe or stream could get
+      // out at all (#1584).
+      signal?: AbortSignal;
     } = {},
   ) => {
     // Opening a conversation dismisses a project home overlaying the chat
@@ -2172,7 +2226,19 @@ export function ChatExperience({
     // persisted yet. Re-fetching would replace those with whatever's
     // in Postgres (which is empty until the stream completes), so we just
     // re-show what we already have.
-    if (attachedConvIdsRef.current.has(conversationId)) {
+    //
+    // A conversation recovery OWNS is in the same position, and is not in the
+    // attach set: its stream is gone, but the partial answer on screen is
+    // still newer than the database, and its slot id is what the chain is
+    // holding. Reopening that chat from the sidebar used to replace both,
+    // after which the chain found its slot missing, released ownership, and
+    // any trailing reattach opened a blank slot while keeping the old
+    // Last-Event-ID — so the text already received was skipped from the
+    // replay. Only the reconciler's own `adopt` load may make that swap
+    // (#1584).
+    const recoveryHoldsIt =
+      !options.adopt && isRecoveringConvRef.current(conversationId);
+    if (attachedConvIdsRef.current.has(conversationId) || recoveryHoldsIt) {
       setActiveConversationId(conversationId);
       const conv = conversations.find((c) => c.id === conversationId);
       if (conv) {
@@ -2183,6 +2249,14 @@ export function ChatExperience({
       return;
     }
 
+    // Who owns this conversation's slot RIGHT NOW, to be compared once the
+    // response lands. A reload that outlives its own bound keeps running, and
+    // in the meantime a successor can attach, lose its socket and be picked up
+    // by a NEW recovery chain — which is deliberately absent from the attach
+    // set, so attachment alone cannot see it. Applying a response older than
+    // that chain replaces its slot, after which the chain finds its slot
+    // missing and lets go (#1584).
+    const recoveryTokenAtStart = recoveryTokenRef.current(conversationId);
     // background: a warm-return revalidation already has the cached transcript
     // on screen, so it must NOT flash the blocking spinner — it swaps in the
     // fresh server copy underneath the rendered messages.
@@ -2192,6 +2266,7 @@ export function ChatExperience({
       if (!url) throw new Error("Unable to load conversation.");
       const response = await fetch(url, {
         cache: "no-store",
+        signal: options.signal,
       });
       if (!response.ok) throw new Error("Unable to load conversation.");
       const data = (await response.json()) as {
@@ -2227,23 +2302,52 @@ export function ChatExperience({
           supersedes_content?: string;
         }>;
       };
-      setActiveConversationId(data.conversation.id);
-      // Opening a conversation clears the keyboard focus cursor (#306): the
-      // cursor is a transient nav aid, and letting it linger would keep the
-      // Enter-to-open shortcut armed after the user has already landed somewhere.
-      setFocusedConversationId(null);
-      setSelectedPersona(data.conversation.persona);
-      setSelectedModel(data.conversation.model || currentDefaultModel());
-      // Reset compaction UI state so the freshly-loaded conversation
-      // starts with pre-summary turns collapsed (when present) and
-      // any prior error from another chat does not leak into this one.
-      setSummaryExpanded(false);
-      setSummarizeError(null);
-      // Refresh the MCP-server catalog for this conversation so the
-      // Tools picker reflects the correct per-conversation opt-in state.
-      // Fire-and-forget: the picker shows its own spinner while the
-      // fetch is in flight and the conversation body doesn't block on it.
-      void loadMcpServerCatalog(data.conversation.id);
+      // The attach check at the top ran BEFORE the fetch. A reload that took
+      // long enough for recovery to give up waiting on it — and for a queued
+      // successor to attach in the meantime — must touch NOTHING: not the
+      // transcript, and not the view state either. Everything below is
+      // derived from a response that is now stale, and applying any of it
+      // would yank the user back to this conversation and reset the persona,
+      // the model and the summary UI under them (#1584).
+      if (attachedConvIdsRef.current.has(conversationId)) return;
+      if (recoveryTokenRef.current(conversationId) !== recoveryTokenAtStart)
+        return;
+      // A BACKGROUND reload must not move the user. Recovery reconciles
+      // conversations that are not on screen, and one finishing after the
+      // user has navigated elsewhere would otherwise switch the active
+      // conversation back and reset that chat's persona, model, summary and
+      // connector state under them. The transcript below still applies:
+      // adopting an answer for a background conversation is the point of the
+      // reload (#1584).
+      const movesTheUser =
+        !options.background ||
+        activeConversationIdRef.current === conversationId;
+      if (movesTheUser) {
+        setActiveConversationId(data.conversation.id);
+        // Opening a conversation clears the keyboard focus cursor (#306): the
+        // cursor is a transient nav aid, and letting it linger would keep the
+        // Enter-to-open shortcut armed after the user has already landed somewhere.
+        setFocusedConversationId(null);
+        setSelectedPersona(data.conversation.persona);
+        setSelectedModel(data.conversation.model || currentDefaultModel());
+        // Reset compaction UI state so the freshly-loaded conversation
+        // starts with pre-summary turns collapsed (when present) and
+        // any prior error from another chat does not leak into this one.
+        setSummaryExpanded(false);
+        setSummarizeError(null);
+        // Refresh the MCP-server catalog for this conversation so the
+        // Tools picker reflects the correct per-conversation opt-in state.
+        // Fire-and-forget: the picker shows its own spinner while the
+        // fetch is in flight and the conversation body doesn't block on it.
+        void loadMcpServerCatalog(data.conversation.id);
+      }
+      // Checked again: the catalog refresh above is fire-and-forget and the
+      // state setters are not instantaneous, so a stream can still claim the
+      // conversation in between. The transcript is the one thing that must
+      // never be painted over live text.
+      if (attachedConvIdsRef.current.has(conversationId)) return;
+      if (recoveryTokenRef.current(conversationId) !== recoveryTokenAtStart)
+        return;
       const next = historyToMessages(data.history ?? []);
 
       // Re-attach approval cards + memory proposals so a page reload (or the
@@ -2374,7 +2478,14 @@ export function ChatExperience({
     // working. Handles the page-refresh-mid-turn scenario: history is
     // empty (server hasn't persisted yet), but /inflight reports
     // inflight:true and /stream replays the complete event sequence.
-    void reattachToConv(conversationId);
+    //
+    // NOT for a recovery adoption. That caller is following one particular
+    // turn and binds its own attach to it; this probe takes whatever the
+    // server reports, so a successor starting between the history response
+    // and this call would be attached here, unbound, and its replay rendered
+    // under the previous turn's prompt (#1584). The recovery caller attaches
+    // itself, with the id it means.
+    if (!options.adopt) void reattachToConv(conversationId);
   };
 
   // deleteAllUnpinned / bulkDeleteConversations / deleteConversationById are
@@ -4105,6 +4216,10 @@ export function ChatExperience({
   } satisfies TurnStreamDeps;
   const {
     reattachToConv,
+    isRecoveringConv,
+    recoveryToken,
+    nudgeRecovery,
+    cancelRecovery,
     sweepStreamLiveness,
     submitPrompt,
     regenerateLastAssistant,
@@ -4130,6 +4245,14 @@ export function ChatExperience({
   const reattachToConvRef = useRef(reattachToConv);
   const sweepStreamLivenessRef = useRef(sweepStreamLiveness);
   const loadConversationRef = useRef(loadConversation);
+  // Read through a ref: the tab-return effect is mounted once and must see
+  // the current predicate, not the one captured at mount.
+  const isRecoveringConvRef = useRef(isRecoveringConv);
+  isRecoveringConvRef.current = isRecoveringConv;
+  const recoveryTokenRef = useRef(recoveryToken);
+  recoveryTokenRef.current = recoveryToken;
+  const nudgeRecoveryRef = useRef(nudgeRecovery);
+  nudgeRecoveryRef.current = nudgeRecovery;
   const refreshConversationsRef = useRef(refreshConversations);
   const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
   useEffect(() => {
@@ -4223,6 +4346,20 @@ export function ChatExperience({
       // reconnect the live stream where it is still generating.
       await sweepStreamLivenessRef.current({ force: true });
       if (attachedConvIdsRef.current.has(convId)) return;
+
+      // A conversation the recovery chain owns is off limits to BOTH halves
+      // of this handler. The chain is mid-decision about one particular turn:
+      // a generic reattach here would bind to whatever /inflight reports —
+      // a queued successor, say — and pour its replay into the turn's slot,
+      // and the reload below would swap the live prompt and partial answer
+      // for an incomplete transcript. The chain re-probes on its own (#1584).
+      if (isRecoveringConvRef.current(convId)) {
+        // Leave the conversation to its chain — but wake it, because the
+        // hidden-tab branch skips its probe on the understanding that this
+        // handler does the work when the user comes back.
+        nudgeRecoveryRef.current(convId);
+        return;
+      }
 
       // First try to reattach to any in-flight turn so the user sees
       // live tokens resume. If nothing's in-flight, fall back to a
@@ -5717,10 +5854,16 @@ export function ChatExperience({
                     rel="noreferrer noopener"
                     className="underline"
                   >
-                    {modelError.modelsUrl.startsWith("/") ? "Provider settings" : "Browse models"}
+                    {modelError.modelsUrl.startsWith("/")
+                      ? "Provider settings"
+                      : "Browse models"}
                   </a>
                   {" · "}
-                  <button type="button" className="underline" onClick={() => setModelPickerOpen(true)}>
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={() => setModelPickerOpen(true)}
+                  >
                     Choose a model
                   </button>
                 </div>
@@ -5737,6 +5880,7 @@ export function ChatExperience({
                 />
               ) : null}
               <Composer
+                cancelRecovery={cancelRecovery}
                 prompt={prompt}
                 setPrompt={setPrompt}
                 promptPlaceholder={promptPlaceholder}
