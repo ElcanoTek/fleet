@@ -20,7 +20,9 @@ bootstrap's work; the installer only gets a checkout in place and hands over.
   prompting.
 - **`--dry-run` changes nothing on the host.** The installer doesn't install git or
   touch `$FLEET_SRC_DIR`. It prints its own plan, then runs bootstrap's dry run from the
-  existing checkout, or from a throwaway shallow clone in a temp dir that's removed afterwards.
+  kept-as-is checkout (dirty or not on `main`, which a real run would also use unchanged),
+  or otherwise from a throwaway shallow clone of the current remote `main`. That's what
+  a real run would clone or fast-forward to. The temp dir is removed afterwards.
   If git itself is missing, it says so and stops.
 - **Reruns.** A clean checkout on `main` (no modified *or untracked* files) is
   fast-forwarded, and bootstrap runs again; it's idempotent. A checkout that's dirty or on
@@ -34,8 +36,10 @@ bootstrap's work; the installer only gets a checkout in place and hands over.
 - **Interrupted clones.** The first clone goes to `$src.partial.<pid>` and is renamed into
   place only on success, so an aborted download never leaves a half-populated
   checkout that blocks the next run.
-- **Truncated downloads.** The whole body is one `main()` function called on the last
-  line, so bash never executes a partially downloaded script.
+- **Truncated downloads.** The body is functions only, and the final call is
+  `{ main "$@"; }`. A download cut off anywhere before the closing brace is a syntax
+  error: an unterminated function, or an unterminated group. A bare trailing `main`
+  would still run with no arguments, so the call is wrapped.
 
 ## Deviations and known limits
 

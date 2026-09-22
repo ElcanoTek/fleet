@@ -17,8 +17,8 @@
 # bootstrap's own dry run from a throwaway clone (or the existing checkout).
 # Re-running on a box with a clean main checkout fast-forwards it and re-runs
 # bootstrap (which is idempotent); a dirty or non-main checkout is left alone.
-# Everything lives inside functions called on the last line, so a truncated
-# download never runs.
+# Everything lives inside functions, and the call on the last line is wrapped in
+# { …; } so a truncated download is a syntax error rather than a partial run.
 set -euo pipefail
 
 usage() {
@@ -43,7 +43,11 @@ absolutize() {
   local flag="$1" value="$2" base="$3"
   case "$flag" in
     --client-config)
-      if [[ "$value" != /* && "$value" != *://* && "$value" != git@* && -e "$base/${value%%#*}" ]]; then
+      # Test the whole value first: bootstrap allows "#" in a filesystem path
+      # and treats it as a ref separator only for URLs, so bundles/acme#prod
+      # may be a directory. Fall back to the part before "#" (path#ref form).
+      if [[ "$value" != /* && "$value" != *://* && "$value" != git@* ]] \
+         && [[ -e "$base/$value" || -e "$base/${value%%#*}" ]]; then
         value="$base/$value"
       fi ;;
     --auth-pubkey)
@@ -82,10 +86,18 @@ main() {
   if [[ "$dry_run" == 1 ]]; then
     local plan_src="$src" tmp=""
     command -v git >/dev/null || { echo "[dry-run] would: dnf install -y git ca-certificates (git is needed for the rest of the plan)"; exit 0; }
-    if [[ -d "$src/.git" ]]; then
-      echo "[dry-run] would: update $src if it is a clean main checkout, then run bootstrap"
+    if [[ -d "$src/.git" && ( "$(git -C "$src" rev-parse --abbrev-ref HEAD)" != main \
+          || -n "$(git -C "$src" status --porcelain)" ) ]]; then
+      # A real run keeps a dirty / non-main checkout as-is, so preview that tree.
+      echo "[dry-run] would: keep $src as-is (not a clean main checkout), then run its bootstrap"
     else
-      echo "[dry-run] would: git clone --branch main $repo $src, then run bootstrap"
+      # A real run clones, or fast-forwards a clean main checkout, before running
+      # bootstrap, so preview the current remote main rather than the local tree.
+      if [[ -d "$src/.git" ]]; then
+        echo "[dry-run] would: git -C $src pull --ff-only, then run bootstrap"
+      else
+        echo "[dry-run] would: git clone --branch main $repo $src, then run bootstrap"
+      fi
       tmp="$(mktemp -d)"
       # Expand now: $tmp is local to main() and gone by the time EXIT fires.
       # shellcheck disable=SC2064
@@ -136,4 +148,6 @@ main() {
   fi
   exec bash scripts/bootstrap.sh "$@"
 }
-main "$@"
+# The call sits inside a group whose closing brace is the last byte that matters:
+# a download cut off anywhere before it is a syntax error, never a bare "main".
+{ main "$@"; }

@@ -205,11 +205,12 @@ sudo fleet restart
 
 > **The read-only token.** A private bundle repo needs read access at clone
 > time. Create a **fine-grained GitHub PAT** scoped to *just that repo* with
-> **`Contents: read`** (no write, no other scope). Cache it via
-> `git config --global credential.helper store` (then one manual `git clone` to
-> seed it) or embed it in the `--client-config` URL
-> (`https://<token>@github.com/ORG/your-config.git`). `update` reuses the same
-> cached credential to fast-forward the bundle.
+> **`Contents: read`** (no write, no other scope). Cache it **for root** (bootstrap
+> and `update` run as root) with `sudo git config --global credential.helper store`,
+> then one manual `sudo git clone` to seed it. Don't embed the token in the
+> `--client-config` URL: bootstrap echoes that argument and git stores the URL in the
+> bundle checkout's `.git/config`. `update` reuses the cached credential to
+> fast-forward the bundle.
 
 The first run is always the **shell script** — the `fleet` binary doesn't exist
 until it's built. Once installed, `fleet bootstrap`/`update`/`status` wrap the
