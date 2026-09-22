@@ -1080,6 +1080,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     scheduleRecoveryRetry(convId, owned.assistantId, owned.gap, 0);
   };
 
+  // armRecoveryForUnsettled hands a slot with no outcome to the chain. It is
+  // for the places an attach fails BEFORE it could establish: the slot exists,
+  // nothing is streaming into it, and the generic callers — the initial
+  // conversation load, the tab-return handler — own no chain of their own. The
+  // liveness watchdog does not cover them either, because it only visits
+  // attached conversations. Without this the bubble spins for ever under a
+  // composer offering Send (#1584).
+  const armRecoveryForUnsettled = (convId: string): void => {
+    if (recoveryUnmountedRef.current) return;
+    if (recoveryOwns(convId) || chasingSuccessor(convId)) return;
+    if (attachedConvIdsRef.current.has(convId)) return;
+    const unsettled = lastUnsettledAssistant(convId);
+    if (unsettled === null) return;
+    // The chain owns an unknown outcome, so the conversation is busy: Stop
+    // stays offered and a follow-up queues rather than racing.
+    markConvStreaming(convId);
+    scheduleRecoveryRetry(convId, unsettled, false, 0);
+  };
+
   // cancelRecovery ends a chain because the USER stopped the turn. By the time
   // recovery owns an unreachable turn the submit finalizer has dropped the
   // AbortController, so Stop has nothing local to abort: without this it would
@@ -2174,10 +2193,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return false;
         }
       } catch (err) {
+        const neverConnected = !connected;
         window.clearTimeout(connectTimer);
         attachedConvIdsRef.current.delete(convId);
         markConvIdle(convId);
         abortControllersRef.current.delete(convId);
+        // The slot was created before this fetch, so a connect that never
+        // established leaves a thinking bubble with nothing behind it.
+        if (neverConnected) armRecoveryForUnsettled(convId);
         throw err;
       }
 
@@ -2874,6 +2897,29 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // normally). Cancelling this body is safe: the turn deliberately
           // outlives its originating request (server.go startTurn).
           void res.body?.cancel().catch(() => {});
+          // The busy flag was stale because the predecessor had already
+          // finished — and if recovery still owns that predecessor's slot it
+          // is mid-flight on screen, which makes it the slot an unbound
+          // reattach reuses. This submission's replay would then land in the
+          // previous turn's bubble. Settle it from the canonical transcript
+          // first, exactly as the chain's own tick does when it finds the
+          // server on a different turn, and release the chain so the attach
+          // below starts a fresh slot (#1584).
+          const owned = recoveryOwnedRef.current.get(convId);
+          if (owned) {
+            await settleStreamedSlot(
+              convId,
+              owned.assistantId,
+              owned.gap,
+              0,
+              true,
+            );
+            releaseRecovery(convId);
+          }
+          // A chase is already attaching whatever the server is running,
+          // which is now this turn: a second attach would race it for the
+          // same slot, and the chase's replay carries our user bubble.
+          if (chasingSuccessor(convId)) return;
           await reattachToConv(convId);
           return;
         }

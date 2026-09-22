@@ -2166,23 +2166,35 @@ export function ChatExperience({
       // would yank the user back to this conversation and reset the persona,
       // the model and the summary UI under them (#1584).
       if (attachedConvIdsRef.current.has(conversationId)) return;
-      setActiveConversationId(data.conversation.id);
-      // Opening a conversation clears the keyboard focus cursor (#306): the
-      // cursor is a transient nav aid, and letting it linger would keep the
-      // Enter-to-open shortcut armed after the user has already landed somewhere.
-      setFocusedConversationId(null);
-      setSelectedPersona(data.conversation.persona);
-      setSelectedModel(data.conversation.model || currentDefaultModel());
-      // Reset compaction UI state so the freshly-loaded conversation
-      // starts with pre-summary turns collapsed (when present) and
-      // any prior error from another chat does not leak into this one.
-      setSummaryExpanded(false);
-      setSummarizeError(null);
-      // Refresh the MCP-server catalog for this conversation so the
-      // Tools picker reflects the correct per-conversation opt-in state.
-      // Fire-and-forget: the picker shows its own spinner while the
-      // fetch is in flight and the conversation body doesn't block on it.
-      void loadMcpServerCatalog(data.conversation.id);
+      // A BACKGROUND reload must not move the user. Recovery reconciles
+      // conversations that are not on screen, and one finishing after the
+      // user has navigated elsewhere would otherwise switch the active
+      // conversation back and reset that chat's persona, model, summary and
+      // connector state under them. The transcript below still applies:
+      // adopting an answer for a background conversation is the point of the
+      // reload (#1584).
+      const movesTheUser =
+        !options.background ||
+        activeConversationIdRef.current === conversationId;
+      if (movesTheUser) {
+        setActiveConversationId(data.conversation.id);
+        // Opening a conversation clears the keyboard focus cursor (#306): the
+        // cursor is a transient nav aid, and letting it linger would keep the
+        // Enter-to-open shortcut armed after the user has already landed somewhere.
+        setFocusedConversationId(null);
+        setSelectedPersona(data.conversation.persona);
+        setSelectedModel(data.conversation.model || currentDefaultModel());
+        // Reset compaction UI state so the freshly-loaded conversation
+        // starts with pre-summary turns collapsed (when present) and
+        // any prior error from another chat does not leak into this one.
+        setSummaryExpanded(false);
+        setSummarizeError(null);
+        // Refresh the MCP-server catalog for this conversation so the
+        // Tools picker reflects the correct per-conversation opt-in state.
+        // Fire-and-forget: the picker shows its own spinner while the
+        // fetch is in flight and the conversation body doesn't block on it.
+        void loadMcpServerCatalog(data.conversation.id);
+      }
       // Checked again: the catalog refresh above is fire-and-forget and the
       // state setters are not instantaneous, so a stream can still claim the
       // conversation in between. The transcript is the one thing that must

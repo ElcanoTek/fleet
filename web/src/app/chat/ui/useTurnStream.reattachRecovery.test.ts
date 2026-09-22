@@ -121,6 +121,10 @@ const makeHarness = (opts: {
   // Indexes of /inflight probes that stay PENDING until releaseInflight() is
   // called — for driving what a callback does when it resumes after unmount.
   inflightDeferAt?: number[];
+  // Zero-based indexes of ATTACHES whose /stream request never returns its
+  // response headers — a blackholed connect, which the reattach's own connect
+  // timer is there to abort. The slot has already been created by then.
+  streamNeverConnectsAt?: number[];
   onLoaded?: () => void;
   // Advertised keepalive cadence, in ms. Omit to send no header at all.
   heartbeatMs?: number;
@@ -217,6 +221,14 @@ const makeHarness = (opts: {
         });
       }
       if (url.includes("/stream")) {
+        if ((opts.streamNeverConnectsAt ?? []).includes(attaches)) {
+          attaches += 1;
+          await new Promise<never>((_, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+          });
+        }
         const body = nth(opts.streamBodies, attaches);
         attaches += 1;
         streamRequests.push({
@@ -1944,5 +1956,48 @@ describe("a confirmed Stop settles every shape recovery was holding", () => {
     expect(lastOf(h).cancelled).toBe(true);
     expect(lastOf(h).state).toBe("done");
     expect(h.streaming.has(CONV)).toBe(false);
+  }, 20000);
+});
+
+// Codex round 13 on #1584: a reattach creates its assistant slot before it
+// opens the stream, so a connect that never establishes leaves a thinking
+// bubble behind. The recovery callers re-probe, but the generic ones — the
+// initial conversation load, the tab-return handler — own no chain, and the
+// liveness watchdog skips a conversation that is no longer attached.
+describe("a reattach that never connects does not strand its slot", () => {
+  it("hands the slot to the chain instead of spinning under a Send button", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "the answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      streamNeverConnectsAt: [0], // the first attach's connect is blackholed
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    void result.current.reattachToConv(CONV).catch(() => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The connect timer fires and aborts a stream that never arrived.
+    await vi.advanceTimersByTimeAsync(8100);
+    // Busy, not idle: the chain owns an unknown outcome, so Stop stays
+    // offered rather than Send over a spinning bubble.
+    expect(h.streaming.has(CONV)).toBe(true);
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+
+    // And the chain does the work the generic caller could not.
+    const attachesBefore = h.attachCount();
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.attachCount()).toBe(attachesBefore + 1);
+    expect(lastOf(h).content).toBe("the answer");
+    expect(lastOf(h).state).toBe("done");
   }, 20000);
 });
