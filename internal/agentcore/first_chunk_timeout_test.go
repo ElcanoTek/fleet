@@ -161,7 +161,9 @@ func TestWatchdogSnapshotsProviderErrorWhenItFires(t *testing.T) {
 	<-fired
 
 	// Let the record lapse, exactly as an unwinding stream would.
-	w.providerErr.Store(&providerErrRecord{until: time.Now().Add(-time.Millisecond).UnixNano(), status: 429})
+	w.mu.Lock()
+	w.providerErr = &providerErrRecord{until: time.Now().Add(-time.Millisecond).UnixNano(), status: 429}
+	w.mu.Unlock()
 	if w.providerErrorLive() {
 		t.Fatalf("the live record should have lapsed by now")
 	}
@@ -182,9 +184,58 @@ func TestWatchdogSnapshotsProviderErrorWhenItFires(t *testing.T) {
 // watchdogLiveStatus reads the status of the record that currently applies, or
 // 0 when none does — the shape the tests assert against.
 func watchdogLiveStatus(w *firstChunkWatchdog) int {
-	rec := w.providerErr.Load()
-	if rec == nil || time.Now().UnixNano() >= rec.until {
+	now := time.Now().UnixNano()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.providerErr == nil || now >= w.providerErr.until {
 		return 0
 	}
-	return rec.status
+	return w.providerErr.status
+}
+
+// The verdict and its evidence are one fact, taken together. The timer reads
+// the clock BEFORE it claims the decision, so a provider-error record that was
+// live at the deadline is still the evidence even if the timer goroutine is
+// then descheduled long enough for that record to lapse. Judging the record
+// against the later clock would put "the model never started" on a card for a
+// provider that was, at the deadline, still inside the backoff it bought
+// (#1585).
+func TestWatchdogJudgesTheRecordAtTheDeadlineNotAtTheLock(t *testing.T) {
+	fired := make(chan struct{})
+	w := newFirstChunkWatchdog(20*time.Millisecond, func() { close(fired) })
+	defer w.stop()
+
+	// A backoff that is live when the deadline passes but lapses while the
+	// timer goroutine waits to be scheduled.
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, 40*time.Millisecond)
+
+	// Stand in for that delay: hold the lock the timer needs, well past the
+	// record's window.
+	w.mu.Lock()
+	time.Sleep(200 * time.Millisecond)
+	w.mu.Unlock()
+
+	<-fired
+	seen, status := w.providerErrorAtExpiry()
+	if !seen || status != 429 {
+		t.Fatalf("a record live AT THE DEADLINE must be the verdict's evidence: seen=%v status=%d", seen, status)
+	}
+	if w.providerErrorLive() {
+		t.Fatal("the live record should have lapsed while the timer was blocked")
+	}
+}
+
+// A retry that lands after the watchdog has already won cannot rewrite the
+// verdict's evidence: the snapshot was taken under the same lock that claimed
+// the decision.
+func TestWatchdogSnapshotIgnoresARetryThatLandsAfterItFires(t *testing.T) {
+	fired := make(chan struct{})
+	w := newFirstChunkWatchdog(10*time.Millisecond, func() { close(fired) })
+	defer w.stop()
+	<-fired
+
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 503}, time.Minute)
+	if seen, status := w.providerErrorAtExpiry(); seen || status != 0 {
+		t.Fatalf("a post-verdict retry rewrote the snapshot: seen=%v status=%d", seen, status)
+	}
 }

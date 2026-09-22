@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"charm.land/fantasy"
@@ -1141,8 +1141,15 @@ type providerErrRecord struct {
 }
 
 type firstChunkWatchdog struct {
-	settled  atomic.Bool // true once either the first chunk or the timer claimed the decision
-	fired    atomic.Bool // true only when the TIMER won
+	// One lock, not a set of atomics, because the verdict and the evidence
+	// for it are a single fact. Claiming the decision and reading the
+	// provider record under separate atomics let the timer goroutine be
+	// descheduled between them: the record could lapse, or a later OnRetry
+	// could publish a different one, and the card would then describe state
+	// from after the watchdog won rather than state at the deadline.
+	mu       sync.Mutex
+	settled  bool // true once either the first chunk or the timer claimed the decision
+	fired    bool // true only when the TIMER won
 	timer    *time.Timer
 	onExpire func()
 
@@ -1157,17 +1164,18 @@ type firstChunkWatchdog struct {
 	// quick 429s followed by an attempt that reasons silently past the
 	// deadline must be reported as a silent model, not as rate limiting — so
 	// the record expires with the sleep that justified it.
-	// ONE atomic publish. Two fields could be read apart: expire() could see a
-	// new live interval carrying the previous callback's status, or a status
-	// of 0 before the new one landed, and report the wrong provider failure.
-	providerErr atomic.Pointer[providerErrRecord]
-	// Captured at the instant the timer WINS, because that is the only moment
-	// the answer is knowable. Reading the live record afterwards — the caller
-	// reads it once ag.Stream has unwound the cancelled request — can miss a
-	// record that lapsed in between, and two separate reads can disagree with
-	// each other, either of which puts "the model never started" on a card
-	// for a provider that was throttling us.
-	expiredProviderErr atomic.Pointer[providerErrRecord]
+	// ONE publish. Two fields could be read apart: expire() could see a new
+	// live interval carrying the previous callback's status, or a status of 0
+	// before the new one landed, and report the wrong provider failure.
+	providerErr *providerErrRecord
+	// Captured at the instant the timer WINS, under the same lock that claims
+	// the decision, because that is the only moment the answer is knowable.
+	// Reading the live record afterwards — the caller reads it once ag.Stream
+	// has unwound the cancelled request — can miss a record that lapsed in
+	// between, and two separate reads can disagree with each other, either of
+	// which puts "the model never started" on a card for a provider that was
+	// throttling us.
+	expiredProviderErr *providerErrRecord
 }
 
 func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWatchdog {
@@ -1179,21 +1187,38 @@ func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWa
 // expire is the timer callback: it cancels only if no chunk has settled the
 // decision first.
 func (w *firstChunkWatchdog) expire() {
-	if !w.settled.CompareAndSwap(false, true) {
+	// Read the clock BEFORE the lock. The deadline instant is when the timer
+	// callback began, not when it won a contended mutex; judging the record
+	// against a later clock is how a provider error that was still live at
+	// the deadline gets reported as a silent model.
+	at := time.Now().UnixNano()
+	w.mu.Lock()
+	if w.settled {
+		w.mu.Unlock()
 		return
 	}
-	// Snapshot first: this is the instant the watchdog's verdict is formed.
-	if rec := w.providerErr.Load(); rec != nil && time.Now().UnixNano() < rec.until {
-		w.expiredProviderErr.Store(rec)
+	w.settled = true
+	w.fired = true
+	// The verdict and its evidence are formed in the same critical section,
+	// so no concurrent noteProviderError can slip a different record between
+	// them.
+	if w.providerErr != nil && at < w.providerErr.until {
+		w.expiredProviderErr = w.providerErr
 	}
-	w.fired.Store(true)
+	w.mu.Unlock()
+	// Outside the lock: onExpire cancels the request, and noteProviderError
+	// must never block behind it.
 	w.onExpire()
 }
 
 // markFirst records that the first semantic event arrived. Idempotent; a call
 // after the timer has already won is a no-op (the cancel stands).
 func (w *firstChunkWatchdog) markFirst() {
-	if w.settled.CompareAndSwap(false, true) {
+	w.mu.Lock()
+	claimed := !w.settled
+	w.settled = true
+	w.mu.Unlock()
+	if claimed {
 		w.timer.Stop()
 	}
 }
@@ -1217,10 +1242,13 @@ func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderErro
 	}
 	// Valid for exactly the sleep this retry is about to take. Published as
 	// one value so no reader can pair a new interval with an old status.
-	w.providerErr.Store(&providerErrRecord{
+	rec := &providerErrRecord{
 		until:  time.Now().Add(delay + providerErrorGrace).UnixNano(),
 		status: status,
-	})
+	}
+	w.mu.Lock()
+	w.providerErr = rec
+	w.mu.Unlock()
 }
 
 // providerErrorLive reports whether a provider error is the explanation for
@@ -1229,21 +1257,28 @@ func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderErro
 // Only expire() consults it; everyone else wants the snapshot below, taken
 // when the verdict was formed.
 func (w *firstChunkWatchdog) providerErrorLive() bool {
-	rec := w.providerErr.Load()
-	return rec != nil && time.Now().UnixNano() < rec.until
+	now := time.Now().UnixNano()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.providerErr != nil && now < w.providerErr.until
 }
 
 // providerErrorAtExpiry reports the provider-error state as it stood when the
 // watchdog fired, and the status that went with it. One read, one instant.
 func (w *firstChunkWatchdog) providerErrorAtExpiry() (seen bool, status int) {
-	rec := w.expiredProviderErr.Load()
-	if rec == nil {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.expiredProviderErr == nil {
 		return false, 0
 	}
-	return true, rec.status
+	return true, w.expiredProviderErr.status
 }
 
 // timedOut reports whether the timer won the decision.
-func (w *firstChunkWatchdog) timedOut() bool { return w.fired.Load() }
+func (w *firstChunkWatchdog) timedOut() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.fired
+}
 
 func (w *firstChunkWatchdog) stop() { w.timer.Stop() }
