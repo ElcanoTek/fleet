@@ -94,20 +94,20 @@ func TestWatchdogProviderErrorStatusTracksTheLatestCallback(t *testing.T) {
 	defer w.stop()
 
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, time.Minute)
-	if !w.providerErrorLive() || w.providerErrStatus.Load() != 429 {
-		t.Fatalf("status = %d, want 429", w.providerErrStatus.Load())
+	if !w.providerErrorLive() || watchdogLiveStatus(w) != 429 {
+		t.Fatalf("status = %d, want 429", watchdogLiveStatus(w))
 	}
 	// A transport error carries no status: the 429 must not linger.
 	w.noteProviderError(nil, time.Minute)
 	if !w.providerErrorLive() {
 		t.Errorf("a transport error is still a provider error")
 	}
-	if got := w.providerErrStatus.Load(); got != 0 {
+	if got := watchdogLiveStatus(w); got != 0 {
 		t.Fatalf("stale status survived a statusless retry: %d", got)
 	}
 	// An out-of-range code is not a status worth reporting either.
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 99_999}, time.Minute)
-	if got := w.providerErrStatus.Load(); got != 0 {
+	if got := watchdogLiveStatus(w); got != 0 {
 		t.Fatalf("out-of-range status was stored: %d", got)
 	}
 }
@@ -133,9 +133,9 @@ func TestWatchdogProviderErrorExpiresWithItsBackoff(t *testing.T) {
 
 	// Inside the backoff it is the explanation.
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 503}, time.Minute)
-	if !w.providerErrorLive() || w.providerErrStatus.Load() != 503 {
+	if !w.providerErrorLive() || watchdogLiveStatus(w) != 503 {
 		t.Fatalf("inside its backoff the record must stand: seen=%v status=%d",
-			w.providerErrorLive(), w.providerErrStatus.Load())
+			w.providerErrorLive(), watchdogLiveStatus(w))
 	}
 
 	// A watchdog that never saw one reports nothing.
@@ -161,7 +161,7 @@ func TestWatchdogSnapshotsProviderErrorWhenItFires(t *testing.T) {
 	<-fired
 
 	// Let the record lapse, exactly as an unwinding stream would.
-	w.providerErrUntil.Store(time.Now().Add(-time.Millisecond).UnixNano())
+	w.providerErr.Store(&providerErrRecord{until: time.Now().Add(-time.Millisecond).UnixNano(), status: 429})
 	if w.providerErrorLive() {
 		t.Fatalf("the live record should have lapsed by now")
 	}
@@ -177,4 +177,14 @@ func TestWatchdogSnapshotsProviderErrorWhenItFires(t *testing.T) {
 	if seen, status := quiet.providerErrorAtExpiry(); seen || status != 0 {
 		t.Fatalf("a silent model must not acquire a provider error: seen=%v status=%d", seen, status)
 	}
+}
+
+// watchdogLiveStatus reads the status of the record that currently applies, or
+// 0 when none does — the shape the tests assert against.
+func watchdogLiveStatus(w *firstChunkWatchdog) int {
+	rec := w.providerErr.Load()
+	if rec == nil || time.Now().UnixNano() >= rec.until {
+		return 0
+	}
+	return rec.status
 }

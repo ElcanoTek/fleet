@@ -206,6 +206,12 @@ thinking phases observed (25–40 s) with headroom. A deployment whose models
 all start streaming promptly can set the base back to 30 with
 `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS`.
 
+The prompt-size term applies only to calls that follow a completed step:
+`lastStepInputTokens()` is 0 for the FIRST provider call of a run, so a long
+conversation's opening call gets the base and nothing more. That is the call a
+user is most often waiting on, which is why the base itself had to move rather
+than the scaling being relied on.
+
 The deadline is **per attempt**, not the time to a terminal verdict. A
 provider that is genuinely dead costs one expiry, the 3 s stream-blip pause,
 and a second expiry on the same model before the run is out of attempts — so

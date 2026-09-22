@@ -1012,11 +1012,16 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// backoff (5+10+20+40 s) can outlast the watchdog deadline, so
 			// without this the rate-limit / provider-failure card would be
 			// replaced by "the model did not start responding" (#1585).
-			watchdog.noteProviderError(providerErr, delay)
+			//
+			// Recorded LAST, because fantasy begins the sleep only once this
+			// callback returns: starting the window before the observers run
+			// would hand their execution time to the backoff and let the
+			// record lapse while the provider is still being waited on.
 			emitTurnRetry(sink, providerErr, delay, nil)
 			if cb := r.engine.onRetry; cb != nil {
 				cb(providerErr, delay)
 			}
+			watchdog.noteProviderError(providerErr, delay)
 		},
 		OnTextDelta: func(_, text string) error {
 			markFirst()
@@ -1122,6 +1127,14 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 // when the callback has already started — so a timer firing in the same
 // instant as the first delta would cancel a stream that had, in fact, started
 // producing, and misreport it as a first-chunk timeout.
+// providerErrRecord is one indivisible answer to "is the current silence the
+// provider's fault, and what did it say": the instant the record stops
+// applying, and the status that came with it.
+type providerErrRecord struct {
+	until  int64 // unix nanos
+	status int
+}
+
 type firstChunkWatchdog struct {
 	settled  atomic.Bool // true once either the first chunk or the timer claimed the decision
 	fired    atomic.Bool // true only when the TIMER won
@@ -1139,16 +1152,17 @@ type firstChunkWatchdog struct {
 	// quick 429s followed by an attempt that reasons silently past the
 	// deadline must be reported as a silent model, not as rate limiting — so
 	// the record expires with the sleep that justified it.
-	providerErrUntil  atomic.Int64 // unix nanos; 0 = never seen one
-	providerErrStatus atomic.Int32
+	// ONE atomic publish. Two fields could be read apart: expire() could see a
+	// new live interval carrying the previous callback's status, or a status
+	// of 0 before the new one landed, and report the wrong provider failure.
+	providerErr atomic.Pointer[providerErrRecord]
 	// Captured at the instant the timer WINS, because that is the only moment
 	// the answer is knowable. Reading the live record afterwards — the caller
 	// reads it once ag.Stream has unwound the cancelled request — can miss a
 	// record that lapsed in between, and two separate reads can disagree with
 	// each other, either of which puts "the model never started" on a card
 	// for a provider that was throttling us.
-	expiredAfterProviderErr atomic.Bool
-	expiredProviderStatus   atomic.Int32
+	expiredProviderErr atomic.Pointer[providerErrRecord]
 }
 
 func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWatchdog {
@@ -1164,9 +1178,8 @@ func (w *firstChunkWatchdog) expire() {
 		return
 	}
 	// Snapshot first: this is the instant the watchdog's verdict is formed.
-	if w.providerErrorLive() {
-		w.expiredAfterProviderErr.Store(true)
-		w.expiredProviderStatus.Store(w.providerErrStatus.Load())
+	if rec := w.providerErr.Load(); rec != nil && time.Now().UnixNano() < rec.until {
+		w.expiredProviderErr.Store(rec)
 	}
 	w.fired.Store(true)
 	w.onExpire()
@@ -1183,26 +1196,26 @@ func (w *firstChunkWatchdog) markFirst() {
 // noteProviderError records that the provider answered with an error before
 // any chunk arrived. Idempotent in effect; the last status wins.
 func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderError, delay time.Duration) {
-	// Valid for the sleep this retry is about to take, plus a small grace so a
-	// watchdog firing at the very end of the backoff still reads as the
-	// provider's failure rather than as a model that never started.
 	if delay < 0 {
 		delay = 0
 	}
-	w.providerErrUntil.Store(time.Now().Add(delay + providerErrorGrace).UnixNano())
-	// The status describes the LAST provider error, so it is cleared on every
-	// callback. Fantasy passes nil for a retryable transport failure (DNS, TCP,
-	// HTTP/2), and leaving a previous 429 cached there would have the card call
-	// a connection reset a rate limit.
-	w.providerErrStatus.Store(0)
-	if providerErr == nil {
-		return
+	// The status describes THIS provider error and no earlier one: fantasy
+	// passes nil for a retryable transport failure (DNS, TCP, HTTP/2), and
+	// carrying a previous 429 forward would have the card call a connection
+	// reset a rate limit. An HTTP status is three digits; anything else is
+	// not a status worth reporting.
+	status := 0
+	if providerErr != nil {
+		if code := providerErr.StatusCode; code > 0 && code <= 599 {
+			status = code
+		}
 	}
-	// An HTTP status is three digits. Anything outside that is not a status
-	// worth reporting, and clamping keeps the atomic's int32 honest.
-	if code := providerErr.StatusCode; code > 0 && code <= 599 {
-		w.providerErrStatus.Store(int32(code))
-	}
+	// Valid for exactly the sleep this retry is about to take. Published as
+	// one value so no reader can pair a new interval with an old status.
+	w.providerErr.Store(&providerErrRecord{
+		until:  time.Now().Add(delay + providerErrorGrace).UnixNano(),
+		status: status,
+	})
 }
 
 // providerErrorLive reports whether a provider error is the explanation for
@@ -1211,17 +1224,18 @@ func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderErro
 // Only expire() consults it; everyone else wants the snapshot below, taken
 // when the verdict was formed.
 func (w *firstChunkWatchdog) providerErrorLive() bool {
-	until := w.providerErrUntil.Load()
-	return until != 0 && time.Now().UnixNano() < until
+	rec := w.providerErr.Load()
+	return rec != nil && time.Now().UnixNano() < rec.until
 }
 
 // providerErrorAtExpiry reports the provider-error state as it stood when the
 // watchdog fired, and the status that went with it. One read, one instant.
 func (w *firstChunkWatchdog) providerErrorAtExpiry() (seen bool, status int) {
-	if !w.expiredAfterProviderErr.Load() {
+	rec := w.expiredProviderErr.Load()
+	if rec == nil {
 		return false, 0
 	}
-	return true, int(w.expiredProviderStatus.Load())
+	return true, rec.status
 }
 
 // timedOut reports whether the timer won the decision.
