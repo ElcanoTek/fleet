@@ -189,12 +189,42 @@ stream blip (one same-model retry, then the fallback swap). The deadline used
 to be a flat 30 s, which a ~115K-token prompt on a slower provider can
 legitimately exceed while it is still processing the prompt — two such
 timeouts in a row swapped a run to its fallback model in its audit tail. The
-wait is now `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` (default **30**,
+wait is now `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` (default **75**,
 floor 5) plus **2 s per 10K prompt tokens** of the previous step's input,
 capped at `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` (default **180**,
 never below the base). When the watchdog fires, the `[stream-blip-retry]`
 log line and the `turn.retry` event carry `first_chunk_timeout` and
 `prompt_tokens`, so the correlation is visible in an exported log.
+
+The base was 30 s until 2026-09-21 (#1585). A **reasoning model** can spend
+tens of seconds on hidden thinking before its first visible token, and a
+provider route that does not stream reasoning emits no semantic event for the
+whole of it — indistinguishable, to the watchdog, from a provider that died.
+At 30 s a healthy reasoning model on a heavy prompt tripped the watchdog on
+both attempts and the turn ended on the model-required card. 75 s covers the
+thinking phases observed (25–40 s) with headroom. A deployment whose models
+all start streaming promptly can set the base back to 30 with
+`FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS`.
+
+The prompt-size term applies only to calls that follow a completed step:
+`lastStepInputTokens()` is 0 for the FIRST provider call of a run, so a long
+conversation's opening call gets the base and nothing more. That is the call a
+user is most often waiting on, which is why the base itself had to move rather
+than the scaling being relied on.
+
+The deadline is **per attempt**, not the time to a terminal verdict. A
+provider that is genuinely dead costs one expiry, the 3 s stream-blip pause,
+and a second expiry on the same model before the run is out of attempts — so
+with the 75 s base a chat turn shows its error after roughly 153 s where it
+used to take about 63 s, and a scheduled run reaches its fallback swap that
+much later. A configured fallback model adds its own attempts on top. That
+latency is the price of not failing a reasoning model that was working.
+
+When the watchdog is what exhausted the retries, the `turn.model_required`
+message says the model did not start responding in time instead of calling the
+provider a repeated failure. It describes the last attempt only: the resilience
+result carries the final error, not a per-attempt history, so the card never
+claims a number of expiries.
 
 **An expired provider prompt cache is a stream blip, not a rejection.** Google
 evicts the implicit prompt cache a long run has been riding on and answers the

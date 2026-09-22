@@ -80,15 +80,35 @@ const (
 	// timeouts in a row swapped a run to its fallback model in the audit
 	// tail. The timeout now grows with the prompt: base + 2 s per 10K prompt
 	// tokens (the previous step's input size), capped. Both ends are knobs:
-	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS (default 30, floor 5) and
+	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS (default 75, floor 5) and
 	// FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS (default 180, never
 	// below the base).
-	defaultFirstChunkTimeout      = 30 * time.Second
+	//
+	// The base moved from 30 s to 75 s on 2026-09-21 (#1585). A reasoning
+	// model can spend tens of seconds on hidden thinking before its first
+	// visible token, and a provider route that does not stream reasoning
+	// emits NO semantic event for the whole of it — indistinguishable, to
+	// this watchdog, from a provider that died. At 30 s a healthy reasoning
+	// model on a heavy prompt tripped it on both attempts and the turn ended
+	// on the model-required card. 75 s covers the thinking phases observed
+	// (25–40 s) with headroom. The deadline is per attempt, so the price is a
+	// later verdict on a genuinely dead provider (two expiries plus the blip
+	// pause); a deployment whose models all start promptly tightens the base
+	// knob back.
+	defaultFirstChunkTimeout      = 75 * time.Second
 	minFirstChunkTimeout          = 5 * time.Second
 	firstChunkTimeoutPer10KTokens = 2 * time.Second
 	defaultFirstChunkTimeoutMax   = 180 * time.Second
-	firstChunkTimeoutBaseEnv      = "PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS"
-	firstChunkTimeoutMaxEnv       = "PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS"
+	// providerErrorGrace is deliberately zero: the record explains exactly the
+	// sleep it bought and not a moment more. A grace period was tried and is
+	// worse than the boundary case it covered — a 429 at 69 s with a 5 s
+	// backoff starts a new attempt at 74 s, and an expiry at 75 s belongs to
+	// THAT attempt, which may be a model reasoning in silence. Mis-attributing
+	// it would send the user off a model that is fine, which is the very thing
+	// this watchdog work exists to stop.
+	providerErrorGrace       = 0
+	firstChunkTimeoutBaseEnv = "PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS"
+	firstChunkTimeoutMaxEnv  = "PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS"
 )
 
 // firstChunkTimeoutFor resolves the watchdog deadline for a provider call
@@ -134,6 +154,11 @@ type firstChunkTimeoutError struct {
 	timeout      time.Duration
 	promptTokens int
 	cause        error
+	// providerErr records that the provider answered with an error before the
+	// deadline (its retry backoff outlasted the watchdog). The silence was
+	// not a model thinking, and the run must not report it as one (#1585).
+	providerErr    bool
+	providerStatus int
 }
 
 func (e *firstChunkTimeoutError) Error() string {
@@ -141,6 +166,32 @@ func (e *firstChunkTimeoutError) Error() string {
 }
 
 func (e *firstChunkTimeoutError) Unwrap() []error { return []error{ErrFirstChunkTimeout, e.cause} }
+
+// FirstChunkTimeoutAfterProviderError reports whether err is a first-chunk
+// timeout that followed one or more PROVIDER errors — a rate limit or a 5xx
+// whose backoff ran past the deadline — and the last status seen. Callers use
+// it to keep reporting the provider's own failure instead of the watchdog's
+// "never started" wording, which would be wrong and would send the user off a
+// model that is merely being throttled.
+func FirstChunkTimeoutAfterProviderError(err error) (status int, ok bool) {
+	var fc *firstChunkTimeoutError
+	if !errors.As(err, &fc) || !fc.providerErr {
+		return 0, false
+	}
+	return fc.providerStatus, true
+}
+
+// NewFirstChunkTimeoutAfterProviderErrorForTest builds the error shape a
+// watchdog expiry takes when provider errors preceded it, so packages outside
+// agentcore can exercise their handling of it without a live provider.
+func NewFirstChunkTimeoutAfterProviderErrorForTest(status int) error {
+	return &firstChunkTimeoutError{
+		timeout:        75 * time.Second,
+		cause:          context.Canceled,
+		providerErr:    true,
+		providerStatus: status,
+	}
+}
 
 // firstChunkTimeoutDetail extracts the watchdog detail from a stream error,
 // when it was one.

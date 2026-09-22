@@ -2068,22 +2068,54 @@ func emitModelSelectionRequired(sink EventSink, reason agentcore.StreamErrorReas
 	if streamErr != nil {
 		raw = streamErr.Error()
 	}
+	// One resolved status for the payload AND the message. The classifier files
+	// a first-chunk timeout as a stream blip with no provider error, so a 429
+	// whose retry backoff outlasted the watchdog arrives here as status 0 —
+	// and an event whose message says "rate limiting" while its structured
+	// status_code says "no provider error" is worse than either alone: it
+	// corrupts telemetry and any client branching on the field (#1585).
+	if status == 0 {
+		if providerStatus, ok := agentcore.FirstChunkTimeoutAfterProviderError(streamErr); ok && providerStatus > 0 {
+			status = providerStatus
+		}
+	}
 	sink.Emit("turn.model_required", map[string]any{
 		"reason":       string(reason),
 		"failed_model": failedModel,
 		"status_code":  status,
-		"message":      humanMessageForReason(reason, status),
+		"message":      humanMessageForReason(reason, status, streamErr),
 		"raw":          truncate(raw, 1000),
 	})
 }
 
-func humanMessageForReason(reason agentcore.StreamErrorReason, status int) string {
+// humanMessageForReason is the one sentence the card shows. streamErr lets the
+// retry-exhausted case tell a provider that FAILED apart from one that never
+// started answering: the first-chunk watchdog (#1585) fires on a healthy
+// reasoning model whose hidden thinking outlasts the deadline, and calling that
+// "failing repeatedly" sent users away from a model that was fine.
+//
+// streamErr is the LAST attempt's error, not a history, so the wording says
+// what that attempt hit and counts nothing: a reset followed by one expiry,
+// or an expiry followed by a reset, must not be reported as two timeouts.
+func humanMessageForReason(reason agentcore.StreamErrorReason, status int, streamErr error) string {
 	switch reason {
 	case agentcore.ReasonContextTooLarge:
 		return "This conversation exceeds the selected model's context window. Pick a model with a larger window or start a new chat."
 	case agentcore.ReasonRetryExhausted:
+		// A watchdog expiry that FOLLOWED provider errors is the provider's
+		// failure, not a silent model: the inner retry backoff simply outlasted
+		// the deadline. Report what the provider actually said (#1585).
+		if providerStatus, afterProviderErr := agentcore.FirstChunkTimeoutAfterProviderError(streamErr); afterProviderErr {
+			if providerStatus == 429 || status == 429 {
+				return "The selected model is rate-limiting this request. Retrying did not help — pick a different model to continue."
+			}
+			return "The selected model's provider is failing repeatedly. Pick a different model to continue."
+		}
 		if status == 429 {
 			return "The selected model is rate-limiting this request. Retrying did not help — pick a different model to continue."
+		}
+		if errors.Is(streamErr, agentcore.ErrFirstChunkTimeout) {
+			return "The selected model did not start responding within the time allowed. Retrying did not help — retry again, or pick a different model to continue."
 		}
 		return "The selected model's provider is failing repeatedly. Pick a different model to continue."
 	default:

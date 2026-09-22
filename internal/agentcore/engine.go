@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"charm.land/fantasy"
@@ -1007,6 +1008,28 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		// recovery resets accumulated text on it) and the engine's session-log
 		// mirror (newRetryLogger).
 		OnRetry: func(providerErr *fantasy.ProviderError, delay time.Duration) {
+			// The provider ANSWERED — with an error. That is a different
+			// story from a model that never starts, and the inner retry
+			// backoff (5+10+20+40 s) can outlast the watchdog deadline, so
+			// without this the rate-limit / provider-failure card would be
+			// replaced by "the model did not start responding" (#1585).
+			//
+			// The window OPENS here and closes on the way out, because the
+			// observers below are synchronous and may block for longer than
+			// the backoff they announce. A record bounded by the announced
+			// delay up front would expire inside them, and a watchdog firing
+			// in that gap would find nothing: the provider's error lost, and
+			// a silent-model card with status_code 0 in its place.
+			//
+			// Deferred rather than written after the calls, so the real
+			// deadline lands even if an observer panics — an open-ended
+			// record left behind would go on explaining a silence the
+			// provider had nothing to do with. It is measured from the
+			// closing call because fantasy begins its sleep only once these
+			// return, which keeps the observers' own execution time from
+			// being charged to the backoff.
+			watchdog.noteProviderErrorSeen(providerErr)
+			defer watchdog.closeProviderErrorWindow(delay)
 			emitTurnRetry(sink, providerErr, delay, nil)
 			if cb := r.engine.onRetry; cb != nil {
 				cb(providerErr, delay)
@@ -1097,7 +1120,14 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		)),
 	})
 	if err != nil && watchdog.timedOut() && ctx.Err() == nil {
-		return nil, &firstChunkTimeoutError{timeout: firstChunkTimeout, promptTokens: promptTokens, cause: err}
+		providerErrAtExpiry, providerStatusAtExpiry := watchdog.providerErrorAtExpiry()
+		return nil, &firstChunkTimeoutError{
+			timeout:        firstChunkTimeout,
+			promptTokens:   promptTokens,
+			cause:          err,
+			providerErr:    providerErrAtExpiry,
+			providerStatus: providerStatusAtExpiry,
+		}
 	}
 	return result, err
 }
@@ -1109,11 +1139,59 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 // when the callback has already started — so a timer firing in the same
 // instant as the first delta would cancel a stream that had, in fact, started
 // producing, and misreport it as a first-chunk timeout.
+// providerErrRecord is one indivisible answer to "is the current silence the
+// provider's fault, and what did it say": the interval over which the record
+// applies, and the status that came with it.
+//
+// Both ends are needed. `until` is the obvious one — the record covers the
+// backoff the error bought and not a moment more. `from` is the subtle one:
+// the timer reads the clock before it takes the lock, so an OnRetry that
+// starts after the deadline can still win the mutex first, and without a
+// start instant its brand-new record would be read as having been live at a
+// deadline it postdates. A model that was silent for the whole allowed
+// interval would then be reported as rate-limited.
+type providerErrRecord struct {
+	from   int64 // unix nanos: when the provider error was seen
+	until  int64 // unix nanos: when the backoff it bought ends
+	status int
+}
+
 type firstChunkWatchdog struct {
-	settled  atomic.Bool // true once either the first chunk or the timer claimed the decision
-	fired    atomic.Bool // true only when the TIMER won
+	// One lock, not a set of atomics, because the verdict and the evidence
+	// for it are a single fact. Claiming the decision and reading the
+	// provider record under separate atomics let the timer goroutine be
+	// descheduled between them: the record could lapse, or a later OnRetry
+	// could publish a different one, and the card would then describe state
+	// from after the watchdog won rather than state at the deadline.
+	mu       sync.Mutex
+	settled  bool // true once either the first chunk or the timer claimed the decision
+	fired    bool // true only when the TIMER won
 	timer    *time.Timer
 	onExpire func()
+
+	// A provider error seen before the first chunk, valid only for the BACKOFF
+	// it bought. It does not disarm the watchdog — a provider that errors once
+	// and then hangs must still be cut off — but while the retry loop is
+	// sleeping it records that the silence is not a model thinking, so the run
+	// reports what really happened instead of the watchdog's sentinel (#1585).
+	//
+	// Tied to the backoff rather than the round: fantasy announces a retry and
+	// the delay it will sleep, but nothing when the next attempt begins. Two
+	// quick 429s followed by an attempt that reasons silently past the
+	// deadline must be reported as a silent model, not as rate limiting — so
+	// the record expires with the sleep that justified it.
+	// ONE publish. Two fields could be read apart: expire() could see a new
+	// live interval carrying the previous callback's status, or a status of 0
+	// before the new one landed, and report the wrong provider failure.
+	providerErr *providerErrRecord
+	// Captured at the instant the timer WINS, under the same lock that claims
+	// the decision, because that is the only moment the answer is knowable.
+	// Reading the live record afterwards — the caller reads it once ag.Stream
+	// has unwound the cancelled request — can miss a record that lapsed in
+	// between, and two separate reads can disagree with each other, either of
+	// which puts "the model never started" on a card for a provider that was
+	// throttling us.
+	expiredProviderErr *providerErrRecord
 }
 
 func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWatchdog {
@@ -1125,22 +1203,146 @@ func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWa
 // expire is the timer callback: it cancels only if no chunk has settled the
 // decision first.
 func (w *firstChunkWatchdog) expire() {
-	if !w.settled.CompareAndSwap(false, true) {
+	// Read the clock BEFORE the lock. The deadline instant is when the timer
+	// callback began, not when it won a contended mutex; judging the record
+	// against a later clock is how a provider error that was still live at
+	// the deadline gets reported as a silent model.
+	at := time.Now().UnixNano()
+	w.mu.Lock()
+	if w.settled {
+		w.mu.Unlock()
 		return
 	}
-	w.fired.Store(true)
+	w.settled = true
+	w.fired = true
+	// The verdict and its evidence are formed in the same critical section,
+	// so no concurrent noteProviderError can slip a different record between
+	// them.
+	if rec := w.providerErr; rec != nil && rec.from <= at && at < rec.until {
+		w.expiredProviderErr = rec
+	}
+	w.mu.Unlock()
+	// Outside the lock: onExpire cancels the request, and noteProviderError
+	// must never block behind it.
 	w.onExpire()
 }
 
 // markFirst records that the first semantic event arrived. Idempotent; a call
 // after the timer has already won is a no-op (the cancel stands).
 func (w *firstChunkWatchdog) markFirst() {
-	if w.settled.CompareAndSwap(false, true) {
+	w.mu.Lock()
+	claimed := !w.settled
+	w.settled = true
+	w.mu.Unlock()
+	if claimed {
 		w.timer.Stop()
 	}
 }
 
+// reportableProviderStatus is the status THIS provider error reports, and no
+// earlier one: fantasy passes nil for a retryable transport failure (DNS, TCP,
+// HTTP/2), and carrying a previous 429 forward would have the card call a
+// connection reset a rate limit. An HTTP status is three digits; anything
+// else is not a status worth reporting.
+func reportableProviderStatus(providerErr *fantasy.ProviderError) int {
+	if providerErr == nil {
+		return 0
+	}
+	if code := providerErr.StatusCode; code > 0 && code <= 599 {
+		return code
+	}
+	return 0
+}
+
+// publishProviderErr swaps in a record. One publish, one immutable value, so
+// no reader can pair a new interval with an old status.
+func (w *firstChunkWatchdog) publishProviderErr(rec *providerErrRecord) {
+	w.mu.Lock()
+	w.providerErr = rec
+	w.mu.Unlock()
+}
+
+// noteProviderError records a provider error seen NOW whose window is exactly
+// the backoff it bought. Idempotent in effect; the last status wins.
+func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderError, delay time.Duration) {
+	if delay < 0 {
+		delay = 0
+	}
+	now := time.Now()
+	w.publishProviderErr(&providerErrRecord{
+		from:   now.UnixNano(),
+		until:  now.Add(delay + providerErrorGrace).UnixNano(),
+		status: reportableProviderStatus(providerErr),
+	})
+}
+
+// noteProviderErrorSeen opens an OPEN-ENDED window the moment the provider
+// error is seen, before the retry observers run. They are synchronous and can
+// block for longer than the backoff they announce — a 5 s delay behind a 6 s
+// observer — and a record that expired on the announced delay would leave the
+// watchdog finding nothing at all: the 429 lost, and a silent-model card with
+// status_code 0 in its place. The window stays open for as long as we are
+// still inside the retry handling, and closeProviderErrorWindow replaces it
+// with the real deadline on the way out.
+func (w *firstChunkWatchdog) noteProviderErrorSeen(providerErr *fantasy.ProviderError) {
+	w.publishProviderErr(&providerErrRecord{
+		from:   time.Now().UnixNano(),
+		until:  math.MaxInt64,
+		status: reportableProviderStatus(providerErr),
+	})
+}
+
+// closeProviderErrorWindow bounds the open window at the real backoff
+// deadline, measured from HERE because fantasy begins its sleep only once the
+// observers return. It keeps the instant the error was SEEN, so a timer that
+// fired while those observers ran still finds the record applicable to its
+// own deadline.
+func (w *firstChunkWatchdog) closeProviderErrorWindow(delay time.Duration) {
+	if delay < 0 {
+		delay = 0
+	}
+	until := time.Now().Add(delay + providerErrorGrace).UnixNano()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.providerErr == nil {
+		return
+	}
+	w.providerErr = &providerErrRecord{
+		from:   w.providerErr.from,
+		until:  until,
+		status: w.providerErr.status,
+	}
+}
+
+// providerErrorLive reports whether a provider error is the explanation for
+// the silence AT THIS MOMENT — i.e. the retry loop is inside the backoff that
+// error bought. Once the next attempt has begun, silence is the model's own.
+// Only expire() consults it; everyone else wants the snapshot below, taken
+// when the verdict was formed.
+func (w *firstChunkWatchdog) providerErrorLive() bool {
+	now := time.Now().UnixNano()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	rec := w.providerErr
+	return rec != nil && rec.from <= now && now < rec.until
+}
+
+// providerErrorAtExpiry reports the provider-error state as it stood when the
+// watchdog fired, and the status that went with it. One read, one instant.
+func (w *firstChunkWatchdog) providerErrorAtExpiry() (seen bool, status int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.expiredProviderErr == nil {
+		return false, 0
+	}
+	return true, w.expiredProviderErr.status
+}
+
 // timedOut reports whether the timer won the decision.
-func (w *firstChunkWatchdog) timedOut() bool { return w.fired.Load() }
+func (w *firstChunkWatchdog) timedOut() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.fired
+}
 
 func (w *firstChunkWatchdog) stop() { w.timer.Stop() }
