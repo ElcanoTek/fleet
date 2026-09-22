@@ -104,7 +104,7 @@ func TestQueue_StopGateIsExact(t *testing.T) {
 	// with respect to it and registerTurnGated must refuse it.
 	s.beginStopSweep("conv-1")
 	defer s.endStopSweep("conv-1")
-	if _, _, _, ok, swept := s.registerTurnGated("conv-1", func() {}, nil, &queuedLaunch{rowID: "r", claimTurnID: "c", sweepGen: gen}); ok || !swept {
+	if _, _, _, ok, swept := s.registerTurnGated("conv-1", func() {}, nil, &queuedLaunch{rowID: "r", claimTurnID: "c", sweepGen: gen}, ""); ok || !swept {
 		t.Fatalf("registration after a later Stop: ok=%v swept=%v, want refused as swept", ok, swept)
 	}
 }

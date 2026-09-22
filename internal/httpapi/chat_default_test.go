@@ -498,6 +498,24 @@ func TestChatSecondTurnReplaysHistory(t *testing.T) {
 	}
 }
 
+// decodeLockdownRefusal reads the self-correcting body of a refused lockdown
+// model override (#1588) and asserts its machine-readable marker — the field a
+// client keys its retry off.
+func decodeLockdownRefusal(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("refusal body is not JSON (%v): %s", err, w.Body.String())
+	}
+	if body["code"] != lockdownModelRefusalCode {
+		t.Fatalf("refusal code = %v, want %q: %s", body["code"], lockdownModelRefusalCode, w.Body.String())
+	}
+	return body
+}
+
 // TestPostChat_LockdownModelOverrideGuard is the #568 regression: the per-turn
 // model override in postChat's existing-conversation branch must pass the SAME
 // lockdown allow-list guard as PATCH /conversations/{id}/model and
@@ -511,10 +529,8 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		}
 	}
 
-	// A disallowed slug never reaches the store and never runs, whichever way
-	// the request is resolved: with an allowed stored model the turn proceeds
-	// on that instead (the picker cannot offer a disallowed model, so this is
-	// a stale client echo); with none, the request is refused.
+	// A disallowed slug never reaches the store and never runs — and the
+	// caller is told, rather than silently served a turn on some other model.
 	t.Run("disallowed override never persists and never runs", func(t *testing.T) {
 		engine := &fakeEngine{}
 		st := newFakeChatStore()
@@ -527,9 +543,7 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 			"model":           "evil/unvetted-model",
 			"message":         "hello",
 		})
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
-		}
+		decodeLockdownRefusal(t, w)
 		st.mu.Lock()
 		model, setModels := st.convs["conv-1"].Model, st.setModels
 		st.mu.Unlock()
@@ -537,10 +551,10 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 			t.Errorf("disallowed override reached the store: SetModel calls = %d, stored model = %q", setModels, model)
 		}
 		engine.mu.Lock()
-		turns, turnModel := engine.turns, engine.lastModel
+		turns := engine.turns
 		engine.mu.Unlock()
-		if turns != 1 || turnModel != "a/b" {
-			t.Errorf("the turn must run on the stored model: turns=%d model=%q", turns, turnModel)
+		if turns != 0 {
+			t.Errorf("a refused override must not run a turn: turns=%d", turns)
 		}
 	})
 
@@ -627,11 +641,11 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		}
 	})
 
-	// A lockdown picker offers only allow-listed models, so ANY disallowed
-	// slug arriving on one is a stale client echo. It is ignored in favour of
-	// the conversation's own model — which the turn then runs on — rather than
-	// refused with a 400 the user can only escape by reloading.
-	t.Run("disallowed override is ignored, and the turn runs on the stored model", func(t *testing.T) {
+	// The refusal is self-correcting (#1588): it names the conversation's own
+	// model, so the caller — an API client reading the error, or a browser
+	// holding a slug the allow-list has moved past — can adopt it and resend
+	// instead of looping on a "no" it can only escape by reloading.
+	t.Run("the refusal names the conversation's model for the client to adopt", func(t *testing.T) {
 		engine := &fakeEngine{}
 		st := newFakeChatStore()
 		srv := newDefaultChatServer(t, engine, st)
@@ -643,23 +657,52 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 			"model":           "evil/unvetted-model",
 			"message":         "hello",
 		})
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		if got := decodeLockdownRefusal(t, w)["model"]; got != "a/b" {
+			t.Errorf("refusal model = %v, want the conversation's own a/b: %s", got, w.Body.String())
 		}
-		st.mu.Lock()
-		model := st.convs["conv-1"].Model
-		st.mu.Unlock()
+
+		// And the retry the body invites actually works.
+		w = postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "a/b",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("the corrected retry must run: status = %d: %s", w.Code, w.Body.String())
+		}
 		engine.mu.Lock()
-		turnModel := engine.lastModel
+		turns, turnModel := engine.turns, engine.lastModel
 		engine.mu.Unlock()
-		if model != "a/b" || turnModel != "a/b" {
-			t.Errorf("the disallowed slug must be ignored: stored=%q turn=%q", model, turnModel)
+		if turns != 1 || turnModel != "a/b" {
+			t.Errorf("the corrected retry must run exactly one turn on a/b: turns=%d model=%q", turns, turnModel)
 		}
 	})
 
-	// With NO allowed stored model there is nothing safe to run: the caller
-	// has to choose, so the request is refused.
-	t.Run("refused when the stored model is disallowed too", func(t *testing.T) {
+	// The stored model is delisted too, so echoing it back would send a
+	// retrying client straight into a second refusal. The correction is the
+	// lockdown default — the slug reconcileLockdownModelCtx would migrate this
+	// conversation to on its next launch anyway.
+	t.Run("a delisted stored model is corrected to the lockdown default", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/d", "e/f"}
+		seed(st, true) // stored a/b, disallowed
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "evil/unvetted-model",
+			"message":         "hello",
+		})
+		if got := decodeLockdownRefusal(t, w)["model"]; got != "c/d" {
+			t.Errorf("refusal model = %v, want the lockdown default c/d: %s", got, w.Body.String())
+		}
+	})
+
+	// With no literal slug anywhere on the allow-list there is nothing safe to
+	// name: the refusal carries no correction rather than a slug that would be
+	// refused again, and the caller has to choose.
+	t.Run("refused with no correction when the allow-list names no literal slug", func(t *testing.T) {
 		engine := &fakeEngine{}
 		st := newFakeChatStore()
 		srv := newDefaultChatServer(t, engine, st)
@@ -671,8 +714,8 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 			"model":           "evil/unvetted-model",
 			"message":         "hello",
 		})
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		if got, ok := decodeLockdownRefusal(t, w)["model"]; ok {
+			t.Errorf("refusal must not name a model it would refuse, got %v: %s", got, w.Body.String())
 		}
 	})
 

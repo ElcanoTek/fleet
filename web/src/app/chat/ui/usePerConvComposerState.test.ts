@@ -6,7 +6,7 @@ import type { PendingAttachment } from "./ChatChips";
 // These tests pin the behavior-preserving contract of the per-conversation
 // composer state extracted from ChatExperience in #401: key-scoped reads,
 // dispatch-compatible setters that capture the key at render time, the
-// delete-on-empty record optimization, and the atomic pending→real
+// delete-on-empty slot optimization, and the atomic pending→real
 // promotion. The component relied on all of these; the extraction must not
 // drift from them.
 
@@ -32,10 +32,10 @@ describe("usePerConvComposerState", () => {
     act(() => result.current.setPrompt((prev) => prev + " world"));
     expect(result.current.prompt).toBe("hello world");
 
-    // Setting back to empty deletes the key from the backing record.
+    // Setting back to empty deletes the key from the backing map.
     act(() => result.current.setPrompt(""));
     expect(result.current.prompt).toBe("");
-    expect("a" in result.current.promptByConv).toBe(false);
+    expect(result.current.promptByConv.has("a")).toBe(false);
   });
 
   it("isolates state per conversation key", () => {
@@ -66,7 +66,7 @@ describe("usePerConvComposerState", () => {
     rerender({ key: "b" });
     act(() => setPromptFromA("written-by-A's-setter"));
 
-    expect(result.current.promptByConv.a).toBe("written-by-A's-setter");
+    expect(result.current.promptByConv.get("a")).toBe("written-by-A's-setter");
     expect(result.current.prompt).toBe(""); // current key is "b", untouched
   });
 
@@ -79,19 +79,19 @@ describe("usePerConvComposerState", () => {
       result.current.setAttachmentErrorForKey("other", "boom");
     });
 
-    expect(result.current.promptByConv.other).toBe("x");
+    expect(result.current.promptByConv.get("other")).toBe("x");
     expect(result.current.getPendingAttachmentsForKey("other")).toHaveLength(1);
-    expect(result.current.attachmentErrorByConv.other).toBe("boom");
+    expect(result.current.attachmentErrorByConv.get("other")).toBe("boom");
 
-    // Clearing to the empty value removes the key (record stays sparse).
+    // Clearing to the empty value removes the key (the map stays sparse).
     act(() => {
       result.current.setPromptForKey("other", "");
       result.current.setPendingAttachmentsForKey("other", []);
       result.current.setAttachmentErrorForKey("other", null);
     });
-    expect("other" in result.current.promptByConv).toBe(false);
-    expect("other" in result.current.pendingAttachmentsByConv).toBe(false);
-    expect("other" in result.current.attachmentErrorByConv).toBe(false);
+    expect(result.current.promptByConv.has("other")).toBe(false);
+    expect(result.current.pendingAttachmentsByConv.has("other")).toBe(false);
+    expect(result.current.attachmentErrorByConv.has("other")).toBe(false);
   });
 
   it("markConvUploading / markConvUploadDone toggle the per-key flag", () => {
@@ -126,9 +126,9 @@ describe("usePerConvComposerState", () => {
     act(() => result.current.promoteComposerKey("__pending__:1", "real-id"));
 
     // Old key is fully drained.
-    expect("__pending__:1" in result.current.promptByConv).toBe(false);
-    expect("__pending__:1" in result.current.pendingAttachmentsByConv).toBe(false);
-    expect("__pending__:1" in result.current.attachmentErrorByConv).toBe(false);
+    expect(result.current.promptByConv.has("__pending__:1")).toBe(false);
+    expect(result.current.pendingAttachmentsByConv.has("__pending__:1")).toBe(false);
+    expect(result.current.attachmentErrorByConv.has("__pending__:1")).toBe(false);
 
     // Values landed on the real id.
     rerender({ key: "real-id" });
@@ -141,8 +141,29 @@ describe("usePerConvComposerState", () => {
   it("promoteComposerKey is a no-op for an empty draft (matches inline behavior)", () => {
     const { result } = renderHook(() => usePerConvComposerState("a"));
     act(() => result.current.promoteComposerKey("__pending__:9", "real"));
-    expect(result.current.promptByConv).toEqual({});
-    expect(result.current.pendingAttachmentsByConv).toEqual({});
-    expect(result.current.attachmentErrorByConv).toEqual({});
+    expect(result.current.promptByConv.size).toBe(0);
+    expect(result.current.pendingAttachmentsByConv.size).toBe(0);
+    expect(result.current.attachmentErrorByConv.size).toBe(0);
+  });
+
+  it("a conversation key of __proto__ stays an ordinary slot", () => {
+    // The conv key is server-supplied, so it is remote input used as a
+    // lookup key — the reason the slots are Maps rather than objects
+    // (CodeQL js/remote-property-injection). A Map entry named
+    // "__proto__" is just an entry: it must not touch Object.prototype,
+    // and it must not leak into an unrelated conversation's slot.
+    const { result, rerender } = renderHook(
+      ({ key }) => usePerConvComposerState(key),
+      { initialProps: { key: "__proto__" } },
+    );
+
+    act(() => result.current.setPrompt("polluted"));
+    expect(result.current.prompt).toBe("polluted");
+    expect(result.current.promptByConv.get("__proto__")).toBe("polluted");
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+
+    // A different conversation is unaffected by the poisoned key.
+    rerender({ key: "b" });
+    expect(result.current.prompt).toBe("");
   });
 });

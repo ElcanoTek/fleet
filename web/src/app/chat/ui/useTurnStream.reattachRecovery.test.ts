@@ -23,12 +23,26 @@ import type { HistoryEntry, Message } from "./history";
 
 const CONV = "conv-1";
 
-type Store = Record<string, Message[]>;
+// The component's messagesByConvRef is a Map (a conv id is server-issued,
+// so it must not be used as an object property name — CodeQL
+// js/remote-property-injection). The harness mirrors that shape.
+type Store = Map<string, Message[]>;
+
+// Read one conversation's slot out of the Map-backed store.
+const convSlot = (h: Harness, convId: string): Message[] =>
+  h.store.get(convId) ?? [];
 type InflightInfo = {
   inflight: boolean;
   turn_id?: string;
   last_event_id?: number;
+  // The submission the reported turn was started FOR (#1592). The sentinel
+  // OUR_SUBMISSION is replaced with whatever the hook actually posted, since
+  // the id it mints is a uuid the test cannot predict; any other string stands
+  // in for a turn some OTHER submission started.
+  submission_id?: string;
 };
+
+const OUR_SUBMISSION = "@ours";
 
 const sse = (id: number, event: string, data: unknown) =>
   `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -101,8 +115,11 @@ type Harness = {
   streamRequests: Array<{ url: string; lastEventId: string | null }>;
   streaming: Set<string>;
   inflightProbes: number;
+  turnOutcomeProbes: number;
   attachCount: () => number;
   releaseInflight: () => void;
+  // Every submission_id POST /api/chat carried, in order.
+  submissionIds: string[];
 };
 
 const makeHarness = (opts: {
@@ -134,10 +151,23 @@ const makeHarness = (opts: {
   // Extra conversations the client already has sockets attached to, for the
   // sweep. Keyed by conv id; each gets its own mid-flight transcript.
   extraConvs?: string[];
+  // What GET /conversations/:id/turns/:turnId answers (#1593). Omitted, the
+  // server 404s — "no such turn", which the client must read as "no answer
+  // available" and fall back to its pre-#1593 behavior, not as a verdict.
+  turnOutcome?: Record<string, unknown>;
+  // Brand-new chat: nothing is open, so submitPrompt posts under a
+  // per-submission pending key and only learns the real id from the server.
+  newChat?: boolean;
+  // The conversation POST /api/chat names on its response headers (#1591).
+  // Omit to model a server that does not send it.
+  chatConversationHeader?: string;
+  // The POST /api/chat itself rejects — the lost-acknowledgement shape: the
+  // server may well have taken the submission, we just never heard back.
+  chatPostRejects?: boolean;
 }): Harness => {
-  const store: Store = { [CONV]: opts.initial };
+  const store: Store = new Map([[CONV, opts.initial]]);
   for (const extra of opts.extraConvs ?? []) {
-    store[extra] = midTurnTranscript();
+    store.set(extra, midTurnTranscript());
   }
   const messagesByConvRef = { current: store };
   const loadConversationCalls: string[] = [];
@@ -145,7 +175,9 @@ const makeHarness = (opts: {
   const streaming = new Set<string>();
   let attaches = 0;
   let probes = 0;
+  const submissionIds: string[] = [];
   let persistedFetches = 0;
+  let turnOutcomeProbes = 0;
   let answeredProbes = 0;
   const deferredProbeReleases: Array<() => void> = [];
 
@@ -153,8 +185,8 @@ const makeHarness = (opts: {
     convId: string,
     updater: Message[] | ((prev: Message[]) => Message[]),
   ) => {
-    const prev = store[convId] ?? [];
-    store[convId] = typeof updater === "function" ? updater(prev) : updater;
+    const prev = store.get(convId) ?? [];
+    store.set(convId, typeof updater === "function" ? updater(prev) : updater);
   };
 
   const patchAssistantMessage = (
@@ -162,8 +194,9 @@ const makeHarness = (opts: {
     assistantId: number,
     updater: (m: Message) => Message,
   ) => {
-    store[convId] = (store[convId] ?? []).map((m) =>
-      m.id === assistantId ? updater(m) : m,
+    store.set(
+      convId,
+      (store.get(convId) ?? []).map((m) => (m.id === assistantId ? updater(m) : m)),
     );
   };
 
@@ -172,7 +205,7 @@ const makeHarness = (opts: {
   const loadConversation = async (convId: string) => {
     loadConversationCalls.push(convId);
     const { historyToMessages } = await import("./history");
-    store[convId] = historyToMessages(opts.persisted);
+    store.set(convId, historyToMessages(opts.persisted));
     // loadConversation ends by re-probing for an in-flight turn; onLoaded lets
     // a test stand in for that trailing reattach claiming the conversation.
     opts.onLoaded?.();
@@ -215,18 +248,31 @@ const makeHarness = (opts: {
         }
         const info = nth(opts.inflight, answeredProbes);
         answeredProbes += 1;
-        return new Response(JSON.stringify(info), {
+        const resolved =
+          info.submission_id === OUR_SUBMISSION
+            ? { ...info, submission_id: submissionIds[submissionIds.length - 1] }
+            : info;
+        return new Response(JSON.stringify(resolved), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       }
       if (url === "/api/chat") {
+        const posted = JSON.parse(String(init?.body ?? "{}")) as {
+          submission_id?: string;
+        };
+        if (posted.submission_id) submissionIds.push(posted.submission_id);
+        if (opts.chatPostRejects) throw new TypeError("Failed to fetch");
         const body = nth(opts.streamBodies, attaches);
         attaches += 1;
         streamRequests.push({ url, lastEventId: null });
+        const headers = streamHeaders();
+        if (opts.chatConversationHeader) {
+          headers["X-Fleet-Conversation-Id"] = opts.chatConversationHeader;
+        }
         return new Response(body(init?.signal ?? undefined), {
           status: 200,
-          headers: streamHeaders(),
+          headers,
         });
       }
       if (url.includes("/stream")) {
@@ -247,6 +293,22 @@ const makeHarness = (opts: {
         return new Response(body(init?.signal ?? undefined), {
           status: 200,
           headers: streamHeaders(),
+        });
+      }
+      // Matched BEFORE the transcript fetch below: both live under
+      // /api/conversations/, and letting an outcome probe consume a
+      // transcript slot would shift every persistedRejectAt index.
+      if (url.includes("/turns/")) {
+        turnOutcomeProbes += 1;
+        if (!opts.turnOutcome) {
+          return new Response(JSON.stringify({ error: "turn not found" }), {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify(opts.turnOutcome), {
+          status: 200,
+          headers: { "content-type": "application/json" },
         });
       }
       if (url.includes("/api/conversations/")) {
@@ -271,10 +333,20 @@ const makeHarness = (opts: {
   // here silently handed the hook `undefined` for a newly-added ref, and every
   // test in the file failed on `.current`. The annotation makes adding a dep a
   // compile error in this harness instead.
+  // The component's real rename: the pending slot's transcript MOVES to the
+  // conversation id the server named. A noop here would hide the whole point
+  // of the promotion (#1591).
+  const renameConvKey = (oldKey: string, newKey: string) => {
+    const slot = store.get(oldKey);
+    if (slot === undefined) return;
+    store.set(newKey, slot);
+    store.delete(oldKey);
+  };
+
   const deps: TurnStreamDeps = {
     setConvMessages,
-    getConvMessages: (convId: string) => store[convId] ?? [],
-    renameConvKey: noop,
+    getConvMessages: (convId: string) => store.get(convId) ?? [],
+    renameConvKey,
     patchAssistantMessage,
     startThinkingCrossfade: noop,
     refreshConversations: asyncNoop,
@@ -302,7 +374,7 @@ const makeHarness = (opts: {
     setPendingLockdown: noop,
     setSidebarOpen: noop,
     setSpreadsheetNudgeDismissed: noop,
-    activeConversationIdRef: { current: CONV },
+    activeConversationIdRef: { current: opts.newChat ? null : CONV },
     messagesByConvRef,
     pendingApprovalScrollRef: { current: null },
     selectedModel: "test-model",
@@ -322,7 +394,21 @@ const makeHarness = (opts: {
     serverHeartbeatMsRef: { current: 0 },
     supersededStreamsRef: { current: new WeakSet<AbortController>() },
     livenessInFlightRef: { current: new Set<string>() },
-    promoteStreamKey: noop,
+    promoteStreamKey: (oldKey: string, newKey: string) => {
+      // Mirrors useTurnStreamState's: the abort controller especially, since
+      // submitPrompt's catch reverse-maps it to find its own slot.
+      for (const ref of [deps.attachedConvIdsRef.current, streaming]) {
+        if (ref.has(oldKey)) {
+          ref.delete(oldKey);
+          ref.add(newKey);
+        }
+      }
+      const controller = deps.abortControllersRef.current.get(oldKey);
+      if (controller) {
+        deps.abortControllersRef.current.delete(oldKey);
+        deps.abortControllersRef.current.set(newKey, controller);
+      }
+    },
     streamingConvsRef: { current: new Set<string>() },
     isStreaming: false,
   };
@@ -336,10 +422,14 @@ const makeHarness = (opts: {
     get inflightProbes() {
       return probes;
     },
+    get turnOutcomeProbes() {
+      return turnOutcomeProbes;
+    },
     attachCount: () => attaches,
     releaseInflight: () => {
       for (const release of deferredProbeReleases.splice(0)) release();
     },
+    submissionIds,
   };
 };
 
@@ -372,7 +462,7 @@ const unansweredHistory = (): HistoryEntry[] => [
   { role: "user", type: "text", content: { text: "run the long job" } },
 ];
 
-const lastOf = (h: Harness) => h.store[CONV][h.store[CONV].length - 1];
+const lastOf = (h: Harness) => convSlot(h, CONV)[convSlot(h, CONV).length - 1];
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -468,6 +558,179 @@ describe("reattachToConv recovery when the socket dies mid-turn", () => {
   });
 });
 
+// #1593. "Nothing live, nothing retained, and the transcript ends at the
+// user's prompt" is the shape of a turn that FAILED before producing a reply
+// AND of a turn that merely produced nothing. The client could not tell them
+// apart, so it settled every one of them as a dropped connection — and a
+// replay-gap slot, which already reads `done`, it left as a blank reply with
+// no Retry at all. The server has recorded the answer all along; these drive
+// asking it.
+describe("a turn's outcome comes from the server, not from inference", () => {
+  // The same question has to be asked on the DIRECT submit path, not only on
+  // reattach. submitPrompt's catch used to stamp its own verdict when
+  // /inflight held nothing and the transcript was unanswered; its `finally`
+  // then found an already-terminal slot and skipped settleStreamedSlot, which
+  // is where the outcome was asked for. So a phone that slept past the retain
+  // TTL turned a named failure into "the connection dropped" and offered no
+  // picker — the one path where the design note's claim was false.
+  it("asks for the outcome on a direct submit whose stream died, not just on reattach", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      // The turn announced itself and THEN the socket died, so the client
+      // knows which turn to ask about — without a turn id there is nothing to
+      // ask and the pre-#1593 fallback is correct.
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      // Nothing live and nothing retained: the retain buffer has expired,
+      // which is exactly the phone-slept-past-the-TTL shape.
+      inflight: [{ inflight: false, turn_id: "" }],
+      turnOutcome: {
+        state: "failed",
+        reason: "model_required",
+        detail: {
+          reason: "retry_exhausted",
+          failed_model: "anthropic/claude-sonnet-4.6",
+          status_code: 429,
+          message: "The selected model is rate-limiting this request.",
+        },
+        user_committed: true,
+      },
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(h.turnOutcomeProbes).toBeGreaterThan(0);
+    const last = convSlot(h, CONV).at(-1);
+    expect(last?.failed).toBe(true);
+    // The real cause, not "the connection dropped" — which blames the network
+    // for a model the server refused to keep retrying.
+    expect(last?.modelRequired?.reason).toBe("retry_exhausted");
+    expect(last?.modelRequired?.failedModel).toBe(
+      "anthropic/claude-sonnet-4.6",
+    );
+  }, 20000);
+
+  it("recovers the model-picker banner for a turn that failed before replying", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      turnOutcome: {
+        state: "failed",
+        reason: "model_required",
+        detail: {
+          reason: "retry_exhausted",
+          failed_model: "anthropic/claude-sonnet-4.6",
+          status_code: 429,
+          message: "The selected model is rate-limiting this request.",
+        },
+        user_committed: true,
+      },
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    expect(h.turnOutcomeProbes).toBeGreaterThan(0);
+    const last = lastOf(h);
+    expect(last.state).toBe("done");
+    expect(last.failed).toBe(true);
+    // The banner the live stream would have shown, reconstructed — instead of
+    // "The connection dropped", which blames the wrong thing entirely.
+    expect(last.modelRequired?.reason).toBe("retry_exhausted");
+    expect(last.modelRequired?.failedModel).toBe("anthropic/claude-sonnet-4.6");
+    expect(last.content).toBe("The selected model is rate-limiting this request.");
+  });
+
+  it("gives a replay-gap slot a failure verdict instead of a blank reply", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "turn.started", { turn_id: "t1" }),
+            sse(2, "reconnect", { missed_events: 7 }),
+            sse(3, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: false, turn_id: "t1" }],
+      turnOutcome: {
+        state: "failed",
+        reason: "error",
+        detail: { message: "the turn ended unexpectedly due to an internal error" },
+        user_committed: true,
+      },
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    const last = lastOf(h);
+    expect(last.state).toBe("done");
+    // Before the outcome existed this slot stayed `done` and empty — terminal
+    // to look at, with nothing to retry.
+    expect(last.failed).toBe(true);
+    expect(last.content).toBe(
+      "the turn ended unexpectedly due to an internal error",
+    );
+  });
+
+  it("does not stamp failed when the server says the turn is still running", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      turnOutcome: { state: "running", user_committed: false },
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    const last = lastOf(h);
+    expect(last.failed).toBeUndefined();
+    expect(last.state === "thinking" || last.state === "streaming").toBe(true);
+    // A turn that is still generating keeps the conversation busy, and the
+    // chain comes back for it.
+    expect(h.streaming.has(CONV)).toBe(true);
+  });
+
+  it("keeps the pre-#1593 verdict when the server has no such turn", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      // No turnOutcome: the endpoint 404s. "No answer available" must not
+      // become "wait for an answer that is never coming".
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    const last = lastOf(h);
+    expect(last.state).toBe("done");
+    expect(last.failed).toBe(true);
+    expect(last.content).toBe(
+      "The connection dropped before the response finished.",
+    );
+  });
+});
+
 // The phone-unlock signature (#1583): the OS severed the socket while the
 // radio was off, and the page wakes — and its probes run — before the network
 // is back. "Could not ask the server" must never be reported as "the server
@@ -531,7 +794,7 @@ describe("an unreachable server is not a failed turn", () => {
     expect(last.id).toBe(2);
     expect(last.content).toBe("partial and the rest");
     expect(last.state).toBe("done");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("adopts the persisted answer when the turn finished while the radio was off", async () => {
@@ -561,7 +824,7 @@ describe("an unreachable server is not a failed turn", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(h.loadConversationCalls).toEqual([CONV]);
     expect(lastOf(h).content).toBe("Done — here are the results.");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("never stamps failed while the server stays unreachable; the chain is bounded", async () => {
@@ -631,7 +894,7 @@ describe("the recovery chain owns the unsettled slot", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(lastOf(h).content).toBe("the answer");
     expect(lastOf(h).state).toBe("done");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("recovers a replay-gap slot, which already reads as done", async () => {
@@ -665,7 +928,7 @@ describe("the recovery chain owns the unsettled slot", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(h.loadConversationCalls).toEqual([CONV]);
     expect(lastOf(h).content).toBe("Done — here are the results.");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("treats an in-progress reattach as ownership instead of settling", async () => {
@@ -787,6 +1050,102 @@ describe("recovery ownership spans the whole chain", () => {
     expect(h.inflightProbes).toBeGreaterThan(afterBackoff);
     expect(lastOf(h).failed).toBeUndefined();
     expect(lastOf(h).state).toBe("streaming");
+  }, 20000);
+
+  // #1594. "Keeps asking" and "keeps asking every 30 seconds" are not the same
+  // promise. The steady beat is right for an outage of minutes and wasteful
+  // for one of hours — a tab left open overnight behind a dead VPN spent 120
+  // requests an hour on a question whose answer had not changed — so the beat
+  // lengthens with the age of the outage while the chain itself never gives
+  // up. The rungs are asserted by cost over a window rather than by exact tick
+  // times, so re-tuning the ladder does not rewrite this test.
+  it("lengthens the steady beat as the outage drags on", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      // Every probe after the reattach's own throws: the outage never ends.
+      inflightRejectAt: Array.from({ length: 400 }, (_, i) => i + 1),
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    // The 1/2/4/8/16 s backoff is untouched: a brief flap still recovers fast.
+    await vi.advanceTimersByTimeAsync(31_100);
+    const afterBackoff = h.inflightProbes;
+    expect(afterBackoff).toBeGreaterThanOrEqual(5);
+
+    // The first steady rungs are the 30 s beat, unchanged — two minutes of
+    // outage still buys four more looks.
+    await vi.advanceTimersByTimeAsync(120_000);
+    const afterTwoMinutes = h.inflightProbes;
+    expect(afterTwoMinutes - afterBackoff).toBe(4);
+
+    // Ten more minutes: a flat 30 s beat would spend 20 probes here.
+    await vi.advanceTimersByTimeAsync(600_000);
+    const afterTwelveMinutes = h.inflightProbes;
+    expect(afterTwelveMinutes - afterTwoMinutes).toBeGreaterThan(0);
+    expect(afterTwelveMinutes - afterTwoMinutes).toBeLessThanOrEqual(8);
+
+    // And an hour of it costs a handful of probes rather than 120 — without
+    // ever declaring a turn the server was never asked about dead.
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(h.inflightProbes - afterTwelveMinutes).toBeGreaterThan(0);
+    expect(h.inflightProbes - afterTwelveMinutes).toBeLessThanOrEqual(13);
+    expect(lastOf(h).failed).toBeUndefined();
+    expect(lastOf(h).state).toBe("streaming");
+    expect(h.streaming.has(CONV)).toBe(true);
+  }, 20000);
+
+  // The long rungs are sized for a client that cannot reach the server at all.
+  // A tick whose probe is ANSWERED has disproved exactly that, so it must not
+  // inherit the five-minute ceiling the outage earned: the server says a turn
+  // is running and only the attach flapped.
+  it("returns to the steady beat as soon as a probe reaches the server", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      // probe 0: the initial reattach's own (answers).
+      // probes 1-16: the outage — the backoff, both steady rungs, and three
+      //   ticks at the 5 min ceiling.
+      // probe 17: the ceiling tick that finally reaches the server: the turn
+      //   is still live.
+      // probe 18: the reattach it triggers, which loses the same flap, so the
+      //   turn stays unattached and the chain has to come back for it.
+      inflightRejectAt: [
+        ...Array.from({ length: 16 }, (_, i) => i + 1),
+        ...Array.from({ length: 40 }, (_, i) => i + 18),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    // Sit out the outage until the chain is ticking at the ceiling, then let
+    // the tick that reaches the server run.
+    await vi.advanceTimersByTimeAsync(1_400_000);
+    const afterContact = h.inflightProbes;
+    expect(afterContact).toBeGreaterThanOrEqual(19);
+
+    // Half a minute later the chain has looked again. On the ceiling it would
+    // have waited five minutes for a turn the server had just called live.
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(h.inflightProbes).toBeGreaterThan(afterContact);
+    expect(lastOf(h).failed).toBeUndefined();
+    expect(lastOf(h).state).toBe("streaming");
+    expect(h.streaming.has(CONV)).toBe(true);
   }, 20000);
 
   it("does not settle when a live turn simply could not be reattached", async () => {
@@ -920,9 +1279,9 @@ describe("the recovery chain hands the conversation back", () => {
     // happened and no replay was appended to our slot.)
     expect(h.loadConversationCalls[0]).toBe(CONV);
     expect(
-      h.store[CONV].some((m) => m.content === "Done — here are the results."),
+      convSlot(h, CONV).some((m) => m.content === "Done — here are the results."),
     ).toBe(true);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     // The successor is then followed, because a turn the server is running
     // with no stream on screen is the other half of this bug: it would show
     // nothing until a reload — and its answer lands in its OWN slot, below
@@ -998,7 +1357,7 @@ describe("a fresh turn does not inherit the previous turn's identity", () => {
     expect(h.loadConversationCalls).toEqual([]);
     expect(lastOf(h).content).toBe("the answer");
     expect(lastOf(h).state).toBe("done");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -1034,9 +1393,9 @@ describe("an unidentified turn is resolved by the transcript, not by guessing", 
     // instead of the successor's replay being appended to our bubble...
     expect(h.loadConversationCalls[0]).toBe(CONV);
     expect(
-      h.store[CONV].some((m) => m.content === "Done — here are the results."),
+      convSlot(h, CONV).some((m) => m.content === "Done — here are the results."),
     ).toBe(true);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     // ...and the successor is still followed, into its own slot.
     expect(h.attachCount()).toBe(attachesBefore + 1);
     expect(lastOf(h).content).toBe("the successor's answer");
@@ -1068,7 +1427,7 @@ describe("an unidentified turn is resolved by the transcript, not by guessing", 
     await vi.advanceTimersByTimeAsync(10);
     expect(lastOf(h).content).toBe("ours after all");
     expect(lastOf(h).state).toBe("done");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -1156,7 +1515,7 @@ describe("a live turn is trusted even when the POST response was lost", () => {
 
     expect(h.attachCount()).toBeGreaterThan(0);
     expect(lastOf(h).content).toBe("it was ours");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -1323,7 +1682,7 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(h.deps.attachedConvIdsRef.current.has(CONV)).toBe(true);
     expect(h.attachCount()).toBe(1);
-    expect(h.store[CONV][1].content).toBe("partial ");
+    expect(convSlot(h, CONV)[1].content).toBe("partial ");
 
     // Let the socket go genuinely silent — a fresh stream is never suspected.
     await vi.advanceTimersByTimeAsync(3000);
@@ -1340,7 +1699,7 @@ describe("checkStreamLiveness — the turn is still generating", () => {
 
     // The turn finished on the replacement, into the SAME assistant slot: the
     // partial answer is still there and the rest is appended to it.
-    expect(h.store[CONV]).toHaveLength(2);
+    expect(convSlot(h, CONV)).toHaveLength(2);
     const last = lastOf(h);
     expect(last.id).toBe(2);
     expect(last.content).toBe("partial and the rest");
@@ -1350,8 +1709,8 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     // replacement's back. Without the superseded marker its teardown fires a
     // "connection dropped" failure into the transcript and forces the
     // replacement onto a second, duplicate assistant bubble.
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
-    expect(h.store[CONV].some((m) => m.cancelled)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.cancelled)).toBe(false);
     expect(h.loadConversationCalls).toEqual([]);
   }, 20000);
 
@@ -1482,7 +1841,7 @@ describe("checkStreamLiveness over a live POST /chat stream", () => {
 
     // The POST is streaming into its assistant slot.
     expect(h.deps.attachedConvIdsRef.current.has(CONV)).toBe(true);
-    const assistant = h.store[CONV][h.store[CONV].length - 1];
+    const assistant = convSlot(h, CONV)[convSlot(h, CONV).length - 1];
     expect(assistant.content).toBe("partial ");
 
     // …and then the phone locks: the socket goes quiet and stays quiet.
@@ -1499,8 +1858,8 @@ describe("checkStreamLiveness over a live POST /chat stream", () => {
     expect(last.id).toBe(assistant.id);
     expect(last.content).toBe("partial and the rest");
     expect(last.state).toBe("done");
-    expect(h.store[CONV].some((m) => m.cancelled)).toBe(false);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.cancelled)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     expect(h.loadConversationCalls).toEqual([]);
   }, 20000);
 });
@@ -1557,7 +1916,7 @@ describe("checkStreamLiveness — silence during a quiet stretch", () => {
     expect(h.attachCount()).toBe(2);
     expect(h.streamRequests[1].lastEventId).toBe("2");
     expect(lastOf(h).content).toBe("tool finished, here is the answer");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 30000);
 
   it("does not declare it dead before the promised keepalives are actually missed", async () => {
@@ -1654,7 +2013,7 @@ describe("sweepStreamLiveness", () => {
     expect(h.deps.attachedConvIdsRef.current.has(OTHER)).toBe(false);
     expect(h.streaming.has(OTHER)).toBe(false);
     expect(lastOf(h).content).toBe("Done — here are the results.");
-    expect(h.store[OTHER][h.store[OTHER].length - 1].content).toBe(
+    expect(convSlot(h, OTHER)[convSlot(h, OTHER).length - 1].content).toBe(
       "Done — here are the results.",
     );
   });
@@ -1689,13 +2048,14 @@ describe("sweepStreamLiveness", () => {
     });
     h.deps.attachedConvIdsRef.current.add(CONV);
     h.deps.attachedConvIdsRef.current.add(OTHER);
-    // CONV's transcript is corrupt in a way that makes its check throw.
-    Object.defineProperty(h.store, CONV, {
-      get() {
-        throw new Error("boom");
-      },
-      configurable: true,
-    });
+    // CONV's transcript is corrupt in a way that makes its check throw. The
+    // store is a Map, so the fault goes on the read itself rather than on an
+    // object property getter.
+    const realGet = h.store.get.bind(h.store);
+    h.store.get = (convId: string) => {
+      if (convId === CONV) throw new Error("boom");
+      return realGet(convId);
+    };
 
     const { result } = renderHook(() => useTurnStream(h.deps));
     await expect(
@@ -1770,7 +2130,7 @@ describe("chasing a successor is owned, gated and cancellable", () => {
     // The answer came from the database, so no turn is running and the
     // composer must stop offering Stop.
     expect(h.streaming.has(CONV)).toBe(false);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 
   it("stops chasing when the user presses Stop", async () => {
@@ -1843,7 +2203,7 @@ describe("a reattach is bound to the turn its caller identified", () => {
     // slot is still open for the chain's next tick rather than stamped.
     expect(h.attachCount()).toBe(attachesBefore);
     expect(lastOf(h).content).toBe("");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     expect(h.streaming.has(CONV)).toBe(true);
   }, 20000);
 });
@@ -1881,7 +2241,7 @@ describe("ownership holds through a chase and across nudged ticks", () => {
     // answers the PREDECESSOR and thrown the successor's text away.
     expect(lastOf(h).content).toBe("partial");
     expect(lastOf(h).state).toBe("streaming");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     expect(h.streaming.has(CONV)).toBe(true);
   }, 20000);
 
@@ -2010,7 +2370,7 @@ describe("a reattach that never connects does not strand its slot", () => {
     // Busy, not idle: the chain owns an unknown outcome, so Stop stays
     // offered rather than Send over a spinning bubble.
     expect(h.streaming.has(CONV)).toBe(true);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
 
     // And the chain does the work the generic caller could not.
     const attachesBefore = h.attachCount();
@@ -2065,7 +2425,7 @@ describe("a successor that ends in the replay-gap shape is still recovered", () 
     await vi.advanceTimersByTimeAsync(20);
     expect(h.loadConversationCalls.length).toBeGreaterThan(1);
     expect(lastOf(h).content).toBe("Done — here are the results.");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -2112,7 +2472,7 @@ describe("a chase follows the successor it discovered", () => {
     await vi.advanceTimersByTimeAsync(20);
     expect(h.attachCount()).toBe(attachesBefore + 1);
     expect(lastOf(h).content).toBe("the second successor's answer");
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -2140,13 +2500,13 @@ describe("an authentication failure is indeterminate, not an answer", () => {
     await vi.advanceTimersByTimeAsync(1100);
     await vi.advanceTimersByTimeAsync(20);
     // Nothing was settled and nothing was stamped: the chain comes back.
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     expect(h.streaming.has(CONV)).toBe(true);
 
     // And it recovers once the session is good again.
     await vi.advanceTimersByTimeAsync(2100);
     await vi.advanceTimersByTimeAsync(20);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 
@@ -2193,7 +2553,7 @@ describe("liveness hands an unreachable reconcile to recovery", () => {
     // And the chain finishes the job once the database can be read.
     await vi.advanceTimersByTimeAsync(1100);
     await vi.advanceTimersByTimeAsync(20);
-    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
     void zombie;
   }, 20000);
 });
@@ -2237,5 +2597,160 @@ describe("a reasoning-only reply is an answer, not a gap", () => {
     // finished turn above it.
     expect(lastOf(h).cancelled).toBeUndefined();
     expect(lastOf(h).reasoning).toBe("a long silent deliberation");
+  }, 20000);
+});
+
+// A brand-new chat posts under a per-submission pending key and only learns
+// its real id from the server. Every recovery endpoint is keyed by
+// conversation id — probeInflightTurn short-circuits on a pending key and the
+// persisted transcript has nothing to read — so a stream that died before the
+// `conversation` frame left the chain with nothing to ask about, and the tab
+// showed a failed turn over an answer the server was still writing (#1591).
+//
+// The POST's response headers name the conversation, and they arrive before
+// any frame does. That is the id the promotion now runs on.
+describe("a brand-new conversation whose stream dies before its identity frame", () => {
+  it("recovers through the id the POST response named", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      newChat: true,
+      initial: [],
+      // Still generating: a premature reconcile has nothing to adopt.
+      persisted: unansweredHistory(),
+      chatConversationHeader: CONV,
+      streamBodies: [
+        // Dies with NOTHING delivered — not even the conversation frame.
+        () => severedStream([]),
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "the answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t-live" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    // The slot moved onto the real conversation id, the probe could be spent
+    // on it, and the live turn was reattached instead of stamped failed.
+    expect(h.store.get("__pending__:1")).toBeUndefined();
+    expect(h.deps.activeConversationIdRef.current).toBe(CONV);
+    expect(lastOf(h).content).toBe("the answer");
+    expect(lastOf(h).state).toBe("done");
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
+  }, 20000);
+
+  it("still settles honestly when the server names no conversation", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      newChat: true,
+      initial: [],
+      persisted: unansweredHistory(),
+      // No X-Fleet-Conversation-Id: an older server, or a proxy that dropped
+      // it. Nothing to promote, so the pre-#1591 behaviour has to stand.
+      streamBodies: [() => severedStream([])],
+      inflight: [{ inflight: false, turn_id: "" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    const pending = convSlot(h, "__pending__:1");
+    expect(pending.at(-1)?.failed).toBe(true);
+  }, 20000);
+});
+
+// The lost-acknowledgement fork (#1592). This client believed the
+// conversation was idle, so it posted directly and rendered an optimistic
+// slot; the server knew better, queued the input behind the turn already
+// running, and that answer never arrived. /inflight then reports a LIVE turn
+// — the pre-existing one. Attaching to it renders that turn's output as the
+// answer to a prompt it never saw, while the user's real question waits in
+// the queue. The submission id is the only evidence that separates them.
+describe("a lost submission acknowledgment does not bind the bubble to a pre-existing turn", () => {
+  it("refuses the running turn when it belongs to another submission", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      chatPostRejects: true,
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "someone else's answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [
+        { inflight: true, turn_id: "t-pre-existing", submission_id: "sub-x" },
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    // The client sent an identity, the server named a different one, and no
+    // stream was opened on the strength of a guess.
+    expect(h.submissionIds.length).toBe(1);
+    expect(h.attachCount()).toBe(0);
+    const last = lastOf(h);
+    expect(last.content).not.toContain("someone else's answer");
+    // Not failed either: the submission may well have been taken. The slot
+    // stays mid-flight and the chain keeps asking (#1584's posture).
+    expect(last.failed).toBeUndefined();
+    expect(last.state).toBe("streaming");
+  }, 20000);
+
+  it("attaches once the running turn is the one it submitted", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      chatPostRejects: true,
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "ours after all" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [
+        // The catch's probe, then the chain's first two ticks (1s, 2s) — the
+        // predecessor is still running throughout. The chain has to apply the
+        // same rule the catch did: it reaches the identical fork with the
+        // identical evidence, and its reattach is BOUND to the turn its probe
+        // named, so a missing rule here attaches to the predecessor for real.
+        { inflight: true, turn_id: "t-pre-existing", submission_id: "sub-x" },
+        { inflight: true, turn_id: "t-pre-existing", submission_id: "sub-x" },
+        { inflight: true, turn_id: "t-pre-existing", submission_id: "sub-x" },
+        // By the third tick (4s) our queued input has drained into its own
+        // turn, and the server names US.
+        { inflight: true, turn_id: "t-ours", submission_id: OUR_SUBMISSION },
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+    expect(h.attachCount()).toBe(0);
+
+    // Through both ticks that still find the predecessor: no attach, and
+    // nothing of that turn's output in our bubble.
+    await vi.advanceTimersByTimeAsync(3200);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(h.attachCount()).toBe(0);
+    expect(lastOf(h).content).not.toContain("ours after all");
+
+    // The tick that finds OUR turn attaches to it.
+    await vi.advanceTimersByTimeAsync(4200);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(lastOf(h).content).toBe("ours after all");
+    expect(lastOf(h).state).toBe("done");
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });

@@ -169,10 +169,24 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	if strings.EqualFold(req.Mode, "steer") && len(req.Attachments) == 0 {
 		mode = store.InputModeSteer
 	}
+	// The two ids are stored separately and never substituted for each other.
+	// client_input_id is the idempotency key and carries the unique index
+	// (conversation_id, client_input_id); submission_id is the client's
+	// identity for the submission (#1592), which the drained turn reports to
+	// /inflight so the browser recognises its OWN turn.
+	//
+	// Folding one into the other breaks both directions. A caller sending BOTH
+	// kept only input_id, so the drained turn echoed the idempotency key as its
+	// submission — a value the client never minted — and the client read it as
+	// "this turn belongs to someone else" and refused to attach to its own
+	// turn, exactly the failure #1592 exists to prevent. And a caller sending
+	// only submission_id had its identity written into the idempotency column,
+	// making it subject to dedup it never asked for.
 	clientID := strings.TrimSpace(req.InputID)
 	if clientID == "" {
 		clientID = uuid.NewString()
 	}
+	submissionID := strings.TrimSpace(req.SubmissionID)
 	// Depth cap: every queued row later runs as a full governed turn, so an
 	// unbounded queue is unbounded unattended LLM spend (a retrying client
 	// minting fresh input_ids can enqueue hundreds during one long turn).
@@ -204,7 +218,8 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	}
 	row, created, err := s.store.EnqueueInput(r.Context(), store.InputQueueRow{
 		ID: uuid.NewString(), ConversationID: conv.ID, UserEmail: user,
-		ClientInputID: clientID, Message: req.Message, Attachments: attachments, Mode: mode,
+		ClientInputID: clientID, SubmissionID: submissionID,
+		Message: req.Message, Attachments: attachments, Mode: mode,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -453,6 +468,11 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		ConversationID: convID,
 		Message:        row.Message,
 		Attachments:    attachments,
+		// The drained turn belongs to whoever queued this row, so it carries
+		// that submission's identity into /inflight (#1592) — otherwise a
+		// client waiting on its queued input could not tell the turn that
+		// finally runs it from any other.
+		SubmissionID: row.SubmissionID,
 	}
 	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen}, releaseSlot) {
 		releaseSlot()

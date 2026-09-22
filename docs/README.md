@@ -86,6 +86,9 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **Chat stream recovery** (why a lost SSE socket reconciles against Postgres
   instead of stamping a terminal state — the walk-away-and-come-back case):
   [`docs/CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md)
+- **What became of one turn** (the per-turn outcome endpoint the client reads
+  instead of inferring from a liveness probe plus a transcript, and why a
+  pre-answer failure now offers Retry): [`docs/TURN-OUTCOME.md`](TURN-OUTCOME.md)
 - **Shared files** (the native cross-chat file library: canonical bytes
   host-side, a read-only staged tree under the workspace root both sandbox
   backends mount, the reconciler, the size cap):
@@ -247,7 +250,7 @@ above fails otherwise.
 - [`MEMORY.md`](MEMORY.md) — User memory: typed, provenanced, reviewable
 - [`MIGRATIONS.md`](MIGRATIONS.md) — Database migrations
 - [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
-- [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — GPT-5.6 Luna Pro as the everyday default, Claude Opus 5 as the strong tier (2026-09-21), and why
+- [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — GPT-5.6 Luna Pro as the everyday default, Claude Opus 5 as the strong tier (2026-09-21), and why; plus the self-correcting refusal a lockdown conversation returns for a model its allow-list forbids
 - [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) — The node toolchain handoff (`fleet update` ⇄ `fleet doctor --node`)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections
@@ -294,6 +297,7 @@ above fails otherwise.
 - [`TOOL-OUTPUT-BOUNDARY.md`](TOOL-OUTPUT-BOUNDARY.md) — Bounded model-visible tool output
 - [`TOOL-PANIC-CONTAINMENT.md`](TOOL-PANIC-CONTAINMENT.md) — Agent tool panic containment
 - [`TURN-JOURNAL.md`](TURN-JOURNAL.md) — Durable turn journal & commit-gated terminal success (#798)
+- [`TURN-OUTCOME.md`](TURN-OUTCOME.md) — Turn outcome — a server-side answer the client reads instead of inferring (#1593)
 - [`UNIFIED-ADMIN-PERMISSION-UI.md`](UNIFIED-ADMIN-PERMISSION-UI.md) — Unified admin permission in the Users UI
 - [`UPLOADS-AND-STORAGE.md`](UPLOADS-AND-STORAGE.md) — Uploads & storage management
 - [`UPSTREAM-ROUTING-FLOOR.md`](UPSTREAM-ROUTING-FLOOR.md) — Upstream routing: precision floor + served-upstream attribution

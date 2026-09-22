@@ -12,22 +12,27 @@ import type { PendingAttachment } from "./ChatChips";
 // navigates away, and a brand-new chat's per-submission key is promoted to
 // its real conversation id in one atomic step when the server confirms it.
 //
-// This is a mechanical relocation, not a rewrite: every body below is the
-// same code that ran in the component, so behavior is preserved. The only
-// difference is that the derived reads and the closure-captured setters now
-// take `currentConvKey` as a hook argument rather than reading a sibling
-// const — which means, exactly as before, a setter created during one
-// render writes to the key that was current *at that render*. Keeping the
-// capture render-scoped (not a ref) is load-bearing: it's what lets an
-// in-flight submit in conv A keep clearing A's slot after the user moves to
-// conv B.
+// The derived reads and the closure-captured setters take `currentConvKey`
+// as a hook argument, which means a setter created during one render writes
+// to the key that was current *at that render*. Keeping the capture
+// render-scoped (not a ref) is load-bearing: it's what lets an in-flight
+// submit in conv A keep clearing A's slot after the user moves to conv B.
+//
+// The three per-conv slots are Maps, not plain objects, and that is a
+// security property rather than a style choice. The key is a conversation
+// id that arrives from the server, so writing it as a property name on an
+// object literal makes the property name remote-controlled — CodeQL's
+// js/remote-property-injection (security-severity 7.5) flagged all six
+// writes, and a key of `__proto__` or `constructor` is the reason the rule
+// exists. A Map has no prototype chain to walk into: `set("__proto__", v)`
+// stores an ordinary entry, so the sink is gone rather than argued about.
 export type PerConvComposerState = {
-  // Raw per-conv records. Exposed for the two callers that read a specific
+  // Raw per-conv records. Exposed for callers that read a specific
   // (submit-time) key rather than the current one; prefer the derived reads
   // and getPendingAttachmentsForKey below for everything else.
-  promptByConv: Record<string, string>;
-  pendingAttachmentsByConv: Record<string, PendingAttachment[]>;
-  attachmentErrorByConv: Record<string, string | null>;
+  promptByConv: ReadonlyMap<string, string>;
+  pendingAttachmentsByConv: ReadonlyMap<string, PendingAttachment[]>;
+  attachmentErrorByConv: ReadonlyMap<string, string>;
   // Derived for the current conversation key.
   prompt: string;
   pendingAttachments: PendingAttachment[];
@@ -54,6 +59,23 @@ export type PerConvComposerState = {
   promoteComposerKey: (oldKey: string, newKey: string) => void;
 };
 
+// setSlot / clearSlot are the two Map writes every setter below funnels
+// through. Both return `prev` unchanged when the write is a no-op so React
+// skips the re-render, which is the same identity-stability contract the
+// object-spread version had.
+function setSlot<V>(prev: Map<string, V>, key: string, value: V): Map<string, V> {
+  const next = new Map(prev);
+  next.set(key, value);
+  return next;
+}
+
+function clearSlot<V>(prev: Map<string, V>, key: string): Map<string, V> {
+  if (!prev.has(key)) return prev;
+  const next = new Map(prev);
+  next.delete(key);
+  return next;
+}
+
 export function usePerConvComposerState(currentConvKey: string): PerConvComposerState {
   // Per-conv composer state — promptByConv / pendingAttachmentsByConv /
   // attachmentErrorByConv / uploadingConvs. These used to be global,
@@ -64,13 +86,15 @@ export function usePerConvComposerState(currentConvKey: string): PerConvComposer
   // Setters are derived below and use closure-captured currentConvKey
   // so an async submit in conv A clears A's slot even if the user
   // navigated to B in the meantime.
-  const [promptByConv, setPromptByConv] = useState<Record<string, string>>({});
+  const [promptByConv, setPromptByConv] = useState<Map<string, string>>(
+    () => new Map<string, string>(),
+  );
   const [pendingAttachmentsByConv, setPendingAttachmentsByConv] = useState<
-    Record<string, PendingAttachment[]>
-  >({});
+    Map<string, PendingAttachment[]>
+  >(() => new Map<string, PendingAttachment[]>());
   const [attachmentErrorByConv, setAttachmentErrorByConv] = useState<
-    Record<string, string | null>
-  >({});
+    Map<string, string>
+  >(() => new Map<string, string>());
   // uploadingConvs is the set of conv keys with an in-flight attachment
   // upload. Used so the send button + attachment-removal chips disable
   // only for the conv whose upload is running, not for an unrelated
@@ -90,92 +114,80 @@ export function usePerConvComposerState(currentConvKey: string): PerConvComposer
     setUploadingConvs(new Set(uploadingConvsRef.current));
   };
 
-  // Composer derivations. Each setter mutates the per-conv Record under
+  // Composer derivations. Each setter mutates the per-conv Map under
   // the currentConvKey captured at *render* time, which means an async
   // submit closure keeps writing to the slot it was launched from even
   // if the user has since navigated to another chat.
   const EMPTY_PENDING_ATTACHMENTS: readonly PendingAttachment[] = [];
-  const prompt = promptByConv[currentConvKey] ?? "";
+  const prompt = promptByConv.get(currentConvKey) ?? "";
   const pendingAttachments =
-    pendingAttachmentsByConv[currentConvKey] ??
+    pendingAttachmentsByConv.get(currentConvKey) ??
     (EMPTY_PENDING_ATTACHMENTS as PendingAttachment[]);
-  const attachmentError = attachmentErrorByConv[currentConvKey] ?? null;
+  const attachmentError = attachmentErrorByConv.get(currentConvKey) ?? null;
   const isUploadingAttachments = uploadingConvs.has(currentConvKey);
   const setPrompt: React.Dispatch<React.SetStateAction<string>> = (next) => {
     setPromptByConv((prev) => {
-      const old = prev[currentConvKey] ?? "";
+      const old = prev.get(currentConvKey) ?? "";
       const value =
         typeof next === "function"
           ? (next as (s: string) => string)(old)
           : next;
       if (value === old) return prev;
-      const out = { ...prev };
-      if (value === "") delete out[currentConvKey];
-      else out[currentConvKey] = value;
-      return out;
+      return value === ""
+        ? clearSlot(prev, currentConvKey)
+        : setSlot(prev, currentConvKey, value);
     });
   };
   const setPromptForKey = (key: string, value: string) => {
     setPromptByConv((prev) => {
-      const old = prev[key] ?? "";
+      const old = prev.get(key) ?? "";
       if (value === old) return prev;
-      const out = { ...prev };
-      if (value === "") delete out[key];
-      else out[key] = value;
-      return out;
+      return value === "" ? clearSlot(prev, key) : setSlot(prev, key, value);
     });
   };
   const setPendingAttachments: React.Dispatch<
     React.SetStateAction<PendingAttachment[]>
   > = (next) => {
     setPendingAttachmentsByConv((prev) => {
-      const old = prev[currentConvKey] ?? [];
+      const old = prev.get(currentConvKey) ?? [];
       const value =
         typeof next === "function"
           ? (next as (a: PendingAttachment[]) => PendingAttachment[])(old)
           : next;
       if (value === old) return prev;
-      const out = { ...prev };
-      if (value.length === 0) delete out[currentConvKey];
-      else out[currentConvKey] = value;
-      return out;
+      return value.length === 0
+        ? clearSlot(prev, currentConvKey)
+        : setSlot(prev, currentConvKey, value);
     });
   };
   const setPendingAttachmentsForKey = (key: string, value: PendingAttachment[]) => {
-    setPendingAttachmentsByConv((prev) => {
-      const out = { ...prev };
-      if (value.length === 0) delete out[key];
-      else out[key] = value;
-      return out;
-    });
+    setPendingAttachmentsByConv((prev) =>
+      value.length === 0 ? clearSlot(prev, key) : setSlot(prev, key, value),
+    );
   };
   const setAttachmentError: React.Dispatch<
     React.SetStateAction<string | null>
   > = (next) => {
     setAttachmentErrorByConv((prev) => {
-      const old = prev[currentConvKey] ?? null;
+      const old = prev.get(currentConvKey) ?? null;
       const value =
         typeof next === "function"
           ? (next as (s: string | null) => string | null)(old)
           : next;
       if (value === old) return prev;
-      const out = { ...prev };
-      if (value === null) delete out[currentConvKey];
-      else out[currentConvKey] = value;
-      return out;
+      return value === null
+        ? clearSlot(prev, currentConvKey)
+        : setSlot(prev, currentConvKey, value);
     });
   };
   const setAttachmentErrorForKey = (key: string, value: string | null) => {
-    setAttachmentErrorByConv((prev) => {
-      const out = { ...prev };
-      if (value === null) delete out[key];
-      else out[key] = value;
-      return out;
-    });
+    setAttachmentErrorByConv((prev) =>
+      value === null ? clearSlot(prev, key) : setSlot(prev, key, value),
+    );
   };
 
   const getPendingAttachmentsForKey = (key: string): PendingAttachment[] =>
-    pendingAttachmentsByConv[key] ?? [];
+    pendingAttachmentsByConv.get(key) ?? [];
 
   // promoteComposerKey migrates the per-submission pending key's composer
   // state onto the real conversation id once the "conversation" SSE event
@@ -186,28 +198,20 @@ export function usePerConvComposerState(currentConvKey: string): PerConvComposer
   // (potentially stale) closure capture.
   const promoteComposerKey = (oldKey: string, newKey: string) => {
     setPromptByConv((prev) => {
-      const v = prev[oldKey];
+      const v = prev.get(oldKey);
       if (typeof v !== "string") return prev;
-      const out = { ...prev };
-      delete out[oldKey];
-      if (v !== "") out[newKey] = v;
-      return out;
+      const next = clearSlot(prev, oldKey);
+      return v === "" ? next : setSlot(next, newKey, v);
     });
     setPendingAttachmentsByConv((prev) => {
-      const v = prev[oldKey];
+      const v = prev.get(oldKey);
       if (!v || v.length === 0) return prev;
-      const out = { ...prev };
-      delete out[oldKey];
-      out[newKey] = v;
-      return out;
+      return setSlot(clearSlot(prev, oldKey), newKey, v);
     });
     setAttachmentErrorByConv((prev) => {
-      const v = prev[oldKey];
+      const v = prev.get(oldKey);
       if (typeof v !== "string") return prev;
-      const out = { ...prev };
-      delete out[oldKey];
-      out[newKey] = v;
-      return out;
+      return setSlot(clearSlot(prev, oldKey), newKey, v);
     });
     if (uploadingConvsRef.current.has(oldKey)) {
       uploadingConvsRef.current.delete(oldKey);

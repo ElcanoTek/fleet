@@ -151,7 +151,14 @@ func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent, caps ma
 
 // handleInflight is a cheap JSON probe the client calls on mount /
 // visibilitychange / online to decide whether to open a reattach
-// stream. Returns {inflight, turn_id?, last_event_id?}.
+// stream. Returns {inflight, turn_id?, last_event_id?, submission_id?}.
+//
+// submission_id names the POST /chat submission this turn was started for
+// (#1592). It is what lets a client that never received its acknowledgement
+// decide whether the running turn is the one the server started FOR IT — the
+// turn id cannot, because a client in that position has no earlier id to
+// compare against. Omitted when the turn carries none, so "absent" reads as
+// no evidence rather than as "not yours".
 func (s *Server) handleInflight(w http.ResponseWriter, r *http.Request, convID string) {
 	user := userFromCtx(r.Context())
 	conv, err := s.store.Get(r.Context(), user, convID)
@@ -170,11 +177,15 @@ func (s *Server) handleInflight(w http.ResponseWriter, r *http.Request, convID s
 		return
 	}
 
-	writeJSON(w, map[string]any{
+	probe := map[string]any{
 		"inflight":      entry.IsRunning(),
 		"turn_id":       entry.turnID,
 		"last_event_id": entry.buf.HighestID(),
-	})
+	}
+	if entry.submissionID != "" {
+		probe["submission_id"] = entry.submissionID
+	}
+	writeJSON(w, probe)
 }
 
 // parseLastEventID extracts the `Last-Event-ID` header, falling back

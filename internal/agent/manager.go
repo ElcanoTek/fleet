@@ -2068,12 +2068,13 @@ func emitModelSelectionRequired(sink EventSink, reason agentcore.StreamErrorReas
 	if streamErr != nil {
 		raw = streamErr.Error()
 	}
-	// One resolved status for the payload AND the message. The classifier files
-	// a first-chunk timeout as a stream blip with no provider error, so a 429
-	// whose retry backoff outlasted the watchdog arrives here as status 0 —
-	// and an event whose message says "rate limiting" while its structured
-	// status_code says "no provider error" is worse than either alone: it
-	// corrupts telemetry and any client branching on the field (#1585).
+	// One resolved status for the payload AND the message. An event whose
+	// message says "rate limiting" while its structured status_code says "no
+	// provider error" is worse than either alone: it corrupts telemetry and any
+	// client branching on the field (#1585). The classifier now recovers the
+	// status a watchdog expiry hid (#1590), so a caller that resolved it
+	// through ClassifyStreamErrorReason already has it; this stays for a caller
+	// that resolved status some other way, and costs one comparison.
 	if status == 0 {
 		if providerStatus, ok := agentcore.FirstChunkTimeoutAfterProviderError(streamErr); ok && providerStatus > 0 {
 			status = providerStatus

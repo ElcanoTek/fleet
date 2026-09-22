@@ -39,20 +39,96 @@ the fact.
 floor needed) and then, on 2026-09-21, to **`openai/gpt-5.6-luna-pro`** with
 **`anthropic/claude-opus-5`** as the strong tier (see
 [MODEL-DEFAULTS.md](MODEL-DEFAULTS.md)). Both are soft-pinned to their vendor
-with cloud resellers of the *official* weights as the only fallbacks (OpenAI →
-Azure, Amazon Bedrock; Anthropic → AWS, Bedrock, Azure, Google), so neither has
-a third-party quantized pool to degrade onto; `officialPoolSlugs` records those
-two exact slugs with the endpoint list that was checked, and the guard test
-accepts a listed slug as the third safe shape — per slug, never per family, so a
-future model in the same family does not inherit the exemption. The
-floor below is unchanged and still applies to the DeepSeek family (production's
-scheduled-task fallback): those slugs remain selectable, and the pin plus the
-floor are what make selecting them safe.
+with cloud resellers of the *official* weights as the only fallbacks, so neither
+has a third-party quantized pool to degrade onto; `officialPoolSlugs` records
+those two exact slugs with the endpoint list that was checked, and the guard test
+accepts them as the third safe shape — per slug, never per family, so a future
+model in the same family does not inherit the exemption. The floor below is
+unchanged and still applies to the DeepSeek family (production's scheduled-task
+fallback): those slugs remain selectable, and the pin plus the floor are what
+make selecting them safe.
 `TestDefaultCoreModelCannotBeServedAtArbitraryPrecision` asserts the general
-property for both default-tier slugs — strictly pinned, a validated
-official-weights pool, or a serving-precision floor — and
+property for both default-tier slugs — strictly pinned, a closed `only`
+allow-list, or a serving-precision floor — and
 `TestOfficialPoolExemptionIsNarrow` keeps the exemption off every other slug,
 siblings included.
+
+## The exemption is enforced, not snapshotted (#1589)
+
+As first shipped, `officialPoolSlugs` was an **assertion about a pool**: a
+comment recording which endpoints were seen on 2026-09-21, read by a guard test
+and by nothing on the request path. `upstreamPinFor` still sent
+`Order=[vendor]` with `AllowFallbacks=true` and no restriction, so if OpenRouter
+later added a third-party or quantized endpoint to one of those pools, the
+exemption would silently permit it — the pool can change between checks, and
+nothing would notice.
+
+The list is now the **allow-list on the request**. For a listed slug
+`upstreamPinFor` emits `Only=[the validated pool]` alongside the unchanged
+`Order=[vendor]` and `AllowFallbacks=true`:
+
+| slug | `order` | `only` (provider routing names) |
+|---|---|---|
+| `openai/gpt-5.6-luna-pro` | OpenAI | OpenAI, Azure, Amazon Bedrock |
+| `anthropic/claude-opus-5` | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
+
+`order` still buys prompt-cache locality; `only` closes the set the fallback may
+reach. Be precise about *what* it closes, because the two are easy to conflate:
+**`only` is a PROVIDER allow-list, not an endpoint allow-list.** OpenRouter's
+`provider.only` matches on the provider's routing name, and the endpoint counts
+below show several endpoints collapsing onto one name (OpenAI ×3, Azure ×2). So:
+
+- **A provider not on the list cannot be routed to at all.** That is the real
+  guarantee, and it is the one the exemption needs: a *third-party* host
+  appearing in the pool tomorrow — the case that would actually put unofficial
+  or quantized weights behind a default-tier slug — is refused at request time
+  instead of silently inheriting the exemption.
+- **An allow-listed provider adding or re-quantizing an endpoint still
+  matches.** If OpenAI ships a fourth `gpt-5.6-luna-pro` endpoint at a different
+  serving precision, `Only=[OpenAI, …]` routes to it. `only` does not pin
+  endpoint-level attributes, and nothing here re-reads them.
+
+That residual is deliberate and it is not closable with this mechanism: the
+quantization floor is the endpoint-level control, and it cannot be used on these
+slugs because every endpoint in both pools reports quantization `unknown`, which
+`fp8AndAbove` excludes — a floor would make both default slugs unroutable. What
+remains is therefore an assumption, stated plainly rather than implied away: an
+allow-listed vendor or its official cloud resellers keep serving the vendor's
+official weights. The exemption is trust in *those named parties*, enforced
+against everyone else. Nothing re-reads endpoint attributes at runtime or in
+CI, so that assumption is not machine-checked — it is carried by the recorded
+snapshot and the date beside it.
+
+**What `only` costs in availability — the check the issue asked for.** Both
+pools were re-read from `GET /api/v1/models/{slug}/endpoints` on 2026-09-22:
+
+- `openai/gpt-5.6-luna-pro` — 5 endpoints: OpenAI ×3, Azure ×2.
+  (Amazon Bedrock was in the 2026-09-21 snapshot and is not in today's; it stays
+  on the allow-list so its return needs no code change.)
+- `anthropic/claude-opus-5` — 11 endpoints: Anthropic ×2, Claude Platform on
+  AWS ×1, Amazon Bedrock ×3, Azure ×2, Google ×3.
+
+Every endpoint in both pools is on the allow-list, so **`only` excludes nothing
+that exists today**: availability is identical to the previous open fallback,
+and the narrowing applies only to endpoints that appear later. That is why the
+allow-list is the whole validated pool rather than the issue's literal
+`Only=[vendor]` — `Only=[OpenAI]` would drop 2 of 5 Luna Pro endpoints and
+`Only=[Anthropic]` 9 of 11 Opus 5 ones, which is the availability loss the
+reseller fallback exists to avoid.
+
+The issue's other option — drop the exemption and floor these slugs instead —
+is not available: **every endpoint in both pools reports `quantization:
+"unknown"`**, and `fp8AndAbove` deliberately excludes `unknown`, so a floor
+would make both default-tier slugs unroutable. The allow-list is the form the
+guarantee can actually take for these pools.
+
+The names in the allow-list must be OpenRouter's own routing names —
+`provider_name` as the endpoints API spells it (`Claude Platform on AWS`, not
+`AWS`) — because a misspelling narrows the pool rather than failing loudly.
+`TestOfficialPoolExemptionIsEnforcedAtRequestTime` pins the emitted `only` per
+slug (and for the `~` alias form), that fallbacks stay enabled, that the
+preferred upstream is inside the set it may route to, and that siblings get no
+allow-list at all.
 
 ## What shipped
 
@@ -87,16 +163,23 @@ of it was served elsewhere.
 
 ## Honest scope
 
-- **The floor is a request-level preference, not an enforced guarantee.** It is
-  passed to OpenRouter as `provider.quantizations`; fleet cannot verify what
-  precision actually served a request, because OpenRouter's response metadata
-  reports the provider name, not the quant level. The attribution above tells
+- **The floor and the allow-list are request-level directives, not guarantees
+  fleet can verify.** They are passed to OpenRouter as `provider.quantizations`
+  and `provider.only`; fleet cannot verify what precision actually served a
+  request, because OpenRouter's response metadata reports the provider name, not
+  the quant level. The provider name it *does* report is checked against the
+  pin (see the attribution below), so a route outside the allow-list would show
+  up there — after the fact, not as a refusal. The attribution above tells
   you *which upstream* answered, which is the actionable signal — confirming its
   precision means looking that endpoint up in OpenRouter's catalog.
 - **This is diagnosis, not enforcement.** `ServedFallback` is recorded and
   logged. Nothing refuses a run, retries on a different route, or surfaces the
-  flag in the chat UI or the task page. Wiring it to an Observer/metric and
-  showing it next to the cost chip is a follow-on.
+  flag in the chat UI or the task page.
+- **The allow-list is a snapshot of membership, checked by hand.** Nothing
+  re-reads OpenRouter's endpoint list at runtime or in CI, so a reseller *added*
+  to a pool needs the same manual check and a code change before requests may
+  reach it. That is the intended direction of the failure: the pool cannot grow
+  silently, only shrink.
 - **Only the DeepSeek family gets a floor.** It is the one family documented to
   mix precisions across its pool. Other soft-pinned families
   (`anthropic/`, `openai/`, `moonshotai/`, `z-ai/`) were left untouched rather
@@ -121,7 +204,13 @@ of it was served elsewhere.
 - `internal/agentcore/provider_pin_test.go` — `TestUpstreamPinQuantizationFloor`
   (floor admits fp8, rejects fp4/fp6/int4/int8/unknown, unmixed families carry
   none), `TestUpstreamPinQuantizationsNotAliased` (the returned slice does not
-  share backing state with the table), `TestPreferredUpstreamFor`.
+  share backing state with the table), `TestPreferredUpstreamFor`,
+  `TestOfficialPoolExemptionIsEnforcedAtRequestTime` (a listed slug's request
+  carries its validated pool as `only`, alias form included, fallbacks still on,
+  the preferred upstream inside the set, siblings with no allow-list),
+  `TestOfficialPoolAllowlistNotAliased`, and
+  `TestDefaultCoreModelCannotBeServedAtArbitraryPrecision`, which now reads the
+  emitted policy rather than the exemption table.
 - `internal/agentcore/served_upstream_test.go` — canonical route is not a
   fallback, an off-pin route latches the flag, unpinned families never flag,
   and absent metadata preserves the last known attribution.

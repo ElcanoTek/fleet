@@ -116,14 +116,33 @@ exactly the "Turn failed until I refresh" report.
 On `unreachable` the slot is **left mid-flight** (`state: "streaming"`, partial
 content kept), the attach handle is released so a reattach can claim the
 conversation, and `scheduleRecoveryRetry` re-probes: 1, 2, 4, 8, 16 s and then
-a steady 30 s beat, one chain per conversation, for as long as the outcome
-stays unknown. It does **not** give up — a conversation left unsettled is no
-longer in `attachedConvIdsRef`, so `sweepStreamLiveness` does not visit it, and
-an outage longer than the backoff would otherwise strand the slot until the
-user happened to switch tabs. A hidden tab reschedules without probing (the
+a steady beat, one chain per conversation, for as long as the outcome stays
+unknown. It does **not** give up — a conversation left unsettled is no longer
+in `attachedConvIdsRef`, so `sweepStreamLiveness` does not visit it, and an
+outage longer than the backoff would otherwise strand the slot until the user
+happened to switch tabs. A hidden tab reschedules without probing (the
 tab-return handler covers that, and background polling is waste), and every
 recovery request is bounded by a timeout so a blackholed connection costs one
 beat rather than the whole chain.
+
+That steady beat **lengthens with the age of the outage** (#1594): 30 s to
+roughly two and a half minutes, a minute apiece to roughly seven and a half,
+then a 5 min ceiling it keeps indefinitely. A flat 30 s is the right cadence
+for an outage of minutes and far more than one of hours warrants — a tab left
+open overnight behind a dead VPN spent 120 requests an hour re-asking a
+question whose answer had not changed, and the hidden-tab skip does not help a
+tab that stays visible. The promise the user guide makes is "the page re-checks
+by itself", not "every 30 seconds".
+
+Nothing carries a clock beside the ladder: the attempt number **is** the age of
+the outage, because every tick — one that probed, and one skipped because the
+tab was hidden — is booked by the same `recoveryDelayFor`. And every path that
+learns the outage may be over restarts the chain at attempt 0, so the long
+rungs are never what a returning user waits out: `online`, `visibilitychange`
+and `focus` all reach `nudgeRecovery`, and a tick whose probe is **answered**
+clamps back to the first steady rung rather than climbing — what failed there
+is the attach, not the network, and the long rungs are sized for a client that
+cannot reach the server at all.
 
 Each tick asks `/inflight`: still unreachable → next tick; a **different**
 turn id than the one the chain is recovering → our turn is over, adopt its
@@ -385,6 +404,155 @@ erasing it when another attach is in flight concurrently, because
 Declining the reattach removes the slot at the source instead of depending on
 the cleanup winning that race.
 
+## Naming what the server is talking about (#1591, #1592)
+
+Everything above reasons about a conversation and a turn the client can
+already name. Two forks reach the same evidence and cannot be decided from the
+browser's own state at all — in both, the missing fact is an **identity the
+server has and the client does not**. Each is closed by one field on the wire.
+
+### A brand-new conversation has no id yet (#1591)
+
+A brand-new chat posts under a per-submission pending key
+(`nextPendingKey()`) and learns its real id from the first `conversation` SSE
+frame. Every recovery endpoint is keyed by conversation id:
+`probeInflightTurn` short-circuits on a pending key, and
+`reconcileFromPersisted` has nothing to read. So a socket that died *between
+the response and that frame* left the whole chain with nothing to ask about,
+and the tab showed a failed turn over an answer the server was still writing
+to the database — recoverable only by a reload.
+
+`POST /chat` now names its conversation on the **response headers**,
+`X-Fleet-Conversation-Id`, which are written before any frame (`startTurn`,
+just before `buf.Attach`). `streamTurn` reads it as soon as the POST resolves
+and runs `promotePendingTarget` — the same rename the `conversation` frame
+does, now shared by both callers so they cannot drift: the transcript, the
+abort controller, the attached/streaming sets, the composer draft and the
+user's active view all move onto the real id together. The frame that follows
+is then an idempotent no-op, and a stream that dies immediately leaves the
+chain a conversation it can probe.
+
+The Next.js proxy rebuilds the response header set rather than passing it
+through, so `src/app/api/chat/route.ts` forwards this header explicitly.
+
+### A turn the server started for someone else (#1592)
+
+A client believes a conversation is idle while the server still has a turn
+running on it — two tabs, two devices, or a tab that missed the turn. It
+submits; `postChat` queues the input behind the running turn and answers with
+a JSON acknowledgement, and **that response is lost in transit**. The browser
+lands in the `submitPrompt` catch holding a fresh optimistic slot, probes
+`/inflight`, and is told a turn is live — the **pre-existing** one. Attaching
+binds the new bubble to it, so a running turn's output renders as the answer
+to a prompt it never saw while the user's actual question waits in the queue.
+
+No evidence available to the browser separates the two. The turn id cannot:
+the client never saw the pre-existing turn, and a brand-new id is exactly what
+its own turn would have. The transcript cannot: `startTurn` registers and
+exposes a turn *before* the manager commits its user message, so "my prompt is
+not the last user row yet" is equally consistent with my turn having just
+started. And the POST outcome is unknown by construction — that is the branch
+we are in.
+
+So the submission carries an identity the server can echo. `submitPrompt`
+mints one per submission and sends it as `submission_id`; the server stamps it
+on the `inflightEntry` for the turn it starts, stores it in the queue row's own
+`submission_id` column when it queues instead (so the turn that eventually
+drains that row still names it), and `/inflight` returns it as
+`submission_id`.
+`answersOurSubmission` compares:
+
+- **`true`** — the live turn is ours; attach as before.
+- **`false`** — the server is running a turn it started for a *different*
+  submission. Do not attach. The slot is left mid-flight and re-probed, the
+  same posture `unreachable` gets (#1583): when our input drains into its own
+  turn, `/inflight` names us and the next tick takes it.
+- **`null`** — one side said nothing (an older server, a webhook or scheduled
+  turn, a client that sent no id). **No evidence**, not a denial: every
+  pre-existing rule applies unchanged.
+
+The rule lives in both places that reach the fork — the `submitPrompt` catch
+and the chain tick's "we never learned our turn's id" branch. The chain's
+matters as much as the catch's: its `reattachToConv` is *bound* to the turn
+its probe named, so without the rule it attaches to the predecessor for real.
+In the chain it is applied only after `reconcileFromPersisted` has come back
+`absent`, so a turn of ours that did finish is still adopted first.
+
+## One tab waits out the outage (#1595)
+
+Everything above is per tab, and for the resolving it should be: each tab
+holds its own slot, sent its own submission, and has its own transcript to
+fill. The *waiting* is not. Two tabs open on the same conversation ran two
+ladders of `/inflight` probes re-learning the same "still nothing" for as long
+as the outage lasted — the overnight-VPN case the ladder above is sized for,
+doubled.
+
+The rule is one sentence.
+
+> **A tab stands down only while its OWN last probe could not reach the
+> server, and any answer — its own, or one another tab relays — puts it
+> straight back on its own ladder.**
+
+`recoveryElection.ts` is that rule and nothing else. It sits between
+`scheduleRecoveryRetry` and `setTimeout`: `book` answers "is this beat mine to
+book?", and where it is not, the module holds the beat until it is worth
+running. Everything the chain does when a beat fires is unchanged.
+
+### Who asks
+
+A tab that has just had a probe refused takes an exclusive **Web Lock** named
+for the conversation (`fleet.chat.recovery:<id>`). Whichever tab is granted it
+keeps its ladder exactly as before. The others queue for the same lock and
+park their beat instead of booking a timer, and the conversation stays busy
+under them: the chain still owns the slot, so Stop is still offered, a
+follow-up still queues, and nothing settles behind their back.
+
+A parked beat runs when any of four things happens:
+
+- **the asking tab's probe is answered.** It relays that over a
+  `BroadcastChannel` before it does anything else with the answer, and every
+  parked tab runs its beat at once — so it probes, attaches and renders in the
+  same moment the asking tab does, rather than waiting out a ladder of its
+  own. This is the case that decides whether standing down is safe: the asking
+  tab may now sit inside a live stream for the length of the turn, ending
+  nothing and releasing nothing.
+- **the lock arrives.** Either the tab holding it finished (its chain settled,
+  adopted or attached, and `releaseRecovery` leaves the election) or it went
+  away. A lock held by a tab that crashes, is closed, or navigates is released
+  by the *browser*, so a tab that dies mid-recovery has its work picked up
+  rather than leaving the others waiting on a dead leader. The beat keeps the
+  deadline it was booked with, so a takeover neither restarts a wait already
+  served nor cuts one short.
+- **the user comes back to that tab.** `nudgeRecovery` — the `online` /
+  `visibilitychange` / `focus` path — takes the next beat back unconditionally.
+  The tab a person is looking at never waits on another tab.
+- **the tab goes hidden.** A hidden tab's chain deliberately spends nothing
+  (it reschedules without probing), so it drops the lock, stands for nothing,
+  and goes back to its own free ladder. A hidden tab holding the lock away
+  from a visible one would starve the only tab that can actually ask.
+
+**The relay is a wake-up, never a verdict.** It names a conversation and says
+"the server answered someone"; it carries no turn id, no outcome and no
+transcript. A woken tab asks the server itself and applies its own rules —
+ownership, the expected turn id, `answersOurSubmission` — to what it gets
+back. So no tab can settle, adopt or fail a turn on another tab's say-so, and
+the server remains the single source of truth for every tab independently.
+
+### Where it exists, and where it does not
+
+Election needs `navigator.locks` **and** `BroadcastChannel`. `navigator.locks`
+is secure-context-only; without it (or without the channel) the module reports
+`mode: "independent"`, every `book` is local, and **every tab runs the
+independent per-tab chain described in the rest of this document** — correct,
+idempotent, convergent, and merely duplicative, exactly as before.
+
+There is no `localStorage` lease, and one would not close that gap:
+`localStorage` has no atomic compare-and-set, so two tabs can both read a
+lapsed lease and both write themselves in. It cannot promise the single owner
+its name would imply, whereas the fallback above says exactly what happens. A
+lock manager that refuses a request is treated the same way — the tab leads
+itself, because a chain must never hang on a grant that is not coming.
+
 ## Tests
 
 - `useTurnStream.reconcile.test.ts` — `persistedAnswersLocalTurn`, including
@@ -413,8 +581,54 @@ the cleanup winning that race.
   contract. Asserting the slot instead reproduces only under concurrency, which
   is what made this a ~5% CI flake instead of a failing test.
 
+- `useTurnStream.reattachRecovery.test.ts` also covers the two identity forks:
+  a brand-new conversation whose stream delivers nothing at all (recovered
+  through the id the POST response named, and still settling honestly when no
+  header arrives), and the lost acknowledgement (no attach while the live turn
+  names another submission; the attach happens on the tick that finds ours).
+  Mutation-checked the same way: disabling the header promotion stamps the
+  brand-new turn `failed`, and disabling either submission-id guard — the
+  catch's or the chain's — binds the bubble to the pre-existing turn. Each
+  fails exactly one test.
+
+- `recoveryElection.test.ts` — the election itself, driven entirely through
+  injected fakes, because the two primitives it rests on are the two a test
+  environment does not have: Web Locks needs a secure context, and one process
+  cannot model a tab that dies without closing. The fake lock manager can
+  therefore `kill` a holder, which is the case the whole design turns on.
+  Covers: independent mode when either primitive is missing; a tab that does
+  not stand down before its own probe has been refused; a parked beat run by a
+  relayed answer, by the lock arriving, and by the tab going hidden; the
+  deadline a parked beat keeps; a nudge taking the next beat back; a refused
+  lock leading itself; a relay for another conversation, a malformed one, and
+  a channel that throws on post.
+
+- `useTurnStream.election.test.ts` — two tabs on one fake server, so the
+  quantity under test (requests it receives) is counted in one place. Three
+  runs of the same outage: the elected one spends **one** ladder's probes over
+  a window that used to cost two and still lands the answer in both tabs'
+  transcripts, with the stood-down tab mid-flight rather than failed
+  throughout and the lock free again once the chains end; the asking tab is
+  killed mid-recovery and the other picks the work up; and the same scenario
+  with no `navigator.locks`, where both ladders run and both tabs settle —
+  six probes, not three. A fourth pins the case standing down could have
+  broken: the turn is still generating when the radio returns, so the asking
+  tab attaches and stays inside that stream, and the other tab has to be
+  relayed awake to attach and render the same tokens.
+
+  Mutation-checked: removing the relay, the run-on-grant, the own-outage
+  condition, the both-primitives gate, either half of the hidden-tab rule, the
+  nudge's claim, the fail-open on a refused lock, the parked beat's deadline,
+  the chain's report of what its probe learned, or the election-leave in
+  `releaseRecovery` each fails a named test.
+
 - Go: `capabilities_test.go` covers the advertised cadence in both the header
   and the `fleet.capabilities` frame, and that keepalives-off advertises `0`.
+  `submission_identity_test.go` covers the two server-side halves end to end:
+  `POST /chat` naming the same conversation on the header as in the
+  `conversation` frame, and `/inflight` reporting the running turn's
+  submission id — the pre-existing one while it runs, the queued one once it
+  drains — plus the omission when a turn names no submission.
 
 ## Detection latency
 
@@ -442,5 +656,55 @@ return is caught in the 2.5s grace window alone. Both replace the five-minute
   be — nothing is on screen to be wrong, and the wake-up is handled on return.
 - **Server-side change is limited to discovery.** The buffer, the retain
   window, the keepalive itself and the persistence ledger are untouched; the
-  only addition is advertising the keepalive cadence the server was already
-  sending, so the client can reason about silence instead of guessing.
+  additions are advertising the keepalive cadence the server was already
+  sending, naming the conversation on the POST response headers, and echoing
+  the submission id the client itself minted — three facts the server already
+  had, so the client can reason instead of guessing.
+- **`submission_id` is identity, not idempotency**, and it has its own column
+  to keep it that way. It is stored on the in-memory inflight entry and, when
+  the submission queues, in `chat_input_queue.submission_id` (migration 062) —
+  deliberately NOT in `client_input_id`, which carries the unique index
+  `(conversation_id, client_input_id)`. It was carried there once and that was
+  the bug: a caller sending both ids had the idempotency key echoed back as its
+  identity and refused to attach to its own turn, and a caller sending only a
+  submission id had it deduplicated against a repeat it never asked to be
+  idempotent. So a re-POST carrying the same `submission_id` is not
+  deduplicated, and `input_id` remains the only idempotency key.
+- **The conversation header closes the window it names, and no more.** A POST
+  whose response headers never arrive at all still leaves a brand-new
+  conversation unreachable from the client: there is no id, and
+  `accepted.value` is false, so nothing is attributed to the submission and
+  the slot settles. That case degrades rather than breaks: the conversation and
+  its answer are written to the database and appear on the next load.
+- **Both identities are process-local.** `/inflight` and its `submission_id`
+  read the same in-memory registry the retain window lives in, so they answer
+  for the process that ran the turn — the same locality `/inflight` always
+  had.
+- **Postgres holding no answer is not by itself a verdict.** A turn that
+  failed before it could reply leaves exactly the transcript a turn that
+  produced nothing leaves, so the finalizer asks the server what became of
+  that particular turn before settling it: see
+  [`TURN-OUTCOME.md`](TURN-OUTCOME.md) (#1593).
+
+- **Recovery state is per tab; the WAITING is shared, and only that (#1595).**
+  One tab per conversation spends the probe ladder while the server is
+  unreachable; the others park their beat and are woken by its answer, by the
+  lock, by the user returning to them, or by going hidden. Everything else is
+  per tab as before: a tab that is being answered never stands down, so two
+  tabs resolving their own slots after an outage still probe twice — that is
+  each tab's own question and no other tab can answer it. The successor chase,
+  the reattach, the live stream, the liveness watchdog and the queue follower
+  are untouched for the same reason: attaching is how a tab's transcript gets
+  its content, so there is nothing there worth sharing.
+- **A tab is never worse off for standing down.** Its slot stays mid-flight,
+  and it is woken the moment the server answers anyone — which is at least as
+  soon as its own ladder would have asked, and usually sooner. Where it might
+  not be (a hidden tab, whose ladder deliberately spends nothing) it does not
+  stand down at all.
+- **What the election cannot claim.** It is per browser profile: two devices,
+  or two profiles, are two elections, and nothing coordinates them — nor needs
+  to, since each converges on the server independently. It does not exist at
+  all without `navigator.locks` and `BroadcastChannel`, where the page keeps
+  today's independent per-tab recovery. And it decides *when* a tab asks,
+  never *what it concludes*: the relay carries no outcome, so a tab's verdict
+  still comes from the server and from that tab's own guards.

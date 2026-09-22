@@ -33,14 +33,20 @@ type InputQueueRow struct {
 	ConversationID string
 	UserEmail      string
 	ClientInputID  string
-	Message        string
-	Attachments    string // JSON array, opaque to the store
-	Mode           string
-	State          string
-	Position       int64
-	TurnID         string
-	CreatedAt      int64
-	UpdatedAt      int64
+	// SubmissionID is the client-minted identity of the submission that
+	// created this row (#1592), carried separately from ClientInputID: the
+	// latter is the idempotency key and carries the unique index, and a row
+	// that reported the key as its identity made /inflight echo a value the
+	// client never minted. Empty for a submission that names none.
+	SubmissionID string
+	Message      string
+	Attachments  string // JSON array, opaque to the store
+	Mode         string
+	State        string
+	Position     int64
+	TurnID       string
+	CreatedAt    int64
+	UpdatedAt    int64
 	// AcceptedSeq is the row's position in the process-wide acceptance
 	// order (#1477): the key the Stop scope=all sweep and the claim-limbo
 	// gate compare against the counter value a Stop recorded when it began.
@@ -101,12 +107,12 @@ func (s *Store) EnqueueInput(ctx context.Context, r InputQueueRow) (InputQueueRo
 	}
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO chat_input_queue
-		   (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at, accepted_seq)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+		   (id, conversation_id, user_email, client_input_id, submission_id, message, attachments, mode, state, position, created_at, updated_at, accepted_seq)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
 		         (SELECT COALESCE(MAX(position), 0) + 1 FROM chat_input_queue WHERE conversation_id = $2),
-		         $9, $9, $10)
+		         $10, $10, $11)
 		 ON CONFLICT (conversation_id, client_input_id) DO NOTHING`,
-		r.ID, r.ConversationID, r.UserEmail, r.ClientInputID, r.Message, r.Attachments, r.Mode, r.State, now, r.AcceptedSeq,
+		r.ID, r.ConversationID, r.UserEmail, r.ClientInputID, r.SubmissionID, r.Message, r.Attachments, r.Mode, r.State, now, r.AcceptedSeq,
 	)
 	if err != nil {
 		return InputQueueRow{}, false, err
@@ -145,7 +151,8 @@ func (s *Store) getInputByClientID(ctx context.Context, convID, clientID string)
 // accepted_seq reads back as 0 for a row written without one (an older binary
 // mid-deploy): 0 is at or below every Stop boundary, so such a row is swept by
 // any Stop — the pre-#1477 behaviour for it.
-const inputQueueColumns = `id, conversation_id, user_email, client_input_id, message, attachments,
+const inputQueueColumns = `id, conversation_id, user_email, client_input_id,
+       COALESCE(submission_id, ''), message, attachments,
        mode, state, position, COALESCE(turn_id, ''), created_at, updated_at,
        COALESCE(accepted_seq, 0)`
 
@@ -156,8 +163,9 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanInputRow(row rowScanner) (InputQueueRow, error) {
 	var r InputQueueRow
-	err := row.Scan(&r.ID, &r.ConversationID, &r.UserEmail, &r.ClientInputID, &r.Message,
-		&r.Attachments, &r.Mode, &r.State, &r.Position, &r.TurnID, &r.CreatedAt, &r.UpdatedAt, &r.AcceptedSeq)
+	err := row.Scan(&r.ID, &r.ConversationID, &r.UserEmail, &r.ClientInputID, &r.SubmissionID,
+		&r.Message, &r.Attachments, &r.Mode, &r.State, &r.Position, &r.TurnID, &r.CreatedAt,
+		&r.UpdatedAt, &r.AcceptedSeq)
 	return r, err
 }
 

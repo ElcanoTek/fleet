@@ -327,6 +327,14 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-turn outcome (#1593) — GET /conversations/{id}/turns/{turnID}.
+	// /inflight answers a question about the CONVERSATION; this one answers
+	// about a named turn, which is what a client holding an open slot needs.
+	if sub == "turns" && subArg != "" && r.Method == http.MethodGet {
+		s.handleTurnOutcome(w, r, id, subArg)
+		return
+	}
+
 	// Cursor-paginated turn-event read path (#189) — see handleTurnEventsPage.
 	if sub == "events" && r.Method == http.MethodGet {
 		s.handleTurnEventsPage(w, r, id)

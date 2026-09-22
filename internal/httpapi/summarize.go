@@ -108,14 +108,16 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 	// persisted here — the conversation migrates where its next turn launches
 	// (startTurn), whose `conversation` event tells the client the new model;
 	// persisting from Compact would leave the browser echoing a slug the
-	// server had already replaced. The web's echo of the stored slug is the
-	// only thing substituted; a genuinely different disallowed slug still 400s.
+	// server had already replaced.
 	if conv.Lockdown && !s.cfg.LockdownAllows(model) {
-		// Same rule as a turn (applyTurnModelOverride): a disallowed slug on a
-		// lockdown conversation is a stale client echo, not a request. Compact
-		// on the conversation's stored model when that is allowed, otherwise
-		// on the lockdown default, rather than refusing an action the user can
-		// only escape by reloading.
+		// Compact deliberately diverges from a turn here. A turn REFUSES a
+		// disallowed override and names the model to use instead (#1588,
+		// applyTurnModelOverride), because the caller asked for that model and
+		// has to be told it cannot have it. Compact is a button, not a model
+		// choice: the slug only rides along because the web sends its picker
+		// state, so substituting an allowed one — the conversation's own, else
+		// the lockdown default — summarizes what the user asked to summarize
+		// instead of refusing an action they can only escape by reloading.
 		switch {
 		case s.cfg.LockdownAllows(conv.Model):
 			model = conv.Model

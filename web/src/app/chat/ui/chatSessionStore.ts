@@ -27,8 +27,12 @@ import type { SkillInfo } from "./skillSlash";
 import type { ConversationSummary, ServerConfig } from "./chat-experience";
 
 export type ChatSessionSnapshot = {
-  // Per-conversation message cache (keyed by conversation id / PENDING sentinel).
-  messagesByConv: Record<string, Message[]>;
+  // Per-conversation message cache (keyed by conversation id / PENDING
+  // sentinel). A Map, not a Record: the key is a server-issued conversation
+  // id, and using remote input as an object property name is the
+  // js/remote-property-injection sink CodeQL flags (a conv id of
+  // `__proto__` would otherwise reach Object.prototype).
+  messagesByConv: ReadonlyMap<string, Message[]>;
   // Sidebar conversation lists.
   conversations: ConversationSummary[];
   archivedConversations: ConversationSummary[];

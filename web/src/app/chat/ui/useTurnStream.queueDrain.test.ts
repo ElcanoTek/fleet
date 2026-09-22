@@ -29,7 +29,14 @@ import type { HistoryEntry, Message } from "./history";
 
 const CONV = "conv-1";
 
-type Store = Record<string, Message[]>;
+// The component's messagesByConvRef is a Map (a conv id is server-issued,
+// so it must not be used as an object property name — CodeQL
+// js/remote-property-injection). The harness mirrors that shape.
+type Store = Map<string, Message[]>;
+
+// Read one conversation's slot out of the Map-backed store.
+const convSlot = (h: Harness, convId: string): Message[] =>
+  h.store.get(convId) ?? [];
 type InflightInfo = { inflight: boolean; turn_id?: string; last_event_id?: number };
 
 const sse = (id: number, event: string, data: unknown) =>
@@ -93,7 +100,7 @@ const makeHarness = (opts: {
   inflight: InflightInfo[];
   streamBodies?: Array<() => ReadableStream<Uint8Array>>;
 }): Harness => {
-  const store: Store = { [CONV]: opts.initial };
+  const store: Store = new Map([[CONV, opts.initial]]);
   const messagesByConvRef = { current: store };
   const loadConversationCalls: string[] = [];
   const streaming = new Set<string>();
@@ -105,8 +112,8 @@ const makeHarness = (opts: {
     convId: string,
     updater: Message[] | ((prev: Message[]) => Message[]),
   ) => {
-    const prev = store[convId] ?? [];
-    store[convId] = typeof updater === "function" ? updater(prev) : updater;
+    const prev = store.get(convId) ?? [];
+    store.set(convId, typeof updater === "function" ? updater(prev) : updater);
   };
 
   const patchAssistantMessage = (
@@ -114,15 +121,16 @@ const makeHarness = (opts: {
     assistantId: number,
     updater: (m: Message) => Message,
   ) => {
-    store[convId] = (store[convId] ?? []).map((m) =>
-      m.id === assistantId ? updater(m) : m,
+    store.set(
+      convId,
+      (store.get(convId) ?? []).map((m) => (m.id === assistantId ? updater(m) : m)),
     );
   };
 
   const loadConversation = async (convId: string) => {
     loadConversationCalls.push(convId);
     const { historyToMessages } = await import("./history");
-    store[convId] = historyToMessages(opts.persisted);
+    store.set(convId, historyToMessages(opts.persisted));
   };
 
   const nth = <T,>(list: T[], i: number): T => list[Math.min(i, list.length - 1)];
@@ -178,7 +186,7 @@ const makeHarness = (opts: {
 
   const deps: TurnStreamDeps = {
     setConvMessages,
-    getConvMessages: (convId: string) => store[convId] ?? [],
+    getConvMessages: (convId: string) => store.get(convId) ?? [],
     renameConvKey: noop,
     patchAssistantMessage,
     startThinkingCrossfade: noop,
@@ -198,7 +206,7 @@ const makeHarness = (opts: {
     promoteComposerKey: noop,
     setMessagesByConv: (updater) => {
       const next = typeof updater === "function" ? updater(store) : updater;
-      Object.assign(store, next);
+      for (const [convId, messages] of next) store.set(convId, messages);
     },
     setConversations: noop,
     setActiveConversationId: noop,
@@ -294,7 +302,7 @@ describe("followQueueDrain", () => {
     });
     const { result } = renderHook(() => useTurnStream(h.deps));
     await result.current.followQueueDrain(CONV);
-    const cards = h.store[CONV].flatMap((message) => message.approvals ?? []);
+    const cards = convSlot(h, CONV).flatMap((message) => message.approvals ?? []);
     expect(cards.find((card) => card.id === "running")).toMatchObject({ status: "pending", executing: true });
     expect(cards.find((card) => card.id === "pending")).toMatchObject({ status: "rejected" });
   });
@@ -320,7 +328,7 @@ describe("followQueueDrain", () => {
     const { result } = renderHook(() => useTurnStream(h.deps));
     await result.current.followQueueDrain(CONV);
 
-    const msgs = h.store[CONV];
+    const msgs = convSlot(h, CONV);
     // The queued follow-up finally has a user bubble AND an answer.
     expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
     expect(msgs[2].content).toBe("keep it clear and concise");
@@ -352,7 +360,7 @@ describe("followQueueDrain", () => {
     const { result } = renderHook(() => useTurnStream(h.deps));
     await result.current.followQueueDrain(CONV);
 
-    const msgs = h.store[CONV];
+    const msgs = convSlot(h, CONV);
     expect(msgs[3].content).toBe("Rewritten for the client.");
     expect(msgs[3].content).not.toContain("DRAFT_SHOULD_VANISH");
   });
@@ -384,7 +392,7 @@ describe("followQueueDrain", () => {
     const { result } = renderHook(() => useTurnStream(h.deps));
     await result.current.followQueueDrain(CONV);
 
-    const contents = h.store[CONV].map((m) => m.content);
+    const contents = convSlot(h, CONV).map((m) => m.content);
     expect(contents).toContain("first follow-up");
     expect(contents).toContain("one");
     expect(contents).toContain("second follow-up");
@@ -410,7 +418,7 @@ describe("followQueueDrain", () => {
 
     // Postgres held the drained turn all along; the transcript now shows it.
     expect(h.loadConversationCalls).toEqual([CONV]);
-    expect(h.store[CONV].map((m) => m.content)).toEqual([
+    expect(convSlot(h, CONV).map((m) => m.content)).toEqual([
       "run the analysis",
       "Here is the analysis.",
       "keep it clear and concise",
@@ -479,11 +487,11 @@ describe("a direct submission the server queued instead of running", () => {
     // The transcript is exactly as it was: the ack said "queued", not "running",
     // so there is no turn to render yet. Before this, the JSON ack was pumped
     // as SSE and left an assistant slot thinking forever.
-    expect(h.store[CONV].map((m) => m.content)).toEqual([
+    expect(convSlot(h, CONV).map((m) => m.content)).toEqual([
       "run the analysis",
       "Here is the analysis.",
     ]);
-    expect(h.store[CONV].some((m) => m.state === "thinking" || m.state === "streaming")).toBe(
+    expect(convSlot(h, CONV).some((m) => m.state === "thinking" || m.state === "streaming")).toBe(
       false,
     );
     // The message is not lost — it is on the chip strip with a send-now button.
@@ -536,7 +544,7 @@ describe("a direct submission the server queued instead of running", () => {
     await result.current.followQueueDrain(CONV);
 
     // The drained turn is on screen exactly once...
-    expect(h.store[CONV].map((m) => m.content)).toEqual([
+    expect(convSlot(h, CONV).map((m) => m.content)).toEqual([
       "run the analysis",
       "Here is the analysis.",
       "keep it clear and concise",
@@ -545,7 +553,7 @@ describe("a direct submission the server queued instead of running", () => {
     // ...and the follower opened ONE stream to put it there. A second open is
     // the bug: it can only append a slot whose every event is already applied.
     expect(h.streamAttaches).toBe(1);
-    expect(h.store[CONV].some((m) => m.state === "thinking" || m.state === "streaming")).toBe(
+    expect(convSlot(h, CONV).some((m) => m.state === "thinking" || m.state === "streaming")).toBe(
       false,
     );
   });
@@ -586,9 +594,9 @@ describe("a direct submission the server queued instead of running", () => {
     // test first, and the useful "expected 5 to be 4" diff is replaced by a
     // bare "Test timed out in 5000ms" that reads like a slow test rather than
     // the defect it is.
-    await vi.waitFor(() => expect(h.store[CONV].length).toBe(4), { timeout: 15000, interval: 25 });
+    await vi.waitFor(() => expect(convSlot(h, CONV).length).toBe(4), { timeout: 15000, interval: 25 });
 
-    const msgs = h.store[CONV];
+    const msgs = convSlot(h, CONV);
     // No orphan: the optimistic pair was withdrawn and the drained turn's own
     // replay rendered the exchange.
     expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);

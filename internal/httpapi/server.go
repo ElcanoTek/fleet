@@ -536,6 +536,15 @@ type inflightEntry struct {
 	// steer is the running turn's mid-turn input mailbox (#785); nil for
 	// turns launched before a steer could exist (mock mode, tests).
 	steer *steerMailbox
+	// submissionID is the client-minted id of the POST /chat submission this
+	// turn was started FOR (#1592), echoed back by /inflight. A browser whose
+	// submission acknowledgement was lost in transit cannot otherwise tell the
+	// turn the server started for it from one that was already running: the
+	// turn id is new either way, and the transcript is inconclusive because a
+	// turn is registered before its user message commits. Empty for turns no
+	// submission named (webhooks, scheduled runs, pre-#1592 clients), which
+	// reads as "no evidence" rather than "not yours".
+	submissionID string
 }
 
 // IsRunning reports whether the turn is still generating (buffer open).
@@ -663,7 +672,7 @@ func envInt(key string, def int) int {
 // This ungated form serves turns with no steer mailbox and no queue row
 // (webhooks); chat submissions and queue drains go through registerTurnGated.
 func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBuffer, string, uint64, bool) {
-	buf, turnID, token, ok, _ := s.registerTurnGated(convID, cancel, nil, nil)
+	buf, turnID, token, ok, _ := s.registerTurnGated(convID, cancel, nil, nil, "")
 	return buf, turnID, token, ok
 }
 
@@ -681,7 +690,7 @@ func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBu
 // against does not hold the row back: that sweep's set never contained it.
 // swept reports a refusal so the caller cancels the row instead of
 // un-claiming it.
-func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, queued *queuedLaunch) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
+func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, queued *queuedLaunch, submissionID string) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
 	s.inflightMu.Lock()
 	if queued != nil && s.stopSweepGens[convID] != queued.sweepGen {
 		s.inflightMu.Unlock()
@@ -700,11 +709,12 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 	turnID = uuid.NewString()
 	buf = newTurnBuffer(convID, turnID)
 	s.inflight[convID] = inflightEntry{
-		cancel: cancel,
-		token:  token,
-		buf:    buf,
-		turnID: turnID,
-		steer:  steer,
+		cancel:       cancel,
+		token:        token,
+		buf:          buf,
+		turnID:       turnID,
+		steer:        steer,
+		submissionID: submissionID,
 	}
 	s.inflightMu.Unlock()
 

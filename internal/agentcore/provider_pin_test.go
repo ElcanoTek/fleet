@@ -108,26 +108,107 @@ func TestUpstreamPinQuantizationFloor(t *testing.T) {
 // Whichever family holds the default slot, it must never be servable at an
 // arbitrary precision from an arbitrary upstream: that is the failure mode that
 // reads as "the model got worse" rather than as a routing event. There are
-// exactly two ways to satisfy it — a strict pin (one upstream, so there is no
-// pool to vary) or a soft pin carrying a serving-precision floor. This asserts
-// the property rather than the current lab, so swapping the default cannot
-// quietly drop the guarantee.
+// exactly three ways to satisfy it, and every one of them is a property of the
+// REQUEST rather than a claim in a comment — a strict pin (one upstream, so
+// there is no pool to vary), a closed `Only` allow-list (the pool cannot grow
+// under us), or a serving-precision floor. This reads the emitted policy, not
+// the tables behind it, so swapping the default cannot quietly drop the
+// guarantee.
 func TestDefaultCoreModelCannotBeServedAtArbitraryPrecision(t *testing.T) {
 	for _, slug := range []string{DefaultCoreModel, DefaultMaxModel} {
 		p := upstreamPinFor(slug)
 		if p == nil {
 			t.Fatalf("upstreamPinFor(%q) = nil: a default-tier slug must be pinned", slug)
 		}
-		strict := len(p.Only) > 0 && p.AllowFallbacks != nil && !*p.AllowFallbacks
-		if strict {
-			continue // one upstream: no pool, so no precision to vary
-		}
-		if pinServesOfficialWeightsOnly(slug) {
-			continue // this exact slug's whole pool is the vendor's official weights: nothing to floor
+		if len(p.Only) > 0 {
+			continue // closed set: strict (one upstream) or a validated official-weights pool
 		}
 		if len(p.Quantizations) == 0 {
-			t.Errorf("upstreamPinFor(%q) = %+v: a soft-pinned default over a mixed pool needs a serving-precision floor", slug, p)
+			t.Errorf("upstreamPinFor(%q) = %+v: a soft-pinned default over an open pool needs a serving-precision floor or an Only allow-list", slug, p)
 		}
+	}
+}
+
+// The official-pool exemption must be ENFORCED, not snapshotted (#1589). A
+// listed slug's request carries its validated pool as provider.only, so an
+// endpoint OpenRouter adds to that pool later — a third party, or a quantized
+// serving — cannot inherit the exemption between endpoint checks. The vendor
+// stays first in Order (prompt-cache locality) and fallbacks stay on, so the
+// cloud resellers of the official weights remain reachable: this closes the
+// pool, it does not shrink it to one endpoint.
+func TestOfficialPoolExemptionIsEnforcedAtRequestTime(t *testing.T) {
+	for slug, pool := range officialPoolSlugs {
+		if pool.checked == "" {
+			t.Errorf("officialPoolSlugs[%q]: no check date; the pool must be recorded with the endpoint list in hand", slug)
+		}
+		for _, form := range []string{slug, "~" + slug} {
+			p := upstreamPinFor(form)
+			if p == nil {
+				t.Fatalf("upstreamPinFor(%q) = nil, want a pin", form)
+			}
+			if len(p.Only) != len(pool.providers) {
+				t.Errorf("upstreamPinFor(%q).Only = %v, want the validated pool %v", form, p.Only, pool.providers)
+				continue
+			}
+			for i, want := range pool.providers {
+				if p.Only[i] != want {
+					t.Errorf("upstreamPinFor(%q).Only[%d] = %q, want %q", form, i, p.Only[i], want)
+				}
+			}
+			if p.AllowFallbacks == nil || !*p.AllowFallbacks {
+				t.Errorf("upstreamPinFor(%q) = %+v: the allow-list closes the pool, it must not disable fallbacks onto the resellers in it", form, p)
+			}
+			// The preferred upstream must be inside the set it may route to,
+			// or the allow-list makes the cache-warm route unroutable.
+			if len(p.Order) != 1 {
+				t.Fatalf("upstreamPinFor(%q).Order = %v, want the vendor alone", form, p.Order)
+			}
+			var found bool
+			for _, name := range p.Only {
+				if name == p.Order[0] {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("upstreamPinFor(%q): preferred upstream %q is not in Only=%v", form, p.Order[0], p.Only)
+			}
+		}
+	}
+
+	// Siblings do not inherit the allow-list any more than they inherit the
+	// exemption: an unchecked slug keeps OpenRouter's open pool (and, where the
+	// family mixes precisions, the floor).
+	for _, slug := range []string{"openai/gpt-5.6-sol", "anthropic/claude-sonnet-5", "z-ai/glm-5.2"} {
+		p := upstreamPinFor(slug)
+		if p == nil {
+			t.Fatalf("upstreamPinFor(%q) = nil, want a pin", slug)
+		}
+		if len(p.Only) != 0 {
+			t.Errorf("upstreamPinFor(%q).Only = %v, want none: only validated slugs carry an allow-list", slug, p.Only)
+		}
+	}
+}
+
+// The allow-list is handed to the request builder like the floor is, so it must
+// not share backing state with the table either.
+func TestOfficialPoolAllowlistNotAliased(t *testing.T) {
+	const listed = "anthropic/claude-opus-5" // any slug with a validated pool
+	first := upstreamPinFor(listed)
+	if first == nil || len(first.Only) == 0 {
+		t.Fatalf("expected an allow-list on %q", listed)
+	}
+	want := len(first.Only)
+	head := first.Only[0]
+	first.Only = append(first.Only, "Some Third Party")
+	first.Only[0] = "mutated"
+
+	second := upstreamPinFor(listed)
+	if len(second.Only) != want {
+		t.Fatalf("allow-list length = %d after a caller mutated an earlier pin, want %d", len(second.Only), want)
+	}
+	if second.Only[0] != head {
+		t.Errorf("allow-list[0] = %q after a caller mutated an earlier pin, want %q", second.Only[0], head)
 	}
 }
 

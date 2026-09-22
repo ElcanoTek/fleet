@@ -314,6 +314,76 @@ func (s *Store) lookupTurn(ctx context.Context, turnID, conversationID string) (
 	return &r, nil
 }
 
+// TurnOutcomeRecord is everything the server already knows about what became
+// of ONE turn, gathered in a single round trip so a client can READ an answer
+// instead of inferring one from a liveness probe plus a transcript (#1593).
+//
+// None of it is new state. turns.status has recorded the terminal outcome
+// since migration 002, the frame that decided that status has been in
+// turn_events all along, and the user entry's provenance row (turn_seq 1) has
+// existed since the durable journal landed. What was missing was a way to ask.
+type TurnOutcomeRecord struct {
+	TurnRecord
+	// UserCommitted reports whether the turn's user entry (turn_seq 1) has
+	// been projected into canonical history. A turn is registered and exposed
+	// BEFORE its user message commits, so a transcript that looks finished can
+	// predate a turn that is still running; this separates the two without the
+	// client re-probing to wait the window out.
+	UserCommitted bool
+	// TerminalEvent is the name of the last terminal frame persisted for the
+	// turn, and TerminalData its payload verbatim — the same JSON the SSE
+	// stream carried, so a client that already parses these frames needs no
+	// second vocabulary. Both are empty while the turn runs, and stay empty
+	// for a turn that died before any terminal frame reached the ledger.
+	TerminalEvent string
+	TerminalData  string
+}
+
+// LookupTurnOutcome resolves a turn's recorded outcome, scoped to its
+// conversation exactly as LookupTurnInConversation is: the conversation id is
+// the caller's ownership proof, so it belongs in the query rather than in a
+// handler check a refactor could drop (#1112). Returns (nil, nil) when the
+// turn is missing or belongs to a different conversation.
+//
+// The terminal-frame subquery reads the same event names inferTerminalStatus
+// seals a turn on, so "why did it end" always comes from the very frame that
+// decided turns.status. Highest event_id wins: startup recovery appends a
+// synthetic terminal frame to a stranded turn, and that later frame is the
+// outcome a client is asking about.
+func (s *Store) LookupTurnOutcome(ctx context.Context, turnID, conversationID string) (*TurnOutcomeRecord, error) {
+	if conversationID == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT t.turn_id, t.conversation_id, t.started_at, t.finished_at, t.status, t.lossy,
+		        EXISTS (SELECT 1 FROM messages m
+		                 WHERE m.turn_id = t.turn_id AND m.turn_seq = 1),
+		        COALESCE(e.event_name, ''), COALESCE(e.data_json, '')
+		   FROM turns t
+		   LEFT JOIN LATERAL (
+		        SELECT te.event_name, te.data_json
+		          FROM turn_events te
+		         WHERE te.turn_id = t.turn_id
+		           AND te.event_name IN ('turn.completed', 'turn.cancelled',
+		                                 'turn.error', 'turn.model_required')
+		         ORDER BY te.event_id DESC
+		         LIMIT 1
+		   ) e ON TRUE
+		  WHERE t.turn_id = $1 AND t.conversation_id = $2`,
+		turnID, conversationID)
+	var r TurnOutcomeRecord
+	var status string
+	if err := row.Scan(&r.TurnID, &r.ConversationID, &r.StartedAt, &r.FinishedAt,
+		&status, &r.Lossy, &r.UserCommitted, &r.TerminalEvent, &r.TerminalData); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	r.Status = TurnStatus(status)
+	return &r, nil
+}
+
 // SweepTurnEvents deletes finished turns — and, via FK cascade, their
 // turn_events ledger rows and turn_journal records — that reached a terminal
 // state more than ttl ago. Called from the post-turn retention sweep

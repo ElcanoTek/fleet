@@ -118,6 +118,10 @@ type chatStore interface {
 	// (#1112) so the stream DB-fallback cannot leak another conversation's
 	// turn events if the handler's equality check is ever dropped.
 	LookupTurnInConversation(ctx context.Context, turnID, conversationID string) (*store.TurnRecord, error)
+	// LookupTurnOutcome is LookupTurnInConversation plus the two facts a
+	// client cannot derive from a transcript: the frame that sealed the turn,
+	// and whether its user entry has been committed (#1593).
+	LookupTurnOutcome(ctx context.Context, turnID, conversationID string) (*store.TurnOutcomeRecord, error)
 
 	// Tool-call audit ledger (#224): one row per tool invocation, written from
 	// the post-turn persistence path and read by GET /conversations/{id}/audit.

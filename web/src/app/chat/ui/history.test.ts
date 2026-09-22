@@ -4,6 +4,7 @@ import {
   applyContextPressure,
   applyModelRequired,
   applyRetryNotice,
+  applyTurnOutcome,
   cachedPercent,
   clearRetryNotice,
   conversationTotals,
@@ -641,6 +642,74 @@ describe("applyModelRequired", () => {
 
     expect(out.modelRequired?.failedModel).toBe(""); // Default for wrong type
     expect(out.modelRequired?.statusCode).toBe(0); // Default for wrong type
+  });
+});
+
+// A server-reported outcome (#1593) is what the client stamps on a slot whose
+// stream died and whose turn Postgres has no answer for. Before it existed,
+// that slot was either called a dropped connection (whatever really happened)
+// or left as a blank reply with no Retry.
+describe("applyTurnOutcome", () => {
+  it("recovers the model-picker banner from a model_required outcome", () => {
+    const out = applyTurnOutcome(assistantMessage(), {
+      state: "failed",
+      reason: "model_required",
+      detail: {
+        reason: "retry_exhausted",
+        failed_model: "anthropic/claude-sonnet-4.6",
+        status_code: 429,
+        message: "The selected model is rate-limiting this request.",
+      },
+    });
+    expect(out.state).toBe("done");
+    expect(out.failed).toBe(true);
+    expect(out.modelRequired?.reason).toBe("retry_exhausted");
+    expect(out.modelRequired?.failedModel).toBe("anthropic/claude-sonnet-4.6");
+  });
+
+  it("uses the server's own message for a generic failure", () => {
+    const out = applyTurnOutcome(assistantMessage(), {
+      state: "failed",
+      reason: "error",
+      detail: { message: "the turn ended unexpectedly due to an internal error" },
+    });
+    expect(out.failed).toBe(true);
+    expect(out.content).toBe(
+      "the turn ended unexpectedly due to an internal error",
+    );
+  });
+
+  it("keeps whatever streamed rather than overwriting it with the reason", () => {
+    const out = applyTurnOutcome(
+      assistantMessage({ content: "partial answer" }),
+      { state: "failed", reason: "error", detail: { message: "boom" } },
+    );
+    expect(out.content).toBe("partial answer");
+    expect(out.failed).toBe(true);
+  });
+
+  it("falls back to generic copy when the record names no cause", () => {
+    const out = applyTurnOutcome(assistantMessage(), { state: "failed" });
+    expect(out.failed).toBe(true);
+    expect(out.content).toContain("ended before it could answer");
+  });
+
+  it("marks a cancelled turn cancelled, not failed", () => {
+    const out = applyTurnOutcome(assistantMessage({ content: "half" }), {
+      state: "cancelled",
+      reason: "cancelled",
+      detail: { reason: "cost_ceiling_reached" },
+    });
+    expect(out.state).toBe("done");
+    expect(out.cancelled).toBe(true);
+    expect(out.failed).toBeUndefined();
+    expect(out.content).toBe("half");
+  });
+
+  it("clears an in-flight retry notice — the turn is over either way", () => {
+    const withRetry = applyRetryNotice(assistantMessage(), { status_code: 429 });
+    const out = applyTurnOutcome(withRetry, { state: "failed", reason: "error" });
+    expect(out.retrying).toBeUndefined();
   });
 });
 

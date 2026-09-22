@@ -121,6 +121,14 @@ const (
 	upstreamProviderMoonshot  = "Moonshot AI"
 	upstreamProviderZAI       = "Z.AI"
 	upstreamProviderDeepSeek  = "DeepSeek"
+
+	// The cloud resellers that serve a vendor's official weights. They are
+	// never a canonicalUpstream preference of their own — they appear only
+	// inside an officialPoolSlugs allow-list, as the named fallbacks a soft
+	// pin is allowed to degrade onto.
+	upstreamProviderAzure         = "Azure"
+	upstreamProviderAmazonBedrock = "Amazon Bedrock"
+	upstreamProviderClaudeOnAWS   = "Claude Platform on AWS"
 )
 
 // fp8AndAbove is the quantization allow-list for families whose OpenRouter
@@ -157,12 +165,14 @@ var canonicalUpstream = []struct {
 	// The strong tier (DefaultMaxModel, Claude Opus 5) lives here: a soft pin
 	// to Anthropic's own endpoint with graceful degradation onto the cloud
 	// resellers of the same weights. The default-pin guard's exemption for that
-	// slug is recorded per SLUG in officialPoolSlugs, not here.
+	// slug — and the allow-list that enforces it — is recorded per SLUG in
+	// officialPoolSlugs, not here.
 	{"anthropic/", upstreamProviderAnthropic, false, nil},
 	// This family carries the recommended everyday default (DefaultCoreModel,
 	// GPT-5.6 Luna Pro), so this is the hot path for ordinary chat turns and
 	// every scheduled run. Soft pin: OpenAI first, Azure and Amazon Bedrock as
-	// fallbacks. No floor: see officialPoolSlugs for the per-slug evidence.
+	// fallbacks. No floor: see officialPoolSlugs for the per-slug evidence and
+	// the allow-list that holds the pool to it.
 	{"openai/", upstreamProviderOpenAI, false, nil},
 	{"moonshotai/", upstreamProviderMoonshot, false, nil},
 	{"z-ai/", upstreamProviderZAI, false, nil},
@@ -182,20 +192,62 @@ var canonicalUpstream = []struct {
 	{"deepseek/", upstreamProviderDeepSeek, false, fp8AndAbove},
 }
 
+// officialPoolAllowlist is one slug's validated endpoint pool: the exact
+// OpenRouter routing names found serving the vendor's official weights, and
+// the date that pool was read.
+type officialPoolAllowlist struct {
+	checked   string
+	providers []string
+}
+
 // officialPoolSlugs lists the exact slugs whose ENTIRE OpenRouter endpoint
 // pool was checked and found to serve the vendor's official weights (the
-// vendor plus its cloud resellers, quantization unspecified on every
-// endpoint), so their soft pin needs no serving-precision floor: there is no
-// third-party quantized serving to degrade onto. This is the third way a
-// default-tier slug may satisfy
-// TestDefaultCoreModelCannotBeServedAtArbitraryPrecision — per slug, never per
-// family, because a future model in the same family can be picked up by
-// third-party hosts. Add a slug only with the endpoint list in hand.
-var officialPoolSlugs = map[string]string{
-	// 2026-09-21: OpenAI ×3, Azure ×3, Amazon Bedrock ×1.
-	"openai/gpt-5.6-luna-pro": "OpenAI, Azure, Amazon Bedrock",
-	// 2026-09-21: Anthropic, Claude Platform on AWS, Amazon Bedrock ×2, Azure, Google.
-	"anthropic/claude-opus-5": "Anthropic, AWS, Amazon Bedrock, Azure, Google",
+// vendor plus its cloud resellers, quantization unspecified — "unknown" — on
+// every endpoint), so their soft pin needs no serving-precision floor: an fp8
+// floor would reject the whole pool, and there is no third-party quantized
+// serving to degrade onto. This is the third way a default-tier slug may
+// satisfy TestDefaultCoreModelCannotBeServedAtArbitraryPrecision — per slug,
+// never per family, because a future model in the same family can be picked up
+// by third-party hosts. Add a slug only with the endpoint list in hand.
+//
+// The list is an ALLOW-LIST, not a note: upstreamPinFor sends it as
+// provider.only, so the claim is enforced on the request instead of snapshotted
+// in a comment (#1589). Be exact about what that enforces, because provider.only
+// matches a PROVIDER ROUTING NAME, not an endpoint: a third-party host appearing
+// in one of these pools later is refused, which is the case the exemption needs
+// closed, but an already-listed provider that adds or re-quantizes an endpoint
+// still matches its name. Endpoint-level precision is what the quantization
+// floor is for, and it is unusable here — every endpoint in both pools reports
+// quantization "unknown", which fp8AndAbove excludes, so a floor would make both
+// slugs unroutable. The residue is therefore an assumption, not a guarantee:
+// these named vendors and their official resellers keep serving official
+// weights, and nothing re-reads endpoint attributes to check it. See
+// docs/UPSTREAM-ROUTING-FLOOR.md.
+//
+// Every name below must be OpenRouter's own routing name for the endpoint —
+// a misspelling narrows the pool to nothing.
+var officialPoolSlugs = map[string]officialPoolAllowlist{
+	// 2026-09-22: OpenAI ×3, Azure ×2 — every endpoint quantization
+	// "unknown". Amazon Bedrock was in the pool on 2026-09-21 and is not
+	// today; it stays on the allow-list because a reseller of the official
+	// weights coming back must not need a code change, and a name with no
+	// endpoint behind it simply never matches.
+	"openai/gpt-5.6-luna-pro": {
+		checked:   "2026-09-22",
+		providers: []string{upstreamProviderOpenAI, upstreamProviderAzure, upstreamProviderAmazonBedrock},
+	},
+	// 2026-09-22: Anthropic ×2, Claude Platform on AWS ×1, Amazon Bedrock ×3,
+	// Azure ×2, Google ×3 — eleven endpoints, every quantization "unknown".
+	"anthropic/claude-opus-5": {
+		checked: "2026-09-22",
+		providers: []string{
+			upstreamProviderAnthropic,
+			upstreamProviderClaudeOnAWS,
+			upstreamProviderAmazonBedrock,
+			upstreamProviderAzure,
+			upstreamProviderGoogle,
+		},
+	},
 }
 
 // pinServesOfficialWeightsOnly reports whether the exact slug (alias marker
@@ -221,6 +273,14 @@ func upstreamPinFor(modelSlug string) *openrouter.Provider {
 			p.Only = []string{c.name}
 		} else {
 			p.Order = []string{c.name}
+			// A slug whose whole pool was validated carries that pool as the
+			// request's allow-list: Order still prefers the vendor (prompt-cache
+			// locality), Only closes the set the fallback may reach, so the
+			// exemption from the quantization floor is a constraint on routing
+			// rather than an assertion about a pool that can grow (#1589).
+			if pool, ok := officialPoolSlugs[matchSlug]; ok {
+				p.Only = append([]string(nil), pool.providers...)
+			}
 		}
 		// Copy: the returned Provider is handed to the request builder, and a
 		// shared backing array would let one call's mutation reach every later

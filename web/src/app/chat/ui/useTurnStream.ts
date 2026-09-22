@@ -6,6 +6,7 @@ import {
   applyModelRequired,
   applyRetryNotice,
   applySubagentProgress,
+  applyTurnOutcome,
   clearRetryNotice,
   historyToMessages,
   parsePythonStream,
@@ -19,6 +20,7 @@ import {
   type RetryEventPayload,
   type SubagentProgressEventPayload,
   type ToolCallState,
+  type TurnOutcome,
 } from "./history";
 import {
   parseSseChunk,
@@ -31,6 +33,10 @@ import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
+import {
+  createRecoveryElection,
+  type RecoveryElection,
+} from "./recoveryElection";
 
 // One pending input in a conversation's #785 queue (wire shape of
 // queue.updated / GET /queue items).
@@ -157,7 +163,35 @@ const recoveryRetryDelaysMs = [1000, 2000, 4000, 8000, 16000];
 // a conversation left unsettled is no longer in attachedConvIdsRef, so the
 // liveness watchdog does not sweep it, and an outage longer than the backoff
 // would otherwise strand the slot until the user happened to switch tabs.
-const recoverySteadyRetryMs = 30000;
+//
+// That beat lengthens with the age of the outage (#1594). A flat 30 s is the
+// right cadence for an outage of minutes and far more than an outage of hours
+// warrants: a tab left open overnight behind a dead VPN asked 120 times an
+// hour for as long as it stayed open, and a visible tab never benefited from
+// the hidden-tab skip. The promise the user guide makes is "the page
+// re-checks by itself", not "every 30 seconds".
+//
+// The attempt number IS the age of the outage, so no clock has to be carried
+// beside it: every tick — one that probed, and one skipped because the tab
+// was hidden — is booked by this same ladder. Counting from the end of the
+// ~31 s backoff, the rungs below hold 30 s to roughly two and a half minutes
+// of outage and a minute apiece to roughly seven and a half.
+const recoverySteadyRetriesMs = [
+  30000, 30000, 30000, 30000, 60000, 60000, 60000, 60000, 60000,
+];
+
+// …and then a ceiling, which the chain keeps for as long as the outcome stays
+// unknown. Every path that learns the outage may be over — `online`,
+// `visibilitychange`, `focus`, all via nudgeRecovery — re-arms the chain at
+// attempt 0, so a user who comes back to the tab still gets an answer within
+// seconds rather than waiting out whichever rung the chain had reached.
+const recoverySteadyCapMs = 300000;
+
+// Ladder position of the first steady rung. A tick whose probe REACHED the
+// server holds here instead of climbing: the long-outage rungs are sized for
+// a client that cannot reach the server at all, and that is demonstrably not
+// what went wrong.
+const recoverySteadyBeatAttempt = recoveryRetryDelaysMs.length;
 
 // Ceiling on a single recovery request. Long enough for a slow-but-alive
 // server, short enough that a blackholed connection costs one beat.
@@ -166,10 +200,48 @@ const recoveryRequestTimeoutMs = 8000;
 // What reconcileFromPersisted learned from Postgres about the turn we hold open.
 type PersistedReconcile = "adopted" | "absent" | "unreachable";
 
-// What /inflight said — or that it could not be asked.
+// What /inflight said — or that it could not be asked. submissionID names the
+// POST /chat submission the reported turn was started FOR (#1592); "" means
+// the server said nothing about it, which is no evidence rather than a denial.
 type InflightProbe =
-  | { kind: "answer"; inflight: boolean; turnID: string }
+  | { kind: "answer"; inflight: boolean; turnID: string; submissionID: string }
   | { kind: "unreachable" };
+
+// What the per-turn outcome endpoint said about the turn a slot is holding
+// open (#1593). Three answers, and the third is not a failure of the second:
+//   "answer"      — the server named the turn's state.
+//   "unreachable" — we could not ask (thrown fetch, 5xx, an expired session).
+//   "unknown"     — there is nothing to ask ABOUT: we never learned the turn's
+//                   id, or the server has no such turn for this conversation.
+//                   The caller keeps whatever behavior it had before the
+//                   outcome existed, rather than waiting for an answer that is
+//                   never coming.
+type TurnOutcomeProbe =
+  | ({ kind: "answer" } & TurnOutcome)
+  | { kind: "unreachable" }
+  | { kind: "unknown" };
+
+// The response header POST /chat sets naming the conversation it is streaming
+// (#1591). A brand-new chat learns its real id from the `conversation` SSE
+// frame; this header carries the same id on the response itself, so a socket
+// that dies before that frame still leaves an id the recovery chain can probe.
+const conversationIdHeader = "X-Fleet-Conversation-Id";
+
+// answersOurSubmission compares the submission id /inflight reported against
+// the one this client sent. `null` = no evidence either way (one side is
+// silent — an older server, a turn nobody's submission named). Only an
+// outright `false` may stop a client attaching to a live turn: a lost
+// acknowledgement leaves the browser unable to tell its own turn from one that
+// was already running, and attaching to the wrong one renders a stranger's
+// answer under a prompt it never saw (#1592).
+const answersOurSubmission = (
+  probe: InflightProbe,
+  ours: string,
+): boolean | null => {
+  if (probe.kind !== "answer") return null;
+  if (!ours || !probe.submissionID) return null;
+  return probe.submissionID === ours;
+};
 
 // Ceiling on waiting for a superseded stream's own teardown to unwind before
 // the replacement attaches. Bounded so a wedged unwind degrades to "no
@@ -201,6 +273,113 @@ export function classifyQueueSubmitResponse(res: {
   return contentType.toLowerCase().includes("text/event-stream")
     ? "stream"
     : "queued";
+}
+
+// Reads a refused lockdown model override off a /api/chat rejection (#1588).
+//
+// A lockdown deployment refuses a model its allow-list forbids with 400 rather
+// than quietly running the turn on a different one — a deliberate API client
+// has to be told — and names the slug to use instead in the same body. A
+// browser can hold a stale slug through no fault of the user (the operator
+// narrowed the allow-list, the tiers behind it moved, or the server migrated
+// the conversation while this tab was asleep and the `conversation` event never
+// arrived), and for it a bare refusal is a loop it can only escape by
+// reloading. So we read the correction out and resend the turn once with it.
+//
+//   null  — not a lockdown model refusal: handle it like any other error.
+//   model — "" when the server offered no correction (an allow-list made only
+//           of globs has no literal slug to name); then the user must pick.
+export function parseLockdownModelRefusal(
+  status: number,
+  bodyText: string,
+): { message: string; model: string } | null {
+  if (status !== 400) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const body = parsed as { code?: unknown; error?: unknown; model?: unknown };
+  // Keyed off the machine-readable code, never the prose.
+  if (body.code !== "lockdown_model_not_allowed") return null;
+  return {
+    message: typeof body.error === "string" ? body.error : "",
+    model: typeof body.model === "string" ? body.model.trim() : "",
+  };
+}
+
+// reportsOutageToElection decides whether a finished probe may tell the
+// cross-tab election what it learned (#1595).
+//
+// An ANSWER always reports, whatever generation the tick belongs to: it is a
+// fact about the server, and the worst it can do is put tabs back on their own
+// free ladders early. An OUTAGE reports only while the tick is still current.
+// A nudge deliberately arms a newer tick while an older one may still be
+// inside its bounded /inflight request, so an older probe timing out AFTER a
+// newer one answered would otherwise re-assert an outage that is no longer
+// true — and the newer tick, needing another beat, could then be parked behind
+// another tab's lock rather than keeping its own ladder. That holder may
+// already be inside a long-lived stream, which is the one outcome this design
+// must never produce: a tab worse off than independent recovery.
+export function reportsOutageToElection(args: {
+  answered: boolean;
+  superseded: boolean;
+}): boolean {
+  return args.answered || !args.superseded;
+}
+
+// preferredTurnID picks which turn id to ask the server about.
+//
+// `||` semantics, deliberately, and this is a fix rather than a style choice.
+// The first arm of a chain whose stream died before `turn.started` OWNS the
+// empty string — it never learned an id — and `??` treats "" as present,
+// because "" is neither null nor undefined. A later probe or reattach learns
+// the real id, and with `??` every subsequent arm kept asking about no turn at
+// all: a turn that then failed before answering settled as the generic
+// connection-drop verdict instead of the server's real cause.
+export function preferredTurnID(
+  ownedTurnID: string | undefined,
+  learnedTurnID: string | undefined,
+): string {
+  return ownedTurnID || learnedTurnID || "";
+}
+
+// correctedModelAdoption decides what to do with a lockdown refusal that names
+// a replacement model. Two independent answers, and keeping them independent is
+// the point:
+//
+//   resend          — retry this submission with the corrected model. Nothing
+//                     was accepted by the server, so the POST *is* the
+//                     submission; not resending silently drops the user's
+//                     message. It must not depend on what the user is looking
+//                     at now.
+//   adoptIntoPicker — write the corrected model into the model picker. The
+//                     picker belongs to the conversation on screen, not to the
+//                     one this response answers, so this is allowed only while
+//                     the refused turn's conversation is still the active one.
+//                     Background and parallel streams are supported, so submit
+//                     in lockdown conversation A, navigate to B, and an
+//                     unguarded write would rewrite B's model to A's
+//                     correction.
+//
+// A refusal that names no model (a glob-only allow-list has no literal slug)
+// corrects nothing and is surfaced as an error instead; a retry that is itself
+// refused is not retried again.
+export function correctedModelAdoption(args: {
+  refusalModel: string;
+  // Optional because streamTurn's own parameter is: the first attempt simply
+  // omits it. Absent means "not a retry".
+  isModelRetry?: boolean;
+  activeConvKey: string | null;
+  target: string;
+}): { resend: boolean; adoptIntoPicker: boolean } {
+  const canCorrect = args.refusalModel !== "" && !args.isModelRetry;
+  return {
+    resend: canCorrect,
+    adoptIntoPicker: canCorrect && args.activeConvKey === args.target,
+  };
 }
 
 // persistedAnswersLocalTurn reports whether the CANONICAL (Postgres) copy of a
@@ -317,7 +496,7 @@ export interface TurnStreamDeps {
   getPendingAttachmentsForKey: PerConvComposerState["getPendingAttachmentsForKey"];
   promoteComposerKey: PerConvComposerState["promoteComposerKey"];
   // Component state setters.
-  setMessagesByConv: Dispatch<SetStateAction<Record<string, Message[]>>>;
+  setMessagesByConv: Dispatch<SetStateAction<Map<string, Message[]>>>;
   setConversations: Dispatch<SetStateAction<ConversationSummary[]>>;
   setActiveConversationId: Dispatch<SetStateAction<string | null>>;
   setSelectedPersona: Dispatch<SetStateAction<string>>;
@@ -329,7 +508,7 @@ export interface TurnStreamDeps {
   setSpreadsheetNudgeDismissed: Dispatch<SetStateAction<boolean>>;
   // Component-owned refs the loop reads/mutates.
   activeConversationIdRef: RefObject<string | null>;
-  messagesByConvRef: RefObject<Record<string, Message[]>>;
+  messagesByConvRef: RefObject<ReadonlyMap<string, Message[]>>;
   pendingApprovalScrollRef: RefObject<string | null>;
   // Component state values (read-only in the loop).
   selectedModel: string;
@@ -353,6 +532,12 @@ export interface TurnStreamDeps {
   promoteStreamKey: TurnStreamState["promoteStreamKey"];
   streamingConvsRef: TurnStreamState["streamingConvsRef"];
   isStreaming: boolean;
+  // Cross-tab election for the recovery chain's beat (#1595). Omitted, the
+  // hook builds its own from the platform — `navigator.locks` plus a
+  // BroadcastChannel where both exist, and today's independent per-tab chain
+  // where they do not. Supplied only by tests, which drive several "tabs" in
+  // one process; the hook owns whatever it is given and closes it on unmount.
+  recoveryElection?: RecoveryElection;
 }
 
 // The public entry points the component/JSX still call. applyStreamEvent,
@@ -556,6 +741,39 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // One monotonic sequence for every chain the hook ever arms. See the arming
   // comment in scheduleRecoveryRetry for why it is not per-record.
   const recoveryGenSeqRef = useRef(0);
+  // The submission id this client last sent for each conversation slot
+  // (#1592), carried past the POST so the recovery chain can compare it with
+  // the one /inflight reports. A Map, not an object: a conversation id is
+  // remote input and indexing an object with it is a property-injection sink.
+  // One entry per slot is enough — a client only has one submission in flight
+  // per conversation at a time. It is consulted only where the chain has no
+  // turn id of its own, which is reachable only from a direct submit whose
+  // stream died before turn.started; the entry is that submission's. And a
+  // stale entry could at worst make a probe read as "not ours", which leaves
+  // the slot mid-flight for the next tick — a later recovery, never a binding
+  // to the wrong turn.
+  const submissionIdByConvRef = useRef<Map<string, string>>(
+    new Map<string, string>(),
+  );
+  // Cross-tab election for the chain's beat (#1595). Built on first use rather
+  // than in an effect, because a chain can be armed before effects have run,
+  // and dropped to null by the unmount cleanup so React's Strict Mode
+  // setup-cleanup-setup cycle rebuilds it instead of leaving every later chain
+  // holding a closed channel.
+  const recoveryElectionRef = useRef<RecoveryElection | null>(null);
+  const recoveryElection = (): RecoveryElection => {
+    const existing = recoveryElectionRef.current;
+    if (existing) return existing;
+    // A callback resuming after unmount still reaches the release paths, and
+    // building a real election for it would open a channel and a visibility
+    // listener with nobody left to close them. Hand it an inert one — and do
+    // not cache it, or the Strict Mode re-setup would inherit it.
+    if (recoveryUnmountedRef.current)
+      return createRecoveryElection({ locks: null });
+    const made = deps.recoveryElection ?? createRecoveryElection();
+    recoveryElectionRef.current = made;
+    return made;
+  };
   const refreshQueue = async (
     convId: string,
   ): Promise<QueuedInput[] | null> => {
@@ -692,7 +910,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (indeterminateStatus(res.status)) return "unreachable";
       if (!res.ok) return "absent";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
-      const local = messagesByConvRef.current[convId] ?? [];
+      const local = messagesByConvRef.current.get(convId) ?? [];
       if (!persistedAnswersLocalTurn(data.history, local, options))
         return "absent";
       // Awaited, not returned: loadConversation makes its own request, and a
@@ -725,7 +943,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   const probeInflightTurn = async (convId: string): Promise<InflightProbe> => {
     if (isPendingKey(convId))
-      return { kind: "answer", inflight: false, turnID: "" };
+      return { kind: "answer", inflight: false, turnID: "", submissionID: "" };
     try {
       const res = await fetch(
         `/api/conversations/${encodeURIComponent(convId)}/inflight`,
@@ -735,15 +953,72 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         },
       );
       if (indeterminateStatus(res.status)) return { kind: "unreachable" };
-      if (!res.ok) return { kind: "answer", inflight: false, turnID: "" };
+      if (!res.ok)
+        return {
+          kind: "answer",
+          inflight: false,
+          turnID: "",
+          submissionID: "",
+        };
       const info = (await res.json()) as {
         inflight?: boolean;
         turn_id?: string;
+        submission_id?: string;
       };
       return {
         kind: "answer",
         inflight: Boolean(info?.inflight),
         turnID: info?.turn_id ?? "",
+        submissionID: info?.submission_id ?? "",
+      };
+    } catch {
+      return { kind: "unreachable" };
+    }
+  };
+
+  // fetchTurnOutcome asks what became of ONE turn (#1593). /inflight answers a
+  // question about the CONVERSATION and the transcript answers another; a slot
+  // left open by a dead socket needs neither. In particular a turn that ended
+  // BEFORE producing a reply — turn.model_required, a pre-answer provider
+  // error — leaves nothing live, nothing retained, and a transcript ending at
+  // the user's prompt, which is indistinguishable from a turn that simply
+  // produced nothing. The server has recorded which it was all along.
+  //
+  // Same reachability discipline as the two probes above: only an `answer` may
+  // drive a verdict. A 404 is not silence though — it is the server saying it
+  // has no such turn, which is "unknown", not "unreachable": re-asking would
+  // never resolve it.
+  const fetchTurnOutcome = async (
+    convId: string,
+    turnID: string,
+  ): Promise<TurnOutcomeProbe> => {
+    if (isPendingKey(convId) || !turnID) return { kind: "unknown" };
+    try {
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(convId)}/turns/${encodeURIComponent(turnID)}`,
+        { cache: "no-store", signal: recoveryRequestSignal() },
+      );
+      if (indeterminateStatus(res.status)) return { kind: "unreachable" };
+      if (!res.ok) return { kind: "unknown" };
+      const body = (await res.json()) as Partial<TurnOutcome>;
+      // A body without a state says nothing usable — an older server, or a
+      // proxy that answered 200 with something else. Fall back rather than
+      // reading the absence as a terminal verdict.
+      if (
+        body?.state !== "running" &&
+        body?.state !== "completed" &&
+        body?.state !== "failed" &&
+        body?.state !== "cancelled"
+      ) {
+        return { kind: "unknown" };
+      }
+      return {
+        kind: "answer",
+        state: body.state,
+        reason: typeof body.reason === "string" ? body.reason : "",
+        detail:
+          body.detail && typeof body.detail === "object" ? body.detail : {},
+        user_committed: Boolean(body.user_committed),
       };
     } catch {
       return { kind: "unreachable" };
@@ -763,7 +1038,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     assistantId: number,
     gap: boolean,
   ): { slot: Message; midFlight: boolean } | null => {
-    const slot = (messagesByConvRef.current[convId] ?? []).find(
+    const slot = (messagesByConvRef.current.get(convId) ?? []).find(
       (m) => m.id === assistantId,
     );
     if (!slot) return null;
@@ -808,7 +1083,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   //                        stream the unmounted parent can no longer abort.
   //
   // The chain does not give up while the outcome stays unknown. It backs off
-  // (1, 2, 4, 8, 16 s) and then keeps a slow steady beat, because the
+  // (1, 2, 4, 8, 16 s) and then keeps a slow steady beat that lengthens with
+  // the age of the outage — 30 s, a minute, five minutes — because the
   // alternative is a slot that stays "thinking" forever on a page whose guide
   // promises it re-checks by itself: the conversation is no longer in
   // attachedConvIdsRef, so the liveness watchdog does not sweep it, and
@@ -817,6 +1093,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // covers that case and background polling is waste.
   const recoveryOwns = (convId: string): boolean =>
     recoveryOwnedRef.current.has(convId);
+
+  // recoveryTickPending is "the chain has a next tick booked" — the question
+  // every caller that is about to release ownership after an await actually
+  // means. A booked tick is a timer this tab owns, OR a beat parked with the
+  // cross-tab election while another tab waits out the outage (#1595). Reading
+  // only the timer map would make a stood-down chain look abandoned and
+  // release the slot it is still holding open.
+  const recoveryTickPending = (convId: string): boolean =>
+    recoveryRetriesRef.current.has(convId) || recoveryElection().booked(convId);
 
   // releaseRecovery ends ownership: the outcome is known, or the slot is gone.
   // It also frees the conversation, because ownership is what suppressed the
@@ -831,6 +1116,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       window.clearTimeout(timer);
       recoveryRetriesRef.current.delete(convId);
     }
+    // Leaving the election frees the lock, so a tab that stood down behind
+    // this one is granted it and runs its own beat straight away (#1595).
+    recoveryElection().leave(convId);
     const owned = recoveryOwnedRef.current.delete(convId);
     if (owned) bumpRecoveryEpoch(convId);
     if (owned && !attachedConvIdsRef.current.has(convId)) {
@@ -838,11 +1126,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
   };
 
-  // recoveryDelayFor is the backoff, then a steady slow beat.
-  const recoveryDelayFor = (attempt: number): number =>
-    attempt < recoveryRetryDelaysMs.length
-      ? recoveryRetryDelaysMs[attempt]
-      : recoverySteadyRetryMs;
+  // recoveryDelayFor is the backoff, then a steady beat that itself lengthens
+  // with how long the outage has already lasted, up to a ceiling (#1594). It
+  // books the successor chase and the deferred direct hand-off too: those wait
+  // on the same unreachable server, so they make the same trade.
+  const recoveryDelayFor = (attempt: number): number => {
+    if (attempt < recoveryRetryDelaysMs.length)
+      return recoveryRetryDelaysMs[attempt];
+    const steady = attempt - recoveryRetryDelaysMs.length;
+    return steady < recoverySteadyRetriesMs.length
+      ? recoverySteadyRetriesMs[steady]
+      : recoverySteadyCapMs;
+  };
 
   // followSuccessor attaches to the turn the server is running now, after the
   // chain has settled the older turn it was recovering. Fire-and-forget was
@@ -863,7 +1158,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const lastUnsettledAssistant = (
     convId: string,
   ): { assistantId: number; gap: boolean } | null => {
-    const messages = messagesByConvRef.current[convId] ?? [];
+    const messages = messagesByConvRef.current.get(convId) ?? [];
     const last = messages[messages.length - 1];
     if (!last || last.role !== "assistant") return null;
     if (slotNeedsSettling(convId, last.id, false))
@@ -932,7 +1227,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // there would let a later turn be attached over a transcript missing
     // ours. Wait until our prompt is the newest question on record.
     const submitted = pendingDirectHandoffRef.current.get(convId);
-    const local = messagesByConvRef.current[convId] ?? [];
+    const local = messagesByConvRef.current.get(convId) ?? [];
     const lastAsked = [...local].reverse().find((m) => m.role === "user");
     const landed = lastAsked?.content === submitted;
     if (adopted !== "adopted" || !landed) {
@@ -1188,12 +1483,21 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     recoveryOwnedRef.current.set(convId, {
       assistantId,
       gap,
-      turnID: owned?.turnID ?? currentTurnIdByConvRef.current.get(convId) ?? "",
+      // `||`, not `??`: the first arm of a chain whose stream died before
+      // turn.started owns the EMPTY string, and `??` would keep that forever
+      // because "" is neither null nor undefined. A later probe or reattach
+      // learns the real id into currentTurnIdByConvRef, and every subsequent
+      // arm has to pick it up — otherwise the chain keeps asking about a turn
+      // it cannot name.
+      turnID: preferredTurnID(
+        owned?.turnID,
+        currentTurnIdByConvRef.current.get(convId),
+      ),
       gen,
     });
     const existing = recoveryRetriesRef.current.get(convId);
     if (existing !== undefined) window.clearTimeout(existing);
-    const timer = window.setTimeout(() => {
+    const runTick = (): void => {
       recoveryRetriesRef.current.delete(convId);
       void (async () => {
         // Ownership is NOT released here: it is released when the outcome is
@@ -1223,6 +1527,27 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return;
         }
         const probe = await probeInflightTurn(convId);
+        const answered = probe.kind === "answer";
+        // What this tab just learned about the server decides two things: its
+        // own next beat, and — when the server answered — a wake-up for every
+        // other tab parked on this conversation, so they resolve their own
+        // slots at the same moment rather than on their own ladders (#1595).
+        //
+        // An ANSWER is reported whatever this tick's generation, because it is
+        // a fact about the server and reporting it can only put tabs back on
+        // their own (free) ladders. An OUTAGE is reported only while this tick
+        // is still the current one. A nudge deliberately creates a newer
+        // generation while an older tick may still be inside its bounded
+        // /inflight request, so without that guard an older probe timing out
+        // AFTER a newer one answered would re-assert an outage that is no
+        // longer true — and the newer tick, needing another beat, could then
+        // be parked behind another tab's lock instead of keeping its own
+        // ladder. That holder may already be inside a long-lived stream, which
+        // is the one thing this design must never do: leave a tab worse off
+        // than independent recovery.
+        if (reportsOutageToElection({ answered, superseded: superseded() })) {
+          recoveryElection().report(convId, answered);
+        }
         if (recoveryUnmountedRef.current || superseded()) return;
         if (probe.kind === "unreachable") {
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
@@ -1239,7 +1564,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const adoptOurTurnThenFollow = async (): Promise<void> => {
           await settleStreamedSlot(convId, assistantId, gap, attempt + 1, true);
           if (recoveryUnmountedRef.current || superseded()) return;
-          if (recoveryRetriesRef.current.has(convId)) return;
+          if (recoveryTickPending(convId)) return;
           releaseRecovery(convId);
           void followSuccessor(convId, 0, probe.turnID || undefined);
         };
@@ -1269,6 +1594,22 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             void followSuccessor(convId, 0, probe.turnID || undefined);
             return;
           }
+          // Postgres has no answer for our slot, so our turn is not over —
+          // and yet the ids still cannot say whether the LIVE one is ours.
+          // The submission id can (#1592): a turn the server started for a
+          // different submission is one our input is queued behind, not ours
+          // finally running. Attaching would replay a stranger's answer into
+          // this bubble. Come back instead — when our input drains into its
+          // own turn, /inflight names us and the branch below takes it.
+          if (
+            answersOurSubmission(
+              probe,
+              submissionIdByConvRef.current.get(convId) ?? "",
+            ) === false
+          ) {
+            scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
+            return;
+          }
         }
         if (probe.inflight || probe.turnID) {
           // Bound to the turn this tick identified: between this probe and the
@@ -1281,7 +1622,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // replacement stream can report missed events our chain never saw).
           // That pending retry owns the slot now; cancelling it here by
           // releasing would strand an empty bubble.
-          if (recoveryRetriesRef.current.has(convId)) return;
+          if (recoveryTickPending(convId)) return;
           // `await` here spans the WHOLE replay, so "is it still attached" is
           // not the question — a reattach that ran a stream to its terminal
           // event has already let the handle go. Judge by the slot: no longer
@@ -1320,7 +1661,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // still owns a turn that may well be running, and a UI that hides
           // Stop and offers to clear the conversation would be lying.
           markConvStreaming(convId);
-          scheduleRecoveryRetry(convId, assistantId, gapNow, attempt + 1);
+          // This tick's probe was ANSWERED, so the long-outage rungs do not
+          // apply: what failed is the attach, not the network, and a turn the
+          // server says is running deserves the steady beat rather than a
+          // five-minute wait (#1594). Clamping also walks a chain that had
+          // climbed those rungs back down as soon as the server answers again.
+          scheduleRecoveryRetry(
+            convId,
+            assistantId,
+            gapNow,
+            Math.min(attempt + 1, recoverySteadyBeatAttempt),
+          );
           return;
         }
         // Definitive: nothing in flight, nothing retained. Now a settle is
@@ -1330,15 +1681,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // Settled (or adopted, or re-armed by settleStreamedSlot when Postgres
         // itself was unreachable). If nothing re-armed the chain, the outcome
         // is known and the conversation is free (releaseRecovery idles it).
-        if (recoveryRetriesRef.current.has(convId)) return;
+        if (recoveryTickPending(convId)) return;
         releaseRecovery(convId);
         // Same hand-off: this chain's settle is a turn-ends moment reached
         // without any stream's finally, and the follower it displaced has to
         // be started now that ownership is gone.
         void followQueueDrain(convId);
       })();
-    }, recoveryDelayFor(attempt));
-    recoveryRetriesRef.current.set(convId, timer);
+    };
+    // Who books this beat is the one thing the election decides (#1595). While
+    // THIS tab's own last probe could not reach the server, every tab open on
+    // the conversation would re-learn the same nothing, so one of them asks
+    // and the rest park their beat until it reports an answer — or until the
+    // lock comes to them, which is what a tab that dies mid-recovery hands
+    // over. Any other state, including no election at all (no
+    // `navigator.locks`, no BroadcastChannel, or a hidden tab whose ticks cost
+    // nothing anyway), books the timer right here exactly as before.
+    const delayMs = recoveryDelayFor(attempt);
+    if (recoveryElection().book(convId, delayMs, runTick) === "elected") return;
+    recoveryRetriesRef.current.set(convId, window.setTimeout(runTick, delayMs));
   };
 
   // nudgeRecovery pulls a chain's next tick forward. The hidden-tab branch
@@ -1366,6 +1727,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       window.clearTimeout(timer);
       recoveryRetriesRef.current.delete(convId);
     }
+    // A nudge is a person coming back to THIS tab (or its radio returning), so
+    // its next beat is its own however the election stands: the tab being
+    // looked at never waits on another tab's ladder (#1595).
+    recoveryElection().claimNextBeat(convId);
     scheduleRecoveryRetry(convId, owned.assistantId, owned.gap, 0);
   };
 
@@ -1420,6 +1785,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       bumpRecoveryEpoch(convId);
     endSuccessorChase(convId);
     if (owned) releaseRecovery(convId);
+    // releaseRecovery leaves the election for an owned chain; a conversation
+    // Stop found in some other state may still hold a seat from an earlier
+    // one, and a seat left behind would keep its lock from the tabs still
+    // waiting (#1595).
+    recoveryElection().leave(convId);
     // slotNeedsSettling, not a state test: a replay-gap slot already reads as
     // `done` and empty, so a state test would skip it and leave a blank
     // bubble that no stream or retry can ever repair.
@@ -1468,8 +1838,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const owned = recoveryOwnedRef.current;
     const chases = recoveryChaseRef.current;
     const pending = pendingDirectHandoffRef.current;
+    const election = recoveryElectionRef;
     return () => {
       unmounted.current = true;
+      // Drop the locks and the relay channel with the chains they served, and
+      // forget the instance so the Strict Mode re-setup builds a fresh one
+      // rather than booking beats on a closed channel (#1595).
+      election.current?.close();
+      election.current = null;
       for (const chase of chases.values()) {
         if (chase.timer !== undefined) window.clearTimeout(chase.timer);
       }
@@ -1482,6 +1858,63 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       owned.clear();
     };
   }, []);
+
+  // consultTurnOutcome asks the server what became of the turn a slot is
+  // holding open, and reduces the answer to the three things a caller can do
+  // about it. Shared by settleStreamedSlot and submitPrompt's catch because
+  // both finalize a slot whose transcript is ambiguous by construction — a
+  // turn that FAILED before it could reply leaves exactly the transcript a
+  // turn that merely produced nothing leaves.
+  //
+  // Sharing it is the fix, not a tidy-up. The catch used to stamp its own
+  // verdict without asking, and its `finally` then found an already-terminal
+  // slot and skipped settleStreamedSlot entirely — so after a phone slept past
+  // the retain TTL, a pre-answer turn.model_required settled as the generic
+  // "connection dropped" instead of restoring the model-picker banner, with
+  // the design note claiming the finalizer had asked (#1593).
+  //
+  //   "wait"    — could not ask, or the turn is still generating. Not a
+  //               verdict: the caller leaves the slot mid-flight and re-arms.
+  //   "settled" — the server named a terminal cause and it is now stamped.
+  //   "silent"  — nothing to ask about, or a completed turn whose answer
+  //               Postgres does not hold yet. The caller applies its own
+  //               fallback, which is the pre-#1593 behavior.
+  const consultTurnOutcome = async (
+    convId: string,
+    assistantId: number,
+  ): Promise<"wait" | "settled" | "silent"> => {
+    const outcome = await fetchTurnOutcome(
+      convId,
+      // `||` rather than `??`, for the reason above: an owned turn id of ""
+      // means "we never learned it", not "we know it is empty", so it must
+      // fall through to whatever the chain has since learned. With `??` a
+      // turn that failed before answering settled as the generic
+      // connection-drop verdict, because this asked about no turn at all.
+      preferredTurnID(
+        recoveryOwnedRef.current.get(convId)?.turnID,
+        currentTurnIdByConvRef.current.get(convId),
+      ),
+    );
+    if (
+      outcome.kind === "unreachable" ||
+      (outcome.kind === "answer" && outcome.state === "running")
+    ) {
+      return "wait";
+    }
+    if (
+      outcome.kind === "answer" &&
+      (outcome.state === "failed" || outcome.state === "cancelled")
+    ) {
+      // Stamp it even on a slot that is not mid-flight: a gap slot reads
+      // `done` already, and returning would leave a real failure rendered as
+      // a blank reply with nothing to retry.
+      patchAssistantMessage(convId, assistantId, (m) =>
+        applyTurnOutcome(m, outcome),
+      );
+      return "settled";
+    }
+    return "silent";
+  };
 
   // settleStreamedSlot finalizes the assistant slot a drained/severed stream
   // was writing to. Two slots need help:
@@ -1527,16 +1960,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       scheduleRecoveryRetry(convId, assistantId, gap, retryAttempt);
       return;
     }
-    if (!midFlight) return;
     // A slot holding a pending approval or memory proposal is waiting on the
     // USER, not on the network: resolving the card resumes the turn. Settle
     // it quietly — a "Turn failed / Retry" banner over a live action card
     // would tell the reader to throw away the very decision we're asking for.
     // (ChatTranscript already suppresses the empty-reply notice here.)
+    // Decided BEFORE the outcome below, deliberately: such a turn really is
+    // still running server-side, so asking would only re-arm the chain for as
+    // long as the card sits unanswered.
     const awaitingUser =
       (slot.approvals ?? []).some((a) => a.status === "pending") ||
       (slot.memoryProposals ?? []).some((mp) => mp.status === "pending");
     if (awaitingUser) {
+      if (!midFlight) return;
       patchAssistantMessage(convId, assistantId, (m) =>
         m.state === "thinking" || m.state === "streaming"
           ? { ...m, state: "done" }
@@ -1544,6 +1980,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       );
       return;
     }
+    // Postgres holds no answer for this slot, and that shape is ambiguous by
+    // construction: a turn that FAILED before it could reply leaves exactly
+    // the transcript a turn that merely produced nothing leaves. Ask the
+    // server what became of THIS turn (#1593) rather than guessing — the
+    // guess was "the connection dropped", and for a slot that already reads
+    // `done` after a replay gap there was no guess at all, just a blank reply
+    // with no Retry under it.
+    const consulted = await consultTurnOutcome(convId, assistantId);
+    if (consulted === "wait") {
+      // Could not ask, or the turn is still generating. Neither is a verdict,
+      // so leave the slot unsettled and come back — exactly what an
+      // unreachable Postgres gets above.
+      scheduleRecoveryRetry(convId, assistantId, gap, retryAttempt);
+      return;
+    }
+    if (consulted === "settled") return;
+    // Either the server reported a COMPLETED turn whose answer Postgres does
+    // not (yet) hold, or there was nothing to ask about. Both land on the
+    // pre-#1593 behavior below.
+    if (!midFlight) return;
     patchAssistantMessage(convId, assistantId, (m) =>
       m.state === "thinking" || m.state === "streaming"
         ? {
@@ -1559,6 +2015,44 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           }
         : m,
     );
+  };
+
+  // promotePendingTarget renames a per-submission pending key onto the real
+  // conversation id the server has now named, in one synchronous step.
+  //
+  // Two callers learn that id, and they must do exactly the same thing with
+  // it: the `conversation` SSE frame, and — for the stream that dies before
+  // that frame ever arrives — the POST's X-Fleet-Conversation-Id response
+  // header (#1591). Sharing one body is what keeps them from drifting: every
+  // pending-keyed handle (messages, abort controller, attached/streaming sets,
+  // composer draft) has to move together, and the user's view has to follow if
+  // it was pointing at the old key. Both promote* helpers mutate synchronously
+  // and run back-to-back, so JS single-threadedness guarantees no SSE event
+  // can observe a half-renamed state between the two families. Returns false
+  // when there was nothing to promote.
+  const promotePendingTarget = (oldKey: string, convId: string): boolean => {
+    if (!convId || !isPendingKey(oldKey) || oldKey === convId) return false;
+    renameConvKey(oldKey, convId);
+    promoteStreamKey(oldKey, convId);
+    promoteComposerKey(oldKey, convId);
+    const mySubmission = submissionIdByConvRef.current.get(oldKey);
+    if (mySubmission !== undefined) {
+      submissionIdByConvRef.current.delete(oldKey);
+      submissionIdByConvRef.current.set(convId, mySubmission);
+    }
+    // The pending lockdown flag has been promoted onto the real
+    // conversation row by the backend; clear the local flag so a
+    // subsequent "+ New chat" doesn't accidentally re-flag.
+    setPendingLockdown(false);
+    // The user is looking at the slot that just got a real id — follow it, or
+    // their view empties out onto a key nothing writes to any more. They may
+    // instead have navigated away (submit → "+ New chat" race), and that is
+    // deliberately left alone.
+    if (activeConversationIdRef.current === oldKey) {
+      activeConversationIdRef.current = convId;
+      setActiveConversationId(convId);
+    }
+    return true;
   };
 
   const applyStreamEvent = async (
@@ -1606,24 +2100,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // the empty new-chat view's composer state, and every brand-new
       // submission gets its own unique pending key from nextPendingKey().
       const oldTarget = ctx.target;
-      if (isPendingKey(oldTarget) && oldTarget !== p.id) {
-        renameConvKey(oldTarget, p.id);
-        ctx.target = p.id;
-        // Migrate every pending-keyed handle onto the real conv id so
-        // subsequent reads (Stop button, attached-set membership, the
-        // streaming-set membership the sidebar reads) and the per-conv
-        // composer draft all point at the same slot the SSE events are now
-        // writing to. Both promote* helpers mutate synchronously and run
-        // back-to-back, so JS single-threadedness guarantees no SSE event
-        // can observe a half-renamed state between the two families. The
-        // stream rename runs first, matching the prior inline ordering.
-        promoteStreamKey(oldTarget, p.id);
-        promoteComposerKey(oldTarget, p.id);
-        // The pending lockdown flag has been promoted onto the real
-        // conversation row by the backend; clear the local flag so a
-        // subsequent "+ New chat" doesn't accidentally re-flag.
-        setPendingLockdown(false);
-      }
+      // A no-op when the POST's X-Fleet-Conversation-Id header already did
+      // this (#1591) — the header and this frame carry the same id, and the
+      // promotion is idempotent.
+      if (promotePendingTarget(oldTarget, p.id)) ctx.target = p.id;
       const currentActive = activeConversationIdRef.current;
       // Two cases land on the active view: the user is already on this
       // conv (e.g. a sidebar-driven reattach) or the user is on the
@@ -2005,7 +2485,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (event.event === "tool.approval_superseded") {
       const p = payload as { tool: string };
       setMessagesByConv((prev) => {
-        const existing = prev[ctx.target];
+        const existing = prev.get(ctx.target);
         if (!existing) return prev;
         const next = existing.map((msg) => {
           if (!msg.approvals?.length) return msg;
@@ -2020,9 +2500,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           );
           return { ...msg, approvals: touched };
         });
-        const nextByConv = new Map(Object.entries(prev));
-        nextByConv.set(ctx.target, next);
-        return Object.fromEntries(nextByConv);
+        return new Map(prev).set(ctx.target, next);
       });
       return;
     }
@@ -2413,7 +2891,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           currentTurnIdByConvRef.current.get(convId) === info.turn_id &&
           (lastEventIdByConvRef.current.get(convId) ?? 0) > 0;
         if (!info.inflight || alreadyStreamedThisTurn) {
-          const existing = messagesByConvRef.current[convId] ?? [];
+          const existing = messagesByConvRef.current.get(convId) ?? [];
           const last = existing[existing.length - 1];
           if (last && last.role === "assistant" && last.state === "done")
             return false;
@@ -2435,7 +2913,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
 
       // Find or create the assistant slot for this turn.
-      const existing = messagesByConvRef.current[convId] ?? [];
+      const existing = messagesByConvRef.current.get(convId) ?? [];
       const last = existing[existing.length - 1];
       let assistantId: number;
       if (
@@ -2801,7 +3279,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (isPendingKey(convId)) return "idle";
     if (!attachedConvIdsRef.current.has(convId)) return "idle";
     if (livenessInFlightRef.current.has(convId)) return "idle";
-    const local = messagesByConvRef.current[convId] ?? [];
+    const local = messagesByConvRef.current.get(convId) ?? [];
     const last = local[local.length - 1];
     if (!last || last.role !== "assistant") return "idle";
     if (last.state !== "thinking" && last.state !== "streaming") return "idle";
@@ -2911,7 +3389,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Re-check the preconditions: the grace window is long enough for the
       // turn to have ended, or for another path to have settled the slot.
       if (!attachedConvIdsRef.current.has(convId)) return "idle";
-      const stillLocal = messagesByConvRef.current[convId] ?? [];
+      const stillLocal = messagesByConvRef.current.get(convId) ?? [];
       const stillLast = stillLocal[stillLocal.length - 1];
       if (
         !stillLast ||
@@ -2971,7 +3449,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // reports (a previous turn still inside its retain window, say) would
     // replay the wrong turn into this slot (#1584).
     accepted?: { value: boolean },
-  ) => {
+    // Set on the one resend a lockdown model refusal is allowed to trigger
+    // (#1588), so a server that refuses the very slug it just named cannot
+    // bounce the turn between us forever.
+    isModelRetry?: boolean,
+    // Annotated because the body references streamTurn (that resend) and TS
+    // cannot infer the type of a const that appears in its own initializer.
+  ): Promise<void> => {
     const thinkingStartedAt = nowMs();
     let hasStartedStreaming = false;
     // Which conversation slot do this turn's events write to? Caller
@@ -2995,6 +3479,34 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const retry = response.headers.get("Retry-After") ?? "a moment";
         throw new Error(
           `Rate limit reached. Try again in ${retry.replace(/\D/g, "")}s.`,
+        );
+      }
+      const refusal = parseLockdownModelRefusal(response.status, errorText);
+      if (refusal) {
+        // The server refused our model and named the one this conversation may
+        // use. Adopt it — so the picker stops showing a slug the deployment
+        // forbids — and resend the turn once, which is the whole reason the
+        // refusal carries a model at all. Nothing was accepted, so no turn is
+        // lost: this POST is the submission, retried.
+        const adoption = correctedModelAdoption({
+          refusalModel: refusal.model,
+          isModelRetry,
+          activeConvKey: activeConversationIdRef.current,
+          target,
+        });
+        if (adoption.adoptIntoPicker) setSelectedModel(refusal.model);
+        if (adoption.resend) {
+          return streamTurn(
+            assistantId,
+            abortController,
+            { ...body, model: refusal.model },
+            target,
+            accepted,
+            true,
+          );
+        }
+        throw new Error(
+          refusal.message || "That model is not allowed in lockdown mode.",
         );
       }
       throw new Error(errorText || "Unable to reach the chat server.");
@@ -3022,6 +3534,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       );
       return;
     }
+
+    // Brand-new chat: the response headers name the conversation the server
+    // created (#1591), and they are already here — the `conversation` frame,
+    // the only other place this id appears, is not. Promote now, before the
+    // per-conversation bookkeeping below picks a key to write under. A socket
+    // that died in this window used to leave the slot under a pending key no
+    // endpoint knows: probeInflightTurn short-circuits on one and the
+    // persisted transcript is keyed by conversation id, so the recovery chain
+    // had nothing to ask about and the turn read as failed while the server
+    // wrote its answer to the database.
+    const namedConv = response.headers.get(conversationIdHeader)?.trim() ?? "";
+    if (promotePendingTarget(target, namedConv)) target = namedConv;
 
     // Fresh turn — reset the idempotency baseline for this conv so
     // the first event (id=1, usually `conversation`) isn't dropped as
@@ -3356,6 +3880,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // The conversation event will rename the per-submission key → the
     // real conv id when it lands.
     const initialTarget = convId ?? nextPendingKey();
+    // This submission's identity (#1592). The server stamps it on the turn it
+    // starts for us — where /inflight echoes it back — and stores it in the
+    // queue row's own submission_id column if it queues us behind a turn we
+    // did not know was running. Without it, a submission whose acknowledgement
+    // is lost in
+    // transit has no way to tell the turn started FOR IT from one that was
+    // already running: the turn id is brand new either way, and the server
+    // exposes a turn before committing its user message, so the transcript
+    // agrees with both readings.
+    const submissionId = crypto.randomUUID();
+    submissionIdByConvRef.current.set(initialTarget, submissionId);
     setConvMessages(initialTarget, (current) => [...current, ...nextMessages]);
     setSidebarOpen(false);
 
@@ -3381,6 +3916,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       message: value,
       persona: selectedPersona,
       model: trimmedModel,
+      submission_id: submissionId,
     };
     if (uploadedAttachments.length > 0) {
       body.attachments = uploadedAttachments;
@@ -3488,6 +4024,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           );
           attachedConvIdsRef.current.delete(target);
           scheduleRecoveryRetry(target, assistantId, false);
+        } else if (answersOurSubmission(probe, submissionId) === false) {
+          // The server is running a turn it started for a DIFFERENT
+          // submission (#1592). We believed this conversation was idle, so we
+          // posted directly; the server knew better and queued our input
+          // behind the turn it names — and that response never reached us.
+          // Attaching here would render a running turn's answer under a
+          // prompt it never saw, while the user's actual question waits in
+          // the queue. The submission id is the only evidence that separates
+          // the two, and it says this turn is not ours. Same posture as an
+          // unreachable server (#1584): leave the slot mid-flight, release
+          // the attach handle, and re-probe — when our input drains into its
+          // own turn, /inflight names US and the chain attaches to it.
+          patchAssistantMessage(target, assistantId, (m) =>
+            m.state === "done" ? m : { ...m, state: "streaming" },
+          );
+          attachedConvIdsRef.current.delete(target);
+          scheduleRecoveryRetry(target, assistantId, false);
+          // The input is queued server-side; show its chip while it waits.
+          void refreshQueue(target);
         } else if (probe.inflight || (accepted.value && probe.turnID)) {
           patchAssistantMessage(target, assistantId, (m) => ({
             ...m,
@@ -3536,9 +4091,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // Stamping `failed` here is the bug behind a fully-rendered
           // answer that flips to "Turn failed" a beat later. If another
           // path already finalized the turn successfully, leave it.
-          const resolved = messagesByConvRef.current[target]?.find(
-            (m) => m.id === assistantId,
-          );
+          const resolved = messagesByConvRef.current
+            .get(target)
+            ?.find((m) => m.id === assistantId);
           if (resolved && resolved.state === "done" && !resolved.failed) {
             // Already settled successfully by another path — leave it.
           } else {
@@ -3560,30 +4115,56 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
               attachedConvIdsRef.current.delete(target);
               scheduleRecoveryRetry(target, assistantId, false);
             } else if (persisted === "absent") {
-              // The premature-EOF sentinel is an internal signal, never a
-              // user-facing string — only reachable when the turn is genuinely
-              // gone (not inflight, no buffer, nothing completed in the DB).
-              const rawMsg =
-                error instanceof Error
-                  ? error.message
-                  : "Something went wrong.";
-              const msg =
-                rawMsg === "__stream_closed_before_turn_end__"
-                  ? "The connection dropped before the response finished."
-                  : rawMsg;
-              // Re-check inside the patch: never downgrade a slot that reached
-              // a successful terminal state between our read and this write
-              // (the reattach pump runs concurrently).
-              patchAssistantMessage(target, assistantId, (m) =>
-                m.state === "done" && !m.failed
-                  ? m
-                  : {
-                      ...m,
-                      content: m.content || msg,
-                      state: "done",
-                      failed: true,
-                    },
-              );
+              // Postgres holding no answer is not a cause, only an absence —
+              // so ask the server what became of THIS turn before stamping a
+              // verdict on it (#1593). Without this the branch below wrote its
+              // own guess and the `finally` then saw a terminal slot and
+              // skipped settleStreamedSlot, which is where the question used
+              // to be asked: a pre-answer turn.model_required that outlived
+              // the retain TTL settled as "the connection dropped", with no
+              // model picker offered and nothing naming the real cause.
+              const consulted = await consultTurnOutcome(target, assistantId);
+              if (consulted === "wait") {
+                // The server could not be asked, or says the turn is still
+                // running. Same rule as an unreachable Postgres above: no
+                // verdict without an answer.
+                patchAssistantMessage(target, assistantId, (m) =>
+                  m.state === "done" ? m : { ...m, state: "streaming" },
+                );
+                attachedConvIdsRef.current.delete(target);
+                scheduleRecoveryRetry(target, assistantId, false);
+              } else if (consulted === "silent") {
+                // Nothing to ask about. Fall back to this stream's own error,
+                // which is more specific than anything the server would add.
+                //
+                // The premature-EOF sentinel is an internal signal, never a
+                // user-facing string — only reachable when the turn is
+                // genuinely gone (not inflight, no buffer, nothing completed
+                // in the DB).
+                const rawMsg =
+                  error instanceof Error
+                    ? error.message
+                    : "Something went wrong.";
+                const msg =
+                  rawMsg === "__stream_closed_before_turn_end__"
+                    ? "The connection dropped before the response finished."
+                    : rawMsg;
+                // Re-check inside the patch: never downgrade a slot that
+                // reached a successful terminal state between our read and
+                // this write (the reattach pump runs concurrently).
+                patchAssistantMessage(target, assistantId, (m) =>
+                  m.state === "done" && !m.failed
+                    ? m
+                    : {
+                        ...m,
+                        content: m.content || msg,
+                        state: "done",
+                        failed: true,
+                      },
+                );
+              }
+              // "settled": the server named the cause and consultTurnOutcome
+              // has already stamped it.
             }
           }
         }

@@ -203,6 +203,38 @@ func firstChunkTimeoutDetail(err error) (timeout time.Duration, promptTokens int
 	return 0, 0, false
 }
 
+// firstChunkTimeoutProviderError rebuilds the provider error a watchdog expiry
+// hid, so the classifier's callers see it. When the provider ANSWERED before
+// the deadline — a 429 or a 5xx whose retry backoff outlasted it — the run's
+// telemetry has to tell the same story as the user-facing card (#1590): the
+// turn.retry event, the circuit-breaker record and fleet.provider_failover all
+// report the classifier's *fantasy.ProviderError, so without this a rate limit
+// is streamed, recorded and failed over as a provider that said nothing at all.
+//
+// Nil when the silence really was the model's own, and nil for a recovered
+// error carrying no reportable status — fantasy passes none for a transport
+// failure (#1585), and inventing one would have the badge call a connection
+// reset an HTTP code. The watchdog keeps the status and not the body, so the
+// message is built from what is actually known rather than from a body this
+// layer never saw.
+func firstChunkTimeoutProviderError(err error) *fantasy.ProviderError {
+	status, ok := FirstChunkTimeoutAfterProviderError(err)
+	if !ok || status == 0 {
+		return nil
+	}
+	timeout, _, _ := firstChunkTimeoutDetail(err)
+	return &fantasy.ProviderError{
+		Title:      fantasy.ErrorTitleForStatusCode(status),
+		Message:    fmt.Sprintf("provider returned HTTP %d; its retry backoff outlasted the %s first-chunk deadline", status, timeout),
+		StatusCode: status,
+		Cause:      err,
+		// The expiry re-drives the same model once before any swap, exactly as
+		// a mid-stream blip does; the status alone (a 429 is retryable, a 400
+		// relayed by a gateway is not) must not re-decide that here.
+		TransientError: true,
+	}
+}
+
 // streamBlipRetryDelay is the wait before retrying the same model after a
 // transient mid-stream error. A var (not a const) only so the package's tests
 // can shorten it: six of them drive a blip through this path, and at 3s each
@@ -289,7 +321,10 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		return streamErrorNone, nil
 	}
 	if errors.Is(err, ErrFirstChunkTimeout) {
-		return streamErrorStreamBlip, nil
+		// Still a stream blip — one same-model retry, then the fallback swap —
+		// but carry the provider error the expiry hid, so the retry, health and
+		// failover telemetry tell the same story as the card (#1590).
+		return streamErrorStreamBlip, firstChunkTimeoutProviderError(err)
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return streamErrorCancelled, nil
@@ -636,8 +671,17 @@ func emitTurnRetry(sink *streamSink, providerErr *fantasy.ProviderError, delay t
 		payload["message"] = summarizeForConsole(providerErr.Message)
 	}
 	if timeout, promptTokens, ok := firstChunkTimeoutDetail(cause); ok {
-		payload["title"] = "Provider slow to start streaming"
-		payload["message"] = fmt.Sprintf("no first chunk within %s for a prompt of about %d tokens; retrying", timeout, promptTokens)
+		// The watchdog wording is for a silence the MODEL owns. When the
+		// classifier recovered a provider status from the expiry (#1590) the
+		// provider had answered — with an error — and calling that "slow to
+		// start streaming" is the same misreport the card was fixed for, so
+		// its title and message stand. The deadline and prompt size are
+		// attached either way: they are what makes a timeout correlatable
+		// with prompt size in an exported log (#1537).
+		if providerErr == nil {
+			payload["title"] = "Provider slow to start streaming"
+			payload["message"] = fmt.Sprintf("no first chunk within %s for a prompt of about %d tokens; retrying", timeout, promptTokens)
+		}
 		payload["first_chunk_timeout_ms"] = timeout.Milliseconds()
 		payload["prompt_tokens"] = promptTokens
 	}

@@ -4,7 +4,11 @@
 package agentcore
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -289,5 +293,190 @@ func TestWatchdogIgnoresAProviderErrorPublishedAfterTheDeadline(t *testing.T) {
 	<-fired
 	if seen, status := w.providerErrorAtExpiry(); seen || status != 0 {
 		t.Fatalf("a post-deadline provider error became the verdict's evidence: seen=%v status=%d", seen, status)
+	}
+}
+
+// The card and the telemetry must tell the same story. A 429 whose retry
+// backoff outlasted the watchdog reaches the resilience loop wearing the
+// sentinel, and the loop reads the classifier's *fantasy.ProviderError for the
+// turn.retry event, the circuit-breaker record and fleet.provider_failover —
+// so with none it streams, records and fails over a rate limit as a provider
+// that said nothing at all (#1590).
+func TestClassifyStreamErrorCarriesTheRecoveredProviderStatus(t *testing.T) {
+	afterRateLimit := error(&firstChunkTimeoutError{
+		timeout:        75 * time.Second,
+		promptTokens:   12_000,
+		cause:          context.Canceled,
+		providerErr:    true,
+		providerStatus: http.StatusTooManyRequests,
+	})
+
+	class, providerErr := classifyStreamError(afterRateLimit)
+	if class != streamErrorStreamBlip {
+		t.Fatalf("class = %v, want stream blip — the recovery path is unchanged", class)
+	}
+	if providerErr == nil || providerErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("providerErr = %+v, want the recovered 429", providerErr)
+	}
+	if providerErr.Title == "" {
+		t.Error("the retry badge derives its title from the provider error; it must not be blank")
+	}
+	if !providerErr.IsRetryable() {
+		t.Error("a watchdog expiry re-drives the same model once, so its provider error is transient")
+	}
+	if got := streamErrorDesc(providerErr); got != "HTTP 429" {
+		t.Errorf("circuit-breaker record = %q, want HTTP 429", got)
+	}
+	// The loop's terminal errors wrap the cause twice; the status must survive.
+	wrapped := fmt.Errorf("fantasy agent error (stream blip persisted): %w: %w", ErrStreamBlipPersisted, afterRateLimit)
+	if _, pe := classifyStreamError(wrapped); pe == nil || pe.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("wrapped providerErr = %+v, want the recovered 429", pe)
+	}
+
+	// A model that really did stay silent acquires no provider error: the
+	// watchdog wording is the honest one there.
+	silent := error(&firstChunkTimeoutError{timeout: 75 * time.Second, cause: context.Canceled})
+	if class, pe := classifyStreamError(silent); class != streamErrorStreamBlip || pe != nil {
+		t.Errorf("silent model: class=%v providerErr=%+v, want stream blip with none", class, pe)
+	}
+	// Fantasy passes nil for a retryable transport failure, so the watchdog can
+	// recover a provider error with no status. Inventing one would have the
+	// badge call a connection reset an HTTP code.
+	statusless := error(&firstChunkTimeoutError{
+		timeout: 75 * time.Second, cause: context.Canceled, providerErr: true,
+	})
+	if _, pe := classifyStreamError(statusless); pe != nil {
+		t.Errorf("statusless provider error was given a status: %+v", pe)
+	}
+}
+
+// turn.retry is what the chat badge renders. "Provider slow to start
+// streaming" describes a silence the MODEL owns; when the classifier recovered
+// the provider's own error the badge must report that instead, while both
+// cases keep the deadline and prompt size that make a timeout correlatable
+// with prompt size in an exported log (#1537, #1590).
+func TestEmitTurnRetryKeepsTheProviderStoryForARecoveredExpiry(t *testing.T) {
+	rec := &retryEventRecorder{}
+	sink := newStreamSink(rec)
+
+	silent := error(&firstChunkTimeoutError{timeout: 75 * time.Second, promptTokens: 20_000, cause: context.Canceled})
+	_, silentProviderErr := classifyStreamError(silent)
+	emitTurnRetry(sink, silentProviderErr, 0, silent)
+
+	afterRateLimit := error(&firstChunkTimeoutError{
+		timeout:        75 * time.Second,
+		promptTokens:   20_000,
+		cause:          context.Canceled,
+		providerErr:    true,
+		providerStatus: http.StatusTooManyRequests,
+	})
+	_, recoveredProviderErr := classifyStreamError(afterRateLimit)
+	emitTurnRetry(sink, recoveredProviderErr, 0, afterRateLimit)
+
+	retries := rec.retries()
+	if len(retries) != 2 {
+		t.Fatalf("emitted %d events, want 2", len(retries))
+	}
+	if got, _ := retries[0]["title"].(string); got != "Provider slow to start streaming" {
+		t.Errorf("silent model title = %q, want the watchdog wording", got)
+	}
+	if _, ok := retries[0]["status_code"]; ok {
+		t.Error("a silent model must not fabricate a status_code")
+	}
+	if got, ok := retries[1]["status_code"].(int); !ok || got != http.StatusTooManyRequests {
+		t.Errorf("recovered status_code = %v, want 429", retries[1]["status_code"])
+	}
+	if got, _ := retries[1]["title"].(string); got == "Provider slow to start streaming" {
+		t.Error("a provider that answered with a 429 must not be reported as slow to start streaming")
+	}
+	for i, r := range retries {
+		if got, ok := r["first_chunk_timeout_ms"].(int64); !ok || got != 75_000 {
+			t.Errorf("event %d: first_chunk_timeout_ms = %v, want 75000", i, r["first_chunk_timeout_ms"])
+		}
+		if got, ok := r["prompt_tokens"].(int); !ok || got != 20_000 {
+			t.Errorf("event %d: prompt_tokens = %v, want 20000", i, r["prompt_tokens"])
+		}
+	}
+}
+
+// End to end through the resilience loop: a watchdog expiry that hid a 429
+// re-drives once and then swaps to the fallback, exactly as before — but the
+// failover event and the circuit-breaker record now name the provider status
+// instead of reporting a blip of unknown origin (#1590).
+func TestWatchdogAfterProviderErrorFailsOverWithTheProviderStatus(t *testing.T) {
+	primaryCalls := int32(0)
+	primary := &namedMockModel{
+		mockModel: mockModel{streamFunc: func(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
+			atomic.AddInt32(&primaryCalls, 1)
+			return nil, &firstChunkTimeoutError{
+				timeout:        75 * time.Second,
+				promptTokens:   1_000,
+				cause:          context.Canceled,
+				providerErr:    true,
+				providerStatus: http.StatusTooManyRequests,
+			}
+		}},
+		name: "primary-model",
+	}
+	fallback := &namedMockModel{mockModel: mockModel{streamFunc: streamStop()}, name: "fallback-model"}
+
+	e := newMockEngine(t, primary)
+	e.fallbackModel = fallback
+	e.healthRegistry = NewProviderHealthRegistry()
+	obs := &payloadObserver{}
+	sink := newStreamSink(obs)
+	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
+		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
+	}
+
+	outcome, err := e.streamRoundWithResilience(
+		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		[]fantasy.Message{fantasy.NewUserMessage("task")}, buildAgent(primary), primary, false, buildAgent,
+	)
+	if err != nil {
+		t.Fatalf("expected success via fallback, got: %v", err)
+	}
+	if !outcome.swappedToFallback {
+		t.Fatal("expected a fallback swap after the in-place retry also expired")
+	}
+	if got := atomic.LoadInt32(&primaryCalls); got != 2 {
+		t.Errorf("primary called %d times, want 2 (one re-drive, then the swap)", got)
+	}
+
+	failover := obs.payloadOf("fleet.provider_failover")
+	if failover == nil {
+		t.Fatalf("events = %v, want fleet.provider_failover", obs.events)
+	}
+	if got := failover["status"]; got != http.StatusTooManyRequests {
+		t.Errorf("failover status = %v, want 429", got)
+	}
+	if got := failover["reason"]; got != streamErrorStreamBlip.String() {
+		t.Errorf("failover reason = %v, want stream_blip", got)
+	}
+	retry := obs.payloadOf("turn.retry")
+	if retry == nil {
+		t.Fatal("no turn.retry event")
+	}
+	if got := retry["status_code"]; got != http.StatusTooManyRequests {
+		t.Errorf("turn.retry status_code = %v, want 429", got)
+	}
+	// Look the model up by slug. Snapshot() builds its slice by ranging a map,
+	// so the order is whatever Go's randomised map iteration gives — indexing
+	// [0] here passed locally and failed in CI on the run where fallback-model
+	// came out first, which is a coin flip per run rather than a real failure.
+	health := e.healthRegistry.Snapshot()
+	var primaryHealth *ModelHealth
+	for i := range health {
+		if health[i].Slug == "primary-model" {
+			primaryHealth = &health[i]
+			break
+		}
+	}
+	if primaryHealth == nil {
+		t.Fatalf("circuit-breaker snapshot has no entry for primary-model: %+v", health)
+	}
+	if primaryHealth.LastError != "HTTP 429" {
+		t.Errorf("circuit-breaker last_error for primary-model = %q, want %q (snapshot %+v)",
+			primaryHealth.LastError, "HTTP 429", health)
 	}
 }
