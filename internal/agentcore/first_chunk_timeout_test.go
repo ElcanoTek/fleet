@@ -460,8 +460,23 @@ func TestWatchdogAfterProviderErrorFailsOverWithTheProviderStatus(t *testing.T) 
 	if got := retry["status_code"]; got != http.StatusTooManyRequests {
 		t.Errorf("turn.retry status_code = %v, want 429", got)
 	}
+	// Look the model up by slug. Snapshot() builds its slice by ranging a map,
+	// so the order is whatever Go's randomised map iteration gives — indexing
+	// [0] here passed locally and failed in CI on the run where fallback-model
+	// came out first, which is a coin flip per run rather than a real failure.
 	health := e.healthRegistry.Snapshot()
-	if len(health) == 0 || health[0].LastError != "HTTP 429" {
-		t.Errorf("circuit-breaker snapshot = %+v, want last_error %q", health, "HTTP 429")
+	var primaryHealth *ModelHealth
+	for i := range health {
+		if health[i].Slug == "primary-model" {
+			primaryHealth = &health[i]
+			break
+		}
+	}
+	if primaryHealth == nil {
+		t.Fatalf("circuit-breaker snapshot has no entry for primary-model: %+v", health)
+	}
+	if primaryHealth.LastError != "HTTP 429" {
+		t.Errorf("circuit-breaker last_error for primary-model = %q, want %q (snapshot %+v)",
+			primaryHealth.LastError, "HTTP 429", health)
 	}
 }
