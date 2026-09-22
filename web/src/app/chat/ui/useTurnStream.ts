@@ -530,14 +530,24 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // so a connection blackholed between the two requests would stall the
       // chain indefinitely. Bound the WAIT, not the work: the load finishes
       // in the background either way and its adoption is idempotent.
-      await Promise.race([
+      const reloadTimedOut = Symbol("reload-timeout");
+      const outcome = await Promise.race([
         loadConversation(convId, {
           preserveScroll: true,
           background: true,
           restore: true,
         }),
-        delay(recoveryRequestTimeoutMs),
+        delay(recoveryRequestTimeoutMs).then(() => reloadTimedOut),
       ]);
+      if (outcome === reloadTimedOut) {
+        // The transcript never landed, so nothing was adopted. Saying
+        // otherwise would have the caller release recovery and idle the
+        // conversation over a slot still marked streaming, with no timer and
+        // no stream left to heal it. "Unreachable" is the truth and the chain
+        // comes back (the load may still complete in the background; its
+        // adoption is idempotent).
+        return "unreachable";
+      }
       return "adopted";
     } catch {
       // The server did not answer — the caller must NOT read this as "no
@@ -662,6 +672,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (await reattachToConv(convId)) return;
     if (recoveryUnmountedRef.current) return;
     if (attachedConvIdsRef.current.has(convId)) return;
+    // A successor that finished before we caught it, and whose retained
+    // buffer has since expired, can never be attached: /inflight has neither
+    // a live turn nor a retained id, so reattachToConv will answer false for
+    // ever. Postgres still has its question and its answer — adopt them
+    // rather than polling an empty conversation every 30 seconds.
+    if ((await reconcileFromPersisted(convId)) === "adopted") return;
+    if (recoveryUnmountedRef.current) return;
     // Keep going on the schedule the chain uses — backoff, then a steady
     // beat. Giving up after the backoff would abandon a turn the server is
     // running: ownership has been released and the conversation is not
@@ -1668,6 +1685,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         turn_id?: string;
         last_event_id?: number;
       };
+      // The hook can have unmounted while that probe was in flight. The
+      // parent's controller cleanup has already run, so a stream opened from
+      // here would have nothing left to abort it.
+      if (recoveryUnmountedRef.current) return false;
       // Reattach in two cases:
       //   - inflight=true: turn still generating, attach for live tokens.
       //   - inflight=false + turn_id present: turn finished within the
