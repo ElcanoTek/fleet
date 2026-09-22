@@ -1,8 +1,64 @@
-# Model defaults: GPT-5.6 Luna Pro everyday, Claude Opus 5 as the strong tier
+# Model defaults: GPT-6 Luna Pro everyday, Claude Opus 5.5 as the strong tier
 
-**Status:** shipped 2026-09-21. Design note for the default-model swap.
+**Status:** shipped 2026-09-22 (previous swap 2026-09-21, recorded below). Design
+note for the default-model swaps, and the checklist for the next one.
 
-## What changed
+## Changing the defaults (checklist)
+
+The compiled-in tiers are meant to change often. There are now two places that
+hold the slugs, plus data that has to be checked by hand:
+
+1. **`internal/agentcore/models.go`**: `DefaultCoreModel` / `DefaultMaxModel`, and a
+   one-paragraph comment on each with price, window and endpoints. `config.DefaultTitleModel`
+   and the fake-LLM catalog derive from these constants.
+2. **`web/src/app/lib/modelAliases.ts`**: `DEFAULT_MODEL` / `ADVANCED_MODEL` and their
+   `*_LABEL`s (OpenRouter's display `name`). Web code and tests reference these
+   constants. `scripts/check_model_defaults_test.go` fails if they disagree with Go.
+3. **Look up the data** (no key needed):
+   ```sh
+   curl -s https://openrouter.ai/api/v1/models | jq '.data[] | select(.id=="<slug>") | {id,name,context_length,pricing}'
+   curl -s https://openrouter.ai/api/v1/models/<slug>/endpoints | jq -r '.data.endpoints[] | "\(.provider_name)\t\(.tag)\t\(.quantization)"'
+   ```
+4. **`internal/agentcore/provider.go` `officialPoolSlugs`**: add each new tier slug with
+   the endpoint list and the date. `TestDefaultCoreModelCannotBeServedAtArbitraryPrecision`
+   fails until you do. Only add a slug whose whole pool is the vendor plus official
+   resellers.
+5. **Context window**: if no `modelContextWindows` prefix covers the new slug, add one.
+   `TestDefaultTiersResolveTheirContextWindows` checks the static table on its own.
+6. **User guide**: update the two names in `internal/clientconfig/builtin_skills/fleet-guide/chat.md`,
+   then `make sync-guides`. The drift test checks the guide names both labels.
+7. **Docs**: a row in the table below, plus the pools in
+   [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
+
+Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
+tiers, are unaffected by any of this. Only the compiled-in fallback moves.
+
+## 2026-09-22: GPT-6 Luna Pro + Claude Opus 5.5
+
+| Slot | Before | After |
+|---|---|---|
+| `DefaultCoreModel` (+ `DefaultTitleModel` and every auxiliary fallback that ends in it) | `openai/gpt-5.6-luna-pro` | `openai/gpt-6-luna-pro` |
+| `DefaultMaxModel` (`suggest_advanced_model`, the strong tier) | `anthropic/claude-opus-5` | `anthropic/claude-opus-5.5` |
+
+- **GPT-6 Luna Pro**: $0.10/M in, $0.50/M out, $0.01/M cache reads (5.6 Luna Pro was
+  $0.20/$1.20). 1,050,000-token window. Three endpoints, all OpenAI. That's one fewer
+  provider than 5.6 Luna Pro had (Azure), so the everyday tier has no second cloud for now.
+  The GPT-6 family had no context-window row and would have cold-booted at the 200K
+  default, so `openai/gpt-6` → 1,050,000 was added.
+- **Claude Opus 5.5**: $4/M in, $20/M out (Opus 5: $5/$25). 1,000,000-token window, and
+  the same 11-endpoint official pool as Opus 5. It's covered by the existing
+  `anthropic/claude-opus-5` window prefix and by extended-thinking detection.
+- **Not measured**: unlike the 2026-09-21 swap, this one wasn't benchmarked on
+  production jobs before shipping. It's a same-vendor generation step on both tiers.
+  Watch cost and dead-letters on the first day of scheduled runs.
+- **Fewer places to change**: `config.DefaultTitleModel` and the fake-LLM catalog now
+  derive from the agentcore constants, web tests and the task form use the shared
+  constants, and `TestModelDefaultsAreInSync` pins the one remaining copy (web) and the
+  guide. See the checklist above.
+
+## 2026-09-21: GPT-5.6 Luna Pro + Claude Opus 5
+
+### What changed
 
 | Slot | Before | After |
 |---|---|---|
@@ -26,7 +82,7 @@ only to tasks with no pinned `fallback_model`. Production and the client boxes
 were switched through those knobs on 2026-09-21 ahead of this change; this PR
 makes the shipped defaults match.
 
-## Why
+### Why
 
 Measured on production's scheduled jobs on 2026-09-21 (fleet 2026.09.21.5):
 
@@ -47,7 +103,7 @@ default (so an escalation is also a provider change), a 1M window, eleven
 healthy OpenRouter endpoints, and current-generation. Sol's main OpenAI
 endpoint was at 80% uptime on the day of the switch and it costs $2/M in.
 
-## What did not change
+### What did not change
 
 - The routing pins (`canonicalUpstream`): `openai/` and `anthropic/` were
   already soft-pinned to their vendors. `officialPoolSlugs` lists the two exact
@@ -73,7 +129,7 @@ endpoint was at 80% uptime on the day of the switch and it costs $2/M in.
 - Context-window table: `anthropic/claude-opus-5` and `-sonnet-5` get 1M rows
   ahead of the generic 200K Claude row; `openai/gpt-5.6*` already had 1.05M.
 
-## Deferred
+### Deferred
 
 - Retiring `google/gemini-3.8-flash` and `openai/gpt-5.6-sol` from the fake-LLM
   catalog and test fixtures: they stay selectable and several tests use them as

@@ -232,6 +232,27 @@ var officialPoolSlugs = map[string]officialPoolAllowlist{
 	// today; it stays on the allow-list because a reseller of the official
 	// weights coming back must not need a code change, and a name with no
 	// endpoint behind it simply never matches.
+	// 2026-09-22: OpenAI ×3 (openai, openai/flex, openai/fast) — every endpoint
+	// quantization "unknown". DefaultCoreModel. Azure and Amazon Bedrock resell
+	// the official weights for earlier OpenAI models and stay listed so a
+	// reseller endpoint appearing later needs no code change.
+	"openai/gpt-6-luna-pro": {
+		checked:   "2026-09-22",
+		providers: []string{upstreamProviderOpenAI, upstreamProviderAzure, upstreamProviderAmazonBedrock},
+	},
+	// 2026-09-22: Anthropic ×2, Claude Platform on AWS ×1, Amazon Bedrock ×3,
+	// Azure ×2, Google ×3 — eleven endpoints, every quantization "unknown".
+	// DefaultMaxModel.
+	"anthropic/claude-opus-5.5": {
+		checked: "2026-09-22",
+		providers: []string{
+			upstreamProviderAnthropic,
+			upstreamProviderClaudeOnAWS,
+			upstreamProviderAmazonBedrock,
+			upstreamProviderAzure,
+			upstreamProviderGoogle,
+		},
+	},
 	"openai/gpt-5.6-luna-pro": {
 		checked:   "2026-09-22",
 		providers: []string{upstreamProviderOpenAI, upstreamProviderAzure, upstreamProviderAmazonBedrock},

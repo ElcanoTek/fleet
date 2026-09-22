@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import { useState } from "react";
 import { ModelPicker } from "./ModelPicker";
 import { _resetModelCacheForTests } from "@/app/shared/lib/models";
+import { ADVANCED_MODEL_LABEL, DEFAULT_MODEL, DEFAULT_MODEL_LABEL } from "@/app/lib/modelAliases";
 
 // Component test for the React ModelPicker (port of moc's model-picker.js).
 // The pure filtering logic is covered in models.test.ts; here we verify the
@@ -31,7 +32,7 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => {
-      expect(screen.getByText("Anthropic: Claude Opus 5")).toBeInTheDocument();
+      expect(screen.getByText(ADVANCED_MODEL_LABEL)).toBeInTheDocument();
     });
     expect(input).toHaveAttribute("aria-expanded", "true");
   });
@@ -40,21 +41,21 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Anthropic: Claude Opus 5"));
+    await waitFor(() => screen.getByText(ADVANCED_MODEL_LABEL));
     fireEvent.change(input, { target: { value: "luna" } });
     await waitFor(() => {
-      expect(screen.getByText("OpenAI: GPT-5.6 Luna Pro")).toBeInTheDocument();
+      expect(screen.getByText(DEFAULT_MODEL_LABEL)).toBeInTheDocument();
     });
-    expect(screen.queryByText("Anthropic: Claude Opus 5")).not.toBeInTheDocument();
+    expect(screen.queryByText(ADVANCED_MODEL_LABEL)).not.toBeInTheDocument();
   });
 
   it("commits a clicked option into the input value", async () => {
     render(<Harness />);
     const input = screen.getByRole("combobox") as HTMLInputElement;
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Luna Pro"));
-    fireEvent.click(screen.getByText("OpenAI: GPT-5.6 Luna Pro"));
-    expect(input.value).toBe("openai/gpt-5.6-luna-pro");
+    await waitFor(() => screen.getByText(DEFAULT_MODEL_LABEL));
+    fireEvent.click(screen.getByText(DEFAULT_MODEL_LABEL));
+    expect(input.value).toBe(DEFAULT_MODEL);
   });
 
   it("renders the restaurant-style cost tier for priced catalog models", async () => {
@@ -94,7 +95,7 @@ describe("ModelPicker", () => {
     // Seed fallback (fetch rejects) — no prices anywhere, so no glyphs.
     render(<Harness />);
     fireEvent.focus(screen.getByRole("combobox"));
-    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Luna Pro"));
+    await waitFor(() => screen.getByText(DEFAULT_MODEL_LABEL));
     expect(document.querySelectorAll(".model-cost")).toHaveLength(0);
   });
 
@@ -102,7 +103,7 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Anthropic: Claude Opus 5"));
+    await waitFor(() => screen.getByText(ADVANCED_MODEL_LABEL));
     fireEvent.change(input, { target: { value: "zzz-nope" } });
     await waitFor(() => {
       expect(
