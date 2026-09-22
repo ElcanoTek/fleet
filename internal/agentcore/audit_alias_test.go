@@ -266,3 +266,61 @@ func TestConfigureAgentPolicy_CriticalToolAliasClasses(t *testing.T) {
 		t.Error("aliases must be replaced, not merged, by the next ConfigureAgentPolicy")
 	}
 }
+
+// One audit may approve several batches under one approval key, each under its
+// own values_digest. The key held a single digest slot, so the last
+// declaration's digest replaced the first's and the first batch was falsely
+// refused. That already happened for two batches of one tool, and #1604 extended
+// it to twins, whose ledgers share the alias class key (the tester's probe on
+// PR #1606). Each batch still rides only under its own records and digest.
+func TestBatchApprovalsKeepEveryDeclaredDigest(t *testing.T) {
+	check := func(t *testing.T, o *orchestrationState, tool, args string, wantBlocked bool) {
+		t.Helper()
+		if blocked, msg := o.checkCriticalTool(tool, "", args); blocked != wantBlocked {
+			t.Fatalf("%s %s: blocked=%t (%s), want %t", tool, args, blocked, msg, wantBlocked)
+		}
+	}
+	t.Run("two batches of one tool", func(t *testing.T) {
+		o := newOrchStateForTest()
+		registerTyped(t, o,
+			criticalActionStruct{Tool: typedCreateToolA, DealIDs: []string{"a", "b"}, ValuesDigest: "D1"},
+			criticalActionStruct{Tool: typedCreateToolA, DealIDs: []string{"c", "d"}, ValuesDigest: "D2"})
+		check(t, o, typedCreateToolA, `{"deal_ids":["a","b"],"values_sha256":"d1"}`, false)
+		check(t, o, typedCreateToolA, `{"deal_ids":["c","d"],"values_sha256":"d2"}`, false)
+		check(t, o, typedCreateToolA, `{"deal_ids":["a","b"],"values_sha256":"d2"}`, true) // another batch's digest
+		check(t, o, typedCreateToolA, `{"deal_ids":["a","b"],"values_sha256":"d3"}`, true) // no batch's digest
+		check(t, o, typedCreateToolA, `{"deal_ids":["a","c"],"values_sha256":"d1"}`, true) // records of two batches
+	})
+	t.Run("one batch per twin", func(t *testing.T) {
+		withPagesPolicy(t, pagesAliases)
+		o := newOrchStateForTest()
+		registerTyped(t, o,
+			criticalActionStruct{Tool: aliasInlineTool, DealIDs: []string{"a", "b"}, ValuesDigest: "D1"},
+			criticalActionStruct{Tool: aliasUploadTool, DealIDs: []string{"c", "d"}, ValuesDigest: "D2"})
+		check(t, o, aliasInlineTool, `{"deal_ids":["a","b"],"values_sha256":"d1"}`, false)
+		check(t, o, aliasUploadTool, `{"deal_ids":["c","d"],"values_sha256":"d2"}`, false)
+		check(t, o, aliasUploadTool, `{"deal_ids":["a","b"],"values_sha256":"d2"}`, true)
+		check(t, o, aliasOtherServerUpload, `{"deal_ids":["c","d"],"values_sha256":"d2"}`, true)
+	})
+}
+
+// validate-config's view of alias problems is the boot path's: the same
+// members and entries ConfigureAgentPolicy would ignore.
+func TestCriticalToolAliasProblems(t *testing.T) {
+	p := AgentPolicy{
+		CriticalToolSuffixes: []string{"update_page_data", "update_page_data_upload"},
+		CriticalToolAliases: map[string][]string{
+			"update_page_data": {"update_page_data_uplaod"},
+			"send_email":       {"send_template_email"}, // base suffixes count as critical
+		},
+	}
+	problems := CriticalToolAliasProblems(p)
+	joined := strings.Join(problems, "\n")
+	if len(problems) != 2 || !strings.Contains(joined, `member "update_page_data_uplaod"`) || !strings.Contains(joined, `entry "update_page_data"`) {
+		t.Fatalf("problems = %v, want the typo'd member and the entry it empties", problems)
+	}
+	p.CriticalToolAliases = map[string][]string{"update_page_data": {"update_page_data_upload"}}
+	if problems := CriticalToolAliasProblems(p); len(problems) != 0 {
+		t.Fatalf("a valid declaration reported problems: %v", problems)
+	}
+}

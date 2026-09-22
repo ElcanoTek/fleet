@@ -424,9 +424,13 @@ reverse. Concretely, a call through an alias:
 What does **not** change:
 
 - `deal_id` / `deal_ids` / `values_digest` binding carries over to the alias as
-  is.
-- An aliased or same-suffix call on a **different** server or client variant is
-  still blocked and discharges nothing.
+  is. One audit may approve several batches under one key — two batches of the
+  same tool, or one per twin, each with its own `values_digest` — and each
+  batch rides only under its own declaration's records and digest.
+- For a **typed** declaration, an aliased or same-suffix call on a
+  **different** server or client variant is still blocked and discharges
+  nothing. (Legacy free-text declarations carry no server identity and stay
+  suffix-level and server-agnostic, exactly as before: see below.)
 - Approval modes stay per suffix, which is why the example gives both Pages
   write variants `notify`.
 - A manifest without the key behaves exactly as before.
@@ -436,9 +440,16 @@ A few rules and caveats:
 - **Every member must be in `critical_tools`.** A member that is not is logged
   and ignored when the policy is installed, and an entry left with fewer than
   two members is dropped. An alias of a tool the gate never sees would be a way
-  around it.
+  around it. `fleet validate-config` reports both as an `agent_policy=fail`
+  check, from the same validation the boot path runs — at boot they are only a
+  log line, and a typo'd member silently leaves the wedge the alias was meant
+  to end. Run it after adding the key.
 - **Legacy free-text audits** honour aliases at suffix level, the way they
-  already honour `critical_tool_substitutes`.
+  already honour `critical_tool_substitutes`. They were never bound to a
+  server: a legacy `update_page_data` declaration already let another server's
+  `…_update_page_data` ride, and with the alias another server's
+  `…_update_page_data_upload` rides too. The cross-server refusal above is a
+  property of typed declarations.
 - **Sub-agents** run in-process under the same installed policy, so they
   inherit the aliases.
 - **Alias vs substitute.** Use an alias only for names that are the same action

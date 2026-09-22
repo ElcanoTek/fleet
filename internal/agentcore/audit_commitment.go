@@ -496,7 +496,7 @@ func parseDealOutcomes(resultText string) ([]dealOutcome, bool) {
 // comments in registerCommittedActionsTyped). Callers must hold o.mu.
 func (o *orchestrationState) resetBatchApprovals() {
 	o.approvedDealIDs = make(map[string]map[string]bool)
-	o.approvedDigest = make(map[string]string)
+	o.approvedDigest = make(map[string]map[string]bool)
 }
 
 // registerCommittedActionsTyped records commitments from the typed
@@ -594,7 +594,10 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 				o.approvedDealIDs[batchKey][id] = true
 			}
 			if a.ValuesDigest != "" {
-				o.approvedDigest[batchKey] = strings.ToLower(strings.TrimSpace(a.ValuesDigest))
+				if o.approvedDigest[batchKey] == nil {
+					o.approvedDigest[batchKey] = make(map[string]bool)
+				}
+				o.approvedDigest[batchKey][strings.ToLower(strings.TrimSpace(a.ValuesDigest))] = true
 			}
 		}
 		tc := &typedCommitment{
@@ -843,9 +846,9 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 				toolName, id)
 		}
 	}
-	if want := o.approvedDigest[suffix]; want != "" {
-		if got := valuesDigestArg(rawInput); got != want {
-			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q != approved %q", toolName, got, want)
+	if wants := o.approvedDigest[suffix]; len(wants) > 0 {
+		if got := valuesDigestArg(rawInput); !wants[got] {
+			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q is not an approved digest", toolName, got)
 			return true, fmt.Sprintf("BLOCKED: batch '%s' values_sha256 does not match the "+
 				"audit-approved digest. The approved value list differs from the one being applied — "+
 				"re-audit with the correct values_digest.", toolName)

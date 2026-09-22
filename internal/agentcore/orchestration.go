@@ -93,13 +93,18 @@ type orchestrationState struct {
 	// record ids (and value-set digest) the audit approved, keyed by
 	// critical-tool suffix. When a tool call carries deal_ids (a server-side
 	// batch), every id MUST be in approvedDealIDs[suffix]; and when the audit
-	// declared a digest, the call's values_sha256 MUST equal
-	// approvedDigest[suffix] — otherwise the call is blocked. Empty/absent =>
-	// no batch binding, i.e. single-record flows behave exactly as before.
+	// declared a digest, the call's values_sha256 MUST be one of the digests
+	// in approvedDigest[suffix] — otherwise the call is blocked. It is a SET:
+	// one envelope may approve two batches under one key (two batches of the
+	// same tool, or one per alias twin, #1604) with different value lists, and
+	// a single slot kept only the last digest and falsely blocked the first
+	// batch. The per-commitment digest check in commitmentAuthorizes still
+	// binds each batch to its own declaration's digest. Empty/absent => no
+	// batch binding, i.e. single-record flows behave exactly as before.
 	// This is what stops one audit approval from silently authorizing a batch
 	// over records the approver never saw.
 	approvedDealIDs map[string]map[string]bool
-	approvedDigest  map[string]string
+	approvedDigest  map[string]map[string]bool
 
 	// dischargedDeals tracks, per critical-tool suffix, the record ids whose
 	// commitment has ALREADY been discharged by a successful per-record batch
@@ -308,7 +313,7 @@ func newOrchestrationState(logSession *LogSession, _ int) *orchestrationState {
 		sentEmailFingerprints:       make(map[string]struct{}),
 		committedCriticalActions:    make(map[string]int),
 		approvedDealIDs:             make(map[string]map[string]bool),
-		approvedDigest:              make(map[string]string),
+		approvedDigest:              make(map[string]map[string]bool),
 		dischargedDeals:             make(map[string]map[string]bool),
 		criticalToolFailureAttempts: make(map[string]int),
 		logSession:                  logSession,

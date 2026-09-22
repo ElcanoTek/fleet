@@ -411,6 +411,18 @@ Measured: a `skills/broken-skill/` folder with no `SKILL.md` on a bundle copy â†
 `bundle_skills=fail: skills/broken-skill: missing SKILL.md`, everything else
 `ok`.
 
+### `agent_policy` â€” alias members the gate would ignore
+
+`agent_policy.critical_tool_aliases` (#1604) members must be critical suffixes,
+and each entry must keep at least two of them. At boot, `ConfigureAgentPolicy`
+logs a violation and ignores it, so a mistyped member is one log line and an
+alias that silently does nothing. `agent_policy` reports the same problems,
+from the same code (`agentcore.CriticalToolAliasProblems`), as
+`agent_policy=fail`. It is non-blocking like the floor checks, and a bundle
+with no aliases reports `ok`. It is **not** part of the forced floor, because
+a fleet checkout without the check would then fail every caller. A bundle that
+declares aliases should add it to `gate_checks`.
+
 ## Gating on `ok`, not on "not `fail`"
 
 The first version of the gate selected checks whose status was `fail`. That was

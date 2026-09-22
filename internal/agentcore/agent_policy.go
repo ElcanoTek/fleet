@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -156,7 +157,11 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		}
 	}
 	activeCriticalSuffixes = critical
-	activeCriticalAliasClass = buildCriticalAliasClasses(p.CriticalToolAliases, seen)
+	classes, aliasProblems := buildCriticalAliasClasses(p.CriticalToolAliases, seen)
+	for _, problem := range aliasProblems {
+		log.Printf("agent_policy: %s", problem)
+	}
+	activeCriticalAliasClass = classes
 
 	subs := make(map[string][]string, len(p.CriticalToolSubstitutes))
 	for k, v := range p.CriticalToolSubstitutes {
@@ -201,17 +206,40 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeCriticalUndoHints = hints
 }
 
+// CriticalToolAliasProblems reports what ConfigureAgentPolicy would ignore in
+// p.CriticalToolAliases: members that are not critical suffixes (checked
+// against the SAME merged list the gate uses — base suffixes plus
+// p.CriticalToolSuffixes) and entries left with fewer than two members. It is
+// the preflight face of the boot-time validation: `fleet validate-config`
+// reports these, because at boot a problem is one log line and a typo'd member
+// silently leaves the exact wrong-variant wedge the alias was meant to end.
+func CriticalToolAliasProblems(p AgentPolicy) []string {
+	critical := make(map[string]bool, len(baseCriticalToolSuffixes)+len(p.CriticalToolSuffixes))
+	for _, s := range baseCriticalToolSuffixes {
+		critical[s] = true
+	}
+	for _, s := range p.CriticalToolSuffixes {
+		if s != "" {
+			critical[s] = true
+		}
+	}
+	_, problems := buildCriticalAliasClasses(p.CriticalToolAliases, critical)
+	return problems
+}
+
 // buildCriticalAliasClasses turns the bundle's critical_tool_aliases into
 // equivalence classes (#1604): an entry's key and the suffixes listed under it
 // are one class, and entries sharing a suffix merge, so the relation is
 // symmetric and transitive whichever way the manifest spells it. Every member
 // must be a critical suffix: an alias of a tool the audit gate never sees would
 // be a discharge path around the gate, and a misspelled one would be silently
-// inert. Such members are logged and dropped, and an entry left with fewer
-// than two members is dropped whole. Returns suffix -> class key, the class's
-// lexicographically smallest member, so the key does not depend on the order
-// the YAML map decoded in.
-func buildCriticalAliasClasses(aliases map[string][]string, critical map[string]bool) map[string]string {
+// inert. Such members are dropped, and an entry left with fewer than two
+// members is dropped whole; each is returned as a problem for the caller to
+// log (boot) or report (validate-config). Returns suffix -> class key, the
+// class's lexicographically smallest member, so the key does not depend on the
+// order the YAML map decoded in.
+func buildCriticalAliasClasses(aliases map[string][]string, critical map[string]bool) (map[string]string, []string) {
+	var problems []string
 	parent := map[string]string{}
 	find := func(s string) string {
 		for parent[s] != s {
@@ -235,13 +263,13 @@ func buildCriticalAliasClasses(aliases map[string][]string, critical map[string]
 			}
 			inEntry[s] = true
 			if !critical[s] {
-				log.Printf("agent_policy: ignoring critical_tool_aliases member %q (entry %q) — it is not in critical_tools, so the audit gate never sees that tool and it may not discharge a declared commitment", s, k)
+				problems = append(problems, fmt.Sprintf("ignoring critical_tool_aliases member %q (entry %q) — it is not in critical_tools, so the audit gate never sees that tool and it may not discharge a declared commitment", s, k))
 				continue
 			}
 			members = append(members, s)
 		}
 		if len(members) < 2 {
-			log.Printf("agent_policy: ignoring critical_tool_aliases entry %q — fewer than two critical suffixes remain in it", k)
+			problems = append(problems, fmt.Sprintf("ignoring critical_tool_aliases entry %q — fewer than two critical suffixes remain in it", k))
 			continue
 		}
 		for _, m := range members {
@@ -261,7 +289,7 @@ func buildCriticalAliasClasses(aliases map[string][]string, critical map[string]
 	for s := range parent {
 		classes[s] = find(s)
 	}
-	return classes
+	return classes, problems
 }
 
 // ApprovalModeForTool returns the bundle-declared approval mode for toolName and
