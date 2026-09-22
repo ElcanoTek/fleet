@@ -761,6 +761,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       !slot.failed &&
       !slot.modelRequired &&
       !slot.content.trim() &&
+      // A reasoning-only reply is a REAL answer: turn.completed keeps the
+      // reasoning it accumulated, so the slot is done and its content empty
+      // through no fault of the replay. Reading that as a gap reopened a
+      // finished turn as recovery work, and let a confirmed Stop mark it
+      // cancelled (#1584).
+      !(slot.reasoning ?? "").trim() &&
       !(slot.toolCalls && slot.toolCalls.length > 0);
     if (!midFlight && !emptyAfterGap) return null;
     return { slot, midFlight };
@@ -862,9 +868,21 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // because nothing else will ever put it on screen.
   const handOffAfterChase = (convId: string): void => {
     if (pendingDirectHandoffRef.current.delete(convId)) {
-      // Deliberately UNBOUND: what we want is whatever the server is running,
-      // which is the turn it started for that submission.
-      void followSuccessor(convId, 0);
+      void (async () => {
+        // Adopt the database first. That submission can itself have finished
+        // while the chase was winding down, and a further queued turn can
+        // have started behind it — attaching that one without adopting ours
+        // would drop its prompt and its answer from the transcript.
+        //
+        // Adoption rather than a turn id, because the id is not knowable
+        // here: the direct response's body is cancelled unread (nobody at
+        // that call site is set up to consume a stream), so its turn.started
+        // never reaches us.
+        await reloadCanonical(convId);
+        if (recoveryUnmountedRef.current) return;
+        // Then take whatever is running, which is the newest turn.
+        void followSuccessor(convId, 0);
+      })();
       return;
     }
     void followQueueDrain(convId);
@@ -1341,6 +1359,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (owned) markCancelled(owned.assistantId, owned.gap);
     if (chasedSlot !== null)
       markCancelled(chasedSlot.assistantId, chasedSlot.gap);
+    // Stop waits for the server to confirm, and in that window the chase or a
+    // recovery tick can have installed a REPLACEMENT socket. Settling its
+    // slot without retiring it leaves a stream attached to a terminal slot
+    // the watchdog no longer visits, which a later turn would then race for
+    // the same handles.
+    retireStream(convId, abortControllersRef.current.get(convId) ?? null);
+    attachedConvIdsRef.current.delete(convId);
     markConvIdle(convId);
   };
 

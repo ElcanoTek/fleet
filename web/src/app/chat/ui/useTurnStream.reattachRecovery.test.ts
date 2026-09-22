@@ -357,6 +357,17 @@ const answeredHistory = (): HistoryEntry[] => [
   },
 ];
 
+// A turn that reasoned and then finished without writing prose. Legitimately
+// `done` with empty content, which is the shape a replay gap also has.
+const reasoningOnlyHistory = (): HistoryEntry[] => [
+  { role: "user", type: "text", content: { text: "run the long job" } },
+  {
+    role: "assistant",
+    type: "reasoning",
+    content: { text: "a long silent deliberation" },
+  },
+];
+
 const unansweredHistory = (): HistoryEntry[] => [
   { role: "user", type: "text", content: { text: "run the long job" } },
 ];
@@ -2184,5 +2195,47 @@ describe("liveness hands an unreachable reconcile to recovery", () => {
     await vi.advanceTimersByTimeAsync(20);
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
     void zombie;
+  }, 20000);
+});
+
+// Codex round 21 on #1584: a reasoning-only reply is legitimately `done` with
+// empty content — turn.completed keeps the reasoning it accumulated. Probing
+// the replay-gap shape unconditionally read that finished turn as unsettled,
+// so a confirmed Stop during a chase reached back and stamped the previous,
+// completed turn cancelled.
+describe("a reasoning-only reply is an answer, not a gap", () => {
+  it("is not cancelled when Stop ends a chase that has no slot yet", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      // Our own turn's answer is reasoning-only.
+      persisted: reasoningOnlyHistory(),
+      streamBodies: [() => severedStream([])],
+      inflightRejectAt: [0],
+      inflight: [
+        // The chain's tick: a successor is running, so it adopts our answer
+        // and starts a chase bound to that id.
+        { inflight: true, turn_id: "t-successor" },
+        // The chase's reattach sees a different id and declines BEFORE
+        // creating a slot, so the chase has none of its own.
+        { inflight: true, turn_id: "t-other" },
+        // Its own probe is back on the turn it is chasing, so it simply
+        // waits for the next tick.
+        { inflight: true, turn_id: "t-successor" },
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(lastOf(h).reasoning).toBe("a long silent deliberation");
+
+    result.current.cancelRecovery(CONV);
+    // The chase had no slot, so Stop must settle nothing — least of all the
+    // finished turn above it.
+    expect(lastOf(h).cancelled).toBeUndefined();
+    expect(lastOf(h).reasoning).toBe("a long silent deliberation");
   }, 20000);
 });
