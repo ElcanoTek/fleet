@@ -75,6 +75,11 @@ absolutize_env() {
   done
 }
 
+# redact URL — drop any userinfo (user:token@) before a URL is printed.
+redact() {
+  sed -E 's#(://)[^/@]+@#\1***@#' <<<"$1"
+}
+
 # checkout_state DIR — absent | clean-main | keep | occupied: the one decision
 # both the real run and --dry-run act on.
 checkout_state() {
@@ -93,16 +98,17 @@ checkout_state() {
   fi
 }
 
-# prepare_checkout DIR REPO — act on checkout_state: clone into an absent DIR
+# prepare_checkout DIR REPO [GIT_OPT...] — act on checkout_state: clone into an absent DIR
 # (via a .partial dir renamed on success), fast-forward a clean main checkout
 # (aborting if it has diverged), keep anything else as-is, refuse a path that
 # exists but is not a checkout.
 prepare_checkout() {
   local dir="$1" repo="$2"
+  shift 2
   case "$(checkout_state "$dir")" in
     clean-main)
       echo "Updating existing checkout at $dir"
-      git -C "$dir" pull --ff-only ;;
+      git "$@" -C "$dir" pull --ff-only ;;
     keep)
       echo "Keeping $dir as-is (not a clean main checkout); use sudo fleet update to move it." >&2 ;;
     occupied)
@@ -114,8 +120,10 @@ prepare_checkout() {
       # a half-populated dir that blocks the next run.
       local partial="$dir.partial.$$"
       CLEANUP+=("$partial")
-      git clone --branch main --single-branch "$repo" "$partial"
-      mv "$partial" "$dir" ;;
+      git "$@" clone --branch main --single-branch "$repo" "$partial"
+      # -T: fail rather than move the clone INSIDE a $dir that another
+      # installer created meanwhile.
+      mv -T "$partial" "$dir" || { echo "$dir appeared during the clone (another install running?); not using it." >&2; return 1; } ;;
   esac
 }
 
@@ -163,7 +171,8 @@ main() {
         # A real run pulls, so rehearse on an exact copy of the checkout: same
         # commits, same git config (the branch's real upstream, whatever remote
         # it names) and the same ignored working-tree state bootstrap reads
-        # (.env.local). It sits beside the checkout so --reflink makes it cheap
+        # (.env.local). Hooks are disabled for the rehearsal pull (a post-merge
+        # hook could act on the host). It sits beside the checkout so --reflink makes it cheap
         # on btrfs/xfs, and it is removed on exit. An ahead checkout previews
         # its own commits; a diverged one fails the same --ff-only pull.
         tmp="$(mktemp -d "$(dirname "$src")/.fleet-dry-run.XXXXXX")"
@@ -171,13 +180,13 @@ main() {
         plan="$tmp/src"
         cp -a --reflink=auto "$src" "$plan"
         echo "[dry-run] would: git -C $src pull --ff-only (rehearsed on a copy)"
-        prepare_checkout "$plan" "$repo" || { echo "[dry-run] a real run would stop at the checkout step." >&2; exit 1; } ;;
+        prepare_checkout "$plan" "$repo" -c core.hooksPath=/dev/null || { echo "[dry-run] a real run would stop at the checkout step." >&2; exit 1; } ;;
       absent)
         tmp="$(mktemp -d)"
         CLEANUP+=("$tmp")
         plan="$tmp/src"
-        echo "[dry-run] would: git clone --branch main $repo $src (rehearsed in a temp dir)"
-        prepare_checkout "$plan" "$repo" || { echo "[dry-run] a real run would stop at the checkout step." >&2; exit 1; } ;;
+        echo "[dry-run] would: git clone --branch main $(redact "$repo") $src (rehearsed in a temp dir)"
+        prepare_checkout "$plan" "$repo" -c core.hooksPath=/dev/null || { echo "[dry-run] a real run would stop at the checkout step." >&2; exit 1; } ;;
     esac
     cd "$plan"
     # Same stdin rule as the real run below, so a terminal-attached dry run is
