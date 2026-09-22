@@ -31,8 +31,10 @@ usage() {
 Usage: curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash [-s -- BOOTSTRAP_FLAGS...]
 
 Clones fleet main into $1 and runs scripts/bootstrap.sh with BOOTSTRAP_FLAGS.
-With no flags on a terminal, bootstrap asks for everything it needs; with flags
-it runs unattended. For automation, download first so a failed fetch is an error:
+With no flags on a terminal, bootstrap asks for everything it needs. With flags
+and no terminal on stdin (curl | bash, CI, or </dev/null) it runs unattended; run
+directly from a terminal, it still asks about anything the flags leave unset.
+For automation, download first so a failed fetch is an error:
   curl -fsSLo /tmp/fleet-install.sh https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh \\
     && sudo bash /tmp/fleet-install.sh FLAGS... </dev/null
 Common flags: --postgres=local|external  --enable-service  --enable-web --domain <host>
