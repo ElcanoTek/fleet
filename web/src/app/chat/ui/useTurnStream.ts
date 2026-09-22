@@ -157,7 +157,35 @@ const recoveryRetryDelaysMs = [1000, 2000, 4000, 8000, 16000];
 // a conversation left unsettled is no longer in attachedConvIdsRef, so the
 // liveness watchdog does not sweep it, and an outage longer than the backoff
 // would otherwise strand the slot until the user happened to switch tabs.
-const recoverySteadyRetryMs = 30000;
+//
+// That beat lengthens with the age of the outage (#1594). A flat 30 s is the
+// right cadence for an outage of minutes and far more than an outage of hours
+// warrants: a tab left open overnight behind a dead VPN asked 120 times an
+// hour for as long as it stayed open, and a visible tab never benefited from
+// the hidden-tab skip. The promise the user guide makes is "the page
+// re-checks by itself", not "every 30 seconds".
+//
+// The attempt number IS the age of the outage, so no clock has to be carried
+// beside it: every tick — one that probed, and one skipped because the tab
+// was hidden — is booked by this same ladder. Counting from the end of the
+// ~31 s backoff, the rungs below hold 30 s to roughly two and a half minutes
+// of outage and a minute apiece to roughly seven and a half.
+const recoverySteadyRetriesMs = [
+  30000, 30000, 30000, 30000, 60000, 60000, 60000, 60000, 60000,
+];
+
+// …and then a ceiling, which the chain keeps for as long as the outcome stays
+// unknown. Every path that learns the outage may be over — `online`,
+// `visibilitychange`, `focus`, all via nudgeRecovery — re-arms the chain at
+// attempt 0, so a user who comes back to the tab still gets an answer within
+// seconds rather than waiting out whichever rung the chain had reached.
+const recoverySteadyCapMs = 300000;
+
+// Ladder position of the first steady rung. A tick whose probe REACHED the
+// server holds here instead of climbing: the long-outage rungs are sized for
+// a client that cannot reach the server at all, and that is demonstrably not
+// what went wrong.
+const recoverySteadyBeatAttempt = recoveryRetryDelaysMs.length;
 
 // Ceiling on a single recovery request. Long enough for a slow-but-alive
 // server, short enough that a blackholed connection costs one beat.
@@ -843,7 +871,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   //                        stream the unmounted parent can no longer abort.
   //
   // The chain does not give up while the outcome stays unknown. It backs off
-  // (1, 2, 4, 8, 16 s) and then keeps a slow steady beat, because the
+  // (1, 2, 4, 8, 16 s) and then keeps a slow steady beat that lengthens with
+  // the age of the outage — 30 s, a minute, five minutes — because the
   // alternative is a slot that stays "thinking" forever on a page whose guide
   // promises it re-checks by itself: the conversation is no longer in
   // attachedConvIdsRef, so the liveness watchdog does not sweep it, and
@@ -873,11 +902,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
   };
 
-  // recoveryDelayFor is the backoff, then a steady slow beat.
-  const recoveryDelayFor = (attempt: number): number =>
-    attempt < recoveryRetryDelaysMs.length
-      ? recoveryRetryDelaysMs[attempt]
-      : recoverySteadyRetryMs;
+  // recoveryDelayFor is the backoff, then a steady beat that itself lengthens
+  // with how long the outage has already lasted, up to a ceiling (#1594). It
+  // books the successor chase and the deferred direct hand-off too: those wait
+  // on the same unreachable server, so they make the same trade.
+  const recoveryDelayFor = (attempt: number): number => {
+    if (attempt < recoveryRetryDelaysMs.length)
+      return recoveryRetryDelaysMs[attempt];
+    const steady = attempt - recoveryRetryDelaysMs.length;
+    return steady < recoverySteadyRetriesMs.length
+      ? recoverySteadyRetriesMs[steady]
+      : recoverySteadyCapMs;
+  };
 
   // followSuccessor attaches to the turn the server is running now, after the
   // chain has settled the older turn it was recovering. Fire-and-forget was
@@ -1355,7 +1391,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // still owns a turn that may well be running, and a UI that hides
           // Stop and offers to clear the conversation would be lying.
           markConvStreaming(convId);
-          scheduleRecoveryRetry(convId, assistantId, gapNow, attempt + 1);
+          // This tick's probe was ANSWERED, so the long-outage rungs do not
+          // apply: what failed is the attach, not the network, and a turn the
+          // server says is running deserves the steady beat rather than a
+          // five-minute wait (#1594). Clamping also walks a chain that had
+          // climbed those rungs back down as soon as the server answers again.
+          scheduleRecoveryRetry(
+            convId,
+            assistantId,
+            gapNow,
+            Math.min(attempt + 1, recoverySteadyBeatAttempt),
+          );
           return;
         }
         // Definitive: nothing in flight, nothing retained. Now a settle is

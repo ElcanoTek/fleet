@@ -797,6 +797,102 @@ describe("recovery ownership spans the whole chain", () => {
     expect(lastOf(h).state).toBe("streaming");
   }, 20000);
 
+  // #1594. "Keeps asking" and "keeps asking every 30 seconds" are not the same
+  // promise. The steady beat is right for an outage of minutes and wasteful
+  // for one of hours — a tab left open overnight behind a dead VPN spent 120
+  // requests an hour on a question whose answer had not changed — so the beat
+  // lengthens with the age of the outage while the chain itself never gives
+  // up. The rungs are asserted by cost over a window rather than by exact tick
+  // times, so re-tuning the ladder does not rewrite this test.
+  it("lengthens the steady beat as the outage drags on", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      // Every probe after the reattach's own throws: the outage never ends.
+      inflightRejectAt: Array.from({ length: 400 }, (_, i) => i + 1),
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    // The 1/2/4/8/16 s backoff is untouched: a brief flap still recovers fast.
+    await vi.advanceTimersByTimeAsync(31_100);
+    const afterBackoff = h.inflightProbes;
+    expect(afterBackoff).toBeGreaterThanOrEqual(5);
+
+    // The first steady rungs are the 30 s beat, unchanged — two minutes of
+    // outage still buys four more looks.
+    await vi.advanceTimersByTimeAsync(120_000);
+    const afterTwoMinutes = h.inflightProbes;
+    expect(afterTwoMinutes - afterBackoff).toBe(4);
+
+    // Ten more minutes: a flat 30 s beat would spend 20 probes here.
+    await vi.advanceTimersByTimeAsync(600_000);
+    const afterTwelveMinutes = h.inflightProbes;
+    expect(afterTwelveMinutes - afterTwoMinutes).toBeGreaterThan(0);
+    expect(afterTwelveMinutes - afterTwoMinutes).toBeLessThanOrEqual(8);
+
+    // And an hour of it costs a handful of probes rather than 120 — without
+    // ever declaring a turn the server was never asked about dead.
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(h.inflightProbes - afterTwelveMinutes).toBeGreaterThan(0);
+    expect(h.inflightProbes - afterTwelveMinutes).toBeLessThanOrEqual(13);
+    expect(lastOf(h).failed).toBeUndefined();
+    expect(lastOf(h).state).toBe("streaming");
+    expect(h.streaming.has(CONV)).toBe(true);
+  }, 20000);
+
+  // The long rungs are sized for a client that cannot reach the server at all.
+  // A tick whose probe is ANSWERED has disproved exactly that, so it must not
+  // inherit the five-minute ceiling the outage earned: the server says a turn
+  // is running and only the attach flapped.
+  it("returns to the steady beat as soon as a probe reaches the server", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      // probe 0: the initial reattach's own (answers).
+      // probes 1-16: the outage — the backoff, both steady rungs, and three
+      //   ticks at the 5 min ceiling.
+      // probe 17: the ceiling tick that finally reaches the server: the turn
+      //   is still live.
+      // probe 18: the reattach it triggers, which loses the same flap, so the
+      //   turn stays unattached and the chain has to come back for it.
+      inflightRejectAt: [
+        ...Array.from({ length: 16 }, (_, i) => i + 1),
+        ...Array.from({ length: 40 }, (_, i) => i + 18),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    // Sit out the outage until the chain is ticking at the ceiling, then let
+    // the tick that reaches the server run.
+    await vi.advanceTimersByTimeAsync(1_400_000);
+    const afterContact = h.inflightProbes;
+    expect(afterContact).toBeGreaterThanOrEqual(19);
+
+    // Half a minute later the chain has looked again. On the ceiling it would
+    // have waited five minutes for a turn the server had just called live.
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(h.inflightProbes).toBeGreaterThan(afterContact);
+    expect(lastOf(h).failed).toBeUndefined();
+    expect(lastOf(h).state).toBe("streaming");
+    expect(h.streaming.has(CONV)).toBe(true);
+  }, 20000);
+
   it("does not settle when a live turn simply could not be reattached", async () => {
     vi.useFakeTimers();
     const h = makeHarness({

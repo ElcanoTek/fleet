@@ -116,14 +116,33 @@ exactly the "Turn failed until I refresh" report.
 On `unreachable` the slot is **left mid-flight** (`state: "streaming"`, partial
 content kept), the attach handle is released so a reattach can claim the
 conversation, and `scheduleRecoveryRetry` re-probes: 1, 2, 4, 8, 16 s and then
-a steady 30 s beat, one chain per conversation, for as long as the outcome
-stays unknown. It does **not** give up — a conversation left unsettled is no
-longer in `attachedConvIdsRef`, so `sweepStreamLiveness` does not visit it, and
-an outage longer than the backoff would otherwise strand the slot until the
-user happened to switch tabs. A hidden tab reschedules without probing (the
+a steady beat, one chain per conversation, for as long as the outcome stays
+unknown. It does **not** give up — a conversation left unsettled is no longer
+in `attachedConvIdsRef`, so `sweepStreamLiveness` does not visit it, and an
+outage longer than the backoff would otherwise strand the slot until the user
+happened to switch tabs. A hidden tab reschedules without probing (the
 tab-return handler covers that, and background polling is waste), and every
 recovery request is bounded by a timeout so a blackholed connection costs one
 beat rather than the whole chain.
+
+That steady beat **lengthens with the age of the outage** (#1594): 30 s to
+roughly two and a half minutes, a minute apiece to roughly seven and a half,
+then a 5 min ceiling it keeps indefinitely. A flat 30 s is the right cadence
+for an outage of minutes and far more than one of hours warrants — a tab left
+open overnight behind a dead VPN spent 120 requests an hour re-asking a
+question whose answer had not changed, and the hidden-tab skip does not help a
+tab that stays visible. The promise the user guide makes is "the page re-checks
+by itself", not "every 30 seconds".
+
+Nothing carries a clock beside the ladder: the attempt number **is** the age of
+the outage, because every tick — one that probed, and one skipped because the
+tab was hidden — is booked by the same `recoveryDelayFor`. And every path that
+learns the outage may be over restarts the chain at attempt 0, so the long
+rungs are never what a returning user waits out: `online`, `visibilitychange`
+and `focus` all reach `nudgeRecovery`, and a tick whose probe is **answered**
+clamps back to the first steady rung rather than climbing — what failed there
+is the attach, not the network, and the long rungs are sized for a client that
+cannot reach the server at all.
 
 Each tick asks `/inflight`: still unreachable → next tick; a **different**
 turn id than the one the chain is recovering → our turn is over, adopt its
@@ -444,3 +463,21 @@ return is caught in the 2.5s grace window alone. Both replace the five-minute
   window, the keepalive itself and the persistence ledger are untouched; the
   only addition is advertising the keepalive cadence the server was already
   sending, so the client can reason about silence instead of guessing.
+- **Recovery state is per tab, deliberately (#1595).** Two tabs open on the
+  same conversation run two independent chains: both probe, both may reattach,
+  both may adopt the canonical transcript. That is not a correctness problem —
+  every path is idempotent and the server is the single source of truth — and
+  electing one tab to recover on the others' behalf was considered and **not**
+  built. A chain is not only a stream of requests; it is how *that tab's*
+  transcript gets its content, so a follower that stands down shows a frozen
+  spinner until the leader hands it an outcome, trading duplicate requests for
+  a tab that is visibly wrong. Making the hand-off sound then needs more than a
+  lock: a leader killed mid-recovery has to be detected and its work redone, in
+  exactly the case where the duplicate requests were supposed to be saved. A
+  `localStorage` lease has no atomic compare-and-set and is racy by
+  construction, and `navigator.locks` — which is sound, and frees on tab death —
+  is secure-context-only, so any fallback puts the race back. The duplicate
+  volume is also small and now smaller: the ladder above cuts a long outage's
+  cost per tab by roughly an order of magnitude. If the duplication ever does
+  matter, the sound fix is server-side — one shared push channel per
+  conversation, multiplexed by the server — not a client-side election.
