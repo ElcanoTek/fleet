@@ -62,12 +62,12 @@ absolutize() {
 }
 
 # absolutize_env CALLER_PWD — the same for bootstrap's path-valued environment
-# settings. FLEET_CLIENT_CONFIG_DIR keeps bootstrap's own rule (the caller's
+# settings (the complete set it reads: every other FLEET_* is a URL, name or number). FLEET_CLIENT_CONFIG_DIR keeps bootstrap's own rule (the caller's
 # path when it exists there, else relative to the checkout), so it is only
 # rewritten when it exists relative to the caller.
 absolutize_env() {
   local base="$1" name value
-  for name in FLEET_ENV_FILE FLEET_BACKUP_DIR FLEET_INSTALL_DIR FLEET_STATE_DIR FLEET_CLIENT_CONFIG_DIR; do
+  for name in FLEET_ENV_FILE FLEET_BACKUP_DIR FLEET_INSTALL_DIR FLEET_STATE_DIR FLEET_CLIENT_CONFIG_CHECKOUT FLEET_CLIENT_CONFIG_DIR; do
     value="${!name:-}"
     [[ -n "$value" && "$value" != /* ]] || continue
     if [[ "$name" == FLEET_CLIENT_CONFIG_DIR && ! -e "$base/$value" ]]; then continue; fi
@@ -120,11 +120,13 @@ prepare_checkout() {
 }
 
 main() {
-  local src="${FLEET_SRC_DIR:-/opt/fleet/src}"
-  # Every trailing slash, or the .partial clone would land inside the target.
-  while [[ "$src" == */ && "$src" != / ]]; do src="${src%/}"; done
-  local repo="${FLEET_REPO_URL:-https://github.com/ElcanoTek/fleet.git}"
   local arg want="" dry_run=0 caller_pwd="$PWD"
+  local src="${FLEET_SRC_DIR:-/opt/fleet/src}"
+  # Absolute and normalized (no ./.., no trailing slash), so the .partial clone
+  # and the dry-run copy are always siblings of the checkout, never inside it.
+  [[ "$src" == /* ]] || src="$caller_pwd/$src"
+  src="$(realpath -m -- "$src")"
+  local repo="${FLEET_REPO_URL:-https://github.com/ElcanoTek/fleet.git}"
   local -a args=()
   # Parse the way bootstrap does, so a value-taking flag consumes the next word:
   # "--client-config --dry-run" is a (bad) client-config value, not a dry run.

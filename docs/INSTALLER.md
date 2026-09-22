@@ -44,9 +44,9 @@ bootstrap's work; the installer only gets a checkout in place and hands over.
   value, not a dry run. A relative local `--client-config` path, or an `--auth-pubkey @file`,
   is made absolute against the caller's directory before the installer `cd`s into the
   checkout, and so are relative path-valued environment settings (`FLEET_ENV_FILE`,
-  `FLEET_BACKUP_DIR`, `FLEET_INSTALL_DIR`, `FLEET_STATE_DIR`, and `FLEET_CLIENT_CONFIG_DIR`
+  `FLEET_BACKUP_DIR`, `FLEET_INSTALL_DIR`, `FLEET_STATE_DIR`, `FLEET_CLIENT_CONFIG_CHECKOUT`, and `FLEET_CLIENT_CONFIG_DIR`
   when it exists relative to the caller; otherwise bootstrap's checkout-relative
-  fallback applies). Every trailing `/` on `FLEET_SRC_DIR` is stripped.
+  fallback applies). `FLEET_SRC_DIR` itself is made absolute and normalized (no `.`/`..`, no trailing `/`).
 - **Interrupted clones.** The first clone goes to `$src.partial.<pid>` and is renamed into
   place only on success, so an aborted download never leaves a half-populated
   checkout that blocks the next run.
