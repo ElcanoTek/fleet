@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -46,6 +47,14 @@ const verifierNoFinalResponseMarker = "(no final response text)"
 
 // Initial review plus at most two repair reviews. Exhaustion never grants success.
 const maxCompletionVerifications = 3
+
+// errVerifierMalformedVerdict marks a verifier that ANSWERED but whose reply is
+// not a verdict — no JSON object, invalid JSON, or no explicit missing_actions
+// array (#1602 follow-up). It is a content failure, not an outage: a degraded
+// verifier model must not quietly become auto-success, so after one retry it
+// spends a check like before. Transport failures, timeouts and an empty reply
+// are outages, and may fail open after a clean audit.
+var errVerifierMalformedVerdict = errors.New("verifier returned a malformed verdict")
 
 type verifierResult struct {
 	Missing   []string `json:"missing_actions"`
@@ -284,7 +293,7 @@ func (a *Agent) runEndOfRunVerifier(ctx context.Context, task, finalResponse str
 
 	parsed, err := parseVerifierResult(raw)
 	if err != nil {
-		return nil, fmt.Errorf("verifier output parse: %w (raw=%q)", err, summarizeForConsole(raw, 200))
+		return nil, fmt.Errorf("%w: %w (raw=%q)", errVerifierMalformedVerdict, err, summarizeForConsole(raw, 200))
 	}
 	log.Printf("Verifier: missing=%v reasoning=%q", parsed.Missing, summarizeForConsole(parsed.Reasoning, 200))
 	return parsed.Missing, nil

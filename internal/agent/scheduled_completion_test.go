@@ -78,18 +78,19 @@ func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing
 		verdicts  []string
 		wantError bool
 		calls     int
-		// wantWarning: the verifier never produced a verdict, so after its one
-		// retry the clean audit finishes the run with the
-		// completion_unverified_verifier_error warning instead of spending the
-		// three checks and dead-lettering (#1602).
+		// wantWarning: whether the run finished with the
+		// completion_unverified_verifier_error warning (#1602). A verifier that
+		// ANSWERS with something that is not a verdict is a content failure,
+		// not an outage: each check is retried once and then spent, as before
+		// — so these three still dead-letter, after six calls.
 		wantWarning bool
 	}{
 		{"repaired", []string{`{"missing_actions":["verify inventory"]}`, `{"missing_actions":[]}`}, false, 2, false},
 		{"repaired at final review", []string{`{"missing_actions":["verify inventory"]}`, `{"missing_actions":["verify inventory"]}`, `{"missing_actions":[]}`}, false, 3, false},
 		{"unresolved", []string{`{"missing_actions":["verify inventory"]}`}, true, 3, false},
-		{"malformed", []string{`not a verdict`}, false, 2, true},
-		{"missing verdict", []string{`{}`}, false, 2, true},
-		{"null verdict", []string{`{"missing_actions":null}`}, false, 2, true},
+		{"malformed", []string{`not a verdict`}, true, 2 * maxCompletionVerifications, false},
+		{"missing verdict", []string{`{}`}, true, 2 * maxCompletionVerifications, false},
+		{"null verdict", []string{`{"missing_actions":null}`}, true, 2 * maxCompletionVerifications, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reviewer := &repairVerifierModel{verdicts: tc.verdicts}

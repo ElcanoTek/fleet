@@ -609,26 +609,28 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		records := buildToolExecSummary(p.agent.logSession)
 		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
 		if err != nil {
-			// A verifier that could not answer (timeout, provider failure,
-			// empty or unparseable reply) says nothing about the run, so it
-			// does not spend one of the three checks: retry once (#1602).
+			// A verifier call that produced no verdict is retried once before
+			// anything else is decided (#1602).
 			log.Printf("verifier failed, retrying once in %s: %v", verifierRetryDelay, err)
 			if sleepCtx(ctx, verifierRetryDelay) {
 				missing, err = p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
 			}
 		}
 		switch {
-		case err != nil && len(failedCriticalCalls(records)) == 0:
-			// Still no verdict, after an audit that cleared with no failed
-			// critical call: fail OPEN with a recorded warning instead of
-			// dead-lettering audited work on the verifier's own outage (the
-			// phone-a-friend reviewer already fails open on its errors).
-			log.Printf("verifier failed twice; the audit cleared with no failed critical call, finishing unverified: %v", err)
+		case err != nil && p.verifierOutageMayFailOpen(err, records):
+			// Still no verdict, from an OUTAGE (transport, timeout, empty
+			// reply), after this run's own audit passed with no failed critical
+			// call: fail OPEN with a recorded warning instead of dead-lettering
+			// audited work on the verifier's own outage (the phone-a-friend
+			// reviewer already fails open on its errors).
+			log.Printf("verifier unavailable twice; the audit passed with no failed critical call, finishing unverified: %v", err)
 			p.verifierWarning = err.Error()
 			p.verified = true
 		case err != nil:
-			// A failed critical call leaves the outcome genuinely in doubt:
-			// an outage there keeps the pre-#1602 semantics and spends a check.
+			// A malformed verdict (the verifier answered, but not with a
+			// verdict), a run whose audit never actually passed, or a failed
+			// critical call on the record: the pre-#1602 semantics — the
+			// check is spent.
 			p.verificationAttempts++
 			log.Printf("verifier failed: %v", err)
 			return p.verificationFailed("Completion verification could not produce a valid verdict: "+err.Error(), records)
@@ -714,10 +716,32 @@ func (p *scheduledPolicy) persistVerifierWarning() {
 		agentcore.MessageTypeCompletionUnverifiedVerifierError, agentcore.RedactSecrets(p.verifierWarning)), nil, nil, &t, nil, nil, "")
 }
 
+// verifierOutageMayFailOpen reports whether a verifier that still has no
+// verdict after its retry may let the run finish unverified (#1602). All three
+// must hold:
+//   - it was an outage, not a malformed verdict (errVerifierMalformedVerdict);
+//   - this run's OWN audit passed (ScheduledPolicy.AuditConfirmed), not merely
+//     finish enforcement — a delegated policy skips the self-audit ritual, so
+//     a sub-agent that never audited keeps the old spend-a-check path (today
+//     children do not run this gate at all; this keeps the premise true if
+//     they ever do);
+//   - no critical tool's last execution failed (failedCriticalCalls).
+func (p *scheduledPolicy) verifierOutageMayFailOpen(err error, records []toolExecRecord) bool {
+	if errors.Is(err, errVerifierMalformedVerdict) || p.inner == nil || !p.inner.AuditConfirmed() {
+		return false
+	}
+	return len(failedCriticalCalls(records)) == 0
+}
+
 // failedCriticalCalls names the critical tools whose LAST execution in the run
 // failed (same records and success classification as the verifier). A failed
 // attempt a later success of the same tool superseded — a stale-version retry,
 // corrected arguments — does not count.
+//
+// TODO(#1606): key by alias class once critical_tool_aliases lands
+// (agentcore's criticalAliasClassOf / sameAliasedTool, via an exported helper):
+// a failed inline write superseded by its successful upload twin still counts
+// as failed here, which fails closed (the check is spent) but is wrong.
 func failedCriticalCalls(records []toolExecRecord) []string {
 	last := make(map[string]bool)
 	var order []string

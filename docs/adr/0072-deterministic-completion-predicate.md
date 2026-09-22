@@ -50,15 +50,20 @@ created a version or recorded a check.
    - Fleet assigns no meaning to the names; they are the producer's opaque
      contract.
 2. **A verifier outage does not spend a check.** A verifier call that returns
-   no verdict (timeout, provider failure, empty or unparseable reply) is
-   retried once.
-   - If it still returns none, and the audit cleared with no critical tool
-     whose last execution failed, the run **succeeds** with a
+   no verdict is retried once.
+   - If the retry is an **outage** too (timeout, provider failure, empty
+     reply), this run's **own** audit passed (`ScheduledPolicy.AuditConfirmed`,
+     so a delegated policy that skipped the self-audit does not qualify), and
+     no critical tool's last execution failed, the run **succeeds** with a
      `completion_unverified_verifier_error` warning. The warning is written to
      the session log, and the runner prefixes it to the task's terminal
      message.
-   - With a failed critical call on the record, the outage keeps the previous
-     semantics: it spends a check toward the three-check cap.
+   - A **malformed verdict** (the verifier answered with prose, invalid JSON,
+     or no `missing_actions` array) is a content failure, not an outage. After
+     its retry it spends a check, so a degraded verifier model cannot turn
+     into auto-success.
+   - With a failed critical call on the record, or no audit in this policy,
+     an outage also spends a check.
    - A verifier that **answers** with missing actions keeps its repair and
      dead-letter semantics unchanged.
 
@@ -77,8 +82,8 @@ created a version or recorded a check.
   - `internal/agent/completion_predicate_test.go`: predicate satisfied,
     unsatisfied, blocked by the audit; outage fail-open and retry; a failed
     critical call keeps the dead-letter.
-  - `internal/agent/scheduled_completion_test.go`: an unparseable verdict now
-    fails open after one retry.
+  - `internal/agent/scheduled_completion_test.go`: a malformed verdict is
+    retried, then spends the check (six calls, then `ErrCompletionUnverified`).
   - `internal/scheduledrun/requirements_completion_test.go`.
   - `internal/runner/completion_warning_test.go`.
 
@@ -91,11 +96,13 @@ created a version or recorded a check.
 - A verifier outage can no longer dead-letter an audited run whose critical
   calls all landed. Such a run is marked, visibly, as unverified rather than
   failed.
-- A verifier model that persistently returns malformed output would make every
-  such run succeed unverified, and every one of them says so.
-- The three-check cap now counts verdicts, not calls. The worst case is six
-  verifier calls: three checks, each retried once. Each is metered in
-  `aux_usage`.
+- A verifier provider that is persistently unreachable makes every audited
+  run whose critical calls landed succeed unverified, and every one of them
+  says so. A verifier *model* that persistently returns malformed output does
+  not: those runs still dead-letter.
+- The three-check cap counts checks, and each check is now up to two calls
+  (the retry). The worst case is six verifier calls. Every call that returns
+  is metered in `aux_usage`.
 
 ## Alternatives considered
 

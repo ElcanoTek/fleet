@@ -1157,17 +1157,18 @@ reviewer-forced repair triggers, and a repair that cannot be re-verified
 within the cap ends the run unverified rather than extending it. Missing
 actions keep completion blocked; the third check that still reports them
 returns `ErrCompletionUnverified` through the core without asking the model to
-abort. A verifier that cannot answer at all — timeout, provider failure,
-empty or unparseable reply — does not spend a check (#1602). It is retried once
-after a short pause. If it still cannot answer:
+abort. A verifier call that produced no verdict is retried once after a short
+pause (#1602). If the retry fails too:
 
-- **The audit cleared with no failed critical call.** The run succeeds with a
-  `completion_unverified_verifier_error` warning, recorded in the session log
-  and at the head of the task's terminal message, instead of dead-lettering
-  audited work on the verifier's own outage.
-- **A critical tool's last execution failed.** The outage keeps the old
-  semantics: it spends a check, and the third ends the run
-  `ErrCompletionUnverified`. Partial work and completed critical actions remain recorded, and the
+- **An outage** (timeout, provider failure, empty reply), after this run's own
+  `confirm_audit` passed, with no critical tool whose last execution failed.
+  The run succeeds with a `completion_unverified_verifier_error` warning,
+  recorded in the session log and at the head of the task's terminal message,
+  instead of dead-lettering audited work on the verifier's own outage.
+- **Anything else** keeps the old semantics: the check is spent, and the third
+  ends the run `ErrCompletionUnverified`. That covers a malformed verdict (the
+  verifier answered, but not with a verdict), a failed critical call, and a
+  policy in which no audit ran (a delegated sub-agent's). Partial work and completed critical actions remain recorded, and the
 transcript identifies the verification failure without claiming external actions
 were rolled back. Tool evidence is read from complete
 redacted records, before UI preview truncation. So core

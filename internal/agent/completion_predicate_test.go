@@ -300,3 +300,49 @@ func TestFailedCriticalCalls(t *testing.T) {
 		t.Fatalf("failedCriticalCalls = %v, want only the unrecovered critical tool", got)
 	}
 }
+
+// A verifier outage fails open only where an audit actually ran in this policy
+// (#1602 follow-up). A delegated policy skips the self-audit ritual, so finish
+// enforcement clearing proves nothing: a sub-agent's outage keeps the
+// spend-a-check path and ends ErrCompletionUnverified. (Children do not run
+// this gate today — the driver skips the wrapper for them — so this pins the
+// premise at the policy seam, where a future change would reach it.)
+func TestVerifierOutageNeedsThisPolicysAuditToFailOpen(t *testing.T) {
+	withFastVerifierRetry(t)
+	verifier := &scriptedVerifier{replies: []string{"ERR"}}
+	a := newTestScheduledAgent(t, &itMockModel{})
+	a.fallbackModel = verifier
+	p := &scheduledPolicy{
+		inner:  agentcore.NewDelegatedPolicy(a.logSession, 50, 0, 0),
+		agent:  a,
+		task:   "delegated work",
+		runCtx: context.Background(),
+	}
+	for check := 1; check <= maxCompletionVerifications; check++ {
+		if ok, _ := p.CanFinish(check); ok {
+			t.Fatalf("check %d: a run that never audited failed open on a verifier outage", check)
+		}
+	}
+	if p.verifierWarning != "" || !errors.Is(p.TerminalError(), agentcore.ErrCompletionUnverified) {
+		t.Fatalf("want ErrCompletionUnverified and no warning, got err=%v warning=%q", p.TerminalError(), p.verifierWarning)
+	}
+	if verifier.calls != 2*maxCompletionVerifications {
+		t.Fatalf("verifier calls = %d, want %d (each check retried once, then spent)", verifier.calls, 2*maxCompletionVerifications)
+	}
+}
+
+// Malformed verdicts are content failures: even after a clean audit they
+// never fail open — a degraded verifier model must not become auto-success.
+func TestScheduledMalformedVerdictStillSpendsChecks(t *testing.T) {
+	withFastVerifierRetry(t)
+	for _, reply := range []string{`{"reasoning":"not published"}`, "the page is incomplete"} {
+		verifier := &scriptedVerifier{replies: []string{reply}}
+		a, _, _, err := scriptedRun(t, []struct{ tool, input string }{{"confirm_audit", cleanAudit}}, verifier, nil, &pagesBroker{calls: map[string]int{}}, nil)
+		if !errors.Is(err, agentcore.ErrCompletionUnverified) {
+			t.Fatalf("%q: want ErrCompletionUnverified, got %v", reply, err)
+		}
+		if hasSessionMessageType(a.logSession, agentcore.MessageTypeCompletionUnverifiedVerifierError) {
+			t.Fatalf("%q: a malformed verdict must not produce the fail-open warning", reply)
+		}
+	}
+}

@@ -66,20 +66,29 @@ after all committed writes succeeded. A verifier that *answered* with missing
 actions remains a terminal failure under the existing retry policy, never a
 successful completion.
 
-A verifier that could not answer at all — a timeout, a provider failure, an
-empty or unparseable reply — says nothing about the run. So it does not spend a
-check (#1602): the call is retried once after a short pause. If the verifier
-still cannot answer, what happens depends on the audit:
+A verifier call that produced no verdict is retried once after a short pause
+(#1602). What happens if the retry also fails depends on *how* it failed, and
+on the audit:
 
-- **The audit cleared with no failed critical call** (no audit-gated tool whose
-  last execution in the run failed). The run succeeds with a
-  `completion_unverified_verifier_error` warning, recorded in the session log
-  and at the head of the task's terminal message. It is not dead-lettered on
-  the verifier's own outage. The phone-a-friend reviewer already failed open
-  on its errors.
-- **A failed critical call is on the record.** The outcome is genuinely in
-  doubt, so the outage keeps the pre-#1602 semantics: it spends a check, and
-  the third ends the run `ErrCompletionUnverified`.
+- **An outage** (a timeout, a provider failure, an empty reply) says nothing
+  about the run. If this run's **own** `confirm_audit` passed and no
+  audit-gated tool's last execution failed, the run succeeds with a
+  `completion_unverified_verifier_error` warning. The warning is recorded in
+  the session log and at the head of the task's terminal message; the run is
+  not dead-lettered on the verifier's own outage. The phone-a-friend reviewer
+  already failed open on its errors.
+- **A malformed verdict** (the verifier answered, but with prose, invalid
+  JSON, or no explicit `missing_actions` array) is a content failure, not an
+  outage. A degraded verifier model must not quietly become auto-success, so
+  the check is spent as before, and the third ends the run
+  `ErrCompletionUnverified`.
+- **The premise does not hold** (a failed critical call is on the record, or
+  no audit ran in this run's policy, as for a delegated sub-agent, whose
+  policy skips the self-audit ritual). Even an outage spends the check. Today
+  sub-agents do not run the verifier at all; the rule keeps it that way if
+  they ever do.
+
+Each check is therefore at most two metered verifier calls.
 Its transcript records `completion_unverified` and explains that completed
 external actions have not been rolled back; the dead-letter reason also names
 the connector calls that succeeded this run (or says none did), so an operator
@@ -152,7 +161,10 @@ the way `required_tools` names are:
 
 - They may be native names, bare server tool names, or full
   `mcp_<server>_<tool>` names. The same identifier rule applies, and at most
-  200 names are allowed.
+  200 names are allowed. **Use full names.** A bare name resolves on every
+  server that exposes it, so `record_refresh_check` would be satisfied by a
+  success on any Pages server or client-variant seat in the roster, not just
+  the one the task is about.
 - A name that is not in the run's tool roster is the same actionable dispatch
   error as an unavailable required tool (`completion tool <name>`).
 - A malformed clause fails closed, like any malformed declaration. That covers
