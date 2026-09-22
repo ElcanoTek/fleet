@@ -1,0 +1,25 @@
+-- Submission identity for a queued input (#1592), kept apart from the
+-- idempotency key.
+--
+-- #1592 gives a client a submission_id it mints itself, which the server
+-- stamps on the turn it starts and /inflight echoes back, so a browser can
+-- tell its OWN turn from one that was already running. A submission that
+-- arrives while a turn is busy becomes a queue row first and only later
+-- drains into a turn, so the identity has to survive the queue.
+--
+-- It was first carried on client_input_id, and that was wrong in two ways.
+-- client_input_id is the caller's idempotency key and carries the unique
+-- index chat_input_queue_idem (conversation_id, client_input_id): storing a
+-- submission id there makes a submission-only request subject to idempotent
+-- dedup, contradicting the documented rule that submission_id is identity and
+-- never an idempotency key. Worse, a caller that sent BOTH kept only
+-- input_id, so the drained turn reported the idempotency key as its
+-- submission and /inflight echoed a value the client had never minted — the
+-- client then read "this turn is someone else's" and refused to attach to its
+-- own turn, which is precisely the failure #1592 exists to prevent.
+--
+-- So it gets its own column, outside the unique index. NOT NULL DEFAULT ''
+-- because it is optional by construction: a webhook or scheduled submission
+-- names no submission, and empty means "no evidence", which every reader
+-- already treats as such rather than as a mismatch.
+ALTER TABLE chat_input_queue ADD COLUMN submission_id TEXT NOT NULL DEFAULT '';

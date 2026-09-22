@@ -135,6 +135,97 @@ func TestInflight_EchoesTheSubmissionTheRunningTurnBelongsTo(t *testing.T) {
 	})
 }
 
+// A queued submission that ALSO carries an idempotency key must still report
+// its own identity. The two ids are different things — client_input_id is the
+// idempotency key and carries the queue's unique index, submission_id is who
+// the submission belongs to — and folding one into the other inverts #1592:
+// the drained turn echoed the idempotency key, a value this client never
+// minted, so the client read its OWN turn as a stranger's and kept polling
+// instead of attaching.
+func TestInflight_QueuedSubmissionKeepsItsIdentityAlongsideAnInputID(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	go postChatJSON(t, s, user, map[string]any{
+		"message": "first question", "conversation_id": conv.ID, "submission_id": "sub-first",
+	})
+	<-eng.started
+
+	// BOTH ids, which is the case that regressed: a retrying client sends an
+	// idempotency key and its identity together.
+	w := postChatJSON(t, s, user, map[string]any{
+		"message": "second question", "conversation_id": conv.ID,
+		"input_id": "idem-key-42", "submission_id": "sub-second",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("busy submit: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	eng.release <- struct{}{}
+	eng.release <- struct{}{}
+	waitFor(t, "the queued input to run as its own turn", func() bool {
+		got := inflightProbe(t, s, conv.ID)["submission_id"]
+		if got == "idem-key-42" {
+			t.Fatalf("drained turn reported the idempotency key as its submission identity")
+		}
+		return got == "sub-second"
+	})
+}
+
+// A submission id must never reach the idempotency column, because that column
+// carries a unique index: two distinct submissions that happen to name no
+// input_id would otherwise dedup against each other and the second would
+// silently vanish instead of queueing.
+func TestBusySubmit_SubmissionIDIsNotAnIdempotencyKey(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	go postChatJSON(t, s, user, map[string]any{
+		"message": "first question", "conversation_id": conv.ID, "submission_id": "sub-first",
+	})
+	<-eng.started
+
+	// Two submissions, same id, no input_id. They are distinct submissions and
+	// both must queue; dedup here would be idempotency the caller never asked
+	// for.
+	for i, msg := range []string{"second question", "third question"} {
+		w := postChatJSON(t, s, user, map[string]any{
+			"message": msg, "conversation_id": conv.ID, "submission_id": "sub-same",
+		})
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("busy submit %d: status=%d body=%s", i, w.Code, w.Body.String())
+		}
+	}
+
+	rows, err := s.store.ListQueuedInputs(t.Context(), user, conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("queued rows = %d, want 2 — a shared submission id deduped as an idempotency key", len(rows))
+	}
+	for _, r := range rows {
+		if r.SubmissionID != "sub-same" {
+			t.Errorf("row %s carries submission_id %q, want sub-same", r.ID, r.SubmissionID)
+		}
+		if r.ClientInputID == "sub-same" {
+			t.Errorf("row %s stored the submission id in the idempotency column", r.ID)
+		}
+	}
+}
+
 // inflightProbe reads GET /conversations/{id}/inflight as the fixture's owner,
 // which is the only user any of these tests create a conversation for.
 func inflightProbe(t *testing.T, s *Server, convID string) map[string]any {
