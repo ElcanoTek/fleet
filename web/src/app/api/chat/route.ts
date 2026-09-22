@@ -55,13 +55,24 @@ export async function POST(request: NextRequest) {
     return new NextResponse(text, { status: upstream.status });
   }
 
+  // The response header set is rebuilt here rather than passed through, so
+  // anything the browser needs has to be listed. X-Fleet-Conversation-Id names
+  // the conversation this stream belongs to (#1591): a brand-new chat posts
+  // under a client-side pending key, and if the socket dies before the
+  // `conversation` frame the header is the only id it ever learns — without it
+  // the recovery chain has nothing to probe and the turn reads as failed while
+  // the server writes its answer to the database.
+  const headers: Record<string, string> = {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  };
+  const conversationId = upstream.headers.get("X-Fleet-Conversation-Id");
+  if (conversationId) headers["X-Fleet-Conversation-Id"] = conversationId;
+
   return new Response(upstream.body, {
     status: 200,
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
+    headers,
   });
 }

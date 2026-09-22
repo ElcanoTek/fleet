@@ -404,6 +404,79 @@ erasing it when another attach is in flight concurrently, because
 Declining the reattach removes the slot at the source instead of depending on
 the cleanup winning that race.
 
+## Naming what the server is talking about (#1591, #1592)
+
+Everything above reasons about a conversation and a turn the client can
+already name. Two forks reach the same evidence and cannot be decided from the
+browser's own state at all — in both, the missing fact is an **identity the
+server has and the client does not**. Each is closed by one field on the wire.
+
+### A brand-new conversation has no id yet (#1591)
+
+A brand-new chat posts under a per-submission pending key
+(`nextPendingKey()`) and learns its real id from the first `conversation` SSE
+frame. Every recovery endpoint is keyed by conversation id:
+`probeInflightTurn` short-circuits on a pending key, and
+`reconcileFromPersisted` has nothing to read. So a socket that died *between
+the response and that frame* left the whole chain with nothing to ask about,
+and the tab showed a failed turn over an answer the server was still writing
+to the database — recoverable only by a reload.
+
+`POST /chat` now names its conversation on the **response headers**,
+`X-Fleet-Conversation-Id`, which are written before any frame (`startTurn`,
+just before `buf.Attach`). `streamTurn` reads it as soon as the POST resolves
+and runs `promotePendingTarget` — the same rename the `conversation` frame
+does, now shared by both callers so they cannot drift: the transcript, the
+abort controller, the attached/streaming sets, the composer draft and the
+user's active view all move onto the real id together. The frame that follows
+is then an idempotent no-op, and a stream that dies immediately leaves the
+chain a conversation it can probe.
+
+The Next.js proxy rebuilds the response header set rather than passing it
+through, so `src/app/api/chat/route.ts` forwards this header explicitly.
+
+### A turn the server started for someone else (#1592)
+
+A client believes a conversation is idle while the server still has a turn
+running on it — two tabs, two devices, or a tab that missed the turn. It
+submits; `postChat` queues the input behind the running turn and answers with
+a JSON acknowledgement, and **that response is lost in transit**. The browser
+lands in the `submitPrompt` catch holding a fresh optimistic slot, probes
+`/inflight`, and is told a turn is live — the **pre-existing** one. Attaching
+binds the new bubble to it, so a running turn's output renders as the answer
+to a prompt it never saw while the user's actual question waits in the queue.
+
+No evidence available to the browser separates the two. The turn id cannot:
+the client never saw the pre-existing turn, and a brand-new id is exactly what
+its own turn would have. The transcript cannot: `startTurn` registers and
+exposes a turn *before* the manager commits its user message, so "my prompt is
+not the last user row yet" is equally consistent with my turn having just
+started. And the POST outcome is unknown by construction — that is the branch
+we are in.
+
+So the submission carries an identity the server can echo. `submitPrompt`
+mints one per submission and sends it as `submission_id`; the server stamps it
+on the `inflightEntry` for the turn it starts, uses it as the queued row's
+client id when it queues instead (so the turn that eventually drains that row
+still names it), and `/inflight` returns it as `submission_id`.
+`answersOurSubmission` compares:
+
+- **`true`** — the live turn is ours; attach as before.
+- **`false`** — the server is running a turn it started for a *different*
+  submission. Do not attach. The slot is left mid-flight and re-probed, the
+  same posture `unreachable` gets (#1583): when our input drains into its own
+  turn, `/inflight` names us and the next tick takes it.
+- **`null`** — one side said nothing (an older server, a webhook or scheduled
+  turn, a client that sent no id). **No evidence**, not a denial: every
+  pre-existing rule applies unchanged.
+
+The rule lives in both places that reach the fork — the `submitPrompt` catch
+and the chain tick's "we never learned our turn's id" branch. The chain's
+matters as much as the catch's: its `reattachToConv` is *bound* to the turn
+its probe named, so without the rule it attaches to the predecessor for real.
+In the chain it is applied only after `reconcileFromPersisted` has come back
+`absent`, so a turn of ours that did finish is still adopted first.
+
 ## Tests
 
 - `useTurnStream.reconcile.test.ts` — `persistedAnswersLocalTurn`, including
@@ -432,8 +505,23 @@ the cleanup winning that race.
   contract. Asserting the slot instead reproduces only under concurrency, which
   is what made this a ~5% CI flake instead of a failing test.
 
+- `useTurnStream.reattachRecovery.test.ts` also covers the two identity forks:
+  a brand-new conversation whose stream delivers nothing at all (recovered
+  through the id the POST response named, and still settling honestly when no
+  header arrives), and the lost acknowledgement (no attach while the live turn
+  names another submission; the attach happens on the tick that finds ours).
+  Mutation-checked the same way: disabling the header promotion stamps the
+  brand-new turn `failed`, and disabling either submission-id guard — the
+  catch's or the chain's — binds the bubble to the pre-existing turn. Each
+  fails exactly one test.
+
 - Go: `capabilities_test.go` covers the advertised cadence in both the header
   and the `fleet.capabilities` frame, and that keepalives-off advertises `0`.
+  `submission_identity_test.go` covers the two server-side halves end to end:
+  `POST /chat` naming the same conversation on the header as in the
+  `conversation` frame, and `/inflight` reporting the running turn's
+  submission id — the pre-existing one while it runs, the queued one once it
+  drains — plus the omission when a turn names no submission.
 
 ## Detection latency
 
@@ -461,8 +549,27 @@ return is caught in the 2.5s grace window alone. Both replace the five-minute
   be — nothing is on screen to be wrong, and the wake-up is handled on return.
 - **Server-side change is limited to discovery.** The buffer, the retain
   window, the keepalive itself and the persistence ledger are untouched; the
-  only addition is advertising the keepalive cadence the server was already
-  sending, so the client can reason about silence instead of guessing.
+  additions are advertising the keepalive cadence the server was already
+  sending, naming the conversation on the POST response headers, and echoing
+  the submission id the client itself minted — three facts the server already
+  had, so the client can reason instead of guessing.
+- **`submission_id` is identity, not idempotency.** It is stored on the
+  in-memory inflight entry and (when the submission queues) as the queue row's
+  client id; it is not a replay key, and a re-POST carrying the same
+  `submission_id` is not deduplicated. `input_id` remains the idempotency key
+  and is unchanged.
+- **The conversation header closes the window it names, and no more.** A POST
+  whose response headers never arrive at all still leaves a brand-new
+  conversation unreachable from the client: there is no id, and
+  `accepted.value` is false, so nothing is attributed to the submission and
+  the slot settles. The conversation and its answer are in the database and
+  appear on the next load. Closing that residue needs a lookup keyed by
+  `submission_id`, which is a new endpoint rather than a header, and is
+  deliberately not built here.
+- **Both identities are process-local.** `/inflight` and its `submission_id`
+  read the same in-memory registry the retain window lives in, so they answer
+  for the process that ran the turn — the same locality `/inflight` always
+  had.
 - **Postgres holding no answer is not by itself a verdict.** A turn that
   failed before it could reply leaves exactly the transcript a turn that
   produced nothing leaves, so the finalizer asks the server what became of

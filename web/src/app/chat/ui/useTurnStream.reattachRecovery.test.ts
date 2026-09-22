@@ -35,7 +35,14 @@ type InflightInfo = {
   inflight: boolean;
   turn_id?: string;
   last_event_id?: number;
+  // The submission the reported turn was started FOR (#1592). The sentinel
+  // OUR_SUBMISSION is replaced with whatever the hook actually posted, since
+  // the id it mints is a uuid the test cannot predict; any other string stands
+  // in for a turn some OTHER submission started.
+  submission_id?: string;
 };
+
+const OUR_SUBMISSION = "@ours";
 
 const sse = (id: number, event: string, data: unknown) =>
   `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -111,6 +118,8 @@ type Harness = {
   turnOutcomeProbes: number;
   attachCount: () => number;
   releaseInflight: () => void;
+  // Every submission_id POST /api/chat carried, in order.
+  submissionIds: string[];
 };
 
 const makeHarness = (opts: {
@@ -146,6 +155,15 @@ const makeHarness = (opts: {
   // server 404s — "no such turn", which the client must read as "no answer
   // available" and fall back to its pre-#1593 behavior, not as a verdict.
   turnOutcome?: Record<string, unknown>;
+  // Brand-new chat: nothing is open, so submitPrompt posts under a
+  // per-submission pending key and only learns the real id from the server.
+  newChat?: boolean;
+  // The conversation POST /api/chat names on its response headers (#1591).
+  // Omit to model a server that does not send it.
+  chatConversationHeader?: string;
+  // The POST /api/chat itself rejects — the lost-acknowledgement shape: the
+  // server may well have taken the submission, we just never heard back.
+  chatPostRejects?: boolean;
 }): Harness => {
   const store: Store = new Map([[CONV, opts.initial]]);
   for (const extra of opts.extraConvs ?? []) {
@@ -157,6 +175,7 @@ const makeHarness = (opts: {
   const streaming = new Set<string>();
   let attaches = 0;
   let probes = 0;
+  const submissionIds: string[] = [];
   let persistedFetches = 0;
   let turnOutcomeProbes = 0;
   let answeredProbes = 0;
@@ -229,18 +248,31 @@ const makeHarness = (opts: {
         }
         const info = nth(opts.inflight, answeredProbes);
         answeredProbes += 1;
-        return new Response(JSON.stringify(info), {
+        const resolved =
+          info.submission_id === OUR_SUBMISSION
+            ? { ...info, submission_id: submissionIds[submissionIds.length - 1] }
+            : info;
+        return new Response(JSON.stringify(resolved), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       }
       if (url === "/api/chat") {
+        const posted = JSON.parse(String(init?.body ?? "{}")) as {
+          submission_id?: string;
+        };
+        if (posted.submission_id) submissionIds.push(posted.submission_id);
+        if (opts.chatPostRejects) throw new TypeError("Failed to fetch");
         const body = nth(opts.streamBodies, attaches);
         attaches += 1;
         streamRequests.push({ url, lastEventId: null });
+        const headers = streamHeaders();
+        if (opts.chatConversationHeader) {
+          headers["X-Fleet-Conversation-Id"] = opts.chatConversationHeader;
+        }
         return new Response(body(init?.signal ?? undefined), {
           status: 200,
-          headers: streamHeaders(),
+          headers,
         });
       }
       if (url.includes("/stream")) {
@@ -301,10 +333,20 @@ const makeHarness = (opts: {
   // here silently handed the hook `undefined` for a newly-added ref, and every
   // test in the file failed on `.current`. The annotation makes adding a dep a
   // compile error in this harness instead.
+  // The component's real rename: the pending slot's transcript MOVES to the
+  // conversation id the server named. A noop here would hide the whole point
+  // of the promotion (#1591).
+  const renameConvKey = (oldKey: string, newKey: string) => {
+    const slot = store.get(oldKey);
+    if (slot === undefined) return;
+    store.set(newKey, slot);
+    store.delete(oldKey);
+  };
+
   const deps: TurnStreamDeps = {
     setConvMessages,
     getConvMessages: (convId: string) => store.get(convId) ?? [],
-    renameConvKey: noop,
+    renameConvKey,
     patchAssistantMessage,
     startThinkingCrossfade: noop,
     refreshConversations: asyncNoop,
@@ -332,7 +374,7 @@ const makeHarness = (opts: {
     setPendingLockdown: noop,
     setSidebarOpen: noop,
     setSpreadsheetNudgeDismissed: noop,
-    activeConversationIdRef: { current: CONV },
+    activeConversationIdRef: { current: opts.newChat ? null : CONV },
     messagesByConvRef,
     pendingApprovalScrollRef: { current: null },
     selectedModel: "test-model",
@@ -352,7 +394,21 @@ const makeHarness = (opts: {
     serverHeartbeatMsRef: { current: 0 },
     supersededStreamsRef: { current: new WeakSet<AbortController>() },
     livenessInFlightRef: { current: new Set<string>() },
-    promoteStreamKey: noop,
+    promoteStreamKey: (oldKey: string, newKey: string) => {
+      // Mirrors useTurnStreamState's: the abort controller especially, since
+      // submitPrompt's catch reverse-maps it to find its own slot.
+      for (const ref of [deps.attachedConvIdsRef.current, streaming]) {
+        if (ref.has(oldKey)) {
+          ref.delete(oldKey);
+          ref.add(newKey);
+        }
+      }
+      const controller = deps.abortControllersRef.current.get(oldKey);
+      if (controller) {
+        deps.abortControllersRef.current.delete(oldKey);
+        deps.abortControllersRef.current.set(newKey, controller);
+      }
+    },
     streamingConvsRef: { current: new Set<string>() },
     isStreaming: false,
   };
@@ -373,6 +429,7 @@ const makeHarness = (opts: {
     releaseInflight: () => {
       for (const release of deferredProbeReleases.splice(0)) release();
     },
+    submissionIds,
   };
 };
 
@@ -2491,5 +2548,160 @@ describe("a reasoning-only reply is an answer, not a gap", () => {
     // finished turn above it.
     expect(lastOf(h).cancelled).toBeUndefined();
     expect(lastOf(h).reasoning).toBe("a long silent deliberation");
+  }, 20000);
+});
+
+// A brand-new chat posts under a per-submission pending key and only learns
+// its real id from the server. Every recovery endpoint is keyed by
+// conversation id — probeInflightTurn short-circuits on a pending key and the
+// persisted transcript has nothing to read — so a stream that died before the
+// `conversation` frame left the chain with nothing to ask about, and the tab
+// showed a failed turn over an answer the server was still writing (#1591).
+//
+// The POST's response headers name the conversation, and they arrive before
+// any frame does. That is the id the promotion now runs on.
+describe("a brand-new conversation whose stream dies before its identity frame", () => {
+  it("recovers through the id the POST response named", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      newChat: true,
+      initial: [],
+      // Still generating: a premature reconcile has nothing to adopt.
+      persisted: unansweredHistory(),
+      chatConversationHeader: CONV,
+      streamBodies: [
+        // Dies with NOTHING delivered — not even the conversation frame.
+        () => severedStream([]),
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "the answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t-live" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    // The slot moved onto the real conversation id, the probe could be spent
+    // on it, and the live turn was reattached instead of stamped failed.
+    expect(h.store.get("__pending__:1")).toBeUndefined();
+    expect(h.deps.activeConversationIdRef.current).toBe(CONV);
+    expect(lastOf(h).content).toBe("the answer");
+    expect(lastOf(h).state).toBe("done");
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
+  }, 20000);
+
+  it("still settles honestly when the server names no conversation", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      newChat: true,
+      initial: [],
+      persisted: unansweredHistory(),
+      // No X-Fleet-Conversation-Id: an older server, or a proxy that dropped
+      // it. Nothing to promote, so the pre-#1591 behaviour has to stand.
+      streamBodies: [() => severedStream([])],
+      inflight: [{ inflight: false, turn_id: "" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    const pending = convSlot(h, "__pending__:1");
+    expect(pending.at(-1)?.failed).toBe(true);
+  }, 20000);
+});
+
+// The lost-acknowledgement fork (#1592). This client believed the
+// conversation was idle, so it posted directly and rendered an optimistic
+// slot; the server knew better, queued the input behind the turn already
+// running, and that answer never arrived. /inflight then reports a LIVE turn
+// — the pre-existing one. Attaching to it renders that turn's output as the
+// answer to a prompt it never saw, while the user's real question waits in
+// the queue. The submission id is the only evidence that separates them.
+describe("a lost submission acknowledgment does not bind the bubble to a pre-existing turn", () => {
+  it("refuses the running turn when it belongs to another submission", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      chatPostRejects: true,
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "someone else's answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [
+        { inflight: true, turn_id: "t-pre-existing", submission_id: "sub-x" },
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    // The client sent an identity, the server named a different one, and no
+    // stream was opened on the strength of a guess.
+    expect(h.submissionIds.length).toBe(1);
+    expect(h.attachCount()).toBe(0);
+    const last = lastOf(h);
+    expect(last.content).not.toContain("someone else's answer");
+    // Not failed either: the submission may well have been taken. The slot
+    // stays mid-flight and the chain keeps asking (#1584's posture).
+    expect(last.failed).toBeUndefined();
+    expect(last.state).toBe("streaming");
+  }, 20000);
+
+  it("attaches once the running turn is the one it submitted", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      chatPostRejects: true,
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "ours after all" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [
+        // The catch's probe, then the chain's first two ticks (1s, 2s) — the
+        // predecessor is still running throughout. The chain has to apply the
+        // same rule the catch did: it reaches the identical fork with the
+        // identical evidence, and its reattach is BOUND to the turn its probe
+        // named, so a missing rule here attaches to the predecessor for real.
+        { inflight: true, turn_id: "t-pre-existing", submission_id: "sub-x" },
+        { inflight: true, turn_id: "t-pre-existing", submission_id: "sub-x" },
+        { inflight: true, turn_id: "t-pre-existing", submission_id: "sub-x" },
+        // By the third tick (4s) our queued input has drained into its own
+        // turn, and the server names US.
+        { inflight: true, turn_id: "t-ours", submission_id: OUR_SUBMISSION },
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+    expect(h.attachCount()).toBe(0);
+
+    // Through both ticks that still find the predecessor: no attach, and
+    // nothing of that turn's output in our bubble.
+    await vi.advanceTimersByTimeAsync(3200);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(h.attachCount()).toBe(0);
+    expect(lastOf(h).content).not.toContain("ours after all");
+
+    // The tick that finds OUR turn attaches to it.
+    await vi.advanceTimersByTimeAsync(4200);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(lastOf(h).content).toBe("ours after all");
+    expect(lastOf(h).state).toBe("done");
+    expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });

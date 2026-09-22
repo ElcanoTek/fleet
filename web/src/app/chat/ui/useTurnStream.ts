@@ -196,9 +196,11 @@ const recoveryRequestTimeoutMs = 8000;
 // What reconcileFromPersisted learned from Postgres about the turn we hold open.
 type PersistedReconcile = "adopted" | "absent" | "unreachable";
 
-// What /inflight said — or that it could not be asked.
+// What /inflight said — or that it could not be asked. submissionID names the
+// POST /chat submission the reported turn was started FOR (#1592); "" means
+// the server said nothing about it, which is no evidence rather than a denial.
 type InflightProbe =
-  | { kind: "answer"; inflight: boolean; turnID: string }
+  | { kind: "answer"; inflight: boolean; turnID: string; submissionID: string }
   | { kind: "unreachable" };
 
 // What the per-turn outcome endpoint said about the turn a slot is holding
@@ -214,6 +216,28 @@ type TurnOutcomeProbe =
   | ({ kind: "answer" } & TurnOutcome)
   | { kind: "unreachable" }
   | { kind: "unknown" };
+
+// The response header POST /chat sets naming the conversation it is streaming
+// (#1591). A brand-new chat learns its real id from the `conversation` SSE
+// frame; this header carries the same id on the response itself, so a socket
+// that dies before that frame still leaves an id the recovery chain can probe.
+const conversationIdHeader = "X-Fleet-Conversation-Id";
+
+// answersOurSubmission compares the submission id /inflight reported against
+// the one this client sent. `null` = no evidence either way (one side is
+// silent — an older server, a turn nobody's submission named). Only an
+// outright `false` may stop a client attaching to a live turn: a lost
+// acknowledgement leaves the browser unable to tell its own turn from one that
+// was already running, and attaching to the wrong one renders a stranger's
+// answer under a prompt it never saw (#1592).
+const answersOurSubmission = (
+  probe: InflightProbe,
+  ours: string,
+): boolean | null => {
+  if (probe.kind !== "answer") return null;
+  if (!ours || !probe.submissionID) return null;
+  return probe.submissionID === ours;
+};
 
 // Ceiling on waiting for a superseded stream's own teardown to unwind before
 // the replacement attaches. Bounded so a wedged unwind degrades to "no
@@ -635,6 +659,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // One monotonic sequence for every chain the hook ever arms. See the arming
   // comment in scheduleRecoveryRetry for why it is not per-record.
   const recoveryGenSeqRef = useRef(0);
+  // The submission id this client last sent for each conversation slot
+  // (#1592), carried past the POST so the recovery chain can compare it with
+  // the one /inflight reports. A Map, not an object: a conversation id is
+  // remote input and indexing an object with it is a property-injection sink.
+  // One entry per slot is enough — a client only has one submission in flight
+  // per conversation at a time. It is consulted only where the chain has no
+  // turn id of its own, which is reachable only from a direct submit whose
+  // stream died before turn.started; the entry is that submission's. And a
+  // stale entry could at worst make a probe read as "not ours", which leaves
+  // the slot mid-flight for the next tick — a later recovery, never a binding
+  // to the wrong turn.
+  const submissionIdByConvRef = useRef<Map<string, string>>(
+    new Map<string, string>(),
+  );
   const refreshQueue = async (
     convId: string,
   ): Promise<QueuedInput[] | null> => {
@@ -804,7 +842,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   const probeInflightTurn = async (convId: string): Promise<InflightProbe> => {
     if (isPendingKey(convId))
-      return { kind: "answer", inflight: false, turnID: "" };
+      return { kind: "answer", inflight: false, turnID: "", submissionID: "" };
     try {
       const res = await fetch(
         `/api/conversations/${encodeURIComponent(convId)}/inflight`,
@@ -814,15 +852,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         },
       );
       if (indeterminateStatus(res.status)) return { kind: "unreachable" };
-      if (!res.ok) return { kind: "answer", inflight: false, turnID: "" };
+      if (!res.ok)
+        return {
+          kind: "answer",
+          inflight: false,
+          turnID: "",
+          submissionID: "",
+        };
       const info = (await res.json()) as {
         inflight?: boolean;
         turn_id?: string;
+        submission_id?: string;
       };
       return {
         kind: "answer",
         inflight: Boolean(info?.inflight),
         turnID: info?.turn_id ?? "",
+        submissionID: info?.submission_id ?? "",
       };
     } catch {
       return { kind: "unreachable" };
@@ -1405,6 +1451,22 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             void followSuccessor(convId, 0, probe.turnID || undefined);
             return;
           }
+          // Postgres has no answer for our slot, so our turn is not over —
+          // and yet the ids still cannot say whether the LIVE one is ours.
+          // The submission id can (#1592): a turn the server started for a
+          // different submission is one our input is queued behind, not ours
+          // finally running. Attaching would replay a stranger's answer into
+          // this bubble. Come back instead — when our input drains into its
+          // own turn, /inflight names us and the branch below takes it.
+          if (
+            answersOurSubmission(
+              probe,
+              submissionIdByConvRef.current.get(convId) ?? "",
+            ) === false
+          ) {
+            scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
+            return;
+          }
         }
         if (probe.inflight || probe.turnID) {
           // Bound to the turn this tick identified: between this probe and the
@@ -1750,6 +1812,44 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     );
   };
 
+  // promotePendingTarget renames a per-submission pending key onto the real
+  // conversation id the server has now named, in one synchronous step.
+  //
+  // Two callers learn that id, and they must do exactly the same thing with
+  // it: the `conversation` SSE frame, and — for the stream that dies before
+  // that frame ever arrives — the POST's X-Fleet-Conversation-Id response
+  // header (#1591). Sharing one body is what keeps them from drifting: every
+  // pending-keyed handle (messages, abort controller, attached/streaming sets,
+  // composer draft) has to move together, and the user's view has to follow if
+  // it was pointing at the old key. Both promote* helpers mutate synchronously
+  // and run back-to-back, so JS single-threadedness guarantees no SSE event
+  // can observe a half-renamed state between the two families. Returns false
+  // when there was nothing to promote.
+  const promotePendingTarget = (oldKey: string, convId: string): boolean => {
+    if (!convId || !isPendingKey(oldKey) || oldKey === convId) return false;
+    renameConvKey(oldKey, convId);
+    promoteStreamKey(oldKey, convId);
+    promoteComposerKey(oldKey, convId);
+    const mySubmission = submissionIdByConvRef.current.get(oldKey);
+    if (mySubmission !== undefined) {
+      submissionIdByConvRef.current.delete(oldKey);
+      submissionIdByConvRef.current.set(convId, mySubmission);
+    }
+    // The pending lockdown flag has been promoted onto the real
+    // conversation row by the backend; clear the local flag so a
+    // subsequent "+ New chat" doesn't accidentally re-flag.
+    setPendingLockdown(false);
+    // The user is looking at the slot that just got a real id — follow it, or
+    // their view empties out onto a key nothing writes to any more. They may
+    // instead have navigated away (submit → "+ New chat" race), and that is
+    // deliberately left alone.
+    if (activeConversationIdRef.current === oldKey) {
+      activeConversationIdRef.current = convId;
+      setActiveConversationId(convId);
+    }
+    return true;
+  };
+
   const applyStreamEvent = async (
     event: ServerEvent,
     payload: unknown,
@@ -1795,24 +1895,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // the empty new-chat view's composer state, and every brand-new
       // submission gets its own unique pending key from nextPendingKey().
       const oldTarget = ctx.target;
-      if (isPendingKey(oldTarget) && oldTarget !== p.id) {
-        renameConvKey(oldTarget, p.id);
-        ctx.target = p.id;
-        // Migrate every pending-keyed handle onto the real conv id so
-        // subsequent reads (Stop button, attached-set membership, the
-        // streaming-set membership the sidebar reads) and the per-conv
-        // composer draft all point at the same slot the SSE events are now
-        // writing to. Both promote* helpers mutate synchronously and run
-        // back-to-back, so JS single-threadedness guarantees no SSE event
-        // can observe a half-renamed state between the two families. The
-        // stream rename runs first, matching the prior inline ordering.
-        promoteStreamKey(oldTarget, p.id);
-        promoteComposerKey(oldTarget, p.id);
-        // The pending lockdown flag has been promoted onto the real
-        // conversation row by the backend; clear the local flag so a
-        // subsequent "+ New chat" doesn't accidentally re-flag.
-        setPendingLockdown(false);
-      }
+      // A no-op when the POST's X-Fleet-Conversation-Id header already did
+      // this (#1591) — the header and this frame carry the same id, and the
+      // promotion is idempotent.
+      if (promotePendingTarget(oldTarget, p.id)) ctx.target = p.id;
       const currentActive = activeConversationIdRef.current;
       // Two cases land on the active view: the user is already on this
       // conv (e.g. a sidebar-driven reattach) or the user is on the
@@ -3238,6 +3324,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
 
+    // Brand-new chat: the response headers name the conversation the server
+    // created (#1591), and they are already here — the `conversation` frame,
+    // the only other place this id appears, is not. Promote now, before the
+    // per-conversation bookkeeping below picks a key to write under. A socket
+    // that died in this window used to leave the slot under a pending key no
+    // endpoint knows: probeInflightTurn short-circuits on one and the
+    // persisted transcript is keyed by conversation id, so the recovery chain
+    // had nothing to ask about and the turn read as failed while the server
+    // wrote its answer to the database.
+    const namedConv = response.headers.get(conversationIdHeader)?.trim() ?? "";
+    if (promotePendingTarget(target, namedConv)) target = namedConv;
+
     // Fresh turn — reset the idempotency baseline for this conv so
     // the first event (id=1, usually `conversation`) isn't dropped as
     // "≤ the previous turn's final id". The turn_id arrives a frame
@@ -3571,6 +3669,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // The conversation event will rename the per-submission key → the
     // real conv id when it lands.
     const initialTarget = convId ?? nextPendingKey();
+    // This submission's identity (#1592). The server stamps it on the turn it
+    // starts for us — where /inflight echoes it back — and uses it as the
+    // queued row's client id if it queues us behind a turn we did not know was
+    // running. Without it, a submission whose acknowledgement is lost in
+    // transit has no way to tell the turn started FOR IT from one that was
+    // already running: the turn id is brand new either way, and the server
+    // exposes a turn before committing its user message, so the transcript
+    // agrees with both readings.
+    const submissionId = crypto.randomUUID();
+    submissionIdByConvRef.current.set(initialTarget, submissionId);
     setConvMessages(initialTarget, (current) => [...current, ...nextMessages]);
     setSidebarOpen(false);
 
@@ -3596,6 +3704,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       message: value,
       persona: selectedPersona,
       model: trimmedModel,
+      submission_id: submissionId,
     };
     if (uploadedAttachments.length > 0) {
       body.attachments = uploadedAttachments;
@@ -3703,6 +3812,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           );
           attachedConvIdsRef.current.delete(target);
           scheduleRecoveryRetry(target, assistantId, false);
+        } else if (answersOurSubmission(probe, submissionId) === false) {
+          // The server is running a turn it started for a DIFFERENT
+          // submission (#1592). We believed this conversation was idle, so we
+          // posted directly; the server knew better and queued our input
+          // behind the turn it names — and that response never reached us.
+          // Attaching here would render a running turn's answer under a
+          // prompt it never saw, while the user's actual question waits in
+          // the queue. The submission id is the only evidence that separates
+          // the two, and it says this turn is not ours. Same posture as an
+          // unreachable server (#1584): leave the slot mid-flight, release
+          // the attach handle, and re-probe — when our input drains into its
+          // own turn, /inflight names US and the chain attaches to it.
+          patchAssistantMessage(target, assistantId, (m) =>
+            m.state === "done" ? m : { ...m, state: "streaming" },
+          );
+          attachedConvIdsRef.current.delete(target);
+          scheduleRecoveryRetry(target, assistantId, false);
+          // The input is queued server-side; show its chip while it waits.
+          void refreshQueue(target);
         } else if (probe.inflight || (accepted.value && probe.turnID)) {
           patchAssistantMessage(target, assistantId, (m) => ({
             ...m,

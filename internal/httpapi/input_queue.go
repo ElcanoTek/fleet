@@ -171,6 +171,16 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	}
 	clientID := strings.TrimSpace(req.InputID)
 	if clientID == "" {
+		// A submission that believed the conversation was idle sends no
+		// idempotency key, but it does send its own identity (#1592). Use it
+		// as the row's client id so the browser still recognises the turn its
+		// input eventually drains into — with a server-minted id here, the
+		// /inflight echo would name a submission the client has never heard
+		// of and it would refuse to attach to its OWN turn. Only input_id ever
+		// claims idempotency; this is identity alone.
+		clientID = strings.TrimSpace(req.SubmissionID)
+	}
+	if clientID == "" {
 		clientID = uuid.NewString()
 	}
 	// Depth cap: every queued row later runs as a full governed turn, so an
@@ -453,6 +463,11 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		ConversationID: convID,
 		Message:        row.Message,
 		Attachments:    attachments,
+		// The drained turn belongs to whoever queued this row, so it carries
+		// that submission's identity into /inflight (#1592) — otherwise a
+		// client waiting on its queued input could not tell the turn that
+		// finally runs it from any other.
+		SubmissionID: row.ClientInputID,
 	}
 	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen}, releaseSlot) {
 		releaseSlot()

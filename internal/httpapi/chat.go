@@ -63,7 +63,31 @@ type chatRequest struct {
 	// to the running turn's next step boundary, falling back to queue if the
 	// turn ends first. Ignored when the conversation is idle.
 	Mode string `json:"mode,omitempty"`
+	// SubmissionID is this POST's own identity (#1592) — NOT an idempotency
+	// key (that is InputID). The server stamps it on the turn it starts for
+	// this submission, where /inflight echoes it back, and uses it as the
+	// queued row's client id when the submission queues instead. It exists
+	// because a client whose acknowledgement was lost in transit has no other
+	// evidence separating "the turn the server started for me" from "a turn
+	// that was already running": the turn id is new either way, and startTurn
+	// exposes a turn before its user message commits, so the transcript agrees
+	// with both readings. Empty = the caller wants no such echo.
+	SubmissionID string `json:"submission_id,omitempty"`
 }
+
+// conversationIDHeaderName names the conversation a POST /chat response is
+// streaming, on the response headers rather than only in the first SSE frame
+// (#1591).
+//
+// A brand-new chat posts under a client-side pending key and learns its real
+// id from the `conversation` frame. If the stream dies between the response
+// headers and that frame, the browser holds no id the server knows: /inflight
+// and the persisted transcript are both keyed by conversation id, so the whole
+// recovery chain has nothing to ask about and the tab shows a failed turn over
+// an answer that is being written to the database. The id is known the moment
+// the turn registers, which is before any frame is written, so saying it here
+// costs nothing and closes the window.
+const conversationIDHeaderName = "X-Fleet-Conversation-Id"
 
 // memoryContents renders the injectable memory bullets (#515): retired and
 // still-proposed rows are EXCLUDED (retirement is the mechanism that stops
@@ -476,7 +500,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// register here.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
-	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queued)
+	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queued, strings.TrimSpace(req.SubmissionID))
 	if swept {
 		// A Stop scope=all began after this drain decided its row was
 		// post-Stop (it may still be sweeping, or have finished while we
@@ -695,6 +719,13 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	}()
 
 	if w != nil && r != nil {
+		// Name the conversation on the response headers, before Attach writes
+		// them (#1591). A brand-new chat's POST is the one request whose caller
+		// does not yet know which conversation it is talking about, and the
+		// `conversation` frame below can be lost with the socket; the header
+		// arrives with the response itself, so a stream that dies immediately
+		// still leaves the browser holding an id the recovery chain can probe.
+		w.Header().Set(conversationIDHeaderName, conv.ID)
 		// Attach this HTTP response as the initial subscriber. Blocks until
 		// the turn finishes or the client disconnects. The client's declared SSE
 		// capabilities (#194) filter which event types it receives; absent header =
