@@ -2086,6 +2086,12 @@ export function ChatExperience({
       // in the canonical copy. Every other load leaves a recovery-owned
       // conversation alone (#1584).
       adopt?: boolean;
+      // Retires the request itself on a timeout. Recovery bounds its WAIT on
+      // this load, and without a signal the request lives on: a long outage
+      // at the steady 30 s beat would pile up history fetches until the
+      // browser's per-origin pool is full and no probe or stream could get
+      // out at all (#1584).
+      signal?: AbortSignal;
     } = {},
   ) => {
     // Opening a conversation dismisses a project home overlaying the chat
@@ -2147,6 +2153,7 @@ export function ChatExperience({
       if (!url) throw new Error("Unable to load conversation.");
       const response = await fetch(url, {
         cache: "no-store",
+        signal: options.signal,
       });
       if (!response.ok) throw new Error("Unable to load conversation.");
       const data = (await response.json()) as {

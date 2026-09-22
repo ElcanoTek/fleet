@@ -295,6 +295,8 @@ export interface TurnStreamDeps {
       preserveScroll?: boolean;
       background?: boolean;
       restore?: boolean;
+      /** Retires the request on a timeout; see the recovery reconciler. */
+      signal?: AbortSignal;
       // Set ONLY by the recovery reconciler. An ordinary load must leave a
       // conversation whose slot recovery owns alone; this one is the
       // deliberate swap to the canonical copy (#1584).
@@ -514,7 +516,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // discovered, so it will not attach ours, and the queue follower has
   // nothing to find because ours is running rather than queued. The chase
   // hands over to it on the way out instead (#1584).
-  const pendingDirectHandoffRef = useRef<Set<string>>(new Set<string>());
+  //
+  // The value is the submitted TEXT, because the hand-off has to know when
+  // that submission has actually reached the canonical transcript: the server
+  // registers a turn before its user row is committed, so a reload can
+  // succeed and still hold only the predecessor. Clearing the hand-off there
+  // would let a later turn be attached over a transcript missing ours.
+  const pendingDirectHandoffRef = useRef<Map<string, string>>(
+    new Map<string, string>(),
+  );
   const recoveryEpochRef = useRef<Map<string, number>>(
     new Map<string, number>(),
   );
@@ -636,6 +646,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         background: true,
         restore: true,
         adopt: true,
+        // Bounding the WAIT is not enough: without this the request outlives
+        // its timeout, and a long outage at the steady beat would pile up
+        // history fetches until the browser's per-origin pool is full.
+        signal: recoveryRequestSignal(),
       }),
       delay(recoveryRequestTimeoutMs).then(() => reloadTimedOut),
     ]);
@@ -912,7 +926,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
     if (recoveryUnmountedRef.current) return;
     if (!pendingDirectHandoffRef.current.has(convId)) return;
-    if (adopted !== "adopted") {
+    // A successful reload is not proof that OUR submission is in it. The
+    // server registers a turn before committing its user row, so the
+    // transcript can still end at the predecessor; clearing the hand-off
+    // there would let a later turn be attached over a transcript missing
+    // ours. Wait until our prompt is the newest question on record.
+    const submitted = pendingDirectHandoffRef.current.get(convId);
+    const local = messagesByConvRef.current[convId] ?? [];
+    const lastAsked = [...local].reverse().find((m) => m.role === "user");
+    const landed = lastAsked?.content === submitted;
+    if (adopted !== "adopted" || !landed) {
       window.setTimeout(() => {
         void performDirectHandoff(convId, attempt + 1);
       }, recoveryDelayFor(attempt));
@@ -1381,6 +1404,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // chase. Read it off the transcript before the chase is dropped, or Stop
     // leaves a spinner under an idle conversation.
     const chasedSlot = chasing ? lastUnsettledAssistant(convId) : null;
+    // A chase that never attached has no slot at all — its bound reattach may
+    // have been declining through a turn transition — so there is nothing
+    // local to settle, and the successor's prompt and its cancelled outcome
+    // exist only in the database. Ending the chase here would leave no path
+    // that repairs that until a manual reload, so adopt it on the way out.
+    const needsCanonical = chasing && chasedSlot === null;
     // Dropping the chase is what stops it re-marking the conversation busy,
     // reattaching after the cancellation, or polling for ever once the
     // cancelled turn's buffer expires.
@@ -1413,6 +1442,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     retireStream(convId, abortControllersRef.current.get(convId) ?? null);
     attachedConvIdsRef.current.delete(convId);
     markConvIdle(convId);
+    if (needsCanonical) {
+      void reloadCanonical(convId).catch(() => {
+        // Best effort: the user has stopped waiting, so a transcript we
+        // cannot fetch is not worth holding the conversation busy for.
+      });
+    }
   };
 
   // Stop every chain when the hook goes away: cancel pending timers AND flag
@@ -2472,6 +2507,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           attachedConvIdsRef.current.delete(convId);
           markConvIdle(convId);
           abortControllersRef.current.delete(convId);
+          // The slot was created before this request, so a proxy's 502 or a
+          // server bounce strands a thinking bubble exactly as a blackholed
+          // connect does. The generic callers own no chain and the watchdog
+          // skips a detached conversation, so hand it over (#1584).
+          armRecoveryForUnsettled(convId);
           return false;
         }
       } catch (err) {
@@ -3241,7 +3281,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // let the chase perform it when it ends.
           if (chasingSuccessor(convId)) {
             if (!pendingDirectHandoffRef.current.has(convId)) {
-              pendingDirectHandoffRef.current.add(convId);
+              pendingDirectHandoffRef.current.set(convId, value);
               bumpRecoveryEpoch(convId);
             }
             return;
