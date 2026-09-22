@@ -3991,6 +3991,7 @@ export function ChatExperience({
   } satisfies TurnStreamDeps;
   const {
     reattachToConv,
+    isRecoveringConv,
     sweepStreamLiveness,
     submitPrompt,
     regenerateLastAssistant,
@@ -4016,6 +4017,10 @@ export function ChatExperience({
   const reattachToConvRef = useRef(reattachToConv);
   const sweepStreamLivenessRef = useRef(sweepStreamLiveness);
   const loadConversationRef = useRef(loadConversation);
+  // Read through a ref: the tab-return effect is mounted once and must see
+  // the current predicate, not the one captured at mount.
+  const isRecoveringConvRef = useRef(isRecoveringConv);
+  isRecoveringConvRef.current = isRecoveringConv;
   const refreshConversationsRef = useRef(refreshConversations);
   const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
   useEffect(() => {
@@ -4138,6 +4143,12 @@ export function ChatExperience({
         (m) => m.state === "streaming" || m.state === "thinking",
       );
       if (!hasStaleStream) return;
+      // A slot the recovery chain owns is deliberately mid-flight while its
+      // outcome is unknown, and the chain re-probes on its own. Reloading it
+      // here would swap the live prompt and assistant slot for an incomplete
+      // Postgres transcript — losing the partial answer, and leaving the
+      // chain looking for a slot that no longer exists (#1584).
+      if (isRecoveringConvRef.current(convId)) return;
 
       // preserveScroll: the user was already on this conversation and may
       // have been mid-read. Even when we do refetch (turn dropped while

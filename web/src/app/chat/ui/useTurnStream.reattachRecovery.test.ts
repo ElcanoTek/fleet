@@ -835,12 +835,17 @@ describe("the recovery chain hands the conversation back", () => {
 
     await vi.advanceTimersByTimeAsync(1100);
     await vi.advanceTimersByTimeAsync(10);
-    // Reattaching would pour the NEW turn's replay into the OLD turn's bubble
-    // and leave the answer we were waiting for unadopted.
-    expect(h.attachCount()).toBe(attachesBefore);
-    expect(h.loadConversationCalls).toEqual([CONV]);
+    // OUR turn is adopted from the canonical transcript rather than having
+    // the successor's replay poured into its bubble. (The successor's own
+    // stream may adopt again when it ends; what matters is that an adoption
+    // happened and no replay was appended to our slot.)
+    expect(h.loadConversationCalls[0]).toBe(CONV);
     expect(lastOf(h).content).toBe("Done — here are the results.");
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    // The successor is then followed, because a turn the server is running
+    // with no stream on screen is the other half of this bug: it would show
+    // nothing until a reload.
+    expect(h.attachCount()).toBe(attachesBefore + 1);
   }, 20000);
 
   it("still recovers after React's Strict Mode setup-cleanup-setup cycle", async () => {
@@ -904,6 +909,66 @@ describe("a fresh turn does not inherit the previous turn's identity", () => {
     // reconciled nothing, and failed the slot.
     expect(h.loadConversationCalls).toEqual([]);
     expect(lastOf(h).content).toBe("the answer");
+    expect(lastOf(h).state).toBe("done");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+});
+
+// Codex round 4 on #1584: the identity checks had holes of their own.
+describe("an unidentified turn is resolved by the transcript, not by guessing", () => {
+  it("adopts and follows the successor when our turn is already answered", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      // Our slot IS answered in Postgres: our turn finished while we were
+      // away, so the live turn /inflight reports must be a successor.
+      persisted: answeredHistory(),
+      streamBodies: [() => severedStream([])], // died before turn.started
+      inflightRejectAt: [0], // the catch's probe: arms the chain, no identity
+      inflight: [{ inflight: true, turn_id: "t-successor" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+    const attachesBefore = h.attachCount();
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    // With no ids to compare, the transcript decides: our answer is adopted
+    // instead of the successor's replay being appended to our bubble...
+    expect(h.loadConversationCalls[0]).toBe(CONV);
+    expect(lastOf(h).content).toBe("Done — here are the results.");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    // ...and the successor is still followed.
+    expect(h.attachCount()).toBe(attachesBefore + 1);
+  }, 20000);
+
+  it("attaches when the transcript shows our turn is still unanswered", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      // Nothing answered: the live turn is almost certainly still ours.
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([]),
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "ours after all" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflightRejectAt: [0],
+      inflight: [{ inflight: true, turn_id: "t-live" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).content).toBe("ours after all");
     expect(lastOf(h).state).toBe("done");
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
   }, 20000);

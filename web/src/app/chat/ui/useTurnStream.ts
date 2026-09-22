@@ -312,6 +312,12 @@ export interface TurnStreamDeps {
 // pumpStreamResponse, streamTurn, and uploadPendingAttachments are internal
 // to the loop and intentionally not returned.
 export interface UseTurnStream {
+  /**
+   * True while the recovery chain owns this conversation's unsettled slot —
+   * its outcome is unknown and the chain is re-probing. Callers that would
+   * otherwise refresh or replace the conversation must leave it alone.
+   */
+  isRecoveringConv: (convId: string) => boolean;
   // Resolves true when this call attached to a turn and pumped its stream
   // (so the caller knows the conversation was, and may still be, ours).
   reattachToConv: (convId: string) => Promise<boolean>;
@@ -688,24 +694,52 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return;
         }
         const ownedTurnID = recoveryOwnedRef.current.get(convId)?.turnID ?? "";
-        const answersADifferentTurn =
-          probe.turnID !== "" && ownedTurnID !== "" && probe.turnID !== ownedTurnID;
-        if (answersADifferentTurn) {
-          // The turn this chain is recovering has finished and the server has
-          // moved on — a queued input started the next one. Reattaching now
-          // would pour the NEW turn's replay into the OLD turn's bubble and
-          // leave the answer we were waiting for unadopted. Settle our slot
-          // from the canonical transcript instead and let the ordinary paths
-          // own the new turn.
+        // adoptOurTurnThenFollow settles OUR slot from the canonical
+        // transcript and then picks up whatever the server is running now.
+        // Used when the live turn is demonstrably not the one this chain is
+        // recovering: reattaching to it would pour a successor's replay into
+        // the old turn's bubble, and ignoring it would leave that successor
+        // running with no stream, no user bubble and no answer on screen
+        // until a reload.
+        const adoptOurTurnThenFollow = async (): Promise<void> => {
           await settleStreamedSlot(convId, assistantId, gap, attempt + 1, true);
           if (recoveryUnmountedRef.current) return;
           if (recoveryRetriesRef.current.has(convId)) return;
           releaseRecovery(convId);
+          void reattachToConv(convId);
+        };
+        if (probe.turnID !== "" && ownedTurnID !== "" && probe.turnID !== ownedTurnID) {
+          await adoptOurTurnThenFollow();
           return;
+        }
+        if (probe.turnID !== "" && ownedTurnID === "") {
+          // We never learned our turn's id — the socket died before
+          // turn.started — so the ids cannot settle the question. Postgres
+          // can: if the canonical transcript already ANSWERS our slot, our
+          // turn is over and this live one is a successor. If it does not,
+          // the live turn is almost certainly still ours, and attaching is
+          // right.
+          const persisted = await reconcileFromPersisted(convId);
+          if (recoveryUnmountedRef.current) return;
+          if (persisted === "unreachable") {
+            scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
+            return;
+          }
+          if (persisted === "adopted") {
+            releaseRecovery(convId);
+            void reattachToConv(convId);
+            return;
+          }
         }
         if (probe.inflight || probe.turnID) {
           await reattachToConv(convId);
           if (recoveryUnmountedRef.current) return;
+          // The reattach's own finalizer may have re-armed the chain — it
+          // settles with the gap IT observed, which can differ from ours (a
+          // replacement stream can report missed events our chain never saw).
+          // That pending retry owns the slot now; cancelling it here by
+          // releasing would strand an empty bubble.
+          if (recoveryRetriesRef.current.has(convId)) return;
           // `await` here spans the WHOLE replay, so "is it still attached" is
           // not the question — a reattach that ran a stream to its terminal
           // event has already let the handle go. Judge by the slot: no longer
@@ -1681,6 +1715,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         abortControllersRef.current.delete(convId);
         return false;
       }
+      // A recovery tick awaits this whole call, so the CONNECT has to be
+      // bounded too: a request blackholed before its response headers arrive
+      // would hang the tick that has already dropped its timer, and with
+      // heartbeats disabled the liveness watchdog has no evidence to supersede
+      // it either. The timer only covers establishment — once headers are in,
+      // the stream is long-lived by design and the timer is cleared.
+      let connected = false;
+      const connectTimer = window.setTimeout(() => {
+        if (!connected) ourController.abort();
+      }, recoveryRequestTimeoutMs);
       try {
         response = await fetch(streamUrl, {
           method: "GET",
@@ -1688,6 +1732,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           headers: { "Last-Event-ID": String(lastSeen) },
           signal: ourController.signal,
         });
+        connected = true;
+        window.clearTimeout(connectTimer);
         if (!response.ok) {
           // A failed reattach (server restart, expired retain buffer) must
           // not strand the conversation in "streaming": that locks the
@@ -1699,6 +1745,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return false;
         }
       } catch (err) {
+        window.clearTimeout(connectTimer);
         attachedConvIdsRef.current.delete(convId);
         markConvIdle(convId);
         abortControllersRef.current.delete(convId);
@@ -2107,6 +2154,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // parallel without colliding on a single PENDING sentinel.
     let target = initialTarget;
     attachedConvIdsRef.current.add(target);
+    // Drop the PREVIOUS turn's id BEFORE the request goes out. The server can
+    // accept and start a turn whose response headers never reach us; `fetch`
+    // then throws and the catch arms recovery, so any reset that waited for
+    // the response would leave the chain holding the preceding turn's
+    // identity — and the chain would classify the genuinely live turn as a
+    // successor and fail a slot that is still running (#1584).
+    currentTurnIdByConvRef.current.delete(target);
 
     const response = await fetch("/api/chat", {
       method: "POST",
@@ -2155,13 +2209,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // later (in turn.started) and the boundary-detection logic in
     // pumpStreamResponse keeps currentTurnIdByConvRef in sync.
     lastEventIdByConvRef.current.set(target, 0);
-    // Drop the PREVIOUS turn's id with it. Until turn.started lands this
-    // conversation has no known turn, and saying otherwise is worse than
-    // saying nothing: if this socket dies first, the recovery chain would
-    // arm with the old id, then read the live turn that /inflight reports as
-    // "a different, newer turn", reconcile an answer that has not been
-    // persisted, and stamp the running slot failed (#1584).
-    currentTurnIdByConvRef.current.delete(target);
+    // The turn id was dropped before the POST (see above); until turn.started
+    // lands this conversation has no known turn, which is the truth.
 
     // Thread mutable per-turn state through the shared pump. The
     // "conversation" SSE event may rename target from PENDING_CONV_KEY
@@ -2673,6 +2722,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   return {
     reattachToConv,
+    // True while the recovery chain owns this conversation's unsettled slot.
+    // The tab-return refresh in chat-experience consults it: reloading the
+    // conversation there would replace the live prompt and assistant slot
+    // with an incomplete Postgres transcript, and the chain would then find
+    // its slot gone.
+    isRecoveringConv: (convId: string) => recoveryOwnedRef.current.has(convId),
     checkStreamLiveness,
     sweepStreamLiveness,
     submitPrompt,
