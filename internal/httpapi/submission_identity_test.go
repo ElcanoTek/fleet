@@ -100,7 +100,7 @@ func TestInflight_EchoesTheSubmissionTheRunningTurnBelongsTo(t *testing.T) {
 	})
 	<-eng.started
 
-	probe := inflightProbe(t, s, user, conv.ID)
+	probe := inflightProbe(t, s, conv.ID)
 	if probe["inflight"] != true {
 		t.Fatalf("expected a running turn, got %v", probe)
 	}
@@ -121,7 +121,7 @@ func TestInflight_EchoesTheSubmissionTheRunningTurnBelongsTo(t *testing.T) {
 	// /inflight must keep naming the FIRST submission. A client holding
 	// sub-second reads that as "not mine" and leaves its slot mid-flight
 	// instead of binding it to a turn that was already running.
-	probe = inflightProbe(t, s, user, conv.ID)
+	probe = inflightProbe(t, s, conv.ID)
 	if probe["submission_id"] != "sub-first" {
 		t.Fatalf("queued submission was reported as the running turn: %v", probe)
 	}
@@ -131,12 +131,15 @@ func TestInflight_EchoesTheSubmissionTheRunningTurnBelongsTo(t *testing.T) {
 	eng.release <- struct{}{}
 	eng.release <- struct{}{}
 	waitFor(t, "the queued input to run as its own turn", func() bool {
-		return inflightProbe(t, s, user, conv.ID)["submission_id"] == "sub-second"
+		return inflightProbe(t, s, conv.ID)["submission_id"] == "sub-second"
 	})
 }
 
-func inflightProbe(t *testing.T, s *Server, user, convID string) map[string]any {
+// inflightProbe reads GET /conversations/{id}/inflight as the fixture's owner,
+// which is the only user any of these tests create a conversation for.
+func inflightProbe(t *testing.T, s *Server, convID string) map[string]any {
 	t.Helper()
+	const user = "alice@x.com"
 	rr := do(t, s.Routes(), http.MethodGet, "/conversations/"+convID+"/inflight", nil, user)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("inflight: status %d body=%s", rr.Code, rr.Body.String())
@@ -163,7 +166,7 @@ func TestInflight_OmitsSubmissionIDWhenTheTurnNamesNone(t *testing.T) {
 	_, _, tok, _ := s.registerTurn(conv.ID, turnCancel)
 	defer s.finishTurn(conv.ID, tok)
 
-	probe := inflightProbe(t, s, "alice@x.com", conv.ID)
+	probe := inflightProbe(t, s, conv.ID)
 	if _, present := probe["submission_id"]; present {
 		t.Fatalf("expected no submission_id key, got %v", probe)
 	}
