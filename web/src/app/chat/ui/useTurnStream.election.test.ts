@@ -161,14 +161,20 @@ type Tab = {
   streaming: Set<string>;
   slot: () => Message;
   lastBeat: () => RecoveryBeat | undefined;
+  reports: () => boolean[];
 };
 
 // Which way a tab's last beat went is the one thing a test cannot read off the
 // server, and the takeover case has to know which tab is doing the asking.
 const instrument = (
   election: RecoveryElection,
-): { election: RecoveryElection; lastBeat: () => RecoveryBeat | undefined } => {
+): {
+  election: RecoveryElection;
+  lastBeat: () => RecoveryBeat | undefined;
+  reports: () => boolean[];
+} => {
   const beats: RecoveryBeat[] = [];
+  const reports: boolean[] = [];
   return {
     election: {
       ...election,
@@ -177,8 +183,13 @@ const instrument = (
         beats.push(beat);
         return beat;
       },
+      report: (convId: string, answered: boolean) => {
+        reports.push(answered);
+        election.report(convId, answered);
+      },
     },
     lastBeat: () => beats[beats.length - 1],
+    reports: () => reports,
   };
 };
 
@@ -267,6 +278,7 @@ const makeTab = (server: Server, election: RecoveryElection): Tab => {
       return slots[slots.length - 1];
     },
     lastBeat: instrumented.lastBeat,
+    reports: instrumented.reports,
   };
 };
 

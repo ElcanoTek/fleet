@@ -456,9 +456,10 @@ we are in.
 
 So the submission carries an identity the server can echo. `submitPrompt`
 mints one per submission and sends it as `submission_id`; the server stamps it
-on the `inflightEntry` for the turn it starts, uses it as the queued row's
-client id when it queues instead (so the turn that eventually drains that row
-still names it), and `/inflight` returns it as `submission_id`.
+on the `inflightEntry` for the turn it starts, stores it in the queue row's own
+`submission_id` column when it queues instead (so the turn that eventually
+drains that row still names it), and `/inflight` returns it as
+`submission_id`.
 `answersOurSubmission` compares:
 
 - **`true`** — the live turn is ours; attach as before.
@@ -659,11 +660,16 @@ return is caught in the 2.5s grace window alone. Both replace the five-minute
   sending, naming the conversation on the POST response headers, and echoing
   the submission id the client itself minted — three facts the server already
   had, so the client can reason instead of guessing.
-- **`submission_id` is identity, not idempotency.** It is stored on the
-  in-memory inflight entry and (when the submission queues) as the queue row's
-  client id; it is not a replay key, and a re-POST carrying the same
-  `submission_id` is not deduplicated. `input_id` remains the idempotency key
-  and is unchanged.
+- **`submission_id` is identity, not idempotency**, and it has its own column
+  to keep it that way. It is stored on the in-memory inflight entry and, when
+  the submission queues, in `chat_input_queue.submission_id` (migration 062) —
+  deliberately NOT in `client_input_id`, which carries the unique index
+  `(conversation_id, client_input_id)`. It was carried there once and that was
+  the bug: a caller sending both ids had the idempotency key echoed back as its
+  identity and refused to attach to its own turn, and a caller sending only a
+  submission id had it deduplicated against a repeat it never asked to be
+  idempotent. So a re-POST carrying the same `submission_id` is not
+  deduplicated, and `input_id` remains the only idempotency key.
 - **The conversation header closes the window it names, and no more.** A POST
   whose response headers never arrive at all still leaves a brand-new
   conversation unreachable from the client: there is no id, and

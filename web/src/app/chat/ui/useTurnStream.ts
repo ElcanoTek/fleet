@@ -310,6 +310,42 @@ export function parseLockdownModelRefusal(
   };
 }
 
+// reportsOutageToElection decides whether a finished probe may tell the
+// cross-tab election what it learned (#1595).
+//
+// An ANSWER always reports, whatever generation the tick belongs to: it is a
+// fact about the server, and the worst it can do is put tabs back on their own
+// free ladders early. An OUTAGE reports only while the tick is still current.
+// A nudge deliberately arms a newer tick while an older one may still be
+// inside its bounded /inflight request, so an older probe timing out AFTER a
+// newer one answered would otherwise re-assert an outage that is no longer
+// true — and the newer tick, needing another beat, could then be parked behind
+// another tab's lock rather than keeping its own ladder. That holder may
+// already be inside a long-lived stream, which is the one outcome this design
+// must never produce: a tab worse off than independent recovery.
+export function reportsOutageToElection(args: {
+  answered: boolean;
+  superseded: boolean;
+}): boolean {
+  return args.answered || !args.superseded;
+}
+
+// preferredTurnID picks which turn id to ask the server about.
+//
+// `||` semantics, deliberately, and this is a fix rather than a style choice.
+// The first arm of a chain whose stream died before `turn.started` OWNS the
+// empty string — it never learned an id — and `??` treats "" as present,
+// because "" is neither null nor undefined. A later probe or reattach learns
+// the real id, and with `??` every subsequent arm kept asking about no turn at
+// all: a turn that then failed before answering settled as the generic
+// connection-drop verdict instead of the server's real cause.
+export function preferredTurnID(
+  ownedTurnID: string | undefined,
+  learnedTurnID: string | undefined,
+): string {
+  return ownedTurnID || learnedTurnID || "";
+}
+
 // correctedModelAdoption decides what to do with a lockdown refusal that names
 // a replacement model. Two independent answers, and keeping them independent is
 // the point:
@@ -1065,8 +1101,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // only the timer map would make a stood-down chain look abandoned and
   // release the slot it is still holding open.
   const recoveryTickPending = (convId: string): boolean =>
-    recoveryRetriesRef.current.has(convId) ||
-    recoveryElection().booked(convId);
+    recoveryRetriesRef.current.has(convId) || recoveryElection().booked(convId);
 
   // releaseRecovery ends ownership: the outcome is known, or the slot is gone.
   // It also frees the conversation, because ownership is what suppressed the
@@ -1448,7 +1483,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     recoveryOwnedRef.current.set(convId, {
       assistantId,
       gap,
-      turnID: owned?.turnID ?? currentTurnIdByConvRef.current.get(convId) ?? "",
+      // `||`, not `??`: the first arm of a chain whose stream died before
+      // turn.started owns the EMPTY string, and `??` would keep that forever
+      // because "" is neither null nor undefined. A later probe or reattach
+      // learns the real id into currentTurnIdByConvRef, and every subsequent
+      // arm has to pick it up — otherwise the chain keeps asking about a turn
+      // it cannot name.
+      turnID: preferredTurnID(
+        owned?.turnID,
+        currentTurnIdByConvRef.current.get(convId),
+      ),
       gen,
     });
     const existing = recoveryRetriesRef.current.get(convId);
@@ -1483,14 +1527,27 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return;
         }
         const probe = await probeInflightTurn(convId);
+        const answered = probe.kind === "answer";
         // What this tab just learned about the server decides two things: its
         // own next beat, and — when the server answered — a wake-up for every
         // other tab parked on this conversation, so they resolve their own
         // slots at the same moment rather than on their own ladders (#1595).
-        // Reported before the generation guard: the fact is about the server,
-        // not about this tick, and it is true even if a newer tick owns the
-        // slot by now.
-        recoveryElection().report(convId, probe.kind === "answer");
+        //
+        // An ANSWER is reported whatever this tick's generation, because it is
+        // a fact about the server and reporting it can only put tabs back on
+        // their own (free) ladders. An OUTAGE is reported only while this tick
+        // is still the current one. A nudge deliberately creates a newer
+        // generation while an older tick may still be inside its bounded
+        // /inflight request, so without that guard an older probe timing out
+        // AFTER a newer one answered would re-assert an outage that is no
+        // longer true — and the newer tick, needing another beat, could then
+        // be parked behind another tab's lock instead of keeping its own
+        // ladder. That holder may already be inside a long-lived stream, which
+        // is the one thing this design must never do: leave a tab worse off
+        // than independent recovery.
+        if (reportsOutageToElection({ answered, superseded: superseded() })) {
+          recoveryElection().report(convId, answered);
+        }
         if (recoveryUnmountedRef.current || superseded()) return;
         if (probe.kind === "unreachable") {
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
@@ -1828,9 +1885,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   ): Promise<"wait" | "settled" | "silent"> => {
     const outcome = await fetchTurnOutcome(
       convId,
-      recoveryOwnedRef.current.get(convId)?.turnID ??
-        currentTurnIdByConvRef.current.get(convId) ??
-        "",
+      // `||` rather than `??`, for the reason above: an owned turn id of ""
+      // means "we never learned it", not "we know it is empty", so it must
+      // fall through to whatever the chain has since learned. With `??` a
+      // turn that failed before answering settled as the generic
+      // connection-drop verdict, because this asked about no turn at all.
+      preferredTurnID(
+        recoveryOwnedRef.current.get(convId)?.turnID,
+        currentTurnIdByConvRef.current.get(convId),
+      ),
     );
     if (
       outcome.kind === "unreachable" ||
@@ -3818,9 +3881,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // real conv id when it lands.
     const initialTarget = convId ?? nextPendingKey();
     // This submission's identity (#1592). The server stamps it on the turn it
-    // starts for us — where /inflight echoes it back — and uses it as the
-    // queued row's client id if it queues us behind a turn we did not know was
-    // running. Without it, a submission whose acknowledgement is lost in
+    // starts for us — where /inflight echoes it back — and stores it in the
+    // queue row's own submission_id column if it queues us behind a turn we
+    // did not know was running. Without it, a submission whose acknowledgement
+    // is lost in
     // transit has no way to tell the turn started FOR IT from one that was
     // already running: the turn id is brand new either way, and the server
     // exposes a turn before committing its user message, so the transcript
@@ -4027,9 +4091,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // Stamping `failed` here is the bug behind a fully-rendered
           // answer that flips to "Turn failed" a beat later. If another
           // path already finalized the turn successfully, leave it.
-          const resolved = messagesByConvRef.current.get(target)?.find(
-            (m) => m.id === assistantId,
-          );
+          const resolved = messagesByConvRef.current
+            .get(target)
+            ?.find((m) => m.id === assistantId);
           if (resolved && resolved.state === "done" && !resolved.failed) {
             // Already settled successfully by another path — leave it.
           } else {

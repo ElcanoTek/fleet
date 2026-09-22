@@ -65,8 +65,9 @@ type chatRequest struct {
 	Mode string `json:"mode,omitempty"`
 	// SubmissionID is this POST's own identity (#1592) — NOT an idempotency
 	// key (that is InputID). The server stamps it on the turn it starts for
-	// this submission, where /inflight echoes it back, and uses it as the
-	// queued row's client id when the submission queues instead. It exists
+	// this submission, where /inflight echoes it back, and stores it in the
+	// queue row's own submission_id column when the submission queues instead
+	// — never in client_input_id, which is the idempotency key. It exists
 	// because a client whose acknowledgement was lost in transit has no other
 	// evidence separating "the turn the server started for me" from "a turn
 	// that was already running": the turn id is new either way, and startTurn

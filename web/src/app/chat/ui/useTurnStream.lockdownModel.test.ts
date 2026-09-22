@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   correctedModelAdoption,
   parseLockdownModelRefusal,
+  preferredTurnID,
+  reportsOutageToElection,
 } from "./useTurnStream";
 
 // #1588: a lockdown deployment refuses a model its allow-list forbids instead
@@ -128,5 +130,60 @@ describe("correctedModelAdoption", () => {
     expect(
       correctedModelAdoption({ ...base, isModelRetry: undefined }),
     ).toEqual({ resend: true, adoptIntoPicker: true });
+  });
+});
+
+// An owned turn id of "" means "this chain never learned one", not "the id is
+// empty". `??` cannot tell those apart, so a chain whose stream died before
+// turn.started kept asking the outcome endpoint about no turn at all — and a
+// turn that then failed before answering settled as the generic
+// connection-drop verdict instead of the server's real cause (#1593).
+describe("preferredTurnID", () => {
+  it("prefers the id this chain already owns", () => {
+    expect(preferredTurnID("t-owned", "t-learned")).toBe("t-owned");
+  });
+
+  it("falls through an EMPTY owned id to the one the chain has since learned", () => {
+    expect(preferredTurnID("", "t-learned")).toBe("t-learned");
+  });
+
+  it("falls through an absent owned id too", () => {
+    expect(preferredTurnID(undefined, "t-learned")).toBe("t-learned");
+  });
+
+  it("yields the empty string when neither is known, so nothing is asked", () => {
+    expect(preferredTurnID("", undefined)).toBe("");
+    expect(preferredTurnID(undefined, "")).toBe("");
+  });
+});
+
+// A nudge arms a newer recovery tick while an older one may still be inside
+// its bounded /inflight request. If that older probe times out AFTER the newer
+// one got an answer, re-asserting its outage would park the newer tick behind
+// another tab's lock — and that holder may already be inside a long-lived
+// stream, leaving this tab worse off than independent recovery (#1595).
+describe("reportsOutageToElection", () => {
+  it("reports an answer from the current tick", () => {
+    expect(reportsOutageToElection({ answered: true, superseded: false })).toBe(
+      true,
+    );
+  });
+
+  it("still reports an answer from a superseded tick — it is a fact about the server", () => {
+    expect(reportsOutageToElection({ answered: true, superseded: true })).toBe(
+      true,
+    );
+  });
+
+  it("reports an outage the current tick saw", () => {
+    expect(
+      reportsOutageToElection({ answered: false, superseded: false }),
+    ).toBe(true);
+  });
+
+  it("does NOT let a superseded tick re-assert an outage a newer answer disproved", () => {
+    expect(reportsOutageToElection({ answered: false, superseded: true })).toBe(
+      false,
+    );
   });
 });
