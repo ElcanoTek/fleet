@@ -54,7 +54,11 @@ endpoint was at 80% uptime on the day of the switch and it costs $2/M in.
   default slugs whose endpoint pools were checked (vendor + cloud resellers of
   the official weights) so the "default must be strictly pinned or floored"
   guard can state the third safe shape explicitly — per slug, never per family
-  — instead of being loosened. See [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
+  — instead of being loosened. That list is now also the request's
+  `provider.only` allow-list (#1589), so the pool it names is enforced rather
+  than snapshotted; it admits every endpoint both slugs have today, so the
+  reseller fallback is unchanged. See
+  [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
 - There is no compiled-in scheduled-task fallback: form-created tasks carry the
   form's pre-filled `deepseek/deepseek-v4.1-flash` as their own pinned
   fallback, and API/imported tasks without one use `FLEET_TASK_FALLBACK_MODEL`
