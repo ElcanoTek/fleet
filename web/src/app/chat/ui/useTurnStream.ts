@@ -502,6 +502,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   );
   // ...and the flag a callback already past its timer checks after each await.
   const recoveryUnmountedRef = useRef(false);
+  // One monotonic sequence for every chain the hook ever arms. See the arming
+  // comment in scheduleRecoveryRetry for why it is not per-record.
+  const recoveryGenSeqRef = useRef(0);
   const refreshQueue = async (
     convId: string,
   ): Promise<QueuedInput[] | null> => {
@@ -906,8 +909,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // chain is recovering is one particular turn, and the server may well be
     // running a different one by the time a tick fires.
     const owned = recoveryOwnedRef.current.get(convId);
-    // Arming supersedes any tick already running for this slot.
-    const gen = (owned?.gen ?? 0) + 1;
+    // Arming supersedes any tick already running for this slot. The counter
+    // is a single monotonic sequence for the hook, never derived from the
+    // record being replaced: deriving it would reset to 1 when ownership is
+    // deleted, and a gen-1 tick still blocked in a bounded request could then
+    // wake up inside a LATER chain that had also reached gen 1, and act on it
+    // with the old chain's assistant id.
+    const gen = ++recoveryGenSeqRef.current;
     recoveryOwnedRef.current.set(convId, {
       assistantId,
       gap,
@@ -1078,20 +1086,33 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // send the server cancellation and leave the conversation busy with a chain
   // still probing for a turn the user has just killed.
   const cancelRecovery = (convId: string): void => {
-    // A chase has no bubble of its own to settle — the turn it follows belongs
-    // to a later submission, and Stop's server-side cancellation covers that
-    // turn. Dropping the chase is what stops it re-marking the conversation
-    // busy, reattaching after the cancellation, or polling for ever once the
+    const owned = recoveryOwnedRef.current.get(convId);
+    const chasing = chasingSuccessor(convId);
+    if (!owned && !chasing) return;
+    // A chase's turn belongs to a later submission, so the ownership record
+    // names no slot for it — but a chase that already attached HAS a slot,
+    // created by its reattach, whose finalizer deliberately deferred to the
+    // chase. Read it off the transcript before the chase is dropped, or Stop
+    // leaves a spinner under an idle conversation.
+    const chasedSlot = chasing ? lastUnsettledAssistant(convId) : null;
+    // Dropping the chase is what stops it re-marking the conversation busy,
+    // reattaching after the cancellation, or polling for ever once the
     // cancelled turn's buffer expires.
     endSuccessorChase(convId);
-    const owned = recoveryOwnedRef.current.get(convId);
-    if (!owned) return;
-    releaseRecovery(convId);
-    patchAssistantMessage(convId, owned.assistantId, (m) =>
-      m.state === "thinking" || m.state === "streaming"
-        ? { ...m, state: "done", cancelled: true }
-        : m,
-    );
+    if (owned) releaseRecovery(convId);
+    // slotNeedsSettling, not a state test: a replay-gap slot already reads as
+    // `done` and empty, so a state test would skip it and leave a blank
+    // bubble that no stream or retry can ever repair.
+    const markCancelled = (assistantId: number, gap: boolean): void => {
+      if (!slotNeedsSettling(convId, assistantId, gap)) return;
+      patchAssistantMessage(convId, assistantId, (m) => ({
+        ...m,
+        state: "done",
+        cancelled: true,
+      }));
+    };
+    if (owned) markCancelled(owned.assistantId, owned.gap);
+    if (chasedSlot !== null) markCancelled(chasedSlot, false);
     markConvIdle(convId);
   };
 
@@ -2286,6 +2307,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   //     the deliberate no-auto-drain-at-boot case (docs/INPUT-QUEUE.md).
   const followQueueDrain = async (convId: string) => {
     if (isPendingKey(convId)) return; // a brand-new chat has no queue
+    // Recovery owns an unresolved slot on this conversation, and its attach
+    // is bound to the turn it is recovering. This follower's is not: it would
+    // take whatever /inflight reports and reuse the recovered turn's
+    // still-streaming slot, so a successor starting between the queue
+    // snapshot and that probe would have its replay written into the
+    // predecessor's bubble. The chain drains the queue itself once it settles
+    // (both stream finalizers call back into here), so deferring loses
+    // nothing (#1584).
+    if (recoveryOwns(convId) || chasingSuccessor(convId)) return;
     if (queueFollowInFlightRef.current.has(convId)) return;
     queueFollowInFlightRef.current.add(convId);
     // Set whenever we see drain work we have not yet put on screen; cleared

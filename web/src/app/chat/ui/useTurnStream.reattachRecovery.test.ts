@@ -24,7 +24,11 @@ import type { HistoryEntry, Message } from "./history";
 const CONV = "conv-1";
 
 type Store = Record<string, Message[]>;
-type InflightInfo = { inflight: boolean; turn_id?: string; last_event_id?: number };
+type InflightInfo = {
+  inflight: boolean;
+  turn_id?: string;
+  last_event_id?: number;
+};
 
 const sse = (id: number, event: string, data: unknown) =>
   `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -65,7 +69,11 @@ const truncatedStream = (frames: string[]) => {
 // The zombie: a socket that delivers nothing and never errors — what an OS
 // leaves behind when it suspends the page. It only ends if we abort it, which
 // is exactly what the liveness check is expected to do.
-const zombieStream = (signal?: AbortSignal, emitAfterMs?: number, frames: string[] = []) => {
+const zombieStream = (
+  signal?: AbortSignal,
+  emitAfterMs?: number,
+  frames: string[] = [],
+) => {
   const encoder = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -163,7 +171,8 @@ const makeHarness = (opts: {
     opts.onLoaded?.();
   };
 
-  const nth = <T,>(list: T[], i: number): T => list[Math.min(i, list.length - 1)];
+  const nth = <T>(list: T[], i: number): T =>
+    list[Math.min(i, list.length - 1)];
 
   // The server advertises its keepalive cadence on every attached stream
   // (X-Fleet-Heartbeat-Interval-Ms). undefined = the header is absent, which
@@ -187,7 +196,9 @@ const makeHarness = (opts: {
           throw new TypeError("Failed to fetch");
         }
         if ((opts.inflightDeferAt ?? []).includes(idx)) {
-          await new Promise<void>((resolve) => deferredProbeReleases.push(resolve));
+          await new Promise<void>((resolve) =>
+            deferredProbeReleases.push(resolve),
+          );
         }
         const info = nth(opts.inflight, answeredProbes);
         answeredProbes += 1;
@@ -251,7 +262,8 @@ const makeHarness = (opts: {
     loadRankedModels: asyncNoop,
     loadCatalogModels: asyncNoop,
     nextPendingKey: () => "__pending__:1",
-    isPendingKey: (key: string | null) => !!key && key.startsWith("__pending__"),
+    isPendingKey: (key: string | null) =>
+      !!key && key.startsWith("__pending__"),
     setPromptForKey: noop,
     setPendingAttachmentsForKey: noop,
     setAttachmentErrorForKey: noop,
@@ -317,7 +329,11 @@ const midTurnTranscript = (): Message[] => [
 
 const answeredHistory = (): HistoryEntry[] => [
   { role: "user", type: "text", content: { text: "run the long job" } },
-  { role: "assistant", type: "text", content: { text: "Done — here are the results." } },
+  {
+    role: "assistant",
+    type: "text",
+    content: { text: "Done — here are the results." },
+  },
 ];
 
 const unansweredHistory = (): HistoryEntry[] => [
@@ -337,7 +353,9 @@ describe("reattachToConv recovery when the socket dies mid-turn", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: answeredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [{ inflight: true, turn_id: "t1" }],
     });
 
@@ -356,7 +374,9 @@ describe("reattachToConv recovery when the socket dies mid-turn", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: answeredHistory(),
-      streamBodies: [() => truncatedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => truncatedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [{ inflight: false, turn_id: "t1" }],
     });
 
@@ -371,7 +391,9 @@ describe("reattachToConv recovery when the socket dies mid-turn", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [{ inflight: true, turn_id: "t1" }],
     });
 
@@ -382,7 +404,9 @@ describe("reattachToConv recovery when the socket dies mid-turn", () => {
     const last = lastOf(h);
     expect(last.state).toBe("done");
     expect(last.failed).toBe(true);
-    expect(last.content).toBe("The connection dropped before the response finished.");
+    expect(last.content).toBe(
+      "The connection dropped before the response finished.",
+    );
   });
 
   it("leaves a normally-completed turn alone", async () => {
@@ -483,7 +507,9 @@ describe("an unreachable server is not a failed turn", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: answeredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       // probe 0 answers (reattach); probe 1 (+1 s) throws, radio off; probe 2
       // (+2 s) answers "nothing in flight, nothing retained" — the long job
       // finished and its buffer is gone; Postgres has the reply.
@@ -511,7 +537,9 @@ describe("an unreachable server is not a failed turn", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       // Every probe after the initial reattach throws — the radio never comes
       // back within the retry window.
       inflightRejectAt: [1, 2, 3, 4, 5, 6, 7, 8],
@@ -613,7 +641,9 @@ describe("the recovery chain owns the unsettled slot", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [
         { inflight: true, turn_id: "t1" }, // reattach's own probe
         { inflight: true, turn_id: "t1" }, // first retry tick: turn is alive
@@ -648,7 +678,9 @@ describe("the recovery chain owns the unsettled slot", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [{ inflight: true, turn_id: "t1" }],
       persistedRejectAt: [0], // the settle that arms the chain
     });
@@ -675,7 +707,9 @@ describe("recovery ownership spans the whole chain", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [{ inflight: true, turn_id: "t1" }, { inflight: false }],
       persistedRejectAt: [0],
     });
@@ -700,7 +734,9 @@ describe("recovery ownership spans the whole chain", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       // Every probe after the reattach's own throws: a long outage.
       inflightRejectAt: Array.from({ length: 40 }, (_, i) => i + 1),
       inflight: [{ inflight: true, turn_id: "t1" }],
@@ -726,7 +762,9 @@ describe("recovery ownership spans the whole chain", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       // probe 0: reattach's own. probe 1: the retry tick — the turn IS live.
       // probe 2: the reattach it triggers, which loses the same flap.
       inflightRejectAt: [2],
@@ -867,14 +905,18 @@ describe("the recovery chain hands the conversation back", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: answeredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [{ inflight: true, turn_id: "t1" }, { inflight: false }],
       persistedRejectAt: [0],
     });
 
     // The simulated cleanup used to set the unmount flag for good, which made
     // every later chain refuse to arm: recovery silently dead in development.
-    const { result } = renderHook(() => useTurnStream(h.deps), { wrapper: StrictMode });
+    const { result } = renderHook(() => useTurnStream(h.deps), {
+      wrapper: StrictMode,
+    });
     await result.current.reattachToConv(CONV);
     await vi.advanceTimersByTimeAsync(10);
     await vi.advanceTimersByTimeAsync(1100);
@@ -1013,10 +1055,16 @@ describe("recovery arms only for a submission the server accepted", () => {
       // ours and its replay would land in this submission's slot.
       inflight: [{ inflight: false, turn_id: "t-earlier-retained" }],
     });
-    const postFails = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === "/api/chat") throw new TypeError("Failed to fetch");
-      return (globalThis as { __origFetch?: typeof fetch }).__origFetch!(input, init);
-    });
+    const postFails = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/chat")
+          throw new TypeError("Failed to fetch");
+        return (globalThis as { __origFetch?: typeof fetch }).__origFetch!(
+          input,
+          init,
+        );
+      },
+    );
     const orig = globalThis.fetch;
     (globalThis as { __origFetch?: typeof fetch }).__origFetch = orig;
     vi.stubGlobal("fetch", postFails);
@@ -1061,8 +1109,12 @@ describe("a live turn is trusted even when the POST response was lost", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input) === "/api/chat") throw new TypeError("Failed to fetch");
-        return (globalThis as { __origFetch?: typeof fetch }).__origFetch!(input, init);
+        if (String(input) === "/api/chat")
+          throw new TypeError("Failed to fetch");
+        return (globalThis as { __origFetch?: typeof fetch }).__origFetch!(
+          input,
+          init,
+        );
       }),
     );
 
@@ -1118,9 +1170,9 @@ describe("checkStreamLiveness — the turn already finished", () => {
     h.streaming.add(CONV);
 
     const { result } = renderHook(() => useTurnStream(h.deps));
-    await expect(result.current.checkStreamLiveness(CONV, { force: true })).resolves.toBe(
-      "recovered",
-    );
+    await expect(
+      result.current.checkStreamLiveness(CONV, { force: true }),
+    ).resolves.toBe("recovered");
     expect(lastOf(h).content).toBe("Done — here are the results.");
     expect(h.deps.attachedConvIdsRef.current.has(CONV)).toBe(false);
     expect(h.streaming.has(CONV)).toBe(false);
@@ -1156,9 +1208,9 @@ describe("checkStreamLiveness — the turn already finished", () => {
     h.streaming.add(CONV);
 
     const { result } = renderHook(() => useTurnStream(h.deps));
-    await expect(result.current.checkStreamLiveness(CONV, { force: true })).resolves.toBe(
-      "recovered",
-    );
+    await expect(
+      result.current.checkStreamLiveness(CONV, { force: true }),
+    ).resolves.toBe("recovered");
 
     expect(replacementAborted).toBe(false);
     expect(h.deps.abortControllersRef.current.get(CONV)).toBe(replacement);
@@ -1179,9 +1231,9 @@ describe("checkStreamLiveness — the turn already finished", () => {
     h.deps.attachedConvIdsRef.current.add(CONV);
 
     const { result } = renderHook(() => useTurnStream(h.deps));
-    await expect(result.current.checkStreamLiveness(CONV, { force: true })).resolves.toBe(
-      "idle",
-    );
+    await expect(
+      result.current.checkStreamLiveness(CONV, { force: true }),
+    ).resolves.toBe("idle");
     expect(h.loadConversationCalls).toEqual([]);
     expect(h.inflightProbes).toBe(0);
   });
@@ -1195,9 +1247,9 @@ describe("checkStreamLiveness — the turn already finished", () => {
     });
 
     const { result } = renderHook(() => useTurnStream(h.deps));
-    await expect(result.current.checkStreamLiveness(CONV, { force: true })).resolves.toBe(
-      "idle",
-    );
+    await expect(
+      result.current.checkStreamLiveness(CONV, { force: true }),
+    ).resolves.toBe("idle");
     expect(h.inflightProbes).toBe(0);
   });
 });
@@ -1280,7 +1332,10 @@ describe("checkStreamLiveness — the turn is still generating", () => {
         // Frozen, not dead. It flushes at t=5000 — after the silence gate has
         // let the check through (t=4000) and inside the grace window it then
         // sits through (t=4000..6500). That is precisely a page thawing.
-        (signal) => zombieStream(signal, 5000, [sse(1, "turn.started", { turn_id: "t1" })]),
+        (signal) =>
+          zombieStream(signal, 5000, [
+            sse(1, "turn.started", { turn_id: "t1" }),
+          ]),
       ],
       inflight: [
         { inflight: true, turn_id: "t1" },
@@ -1336,7 +1391,10 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     const h = makeHarness({
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
-      streamBodies: [(signal) => zombieStream(signal, 5, [sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        (signal) =>
+          zombieStream(signal, 5, [sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [{ inflight: true, turn_id: "t1" }],
     });
 
@@ -1346,7 +1404,9 @@ describe("checkStreamLiveness — the turn is still generating", () => {
     const probesAfterAttach = h.inflightProbes;
 
     // Not forced: this is a watchdog tick, and the socket just delivered.
-    await expect(result.current.checkStreamLiveness(CONV)).resolves.toBe("healthy");
+    await expect(result.current.checkStreamLiveness(CONV)).resolves.toBe(
+      "healthy",
+    );
     expect(h.inflightProbes).toBe(probesAfterAttach);
 
     h.deps.abortControllersRef.current.get(CONV)?.abort();
@@ -1474,7 +1534,10 @@ describe("checkStreamLiveness — silence during a quiet stretch", () => {
       initial: midTurnTranscript(),
       persisted: unansweredHistory(),
       heartbeatMs: HEARTBEAT,
-      streamBodies: [(signal) => zombieStream(signal, 5, [sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        (signal) =>
+          zombieStream(signal, 5, [sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [
         { inflight: true, turn_id: "t1" },
         { inflight: true, turn_id: "t1", last_event_id: 1 },
@@ -1504,7 +1567,10 @@ describe("checkStreamLiveness — silence during a quiet stretch", () => {
       // The operator turned keepalives off: there is no cadence to miss, so
       // assuming one would eventually kill every healthy stream.
       heartbeatMs: 0,
-      streamBodies: [(signal) => zombieStream(signal, 5, [sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        (signal) =>
+          zombieStream(signal, 5, [sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
       inflight: [
         { inflight: true, turn_id: "t1" },
         { inflight: true, turn_id: "t1", last_event_id: 1 },
@@ -1569,7 +1635,9 @@ describe("sweepStreamLiveness", () => {
       inflight: [{ inflight: false }],
     });
     h.deps.attachedConvIdsRef.current.add(CONV);
-    const spy = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const spy = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue("hidden");
 
     const { result } = renderHook(() => useTurnStream(h.deps));
     await result.current.sweepStreamLiveness({ force: true });
@@ -1598,7 +1666,9 @@ describe("sweepStreamLiveness", () => {
     });
 
     const { result } = renderHook(() => useTurnStream(h.deps));
-    await expect(result.current.sweepStreamLiveness({ force: true })).resolves.toBeUndefined();
+    await expect(
+      result.current.sweepStreamLiveness({ force: true }),
+    ).resolves.toBeUndefined();
     expect(h.loadConversationCalls).toEqual([OTHER]);
   });
 });
@@ -1653,7 +1723,10 @@ describe("chasing a successor is owned, gated and cancellable", () => {
       // The chain's tick sees a successor; by the time the chase asks, that
       // successor has finished and its retained buffer has expired, so there
       // is nothing live and nothing to attach to — ever.
-      inflight: [{ inflight: true, turn_id: "t-successor" }, { inflight: false }],
+      inflight: [
+        { inflight: true, turn_id: "t-successor" },
+        { inflight: false },
+      ],
     });
 
     const { result } = renderHook(() => useTurnStream(h.deps));
@@ -1811,5 +1884,65 @@ describe("ownership holds through a chase and across nudged ticks", () => {
     await vi.advanceTimersByTimeAsync(1100);
     await vi.advanceTimersByTimeAsync(20);
     expect(h.attachCount()).toBe(attachesBefore + 1);
+  }, 20000);
+});
+
+// Codex round 12 on #1584: Stop has to settle whatever the chain was holding,
+// whichever shape it is, and the queue follower must not attach over it.
+describe("a confirmed Stop settles every shape recovery was holding", () => {
+  it("marks a replay-gap slot cancelled, although it already reads as done", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: answeredHistory(),
+      streamBodies: [
+        // Terminal event after a gap, no answer: the slot lands `done` and
+        // empty, so a state test would skip it and leave a blank bubble.
+        () =>
+          truncatedStream([
+            sse(1, "reconnect", { type: "resumed", missed_events: 4 }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }, { inflight: false }],
+      persistedRejectAt: [0], // the gap settle cannot reach Postgres
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).content).toBe("");
+
+    result.current.cancelRecovery(CONV);
+    expect(lastOf(h).cancelled).toBe(true);
+    expect(h.streaming.has(CONV)).toBe(false);
+  }, 20000);
+
+  it("settles the slot a chase had already attached", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: answeredHistory(),
+      streamBodies: [
+        () => severedStream([]), // ours
+        () => severedStream([sse(1, "text.delta", { text: "partial" })]), // the successor's
+      ],
+      inflightRejectAt: [0],
+      inflight: [{ inflight: true, turn_id: "t-successor" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(lastOf(h).state).toBe("streaming");
+
+    result.current.cancelRecovery(CONV);
+    // The reattach created that slot and its finalizer deferred to the chase,
+    // so nothing else would ever settle it.
+    expect(lastOf(h).cancelled).toBe(true);
+    expect(lastOf(h).state).toBe("done");
+    expect(h.streaming.has(CONV)).toBe(false);
   }, 20000);
 });
