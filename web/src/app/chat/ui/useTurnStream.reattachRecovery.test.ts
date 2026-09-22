@@ -865,6 +865,50 @@ describe("the recovery chain hands the conversation back", () => {
   }, 20000);
 });
 
+// A chain must recover the turn it was armed for. Before this, a fresh
+// submission left the PREVIOUS turn's id in place until turn.started arrived,
+// so a socket that died in that window armed the chain with the wrong
+// identity — and the chain then treated the genuinely live turn as a newer
+// one, reconciled an unpersisted answer and failed a running slot (#1584).
+describe("a fresh turn does not inherit the previous turn's identity", () => {
+  it("recovers the live turn instead of mistaking it for a newer one", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      // Nothing persisted: the turn is still running, so a premature
+      // reconcile has nothing to adopt and would stamp the slot failed.
+      persisted: unansweredHistory(),
+      streamBodies: [
+        // Dies before turn.started: no identity was ever learned for it.
+        () => severedStream([]),
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "the answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflightRejectAt: [0], // the catch's probe: radio off, chain armed
+      inflight: [{ inflight: true, turn_id: "t-live" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    // Seed the ref as a previous turn on this conversation would have.
+    h.deps.currentTurnIdByConvRef.current.set(CONV, "t-previous");
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).failed).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    // With the stale id the chain would have called t-live "a different turn",
+    // reconciled nothing, and failed the slot.
+    expect(h.loadConversationCalls).toEqual([]);
+    expect(lastOf(h).content).toBe("the answer");
+    expect(lastOf(h).state).toBe("done");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+});
+
 describe("settling a slot that is waiting on the user", () => {
   it("does not stamp 'Turn failed' over a pending approval card", async () => {
     const h = makeHarness({

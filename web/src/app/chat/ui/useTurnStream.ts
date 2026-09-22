@@ -1564,7 +1564,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     try {
       const inflightUrl = conversationApiUrl(convId, "/inflight");
       if (!inflightUrl) return false;
-      const probe = await fetch(inflightUrl, { cache: "no-store" });
+      // Bounded like every other recovery request: a recovery tick awaits this
+      // call, and a blackholed connection here would hang the tick that has
+      // already dropped its timer — stopping the chain for good.
+      const probe = await fetch(inflightUrl, {
+        cache: "no-store",
+        signal: recoveryRequestSignal(),
+      });
       if (!probe.ok) return false;
       const info = (await probe.json()) as {
         inflight?: boolean;
@@ -2149,6 +2155,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // later (in turn.started) and the boundary-detection logic in
     // pumpStreamResponse keeps currentTurnIdByConvRef in sync.
     lastEventIdByConvRef.current.set(target, 0);
+    // Drop the PREVIOUS turn's id with it. Until turn.started lands this
+    // conversation has no known turn, and saying otherwise is worse than
+    // saying nothing: if this socket dies first, the recovery chain would
+    // arm with the old id, then read the live turn that /inflight reports as
+    // "a different, newer turn", reconcile an answer that has not been
+    // persisted, and stamp the running slot failed (#1584).
+    currentTurnIdByConvRef.current.delete(target);
 
     // Thread mutable per-turn state through the shared pump. The
     // "conversation" SSE event may rename target from PENDING_CONV_KEY
