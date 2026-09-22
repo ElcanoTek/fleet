@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
 import { chatServerFetch } from "@/app/lib/chatServer";
+import { sseProxyHeaders } from "@/app/lib/sseHeaders";
 
 export const runtime = "nodejs";
 
@@ -61,13 +62,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
     return new NextResponse(text, { status: upstream.status });
   }
 
+  // Shared with the /api/chat proxy so a header chat-server adds cannot reach
+  // one stream route and silently miss the other — see ./lib/sseHeaders.
   return new Response(upstream.body, {
     status: 200,
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
+    headers: sseProxyHeaders(upstream),
   });
 }

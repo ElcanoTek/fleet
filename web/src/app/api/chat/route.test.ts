@@ -76,6 +76,34 @@ describe("POST /api/chat", () => {
     expect(res.headers.get("X-Fleet-Conversation-Id")).toBeNull();
   });
 
+  // The heartbeat cadence had the same bug as the conversation id and went
+  // unnoticed far longer, because dropping it fails SILENTLY: the client reads
+  // absent as 0, which means "keepalives are off, silence proves nothing", and
+  // checkStreamLiveness's missed-keepalive branch is disabled rather than
+  // wrong. Every Next-proxied deployment ran the watchdog in its no-cadence
+  // fallback while looking healthy.
+  it("forwards the advertised heartbeat cadence", async () => {
+    chatServerFetchMock.mockResolvedValue(
+      sseResponse({ "X-Fleet-Heartbeat-Interval-Ms": "15000" }),
+    );
+
+    const res = await POST(chatRequest());
+
+    expect(res.headers.get("X-Fleet-Heartbeat-Interval-Ms")).toBe("15000");
+  });
+
+  // 0 means "keepalives are disabled", which is a real cadence the operator
+  // can configure — it must reach the client as 0, not be dropped as falsy.
+  it("forwards a heartbeat cadence of 0 rather than dropping it", async () => {
+    chatServerFetchMock.mockResolvedValue(
+      sseResponse({ "X-Fleet-Heartbeat-Interval-Ms": "0" }),
+    );
+
+    const res = await POST(chatRequest());
+
+    expect(res.headers.get("X-Fleet-Heartbeat-Interval-Ms")).toBe("0");
+  });
+
   it("forwards the request body verbatim, submission id included", async () => {
     chatServerFetchMock.mockResolvedValue(sseResponse({}));
 
