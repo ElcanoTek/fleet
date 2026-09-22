@@ -562,10 +562,8 @@ return is caught in the 2.5s grace window alone. Both replace the five-minute
   whose response headers never arrive at all still leaves a brand-new
   conversation unreachable from the client: there is no id, and
   `accepted.value` is false, so nothing is attributed to the submission and
-  the slot settles. The conversation and its answer are in the database and
-  appear on the next load. Closing that residue needs a lookup keyed by
-  `submission_id`, which is a new endpoint rather than a header, and is
-  deliberately not built here.
+  the slot settles. That case degrades rather than breaks: the conversation and
+  its answer are written to the database and appear on the next load.
 - **Both identities are process-local.** `/inflight` and its `submission_id`
   read the same in-memory registry the retain window lives in, so they answer
   for the process that ran the turn — the same locality `/inflight` always
@@ -576,21 +574,22 @@ return is caught in the 2.5s grace window alone. Both replace the five-minute
   that particular turn before settling it: see
   [`TURN-OUTCOME.md`](TURN-OUTCOME.md) (#1593).
 
-- **Recovery state is per tab, deliberately (#1595).** Two tabs open on the
-  same conversation run two independent chains: both probe, both may reattach,
-  both may adopt the canonical transcript. That is not a correctness problem —
-  every path is idempotent and the server is the single source of truth — and
-  electing one tab to recover on the others' behalf was considered and **not**
-  built. A chain is not only a stream of requests; it is how *that tab's*
-  transcript gets its content, so a follower that stands down shows a frozen
-  spinner until the leader hands it an outcome, trading duplicate requests for
-  a tab that is visibly wrong. Making the hand-off sound then needs more than a
-  lock: a leader killed mid-recovery has to be detected and its work redone, in
-  exactly the case where the duplicate requests were supposed to be saved. A
-  `localStorage` lease has no atomic compare-and-set and is racy by
-  construction, and `navigator.locks` — which is sound, and frees on tab death —
-  is secure-context-only, so any fallback puts the race back. The duplicate
-  volume is also small and now smaller: the ladder above cuts a long outage's
-  cost per tab by roughly an order of magnitude. If the duplication ever does
-  matter, the sound fix is server-side — one shared push channel per
-  conversation, multiplexed by the server — not a client-side election.
+- **Recovery state is per tab, and stays that way.** Two tabs open on the same
+  conversation run two independent chains: both probe, both may reattach, both
+  may adopt the canonical transcript. That is not a correctness problem — every
+  path is idempotent and the server is the single source of truth — it is
+  duplicate requests and a busy indicator that can briefly disagree between
+  tabs. Electing one tab to recover on the others' behalf was evaluated and
+  rejected (#1595, closed as won't-fix), for three reasons worth keeping here
+  because they also rule out the obvious variants. A chain is not only a stream
+  of requests; it is how *that tab's* transcript gets its content, so a follower
+  that stands down shows a frozen spinner until the leader hands it an outcome —
+  trading duplicate requests for a tab that is visibly wrong. Making the hand-off
+  sound needs more than a lock: a leader killed mid-recovery has to be detected
+  and its work redone, in exactly the case where the duplicate requests were
+  supposed to be saved. And the primitives do not cooperate — a `localStorage`
+  lease has no atomic compare-and-set and is racy by construction, while
+  `navigator.locks`, which is sound and frees on tab death, is
+  secure-context-only, so any fallback puts the race back. The duplicate volume
+  is also small and got smaller: the ladder above cuts a long outage's cost per
+  tab by roughly an order of magnitude.

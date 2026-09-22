@@ -221,7 +221,7 @@ type officialPoolAllowlist struct {
 // quantization "unknown", which fp8AndAbove excludes, so a floor would make both
 // slugs unroutable. The residue is therefore an assumption, not a guarantee:
 // these named vendors and their official resellers keep serving official
-// weights. Closing it needs endpoint-level monitoring; see
+// weights, and nothing re-reads endpoint attributes to check it. See
 // docs/UPSTREAM-ROUTING-FLOOR.md.
 //
 // Every name below must be OpenRouter's own routing name for the endpoint —

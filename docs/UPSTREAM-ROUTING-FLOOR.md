@@ -95,9 +95,9 @@ slugs because every endpoint in both pools reports quantization `unknown`, which
 remains is therefore an assumption, stated plainly rather than implied away: an
 allow-listed vendor or its official cloud resellers keep serving the vendor's
 official weights. The exemption is trust in *those named parties*, enforced
-against everyone else. Narrowing it further needs endpoint-level monitoring —
-a scheduled job that diffs each pool's endpoints AND their quantizations against
-the recorded snapshot — which is the follow-on named at the end of this note.
+against everyone else. Nothing re-reads endpoint attributes at runtime or in
+CI, so that assumption is not machine-checked — it is carried by the recorded
+snapshot and the date beside it.
 
 **What `only` costs in availability — the check the issue asked for.** Both
 pools were re-read from `GET /api/v1/models/{slug}/endpoints` on 2026-09-22:
@@ -174,14 +174,12 @@ of it was served elsewhere.
   precision means looking that endpoint up in OpenRouter's catalog.
 - **This is diagnosis, not enforcement.** `ServedFallback` is recorded and
   logged. Nothing refuses a run, retries on a different route, or surfaces the
-  flag in the chat UI or the task page. Wiring it to an Observer/metric and
-  showing it next to the cost chip is a follow-on.
+  flag in the chat UI or the task page.
 - **The allow-list is a snapshot of membership, checked by hand.** Nothing
   re-reads OpenRouter's endpoint list at runtime or in CI, so a reseller *added*
   to a pool needs the same manual check and a code change before requests may
   reach it. That is the intended direction of the failure: the pool cannot grow
-  silently, only shrink. Automating the re-read (a scheduled job that diffs the
-  live pool against `officialPoolSlugs`) is a follow-on.
+  silently, only shrink.
 - **Only the DeepSeek family gets a floor.** It is the one family documented to
   mix precisions across its pool. Other soft-pinned families
   (`anthropic/`, `openai/`, `moonshotai/`, `z-ai/`) were left untouched rather
