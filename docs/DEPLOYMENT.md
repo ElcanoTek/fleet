@@ -139,8 +139,9 @@ webhooks ───TLS──▶ Caddy ──▶ /webhooks/* ──▶ chat :8080
 ```
 
 **One-liner.** On a fresh Fedora box, this does steps 1–3 below (installs git,
-clones `main` into `/opt/fleet/src`, runs `bootstrap.sh` — interactively on a
-terminal, or with whatever flags you pass after `-s --`):
+clones `main` into `/opt/fleet/src`, runs `bootstrap.sh` — interactively with no
+flags on a terminal, or unattended with whatever flags you pass after `-s --`;
+`--dry-run` changes nothing). Design note: [`INSTALLER.md`](INSTALLER.md).
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash
@@ -150,7 +151,12 @@ curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | s
 ```
 
 Re-running it fast-forwards a clean `main` checkout and re-runs the idempotent
-bootstrap. For a private config bundle, cache git credentials first (step 1).
+bootstrap. For a private config bundle, the clone runs as **root**, so cache the
+credential for root, not your user: `sudo git config --global credential.helper store`,
+then `sudo git clone <bundle-url> /tmp/probe && sudo rm -rf /tmp/probe` once (or put a
+token in the `--client-config` URL). In automation, download the script to a file
+and run it (`curl -fsSLo /tmp/fleet-install.sh … && sudo bash /tmp/fleet-install.sh …`)
+so a failed download fails the step instead of piping nothing into `bash`.
 
 On a bare Fedora/RHEL box this is **four steps** — the bootstrap script installs
 the toolchain (Go, Node, podman, python3), provisions Postgres, builds + installs
