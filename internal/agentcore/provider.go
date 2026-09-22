@@ -152,11 +152,17 @@ var canonicalUpstream = []struct {
 }{
 	// Google serves this family alone, so the pin is STRICT (Only, no
 	// fallbacks) and needs no serving-precision floor — there is no second
-	// upstream to degrade onto. This family carries the recommended everyday
-	// default (DefaultCoreModel), so this is the hot path for ordinary chat
-	// turns and every scheduled run.
+	// upstream to degrade onto.
 	{"google/", upstreamProviderGoogle, true, nil},
+	// The strong tier (DefaultMaxModel, Claude Opus 5) lives here: a soft pin
+	// to Anthropic's own endpoint with graceful degradation onto the cloud
+	// resellers of the same weights. The default-pin guard's exemption for that
+	// slug is recorded per SLUG in officialPoolSlugs, not here.
 	{"anthropic/", upstreamProviderAnthropic, false, nil},
+	// This family carries the recommended everyday default (DefaultCoreModel,
+	// GPT-5.6 Luna Pro), so this is the hot path for ordinary chat turns and
+	// every scheduled run. Soft pin: OpenAI first, Azure and Amazon Bedrock as
+	// fallbacks. No floor: see officialPoolSlugs for the per-slug evidence.
 	{"openai/", upstreamProviderOpenAI, false, nil},
 	{"moonshotai/", upstreamProviderMoonshot, false, nil},
 	{"z-ai/", upstreamProviderZAI, false, nil},
@@ -174,6 +180,29 @@ var canonicalUpstream = []struct {
 	// the everyday default, but the pin and the floor stay: operators still
 	// select these slugs explicitly, and they are the reason it is safe to.
 	{"deepseek/", upstreamProviderDeepSeek, false, fp8AndAbove},
+}
+
+// officialPoolSlugs lists the exact slugs whose ENTIRE OpenRouter endpoint
+// pool was checked and found to serve the vendor's official weights (the
+// vendor plus its cloud resellers, quantization unspecified on every
+// endpoint), so their soft pin needs no serving-precision floor: there is no
+// third-party quantized serving to degrade onto. This is the third way a
+// default-tier slug may satisfy
+// TestDefaultCoreModelCannotBeServedAtArbitraryPrecision — per slug, never per
+// family, because a future model in the same family can be picked up by
+// third-party hosts. Add a slug only with the endpoint list in hand.
+var officialPoolSlugs = map[string]string{
+	// 2026-09-21: OpenAI ×3, Azure ×3, Amazon Bedrock ×1.
+	"openai/gpt-5.6-luna-pro": "OpenAI, Azure, Amazon Bedrock",
+	// 2026-09-21: Anthropic, Claude Platform on AWS, Amazon Bedrock ×2, Azure, Google.
+	"anthropic/claude-opus-5": "Anthropic, AWS, Amazon Bedrock, Azure, Google",
+}
+
+// pinServesOfficialWeightsOnly reports whether the exact slug (alias marker
+// stripped) is listed in officialPoolSlugs.
+func pinServesOfficialWeightsOnly(modelSlug string) bool {
+	_, ok := officialPoolSlugs[strings.TrimPrefix(modelSlug, "~")]
+	return ok
 }
 
 // upstreamPinFor returns the OpenRouter provider routing policy for a model

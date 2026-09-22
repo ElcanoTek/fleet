@@ -265,6 +265,14 @@ func defaultModelTier(envValue, builtin string) string {
 	return builtin
 }
 
+// seedModelTiersFromConfig pushes the env-derived tier slugs into the agentcore
+// holders. The setters treat "" as "revert to the compiled-in constant", so an
+// unset env var cannot blank a tier.
+func seedModelTiersFromConfig(cfg *config.Config) {
+	agentcore.SetDefaultModel(cfg.DefaultModel)
+	agentcore.SetAdvancedModel(cfg.AdvancedModel)
+}
+
 // applyModelTier adapts an agentcore model-tier setter to an ApplyFunc. Like
 // the config bool setters, the holder doesn't re-read the env after boot, so
 // applying the default and applying an override are the same operation.
@@ -376,6 +384,15 @@ func applyEnvShadowedInt(set func(int), clearSentinel int) settings.ApplyFunc {
 // default or hook — a programming error, also caught by
 // TestBuildWorkspaceSettingsCoversRegistry) degrades the same way.
 func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st *store.Store) []httpapi.Option {
+	// Seed the live tier holders from the env-derived config FIRST, so the
+	// operator's FLEET_DEFAULT_MODEL / FLEET_ADVANCED_MODEL are in effect even
+	// when the settings service cannot be built or its boot load fails below
+	// (those paths return early and never run the apply hooks). Everything
+	// that reads the holders — /client-config, the lockdown allow-list default
+	// (config.LockdownModels), the escalation target — would otherwise sit on
+	// the compiled-in pair while the config said something else. The hooks
+	// then override with any admin setting exactly as before.
+	seedModelTiersFromConfig(cfg)
 	svc, guard, err := buildWorkspaceSettings(cfg, st)
 	if err != nil {
 		log.Printf("workspace settings: DISABLED — service construction failed (this is a wiring bug): %v", err)

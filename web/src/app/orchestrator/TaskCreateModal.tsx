@@ -14,6 +14,11 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
+import {
+  currentDefaultModel,
+  currentTaskFallbackModel,
+} from "@/app/lib/modelAliases";
+import { useClientConfig } from "@/app/lib/useClientConfig";
 import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
 import { FileUpload, type FileUploadHandle, type FileEntry } from "@/app/shared/ui/FileUpload";
 import { CostForecastPanel } from "./CostForecastPanel";
@@ -54,8 +59,14 @@ const PROMPT_AUTOGROW_MAX_PX = 240;
 // protocol prompts wants the tall pane every time, not once per modal.
 const PROMPT_EXPANDED_STORAGE_KEY = "fleet-task-prompt-expanded";
 
-const DEFAULT_PRIMARY_MODEL = "google/gemini-3.8-flash";
-const DEFAULT_FALLBACK_MODEL = "openai/gpt-5.6-sol";
+// The form's pre-filled model pair is LIVE, not compiled in: the primary is the
+// workspace default tier (an admin override in Settings → Model tiers reaches a
+// new task exactly as it reaches a new chat) and the fallback is the operator's
+// scheduler fallback when one is set. Both arrive with /api/client-config, which
+// the Operations Center shell fetches on mount; before it lands the compiled-in
+// pair (modelAliases.ts) stands in.
+const defaultPrimaryModel = () => currentDefaultModel();
+const defaultFallbackModel = () => currentTaskFallbackModel();
 
 const SCHEDULE_PRESETS = [
   { label: "Weekdays 9am", cron: "0 9 * * 1-5" },
@@ -211,8 +222,8 @@ function taskToFormValues(task: Task | null) {
     simpleFrequency: parsed?.frequency ?? ("weekdays" as SimpleFrequency),
     simpleTime: parsed?.time ?? "09:00",
     simpleWeekdays: parsed?.weekdays ?? ["1"],
-    model: task?.model || DEFAULT_PRIMARY_MODEL,
-    fallbackModel: task?.fallback_model || DEFAULT_FALLBACK_MODEL,
+    model: task?.model || defaultPrimaryModel(),
+    fallbackModel: task?.fallback_model || defaultFallbackModel(),
     maxIterations:
       typeof task?.max_iterations === "number" ? String(task.max_iterations) : "",
     maxCostUSD: typeof task?.max_cost_usd === "number" ? String(task.max_cost_usd) : "",
@@ -390,6 +401,32 @@ export function TaskCreateModal({
 
   const [model, setModel] = useState(init.model);
   const [fallbackModel, setFallbackModel] = useState(init.fallbackModel);
+  // The modal mounts (closed) with the Operations Center page, usually before
+  // /api/client-config has resolved, so `init` captured the compiled-in pair.
+  // When the live pair lands, adopt it into a form the user has not touched:
+  // a create form still on the compiled-in slugs. An edited/cloned task pins
+  // its own pair; a slug the user picked stays because the values differ.
+  // Deferred to a microtask, mirroring the chat shell, so the adoption lands
+  // outside the effect's synchronous phase.
+  // "Touched" is explicit state, not a comparison against the compiled-in
+  // constants: the module cache may already hold an OLDER admin slug from a
+  // previous mount, and a comparison against the constants would leave a
+  // pristine form on that stale value when the refresh brings a newer one.
+  const modelTouched = useRef(false);
+  const fallbackTouched = useRef(false);
+  const { models: liveModelTiers } = useClientConfig();
+  useEffect(() => {
+    if (!liveModelTiers || editTask) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (!modelTouched.current) setModel(currentDefaultModel());
+      if (!fallbackTouched.current) setFallbackModel(currentTaskFallbackModel());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [liveModelTiers, editTask]);
   const [maxIterations, setMaxIterations] = useState(init.maxIterations);
   const [maxCostUSD, setMaxCostUSD] = useState(init.maxCostUSD);
   const [captainsLog, setCaptainsLog] = useState(init.captainsLog);
@@ -520,8 +557,8 @@ export function TaskCreateModal({
     (mcpSelectionOverride !== null &&
       JSON.stringify(mcpSelectionOverride) !== JSON.stringify(defaultMcpSelection)) ||
     fileCount > 0 ||
-    model !== DEFAULT_PRIMARY_MODEL ||
-    fallbackModel !== DEFAULT_FALLBACK_MODEL ||
+    model !== defaultPrimaryModel() ||
+    fallbackModel !== defaultFallbackModel() ||
     maxIterations.trim() !== "" ||
     maxCostUSD.trim() !== "" ||
     expectedDuration.trim() !== "" ||
@@ -638,8 +675,10 @@ export function TaskCreateModal({
     setContextOpen(false);
     setToolsOpen(false);
     setAdvancedOpen(false);
-    setModel(DEFAULT_PRIMARY_MODEL);
-    setFallbackModel(DEFAULT_FALLBACK_MODEL);
+    setModel(defaultPrimaryModel());
+    setFallbackModel(defaultFallbackModel());
+    modelTouched.current = false;
+    fallbackTouched.current = false;
     setMaxIterations("");
     setMaxCostUSD("");
     setCaptainsLog(false);
@@ -732,8 +771,12 @@ export function TaskCreateModal({
     }
     setScheduleMode(t.recurrence ? "repeat" : "now");
     setScheduledDate("");
-    setModel(t.model ?? DEFAULT_PRIMARY_MODEL);
-    setFallbackModel(t.fallback_model ?? DEFAULT_FALLBACK_MODEL);
+    setModel(t.model ?? defaultPrimaryModel());
+    setFallbackModel(t.fallback_model ?? defaultFallbackModel());
+    // A template that pins a model is a deliberate choice the live pair must
+    // not overwrite; one that leaves it blank stays on the live default.
+    modelTouched.current = !!t.model;
+    fallbackTouched.current = !!t.fallback_model;
     setAllowNetwork(Boolean(t.allow_network));
     setAllowDelegation(t.allow_delegation !== false);
     setCarryContext(Boolean(t.carry_context));
@@ -870,8 +913,8 @@ export function TaskCreateModal({
   const contextCount = [description, tagsInput, persona].filter((v) => v.trim() !== "").length;
 
   const advancedCount = [
-    model !== DEFAULT_PRIMARY_MODEL,
-    fallbackModel !== DEFAULT_FALLBACK_MODEL,
+    model !== defaultPrimaryModel(),
+    fallbackModel !== defaultFallbackModel(),
     maxIterations.trim() !== "",
     maxCostUSD.trim() !== "",
     expectedDuration.trim() !== "",
@@ -2138,8 +2181,11 @@ export function TaskCreateModal({
                         <ModelPicker
                           id="taskModelInput"
                           value={model}
-                          onChange={setModel}
-                          placeholder="google/gemini-3.8-flash"
+                          onChange={(v) => {
+                            modelTouched.current = true;
+                            setModel(v);
+                          }}
+                          placeholder="openai/gpt-5.6-luna-pro"
                         />
                         {errors.model ? (
                           <div className="validation-error" data-testid="error-model">
@@ -2154,7 +2200,10 @@ export function TaskCreateModal({
                         <ModelPicker
                           id="taskFallbackModelInput"
                           value={fallbackModel}
-                          onChange={setFallbackModel}
+                          onChange={(v) => {
+                            fallbackTouched.current = true;
+                            setFallbackModel(v);
+                          }}
                           placeholder="moonshotai/kimi-k2.6"
                         />
                         {errors.fallback_model ? (

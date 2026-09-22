@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -477,6 +479,212 @@ func TestServerConfig_LockdownAvailability(t *testing.T) {
 				t.Errorf("LockdownAllowedModels non-empty = %v, want %v (got=%v)", gotNonNil, tc.wantAllowedNonNil, resp.LockdownAllowedModels)
 			}
 		})
+	}
+}
+
+// With no operator allow-list, /server-config advertises the LIVE model tiers
+// as the lockdown list — default first — so the lockdown picker leads with the
+// same model a regular chat starts on, and an admin tier override shows up in
+// lockdown on the next fetch without a restart.
+func TestServerConfig_LockdownListDefaultsToLiveTiers(t *testing.T) {
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel("")
+		agentcore.SetAdvancedModel("")
+	})
+	agentcore.SetDefaultModel("")
+	agentcore.SetAdvancedModel("")
+
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = nil
+
+	get := func() []string {
+		w := do(t, s.Routes(), http.MethodGet, "/server-config", nil, "alice@x.com")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status: %d body: %s", w.Code, w.Body.String())
+		}
+		var resp serverConfigResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return resp.LockdownAllowedModels
+	}
+	want := []string{agentcore.DefaultCoreModel, agentcore.DefaultMaxModel}
+	if got := get(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("lockdown_allowed_models = %v, want the compiled-in tiers %v", got, want)
+	}
+	agentcore.SetDefaultModel("acme/frontier-1")
+	want = []string{"acme/frontier-1", agentcore.DefaultMaxModel}
+	if got := get(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after an admin default override lockdown_allowed_models = %v, want %v", got, want)
+	}
+}
+
+// Compact is a user-visible action that used to be the one path where a
+// delisted lockdown model still 400ed: the web posts the conversation's stale
+// stored slug, and the summarize guard rejected it. Now that echo is run on
+// the lockdown default, so the request proceeds past the lockdown guard (here
+// to the handler's own "no history" 400) — WITHOUT persisting: the
+// conversation migrates when its next turn launches, which is also when the
+// client is told.
+func TestSummarize_LockdownDelistedModelRunsOnTheDefault(t *testing.T) {
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "generic", "a/b", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.LockdownAllowedModels = []string{"c/d"} // a/b delisted after creation
+
+	w := do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/summarize",
+		map[string]string{"model": "a/b"}, user)
+	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "not allowed in lockdown") {
+		t.Fatalf("summarize still rejects the stale echoed model: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "no history to summarize") {
+		t.Fatalf("expected to reach the handler's own no-history check, got %d %s", w.Code, w.Body.String())
+	}
+	got, err := s.store.Get(t.Context(), user, conv.ID)
+	if err != nil || got == nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.Model != "a/b" {
+		t.Fatalf("Compact must not persist the migration (the launching turn does, and tells the client): model=%q", got.Model)
+	}
+
+	// Any disallowed model is treated the same way: a lockdown picker offers
+	// only allowed models, so Compact substitutes the conversation's own
+	// rather than refusing an action the user can only escape by reloading.
+	w = do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/summarize",
+		map[string]string{"model": "evil/unvetted"}, user)
+	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "not allowed in lockdown") {
+		t.Fatalf("a disallowed model should be substituted, not refused: %s", w.Body.String())
+	}
+}
+
+// The migration persists the replacement and announces it on the `conversation`
+// event — but emitting an event is not proof the browser received it, and the
+// socket dying in that instant is the very situation the migration exists for.
+// The next submission then echoes a slug the allow-list refuses. On a lockdown
+// conversation that is a stale echo by construction (the picker only offers
+// allowed models), so it is ignored in favour of the stored model rather than
+// refused with a 400 the user can only escape by reloading. The rule is
+// stateless on purpose: it holds across a process restart, for a second tab,
+// and after any number of migrations.
+func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing.T) {
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "generic", "a/b", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.LockdownAllowedModels = []string{"c/d"} // a/b delisted
+
+	// The turn launches and migrates; assume the client never saw the event.
+	if err := s.reconcileLockdownModelCtx(t.Context(), user, conv); err != nil {
+		t.Fatalf("migration: %v", err)
+	}
+	if conv.Model != "c/d" {
+		t.Fatalf("migration did not run: %q", conv.Model)
+	}
+
+	reload := func() *store.Conversation {
+		got, gerr := s.store.Get(t.Context(), user, conv.ID)
+		if gerr != nil || got == nil {
+			t.Fatalf("reload: %v", gerr)
+		}
+		return got
+	}
+
+	// The stale echo: accepted, and it does not drag the conversation back.
+	fresh := reload()
+	w := httptest.NewRecorder()
+	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
+		t.Fatalf("the pre-migration echo must be accepted, got %d %s", w.Code, w.Body.String())
+	}
+	if fresh.Model != "c/d" {
+		t.Fatalf("the echo must not change the stored model, got %q", fresh.Model)
+	}
+
+	// Any other disallowed slug is treated the same way — it cannot be run,
+	// and the conversation has a perfectly good allowed model to proceed on.
+	fresh = reload()
+	w = httptest.NewRecorder()
+	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "evil/unvetted") {
+		t.Fatalf("a disallowed slug must be ignored, not refused: %d %s", w.Code, w.Body.String())
+	}
+	if fresh.Model != "c/d" {
+		t.Fatalf("the ignored slug must not be stored, got %q", fresh.Model)
+	}
+
+	// Only when the STORED model is disallowed too is there nothing safe to
+	// run, and the caller has to choose.
+	stranded := reload()
+	stranded.Model = "a/b"
+	w = httptest.NewRecorder()
+	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, stranded, "evil/unvetted") {
+		t.Fatalf("with no allowed stored model the request must be refused")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+
+	// Once the operator puts that slug back on the allow-list it stops being
+	// an echo: it is an ordinary selection and must be honoured.
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	fresh = reload()
+	w = httptest.NewRecorder()
+	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
+		t.Fatalf("a re-allowed model must be accepted: %d %s", w.Code, w.Body.String())
+	}
+	if got := reload(); got.Model != "a/b" {
+		t.Fatalf("a re-allowed model must actually be selected, stored=%q", got.Model)
+	}
+
+	// A fresh Server — as after a process restart — behaves identically,
+	// because nothing about this is remembered. (Last: its fixture resets the
+	// database the assertions above rely on.)
+	restarted := serverFixture(t)
+	restarted.cfg.SandboxImage = "ghcr.io/x/y:1"
+	restarted.cfg.LockdownAllowedModels = []string{"c/d"}
+	afterRestart := &store.Conversation{ID: conv.ID, UserEmail: user, Model: "c/d", Lockdown: true}
+	w = httptest.NewRecorder()
+	if !restarted.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, afterRestart, "a/b") {
+		t.Fatalf("a restarted server must still ignore the stale echo: %d %s", w.Code, w.Body.String())
+	}
+	if afterRestart.Model != "c/d" {
+		t.Fatalf("the restarted server must keep the stored model, got %q", afterRestart.Model)
+	}
+}
+
+// Compact posts the client's selected model. After a migration the client
+// never saw, that slug differs from the stored model, so the pre-migration
+// equality test could not recognise it and Compact 400ed.
+func TestSummarize_LockdownStaleEchoAfterMigration(t *testing.T) {
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "generic", "a/b", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.LockdownAllowedModels = []string{"c/d"}
+	if err := s.reconcileLockdownModelCtx(t.Context(), user, conv); err != nil {
+		t.Fatalf("migration: %v", err)
+	}
+
+	w := do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/summarize",
+		map[string]string{"model": "a/b"}, user)
+	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "not allowed in lockdown") {
+		t.Fatalf("Compact must recognise the post-migration echo: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "no history to summarize") {
+		t.Fatalf("expected the handler's own no-history check, got %d %s", w.Code, w.Body.String())
 	}
 }
 

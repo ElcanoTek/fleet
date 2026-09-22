@@ -209,7 +209,10 @@ and pick the one that fits the job. Models your deployment marks **recommended**
 sit at the top of the list. Typically the first is fast and inexpensive — the one
 new conversations start on, and the right choice for pulls, checks, and
 formatting — and the second is stronger, for judgment calls, retrospectives, and
-anything where depth matters more than speed. The rest of the list is marked by
+anything where depth matters more than speed. By default those two are
+**GPT-5.6 Luna Pro** (new conversations start on it) and **Claude Opus 5** (the
+model a "switch to a stronger model" suggestion offers); your admin can point
+either slot at a different model. The rest of the list is marked by
 status (**tested**, **new**, or **experimental**), and a model whose pricing the
 deployment knows shows its cost band, so you can see what you are about to
 spend. No band means the price is unknown rather than zero — worth asking about
@@ -221,7 +224,16 @@ named provider. Recommended and public-catalog choices that the workspace cannot
 route are hidden once provider information loads. A saved conversation or default
 that is no longer available stays visible with an explanation: use **Choose a
 model**, pick an available workspace model, then retry. Fleet does not silently
-switch an existing conversation to another provider. Admins can fix the provider
+switch an existing conversation to another provider, with one exception: a
+**lockdown** conversation may only run on the models your admin allows for
+lockdown (by default the workspace's default and stronger models), so if that
+list changes under it, its next turn runs on the lockdown default and the
+conversation keeps that model from then on. The model picker shows the switch
+when the turn starts. That switch needs a specific model to move to: if your
+admin has written the lockdown list entirely as patterns rather than named
+models, there is nothing to switch to and the conversation keeps refusing —
+start a new lockdown chat and tell your admin the list needs a named model
+first. Admins can fix the provider
 configuration under **Settings → Admin → Model providers**, and set the default
 and stronger model under **Settings → Admin → Features → Model tiers**.
 If a direct provider takes precedence over OpenRouter, available OpenRouter

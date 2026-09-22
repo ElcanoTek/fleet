@@ -102,6 +102,29 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		http.Error(w, "model required (no body field, conversation has no stored slug)", http.StatusBadRequest)
 		return
 	}
+	// A lockdown conversation whose persisted model was delisted (the tiers or
+	// the allow-list moved under it): run the summary on the lockdown default
+	// instead of 400ing until the user sends a message. Deliberately NOT
+	// persisted here — the conversation migrates where its next turn launches
+	// (startTurn), whose `conversation` event tells the client the new model;
+	// persisting from Compact would leave the browser echoing a slug the
+	// server had already replaced. The web's echo of the stored slug is the
+	// only thing substituted; a genuinely different disallowed slug still 400s.
+	if conv.Lockdown && !s.cfg.LockdownAllows(model) {
+		// Same rule as a turn (applyTurnModelOverride): a disallowed slug on a
+		// lockdown conversation is a stale client echo, not a request. Compact
+		// on the conversation's stored model when that is allowed, otherwise
+		// on the lockdown default, rather than refusing an action the user can
+		// only escape by reloading.
+		switch {
+		case s.cfg.LockdownAllows(conv.Model):
+			model = conv.Model
+		default:
+			if next := lockdownDefaultSlug(s.cfg.LockdownModels()); next != "" {
+				model = next
+			}
+		}
+	}
 	if conv.Lockdown && !s.cfg.LockdownAllows(model) {
 		http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 		return

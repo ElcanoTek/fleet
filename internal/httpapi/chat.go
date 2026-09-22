@@ -129,6 +129,28 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		return true
 	}
 	if conv.Lockdown && !s.cfg.LockdownAllows(reqModel) {
+		// A lockdown conversation's picker only ever offers allow-listed
+		// models, so a disallowed slug arriving on one is a client echoing
+		// something the server itself told it before the list — or the tiers
+		// behind it — moved. It is not a request for that model, and it could
+		// not be honoured in any case. Ignore it and run the conversation's
+		// stored model, which is allowed; the `conversation` event carries the
+		// truth back, and the turn is not lost to a 400 the user can only
+		// escape by reloading.
+		//
+		// This replaced a per-conversation memo of the exact pre-migration
+		// slug. The memo could not survive a process restart, could not speak
+		// for a second tab, and lost the first hop when a conversation was
+		// migrated twice — three ways to strand a client, all of which this
+		// rule dissolves, because it needs no memory at all. The invariant is
+		// untouched: the model that RUNS is one the allow-list permits.
+		if s.cfg.LockdownAllows(conv.Model) {
+			log.Printf("lockdown: conversation %s ignored a disallowed model %q from the client and ran on its stored %q", logSafe(conv.ID), logSafe(reqModel), logSafe(conv.Model))
+			return true
+		}
+		// The stored model is disallowed too, so there is nothing safe to run
+		// and the caller must choose. (reconcileLockdownModelCtx migrates this
+		// conversation when its turn launches, which is the usual way out.)
 		http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 		return false
 	}
@@ -140,6 +162,56 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		conv.Model = reqModel
 	}
 	return true
+}
+
+// lockdownDefaultSlug picks the slug a delisted lockdown conversation is moved
+// to: the first LITERAL entry of the allow-list. A glob (`anthropic/*`) names a
+// family, not a model, so it is skipped rather than persisted as a model; an
+// operator list made only of globs yields "" and the conversation is left to
+// the guard.
+func lockdownDefaultSlug(allowed []string) string {
+	for _, slug := range allowed {
+		slug = strings.TrimSpace(slug)
+		if slug == "" || strings.ContainsAny(slug, "*?[") {
+			continue
+		}
+		return slug
+	}
+	return ""
+}
+
+// reconcileLockdownModelCtx moves a lockdown conversation whose PERSISTED model is
+// no longer on the allow-list onto the lockdown default — the first entry of
+// config.LockdownModels — and persists that choice. A conversation pins its
+// model at creation and the manager re-validates it on every turn, so without
+// this step every lockdown chat created before the allow-list changed (the
+// operator narrowed FLEET_LOCKDOWN_ALLOWED_MODELS, the shipped tier defaults
+// moved on an upgrade, or an admin overrode a tier in Settings) would fail each
+// turn with "model not allowed in lockdown mode" until the user found the
+// picker. This is a migration IN FRONT of the guard, not a bypass of it: the
+// manager still rejects whatever it is handed if it is not allow-listed, and
+// the explicit per-turn override in postChat still 400s on a disallowed slug.
+// A glob-only list (no literal slug to move to) is left to the guard; a list
+// that merely STARTS with a glob moves to its first literal slug.
+// reconcileLockdownModelCtx is the migration itself. It runs on the shared
+// launch path (startTurn), so a direct submission and a queue-drained
+// follow-up (#785) get the same treatment, and the `conversation` event the
+// launching turn emits carries the new model to the client. Idempotent — a
+// conversation already on an allowed model is untouched.
+func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, conv *store.Conversation) error {
+	if !conv.Lockdown || conv.Model == "" || s.cfg.LockdownAllows(conv.Model) {
+		return nil
+	}
+	next := lockdownDefaultSlug(s.cfg.LockdownModels())
+	if next == "" {
+		return nil
+	}
+	if err := s.store.SetModel(ctx, user, conv.ID, next); err != nil {
+		return err
+	}
+	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", logSafe(conv.ID), logSafe(conv.Model), logSafe(next)) //nolint:gosec // G706: logSafe strips CR/LF from the conversation id and both slugs.
+	conv.Model = next
+	return nil
 }
 
 func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +252,18 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		if conv == nil {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
+		}
+		// The web echoes the conversation's stored model on every turn. An echo
+		// is "no opinion" — it can never be an override — so it must not trip
+		// the lockdown guard when that stored model has since been delisted.
+		// The migration itself happens where the turn LAUNCHES (startTurn, the
+		// path shared by direct and queue-drained turns), whose `conversation`
+		// event then tells the client the new model. Doing it here would also
+		// run for a busy-path steer, which launches no turn and so would leave
+		// the browser holding a slug the server had already replaced. A
+		// genuinely different disallowed slug still 400s below.
+		if reqModel == conv.Model {
+			reqModel = ""
 		}
 		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) {
 			return
@@ -315,7 +399,6 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// submission on this conversation (possibly forever).
 		s.rekickDrainAfter(conv.ID, 3*time.Second)
 	}
-
 	// Load history before we even allocate a buffer — if this errors, the
 	// client never sees a partial SSE stream.
 	history, err := s.store.LoadHistory(reqCtx, conv.ID)
@@ -459,6 +542,19 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// the set the turn runs with — not only the creation-time request seed,
 	// which later turns never carry.
 	injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
+
+	// Lockdown model migration, at the last moment before the client can be
+	// TOLD about it: every fallible preparation above (history, memories,
+	// turn registration) has succeeded, and the `conversation` event below
+	// carries conv.Model to the browser, so a stored model that fell off the
+	// allow-list is replaced only on a turn that actually launches. Migrating
+	// earlier and then failing a preparation would leave the browser echoing
+	// a slug the server had already replaced — a transient 500 turned into
+	// 400s until reload. A failed write here is logged and the turn goes on
+	// with the stored model; the manager's own guard then decides.
+	if err := s.reconcileLockdownModelCtx(turnCtx, user, conv); err != nil {
+		log.Printf("lockdown: conversation %s: model migration write failed, running with the stored model: %v", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+	}
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The

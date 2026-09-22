@@ -6,6 +6,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
@@ -27,8 +28,9 @@ type personasResponse struct {
 //     configured).
 //   - LockdownOnly: lockdown is enforced for every chat — frontend
 //     hides the regular "+" button and always shows the badge.
-//   - LockdownAllowedModels: slug allow-list, used by the model picker
-//     filter.
+//   - LockdownAllowedModels: the effective slug allow-list (the operator's
+//     list, else the live model tiers — config.LockdownModels), used by the
+//     model picker filter; its first entry is the lockdown default.
 type serverConfigResponse struct {
 	LockdownAvailable     bool     `json:"lockdown_available"`
 	LockdownOnly          bool     `json:"lockdown_only"`
@@ -50,7 +52,7 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 		UploadMaxBytes:    s.cfg.UploadMaxBytes,
 	}
 	if resp.LockdownAvailable {
-		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownAllowedModels...)
+		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownModels()...)
 	}
 	writeJSON(w, resp)
 }
@@ -74,6 +76,13 @@ type clientConfigResponse struct {
 type clientConfigModels struct {
 	DefaultModel  string `json:"default_model"`
 	AdvancedModel string `json:"advanced_model"`
+	// TaskFallbackModel is the scheduler's fallback model (FLEET_TASK_FALLBACK_MODEL)
+	// when the operator set one, so the Operations Center's create form
+	// pre-fills the same fallback an unpinned scheduled task would get. Omitted
+	// when unset; the web then keeps its compiled-in fallback. The form's
+	// pre-filled PRIMARY is DefaultModel — the live admin tier — so an admin
+	// override reaches new tasks the same way it reaches new chats.
+	TaskFallbackModel string `json:"task_fallback_model,omitempty"`
 }
 
 type clientConfigBranding struct {
@@ -126,6 +135,9 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 			DefaultModel:  agentcore.CurrentDefaultModel(),
 			AdvancedModel: agentcore.CurrentAdvancedModel(),
 		},
+	}
+	if s.cfg != nil {
+		resp.Models.TaskFallbackModel = strings.TrimSpace(s.cfg.TaskFallbackModel)
 	}
 	if s.clientConfig != nil {
 		b := s.clientConfig

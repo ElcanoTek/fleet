@@ -157,7 +157,7 @@ describe("loadModels (fetch + fallback)", () => {
       }),
     );
     const models = await loadModels();
-    expect(models.some((m) => m.id === "google/gemini-3.8-flash")).toBe(true);
+    expect(models.some((m) => m.id === "openai/gpt-5.6-luna-pro")).toBe(true);
     expect(models.some((m) => m.id === "deepseek/deepseek-v3.2")).toBe(true);
   });
 
@@ -174,8 +174,8 @@ describe("loadModels (fetch + fallback)", () => {
             json: async () => ({
               models: [
                 {
-                  slug: "google/gemini-3.8-flash",
-                  name: "Google: Gemini 3.8 Flash",
+                  slug: "openai/gpt-5.6-luna-pro",
+                  name: "OpenAI: GPT-5.6 Luna Pro",
                   price_prompt: 0.0000004,
                   price_completion: 0.0000016,
                   context_length: 200000,
@@ -188,17 +188,17 @@ describe("loadModels (fetch + fallback)", () => {
       }),
     );
     const models = await loadModels();
-    const seeded = models.find((m) => m.id === "google/gemini-3.8-flash");
+    const seeded = models.find((m) => m.id === "openai/gpt-5.6-luna-pro");
     expect(seeded).toMatchObject({
       // Seed facts win: the curated name and the recommended flag survive.
-      name: "Google: Gemini 3.8 Flash",
+      name: "OpenAI: GPT-5.6 Luna Pro",
       recommended: true,
       pricePrompt: 0.0000004,
       priceCompletion: 0.0000016,
       contextLength: 200000,
     });
     // And the row is not duplicated by the catalog entry.
-    expect(models.filter((m) => m.id === "google/gemini-3.8-flash")).toHaveLength(1);
+    expect(models.filter((m) => m.id === "openai/gpt-5.6-luna-pro")).toHaveLength(1);
   });
 
   it("falls back to the seed list when the fetch fails", async () => {
@@ -229,7 +229,7 @@ describe("loadModels (fetch + fallback)", () => {
       workspace: true,
     });
     // The catalog/seed entries still follow.
-    expect(models.some((m) => m.id === "google/gemini-3.8-flash")).toBe(true);
+    expect(models.some((m) => m.id === "openai/gpt-5.6-luna-pro")).toBe(true);
   });
 
   it("expands a catch-all workspace provider from the catwalk catalog", async () => {

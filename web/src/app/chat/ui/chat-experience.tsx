@@ -12,6 +12,7 @@
 // derive-in-render, handler-side resets, or a deferred microtask). Keep this
 // component clean — prefer those patterns over re-adding a rule disable.
 import { signOut } from "@/app/shared/signOut";
+import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deriveConversationTitle } from "@/app/lib/title";
 import {
@@ -29,7 +30,7 @@ import {
   largeUploadWarning,
   screenFilesForUpload,
 } from "@/app/lib/uploadLimits";
-import { useClientConfig } from "@/app/lib/useClientConfig";
+import { refreshClientConfig, useClientConfig } from "@/app/lib/useClientConfig";
 import {
   filterConversations,
   visibleConversationOrder,
@@ -166,6 +167,28 @@ export type ServerConfig = {
   // instead of failing after a full upload round-trip.
   uploadMaxBytes: number;
 };
+
+// parseServerConfigPayload maps GET /api/server-config onto ServerConfig.
+// Shared by the mount-time fetch and the live refreshes (tab return, network
+// return, a model-tier change), so every path reads the payload identically.
+export function parseServerConfigPayload(cfg: {
+  lockdown_available?: boolean;
+  lockdown_only?: boolean;
+  lockdown_allowed_models?: string[] | null;
+  upload_max_bytes?: number;
+}): ServerConfig {
+  return {
+    lockdownAvailable: cfg.lockdown_available === true,
+    lockdownOnly: cfg.lockdown_only === true,
+    lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
+    // Older servers don't advertise the cap — keep the client-side default
+    // rather than treating it as 0.
+    uploadMaxBytes:
+      typeof cfg.upload_max_bytes === "number" && cfg.upload_max_bytes > 0
+        ? cfg.upload_max_bytes
+        : DEFAULT_UPLOAD_MAX_BYTES,
+  };
+}
 
 export type PendingDeleteConversation = {
   id: string;
@@ -629,28 +652,20 @@ export function ChatExperience({
   const [selectedModel, setSelectedModel] = useState<string>(
     () => restoredSession?.selectedModel ?? currentDefaultModel(),
   );
-  // The very first mount of a session races the client-config fetch: state
-  // seeds from the compiled-in fallback before the workspace's tier pair is
-  // known. When the pair lands, move ONLY a not-yet-started chat still sitting
-  // on that fallback — an open conversation keeps the model its row carries,
-  // and any other pick stays because the values differ. Picking the fallback
-  // slug itself pre-fetch was picking "recommended", which this resolves.
-  useEffect(() => {
-    if (!workspaceModelTiers || activeConversationId !== null) return;
-    // Deferred to a microtask so the adoption lands outside the effect's
-    // synchronous phase (no cascading render off the effect body); the guard
-    // cancels it if the deps change before the microtask runs.
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      setSelectedModel((cur) =>
-        cur === FALLBACK_DEFAULT_MODEL ? workspaceModelTiers.defaultModel : cur,
-      );
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceModelTiers, activeConversationId]);
+  // The live default this shell last installed, so a pristine draft can be
+  // moved off it when the admin changes the tiers again (see below).
+  const lastLiveDefaultRef = useRef<string | null>(null);
+  // Whether the user has chosen a model for the chat being composed. Intent
+  // cannot be inferred from the value: someone who deliberately picks the
+  // model that happens to BE the current default means it, and a tier change
+  // must not silently move them off it. Set by every explicit selection
+  // (picker, nudge, the transcript's switch card), cleared when a new chat
+  // resets the composer.
+  const modelTouchedRef = useRef(false);
+  const selectModelExplicitly = useCallback<Dispatch<SetStateAction<string>>>((value) => {
+    modelTouchedRef.current = true;
+    setSelectedModel(value);
+  }, []);
   const [rankedModels, setRankedModels] = useState<RankedModel[]>([]);
   const [catalogModels, setCatalogModels] = useState<RankedModel[]>([]);
   // Active workspace-provider models, "<provider>/<model>" slugs. Loaded via the
@@ -691,6 +706,10 @@ export function ChatExperience({
   // lockdownAvailable is false the +button stays a plain "+"
   // (matches the UI-as-it-is-now contract for operators who haven't
   // opted into lockdown opt-in mode).
+  // Generation counters for /api/server-config, so a superseded response
+  // cannot install an obsolete lockdown allow-list (see refreshServerConfig).
+  const serverConfigFetchSeqRef = useRef(0);
+  const serverConfigAppliedSeqRef = useRef(0);
   const [serverConfig, setServerConfig] = useState<ServerConfig>(
     () =>
       restoredSession?.serverConfig ?? {
@@ -700,10 +719,95 @@ export function ChatExperience({
         uploadMaxBytes: DEFAULT_UPLOAD_MAX_BYTES,
       },
   );
+  // refreshServerConfig re-reads the capability payload. Besides mount it runs
+  // on tab/network return and whenever the workspace model tiers change: with
+  // FLEET_LOCKDOWN_ALLOWED_MODELS unset the lockdown allow-list IS the live
+  // tiers, so an admin moving a tier changes what the server accepts for
+  // lockdown chats immediately — a stale snapshot here would keep offering a
+  // now-refused model and hide the newly allowed one until a reload.
+  // Best-effort: a 404 / network error means an older server or a blip, so
+  // the current snapshot stays.
+  const refreshServerConfig = useCallback(async () => {
+    // Overlapping refreshes (a focus/visibility one and the tier-triggered
+    // one) can both be in flight. Without a generation the request that saw
+    // the OLD allow-list can land last and win, leaving the picker offering
+    // models the backend now rejects and hiding newly allowed ones until some
+    // later refresh happens to fix it. Same rule as client-config.
+    serverConfigFetchSeqRef.current += 1;
+    const seq = serverConfigFetchSeqRef.current;
+    try {
+      const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
+      if (!cfgRes.ok) return;
+      const cfg = (await cfgRes.json()) as Parameters<typeof parseServerConfigPayload>[0];
+      if (seq <= serverConfigAppliedSeqRef.current) return;
+      serverConfigAppliedSeqRef.current = seq;
+      setServerConfig(parseServerConfigPayload(cfg));
+    } catch {
+      // Optional capability — leave the snapshot as it is.
+    }
+  }, []);
+  // The lockdown allow-list follows the live tiers server-side (see
+  // refreshServerConfig); re-read it whenever a tier payload lands.
+  useEffect(() => {
+    if (!workspaceModelTiers) return;
+    void refreshServerConfig();
+  }, [workspaceModelTiers, refreshServerConfig]);
   // pendingLockdown is set when the user clicks "New lockdown chat"
   // and cleared once the conversation is actually created. The flag
   // rides along on the first /api/chat POST as `lockdown: true`.
   const [pendingLockdown, setPendingLockdown] = useState(false);
+
+  // The very first mount of a session races the client-config fetch: state
+  // seeds from the compiled-in fallback before the workspace's tier pair is
+  // known. When the pair lands, move ONLY a not-yet-started chat still sitting
+  // on that fallback — an open conversation keeps the model its row carries,
+  // and any other pick stays because the values differ. Picking the fallback
+  // slug itself pre-fetch was picking "recommended", which this resolves.
+  useEffect(() => {
+    if (!workspaceModelTiers) return;
+    const previousLiveDefault = lastLiveDefaultRef.current;
+    lastLiveDefaultRef.current = workspaceModelTiers.defaultModel;
+    if (activeConversationId !== null) return;
+    // Deferred to a microtask so the adoption lands outside the effect's
+    // synchronous phase (no cascading render off the effect body); the guard
+    // cancels it if the deps change before the microtask runs.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (modelTouchedRef.current) return;
+      // A lockdown draft may only run models the operator allows. When that
+      // list is explicit it does not move with the tiers, so adopting a new
+      // default blindly would leave the draft on a model the server refuses.
+      // Adopt only what the list permits; otherwise take its first entry.
+      if (pendingLockdown || serverConfig.lockdownOnly) {
+        const allowed = serverConfig.lockdownAllowedModels;
+        if (allowed.length > 0 && !allowed.includes(workspaceModelTiers.defaultModel)) {
+          const firstAllowed = allowed.find((slug) => !slug.includes("*"));
+          if (firstAllowed) setSelectedModel(firstAllowed);
+          return;
+        }
+      }
+      setSelectedModel((cur) =>
+        // Untouched means "still on whatever we last put there": the
+        // compiled-in fallback before any config landed, or the live default
+        // from the previous payload. Moving only off the fallback left a
+        // blank composer sitting on a superseded admin default, which in a
+        // lockdown chat the server then refuses.
+        cur === FALLBACK_DEFAULT_MODEL || (previousLiveDefault !== null && cur === previousLiveDefault)
+          ? workspaceModelTiers.defaultModel
+          : cur,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    workspaceModelTiers,
+    activeConversationId,
+    pendingLockdown,
+    serverConfig.lockdownOnly,
+    serverConfig.lockdownAllowedModels,
+  ]);
   // activeConversation tracks the currently-active conversation
   // record (or null for a brand-new pending chat). Used so the chat
   // header can render the lockdown badge without re-walking the
@@ -1293,6 +1397,15 @@ export function ChatExperience({
     };
     const handle = () => {
       void probe();
+      // Tiers and the lockdown list they drive move as ONE snapshot: refresh
+      // client-config first (it publishes the live tiers module-wide), and
+      // only install the new allow-list if that succeeded. Taking the new
+      // list against the old tiers is the divergence itself — the tab would
+      // start a lockdown chat on a default the server had stopped accepting.
+      // Both stale is consistent; the next tick tries again.
+      void refreshClientConfig().then((ok) => {
+        if (ok) void refreshServerConfig();
+      });
     };
     // Fire once on mount in case the user left the tab open across a
     // deploy and we're starting fresh against an already-updated
@@ -1309,7 +1422,7 @@ export function ChatExperience({
       window.removeEventListener("online", handle);
       window.clearInterval(interval);
     };
-  }, []);
+  }, [refreshServerConfig]);
 
   // (Initial-load mount effect moved below its callback dependencies — see
   // "mount effects, hoisted below their callback dependencies".)
@@ -3647,6 +3760,7 @@ export function ChatExperience({
     // to the live default tier — for lockdown that's also the first
     // allowed slug, and for normal chat it's the workspace default.
     setSelectedModel(currentDefaultModel());
+    modelTouchedRef.current = false;
     promptRef.current?.focus();
   };
 
@@ -4270,38 +4384,11 @@ export function ChatExperience({
       }
     };
 
-    // Capability fetch — currently just lockdown availability.
-    // Best-effort: a 404 / network error means the older server
-    // doesn't expose this endpoint, so we keep the feature off.
+    // Capability fetch (lockdown availability, allow-list, upload cap) — the
+    // same refresher the live paths use.
     const loadServerConfig = async () => {
-      try {
-        const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
-        if (cfgRes.ok) {
-          const cfg = (await cfgRes.json()) as {
-            lockdown_available: boolean;
-            lockdown_only: boolean;
-            lockdown_allowed_models: string[] | null;
-            upload_max_bytes?: number;
-          };
-          if (!cancelled) {
-            setServerConfig({
-              lockdownAvailable: cfg.lockdown_available === true,
-              lockdownOnly: cfg.lockdown_only === true,
-              lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
-              // Older servers don't advertise the cap — keep the
-              // client-side default rather than treating it as 0.
-              uploadMaxBytes:
-                typeof cfg.upload_max_bytes === "number" &&
-                cfg.upload_max_bytes > 0
-                  ? cfg.upload_max_bytes
-                  : DEFAULT_UPLOAD_MAX_BYTES,
-            });
-          }
-        }
-      } catch {
-        // Optional capability — leave lockdown off when the server
-        // is too old to advertise it.
-      }
+      if (cancelled) return;
+      await refreshServerConfig();
     };
 
     const loadInitialState = async () => {
@@ -4481,7 +4568,7 @@ export function ChatExperience({
     // above). initialUserEmail is a per-mount constant (the server component
     // resolves it per request), so listing it keeps exhaustive-deps honest
     // without changing the mount-once behavior.
-  }, [initialUserEmail]);
+  }, [initialUserEmail, refreshServerConfig]);
 
   const toggleShowStats = () => {
     setShowStats((prev) => {
@@ -5569,7 +5656,7 @@ export function ChatExperience({
               savePromptFromMessage={savePromptFromMessage}
               loadMemories={loadMemories}
               memoryProject={activeProjectForMemory}
-              setSelectedModel={setSelectedModel}
+              setSelectedModel={selectModelExplicitly}
               setModelPickerOpen={setModelPickerOpen}
               setModelSearchQuery={setModelSearchQuery}
               loadRankedModels={loadRankedModels}
@@ -5676,7 +5763,7 @@ export function ChatExperience({
                 setPersonaPickerOpen={setPersonaPickerOpen}
                 personaPickerRef={personaPickerRef}
                 selectedModel={selectedModel}
-                setSelectedModel={setSelectedModel}
+                setSelectedModel={selectModelExplicitly}
                 selectedModelLabel={selectedModelLabel}
                 selectedModelPrices={selectedModelPrices}
                 modelError={modelError}

@@ -1,12 +1,12 @@
 "use client";
 
 import { signOutAfter } from "@/app/shared/signOut";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { orchestratorApi, type Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
 import { useDashboardData } from "@/app/shared/hooks/useDashboardData";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
-import { useClientConfig } from "@/app/lib/useClientConfig";
+import { refreshClientConfig, useClientConfig } from "@/app/lib/useClientConfig";
 import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
 import { ConfirmDialog } from "@/app/shared/ui/ConfirmDialog";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
@@ -98,6 +98,24 @@ function OrchestratorInner({
   const dashboard = useDashboardData(session.signedIn);
   const { servers, loading: serversLoading } = useMcpServers(session.signedIn);
   const { branding } = useClientConfig();
+  // The task-create form pre-fills from the live model tiers, and this page is
+  // left open for hours. Without a refresh path of its own (the chat shell has
+  // one) an admin's tier change would never reach this tab and the next task
+  // would be created on the previous default. Same events the chat shell uses;
+  // the shared module cache means one fetch serves every consumer on the page.
+  useEffect(() => {
+    const handle = () => {
+      void refreshClientConfig();
+    };
+    document.addEventListener("visibilitychange", handle);
+    window.addEventListener("focus", handle);
+    window.addEventListener("online", handle);
+    return () => {
+      document.removeEventListener("visibilitychange", handle);
+      window.removeEventListener("focus", handle);
+      window.removeEventListener("online", handle);
+    };
+  }, []);
 
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);

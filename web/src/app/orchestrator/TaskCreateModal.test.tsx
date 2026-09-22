@@ -3,6 +3,13 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import { TaskCreateModal, normalizeRunIfTimeout } from "./TaskCreateModal";
 import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { buildPromptWithRecipients } from "./taskEmailBlock";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_TASK_FALLBACK_MODEL,
+  _resetModelTiersForTests,
+  setModelTiers,
+} from "@/app/lib/modelAliases";
+import { __resetClientConfigCacheForTests } from "@/app/lib/useClientConfig";
 
 // Component tests for the redesigned New Task modal: schedule mode segment,
 // launch gating + footer reason, blur validation with the design's error copy,
@@ -59,6 +66,122 @@ function renderModal(
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
+  _resetModelTiersForTests();
+  __resetClientConfigCacheForTests();
+});
+
+// The pre-filled model pair is the LIVE workspace default + the operator's
+// scheduler fallback (both from /api/client-config), not a compiled-in pair:
+// an admin who changes the default model in Settings must see new tasks pick
+// it up, or the setting is a lie for the Operations Center.
+describe("TaskCreateModal — default model pair", () => {
+  it("launches with the compiled-in pair before any client config lands", async () => {
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({
+      model: DEFAULT_MODEL,
+      fallback_model: DEFAULT_TASK_FALLBACK_MODEL,
+    });
+  });
+
+  // The modal mounts with the page, before /api/client-config resolves. The
+  // pristine create form must adopt the live pair when it lands — otherwise
+  // the first task of the session ships the compiled-in slugs and the admin's
+  // setting is a lie for the Operations Center.
+  it("adopts the live pair when client config lands after mount", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        models: { default_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    // The admin's default replaces the compiled-in pre-fill without a reopen.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Primary") as HTMLInputElement).value).toBe("acme/frontier-1"),
+    );
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({
+      model: "acme/frontier-1",
+      fallback_model: "acme/cheap-1",
+    });
+  });
+
+  // The module cache can hold an OLDER admin slug from a previous mount; the
+  // mount-time refresh must still move a pristine form to the newer one.
+  it("refreshes a pristine form from a stale cached admin default", async () => {
+    setModelTiers({ default_model: "acme/old-default", task_fallback_model: "acme/old-cheap" });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        models: { default_model: "acme/new-default", task_fallback_model: "acme/new-cheap" },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    expect((screen.getByLabelText("Primary") as HTMLInputElement).value).toBe("acme/old-default");
+    await waitFor(() =>
+      expect((screen.getByLabelText("Primary") as HTMLInputElement).value).toBe("acme/new-default"),
+    );
+    expect((screen.getByLabelText("Fallback") as HTMLInputElement).value).toBe("acme/new-cheap");
+  });
+
+  it("does not overwrite a model the user already picked when config lands", async () => {
+    let resolveConfig: (v: unknown) => void = () => {};
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise((resolve) => {
+        resolveConfig = resolve;
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText("Primary"), { target: { value: "user/pick-1" } });
+    resolveConfig({
+      ok: true,
+      json: async () => ({
+        models: { default_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" },
+      }),
+    });
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    // The untouched fallback still adopts the live value; the user's primary stays.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Fallback") as HTMLInputElement).value).toBe("acme/cheap-1"),
+    );
+    expect((screen.getByLabelText("Primary") as HTMLInputElement).value).toBe("user/pick-1");
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({
+      model: "user/pick-1",
+      fallback_model: "acme/cheap-1",
+    });
+  });
+
+  it("pre-fills the admin's default model and the operator's task fallback", async () => {
+    setModelTiers({ default_model: "acme/frontier-1", task_fallback_model: "acme/cheap-1" });
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({
+      model: "acme/frontier-1",
+      fallback_model: "acme/cheap-1",
+    });
+  });
 });
 
 describe("TaskCreateModal — launch gating", () => {

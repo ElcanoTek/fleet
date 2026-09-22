@@ -31,11 +31,20 @@
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04).
-export const DEFAULT_MODEL = "google/gemini-3.8-flash";
-export const DEFAULT_MODEL_LABEL = "Google: Gemini 3.8 Flash";
+export const DEFAULT_MODEL = "openai/gpt-5.6-luna-pro";
+export const DEFAULT_MODEL_LABEL = "OpenAI: GPT-5.6 Luna Pro";
 
-export const ADVANCED_MODEL = "openai/gpt-5.6-sol";
-export const ADVANCED_MODEL_LABEL = "OpenAI: GPT-5.6 Sol";
+export const ADVANCED_MODEL = "anthropic/claude-opus-5";
+export const ADVANCED_MODEL_LABEL = "Anthropic: Claude Opus 5";
+
+// The scheduled-task FALLBACK the Operations Center create form pre-fills:
+// what a task fails over to when its primary is down. Compiled-in fallback
+// only — the effective slug is the operator's FLEET_TASK_FALLBACK_MODEL,
+// which arrives as `task_fallback_model` on /api/client-config. Read it via
+// currentTaskFallbackModel(). (The form's pre-filled PRIMARY is the live
+// default tier, currentDefaultModel(), so an admin override reaches new
+// tasks exactly as it reaches new chats.)
+export const DEFAULT_TASK_FALLBACK_MODEL = "deepseek/deepseek-v4.1-flash";
 
 // Display names for slugs we know by heart. An admin-configured tier
 // slug outside this map renders as itself — honest, and the pickers'
@@ -50,11 +59,16 @@ const KNOWN_LABELS: Readonly<Record<string, string>> = {
 // /api/client-config payload lands, and surviving route remounts. There
 // is no subscription mechanism — the config fetch that changes this also
 // re-renders the chat shell, so render-time reads stay fresh.
-let liveTiers = { defaultModel: DEFAULT_MODEL, advancedModel: ADVANCED_MODEL };
+let liveTiers = {
+  defaultModel: DEFAULT_MODEL,
+  advancedModel: ADVANCED_MODEL,
+  taskFallbackModel: DEFAULT_TASK_FALLBACK_MODEL,
+};
 
 export type ModelTiersConfig = {
   default_model?: string;
   advanced_model?: string;
+  task_fallback_model?: string;
 };
 
 // setModelTiers installs the workspace's effective tier slugs (from the
@@ -63,10 +77,19 @@ export type ModelTiersConfig = {
 export function setModelTiers(cfg: ModelTiersConfig | null | undefined): void {
   const def = String(cfg?.default_model ?? "").trim();
   const adv = String(cfg?.advanced_model ?? "").trim();
+  const fb = String(cfg?.task_fallback_model ?? "").trim();
   liveTiers = {
     defaultModel: def || DEFAULT_MODEL,
     advancedModel: adv || ADVANCED_MODEL,
+    taskFallbackModel: fb || DEFAULT_TASK_FALLBACK_MODEL,
   };
+}
+
+// currentTaskFallbackModel is the fallback slug the task-create form pre-fills:
+// the operator's scheduler fallback when one is configured, else the
+// compiled-in DEFAULT_TASK_FALLBACK_MODEL.
+export function currentTaskFallbackModel(): string {
+  return liveTiers.taskFallbackModel;
 }
 
 export function currentDefaultModel(): string {
@@ -105,7 +128,11 @@ export const TIER_MODELS: ReadonlyArray<{ slug: string; label: string }> = [
 
 // _resetModelTiersForTests restores the compiled-in pair between tests.
 export function _resetModelTiersForTests(): void {
-  liveTiers = { defaultModel: DEFAULT_MODEL, advancedModel: ADVANCED_MODEL };
+  liveTiers = {
+    defaultModel: DEFAULT_MODEL,
+    advancedModel: ADVANCED_MODEL,
+    taskFallbackModel: DEFAULT_TASK_FALLBACK_MODEL,
+  };
 }
 
 // TESTED_MODELS lists slugs we've validated end-to-end against our

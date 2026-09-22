@@ -34,6 +34,7 @@ import (
 type fakeEngine struct {
 	mu             sync.Mutex
 	lastHistory    []agent.HistoryEntry
+	lastModel      string
 	turns          int
 	providerHealth []agentcore.ModelHealth
 }
@@ -41,6 +42,7 @@ type fakeEngine struct {
 func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
 	f.mu.Lock()
 	f.lastHistory = in.History
+	f.lastModel = in.Model
 	f.turns++
 	f.mu.Unlock()
 
@@ -509,7 +511,11 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		}
 	}
 
-	t.Run("disallowed override on lockdown conversation rejected", func(t *testing.T) {
+	// A disallowed slug never reaches the store and never runs, whichever way
+	// the request is resolved: with an allowed stored model the turn proceeds
+	// on that instead (the picker cannot offer a disallowed model, so this is
+	// a stale client echo); with none, the request is refused.
+	t.Run("disallowed override never persists and never runs", func(t *testing.T) {
 		engine := &fakeEngine{}
 		st := newFakeChatStore()
 		srv := newDefaultChatServer(t, engine, st)
@@ -521,20 +527,20 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 			"model":           "evil/unvetted-model",
 			"message":         "hello",
 		})
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 		}
 		st.mu.Lock()
 		model, setModels := st.convs["conv-1"].Model, st.setModels
 		st.mu.Unlock()
 		if setModels != 0 || model != "a/b" {
-			t.Errorf("rejected override reached the store: SetModel calls = %d, stored model = %q", setModels, model)
+			t.Errorf("disallowed override reached the store: SetModel calls = %d, stored model = %q", setModels, model)
 		}
 		engine.mu.Lock()
-		turns := engine.turns
+		turns, turnModel := engine.turns, engine.lastModel
 		engine.mu.Unlock()
-		if turns != 0 {
-			t.Errorf("turn ran despite the rejected model override (%d turns)", turns)
+		if turns != 1 || turnModel != "a/b" {
+			t.Errorf("the turn must run on the stored model: turns=%d model=%q", turns, turnModel)
 		}
 	})
 
@@ -558,6 +564,159 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		st.mu.Unlock()
 		if model != "c/d" {
 			t.Errorf("allow-listed override not persisted: stored model = %q, want c/d", model)
+		}
+	})
+
+	// The persisted model fell off the allow-list (operator narrowed it, or the
+	// tier defaults moved on an upgrade / admin override): the turn must still
+	// run — on the lockdown default, persisted — instead of 400ing forever.
+	t.Run("lockdown conversation on a delisted model moves to the lockdown default", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/d", "e/f"}
+		seed(st, true) // persisted model a/b, no longer allowed
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model, setModels := st.convs["conv-1"].Model, st.setModels
+		st.mu.Unlock()
+		if model != "c/d" || setModels != 1 {
+			t.Errorf("delisted lockdown model not moved to the lockdown default: stored model = %q, SetModel calls = %d", model, setModels)
+		}
+		engine.mu.Lock()
+		turns, turnModel := engine.turns, engine.lastModel
+		engine.mu.Unlock()
+		if turns != 1 || turnModel != "c/d" {
+			t.Errorf("turn should have run once on the lockdown default: turns=%d model=%q", turns, turnModel)
+		}
+	})
+
+	// The web echoes the stored model on every turn. That echo of the stale
+	// persisted slug must not be mistaken for an override TO the delisted
+	// model — it is the exact case the migration exists for.
+	t.Run("client echoing the delisted persisted model is migrated, not rejected", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/d"}
+		seed(st, true) // persisted a/b
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "a/b", // what the web sends: the conversation's own stored model
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		engine.mu.Lock()
+		turnModel := engine.lastModel
+		engine.mu.Unlock()
+		if model != "c/d" || turnModel != "c/d" {
+			t.Errorf("echoed delisted model should migrate to the lockdown default: stored=%q turn=%q", model, turnModel)
+		}
+	})
+
+	// A lockdown picker offers only allow-listed models, so ANY disallowed
+	// slug arriving on one is a stale client echo. It is ignored in favour of
+	// the conversation's own model — which the turn then runs on — rather than
+	// refused with a 400 the user can only escape by reloading.
+	t.Run("disallowed override is ignored, and the turn runs on the stored model", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+		seed(st, true) // stored a/b, which is allowed
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "evil/unvetted-model",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		engine.mu.Lock()
+		turnModel := engine.lastModel
+		engine.mu.Unlock()
+		if model != "a/b" || turnModel != "a/b" {
+			t.Errorf("the disallowed slug must be ignored: stored=%q turn=%q", model, turnModel)
+		}
+	})
+
+	// With NO allowed stored model there is nothing safe to run: the caller
+	// has to choose, so the request is refused.
+	t.Run("refused when the stored model is disallowed too", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"z/*"} // globs only: no migration target
+		seed(st, true)                                  // stored a/b, disallowed
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "evil/unvetted-model",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+	})
+
+	// A list that starts with a glob still has a literal slug further along:
+	// that is the lockdown default, not the glob.
+	t.Run("glob-first allow-list migrates to its first literal slug", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/*", "e/f", "g/h"}
+		seed(st, true)
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		if model != "e/f" {
+			t.Errorf("glob-first list should migrate to the first literal slug e/f, got %q", model)
+		}
+	})
+
+	// A glob-only list has no literal slug to move to: leave it to the guard.
+	t.Run("glob-only allow-list does not invent a model", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"c/*"}
+		seed(st, true)
+
+		postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"message":         "hello",
+		})
+		st.mu.Lock()
+		model, setModels := st.convs["conv-1"].Model, st.setModels
+		st.mu.Unlock()
+		if model != "a/b" || setModels != 0 {
+			t.Errorf("glob-only list must not rewrite the model: stored=%q SetModel calls=%d", model, setModels)
 		}
 	})
 

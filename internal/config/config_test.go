@@ -4,8 +4,11 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // ── shared test helpers ──
@@ -508,33 +511,71 @@ func TestLockdownAllows(t *testing.T) {
 	}
 }
 
-func TestSplitLockdownModels_DefaultsWhenEmpty(t *testing.T) {
-	got := splitLockdownModels("")
-	if len(got) < 2 {
-		t.Fatalf("expected default list with both tier slots, got %v", got)
+func TestSplitLockdownModels_EmptyMeansUnset(t *testing.T) {
+	if got := splitLockdownModels(""); got != nil {
+		t.Fatalf("empty allow-list must parse as unset (nil), got %v", got)
 	}
-	// One slug per product tier slot, kept in sync with the frontend's
-	// DEFAULT_MODEL / ADVANCED_MODEL and the agentcore mirrors.
-	wantContains := []string{
-		"google/gemini-3.8-flash",
-		"openai/gpt-5.6-sol",
+	if got := splitLockdownModels("   "); got != nil {
+		t.Fatalf("blank allow-list must parse as unset (nil), got %v", got)
 	}
-	for _, w := range wantContains {
-		found := false
-		for _, g := range got {
-			if g == w {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("default list missing %q (got %v)", w, got)
+}
+
+// With no operator list the lockdown allow-list IS the live tier pair — so a
+// lockdown chat defaults to the workspace default model, and an admin override
+// of that tier (Settings → Model tiers) moves lockdown with it, live.
+func TestLockdownModels_FollowLiveTiersWhenUnset(t *testing.T) {
+	t.Cleanup(func() {
+		agentcore.SetDefaultModel("")
+		agentcore.SetAdvancedModel("")
+	})
+	agentcore.SetDefaultModel("")
+	agentcore.SetAdvancedModel("")
+
+	cfg := &Config{}
+	want := []string{agentcore.DefaultCoreModel, agentcore.DefaultMaxModel}
+	if got := cfg.LockdownModels(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("LockdownModels() = %v, want the compiled-in tiers %v", got, want)
+	}
+	for _, slug := range want {
+		if !cfg.LockdownAllows(slug) {
+			t.Errorf("LockdownAllows(%q) = false; the tier defaults must be allowed in lockdown", slug)
 		}
 	}
-	for _, g := range got {
-		if g == "~moonshotai/kimi-latest" {
-			t.Errorf("default list still contains the removed economy tier %q (got %v)", g, got)
+	// The previous tier slugs are NOT grandfathered in: the list is the
+	// current defaults, nothing else.
+	for _, slug := range []string{"google/gemini-3.8-flash", "openai/gpt-5.6-sol"} {
+		if cfg.LockdownAllows(slug) {
+			t.Errorf("LockdownAllows(%q) = true; retired tier slugs must not linger in the lockdown default", slug)
 		}
+	}
+
+	agentcore.SetDefaultModel("acme/frontier-1")
+	agentcore.SetAdvancedModel("acme/frontier-1-pro")
+	want = []string{"acme/frontier-1", "acme/frontier-1-pro"}
+	if got := cfg.LockdownModels(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after an admin override LockdownModels() = %v, want %v", got, want)
+	}
+	if cfg.LockdownAllows(agentcore.DefaultCoreModel) {
+		t.Errorf("the overridden-away default must no longer be allowed in lockdown")
+	}
+	if !cfg.LockdownAllows("acme/frontier-1") {
+		t.Errorf("the admin's default tier must be allowed in lockdown")
+	}
+
+	// Both tiers on one slug collapse to a single entry, not a duplicate.
+	agentcore.SetAdvancedModel("acme/frontier-1")
+	if got := cfg.LockdownModels(); !reflect.DeepEqual(got, []string{"acme/frontier-1"}) {
+		t.Fatalf("identical tiers should yield one entry, got %v", got)
+	}
+}
+
+func TestLockdownModels_OperatorListWins(t *testing.T) {
+	cfg := &Config{LockdownAllowedModels: []string{"a/b", "c/d"}}
+	if got := cfg.LockdownModels(); !reflect.DeepEqual(got, []string{"a/b", "c/d"}) {
+		t.Fatalf("LockdownModels() = %v, want the operator list verbatim", got)
+	}
+	if cfg.LockdownAllows(agentcore.CurrentDefaultModel()) {
+		t.Errorf("an explicit operator list must not be widened by the live tiers")
 	}
 }
 
