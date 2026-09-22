@@ -151,6 +151,10 @@ const recoveryRetryDelaysMs = [1000, 2000, 4000, 8000, 16000];
 // would otherwise strand the slot until the user happened to switch tabs.
 const recoverySteadyRetryMs = 30000;
 
+// Ceiling on a single recovery request. Long enough for a slow-but-alive
+// server, short enough that a blackholed connection costs one beat.
+const recoveryRequestTimeoutMs = 8000;
+
 // What reconcileFromPersisted learned from Postgres about the turn we hold open.
 type PersistedReconcile = "adopted" | "absent" | "unreachable";
 
@@ -415,9 +419,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // The pending timer per conversation...
   const recoveryRetriesRef = useRef<Map<string, number>>(new Map<string, number>());
   // ...the slot each chain is recovering, held for the chain's whole life...
-  const recoveryOwnedRef = useRef<Map<string, { assistantId: number; gap: boolean }>>(
-    new Map<string, { assistantId: number; gap: boolean }>(),
-  );
+  const recoveryOwnedRef = useRef<
+    Map<string, { assistantId: number; gap: boolean; turnID: string }>
+  >(new Map<string, { assistantId: number; gap: boolean; turnID: string }>());
   // ...and the flag a callback already past its timer checks after each await.
   const recoveryUnmountedRef = useRef(false);
   const refreshQueue = async (convId: string): Promise<QueuedInput[] | null> => {
@@ -470,6 +474,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // works precisely because it reads from there. These helpers do the same
   // read automatically.
 
+  // Every recovery request is bounded. A connection that is accepted and then
+  // blackholed — not refused — would otherwise hang this await forever: the
+  // tick has already dropped its timer and only schedules the next one after
+  // the await returns, so the "persistent" chain would stop for good with the
+  // conversation still busy and invisible to the liveness watchdog (its
+  // conversation is no longer attached). A timeout reads as `unreachable`,
+  // which is exactly what it is.
+  const recoveryRequestSignal = (): AbortSignal | undefined =>
+    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(recoveryRequestTimeoutMs)
+      : undefined;
+
   // reconcileFromPersisted adopts the canonical transcript when it already
   // answers the turn we are holding open — programmatically what the user's
   // manual refresh does.
@@ -486,6 +502,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     try {
       const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}`, {
         cache: "no-store",
+        signal: recoveryRequestSignal(),
       });
       if (res.status >= 500) return "unreachable";
       if (!res.ok) return "absent";
@@ -519,6 +536,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     try {
       const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/inflight`, {
         cache: "no-store",
+        signal: recoveryRequestSignal(),
       });
       if (res.status >= 500) return { kind: "unreachable" };
       if (!res.ok) return { kind: "answer", inflight: false, turnID: "" };
@@ -589,13 +607,22 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const recoveryOwns = (convId: string): boolean => recoveryOwnedRef.current.has(convId);
 
   // releaseRecovery ends ownership: the outcome is known, or the slot is gone.
+  // It also frees the conversation, because ownership is what suppressed the
+  // busy flag while the outcome was unknown — both stream finalizers skip
+  // markConvIdle for a conversation the chain owns, so if the chain does not
+  // idle it here the composer keeps offering Stop for a finished turn. A
+  // conversation a live stream has re-claimed is left alone: that stream owns
+  // the flag and idles at its own finalizer.
   const releaseRecovery = (convId: string): void => {
     const timer = recoveryRetriesRef.current.get(convId);
     if (timer !== undefined) {
       window.clearTimeout(timer);
       recoveryRetriesRef.current.delete(convId);
     }
-    recoveryOwnedRef.current.delete(convId);
+    const owned = recoveryOwnedRef.current.delete(convId);
+    if (owned && !attachedConvIdsRef.current.has(convId)) {
+      markConvIdle(convId);
+    }
   };
 
   // recoveryDelayFor is the backoff, then a steady slow beat.
@@ -621,8 +648,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     attempt = 0,
   ): void => {
     if (recoveryUnmountedRef.current) return;
-    // Ownership starts here and outlives the individual timers.
-    recoveryOwnedRef.current.set(convId, { assistantId, gap });
+    // Ownership starts here and outlives the individual timers. The turn id is
+    // captured on the FIRST arm and carried for the chain's life: what this
+    // chain is recovering is one particular turn, and the server may well be
+    // running a different one by the time a tick fires.
+    const owned = recoveryOwnedRef.current.get(convId);
+    recoveryOwnedRef.current.set(convId, {
+      assistantId,
+      gap,
+      turnID: owned?.turnID ?? (currentTurnIdByConvRef.current.get(convId) ?? ""),
+    });
     const existing = recoveryRetriesRef.current.get(convId);
     if (existing !== undefined) window.clearTimeout(existing);
     const timer = window.setTimeout(() => {
@@ -652,10 +687,35 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
           return;
         }
+        const ownedTurnID = recoveryOwnedRef.current.get(convId)?.turnID ?? "";
+        const answersADifferentTurn =
+          probe.turnID !== "" && ownedTurnID !== "" && probe.turnID !== ownedTurnID;
+        if (answersADifferentTurn) {
+          // The turn this chain is recovering has finished and the server has
+          // moved on — a queued input started the next one. Reattaching now
+          // would pour the NEW turn's replay into the OLD turn's bubble and
+          // leave the answer we were waiting for unadopted. Settle our slot
+          // from the canonical transcript instead and let the ordinary paths
+          // own the new turn.
+          await settleStreamedSlot(convId, assistantId, gap, attempt + 1, true);
+          if (recoveryUnmountedRef.current) return;
+          if (recoveryRetriesRef.current.has(convId)) return;
+          releaseRecovery(convId);
+          return;
+        }
         if (probe.inflight || probe.turnID) {
           await reattachToConv(convId);
           if (recoveryUnmountedRef.current) return;
+          // `await` here spans the WHOLE replay, so "is it still attached" is
+          // not the question — a reattach that ran a stream to its terminal
+          // event has already let the handle go. Judge by the slot: no longer
+          // needing settlement means the replay finished the turn.
+          if (!slotNeedsSettling(convId, assistantId, gap)) {
+            releaseRecovery(convId);
+            return;
+          }
           if (attachedConvIdsRef.current.has(convId)) {
+            // Still streaming: that stream owns the slot and will settle it.
             releaseRecovery(convId);
             return;
           }
@@ -673,10 +733,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         if (recoveryUnmountedRef.current) return;
         // Settled (or adopted, or re-armed by settleStreamedSlot when Postgres
         // itself was unreachable). If nothing re-armed the chain, the outcome
-        // is known and the conversation is free.
+        // is known and the conversation is free (releaseRecovery idles it).
         if (recoveryRetriesRef.current.has(convId)) return;
         releaseRecovery(convId);
-        markConvIdle(convId);
       })();
     }, recoveryDelayFor(attempt));
     recoveryRetriesRef.current.set(convId, timer);
@@ -686,17 +745,27 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // the callbacks already past their timer, which no timer id can reach. A
   // callback that resumed after unmount would reattach and open an SSE stream
   // the unmounted parent's AbortController cleanup can no longer abort.
-  useEffect(
-    () => () => {
-      recoveryUnmountedRef.current = true;
-      for (const timer of recoveryRetriesRef.current.values()) {
+  useEffect(() => {
+    // React's development Strict Mode runs setup → cleanup → setup. Without
+    // resetting here, that simulated cleanup would leave the flag set and
+    // every later chain would refuse to arm — recovery silently dead for the
+    // whole dev session.
+    recoveryUnmountedRef.current = false;
+    // Captured in setup: these refs hold one stable object for the hook's
+    // lifetime, and the lint rule (rightly) refuses `.current` reads in a
+    // cleanup that may run long after.
+    const unmounted = recoveryUnmountedRef;
+    const timers = recoveryRetriesRef.current;
+    const owned = recoveryOwnedRef.current;
+    return () => {
+      unmounted.current = true;
+      for (const timer of timers.values()) {
         window.clearTimeout(timer);
       }
-      recoveryRetriesRef.current.clear();
-      recoveryOwnedRef.current.clear();
-    },
-    [],
-  );
+      timers.clear();
+      owned.clear();
+    };
+  }, []);
 
   // settleStreamedSlot finalizes the assistant slot a drained/severed stream
   // was writing to. Two slots need help:
@@ -2473,12 +2542,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // it; the finally below will only reset state we still own.
           attachedConvIdsRef.current.delete(target);
           await reattachToConv(target);
+          if (
+            slotNeedsSettling(target, assistantId, false) &&
+            !attachedConvIdsRef.current.has(target)
+          ) {
+            // The probe said the turn was LIVE (or retained) and the reattach
+            // did not take it — its own probe or stream request lost the same
+            // flap, or another recovery path is already inside it. That is not
+            // evidence the turn is gone, so it must not become a verdict:
+            // settling here on a reachable-but-unanswered transcript would
+            // stamp a running turn failed. Hand it to the chain, which
+            // re-probes and only settles on a definitive answer.
+            scheduleRecoveryRetry(target, assistantId, false);
+          }
           // Defensive reconcile against the probe/reattach race: if the turn
           // completed between our /inflight probe and reattach's own probe,
           // reattach short-circuits without attaching and the slot is left
           // mid-flight. Postgres has the canonical shape — pull it (and, if
           // it doesn't, leave an honest retryable marker instead of a blank
-          // bubble that reads as "the assistant said nothing").
+          // bubble that reads as "the assistant said nothing"). The chain's
+          // ownership guard makes this a no-op when the branch above armed it.
           await settleStreamedSlot(target, assistantId, false);
         } else {
           // Guard against the two-recovery-path race. When a phone

@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useTurnStream, type TurnStreamDeps } from "./useTurnStream";
@@ -773,6 +774,94 @@ describe("recovery ownership spans the whole chain", () => {
     h.releaseInflight();
     await vi.advanceTimersByTimeAsync(5000);
     expect(h.attachCount()).toBe(attachesBefore);
+  }, 20000);
+});
+
+// Codex round 3 on #1584: ownership suppresses the busy flag, so the chain
+// owes the conversation an idle; and a chain recovers ONE turn, which the
+// server may have moved past by the time a tick fires.
+describe("the recovery chain hands the conversation back", () => {
+  it("frees the conversation once its recovered stream completes", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+        () =>
+          truncatedStream([
+            sse(2, "text.delta", { text: "the answer" }),
+            sse(3, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.streaming.has(CONV)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    // Both finalizers skip markConvIdle while the chain owns the slot, so if
+    // the chain does not hand it back the composer keeps offering Stop for a
+    // finished turn and routes follow-ups as if one were running.
+    expect(lastOf(h).content).toBe("the answer");
+    expect(lastOf(h).state).toBe("done");
+    expect(h.streaming.has(CONV)).toBe(false);
+  }, 20000);
+
+  it("adopts its own turn's answer when the server has moved to a new turn", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      // Our turn finished and its answer is in Postgres; a queued input then
+      // started the NEXT turn, which /inflight reports.
+      persisted: answeredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      inflight: [
+        { inflight: true, turn_id: "t1" }, // reattach's own probe: our turn
+        { inflight: true, turn_id: "t2" }, // the retry tick: a different turn
+      ],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    const attachesBefore = h.attachCount();
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    // Reattaching would pour the NEW turn's replay into the OLD turn's bubble
+    // and leave the answer we were waiting for unadopted.
+    expect(h.attachCount()).toBe(attachesBefore);
+    expect(h.loadConversationCalls).toEqual([CONV]);
+    expect(lastOf(h).content).toBe("Done — here are the results.");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+
+  it("still recovers after React's Strict Mode setup-cleanup-setup cycle", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: answeredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      inflight: [{ inflight: true, turn_id: "t1" }, { inflight: false }],
+      persistedRejectAt: [0],
+    });
+
+    // The simulated cleanup used to set the unmount flag for good, which made
+    // every later chain refuse to arm: recovery silently dead in development.
+    const { result } = renderHook(() => useTurnStream(h.deps), { wrapper: StrictMode });
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.loadConversationCalls).toEqual([CONV]);
+    expect(lastOf(h).content).toBe("Done — here are the results.");
   }, 20000);
 });
 

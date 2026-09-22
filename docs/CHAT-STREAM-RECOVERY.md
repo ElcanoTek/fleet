@@ -115,17 +115,37 @@ exactly the "Turn failed until I refresh" report.
 
 On `unreachable` the slot is **left mid-flight** (`state: "streaming"`, partial
 content kept), the attach handle is released so a reattach can claim the
-conversation, and `scheduleRecoveryRetry` re-probes on a short bounded backoff
-(1, 2, 4, 8, 16 s — one chain per conversation). Each tick asks `/inflight`
-again: still unreachable → next tick; live or retained → `reattachToConv`;
-otherwise `settleStreamedSlot`, which asks Postgres and applies the same rule.
-Leaving the slot mid-flight is what keeps the existing recovery paths — the
-`online` / `visibilitychange` / `focus` handler in `chat-experience.tsx` and
-the liveness watchdog — treating it as recoverable: a slot already stamped
+conversation, and `scheduleRecoveryRetry` re-probes: 1, 2, 4, 8, 16 s and then
+a steady 30 s beat, one chain per conversation, for as long as the outcome
+stays unknown. It does **not** give up — a conversation left unsettled is no
+longer in `attachedConvIdsRef`, so `sweepStreamLiveness` does not visit it, and
+an outage longer than the backoff would otherwise strand the slot until the
+user happened to switch tabs. A hidden tab reschedules without probing (the
+tab-return handler covers that, and background polling is waste), and every
+recovery request is bounded by a timeout so a blackholed connection costs one
+beat rather than the whole chain.
+
+Each tick asks `/inflight`: still unreachable → next tick; a **different**
+turn id than the one the chain is recovering → our turn is over, adopt its
+answer from Postgres and leave the new turn to the ordinary paths; live or
+retained → `reattachToConv`, judged afterwards by whether the slot still needs
+settling (the await spans the whole replay, so the attach handle is already
+gone when a replay ran to its terminal event); otherwise `settleStreamedSlot`,
+which asks Postgres and applies the same rule.
+
+Ownership (`recoveryOwnedRef`) spans the chain's whole life, not merely a
+pending timer: it is set when the chain is armed and released only when the
+outcome is known. While it holds, no other finalizer may settle the slot and
+neither stream finalizer marks the conversation idle — the turn may still be
+running, so Stop stays offered and a follow-up queues instead of racing. The
+chain therefore owes the conversation its `markConvIdle`, which
+`releaseRecovery` performs unless a live stream has re-claimed it.
+
+Leaving the slot mid-flight is also what keeps the existing recovery paths —
+the `online` / `visibilitychange` / `focus` handler in `chat-experience.tsx`
+and the liveness watchdog — treating it as recoverable: a slot already stamped
 `done + failed` is terminal to all of them, which is why the old page could
-never self-heal. If the chain is exhausted with the server still unreachable,
-the slot stays mid-flight and those handlers remain the way back; the page
-never invents a verdict the server did not give.
+never self-heal. The page never invents a verdict the server did not give.
 
 ## `checkStreamLiveness` — the zombie socket
 
