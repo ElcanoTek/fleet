@@ -239,3 +239,55 @@ func TestWatchdogSnapshotIgnoresARetryThatLandsAfterItFires(t *testing.T) {
 		t.Fatalf("a post-verdict retry rewrote the snapshot: seen=%v status=%d", seen, status)
 	}
 }
+
+// The retry observers are synchronous and can block for longer than the
+// backoff they announce. A record bounded by the announced delay up front
+// would expire inside them, and a watchdog firing in that gap would find
+// nothing at all: the provider's error lost, and a silent-model card with
+// status_code 0 in its place (#1585).
+func TestWatchdogProviderErrorSurvivesAnObserverSlowerThanItsBackoff(t *testing.T) {
+	fired := make(chan struct{})
+	w := newFirstChunkWatchdog(30*time.Millisecond, func() { close(fired) })
+	defer w.stop()
+
+	// The provider answers with a 429 and announces a 5 ms backoff.
+	w.noteProviderErrorSeen(&fantasy.ProviderError{StatusCode: 429})
+	// An observer that blocks far past that: the watchdog fires while it runs.
+	time.Sleep(60 * time.Millisecond)
+	w.closeProviderErrorWindow(5 * time.Millisecond)
+
+	<-fired
+	seen, status := w.providerErrorAtExpiry()
+	if !seen || status != 429 {
+		t.Fatalf("the error must survive an observer slower than its backoff: seen=%v status=%d", seen, status)
+	}
+}
+
+// A provider error published AFTER the deadline cannot be the evidence for it.
+// The timer reads the clock before it takes the lock, so a retry callback that
+// starts later can still win the mutex first; without the record's start
+// instant, its brand-new record would be read as having been live at a
+// deadline it postdates, and a model that was silent for the whole allowed
+// interval would be reported as rate-limited (#1585).
+func TestWatchdogIgnoresAProviderErrorPublishedAfterTheDeadline(t *testing.T) {
+	fired := make(chan struct{})
+	w := newFirstChunkWatchdog(20*time.Millisecond, func() { close(fired) })
+	defer w.stop()
+
+	// Hold the lock so the timer fires, captures its deadline, and blocks.
+	w.mu.Lock()
+	time.Sleep(100 * time.Millisecond)
+	// A retry that begins only now — after that deadline — publishes its
+	// record and would win the mutex first.
+	w.providerErr = &providerErrRecord{
+		from:   time.Now().UnixNano(),
+		until:  time.Now().Add(time.Minute).UnixNano(),
+		status: 429,
+	}
+	w.mu.Unlock()
+
+	<-fired
+	if seen, status := w.providerErrorAtExpiry(); seen || status != 0 {
+		t.Fatalf("a post-deadline provider error became the verdict's evidence: seen=%v status=%d", seen, status)
+	}
+}
