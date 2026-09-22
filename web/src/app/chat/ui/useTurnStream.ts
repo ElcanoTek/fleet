@@ -867,25 +867,54 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // was started directly while the chase was busy, it is that turn instead,
   // because nothing else will ever put it on screen.
   const handOffAfterChase = (convId: string): void => {
-    if (pendingDirectHandoffRef.current.delete(convId)) {
-      void (async () => {
-        // Adopt the database first. That submission can itself have finished
-        // while the chase was winding down, and a further queued turn can
-        // have started behind it — attaching that one without adopting ours
-        // would drop its prompt and its answer from the transcript.
-        //
-        // Adoption rather than a turn id, because the id is not knowable
-        // here: the direct response's body is cancelled unread (nobody at
-        // that call site is set up to consume a stream), so its turn.started
-        // never reaches us.
-        await reloadCanonical(convId);
-        if (recoveryUnmountedRef.current) return;
-        // Then take whatever is running, which is the newest turn.
-        void followSuccessor(convId, 0);
-      })();
+    if (recoveryUnmountedRef.current) return;
+    if (!pendingDirectHandoffRef.current.has(convId)) {
+      void followQueueDrain(convId);
       return;
     }
-    void followQueueDrain(convId);
+    void performDirectHandoff(convId, 0);
+  };
+
+  // performDirectHandoff puts a submission the server started directly on
+  // screen once the chase that displaced it has ended.
+  //
+  // It adopts the database BEFORE it follows anything. That submission can
+  // itself have finished while the chase was winding down, with a further
+  // queued turn starting behind it, and attaching that later turn over a
+  // transcript predating ours would drop our prompt and our answer.
+  //
+  // Adoption rather than a turn id, because the id is not knowable here: the
+  // direct response's body is cancelled unread — nobody at that call site is
+  // set up to consume a stream — so its turn.started never reaches us.
+  //
+  // The hand-off stays pending until that adoption actually lands. The reload
+  // is bounded and can also reject, and following the newest turn over either
+  // outcome is the mistake above; exiting instead would leave the submission
+  // with no stream at all.
+  const performDirectHandoff = async (
+    convId: string,
+    attempt: number,
+  ): Promise<void> => {
+    if (recoveryUnmountedRef.current) return;
+    // Stop drops the hand-off, which is also how this retry ends.
+    if (!pendingDirectHandoffRef.current.has(convId)) return;
+    let adopted: "adopted" | "unreachable" = "unreachable";
+    try {
+      adopted = await reloadCanonical(convId);
+    } catch {
+      adopted = "unreachable";
+    }
+    if (recoveryUnmountedRef.current) return;
+    if (!pendingDirectHandoffRef.current.has(convId)) return;
+    if (adopted !== "adopted") {
+      window.setTimeout(() => {
+        void performDirectHandoff(convId, attempt + 1);
+      }, recoveryDelayFor(attempt));
+      return;
+    }
+    pendingDirectHandoffRef.current.delete(convId);
+    // Then take whatever is running, which is the newest turn.
+    void followSuccessor(convId, 0);
   };
 
   // endSuccessorChase drops the chase and frees the conversation it was
