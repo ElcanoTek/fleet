@@ -4115,6 +4115,14 @@ export function ChatExperience({
       await sweepStreamLivenessRef.current({ force: true });
       if (attachedConvIdsRef.current.has(convId)) return;
 
+      // A conversation the recovery chain owns is off limits to BOTH halves
+      // of this handler. The chain is mid-decision about one particular turn:
+      // a generic reattach here would bind to whatever /inflight reports —
+      // a queued successor, say — and pour its replay into the turn's slot,
+      // and the reload below would swap the live prompt and partial answer
+      // for an incomplete transcript. The chain re-probes on its own (#1584).
+      if (isRecoveringConvRef.current(convId)) return;
+
       // First try to reattach to any in-flight turn so the user sees
       // live tokens resume. If nothing's in-flight, fall back to a
       // plain DB reload in case a turn completed while we were away.
@@ -4143,12 +4151,6 @@ export function ChatExperience({
         (m) => m.state === "streaming" || m.state === "thinking",
       );
       if (!hasStaleStream) return;
-      // A slot the recovery chain owns is deliberately mid-flight while its
-      // outcome is unknown, and the chain re-probes on its own. Reloading it
-      // here would swap the live prompt and assistant slot for an incomplete
-      // Postgres transcript — losing the partial answer, and leaving the
-      // chain looking for a slot that no longer exists (#1584).
-      if (isRecoveringConvRef.current(convId)) return;
 
       // preserveScroll: the user was already on this conversation and may
       // have been mid-read. Even when we do refetch (turn dropped while

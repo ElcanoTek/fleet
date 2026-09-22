@@ -637,6 +637,24 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       ? recoveryRetryDelaysMs[attempt]
       : recoverySteadyRetryMs;
 
+  // followSuccessor attaches to the turn the server is running now, after the
+  // chain has settled the older turn it was recovering. Fire-and-forget was
+  // not enough: that attach makes its own probe and /stream request, either
+  // of which can lose the same connectivity flap, and a `false` return with
+  // no chain and no timer left the successor running with nothing on screen
+  // until a focus event or a reload. A short bounded retry covers the flap.
+  const followSuccessor = async (convId: string, attempt = 0): Promise<void> => {
+    if (recoveryUnmountedRef.current) return;
+    if (attachedConvIdsRef.current.has(convId)) return;
+    if (await reattachToConv(convId)) return;
+    if (recoveryUnmountedRef.current) return;
+    if (attachedConvIdsRef.current.has(convId)) return;
+    if (attempt >= recoveryRetryDelaysMs.length) return;
+    window.setTimeout(() => {
+      void followSuccessor(convId, attempt + 1);
+    }, recoveryDelayFor(attempt));
+  };
+
   // scheduleRecoveryRetry re-asks the server about a slot left unsettled
   // because the server was unreachable when its stream died. The online /
   // visibilitychange / focus handlers and the liveness watchdog also recover
@@ -706,9 +724,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           if (recoveryUnmountedRef.current) return;
           if (recoveryRetriesRef.current.has(convId)) return;
           releaseRecovery(convId);
-          void reattachToConv(convId);
+          void followSuccessor(convId);
         };
         if (probe.turnID !== "" && ownedTurnID !== "" && probe.turnID !== ownedTurnID) {
+
           await adoptOurTurnThenFollow();
           return;
         }
@@ -727,7 +746,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           }
           if (persisted === "adopted") {
             releaseRecovery(convId);
-            void reattachToConv(convId);
+            void followSuccessor(convId);
             return;
           }
         }
@@ -757,7 +776,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // not take it — its own probe or stream fetch lost the same
           // connectivity flap, or another path is inside it. Either way this
           // is not evidence the turn is gone, so it must not become a verdict:
-          // come back instead of settling.
+          // come back instead of settling. reattachToConv idles the
+          // conversation on its way out, so restore the busy flag: recovery
+          // still owns a turn that may well be running, and a UI that hides
+          // Stop and offers to clear the conversation would be lying.
+          markConvStreaming(convId);
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
           return;
         }
@@ -2143,6 +2166,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     abortController: AbortController,
     body: Record<string, unknown>,
     initialTarget: string,
+    // Flipped once the POST is ACCEPTED. submitPrompt's catch reads it: a
+    // submission the server never took started no turn, so there is nothing
+    // for the recovery chain to recover and attaching to whatever /inflight
+    // reports (a previous turn still inside its retain window, say) would
+    // replay the wrong turn into this slot (#1584).
+    accepted?: { value: boolean },
   ) => {
     const thinkingStartedAt = nowMs();
     let hasStartedStreaming = false;
@@ -2154,14 +2183,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // parallel without colliding on a single PENDING sentinel.
     let target = initialTarget;
     attachedConvIdsRef.current.add(target);
-    // Drop the PREVIOUS turn's id BEFORE the request goes out. The server can
-    // accept and start a turn whose response headers never reach us; `fetch`
-    // then throws and the catch arms recovery, so any reset that waited for
-    // the response would leave the chain holding the preceding turn's
-    // identity — and the chain would classify the genuinely live turn as a
-    // successor and fail a slot that is still running (#1584).
-    currentTurnIdByConvRef.current.delete(target);
-
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2209,8 +2230,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // later (in turn.started) and the boundary-detection logic in
     // pumpStreamResponse keeps currentTurnIdByConvRef in sync.
     lastEventIdByConvRef.current.set(target, 0);
-    // The turn id was dropped before the POST (see above); until turn.started
-    // lands this conversation has no known turn, which is the truth.
+    // Drop the PREVIOUS turn's id alongside it, now that the POST has been
+    // ACCEPTED: from here a new turn is starting, and until turn.started
+    // arrives this conversation has no known turn — which is the truth, and
+    // what lets the recovery chain fall back to the transcript instead of
+    // mistaking a successor for ours. Deliberately not before the request:
+    // a POST that is rejected or never arrives starts no turn, and clearing
+    // then would let the catch's probe mistake a previous turn still inside
+    // its retain window for this submission (#1584).
+    currentTurnIdByConvRef.current.delete(target);
+    // The server has accepted this submission, so there IS a turn for the
+    // recovery chain to recover if the stream dies. A failure before this
+    // point started nothing, and recovery must not attach to anything.
+    if (accepted) accepted.value = true;
 
     // Thread mutable per-turn state through the shared pump. The
     // "conversation" SSE event may rename target from PENDING_CONV_KEY
@@ -2533,9 +2565,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }
       return initialTarget;
     };
+    // Whether the server took this submission (see streamTurn's parameter).
+    const accepted = { value: false };
 
     try {
-      await streamTurn(assistantId, abortController, body, initialTarget);
+      await streamTurn(assistantId, abortController, body, initialTarget, accepted);
       await refreshConversations();
       void loadMemories();
     } catch (error) {
@@ -2595,7 +2629,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           );
           attachedConvIdsRef.current.delete(target);
           scheduleRecoveryRetry(target, assistantId, false);
-        } else if (probe.inflight || probe.turnID) {
+        } else if (accepted.value && (probe.inflight || probe.turnID)) {
           patchAssistantMessage(target, assistantId, (m) => ({
             ...m,
             state: "streaming",

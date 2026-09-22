@@ -974,6 +974,43 @@ describe("an unidentified turn is resolved by the transcript, not by guessing", 
   }, 20000);
 });
 
+// A submission the server never took started no turn, so there is nothing to
+// recover — and a previous turn still inside its retain window must not be
+// mistaken for it (#1584).
+describe("recovery arms only for a submission the server accepted", () => {
+  it("does not attach to a retained earlier turn when the POST never lands", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      // The POST itself throws: no response, no turn.
+      streamBodies: [() => severedStream([])],
+      // If the gate were missing, this retained earlier turn would look like
+      // ours and its replay would land in this submission's slot.
+      inflight: [{ inflight: false, turn_id: "t-earlier-retained" }],
+    });
+    const postFails = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/chat") throw new TypeError("Failed to fetch");
+      return (globalThis as { __origFetch?: typeof fetch }).__origFetch!(input, init);
+    });
+    const orig = globalThis.fetch;
+    (globalThis as { __origFetch?: typeof fetch }).__origFetch = orig;
+    vi.stubGlobal("fetch", postFails);
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // No attach to the retained turn, and the slot is settled honestly
+    // rather than left waiting on a turn that never existed.
+    expect(h.attachCount()).toBe(0);
+    const last = lastOf(h);
+    expect(last.role).toBe("assistant");
+    expect(last.state).toBe("done");
+    expect(last.failed).toBe(true);
+  }, 20000);
+});
+
 describe("settling a slot that is waiting on the user", () => {
   it("does not stamp 'Turn failed' over a pending approval card", async () => {
     const h = makeHarness({
