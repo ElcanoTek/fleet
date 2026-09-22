@@ -140,8 +140,17 @@ caller's still-open assistant slot, pouring one turn's replay into another
 turn's bubble. **The chase is bound too**: it carries the successor id the
 chain discovered, because two queued inputs can drain in quick succession and
 an unbound attach would take the later turn and replay its answer under the
-earlier one's committed prompt. Only the queue follower attaches unbound, and
-it stands down entirely while recovery owns the conversation.
+earlier one's committed prompt.
+
+Two callers attach **unbound**, and both are deliberate. The queue follower
+looks for whatever ran a queued row, and stands down entirely while recovery
+owns the conversation. And a chase ending with a **deferred direct hand-off**
+takes whatever the server is running: that is a submission the server started
+directly while the chase was busy with another turn, and its id never reaches
+the client, because the direct response's body is cancelled unread. That
+hand-off reloads the canonical transcript before it attaches, so a submission
+that finished in the meantime keeps its prompt and its answer rather than
+being replaced by the next turn.
 
 ## Chasing a successor
 
