@@ -96,6 +96,37 @@ produce an actionable roster error. Tools may be native names, server tool names
 or Fleet's full `mcp_<server>_<tool>` names; full names avoid ambiguity. Model
 resolution already happens before the run and remains mandatory.
 
+`"roster":"required_tools_only"` (#1603) additionally narrows the run's MCP
+roster to the tools `required_tools` names:
+
+```text
+EXECUTION REQUIREMENTS (JSON):
+{"mcp_servers":["pages"],"required_tools":["mcp_pages_get_page_data","mcp_pages_record_refresh_check","mcp_pages_update_page_data_upload"],"roster":"required_tools_only"}
+```
+
+- **What registers.** Each selected server's Gate-2 allowlist is intersected
+  with the required tools, which are resolved the same way as the check above.
+  A server none of whose tools is required registers nothing: here `fast_io`,
+  `fastio_helpers`, and every Pages layout, template or delete tool.
+- **What does not change.** Native tools stay (`confirm_audit`,
+  `task_tracker`, bash, Python, the file tools). The live-registry section of
+  the system prompt follows the roster.
+- **No lost tools.** A required tool can never be narrowed away, because the
+  check above has already proved it is in the roster. Narrowing only removes;
+  it never grants a tool the allowlist denies.
+- **Removed tools.** A call to a removed tool is answered `tool not found`.
+  The run log carries one `[roster] required_tools_only: N mcp tools
+  registered` breadcrumb.
+- **Unknown values.** Any other `roster` value is a dispatch error. Without
+  the key, the roster is exactly as before.
+
+The point is cost and safety. A Pages data refresh resent about 34K tokens of
+tool schemas it never used on every step. Prod run `89afe409` declared a
+layout-mutating `deploy_page_upload` in its audit, which a data refresh must
+never reach; on a narrowed roster that declaration is unrepresentable. Fleet
+still interprets nothing about the tools: the list and the narrowing are the
+producer's contract.
+
 This declaration only restricts a run. It cannot enable network, bypass the
 broker, select credentials or override an administrator's allowlist. It does not
 prove endpoint reachability, per-account authorization or source completeness;

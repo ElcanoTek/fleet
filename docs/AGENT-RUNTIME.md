@@ -522,6 +522,22 @@ Consequences worth stating plainly:
 - Gate-2's per-server tool allowlist (`mcpAllowlist.toolsFor`) resolves through
   the same helper, so a variant seat is filtered by its manifest server's
   allowlist exactly like the default seat.
+- **A narrowed roster keys the same way (#1603).** A scheduled task whose
+  `EXECUTION REQUIREMENTS` sets `"roster":"required_tools_only"` runs with an
+  allowlist built from its `required_tools` (entries keyed by registered server
+  name), and with Gate-2 **exhaustive** (`RunConfig.MCPRosterNarrowing`). A
+  server with no entry — after the same keying rule — registers nothing, where
+  an absent entry otherwise means "allow all". So a `<server>_<account>` seat
+  whose tools are not named in its own full form falls back to its base server's
+  narrowed entry and narrows the same way.
+  - A sub-agent of a narrowed run inherits the exhaustive flag, and it gets an
+    explicit entry for every catalog server before the explore role's filter
+    runs, so no child sees a tool its parent cannot call.
+  - The run log carries one `[roster] required_tools_only: N mcp tools
+    registered` breadcrumb. A call to a tool the narrowing removed is answered
+    `tool not found`.
+  - Roster order is unchanged (catalog order, as the prompt-cache contract
+    requires).
 
 The whole-name (`N == K`) branch applies only to **registered server names** — a
 registered name can legitimately *be* a declared server. It is deliberately off

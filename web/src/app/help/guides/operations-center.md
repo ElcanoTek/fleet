@@ -153,7 +153,9 @@ review the model in **Advanced** if a run reports that no provider serves it.
 Some generated prompts include an **EXECUTION REQUIREMENTS (JSON)** block.
 Keep it when copying the prompt. Fleet checks it when the run starts, before
 model execution, and reports missing tools or sandbox network access. It does
-not enable connections or permissions for you. For file uploads, select
+not enable connections or permissions for you. A block that marks its tool list
+as the run's whole roster limits the task to exactly those connector tools, and
+a call to any other connector tool is refused. For file uploads, select
 **Allow network egress** in Advanced; the administrator's network policy still
 applies. Working mailbox or connector calls do not prove that shell uploads can
 reach the destination. A required source must still be fetched and checked by

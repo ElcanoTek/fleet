@@ -53,6 +53,16 @@ type RunConfig struct {
 	MaxIterations int
 	// Allowlist is the per-server tool allowlist (Gate-2).
 	Allowlist mcpAllowlist
+	// MCPRosterNarrowing, when non-empty, makes Allowlist EXHAUSTIVE for this
+	// run (#1603): a server with no allowlist entry (after the one keying rule,
+	// so a `<server>_<account>` seat falls back to its base entry) registers no
+	// MCP tools, where an absent entry normally means "allow all". The value
+	// names the narrowing for the one-time `[roster] <value>: N mcp tools
+	// registered` session-log breadcrumb — the scheduled driver sets it to
+	// "required_tools_only" from the task's EXECUTION REQUIREMENTS. Native,
+	// loader and confirm_audit tools are never affected. Empty = Gate-2 exactly
+	// as before.
+	MCPRosterNarrowing string
 	// OptionalServers is the authoritative catalog of Optional servers.
 	OptionalServers mcpOptionalSet
 	// Selection is the per-run MCP selection; its server names form the Gate-1
@@ -448,6 +458,8 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		journal:           deps.TurnJournal,
 		readWorkspaceFile: deps.ReadWorkspaceFile,
 	}
+	// A narrowed roster (#1603) makes Gate-2 exhaustive for this run.
+	toolCfg.exclusiveAllowlist = cfg.MCPRosterNarrowing != ""
 
 	mcpClient := deps.MCPClient
 	if mcpClient == nil {
@@ -507,6 +519,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if err != nil {
 		return Result{}, fmt.Errorf("build tools: %w", err)
 	}
+	// One breadcrumb for a narrowed roster (#1603), at the first build only: a
+	// mid-run MCP rebuild re-applies the same exhaustive allowlist but does not
+	// repeat the line.
+	noteRosterNarrowing(logSession, cfg.MCPRosterNarrowing, roster)
 	// The prompt the model sees = the driver's base + what this roster makes
 	// callable. Every later consumer of systemPrompt (the agent, the context
 	// prefix accounting, the finalize seam, terminal structured output) uses

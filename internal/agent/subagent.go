@@ -267,6 +267,29 @@ var exploreDeniedMCPNamePattern = regexp.MustCompile(`(?i)(?:^|_)(write|create|u
 // never-matching name rather than an empty list.
 const exploreNoToolsSentinel = "__explore_role_denies_all_tools__"
 
+// explicitNarrowedAllowlist turns an EXHAUSTIVE allowlist (a narrowed roster,
+// #1603) into an equivalent explicit one over the catalog: every catalog
+// server gets the entry governing it under the one keying rule, or the
+// never-matching sentinel when none does. Consumers that read a missing entry
+// as "allow all" then see exactly what the narrowed run can call.
+func explicitNarrowedAllowlist(catalog []mcp.ServerTool, narrowed agentcore.MCPAllowlist) agentcore.MCPAllowlist {
+	out := make(agentcore.MCPAllowlist, len(narrowed))
+	for server, list := range narrowed {
+		out[server] = append([]string(nil), list...)
+	}
+	for _, st := range catalog {
+		if _, ok := out[st.ServerName]; ok {
+			continue
+		}
+		if list := agentcore.AllowlistToolsFor(narrowed, st.ServerName); len(list) > 0 {
+			out[st.ServerName] = append([]string(nil), list...)
+		} else {
+			out[st.ServerName] = []string{exploreNoToolsSentinel}
+		}
+	}
+	return out
+}
+
 // exploreMCPToolAllowlist derives an explore child's Gate-2 tool allowlist
 // (#1043): every catalog server gets an EXPLICIT entry — the parent's allowed
 // set (or the server's full catalog set when the parent had no entry) minus the
@@ -909,13 +932,21 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 	// received. This section states the child's actual contract instead.
 	childSystemPrompt := a.systemPrompt + subagentChildPromptSection
 	childMCPAllowlist := a.mcpToolAllowlist
+	if a.mcpRosterNarrowing != "" {
+		// The parent's allowlist is EXHAUSTIVE (#1603): a server it has no
+		// entry for registers nothing. Spell that out per catalog server before
+		// anything derives from it, because the explore filter below reads a
+		// missing entry as "allow all" — without this an explore child of a
+		// narrowed run would see tools its parent could not call.
+		childMCPAllowlist = explicitNarrowedAllowlist(a.mcpCatalog, a.mcpToolAllowlist)
+	}
 	if role == SubagentRoleExplore {
 		childSystemPrompt += exploreChildPromptSection
 		// Best-effort MCP write stripping (#1043): the explore child's Gate-2
 		// allowlist is the parent's, minus write-verb tool names, with every
 		// catalog server covered explicitly. Name-based only; the prompt section
 		// above is the guard for mutators the pattern cannot recognize.
-		childMCPAllowlist = exploreMCPToolAllowlist(a.mcpCatalog, a.mcpToolAllowlist)
+		childMCPAllowlist = exploreMCPToolAllowlist(a.mcpCatalog, childMCPAllowlist)
 	}
 
 	child := NewAgent(Options{
@@ -944,6 +975,10 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		// Monotonic privilege: the child carries the parent's (copied) credential
 		// allowlist — Gate-3 enforced by the child's own agentcore.Run.
 		CredentialAllowlist: allowlist,
+		// A narrowed parent's exhaustive Gate-2 carries to the child too
+		// (#1603): a server loaded after the spawn is as closed to the child as
+		// it is to the parent.
+		MCPRosterNarrowing: a.mcpRosterNarrowing,
 		// A child does not itself run the phone-a-friend reviewer; that is a
 		// root-run finish gate. Leaving it off avoids unbounded reviewer fan-out.
 		PhoneAFriendEnabled: false,

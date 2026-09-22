@@ -65,6 +65,26 @@ by the driver before the roster existed, so above the threshold it listed
 every name as callable — the model called one, got "tool not found", and gave
 up on a working connector (#1006, four hosted connectors = 159 tools).
 
+## Narrowing the roster instead (#1603)
+
+Disclosure changes how much of the roster the model sees on each turn, not what
+the roster contains. A run that knows exactly which MCP tools it needs can
+shrink the roster itself. A scheduled task's `EXECUTION REQUIREMENTS` may carry
+`"roster":"required_tools_only"` (see
+[CONDITIONAL-TASK-COMPLETION.md](CONDITIONAL-TASK-COMPLETION.md#copyable-execution-prerequisites)).
+
+The scheduled driver then intersects each server's Gate-2 allowlist with the
+tools `required_tools` names, and makes Gate-2 **exhaustive** for the run
+(`RunConfig.MCPRosterNarrowing`): a selected server none of whose tools is
+required registers nothing. Native, loader and `confirm_audit` tools are
+untouched.
+
+The live-registry section, the tool list the model is sent, and the disclosure
+threshold count all see the narrowed roster. A narrowed roster usually lands
+well under the threshold. A Pages data refresh drops from the 44 Pages tools
+(about 135 KB of descriptions and schemas, ≈34K tokens resent on every step),
+plus the `fast_io` and `fastio_helpers` tools, to the eight or so it names.
+
 ## BM25 index (`internal/tools/bm25_index.go`)
 
 Textbook BM25 (k1=1.5, b=0.75) over tokenized tool metadata. The tokenizer

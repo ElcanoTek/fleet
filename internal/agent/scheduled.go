@@ -75,6 +75,9 @@ type Agent struct {
 	noteProposer     agentcore.NoteProposer
 	skillProposer    agentcore.SkillProposer
 
+	// mcpRosterNarrowing is Options.MCPRosterNarrowing ("" = none).
+	mcpRosterNarrowing string
+
 	// ── agent self-improvement (#285), gated by the per-task Captain's Log opt-in
 	// (instruction_self_improve). The DRIVER (scheduledrun) leaves these nil unless
 	// the task opted in, so config/default behaviour is unchanged. ──
@@ -189,6 +192,13 @@ type Options struct {
 	Sandbox        *sandbox.Sandbox
 	LogFile        string
 	OutputSchema   json.RawMessage
+
+	// MCPRosterNarrowing, when non-empty, declares MCPToolAllowlist exhaustive
+	// for the run (agentcore.RunConfig.MCPRosterNarrowing, #1603): a server
+	// with no entry registers no MCP tools. scheduledrun sets it to
+	// "required_tools_only" with an allowlist narrowed to the task's
+	// EXECUTION REQUIREMENTS required_tools. "" = Gate-2 as before.
+	MCPRosterNarrowing string
 
 	// NotesProvider supplies the admin-curated knowledge base appended to the
 	// system prompt at run start (both modes inject the same notes). Nil = none.
@@ -337,6 +347,7 @@ func NewAgent(opts Options) *Agent {
 		mcpBroker:            opts.MCPBroker,
 		mcpCatalog:           cloneScheduledMCPCatalog(opts.MCPCatalog),
 		mcpToolAllowlist:     opts.MCPToolAllowlist,
+		mcpRosterNarrowing:   opts.MCPRosterNarrowing,
 		overlay:              opts.Overlay,
 		nativeTools:          opts.NativeTools,
 		systemPrompt:         opts.SystemPrompt,
@@ -882,6 +893,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		MaxCompletionTokens: maxTokens,
 		MaxIterations:       a.maxIterations,
 		Allowlist:           allow,
+		MCPRosterNarrowing:  a.mcpRosterNarrowing,
 		OptionalServers:     optional,
 		Selection:           a.selection(),
 		IncludeConfirmAudit: true,
