@@ -1103,12 +1103,13 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		)),
 	})
 	if err != nil && watchdog.timedOut() && ctx.Err() == nil {
+		providerErrAtExpiry, providerStatusAtExpiry := watchdog.providerErrorAtExpiry()
 		return nil, &firstChunkTimeoutError{
 			timeout:        firstChunkTimeout,
 			promptTokens:   promptTokens,
 			cause:          err,
-			providerErr:    watchdog.sawProviderError(),
-			providerStatus: watchdog.providerErrorStatus(),
+			providerErr:    providerErrAtExpiry,
+			providerStatus: providerStatusAtExpiry,
 		}
 	}
 	return result, err
@@ -1140,6 +1141,14 @@ type firstChunkWatchdog struct {
 	// the record expires with the sleep that justified it.
 	providerErrUntil  atomic.Int64 // unix nanos; 0 = never seen one
 	providerErrStatus atomic.Int32
+	// Captured at the instant the timer WINS, because that is the only moment
+	// the answer is knowable. Reading the live record afterwards — the caller
+	// reads it once ag.Stream has unwound the cancelled request — can miss a
+	// record that lapsed in between, and two separate reads can disagree with
+	// each other, either of which puts "the model never started" on a card
+	// for a provider that was throttling us.
+	expiredAfterProviderErr atomic.Bool
+	expiredProviderStatus   atomic.Int32
 }
 
 func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWatchdog {
@@ -1153,6 +1162,11 @@ func newFirstChunkWatchdog(timeout time.Duration, onExpire func()) *firstChunkWa
 func (w *firstChunkWatchdog) expire() {
 	if !w.settled.CompareAndSwap(false, true) {
 		return
+	}
+	// Snapshot first: this is the instant the watchdog's verdict is formed.
+	if w.providerErrorLive() {
+		w.expiredAfterProviderErr.Store(true)
+		w.expiredProviderStatus.Store(w.providerErrStatus.Load())
 	}
 	w.fired.Store(true)
 	w.onExpire()
@@ -1191,20 +1205,23 @@ func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderErro
 	}
 }
 
-// sawProviderError reports whether a provider error is still the explanation
-// for the current silence — i.e. the retry loop is inside the backoff that
+// providerErrorLive reports whether a provider error is the explanation for
+// the silence AT THIS MOMENT — i.e. the retry loop is inside the backoff that
 // error bought. Once the next attempt has begun, silence is the model's own.
-func (w *firstChunkWatchdog) sawProviderError() bool {
+// Only expire() consults it; everyone else wants the snapshot below, taken
+// when the verdict was formed.
+func (w *firstChunkWatchdog) providerErrorLive() bool {
 	until := w.providerErrUntil.Load()
 	return until != 0 && time.Now().UnixNano() < until
 }
 
-// providerErrorStatus is the last pre-first-chunk provider status, or 0.
-func (w *firstChunkWatchdog) providerErrorStatus() int {
-	if !w.sawProviderError() {
-		return 0
+// providerErrorAtExpiry reports the provider-error state as it stood when the
+// watchdog fired, and the status that went with it. One read, one instant.
+func (w *firstChunkWatchdog) providerErrorAtExpiry() (seen bool, status int) {
+	if !w.expiredAfterProviderErr.Load() {
+		return false, 0
 	}
-	return int(w.providerErrStatus.Load())
+	return true, int(w.expiredProviderStatus.Load())
 }
 
 // timedOut reports whether the timer won the decision.

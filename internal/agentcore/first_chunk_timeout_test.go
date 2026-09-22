@@ -94,20 +94,20 @@ func TestWatchdogProviderErrorStatusTracksTheLatestCallback(t *testing.T) {
 	defer w.stop()
 
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, time.Minute)
-	if got := w.providerErrorStatus(); got != 429 {
-		t.Fatalf("status = %d, want 429", got)
+	if !w.providerErrorLive() || w.providerErrStatus.Load() != 429 {
+		t.Fatalf("status = %d, want 429", w.providerErrStatus.Load())
 	}
 	// A transport error carries no status: the 429 must not linger.
 	w.noteProviderError(nil, time.Minute)
-	if !w.sawProviderError() {
+	if !w.providerErrorLive() {
 		t.Errorf("a transport error is still a provider error")
 	}
-	if got := w.providerErrorStatus(); got != 0 {
+	if got := w.providerErrStatus.Load(); got != 0 {
 		t.Fatalf("stale status survived a statusless retry: %d", got)
 	}
 	// An out-of-range code is not a status worth reporting either.
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 99_999}, time.Minute)
-	if got := w.providerErrorStatus(); got != 0 {
+	if got := w.providerErrStatus.Load(); got != 0 {
 		t.Fatalf("out-of-range status was stored: %d", got)
 	}
 }
@@ -124,24 +124,57 @@ func TestWatchdogProviderErrorExpiresWithItsBackoff(t *testing.T) {
 	// so its silence is the model's own. A zero delay is enough to show it —
 	// the record covers the sleep it bought and not a moment more.
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, 0)
-	if w.sawProviderError() {
+	if w.providerErrorLive() {
 		t.Fatalf("a lapsed provider-error record still explained the silence")
 	}
-	if got := w.providerErrorStatus(); got != 0 {
-		t.Fatalf("a lapsed record still reported status %d", got)
+	if seen, status := w.providerErrorAtExpiry(); seen || status != 0 {
+		t.Fatalf("nothing expired yet, so the snapshot must be empty: seen=%v status=%d", seen, status)
 	}
 
 	// Inside the backoff it is the explanation.
 	w.noteProviderError(&fantasy.ProviderError{StatusCode: 503}, time.Minute)
-	if !w.sawProviderError() || w.providerErrorStatus() != 503 {
+	if !w.providerErrorLive() || w.providerErrStatus.Load() != 503 {
 		t.Fatalf("inside its backoff the record must stand: seen=%v status=%d",
-			w.sawProviderError(), w.providerErrorStatus())
+			w.providerErrorLive(), w.providerErrStatus.Load())
 	}
 
 	// A watchdog that never saw one reports nothing.
 	fresh := newFirstChunkWatchdog(time.Hour, func() {})
 	defer fresh.stop()
-	if fresh.sawProviderError() {
+	if fresh.providerErrorLive() {
 		t.Fatalf("a watchdog with no provider error must report none")
+	}
+}
+
+// The verdict is formed when the timer wins, so the provider-error state is
+// snapshotted THERE. Reading the live record afterwards — the caller reads it
+// once the cancelled stream has unwound — could miss a record that lapsed in
+// between and put "the model never started" on a card for a provider that was
+// throttling us (#1585).
+func TestWatchdogSnapshotsProviderErrorWhenItFires(t *testing.T) {
+	fired := make(chan struct{})
+	w := newFirstChunkWatchdog(10*time.Millisecond, func() { close(fired) })
+	defer w.stop()
+
+	// A backoff that is still running when the watchdog fires.
+	w.noteProviderError(&fantasy.ProviderError{StatusCode: 429}, time.Second)
+	<-fired
+
+	// Let the record lapse, exactly as an unwinding stream would.
+	w.providerErrUntil.Store(time.Now().Add(-time.Millisecond).UnixNano())
+	if w.providerErrorLive() {
+		t.Fatalf("the live record should have lapsed by now")
+	}
+	seen, status := w.providerErrorAtExpiry()
+	if !seen || status != 429 {
+		t.Fatalf("the snapshot must survive the unwind: seen=%v status=%d", seen, status)
+	}
+
+	// A watchdog that fires with no provider error in play reports none.
+	quiet := newFirstChunkWatchdog(time.Millisecond, func() {})
+	defer quiet.stop()
+	time.Sleep(20 * time.Millisecond)
+	if seen, status := quiet.providerErrorAtExpiry(); seen || status != 0 {
+		t.Fatalf("a silent model must not acquire a provider error: seen=%v status=%d", seen, status)
 	}
 }
