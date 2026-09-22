@@ -2358,7 +2358,14 @@ export function ChatExperience({
     // working. Handles the page-refresh-mid-turn scenario: history is
     // empty (server hasn't persisted yet), but /inflight reports
     // inflight:true and /stream replays the complete event sequence.
-    void reattachToConv(conversationId);
+    //
+    // NOT for a recovery adoption. That caller is following one particular
+    // turn and binds its own attach to it; this probe takes whatever the
+    // server reports, so a successor starting between the history response
+    // and this call would be attached here, unbound, and its replay rendered
+    // under the previous turn's prompt (#1584). The recovery caller attaches
+    // itself, with the id it means.
+    if (!options.adopt) void reattachToConv(conversationId);
   };
 
   // deleteAllUnpinned / bulkDeleteConversations / deleteConversationById are

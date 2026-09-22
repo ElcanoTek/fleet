@@ -2138,3 +2138,51 @@ describe("an authentication failure is indeterminate, not an answer", () => {
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
   }, 20000);
 });
+
+// Codex round 18 on #1584: when the liveness probe says the turn has ended,
+// the reconcile releases the attach handle before it reloads. If that reload
+// cannot be made, reporting health strands the bubble: every later sweep
+// enumerates only attached conversations, so nothing would ever look again.
+describe("liveness hands an unreachable reconcile to recovery", () => {
+  it("arms the chain instead of reporting health over a stranded bubble", async () => {
+    vi.useFakeTimers();
+    const HEARTBEAT = 1000;
+    const h = makeHarness({
+      initial: [],
+      persisted: answeredHistory(),
+      heartbeatMs: HEARTBEAT,
+      streamBodies: [
+        (signal) => zombieStream(signal, undefined, []),
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "the answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [
+        { inflight: true, turn_id: "t1" }, // the attach
+        { inflight: false }, // the liveness probe: the turn is over
+        { inflight: false }, // the chain's tick
+      ],
+      // The reconcile's history request cannot be made.
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    const zombie = result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+
+    await vi.advanceTimersByTimeAsync(4 * HEARTBEAT + 1000);
+    await result.current.checkStreamLiveness(CONV);
+    await vi.advanceTimersByTimeAsync(20);
+    // Busy and owned, not quietly "healthy" over a bubble nothing will visit.
+    expect(result.current.isRecoveringConv(CONV)).toBe(true);
+    expect(h.streaming.has(CONV)).toBe(true);
+
+    // And the chain finishes the job once the database can be read.
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    void zombie;
+  }, 20000);
+});

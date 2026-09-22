@@ -1016,10 +1016,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // for it: it ended before producing one. Show what a refresh would
         // show and stop chasing something that has finished — polling on
         // would hold the conversation busy for ever.
-        await reloadCanonical(convId);
+        const shown = await reloadCanonical(convId);
         if (recoveryUnmountedRef.current || !stillMine()) return;
+        if (shown !== "adopted") {
+          // The transcript never landed, so this submission may have no trace
+          // on screen at all — the predecessor's adoption can have happened
+          // before the successor's prompt was committed. Ending here would
+          // leave nothing to repair it.
+          scheduleSuccessorRetry(convId, attempt);
+          return;
+        }
         endSuccessorChase(convId);
-        return;
       }
       if (persisted === "adopted") {
         // The answer came from the database, so no turn is running: the
@@ -1184,6 +1191,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
               : null;
           if (gapNow === null) {
             releaseRecovery(convId);
+            // The replay's own hand-off to the queue follower was turned away
+            // while this chain still owned the conversation, so a further
+            // queued input would otherwise drain with no stream on it.
+            void followQueueDrain(convId);
             return;
           }
           if (attachedConvIdsRef.current.has(convId)) {
@@ -1212,6 +1223,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // is known and the conversation is free (releaseRecovery idles it).
         if (recoveryRetriesRef.current.has(convId)) return;
         releaseRecovery(convId);
+        // Same hand-off: this chain's settle is a turn-ends moment reached
+        // without any stream's finally, and the follower it displaced has to
+        // be started now that ownership is gone.
+        void followQueueDrain(convId);
       })();
     }, recoveryDelayFor(attempt));
     recoveryRetriesRef.current.set(convId, timer);
@@ -2693,8 +2708,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (!inflight) {
         // The turn is over. Postgres is authoritative; adopt it and retire the
         // socket. reconcileFromPersisted releases the attach handle itself.
-        if ((await reconcileFromPersisted(convId)) !== "adopted")
+        const adopted = await reconcileFromPersisted(convId);
+        if (adopted === "unreachable") {
+          // The probe said the turn is OVER, so this socket is finished
+          // whatever the database said — but we could not read the answer.
+          // Retire the socket and hand the slot to the chain: reporting
+          // health would strand the bubble, because reloadCanonical releases
+          // the attach handle on its way and every later sweep visits only
+          // attached conversations, so nothing would ever look again.
+          const holder = abortControllersRef.current.get(convId);
+          if (holder && holder !== doomed) return "healthy";
+          retireStream(convId, doomed);
+          // The adopted path gets this release from reloadCanonical; here
+          // nothing reached it, and armRecoveryForUnsettled will not touch a
+          // conversation that still looks attached.
+          attachedConvIdsRef.current.delete(convId);
+          armRecoveryForUnsettled(convId);
           return "healthy";
+        }
+        if (adopted !== "adopted") return "healthy";
         // If something else has claimed the conversation since we started
         // (loadConversation ends by re-probing for an in-flight turn), that
         // stream owns the streaming flag — leave it be. Otherwise the turn is
@@ -3090,7 +3122,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             // releasing here would throw that chain away and let the attach
             // below reuse its slot. Leave it to the chain, which chases this
             // new turn itself once it settles.
-            if (recoveryRetriesRef.current.has(convId)) return;
+            //
+            // Judged by the GENERATION, not by the presence of a timer: a
+            // chain waiting for its next tick always has one, so testing for
+            // presence returned early even when the settle had succeeded —
+            // and the old timer then found the slot settled, released, and
+            // never followed the turn this submission had just started.
+            const after = recoveryOwnedRef.current.get(convId);
+            if (after && after.gen !== owned.gen) return;
             releaseRecovery(convId);
           }
           // A chase is already attaching whatever the server is running,
