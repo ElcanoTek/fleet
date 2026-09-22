@@ -2130,6 +2130,14 @@ export function ChatExperience({
       return;
     }
 
+    // Who owns this conversation's slot RIGHT NOW, to be compared once the
+    // response lands. A reload that outlives its own bound keeps running, and
+    // in the meantime a successor can attach, lose its socket and be picked up
+    // by a NEW recovery chain — which is deliberately absent from the attach
+    // set, so attachment alone cannot see it. Applying a response older than
+    // that chain replaces its slot, after which the chain finds its slot
+    // missing and lets go (#1584).
+    const recoveryTokenAtStart = recoveryTokenRef.current(conversationId);
     // background: a warm-return revalidation already has the cached transcript
     // on screen, so it must NOT flash the blocking spinner — it swaps in the
     // fresh server copy underneath the rendered messages.
@@ -2182,6 +2190,8 @@ export function ChatExperience({
       // would yank the user back to this conversation and reset the persona,
       // the model and the summary UI under them (#1584).
       if (attachedConvIdsRef.current.has(conversationId)) return;
+      if (recoveryTokenRef.current(conversationId) !== recoveryTokenAtStart)
+        return;
       // A BACKGROUND reload must not move the user. Recovery reconciles
       // conversations that are not on screen, and one finishing after the
       // user has navigated elsewhere would otherwise switch the active
@@ -2216,6 +2226,8 @@ export function ChatExperience({
       // conversation in between. The transcript is the one thing that must
       // never be painted over live text.
       if (attachedConvIdsRef.current.has(conversationId)) return;
+      if (recoveryTokenRef.current(conversationId) !== recoveryTokenAtStart)
+        return;
       const next = historyToMessages(data.history ?? []);
 
       // Re-attach approval cards + memory proposals so a page reload (or the
@@ -4077,6 +4089,7 @@ export function ChatExperience({
   const {
     reattachToConv,
     isRecoveringConv,
+    recoveryToken,
     nudgeRecovery,
     cancelRecovery,
     sweepStreamLiveness,
@@ -4108,6 +4121,8 @@ export function ChatExperience({
   // the current predicate, not the one captured at mount.
   const isRecoveringConvRef = useRef(isRecoveringConv);
   isRecoveringConvRef.current = isRecoveringConv;
+  const recoveryTokenRef = useRef(recoveryToken);
+  recoveryTokenRef.current = recoveryToken;
   const nudgeRecoveryRef = useRef(nudgeRecovery);
   nudgeRecoveryRef.current = nudgeRecovery;
   const refreshConversationsRef = useRef(refreshConversations);

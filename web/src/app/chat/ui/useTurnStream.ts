@@ -364,6 +364,12 @@ export interface UseTurnStream {
    */
   isRecoveringConv: (convId: string) => boolean;
   /**
+   * The token a long-running conversation load compares against to notice
+   * that recovery took the conversation while that load was in flight.
+   * 0 means nobody owns it.
+   */
+  recoveryToken: (convId: string) => number;
+  /**
    * Pull a recovery chain's next probe forward — for a tab that has just come
    * back to a conversation the chain owns.
    */
@@ -493,9 +499,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // holds busy, so it gets its own map. Presence is the live flag and every
   // await in the chase re-checks it; the record carries only the pending
   // timer, which is absent precisely while a request is in flight.
-  const recoveryChaseRef = useRef<Map<string, { timer?: number }>>(
-    new Map<string, { timer?: number }>(),
-  );
+  const recoveryChaseRef = useRef<
+    Map<string, { timer?: number; turnID?: string }>
+  >(new Map<string, { timer?: number; turnID?: string }>());
   // `gen` serializes ticks. A tick deletes its timer entry BEFORE its first
   // await, so a focus / visibility / online event arriving during that request
   // reaches nudgeRecovery and arms a second tick for the same slot. Arming
@@ -845,9 +851,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const followSuccessor = async (
     convId: string,
     attempt = 0,
+    expectTurnID?: string,
   ): Promise<void> => {
     try {
-      await chaseSuccessorOnce(convId, attempt);
+      await chaseSuccessorOnce(convId, attempt, expectTurnID);
     } catch {
       if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
       scheduleSuccessorRetry(convId, attempt);
@@ -857,6 +864,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const chaseSuccessorOnce = async (
     convId: string,
     attempt: number,
+    expectTurnID?: string,
   ): Promise<void> => {
     if (recoveryUnmountedRef.current) return;
     if (attachedConvIdsRef.current.has(convId)) {
@@ -866,13 +874,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // Registered BEFORE the first await, so Stop and unmount reach a chase
     // that is inside a request and not only one waiting on a timer.
     if (!recoveryChaseRef.current.has(convId))
-      recoveryChaseRef.current.set(convId, {});
+      recoveryChaseRef.current.set(convId, { turnID: expectTurnID });
+    // The turn this chase is FOR. Two queued successors can drain in quick
+    // succession, so an unbound attach could take the later one and replay
+    // its answer under the earlier one's committed prompt — the first answer
+    // missing, the second misattributed, until a reload (#1584).
+    const expect = recoveryChaseRef.current.get(convId)?.turnID;
     // A turn IS running on the server; we simply have no stream on it yet.
     // Releasing recovery marked the conversation idle, so hold it busy for
     // the chase — otherwise the UI hides Stop and offers to clear a
     // conversation that is actively generating.
     markConvStreaming(convId);
-    if (await reattachToConv(convId)) {
+    if (await reattachToConv(convId, expect)) {
       // That await spanned the WHOLE stream, and its finalizer deferred to
       // this chase rather than settling. So if the successor's socket died
       // mid-flight its slot is still open, and the chain — not the chase — is
@@ -905,6 +918,24 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // server that cannot be asked, means keep chasing.
     const probe = await probeInflightTurn(convId);
     if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+    if (
+      expect &&
+      probe.kind === "answer" &&
+      probe.turnID !== "" &&
+      probe.turnID !== expect
+    ) {
+      // The turn we were chasing is over and a LATER one is running. Put the
+      // finished one's answer on screen from the database before following
+      // the new one, or its reply would be skipped and the new one's written
+      // under its prompt.
+      await reloadCanonical(convId);
+      if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+      const chase = recoveryChaseRef.current.get(convId);
+      if (!chase) return;
+      chase.turnID = probe.turnID;
+      scheduleSuccessorRetry(convId, 0);
+      return;
+    }
     if (probe.kind === "answer" && !probe.inflight && probe.turnID === "") {
       // Nothing live, nothing retained: reattachToConv can never succeed
       // again, and a turn that reached that state committed its user message
@@ -1028,7 +1059,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           if (recoveryUnmountedRef.current || superseded()) return;
           if (recoveryRetriesRef.current.has(convId)) return;
           releaseRecovery(convId);
-          void followSuccessor(convId);
+          void followSuccessor(convId, 0, probe.turnID || undefined);
         };
         if (
           probe.turnID !== "" &&
@@ -1053,7 +1084,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           }
           if (persisted === "adopted") {
             releaseRecovery(convId);
-            void followSuccessor(convId);
+            void followSuccessor(convId, 0, probe.turnID || undefined);
             return;
           }
         }
@@ -3337,6 +3368,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     isRecoveringConv: (convId: string) =>
       recoveryOwnedRef.current.has(convId) ||
       recoveryChaseRef.current.has(convId),
+    // The token a long-running load compares against to notice that recovery
+    // took the conversation while it was in flight. 0 = nobody owns it. It is
+    // the chain's monotonic generation, so a chain that was released and
+    // re-armed reads as different rather than identical.
+    recoveryToken: (convId: string) =>
+      recoveryOwnedRef.current.get(convId)?.gen ?? 0,
     nudgeRecovery,
     cancelRecovery,
     checkStreamLiveness,

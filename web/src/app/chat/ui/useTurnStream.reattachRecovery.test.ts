@@ -2048,3 +2048,50 @@ describe("a successor that ends in the replay-gap shape is still recovered", () 
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
   }, 20000);
 });
+
+// Codex round 15 on #1584: two queued successors can drain in quick
+// succession, so the turn the chase set out to follow may already be over by
+// the time it attaches. An unbound attach took the LATER turn and replayed its
+// answer under the earlier one's committed prompt — the first answer missing,
+// the second misattributed, until a reload.
+describe("a chase follows the successor it discovered", () => {
+  it("adopts the finished successor before re-targeting the next one", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: answeredHistory(),
+      streamBodies: [
+        () => severedStream([]), // ours: died before turn.started
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "the second successor's answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflightRejectAt: [0],
+      inflight: [
+        { inflight: true, turn_id: "t-a" }, // the chain's tick discovers A
+        { inflight: true, turn_id: "t-b" }, // A is over; B is running
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    // The bound attach declined a turn that was not the one discovered, and
+    // the chase reloaded the canonical transcript rather than writing B's
+    // reply under A's prompt. Two reloads: our own answer, then A's.
+    expect(h.loadConversationCalls.length).toBe(2);
+
+    // It then re-targets and attaches to B.
+    const attachesBefore = h.attachCount();
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.attachCount()).toBe(attachesBefore + 1);
+    expect(lastOf(h).content).toBe("the second successor's answer");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+});
