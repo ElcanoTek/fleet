@@ -6,6 +6,7 @@ import {
   applyModelRequired,
   applyRetryNotice,
   applySubagentProgress,
+  applyTurnOutcome,
   clearRetryNotice,
   historyToMessages,
   parsePythonStream,
@@ -19,6 +20,7 @@ import {
   type RetryEventPayload,
   type SubagentProgressEventPayload,
   type ToolCallState,
+  type TurnOutcome,
 } from "./history";
 import {
   parseSseChunk,
@@ -198,6 +200,20 @@ type PersistedReconcile = "adopted" | "absent" | "unreachable";
 type InflightProbe =
   | { kind: "answer"; inflight: boolean; turnID: string }
   | { kind: "unreachable" };
+
+// What the per-turn outcome endpoint said about the turn a slot is holding
+// open (#1593). Three answers, and the third is not a failure of the second:
+//   "answer"      — the server named the turn's state.
+//   "unreachable" — we could not ask (thrown fetch, 5xx, an expired session).
+//   "unknown"     — there is nothing to ask ABOUT: we never learned the turn's
+//                   id, or the server has no such turn for this conversation.
+//                   The caller keeps whatever behavior it had before the
+//                   outcome existed, rather than waiting for an answer that is
+//                   never coming.
+type TurnOutcomeProbe =
+  | ({ kind: "answer" } & TurnOutcome)
+  | { kind: "unreachable" }
+  | { kind: "unknown" };
 
 // Ceiling on waiting for a superseded stream's own teardown to unwind before
 // the replacement attaches. Bounded so a wedged unwind degrades to "no
@@ -807,6 +823,55 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         kind: "answer",
         inflight: Boolean(info?.inflight),
         turnID: info?.turn_id ?? "",
+      };
+    } catch {
+      return { kind: "unreachable" };
+    }
+  };
+
+  // fetchTurnOutcome asks what became of ONE turn (#1593). /inflight answers a
+  // question about the CONVERSATION and the transcript answers another; a slot
+  // left open by a dead socket needs neither. In particular a turn that ended
+  // BEFORE producing a reply — turn.model_required, a pre-answer provider
+  // error — leaves nothing live, nothing retained, and a transcript ending at
+  // the user's prompt, which is indistinguishable from a turn that simply
+  // produced nothing. The server has recorded which it was all along.
+  //
+  // Same reachability discipline as the two probes above: only an `answer` may
+  // drive a verdict. A 404 is not silence though — it is the server saying it
+  // has no such turn, which is "unknown", not "unreachable": re-asking would
+  // never resolve it.
+  const fetchTurnOutcome = async (
+    convId: string,
+    turnID: string,
+  ): Promise<TurnOutcomeProbe> => {
+    if (isPendingKey(convId) || !turnID) return { kind: "unknown" };
+    try {
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(convId)}/turns/${encodeURIComponent(turnID)}`,
+        { cache: "no-store", signal: recoveryRequestSignal() },
+      );
+      if (indeterminateStatus(res.status)) return { kind: "unreachable" };
+      if (!res.ok) return { kind: "unknown" };
+      const body = (await res.json()) as Partial<TurnOutcome>;
+      // A body without a state says nothing usable — an older server, or a
+      // proxy that answered 200 with something else. Fall back rather than
+      // reading the absence as a terminal verdict.
+      if (
+        body?.state !== "running" &&
+        body?.state !== "completed" &&
+        body?.state !== "failed" &&
+        body?.state !== "cancelled"
+      ) {
+        return { kind: "unknown" };
+      }
+      return {
+        kind: "answer",
+        state: body.state,
+        reason: typeof body.reason === "string" ? body.reason : "",
+        detail:
+          body.detail && typeof body.detail === "object" ? body.detail : {},
+        user_committed: Boolean(body.user_committed),
       };
     } catch {
       return { kind: "unreachable" };
@@ -1608,16 +1673,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       scheduleRecoveryRetry(convId, assistantId, gap, retryAttempt);
       return;
     }
-    if (!midFlight) return;
     // A slot holding a pending approval or memory proposal is waiting on the
     // USER, not on the network: resolving the card resumes the turn. Settle
     // it quietly — a "Turn failed / Retry" banner over a live action card
     // would tell the reader to throw away the very decision we're asking for.
     // (ChatTranscript already suppresses the empty-reply notice here.)
+    // Decided BEFORE the outcome below, deliberately: such a turn really is
+    // still running server-side, so asking would only re-arm the chain for as
+    // long as the card sits unanswered.
     const awaitingUser =
       (slot.approvals ?? []).some((a) => a.status === "pending") ||
       (slot.memoryProposals ?? []).some((mp) => mp.status === "pending");
     if (awaitingUser) {
+      if (!midFlight) return;
       patchAssistantMessage(convId, assistantId, (m) =>
         m.state === "thinking" || m.state === "streaming"
           ? { ...m, state: "done" }
@@ -1625,6 +1693,46 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       );
       return;
     }
+    // Postgres holds no answer for this slot, and that shape is ambiguous by
+    // construction: a turn that FAILED before it could reply leaves exactly
+    // the transcript a turn that merely produced nothing leaves. Ask the
+    // server what became of THIS turn (#1593) rather than guessing — the
+    // guess was "the connection dropped", and for a slot that already reads
+    // `done` after a replay gap there was no guess at all, just a blank reply
+    // with no Retry under it.
+    const outcome = await fetchTurnOutcome(
+      convId,
+      recoveryOwnedRef.current.get(convId)?.turnID ??
+        currentTurnIdByConvRef.current.get(convId) ??
+        "",
+    );
+    if (
+      outcome.kind === "unreachable" ||
+      (outcome.kind === "answer" && outcome.state === "running")
+    ) {
+      // Could not ask, or the turn is still generating. Neither is a verdict,
+      // so leave the slot unsettled and come back — exactly what an
+      // unreachable Postgres gets above.
+      scheduleRecoveryRetry(convId, assistantId, gap, retryAttempt);
+      return;
+    }
+    if (
+      outcome.kind === "answer" &&
+      (outcome.state === "failed" || outcome.state === "cancelled")
+    ) {
+      // The server says this turn is over and why. Stamp it, including on a
+      // slot that is not mid-flight: a gap slot reads `done` already, and
+      // returning below would leave a real failure rendered as a blank reply
+      // with nothing to retry.
+      patchAssistantMessage(convId, assistantId, (m) =>
+        applyTurnOutcome(m, outcome),
+      );
+      return;
+    }
+    // Either the server reported a COMPLETED turn whose answer Postgres does
+    // not (yet) hold, or there was nothing to ask about. Both land on the
+    // pre-#1593 behavior below.
+    if (!midFlight) return;
     patchAssistantMessage(convId, assistantId, (m) =>
       m.state === "thinking" || m.state === "streaming"
         ? {

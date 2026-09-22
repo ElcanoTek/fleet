@@ -463,6 +463,12 @@ return is caught in the 2.5s grace window alone. Both replace the five-minute
   window, the keepalive itself and the persistence ledger are untouched; the
   only addition is advertising the keepalive cadence the server was already
   sending, so the client can reason about silence instead of guessing.
+- **Postgres holding no answer is not by itself a verdict.** A turn that
+  failed before it could reply leaves exactly the transcript a turn that
+  produced nothing leaves, so the finalizer asks the server what became of
+  that particular turn before settling it: see
+  [`TURN-OUTCOME.md`](TURN-OUTCOME.md) (#1593).
+
 - **Recovery state is per tab, deliberately (#1595).** Two tabs open on the
   same conversation run two independent chains: both probe, both may reattach,
   both may adopt the canonical transcript. That is not a correctness problem —

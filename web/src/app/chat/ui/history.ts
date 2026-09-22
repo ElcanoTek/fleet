@@ -812,6 +812,76 @@ export function applyModelRequired(message: Message, payload: ModelRequiredEvent
   };
 }
 
+/**
+ * TurnOutcome is the body of `GET /api/conversations/:id/turns/:turnId`
+ * (#1593): what the SERVER recorded about one turn, so the client can read an
+ * outcome instead of inferring one from a liveness probe plus a transcript.
+ *
+ * `detail` is the terminal SSE frame's payload verbatim — the same JSON the
+ * live stream carried — which is why applyTurnOutcome can hand a
+ * `model_required` outcome straight to applyModelRequired.
+ */
+export type TurnOutcome = {
+  state: "running" | "completed" | "failed" | "cancelled";
+  /** "model_required" | "error" | "cancelled"; empty when the record does not say. */
+  reason?: string;
+  detail?: Record<string, unknown>;
+  /** False on a running turn means the transcript does not hold its prompt yet. */
+  user_committed?: boolean;
+};
+
+/**
+ * applyTurnOutcome resolves a SERVER-REPORTED terminal outcome onto the
+ * assistant slot a dead socket left open.
+ *
+ * The client reaches here having established that Postgres holds no answer for
+ * the slot, which is ambiguous by construction: a turn that FAILED before it
+ * could reply leaves exactly the transcript a turn that merely produced
+ * nothing leaves. The outcome disambiguates it, and the slot must then say so
+ * — a failure with no Retry is the wrong affordance, and a guessed
+ * "the connection dropped" is the wrong cause.
+ *
+ * Only `failed` and `cancelled` reach here; `running` and `completed` are not
+ * verdicts this helper's callers may stamp.
+ */
+export function applyTurnOutcome(
+  message: Message,
+  outcome: TurnOutcome,
+): Message {
+  if (outcome.reason === "model_required") {
+    // The server gave up on the model and the user can fix it by picking
+    // another — the same banner the live stream would have shown, recovered.
+    return applyModelRequired(
+      message,
+      (outcome.detail ?? {}) as ModelRequiredEventPayload,
+    );
+  }
+  const detail = outcome.detail ?? {};
+  // turn.error carries `message`, turn.cancelled carries `reason`.
+  const reported =
+    typeof detail.message === "string" && detail.message.trim()
+      ? detail.message
+      : "";
+  if (outcome.state === "cancelled") {
+    return {
+      ...clearRetryNotice(message),
+      // Whatever streamed before the stop is still the best thing to show.
+      content: message.content,
+      state: "done",
+      cancelled: true,
+    };
+  }
+  return {
+    ...clearRetryNotice(message),
+    content:
+      message.content ||
+      reported ||
+      "The turn ended before it could answer.",
+    state: "done",
+    failed: true,
+  };
+}
+
 export type HistoryEntry = {
   /**
    * Persisted messages.id, present on entries loaded from server history (#454).

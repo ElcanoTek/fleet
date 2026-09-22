@@ -108,6 +108,7 @@ type Harness = {
   streamRequests: Array<{ url: string; lastEventId: string | null }>;
   streaming: Set<string>;
   inflightProbes: number;
+  turnOutcomeProbes: number;
   attachCount: () => number;
   releaseInflight: () => void;
 };
@@ -141,6 +142,10 @@ const makeHarness = (opts: {
   // Extra conversations the client already has sockets attached to, for the
   // sweep. Keyed by conv id; each gets its own mid-flight transcript.
   extraConvs?: string[];
+  // What GET /conversations/:id/turns/:turnId answers (#1593). Omitted, the
+  // server 404s — "no such turn", which the client must read as "no answer
+  // available" and fall back to its pre-#1593 behavior, not as a verdict.
+  turnOutcome?: Record<string, unknown>;
 }): Harness => {
   const store: Store = new Map([[CONV, opts.initial]]);
   for (const extra of opts.extraConvs ?? []) {
@@ -153,6 +158,7 @@ const makeHarness = (opts: {
   let attaches = 0;
   let probes = 0;
   let persistedFetches = 0;
+  let turnOutcomeProbes = 0;
   let answeredProbes = 0;
   const deferredProbeReleases: Array<() => void> = [];
 
@@ -257,6 +263,22 @@ const makeHarness = (opts: {
           headers: streamHeaders(),
         });
       }
+      // Matched BEFORE the transcript fetch below: both live under
+      // /api/conversations/, and letting an outcome probe consume a
+      // transcript slot would shift every persistedRejectAt index.
+      if (url.includes("/turns/")) {
+        turnOutcomeProbes += 1;
+        if (!opts.turnOutcome) {
+          return new Response(JSON.stringify({ error: "turn not found" }), {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify(opts.turnOutcome), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       if (url.includes("/api/conversations/")) {
         const idx = persistedFetches;
         persistedFetches += 1;
@@ -343,6 +365,9 @@ const makeHarness = (opts: {
     streaming,
     get inflightProbes() {
       return probes;
+    },
+    get turnOutcomeProbes() {
+      return turnOutcomeProbes;
     },
     attachCount: () => attaches,
     releaseInflight: () => {
@@ -473,6 +498,130 @@ describe("reattachToConv recovery when the socket dies mid-turn", () => {
     expect(last.state).toBe("done");
     expect(last.failed).toBeUndefined();
     expect(last.content).toBe("Done — here are the results.");
+  });
+});
+
+// #1593. "Nothing live, nothing retained, and the transcript ends at the
+// user's prompt" is the shape of a turn that FAILED before producing a reply
+// AND of a turn that merely produced nothing. The client could not tell them
+// apart, so it settled every one of them as a dropped connection — and a
+// replay-gap slot, which already reads `done`, it left as a blank reply with
+// no Retry at all. The server has recorded the answer all along; these drive
+// asking it.
+describe("a turn's outcome comes from the server, not from inference", () => {
+  it("recovers the model-picker banner for a turn that failed before replying", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      turnOutcome: {
+        state: "failed",
+        reason: "model_required",
+        detail: {
+          reason: "retry_exhausted",
+          failed_model: "anthropic/claude-sonnet-4.6",
+          status_code: 429,
+          message: "The selected model is rate-limiting this request.",
+        },
+        user_committed: true,
+      },
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    expect(h.turnOutcomeProbes).toBeGreaterThan(0);
+    const last = lastOf(h);
+    expect(last.state).toBe("done");
+    expect(last.failed).toBe(true);
+    // The banner the live stream would have shown, reconstructed — instead of
+    // "The connection dropped", which blames the wrong thing entirely.
+    expect(last.modelRequired?.reason).toBe("retry_exhausted");
+    expect(last.modelRequired?.failedModel).toBe("anthropic/claude-sonnet-4.6");
+    expect(last.content).toBe("The selected model is rate-limiting this request.");
+  });
+
+  it("gives a replay-gap slot a failure verdict instead of a blank reply", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "turn.started", { turn_id: "t1" }),
+            sse(2, "reconnect", { missed_events: 7 }),
+            sse(3, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: false, turn_id: "t1" }],
+      turnOutcome: {
+        state: "failed",
+        reason: "error",
+        detail: { message: "the turn ended unexpectedly due to an internal error" },
+        user_committed: true,
+      },
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    const last = lastOf(h);
+    expect(last.state).toBe("done");
+    // Before the outcome existed this slot stayed `done` and empty — terminal
+    // to look at, with nothing to retry.
+    expect(last.failed).toBe(true);
+    expect(last.content).toBe(
+      "the turn ended unexpectedly due to an internal error",
+    );
+  });
+
+  it("does not stamp failed when the server says the turn is still running", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      turnOutcome: { state: "running", user_committed: false },
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    const last = lastOf(h);
+    expect(last.failed).toBeUndefined();
+    expect(last.state === "thinking" || last.state === "streaming").toBe(true);
+    // A turn that is still generating keeps the conversation busy, and the
+    // chain comes back for it.
+    expect(h.streaming.has(CONV)).toBe(true);
+  });
+
+  it("keeps the pre-#1593 verdict when the server has no such turn", async () => {
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+      ],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      // No turnOutcome: the endpoint 404s. "No answer available" must not
+      // become "wait for an answer that is never coming".
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+
+    const last = lastOf(h);
+    expect(last.state).toBe("done");
+    expect(last.failed).toBe(true);
+    expect(last.content).toBe(
+      "The connection dropped before the response finished.",
+    );
   });
 });
 
