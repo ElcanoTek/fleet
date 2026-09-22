@@ -2068,6 +2068,17 @@ func emitModelSelectionRequired(sink EventSink, reason agentcore.StreamErrorReas
 	if streamErr != nil {
 		raw = streamErr.Error()
 	}
+	// One resolved status for the payload AND the message. The classifier files
+	// a first-chunk timeout as a stream blip with no provider error, so a 429
+	// whose retry backoff outlasted the watchdog arrives here as status 0 —
+	// and an event whose message says "rate limiting" while its structured
+	// status_code says "no provider error" is worse than either alone: it
+	// corrupts telemetry and any client branching on the field (#1585).
+	if status == 0 {
+		if providerStatus, ok := agentcore.FirstChunkTimeoutAfterProviderError(streamErr); ok && providerStatus > 0 {
+			status = providerStatus
+		}
+	}
 	sink.Emit("turn.model_required", map[string]any{
 		"reason":       string(reason),
 		"failed_model": failedModel,

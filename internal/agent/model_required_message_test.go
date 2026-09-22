@@ -66,3 +66,43 @@ func TestHumanMessageForReason_WatchdogAfterProviderErrorsKeepsTheProviderStory(
 		})
 	}
 }
+
+// The card's message and its structured status must tell the same story: a
+// 429 whose backoff outlasted the watchdog arrives classified as a stream blip
+// with status 0, and emitting "rate limiting" next to status_code 0 corrupts
+// telemetry and any client branching on the field (#1585).
+func TestEmitModelSelectionRequired_CarriesTheRecoveredProviderStatus(t *testing.T) {
+	sink := &capturingSink{}
+	err := agentcore.NewFirstChunkTimeoutAfterProviderErrorForTest(429)
+	emitModelSelectionRequired(sink, agentcore.ReasonRetryExhausted, "vendor/model", 0, err)
+
+	if len(sink.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(sink.events))
+	}
+	payload, ok := sink.events[0].payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T", sink.events[0].payload)
+	}
+	if got := payload["status_code"]; got != 429 {
+		t.Errorf("status_code = %v, want 429", got)
+	}
+	msg, _ := payload["message"].(string)
+	if !strings.Contains(msg, "rate-limiting") {
+		t.Errorf("message = %q, want the rate-limit wording", msg)
+	}
+}
+
+// A minimal EventSink that records what it was given.
+type capturingSink struct {
+	events []struct {
+		event   string
+		payload any
+	}
+}
+
+func (c *capturingSink) Emit(event string, payload any) {
+	c.events = append(c.events, struct {
+		event   string
+		payload any
+	}{event: event, payload: payload})
+}
