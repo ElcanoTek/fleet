@@ -1027,6 +1027,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return;
         }
         endSuccessorChase(convId);
+        // Same hand-off as the adoption beside this one: the follower that
+        // this turn's end tried to start was turned away while the chase
+        // still owned the conversation, and the reload above deliberately
+        // suppresses loadConversation's own trailing attach.
+        void followQueueDrain(convId);
       }
       if (persisted === "adopted") {
         // The answer came from the database, so no turn is running: the
