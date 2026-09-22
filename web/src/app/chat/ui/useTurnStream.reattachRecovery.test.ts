@@ -1001,13 +1001,54 @@ describe("recovery arms only for a submission the server accepted", () => {
     await result.current.submitPrompt("run the long job");
     await vi.advanceTimersByTimeAsync(2000);
 
-    // No attach to the retained turn, and the slot is settled honestly
+    // No attach to the merely-RETAINED turn, and the slot is settled honestly
     // rather than left waiting on a turn that never existed.
     expect(h.attachCount()).toBe(0);
     const last = lastOf(h);
     expect(last.role).toBe("assistant");
     expect(last.state).toBe("done");
     expect(last.failed).toBe(true);
+  }, 20000);
+});
+
+// A turn the server registered and started, whose POST response headers never
+// reached us, is still OUR turn: /inflight reports it live, and refusing to
+// reattach there would fail a running turn (#1584).
+describe("a live turn is trusted even when the POST response was lost", () => {
+  it("reattaches to an inflight turn although the POST threw", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      // The POST never reaches the harness (stubbed to throw), so the first
+      // stream the harness serves is the reattach's.
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "it was ours" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      // The probe reports a LIVE turn, not a retained one.
+      inflight: [{ inflight: true, turn_id: "t-live" }],
+    });
+    const orig = globalThis.fetch;
+    (globalThis as { __origFetch?: typeof fetch }).__origFetch = orig;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/chat") throw new TypeError("Failed to fetch");
+        return (globalThis as { __origFetch?: typeof fetch }).__origFetch!(input, init);
+      }),
+    );
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(h.attachCount()).toBeGreaterThan(0);
+    expect(lastOf(h).content).toBe("it was ours");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
   }, 20000);
 });
 

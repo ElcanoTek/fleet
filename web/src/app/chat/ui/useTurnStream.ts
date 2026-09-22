@@ -318,6 +318,11 @@ export interface UseTurnStream {
    * otherwise refresh or replace the conversation must leave it alone.
    */
   isRecoveringConv: (convId: string) => boolean;
+  /**
+   * Pull a recovery chain's next probe forward — for a tab that has just come
+   * back to a conversation the chain owns.
+   */
+  nudgeRecovery: (convId: string) => void;
   // Resolves true when this call attached to a turn and pumped its stream
   // (so the caller knows the conversation was, and may still be, ours).
   reattachToConv: (convId: string) => Promise<boolean>;
@@ -520,11 +525,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // (the in-memory copy is newer than the DB in that case). Here the
       // opposite is true — the DB is the newer copy.
       attachedConvIdsRef.current.delete(convId);
-      await loadConversation(convId, {
-        preserveScroll: true,
-        background: true,
-        restore: true,
-      });
+      // loadConversation issues its own fetch, which carries no signal of
+      // ours. A recovery tick awaits this call with its timer already gone,
+      // so a connection blackholed between the two requests would stall the
+      // chain indefinitely. Bound the WAIT, not the work: the load finishes
+      // in the background either way and its adoption is idempotent.
+      await Promise.race([
+        loadConversation(convId, {
+          preserveScroll: true,
+          background: true,
+          restore: true,
+        }),
+        delay(recoveryRequestTimeoutMs),
+      ]);
       return "adopted";
     } catch {
       // The server did not answer — the caller must NOT read this as "no
@@ -649,7 +662,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (await reattachToConv(convId)) return;
     if (recoveryUnmountedRef.current) return;
     if (attachedConvIdsRef.current.has(convId)) return;
-    if (attempt >= recoveryRetryDelaysMs.length) return;
+    // Keep going on the schedule the chain uses — backoff, then a steady
+    // beat. Giving up after the backoff would abandon a turn the server is
+    // running: ownership has been released and the conversation is not
+    // attached, so the liveness watchdog does not inspect it either, and
+    // nothing would put it on screen without a focus event or a reload.
     window.setTimeout(() => {
       void followSuccessor(convId, attempt + 1);
     }, recoveryDelayFor(attempt));
@@ -796,6 +813,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       })();
     }, recoveryDelayFor(attempt));
     recoveryRetriesRef.current.set(convId, timer);
+  };
+
+  // nudgeRecovery pulls a chain's next tick forward. The hidden-tab branch
+  // reschedules without probing on the understanding that the tab-return
+  // handler does the work; that handler now leaves recovery-owned
+  // conversations alone, so it wakes the chain instead — otherwise a return
+  // landing just after a steady-phase tick was scheduled leaves the reply
+  // stuck for most of another 30 seconds.
+  const nudgeRecovery = (convId: string): void => {
+    const owned = recoveryOwnedRef.current.get(convId);
+    if (!owned || recoveryUnmountedRef.current) return;
+    const timer = recoveryRetriesRef.current.get(convId);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      recoveryRetriesRef.current.delete(convId);
+    }
+    scheduleRecoveryRetry(convId, owned.assistantId, owned.gap, 0);
   };
 
   // Stop every chain when the hook goes away: cancel pending timers AND flag
@@ -2629,11 +2663,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           );
           attachedConvIdsRef.current.delete(target);
           scheduleRecoveryRetry(target, assistantId, false);
-        } else if (accepted.value && (probe.inflight || probe.turnID)) {
+        } else if (probe.inflight || (accepted.value && probe.turnID)) {
           patchAssistantMessage(target, assistantId, (m) => ({
             ...m,
             state: "streaming",
           }));
+          // A LIVE turn (inflight) is trusted whatever happened to our POST:
+          // the server can register and start a turn whose response headers
+          // never reach us, and refusing to reattach there would fail a turn
+          // that is running. A merely RETAINED turn (inflight=false with an
+          // id) is trusted only when we know the server took this submission,
+          // or an earlier turn still inside its retain window would be
+          // mistaken for it (#1584).
           // Release the attach handle so reattachToConv can re-claim
           // it; the finally below will only reset state we still own.
           attachedConvIdsRef.current.delete(target);
@@ -2762,6 +2803,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // with an incomplete Postgres transcript, and the chain would then find
     // its slot gone.
     isRecoveringConv: (convId: string) => recoveryOwnedRef.current.has(convId),
+    nudgeRecovery,
     checkStreamLiveness,
     sweepStreamLiveness,
     submitPrompt,

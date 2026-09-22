@@ -3992,6 +3992,7 @@ export function ChatExperience({
   const {
     reattachToConv,
     isRecoveringConv,
+    nudgeRecovery,
     sweepStreamLiveness,
     submitPrompt,
     regenerateLastAssistant,
@@ -4021,6 +4022,8 @@ export function ChatExperience({
   // the current predicate, not the one captured at mount.
   const isRecoveringConvRef = useRef(isRecoveringConv);
   isRecoveringConvRef.current = isRecoveringConv;
+  const nudgeRecoveryRef = useRef(nudgeRecovery);
+  nudgeRecoveryRef.current = nudgeRecovery;
   const refreshConversationsRef = useRef(refreshConversations);
   const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
   useEffect(() => {
@@ -4121,7 +4124,13 @@ export function ChatExperience({
       // a queued successor, say — and pour its replay into the turn's slot,
       // and the reload below would swap the live prompt and partial answer
       // for an incomplete transcript. The chain re-probes on its own (#1584).
-      if (isRecoveringConvRef.current(convId)) return;
+      if (isRecoveringConvRef.current(convId)) {
+        // Leave the conversation to its chain — but wake it, because the
+        // hidden-tab branch skips its probe on the understanding that this
+        // handler does the work when the user comes back.
+        nudgeRecoveryRef.current(convId);
+        return;
+      }
 
       // First try to reattach to any in-flight turn so the user sees
       // live tokens resume. If nothing's in-flight, fall back to a
