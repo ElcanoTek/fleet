@@ -27,6 +27,12 @@ type executionRequirements struct {
 var requirementName = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,200}$`)
 
 func parseExecutionRequirements(prompt string) (*executionRequirements, error) {
+	// The declaration's grammar lives in models (#1601), shared with every
+	// task write path, so a declaration refused here would have been refused
+	// when the task was saved — and its message names the offending identifier.
+	if err := models.ValidateExecutionRequirements(prompt); err != nil {
+		return nil, err
+	}
 	var found *executionRequirements
 	lines := strings.Split(prompt, "\n")
 	for i, line := range lines {

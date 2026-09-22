@@ -45,6 +45,11 @@ completion time, so it leaves the count; deleting the task removes it the same
 way. Replay re-runs that occurrence. If the task is recurring and the
 dead-letter already queued the next run, replay does not queue another; if the
 schedule is parked (two consecutive dead-letters), replay is how it continues.
+The one exception is a prompt whose **EXECUTION REQUIREMENTS (JSON)** line is
+malformed. That schedule parks on its first dead-letter, and replay would rerun
+the same broken line, so correct the prompt in the task editor instead. Fleet
+refuses to save such a line in the first place and names the bad entry, so this
+only affects tasks saved before that check.
 A zero therefore means nothing is sitting failed from today — which is what
 you usually want to know, but it is not the same as nothing having gone wrong.
 
@@ -178,7 +183,7 @@ Every status badge means one of ten things. What each one means, and what to do:
 | `RUNNING` | Executing now. Open it to watch live if you are curious. |
 | `SUCCESS` | The run completed. Its result is in the logs, and in the recipients' inboxes if the task has any — a task with no recipients succeeds quietly, so a green badge is not by itself proof that anyone was emailed. |
 | `ERROR` | A failure the scheduler could not route anywhere else — the uncommon one. Treat it like the row below: read it, fix the cause, rerun. A run that failed and is going to be retried does not sit here; it goes back to `PENDING` until its next attempt. |
-| `DEAD_LETTERED` | Failed and set aside for review — the badge most failures end on. It means one of two things, and the row says which: retries were exhausted, or the failure was deterministic and was quarantined on its first attempt without retrying. This occurrence is done: read the failure, fix the cause, and replay it if you want this run again; see [When a run goes wrong](#6-when-a-run-goes-wrong). A recurring schedule still continues on its own — the next occurrence is queued unless the schedule has reached its configured end (its run count or end date). Two exceptions resume only on replay: chains parked by two consecutive dead-letters, and rows dead-lettered before that continuation shipped. |
+| `DEAD_LETTERED` | Failed and set aside for review — the badge most failures end on. It means one of two things, and the row says which: retries were exhausted, or the failure was deterministic and was quarantined on its first attempt without retrying. This occurrence is done: read the failure, fix the cause, and replay it if you want this run again; see [When a run goes wrong](#6-when-a-run-goes-wrong). A recurring schedule still continues on its own — the next occurrence is queued unless the schedule has reached its configured end (its run count or end date). Two exceptions resume only on replay: chains parked by two consecutive dead-letters, and rows dead-lettered before that continuation shipped. A chain whose prompt has a malformed EXECUTION REQUIREMENTS line parks on its first dead-letter; correct the prompt in the task editor, since replay reruns the same line. |
 | `CANCELLED` | A person stopped it. The record notes who. Deliberate stops never retry or alert. |
 | `PAUSED_AWAITING_INPUT` | The run reached a decision it was not willing to make alone and stopped to ask a question. It holds no resources while it waits. Answer it and it resumes from there; this state is the system working as designed, not a failure. Most deployments let it wait indefinitely, but an operator can set an expiry after which an unanswered run fails — ask yours whether one is set. |
 | `PAUSED_AWAITING_WAKE` | The run put itself to sleep until a set time or an expected event, for example to check back on something later. It wakes on its own; every sleep has a deadline. Sleeping runs also get their own short list on the dashboard, so parked work stays visible without a status filter. |

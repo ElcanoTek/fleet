@@ -682,6 +682,9 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 	if strings.TrimSpace(bt.Prompt) == "" {
 		return nil, false, fmt.Errorf("empty prompt")
 	}
+	if err := models.ValidateExecutionRequirements(bt.Prompt); err != nil {
+		return nil, false, err
+	}
 	status := models.TaskStatus(bt.Status)
 	if !importableTaskStatus(status) {
 		return nil, false, fmt.Errorf("unsupported status %q (exporters must normalize transient statuses)", bt.Status)

@@ -358,6 +358,9 @@ func validateExportRecordCLI(rec models.TaskExportRecord) error {
 	if strings.TrimSpace(rec.Prompt) == "" {
 		return errors.New("prompt is required")
 	}
+	if err := models.ValidateExecutionRequirements(rec.Prompt); err != nil {
+		return err
+	}
 	for i, c := range rec.MCPSelection {
 		if strings.TrimSpace(c.Server) == "" {
 			return fmt.Errorf("mcp_selection[%d] has no server", i)

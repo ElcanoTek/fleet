@@ -126,6 +126,9 @@ func validateBatchTaskCreate(tc *models.TaskCreate) error {
 	if tc.Prompt == "" {
 		return errors.New("prompt is required")
 	}
+	if err := models.ValidateExecutionRequirements(tc.Prompt); err != nil {
+		return err
+	}
 	for i, c := range tc.MCPSelection {
 		if strings.TrimSpace(c.Server) == "" {
 			return fmt.Errorf("mcp_selection[%d] has no server", i)

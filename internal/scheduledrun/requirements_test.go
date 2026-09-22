@@ -62,3 +62,27 @@ func TestRunWorkerChecksRequirementsBeforeModelSetup(t *testing.T) {
 		}
 	}
 }
+
+// The dispatch parser and the save-time validator (models, #1601) accept and
+// refuse exactly the same prompts: a declaration that reaches dispatch has
+// been validated the same way when the task was saved.
+func TestParseExecutionRequirementsAgreesWithSaveTimeValidation(t *testing.T) {
+	if executionRequirementsMarker != models.ExecutionRequirementsMarker {
+		t.Fatal("dispatch and save-time validation must key on the same marker")
+	}
+	for _, body := range []string{
+		`{"mcp_servers":["reports"],"required_tools":["mcp_reports_download"],"network":true}`,
+		`{"mcp_servers":["fast_io + fastio_helpers"]}`, `{"required_tools":[" x"]}`, `{}`, `null`, `[]`, `{bad}`,
+		`{"network":"yes"}`, `{"mcp_servers":"x"}`, strings.Repeat("x", 16385), "{}\n" + executionRequirementsMarker + "\n{}",
+	} {
+		prompt := "TASK\n" + executionRequirementsMarker + "\n" + body
+		_, dispatchErr := parseExecutionRequirements(prompt)
+		saveErr := models.ValidateExecutionRequirements(prompt)
+		if (dispatchErr == nil) != (saveErr == nil) {
+			t.Fatalf("dispatch and save-time validation disagree on %.60q: dispatch=%v save=%v", body, dispatchErr, saveErr)
+		}
+		if dispatchErr != nil && dispatchErr.Error() != saveErr.Error() {
+			t.Fatalf("dispatch must report the save-time message, got %q vs %q", dispatchErr, saveErr)
+		}
+	}
+}

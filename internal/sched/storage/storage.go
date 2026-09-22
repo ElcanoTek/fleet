@@ -1879,14 +1879,30 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// Consecutive-dead-letter breaker (ADR-0070): two dead-lettered occurrences
 	// in a row parks the chain. Lookup errors roll back so the sweep retries
 	// rather than parking on a transient read failure.
+	//
+	// A malformed EXECUTION REQUIREMENTS declaration parks on the FIRST
+	// dead-letter (#1601). It is a property of the prompt text, which every
+	// successor copies verbatim, so the next occurrence is certain to
+	// dead-letter the same way at dispatch: the two-strike rule exists for
+	// causes that might not recur, and this one always does. Replay cannot fix
+	// it either — it reruns the same prompt — so the log says to correct the
+	// prompt (the terminal-task editor saves a corrected copy).
 	if current.Status == models.TaskStatusDeadLettered {
-		parked, perr := predecessorIsDeadLettered(ctx, tx, current)
-		if perr != nil {
-			log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
-			return false
+		parkReason := ""
+		if rerr := models.ValidateExecutionRequirements(current.Prompt); rerr != nil {
+			parkReason = fmt.Sprintf("on its first dead-letter: %v — every occurrence would dead-letter the same way; correct the task prompt (the task editor saves a corrected copy), replaying the same prompt cannot help", rerr)
+		} else {
+			parked, perr := predecessorIsDeadLettered(ctx, tx, current)
+			if perr != nil {
+				log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
+				return false
+			}
+			if parked {
+				parkReason = "after 2 consecutive dead-lettered occurrences; replay to continue"
+			}
 		}
-		if parked {
-			log.Printf("Recurrence for task %s parked after 2 consecutive dead-lettered occurrences; replay to continue", current.ID)
+		if parkReason != "" {
+			log.Printf("Recurrence for task %s parked %s", current.ID, parkReason)
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE tasks SET recurrence_parked_at = now() WHERE id = $1 AND status = $2`,
 				current.ID, string(models.TaskStatusDeadLettered)); err != nil {
