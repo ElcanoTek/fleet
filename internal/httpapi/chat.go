@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -168,8 +169,9 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 //
 // A record is NOT dropped when some client acknowledges the migration: the
 // same conversation can be open in several tabs, and one tab sending the new
-// model says nothing about what the others are still holding. It is replaced
-// by a later migration and otherwise evicted by the cap. That is safe because
+// model says nothing about what the others are still holding. Nor does a
+// later migration replace it — after A→B→C a tab that saw neither event still
+// holds A — so the hops accumulate, bounded per conversation and overall. That is safe because
 // the record is only ever consulted for a slug the allow-list currently
 // REFUSES — an echo by construction; once an operator re-allows that slug it
 // is an ordinary selection again and the memo no longer applies.
@@ -179,7 +181,7 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 // correctness — the allow-list guard is enforced independently on every turn.
 type migratedModelMemo struct {
 	mu    sync.Mutex
-	from  map[string]string
+	from  map[string][]string
 	order []string
 }
 
@@ -187,9 +189,15 @@ type migratedModelMemo struct {
 // lockdown conversations migrated in one allow-list change.
 const migratedModelMemoCap = 1024
 
-// note records that convID moved off slug `from`. A second migration replaces
-// the record: only the most recent pre-migration slug can still be in a
-// client's hand.
+// migratedModelMemoPerConv bounds the slugs remembered for ONE conversation.
+// A conversation can be migrated more than once (A→B, then B→C) while a tab
+// that saw neither event still holds A, so only remembering the most recent
+// hop would refuse that tab — the case this memo exists to prevent. Four hops
+// is far more allow-list churn than a disconnected client survives.
+const migratedModelMemoPerConv = 4
+
+// note records that convID moved off slug `from`, keeping the previous hops:
+// each migration can strand a different client on a different slug.
 func (m *migratedModelMemo) note(convID, from string) {
 	if convID == "" || from == "" {
 		return
@@ -197,12 +205,20 @@ func (m *migratedModelMemo) note(convID, from string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.from == nil {
-		m.from = make(map[string]string)
+		m.from = make(map[string][]string)
 	}
-	if _, seen := m.from[convID]; !seen {
+	slugs, seen := m.from[convID]
+	if !seen {
 		m.order = append(m.order, convID)
 	}
-	m.from[convID] = from
+	if slices.Contains(slugs, from) {
+		return
+	}
+	slugs = append(slugs, from)
+	if len(slugs) > migratedModelMemoPerConv {
+		slugs = slugs[len(slugs)-migratedModelMemoPerConv:]
+	}
+	m.from[convID] = slugs
 	for len(m.order) > migratedModelMemoCap {
 		oldest := m.order[0]
 		m.order = m.order[1:]
@@ -210,14 +226,14 @@ func (m *migratedModelMemo) note(convID, from string) {
 	}
 }
 
-// matches reports whether slug is the model convID was migrated away from.
+// matches reports whether slug is a model convID was migrated away from.
 func (m *migratedModelMemo) matches(convID, slug string) bool {
 	if convID == "" || slug == "" {
 		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.from[convID] == slug
+	return slices.Contains(m.from[convID], slug)
 }
 
 // lockdownDefaultSlug picks the slug a delisted lockdown conversation is moved

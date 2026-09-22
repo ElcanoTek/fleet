@@ -12,6 +12,7 @@
 // derive-in-render, handler-side resets, or a deferred microtask). Keep this
 // component clean — prefer those patterns over re-adding a rule disable.
 import { signOut } from "@/app/shared/signOut";
+import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deriveConversationTitle } from "@/app/lib/title";
 import {
@@ -654,6 +655,17 @@ export function ChatExperience({
   // The live default this shell last installed, so a pristine draft can be
   // moved off it when the admin changes the tiers again (see below).
   const lastLiveDefaultRef = useRef<string | null>(null);
+  // Whether the user has chosen a model for the chat being composed. Intent
+  // cannot be inferred from the value: someone who deliberately picks the
+  // model that happens to BE the current default means it, and a tier change
+  // must not silently move them off it. Set by every explicit selection
+  // (picker, nudge, the transcript's switch card), cleared when a new chat
+  // resets the composer.
+  const modelTouchedRef = useRef(false);
+  const selectModelExplicitly = useCallback<Dispatch<SetStateAction<string>>>((value) => {
+    modelTouchedRef.current = true;
+    setSelectedModel(value);
+  }, []);
   // The very first mount of a session races the client-config fetch: state
   // seeds from the compiled-in fallback before the workspace's tier pair is
   // known. When the pair lands, move ONLY a not-yet-started chat still sitting
@@ -671,6 +683,7 @@ export function ChatExperience({
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
+      if (modelTouchedRef.current) return;
       setSelectedModel((cur) =>
         // Untouched means "still on whatever we last put there": the
         // compiled-in fallback before any config landed, or the live default
@@ -726,6 +739,10 @@ export function ChatExperience({
   // lockdownAvailable is false the +button stays a plain "+"
   // (matches the UI-as-it-is-now contract for operators who haven't
   // opted into lockdown opt-in mode).
+  // Generation counters for /api/server-config, so a superseded response
+  // cannot install an obsolete lockdown allow-list (see refreshServerConfig).
+  const serverConfigFetchSeqRef = useRef(0);
+  const serverConfigAppliedSeqRef = useRef(0);
   const [serverConfig, setServerConfig] = useState<ServerConfig>(
     () =>
       restoredSession?.serverConfig ?? {
@@ -744,10 +761,19 @@ export function ChatExperience({
   // Best-effort: a 404 / network error means an older server or a blip, so
   // the current snapshot stays.
   const refreshServerConfig = useCallback(async () => {
+    // Overlapping refreshes (a focus/visibility one and the tier-triggered
+    // one) can both be in flight. Without a generation the request that saw
+    // the OLD allow-list can land last and win, leaving the picker offering
+    // models the backend now rejects and hiding newly allowed ones until some
+    // later refresh happens to fix it. Same rule as client-config.
+    serverConfigFetchSeqRef.current += 1;
+    const seq = serverConfigFetchSeqRef.current;
     try {
       const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
       if (!cfgRes.ok) return;
       const cfg = (await cfgRes.json()) as Parameters<typeof parseServerConfigPayload>[0];
+      if (seq <= serverConfigAppliedSeqRef.current) return;
+      serverConfigAppliedSeqRef.current = seq;
       setServerConfig(parseServerConfigPayload(cfg));
     } catch {
       // Optional capability — leave the snapshot as it is.
@@ -3715,6 +3741,7 @@ export function ChatExperience({
     // to the live default tier — for lockdown that's also the first
     // allowed slug, and for normal chat it's the workspace default.
     setSelectedModel(currentDefaultModel());
+    modelTouchedRef.current = false;
     promptRef.current?.focus();
   };
 
@@ -5610,7 +5637,7 @@ export function ChatExperience({
               savePromptFromMessage={savePromptFromMessage}
               loadMemories={loadMemories}
               memoryProject={activeProjectForMemory}
-              setSelectedModel={setSelectedModel}
+              setSelectedModel={selectModelExplicitly}
               setModelPickerOpen={setModelPickerOpen}
               setModelSearchQuery={setModelSearchQuery}
               loadRankedModels={loadRankedModels}
@@ -5717,7 +5744,7 @@ export function ChatExperience({
                 setPersonaPickerOpen={setPersonaPickerOpen}
                 personaPickerRef={personaPickerRef}
                 selectedModel={selectedModel}
-                setSelectedModel={setSelectedModel}
+                setSelectedModel={selectModelExplicitly}
                 selectedModelLabel={selectedModelLabel}
                 selectedModelPrices={selectedModelPrices}
                 modelError={modelError}

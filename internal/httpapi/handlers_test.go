@@ -616,6 +616,24 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
 
+	// A SECOND migration, while an even older tab still holds the first slug.
+	s.cfg.LockdownAllowedModels = []string{"e/f"}
+	fresh = reload()
+	if err := s.reconcileLockdownModelCtx(t.Context(), user, fresh); err != nil {
+		t.Fatalf("second migration: %v", err)
+	}
+	for _, stale := range []string{"a/b", "c/d"} {
+		probe := reload()
+		rec := httptest.NewRecorder()
+		if !s.applyTurnModelOverride(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, probe, stale) {
+			t.Fatalf("a client stranded on %q must still be recognised: %d %s", stale, rec.Code, rec.Body.String())
+		}
+	}
+	s.cfg.LockdownAllowedModels = []string{"c/d"}
+	if err := s.store.SetModel(t.Context(), user, conv.ID, "c/d"); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
 	// Another tab acknowledging the migration says nothing about what a third
 	// one is still holding, so the record survives an allowed selection.
 	fresh = reload()
@@ -685,11 +703,27 @@ func TestMigratedModelMemo_EvictsOldestFirst(t *testing.T) {
 	if got := len(memo.from); got > migratedModelMemoCap {
 		t.Errorf("memo grew past its cap: %d", got)
 	}
-	// A second migration replaces the record rather than stacking one.
+	// Every hop is kept: after A→B→C a tab that saw neither event holds A.
 	memo.note("conv-x", "old/one")
 	memo.note("conv-x", "old/two")
-	if memo.matches("conv-x", "old/one") || !memo.matches("conv-x", "old/two") {
-		t.Errorf("only the most recent pre-migration slug is remembered")
+	if !memo.matches("conv-x", "old/one") || !memo.matches("conv-x", "old/two") {
+		t.Errorf("both pre-migration slugs must be recognised")
+	}
+	// Bounded per conversation, oldest hop first.
+	for i := range migratedModelMemoPerConv + 2 {
+		memo.note("conv-x", fmt.Sprintf("hop/%d", i))
+	}
+	if memo.matches("conv-x", "old/one") {
+		t.Errorf("the per-conversation cap must drop the oldest hop")
+	}
+	if !memo.matches("conv-x", fmt.Sprintf("hop/%d", migratedModelMemoPerConv+1)) {
+		t.Errorf("the newest hop must survive")
+	}
+	// A repeated slug is not a new hop.
+	memo.note("conv-y", "same/slug")
+	memo.note("conv-y", "same/slug")
+	if got := len(memo.from["conv-y"]); got != 1 {
+		t.Errorf("a repeated slug stacked %d entries", got)
 	}
 }
 
