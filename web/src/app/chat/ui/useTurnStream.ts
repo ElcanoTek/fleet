@@ -744,9 +744,42 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     if (!attachedConvIdsRef.current.has(convId)) markConvIdle(convId);
   };
 
+  // scheduleSuccessorRetry books the chase's next tick on the schedule the
+  // chain uses — backoff, then a steady beat. Giving up would abandon a turn
+  // the server is running: ownership has been released and the conversation
+  // is not attached, so the liveness watchdog does not inspect it either, and
+  // nothing would put it on screen without a focus event or a reload.
+  const scheduleSuccessorRetry = (convId: string, attempt: number): void => {
+    const chase = recoveryChaseRef.current.get(convId);
+    if (!chase) return;
+    if (chase.timer !== undefined) window.clearTimeout(chase.timer);
+    chase.timer = window.setTimeout(() => {
+      const current = recoveryChaseRef.current.get(convId);
+      if (current) current.timer = undefined;
+      void followSuccessor(convId, attempt + 1);
+    }, recoveryDelayFor(attempt));
+  };
+
+  // followSuccessor never lets a throw strand the chase. A registered chase
+  // with no timer holds the conversation busy and, because it reads as
+  // recovering, turns the tab-return reattach away as well — so an unexpected
+  // rejection anywhere below would freeze the conversation for good. Come
+  // back instead.
   const followSuccessor = async (
     convId: string,
     attempt = 0,
+  ): Promise<void> => {
+    try {
+      await chaseSuccessorOnce(convId, attempt);
+    } catch {
+      if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+      scheduleSuccessorRetry(convId, attempt);
+    }
+  };
+
+  const chaseSuccessorOnce = async (
+    convId: string,
+    attempt: number,
   ): Promise<void> => {
     if (recoveryUnmountedRef.current) return;
     if (attachedConvIdsRef.current.has(convId)) {
@@ -802,18 +835,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         return;
       }
     }
-    // Keep going on the schedule the chain uses — backoff, then a steady
-    // beat. Giving up after the backoff would abandon a turn the server is
-    // running: ownership has been released and the conversation is not
-    // attached, so the liveness watchdog does not inspect it either, and
-    // nothing would put it on screen without a focus event or a reload.
-    const chase = recoveryChaseRef.current.get(convId);
-    if (!chase) return;
-    chase.timer = window.setTimeout(() => {
-      const current = recoveryChaseRef.current.get(convId);
-      if (current) current.timer = undefined;
-      void followSuccessor(convId, attempt + 1);
-    }, recoveryDelayFor(attempt));
+    scheduleSuccessorRetry(convId, attempt);
   };
 
   // scheduleRecoveryRetry re-asks the server about a slot left unsettled
