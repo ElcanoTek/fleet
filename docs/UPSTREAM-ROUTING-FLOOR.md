@@ -67,14 +67,37 @@ The list is now the **allow-list on the request**. For a listed slug
 `upstreamPinFor` emits `Only=[the validated pool]` alongside the unchanged
 `Order=[vendor]` and `AllowFallbacks=true`:
 
-| slug | `order` | `only` |
+| slug | `order` | `only` (provider routing names) |
 |---|---|---|
 | `openai/gpt-5.6-luna-pro` | OpenAI | OpenAI, Azure, Amazon Bedrock |
 | `anthropic/claude-opus-5` | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 
 `order` still buys prompt-cache locality; `only` closes the set the fallback may
-reach. An endpoint added to the pool tomorrow is simply not routed to, so the
-claim the exemption rests on holds at request time rather than at review time.
+reach. Be precise about *what* it closes, because the two are easy to conflate:
+**`only` is a PROVIDER allow-list, not an endpoint allow-list.** OpenRouter's
+`provider.only` matches on the provider's routing name, and the endpoint counts
+below show several endpoints collapsing onto one name (OpenAI ×3, Azure ×2). So:
+
+- **A provider not on the list cannot be routed to at all.** That is the real
+  guarantee, and it is the one the exemption needs: a *third-party* host
+  appearing in the pool tomorrow — the case that would actually put unofficial
+  or quantized weights behind a default-tier slug — is refused at request time
+  instead of silently inheriting the exemption.
+- **An allow-listed provider adding or re-quantizing an endpoint still
+  matches.** If OpenAI ships a fourth `gpt-5.6-luna-pro` endpoint at a different
+  serving precision, `Only=[OpenAI, …]` routes to it. `only` does not pin
+  endpoint-level attributes, and nothing here re-reads them.
+
+That residual is deliberate and it is not closable with this mechanism: the
+quantization floor is the endpoint-level control, and it cannot be used on these
+slugs because every endpoint in both pools reports quantization `unknown`, which
+`fp8AndAbove` excludes — a floor would make both default slugs unroutable. What
+remains is therefore an assumption, stated plainly rather than implied away: an
+allow-listed vendor or its official cloud resellers keep serving the vendor's
+official weights. The exemption is trust in *those named parties*, enforced
+against everyone else. Narrowing it further needs endpoint-level monitoring —
+a scheduled job that diffs each pool's endpoints AND their quantizations against
+the recorded snapshot — which is the follow-on named at the end of this note.
 
 **What `only` costs in availability — the check the issue asked for.** Both
 pools were re-read from `GET /api/v1/models/{slug}/endpoints` on 2026-09-22:

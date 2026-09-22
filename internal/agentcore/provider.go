@@ -211,10 +211,19 @@ type officialPoolAllowlist struct {
 // by third-party hosts. Add a slug only with the endpoint list in hand.
 //
 // The list is an ALLOW-LIST, not a note: upstreamPinFor sends it as
-// provider.only, so the claim "this pool is all official weights" is enforced
-// on the request instead of snapshotted in a comment. If OpenRouter later adds
-// a third-party or quantized endpoint to one of these pools, the request
-// refuses to route to it rather than silently inheriting the exemption (#1589).
+// provider.only, so the claim is enforced on the request instead of snapshotted
+// in a comment (#1589). Be exact about what that enforces, because provider.only
+// matches a PROVIDER ROUTING NAME, not an endpoint: a third-party host appearing
+// in one of these pools later is refused, which is the case the exemption needs
+// closed, but an already-listed provider that adds or re-quantizes an endpoint
+// still matches its name. Endpoint-level precision is what the quantization
+// floor is for, and it is unusable here — every endpoint in both pools reports
+// quantization "unknown", which fp8AndAbove excludes, so a floor would make both
+// slugs unroutable. The residue is therefore an assumption, not a guarantee:
+// these named vendors and their official resellers keep serving official
+// weights. Closing it needs endpoint-level monitoring; see
+// docs/UPSTREAM-ROUTING-FLOOR.md.
+//
 // Every name below must be OpenRouter's own routing name for the endpoint —
 // a misspelling narrows the pool to nothing.
 var officialPoolSlugs = map[string]officialPoolAllowlist{
