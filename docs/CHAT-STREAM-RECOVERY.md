@@ -127,11 +127,42 @@ beat rather than the whole chain.
 
 Each tick asks `/inflight`: still unreachable → next tick; a **different**
 turn id than the one the chain is recovering → our turn is over, adopt its
-answer from Postgres and leave the new turn to the ordinary paths; live or
-retained → `reattachToConv`, judged afterwards by whether the slot still needs
-settling (the await spans the whole replay, so the attach handle is already
-gone when a replay ran to its terminal event); otherwise `settleStreamedSlot`,
-which asks Postgres and applies the same rule.
+answer from Postgres and chase the new turn (below); live or retained →
+`reattachToConv`, bound to the turn id this tick saw and judged afterwards by
+whether the slot still needs settling (the await spans the whole replay, so
+the attach handle is already gone when a replay ran to its terminal event);
+otherwise `settleStreamedSlot`, which asks Postgres and applies the same rule.
+
+That binding matters. `reattachToConv` takes its own `/inflight` look, and
+between the two the recovered turn can finish and a queued successor start.
+Without an expected turn id it would attach to that successor and reuse the
+caller's still-open assistant slot, pouring one turn's replay into another
+turn's bubble. Callers with no particular turn in mind — the chase below, the
+queue follower — pass nothing and take whatever is running.
+
+## Chasing a successor
+
+A different turn is not handed back to the ordinary paths; it is chased. The
+chain settles its own slot from Postgres, releases ownership and calls
+`followSuccessor`, which holds the conversation busy and retries attachment on
+the same backoff and steady cadence — indefinitely, because a released chain
+is no longer swept by the liveness watchdog and nothing else would put that
+turn on screen without a focus event or a reload.
+
+The chase is tracked in its own map, registered **before** its first request,
+so three things can reach it: **Stop** (`cancelRecovery` drops it, so it stops
+re-marking the conversation busy and stops polling for a turn the user has
+killed), the tab-return nudge, and unmount. It has no assistant slot of its
+own to settle — the turn it follows belongs to a later submission — which is
+why it does not live in `recoveryOwnedRef`. Ending it frees the conversation
+unless a live stream has taken over, and an unexpected throw books the next
+tick rather than stranding a registered chase with no timer.
+
+It may adopt the persisted transcript **only** when `/inflight` reports
+nothing live and nothing retained. A turn is registered and exposed before its
+user message is committed, so during that window the canonical transcript
+still ends at the predecessor's completed answer and reads exactly like a
+finished successor; adopting there would abandon a turn that is running.
 
 Ownership (`recoveryOwnedRef`) spans the chain's whole life, not merely a
 pending timer: it is set when the chain is armed and released only when the

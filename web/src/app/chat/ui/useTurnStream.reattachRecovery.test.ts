@@ -1674,3 +1674,47 @@ describe("chasing a successor is owned, gated and cancellable", () => {
     expect(h.streaming.has(CONV)).toBe(false);
   }, 20000);
 });
+
+// Codex round 10 on #1584: the chain compared turn ids and then handed the
+// attach to reattachToConv, which took its own /inflight look. Between the
+// two, the recovered turn can finish and a queued successor start — and that
+// second, unconstrained probe would attach to the successor while reusing the
+// predecessor's still-open slot, pouring one turn's replay into another turn's
+// bubble.
+describe("a reattach is bound to the turn its caller identified", () => {
+  it("declines a successor that started between the two probes", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      streamBodies: [
+        // Learns its identity, then dies: the chain is armed with "t-ours".
+        () => severedStream([sse(1, "turn.started", { turn_id: "t-ours" })]),
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "someone else's answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflightRejectAt: [0], // the catch's probe: radio off, chain armed
+      inflight: [
+        { inflight: true, turn_id: "t-ours" }, // the chain's tick: still ours
+        { inflight: true, turn_id: "t-successor" }, // the reattach's own look
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+    const attachesBefore = h.attachCount();
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    // Nothing was attached, so nothing was poured into our bubble, and the
+    // slot is still open for the chain's next tick rather than stamped.
+    expect(h.attachCount()).toBe(attachesBefore);
+    expect(lastOf(h).content).toBe("");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(h.streaming.has(CONV)).toBe(true);
+  }, 20000);
+});

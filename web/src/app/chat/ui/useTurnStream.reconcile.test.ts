@@ -88,7 +88,30 @@ describe("persistedAnswersLocalTurn", () => {
   });
 
   it("does not treat a trailing user prompt as an answer", () => {
+    // Our newest prompt has no reply behind it: the trailing user row is
+    // skipped, and the answer above it covers only the FIRST turn.
     const history = [user("first"), assistant("answer"), user("second")];
     expect(persistedAnswersLocalTurn(history, localMidTurn(["first", "second"]))).toBe(false);
+  });
+
+  // Codex round 10 on #1584. The server commits a turn's user message when
+  // that turn STARTS, so a successor already running leaves the transcript
+  // ending in ITS prompt with OUR completed answer immediately above.
+  // Requiring the answer to be the last row read that shape as "no answer for
+  // your turn" and stamped a recovered slot failed over an answer sitting
+  // right there.
+  it("finds our answer behind a running successor's committed prompt", () => {
+    const history = [user("first"), assistant("answer to first"), user("second")];
+    expect(persistedAnswersLocalTurn(history, localMidTurn(["first"]))).toBe(true);
+  });
+
+  it("still refuses when the answer above the successor is not ours", () => {
+    // Three prompts locally, and the transcript's newest answer covers only
+    // the first: the successor's prompt cannot stand in for the reply we are
+    // waiting on.
+    const history = [user("first"), assistant("answer to first"), user("second")];
+    expect(
+      persistedAnswersLocalTurn(history, localMidTurn(["first", "second", "third"])),
+    ).toBe(false);
   });
 });

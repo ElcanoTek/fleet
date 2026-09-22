@@ -209,34 +209,46 @@ export function classifyQueueSubmitResponse(res: {
 // show the answer.
 //
 // Two conditions, both load-bearing:
-//   - the persisted transcript ends in a completed, non-failed assistant
-//     message (the reply landed and the turn was sealed), and
-//   - it covers at least as many user turns as our in-memory copy.
+//   - the transcript holds a completed, non-failed assistant message (the
+//     reply landed and the turn was sealed), and
+//   - the transcript UP TO that reply covers at least as many user turns as
+//     our in-memory copy.
 //
 // The second guard is what keeps this from adopting a STALE transcript. A
-// conversation whose previous turn completed also "ends in an assistant
-// reply"; without the user-turn count we would happily swap the live turn's
+// conversation whose previous turn completed also contains an assistant
+// reply; without the user-turn count we would happily swap the live turn's
 // prompt out of the transcript and call it a recovery. Counting user messages
 // (not entries) is the comparison that survives historyToMessages' grouping:
 // it merges an assistant's text/tool_call/tool_result rows into one message
 // but never merges user rows.
+//
+// The reply need NOT be the last row, and insisting it was is how a correct
+// recovery turned into a wrong "Turn failed" (#1584). The server commits a
+// turn's user message when that turn STARTS, long before it has an answer, so
+// a successor already running leaves the transcript ending in ITS user row
+// with our completed answer immediately above. Reading that shape as "no
+// answer for your turn" stamps a slot failed over an answer sitting right
+// there. Trailing user rows are skipped, and excluded from the count as well:
+// they belong to a LATER turn and cannot be evidence that ours is covered.
 export function persistedAnswersLocalTurn(
   history: HistoryEntry[] | null | undefined,
   localMessages: Message[],
 ): boolean {
   const persisted = historyToMessages(history ?? []);
-  const last = persisted[persisted.length - 1];
+  let idx = persisted.length - 1;
+  while (idx >= 0 && persisted[idx].role === "user") idx -= 1;
+  const reply = persisted[idx];
   if (
-    !last ||
-    last.role !== "assistant" ||
-    last.state !== "done" ||
-    last.failed
+    !reply ||
+    reply.role !== "assistant" ||
+    reply.state !== "done" ||
+    reply.failed
   ) {
     return false;
   }
   const userTurns = (messages: Message[]) =>
     messages.reduce((n, m) => n + (m.role === "user" ? 1 : 0), 0);
-  return userTurns(persisted) >= userTurns(localMessages);
+  return userTurns(persisted.slice(0, idx + 1)) >= userTurns(localMessages);
 }
 
 // Server-trusted attachment metadata returned by POST /api/attachments and
@@ -940,7 +952,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           }
         }
         if (probe.inflight || probe.turnID) {
-          await reattachToConv(convId);
+          // Bound to the turn this tick identified: between this probe and the
+          // reattach's own, our turn can finish and a successor start, and
+          // that successor must not be replayed into our bubble.
+          await reattachToConv(convId, probe.turnID || undefined);
           if (recoveryUnmountedRef.current) return;
           // The reattach's own finalizer may have re-armed the chain — it
           // settles with the gap IT observed, which can differ from ours (a
@@ -1904,7 +1919,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // Resolves true when this call took ownership of the conversation and pumped
   // a stream — the signal followQueueDrain uses to tell "we showed that turn"
   // apart from "there was nothing to attach to (yet)".
-  const reattachToConv = async (convId: string): Promise<boolean> => {
+  //
+  // expectTurnID binds the attach to ONE turn. A caller that probed /inflight
+  // itself has identified the turn it means to attach to, and the probe below
+  // is a SECOND look at a server that may have moved on: the turn it asked
+  // about can finish and a queued successor start in between. Attaching then
+  // reuses the caller's still-open assistant slot and pours the successor's
+  // replay into the predecessor's bubble — the exact mix-up the caller's own
+  // id comparison was written to prevent (#1584). Callers with no particular
+  // turn in mind (the successor chase, the queue follower) pass nothing and
+  // take whatever is running.
+  const reattachToConv = async (
+    convId: string,
+    expectTurnID?: string,
+  ): Promise<boolean> => {
     if (attachedConvIdsRef.current.has(convId)) return false;
     if (reattachInFlightRef.current.has(convId)) return false;
     reattachInFlightRef.current.add(convId);
@@ -1942,6 +1970,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       //     branch in streamTurn paints "Turn failed" even though the
       //     server actually finished cleanly.
       if (!info.inflight && !info.turn_id) return false;
+      // Not the turn the caller identified: decline rather than bind its slot
+      // to a stranger. The caller's own recovery path re-probes and handles a
+      // successor properly.
+      if (expectTurnID && info.turn_id && info.turn_id !== expectTurnID)
+        return false;
       if (attachedConvIdsRef.current.has(convId)) return false;
 
       // Nothing left to put on screen: the conversation already ends in a
