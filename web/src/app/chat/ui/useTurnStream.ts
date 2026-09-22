@@ -509,6 +509,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // both before recovery starts and while a chase (unattached, and about to
   // use the slot) is running, so a load spanning exactly that handover saw no
   // change at all (#1584).
+  // Conversations whose submission the server started DIRECTLY while a chase
+  // was busy with a different turn. The chase is bound to the turn it
+  // discovered, so it will not attach ours, and the queue follower has
+  // nothing to find because ours is running rather than queued. The chase
+  // hands over to it on the way out instead (#1584).
+  const pendingDirectHandoffRef = useRef<Set<string>>(new Set<string>());
   const recoveryEpochRef = useRef<Map<string, number>>(
     new Map<string, number>(),
   );
@@ -850,6 +856,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const chasingSuccessor = (convId: string): boolean =>
     recoveryChaseRef.current.has(convId);
 
+  // handOffAfterChase is what a chase does on its way out. Normally that is
+  // the queue follower, whose start this chase displaced; when a submission
+  // was started directly while the chase was busy, it is that turn instead,
+  // because nothing else will ever put it on screen.
+  const handOffAfterChase = (convId: string): void => {
+    if (pendingDirectHandoffRef.current.delete(convId)) {
+      // Deliberately UNBOUND: what we want is whatever the server is running,
+      // which is the turn it started for that submission.
+      void followSuccessor(convId, 0);
+      return;
+    }
+    void followQueueDrain(convId);
+  };
+
   // endSuccessorChase drops the chase and frees the conversation it was
   // holding busy. A conversation a live stream has taken is left alone: that
   // stream owns the flag and idles at its own finalizer.
@@ -951,7 +971,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       endSuccessorChase(convId);
       // Same reason as above: the follower this stream's end already tried to
       // start was turned away by the chase that is only now ending.
-      void followQueueDrain(convId);
+      handOffAfterChase(convId);
       return;
     }
     if (recoveryUnmountedRef.current || !stillMine()) return;
@@ -1031,7 +1051,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // this turn's end tried to start was turned away while the chase
         // still owned the conversation, and the reload above deliberately
         // suppresses loadConversation's own trailing attach.
-        void followQueueDrain(convId);
+        handOffAfterChase(convId);
       }
       if (persisted === "adopted") {
         // The answer came from the database, so no turn is running: the
@@ -1044,7 +1064,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // A further queued input may still be waiting, and the hand-off that
         // this turn's end already attempted was turned away by the chase that
         // is only now ending.
-        void followQueueDrain(convId);
+        handOffAfterChase(convId);
         return;
       }
     }
@@ -1302,6 +1322,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // Dropping the chase is what stops it re-marking the conversation busy,
     // reattaching after the cancellation, or polling for ever once the
     // cancelled turn's buffer expires.
+    // The user has stopped waiting for this conversation, so a hand-off
+    // recorded for it is dropped rather than performed.
+    pendingDirectHandoffRef.current.delete(convId);
     endSuccessorChase(convId);
     if (owned) releaseRecovery(convId);
     // slotNeedsSettling, not a state test: a replay-gap slot already reads as
@@ -1338,12 +1361,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const timers = recoveryRetriesRef.current;
     const owned = recoveryOwnedRef.current;
     const chases = recoveryChaseRef.current;
+    const pending = pendingDirectHandoffRef.current;
     return () => {
       unmounted.current = true;
       for (const chase of chases.values()) {
         if (chase.timer !== undefined) window.clearTimeout(chase.timer);
       }
       chases.clear();
+      pending.clear();
       for (const timer of timers.values()) {
         window.clearTimeout(timer);
       }
@@ -3137,10 +3162,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             if (after && after.gen !== owned.gen) return;
             releaseRecovery(convId);
           }
-          // A chase is already attaching whatever the server is running,
-          // which is now this turn: a second attach would race it for the
-          // same slot, and the chase's replay carries our user bubble.
-          if (chasingSuccessor(convId)) return;
+          // A chase is running, and it is BOUND to the turn it discovered —
+          // which is not this one. Racing it for the same slot is wrong, and
+          // so is assuming it will pick our turn up: it will not, and the
+          // queue follower it starts on the way out finds nothing, because
+          // our turn is running rather than queued. Record the hand-off and
+          // let the chase perform it when it ends.
+          if (chasingSuccessor(convId)) {
+            pendingDirectHandoffRef.current.add(convId);
+            return;
+          }
           await reattachToConv(convId);
           return;
         }
