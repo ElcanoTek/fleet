@@ -323,6 +323,12 @@ export interface UseTurnStream {
    * back to a conversation the chain owns.
    */
   nudgeRecovery: (convId: string) => void;
+  /**
+   * End a recovery chain because the user pressed Stop: settle its slot as
+   * cancelled and free the conversation. Stop has no local controller to
+   * abort once recovery owns an unreachable turn.
+   */
+  cancelRecovery: (convId: string) => void;
   // Resolves true when this call attached to a turn and pumped its stream
   // (so the caller knows the conversation was, and may still be, ours).
   reattachToConv: (convId: string) => Promise<boolean>;
@@ -669,6 +675,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const followSuccessor = async (convId: string, attempt = 0): Promise<void> => {
     if (recoveryUnmountedRef.current) return;
     if (attachedConvIdsRef.current.has(convId)) return;
+    // A turn IS running on the server; we simply have no stream on it yet.
+    // Releasing recovery marked the conversation idle, so hold it busy for
+    // the chase — otherwise the UI hides Stop and offers to clear a
+    // conversation that is actively generating.
+    markConvStreaming(convId);
     if (await reattachToConv(convId)) return;
     if (recoveryUnmountedRef.current) return;
     if (attachedConvIdsRef.current.has(convId)) return;
@@ -847,6 +858,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       recoveryRetriesRef.current.delete(convId);
     }
     scheduleRecoveryRetry(convId, owned.assistantId, owned.gap, 0);
+  };
+
+  // cancelRecovery ends a chain because the USER stopped the turn. By the time
+  // recovery owns an unreachable turn the submit finalizer has dropped the
+  // AbortController, so Stop has nothing local to abort: without this it would
+  // send the server cancellation and leave the conversation busy with a chain
+  // still probing for a turn the user has just killed.
+  const cancelRecovery = (convId: string): void => {
+    const owned = recoveryOwnedRef.current.get(convId);
+    if (!owned) return;
+    releaseRecovery(convId);
+    patchAssistantMessage(convId, owned.assistantId, (m) =>
+      m.state === "thinking" || m.state === "streaming"
+        ? { ...m, state: "done", cancelled: true }
+        : m,
+    );
+    markConvIdle(convId);
   };
 
   // Stop every chain when the hook goes away: cancel pending timers AND flag
@@ -2825,6 +2853,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // its slot gone.
     isRecoveringConv: (convId: string) => recoveryOwnedRef.current.has(convId),
     nudgeRecovery,
+    cancelRecovery,
     checkStreamLiveness,
     sweepStreamLiveness,
     submitPrompt,

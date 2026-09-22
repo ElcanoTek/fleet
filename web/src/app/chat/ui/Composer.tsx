@@ -199,6 +199,8 @@ export type ComposerProps = {
   // Model picker
   selectedModel: string;
   setSelectedModel: Dispatch<SetStateAction<string>>;
+  // Ends a recovery chain when the user presses Stop (see the Stop handler).
+  cancelRecovery: (convId: string) => void;
   // Display label for the chip: the tier alias ("default"/"advanced") or the
   // catalog display name for a known slug — the same string the menu row
   // shows — falling back to the raw slug/typed text. Resolved by
@@ -283,6 +285,7 @@ export function Composer({
   personaPickerRef,
   selectedModel,
   setSelectedModel,
+  cancelRecovery,
   selectedModelLabel,
   selectedModelPrices,
   modelError,
@@ -1290,6 +1293,13 @@ export function Composer({
                           });
                         }
                         abortControllersRef.current.get(convKey)?.abort();
+                        // A turn whose stream died while the server was
+                        // unreachable is held open by the recovery chain,
+                        // and by then there is no controller left to abort.
+                        // Stop must end that chain too, or the conversation
+                        // stays busy while it probes for a turn the user has
+                        // just cancelled (#1584).
+                        cancelRecovery(convKey);
                       }}
                     >
                       <Icon name="stop" className="size-[1.125rem]" />

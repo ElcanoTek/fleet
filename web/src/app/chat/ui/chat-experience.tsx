@@ -2131,6 +2131,11 @@ export function ChatExperience({
       // Fire-and-forget: the picker shows its own spinner while the
       // fetch is in flight and the conversation body doesn't block on it.
       void loadMcpServerCatalog(data.conversation.id);
+      // The attach check above ran BEFORE the fetch. A reload that took long
+      // enough for recovery to give up waiting on it — and for a queued
+      // successor to attach in the meantime — must not paint its older
+      // database snapshot over that live slot (#1584).
+      if (attachedConvIdsRef.current.has(conversationId)) return;
       const next = historyToMessages(data.history ?? []);
 
       // Re-attach approval cards + memory proposals so a page reload (or the
@@ -3993,6 +3998,7 @@ export function ChatExperience({
     reattachToConv,
     isRecoveringConv,
     nudgeRecovery,
+    cancelRecovery,
     sweepStreamLiveness,
     submitPrompt,
     regenerateLastAssistant,
@@ -5672,6 +5678,7 @@ export function ChatExperience({
                 />
               ) : null}
               <Composer
+                cancelRecovery={cancelRecovery}
                 prompt={prompt}
                 setPrompt={setPrompt}
                 promptPlaceholder={promptPlaceholder}
