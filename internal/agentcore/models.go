@@ -24,6 +24,13 @@ const (
 	// alias slug defeats the send-side reasoning reconstruction (see
 	// isAliasModel).
 	//
+	// GPT-6 Luna Pro (2026-09-22, replacing openai/gpt-5.6-luna-pro): the
+	// GPT-6 generation of the same everyday tier, $0.10/M in, $0.50/M out,
+	// cache reads at $0.01/M, a 1,050,000-token window, and OpenAI's own three
+	// endpoints (openai, openai/flex, openai/fast) — so the `openai/` soft pin
+	// below still holds the prompt cache on one upstream. See
+	// docs/MODEL-DEFAULTS.md.
+	//
 	// GPT-5.6 Luna Pro (2026-09-21, replacing google/gemini-3.8-flash): the
 	// same Luna model served with reasoning.mode=pro, $0.20/M in, $1.20/M out,
 	// cache reads at a tenth of that, a 1,050,000-token window and OpenAI's
@@ -34,17 +41,21 @@ const (
 	// jobs on Luna Pro ran in 4–10 minutes at $0.16–0.62 with 89–95% cache
 	// hits. The `openai/` soft pin in canonicalUpstream keeps the prompt cache
 	// on one upstream with graceful degradation.
-	DefaultCoreModel = "openai/gpt-5.6-luna-pro"
+	DefaultCoreModel = "openai/gpt-6-luna-pro"
 	// DefaultMaxModel is the strong tier — the model escalation
 	// (suggest_advanced_model, chat's "advanced model") resolves to. Exact slug,
-	// never a `~latest` alias. Claude Opus 5 (2026-09-21, replacing
+	// never a `~latest` alias. Claude Opus 5.5 (2026-09-22, replacing
+	// anthropic/claude-opus-5): same 1M window and the same eleven official
+	// endpoints across Anthropic, Claude Platform on AWS, Bedrock, Azure and
+	// Google, at $4/M in and $20/M out (Opus 5: $5/$25). History: Claude Opus 5
+	// (2026-09-21, replacing
 	// openai/gpt-5.6-sol): 1M window, 11 healthy OpenRouter endpoints across
 	// four clouds, and a different provider family from the default so an
 	// escalation is also a provider change. It matches the `anthropic/` soft pin
 	// in canonicalUpstream, so the escalation path keeps per-upstream prompt-cache
 	// locality. The scheduled-task FALLBACK is configured separately
 	// (FLEET_TASK_FALLBACK_MODEL; production uses deepseek/deepseek-v4.1-flash).
-	DefaultMaxModel = "anthropic/claude-opus-5"
+	DefaultMaxModel = "anthropic/claude-opus-5.5"
 	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel
@@ -98,10 +109,15 @@ var modelContextWindows = []struct {
 	// without this line the strong tier — the slug users escalate to for their
 	// LARGEST problems — would cold-boot compacting at 38% of its real window.
 	{"openai/gpt-5.6", 1_050_000},
+	// GPT-6 (sol / luna / astra and their -pro variants, DefaultCoreModel is
+	// gpt-6-luna-pro) is 1,050,000 too. No generic openai/gpt-6 row existed, so
+	// without this the everyday tier would fall through to the default window.
+	{"openai/gpt-6", 1_050_000},
 	{"openai/gpt-4.1", 1_000_000},
 	{"openai/o1", 200_000},
 	{modelOpenAIGPT5, 400_000},
-	// Claude 5 ships a 1M window (Opus 5 is DefaultMaxModel); the generic row
+	// Claude 5 ships a 1M window (this prefix also covers Opus 5.5, the
+	// DefaultMaxModel); the generic row
 	// below keeps the Claude 4 family at 200K. Longest prefix first.
 	{"anthropic/claude-opus-5", 1_000_000},
 	{"anthropic/claude-sonnet-5", 1_000_000},
@@ -136,6 +152,13 @@ func contextWindowForOpenRouterCatalog(slug string) int {
 	if n := contextLengthFromOpenRouterLive(slug); n > 0 {
 		return n
 	}
+	return staticContextWindow(slug)
+}
+
+// staticContextWindow is the compiled-in fallback alone: the first matching
+// modelContextWindows prefix, else defaultModelContextWindow. It is what a cold
+// boot with no OpenRouter catalog sees.
+func staticContextWindow(slug string) int {
 	m := strings.ToLower(strings.TrimSpace(slug))
 	for _, entry := range modelContextWindows {
 		if strings.HasPrefix(m, entry.prefix) {
