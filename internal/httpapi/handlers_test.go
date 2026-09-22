@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -559,6 +560,101 @@ func TestSummarize_LockdownDelistedModelRunsOnTheDefault(t *testing.T) {
 		map[string]string{"model": "evil/unvetted"}, user)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "not allowed in lockdown") {
 		t.Fatalf("different disallowed model should be refused, got %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The migration persists the replacement and announces it on the `conversation`
+// event — but emitting an event is not proof the browser received it, and the
+// socket dying in that instant is the very situation the migration exists for.
+// The next submission then echoes the pre-migration slug. Refusing it would
+// leave the conversation at 400 until the user reloaded, so the echo is
+// recognised; a genuinely different disallowed slug is still refused.
+func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing.T) {
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "generic", "a/b", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.LockdownAllowedModels = []string{"c/d"} // a/b delisted
+
+	// The turn launches and migrates; assume the client never saw the event.
+	if err := s.reconcileLockdownModelCtx(t.Context(), user, conv); err != nil {
+		t.Fatalf("migration: %v", err)
+	}
+	if conv.Model != "c/d" {
+		t.Fatalf("migration did not run: %q", conv.Model)
+	}
+
+	reload := func() *store.Conversation {
+		got, gerr := s.store.Get(t.Context(), user, conv.ID)
+		if gerr != nil || got == nil {
+			t.Fatalf("reload: %v", gerr)
+		}
+		return got
+	}
+
+	// The stale echo: accepted, and it does not drag the conversation back.
+	fresh := reload()
+	w := httptest.NewRecorder()
+	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
+		t.Fatalf("the pre-migration echo must be accepted, got %d %s", w.Code, w.Body.String())
+	}
+	if fresh.Model != "c/d" {
+		t.Fatalf("the echo must not change the stored model, got %q", fresh.Model)
+	}
+
+	// A different disallowed slug is still a deliberate, refusable request.
+	fresh = reload()
+	w = httptest.NewRecorder()
+	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "evil/unvetted") {
+		t.Fatalf("a different disallowed model must still be refused")
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+
+	// Once the client picks an allowed model of its own it has moved on, and
+	// the old slug stops being treated as an echo.
+	fresh = reload()
+	w = httptest.NewRecorder()
+	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "c/d") {
+		t.Fatalf("an allowed model must be accepted: %d %s", w.Code, w.Body.String())
+	}
+	fresh = reload()
+	w = httptest.NewRecorder()
+	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
+		t.Fatalf("after the client moved on, the old slug is an ordinary disallowed request")
+	}
+}
+
+// The memo is bounded: the oldest record is evicted, never the newest.
+func TestMigratedModelMemo_EvictsOldestFirst(t *testing.T) {
+	var memo migratedModelMemo
+	for i := range migratedModelMemoCap + 10 {
+		memo.note(fmt.Sprintf("conv-%d", i), fmt.Sprintf("old/model-%d", i))
+	}
+	if memo.matches("conv-0", "old/model-0") {
+		t.Errorf("the oldest record should have been evicted")
+	}
+	newest := migratedModelMemoCap + 9
+	if !memo.matches(fmt.Sprintf("conv-%d", newest), fmt.Sprintf("old/model-%d", newest)) {
+		t.Errorf("the newest record must survive the cap")
+	}
+	if got := len(memo.from); got > migratedModelMemoCap {
+		t.Errorf("memo grew past its cap: %d", got)
+	}
+	// A second migration replaces the record rather than stacking one.
+	memo.note("conv-x", "old/one")
+	memo.note("conv-x", "old/two")
+	if memo.matches("conv-x", "old/one") || !memo.matches("conv-x", "old/two") {
+		t.Errorf("only the most recent pre-migration slug is remembered")
+	}
+	memo.forget("conv-x")
+	if memo.matches("conv-x", "old/two") {
+		t.Errorf("forget must drop the record")
 	}
 }
 

@@ -229,7 +229,11 @@ switch an existing conversation to another provider, with one exception: a
 lockdown (by default the workspace's default and stronger models), so if that
 list changes under it, its next turn runs on the lockdown default and the
 conversation keeps that model from then on. The model picker shows the switch
-when the turn starts. Admins can fix the provider
+when the turn starts. That switch needs a specific model to move to: if your
+admin has written the lockdown list entirely as patterns rather than named
+models, there is nothing to switch to and the conversation keeps refusing —
+start a new lockdown chat and tell your admin the list needs a named model
+first. Admins can fix the provider
 configuration under **Settings → Admin → Model providers**, and set the default
 and stronger model under **Settings → Admin → Features → Model tiers**.
 If a direct provider takes precedence over OpenRouter, available OpenRouter

@@ -1339,11 +1339,15 @@ export function ChatExperience({
     };
     const handle = () => {
       void probe();
-      // Tiers and the lockdown list they drive move as one snapshot: refresh
-      // client-config first (it publishes the live tiers module-wide), then
-      // server-config, so a new lockdown chat never starts on a default the
-      // server has stopped accepting.
-      void refreshClientConfig().then(() => refreshServerConfig());
+      // Tiers and the lockdown list they drive move as ONE snapshot: refresh
+      // client-config first (it publishes the live tiers module-wide), and
+      // only install the new allow-list if that succeeded. Taking the new
+      // list against the old tiers is the divergence itself — the tab would
+      // start a lockdown chat on a default the server had stopped accepting.
+      // Both stale is consistent; the next tick tries again.
+      void refreshClientConfig().then((ok) => {
+        if (ok) void refreshServerConfig();
+      });
     };
     // Fire once on mount in case the user left the tab open across a
     // deploy and we're starting fresh against an already-updated
