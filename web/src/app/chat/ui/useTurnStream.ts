@@ -20,7 +20,11 @@ import {
   type SubagentProgressEventPayload,
   type ToolCallState,
 } from "./history";
-import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse";
+import {
+  parseSseChunk,
+  stepStreamDedup,
+  type ServerEvent,
+} from "@/app/lib/sse";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
@@ -48,8 +52,12 @@ import type { TurnStreamState } from "./useTurnStreamState";
 // for a drain kick; `running` rows were claimed by one (their turn may not
 // have registered yet). `injected` rows are NOT drain work — they were folded
 // into a turn that is already generating and complete with it.
-export function hasPendingQueueWork(items: QueuedInput[] | null | undefined): boolean {
-  return (items ?? []).some((it) => it.state === "queued" || it.state === "running");
+export function hasPendingQueueWork(
+  items: QueuedInput[] | null | undefined,
+): boolean {
+  return (items ?? []).some(
+    (it) => it.state === "queued" || it.state === "running",
+  );
 }
 
 // Backoff for the post-turn queue handoff (#785). The server drains the
@@ -170,7 +178,8 @@ const supersedeUnwindTimeoutMs = 2000;
 
 // Small awaited delay. Isolated like nowMs so the async stream handlers keep
 // clear of the React Compiler's purity rules.
-const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 // Classifies the /api/chat response to a mode:"queue" submission (#824).
 // The server only honors queueing while a turn is actually RUNNING; if our
@@ -189,7 +198,9 @@ export function classifyQueueSubmitResponse(res: {
 }): "queued" | "stream" | "error" {
   if (!res.ok && res.status !== 202) return "error";
   const contentType = res.headers.get("content-type") ?? "";
-  return contentType.toLowerCase().includes("text/event-stream") ? "stream" : "queued";
+  return contentType.toLowerCase().includes("text/event-stream")
+    ? "stream"
+    : "queued";
 }
 
 // persistedAnswersLocalTurn reports whether the CANONICAL (Postgres) copy of a
@@ -215,7 +226,12 @@ export function persistedAnswersLocalTurn(
 ): boolean {
   const persisted = historyToMessages(history ?? []);
   const last = persisted[persisted.length - 1];
-  if (!last || last.role !== "assistant" || last.state !== "done" || last.failed) {
+  if (
+    !last ||
+    last.role !== "assistant" ||
+    last.state !== "done" ||
+    last.failed
+  ) {
     return false;
   }
   const userTurns = (messages: Message[]) =>
@@ -254,7 +270,11 @@ export interface TurnStreamDeps {
   refreshConversations: () => Promise<void>;
   loadConversation: (
     conversationId: string,
-    options?: { preserveScroll?: boolean; background?: boolean; restore?: boolean },
+    options?: {
+      preserveScroll?: boolean;
+      background?: boolean;
+      restore?: boolean;
+    },
   ) => Promise<void>;
   loadMemories: () => Promise<void>;
   loadRankedModels: () => Promise<void>;
@@ -345,7 +365,10 @@ export interface UseTurnStream {
   sweepStreamLiveness: (opts?: { force?: boolean }) => Promise<void>;
   submitPrompt: (submittedPrompt: string) => Promise<void>;
   regenerateLastAssistant: () => Promise<void>;
-  resendUserMessage: (userMessageId: number, editedContent: string) => Promise<void>;
+  resendUserMessage: (
+    userMessageId: number,
+    editedContent: string,
+  ) => Promise<void>;
   retryLastUserMessage: () => Promise<void>;
   // #785 pending-input queue: per-conversation snapshot + mutations.
   //
@@ -426,24 +449,40 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
   // #785: per-conversation pending-input queue, fed by queue.updated events
   // on the live stream and by GET /queue on submit/reconnect.
-  const [queuedInputs, setQueuedInputs] = useState<ReadonlyMap<string, QueuedInput[]>>(
-    () => new Map<string, QueuedInput[]>(),
-  );
+  const [queuedInputs, setQueuedInputs] = useState<
+    ReadonlyMap<string, QueuedInput[]>
+  >(() => new Map<string, QueuedInput[]>());
   // One drain-follower per conversation (followQueueDrain re-enters itself
   // through the reattach it awaits).
   const queueFollowInFlightRef = useRef<Set<string>>(new Set<string>());
   // Recovery chain state (#1583/#1584); see "Recovery ownership" below.
   // The pending timer per conversation...
-  const recoveryRetriesRef = useRef<Map<string, number>>(new Map<string, number>());
+  const recoveryRetriesRef = useRef<Map<string, number>>(
+    new Map<string, number>(),
+  );
   // ...the slot each chain is recovering, held for the chain's whole life...
+  // A successor chase has no assistant slot of its own — the turn it follows
+  // was submitted after the one the chain recovered, so there is nothing in
+  // recoveryOwnedRef to name it by. It still has to be cancellable while it is
+  // inside a request, woken on tab return, and to free the conversation it
+  // holds busy, so it gets its own map. Presence is the live flag and every
+  // await in the chase re-checks it; the record carries only the pending
+  // timer, which is absent precisely while a request is in flight.
+  const recoveryChaseRef = useRef<Map<string, { timer?: number }>>(
+    new Map<string, { timer?: number }>(),
+  );
   const recoveryOwnedRef = useRef<
     Map<string, { assistantId: number; gap: boolean; turnID: string }>
   >(new Map<string, { assistantId: number; gap: boolean; turnID: string }>());
   // ...and the flag a callback already past its timer checks after each await.
   const recoveryUnmountedRef = useRef(false);
-  const refreshQueue = async (convId: string): Promise<QueuedInput[] | null> => {
+  const refreshQueue = async (
+    convId: string,
+  ): Promise<QueuedInput[] | null> => {
     try {
-      const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/queue`);
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(convId)}/queue`,
+      );
       if (!res.ok) return null;
       const body = (await res.json()) as { items?: QueuedInput[] };
       const items = body.items ?? [];
@@ -499,7 +538,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // conversation is no longer attached). A timeout reads as `unreachable`,
   // which is exactly what it is.
   const recoveryRequestSignal = (): AbortSignal | undefined =>
-    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+    typeof AbortSignal !== "undefined" &&
+    typeof AbortSignal.timeout === "function"
       ? AbortSignal.timeout(recoveryRequestTimeoutMs)
       : undefined;
 
@@ -514,13 +554,18 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // A phone that wakes before its radio is back throws here, and "could not
   // ask" used to be reported exactly like "no answer" — which is how a turn
   // still running on the server got stamped "Turn failed" until a refresh.
-  const reconcileFromPersisted = async (convId: string): Promise<PersistedReconcile> => {
+  const reconcileFromPersisted = async (
+    convId: string,
+  ): Promise<PersistedReconcile> => {
     if (isPendingKey(convId)) return "absent";
     try {
-      const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}`, {
-        cache: "no-store",
-        signal: recoveryRequestSignal(),
-      });
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(convId)}`,
+        {
+          cache: "no-store",
+          signal: recoveryRequestSignal(),
+        },
+      );
       if (res.status >= 500) return "unreachable";
       if (!res.ok) return "absent";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
@@ -567,16 +612,27 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // reconcileFromPersisted it separates "the server said" from "we could not
   // ask": only an `answer` may drive a terminal verdict on the slot.
   const probeInflightTurn = async (convId: string): Promise<InflightProbe> => {
-    if (isPendingKey(convId)) return { kind: "answer", inflight: false, turnID: "" };
+    if (isPendingKey(convId))
+      return { kind: "answer", inflight: false, turnID: "" };
     try {
-      const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/inflight`, {
-        cache: "no-store",
-        signal: recoveryRequestSignal(),
-      });
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(convId)}/inflight`,
+        {
+          cache: "no-store",
+          signal: recoveryRequestSignal(),
+        },
+      );
       if (res.status >= 500) return { kind: "unreachable" };
       if (!res.ok) return { kind: "answer", inflight: false, turnID: "" };
-      const info = (await res.json()) as { inflight?: boolean; turn_id?: string };
-      return { kind: "answer", inflight: Boolean(info?.inflight), turnID: info?.turn_id ?? "" };
+      const info = (await res.json()) as {
+        inflight?: boolean;
+        turn_id?: string;
+      };
+      return {
+        kind: "answer",
+        inflight: Boolean(info?.inflight),
+        turnID: info?.turn_id ?? "",
+      };
     } catch {
       return { kind: "unreachable" };
     }
@@ -595,7 +651,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     assistantId: number,
     gap: boolean,
   ): { slot: Message; midFlight: boolean } | null => {
-    const slot = (messagesByConvRef.current[convId] ?? []).find((m) => m.id === assistantId);
+    const slot = (messagesByConvRef.current[convId] ?? []).find(
+      (m) => m.id === assistantId,
+    );
     if (!slot) return null;
     const midFlight = slot.state === "thinking" || slot.state === "streaming";
     const emptyAfterGap =
@@ -639,7 +697,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // without a focus/visibility/online event nothing else would ever look
   // again. A hidden tab reschedules without probing — the tab-return handler
   // covers that case and background polling is waste.
-  const recoveryOwns = (convId: string): boolean => recoveryOwnedRef.current.has(convId);
+  const recoveryOwns = (convId: string): boolean =>
+    recoveryOwnedRef.current.has(convId);
 
   // releaseRecovery ends ownership: the outcome is known, or the slot is gone.
   // It also frees the conversation, because ownership is what suppressed the
@@ -672,30 +731,87 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // of which can lose the same connectivity flap, and a `false` return with
   // no chain and no timer left the successor running with nothing on screen
   // until a focus event or a reload. A short bounded retry covers the flap.
-  const followSuccessor = async (convId: string, attempt = 0): Promise<void> => {
+  const chasingSuccessor = (convId: string): boolean =>
+    recoveryChaseRef.current.has(convId);
+
+  // endSuccessorChase drops the chase and frees the conversation it was
+  // holding busy. A conversation a live stream has taken is left alone: that
+  // stream owns the flag and idles at its own finalizer.
+  const endSuccessorChase = (convId: string): void => {
+    const chase = recoveryChaseRef.current.get(convId);
+    if (chase?.timer !== undefined) window.clearTimeout(chase.timer);
+    if (!recoveryChaseRef.current.delete(convId)) return;
+    if (!attachedConvIdsRef.current.has(convId)) markConvIdle(convId);
+  };
+
+  const followSuccessor = async (
+    convId: string,
+    attempt = 0,
+  ): Promise<void> => {
     if (recoveryUnmountedRef.current) return;
-    if (attachedConvIdsRef.current.has(convId)) return;
+    if (attachedConvIdsRef.current.has(convId)) {
+      endSuccessorChase(convId);
+      return;
+    }
+    // Registered BEFORE the first await, so Stop and unmount reach a chase
+    // that is inside a request and not only one waiting on a timer.
+    if (!recoveryChaseRef.current.has(convId))
+      recoveryChaseRef.current.set(convId, {});
     // A turn IS running on the server; we simply have no stream on it yet.
     // Releasing recovery marked the conversation idle, so hold it busy for
     // the chase — otherwise the UI hides Stop and offers to clear a
     // conversation that is actively generating.
     markConvStreaming(convId);
-    if (await reattachToConv(convId)) return;
-    if (recoveryUnmountedRef.current) return;
-    if (attachedConvIdsRef.current.has(convId)) return;
-    // A successor that finished before we caught it, and whose retained
-    // buffer has since expired, can never be attached: /inflight has neither
-    // a live turn nor a retained id, so reattachToConv will answer false for
-    // ever. Postgres still has its question and its answer — adopt them
-    // rather than polling an empty conversation every 30 seconds.
-    if ((await reconcileFromPersisted(convId)) === "adopted") return;
-    if (recoveryUnmountedRef.current) return;
+    if (await reattachToConv(convId)) {
+      // The stream owns the conversation and its busy flag now, and idles it
+      // at its own finalizer.
+      recoveryChaseRef.current.delete(convId);
+      return;
+    }
+    if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+    if (attachedConvIdsRef.current.has(convId)) {
+      endSuccessorChase(convId);
+      return;
+    }
+    // A reattach fails for two very different reasons and only the server can
+    // tell them apart: the connectivity flap that started all this, or a
+    // successor that finished and whose retained buffer has since expired.
+    // Only the second may be adopted from Postgres, and asking is not
+    // optional — startTurn registers and exposes a turn BEFORE the manager
+    // commits its user message, so during that window the canonical
+    // transcript still ends at the PREDECESSOR's completed answer, which
+    // reads exactly like a finished successor. Adopting there would abandon a
+    // turn that is running and show its question to nobody. A live turn, or a
+    // server that cannot be asked, means keep chasing.
+    const probe = await probeInflightTurn(convId);
+    if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+    if (probe.kind === "answer" && !probe.inflight && probe.turnID === "") {
+      // Nothing live, nothing retained: reattachToConv can never succeed
+      // again, and a turn that reached that state committed its user message
+      // long ago. Postgres has both the question and the answer.
+      const persisted = await reconcileFromPersisted(convId);
+      if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+      if (persisted === "adopted") {
+        // The answer came from the database, so no turn is running: the
+        // conversation must stop showing Stop. reconcileFromPersisted's
+        // reload only makes a best-effort reattach and never clears the
+        // busy flag, so leaving it set would route the next submission
+        // through the queue path for a conversation with nothing to queue
+        // behind.
+        endSuccessorChase(convId);
+        return;
+      }
+    }
     // Keep going on the schedule the chain uses — backoff, then a steady
     // beat. Giving up after the backoff would abandon a turn the server is
     // running: ownership has been released and the conversation is not
     // attached, so the liveness watchdog does not inspect it either, and
     // nothing would put it on screen without a focus event or a reload.
-    window.setTimeout(() => {
+    const chase = recoveryChaseRef.current.get(convId);
+    if (!chase) return;
+    chase.timer = window.setTimeout(() => {
+      const current = recoveryChaseRef.current.get(convId);
+      if (current) current.timer = undefined;
       void followSuccessor(convId, attempt + 1);
     }, recoveryDelayFor(attempt));
   };
@@ -725,7 +841,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     recoveryOwnedRef.current.set(convId, {
       assistantId,
       gap,
-      turnID: owned?.turnID ?? (currentTurnIdByConvRef.current.get(convId) ?? ""),
+      turnID: owned?.turnID ?? currentTurnIdByConvRef.current.get(convId) ?? "",
     });
     const existing = recoveryRetriesRef.current.get(convId);
     if (existing !== undefined) window.clearTimeout(existing);
@@ -744,7 +860,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           releaseRecovery(convId);
           return;
         }
-        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        if (
+          typeof document !== "undefined" &&
+          document.visibilityState === "hidden"
+        ) {
           // Nothing is on screen to be wrong, and the tab-return handler
           // probes on the way back. Keep the chain alive, spend nothing.
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
@@ -771,8 +890,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           releaseRecovery(convId);
           void followSuccessor(convId);
         };
-        if (probe.turnID !== "" && ownedTurnID !== "" && probe.turnID !== ownedTurnID) {
-
+        if (
+          probe.turnID !== "" &&
+          ownedTurnID !== "" &&
+          probe.turnID !== ownedTurnID
+        ) {
           await adoptOurTurnThenFollow();
           return;
         }
@@ -850,8 +972,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // landing just after a steady-phase tick was scheduled leaves the reply
   // stuck for most of another 30 seconds.
   const nudgeRecovery = (convId: string): void => {
+    if (recoveryUnmountedRef.current) return;
+    const chase = recoveryChaseRef.current.get(convId);
+    if (chase) {
+      // A chase with no timer is already inside a request; starting a second
+      // one would run two attach attempts at each other.
+      if (chase.timer === undefined) return;
+      window.clearTimeout(chase.timer);
+      chase.timer = undefined;
+      void followSuccessor(convId, 0);
+      return;
+    }
     const owned = recoveryOwnedRef.current.get(convId);
-    if (!owned || recoveryUnmountedRef.current) return;
+    if (!owned) return;
     const timer = recoveryRetriesRef.current.get(convId);
     if (timer !== undefined) {
       window.clearTimeout(timer);
@@ -866,6 +999,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // send the server cancellation and leave the conversation busy with a chain
   // still probing for a turn the user has just killed.
   const cancelRecovery = (convId: string): void => {
+    // A chase has no bubble of its own to settle — the turn it follows belongs
+    // to a later submission, and Stop's server-side cancellation covers that
+    // turn. Dropping the chase is what stops it re-marking the conversation
+    // busy, reattaching after the cancellation, or polling for ever once the
+    // cancelled turn's buffer expires.
+    endSuccessorChase(convId);
     const owned = recoveryOwnedRef.current.get(convId);
     if (!owned) return;
     releaseRecovery(convId);
@@ -893,8 +1032,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const unmounted = recoveryUnmountedRef;
     const timers = recoveryRetriesRef.current;
     const owned = recoveryOwnedRef.current;
+    const chases = recoveryChaseRef.current;
     return () => {
       unmounted.current = true;
+      for (const chase of chases.values()) {
+        if (chase.timer !== undefined) window.clearTimeout(chase.timer);
+      }
+      chases.clear();
       for (const timer of timers.values()) {
         window.clearTimeout(timer);
       }
@@ -951,7 +1095,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       (slot.memoryProposals ?? []).some((mp) => mp.status === "pending");
     if (awaitingUser) {
       patchAssistantMessage(convId, assistantId, (m) =>
-        m.state === "thinking" || m.state === "streaming" ? { ...m, state: "done" } : m,
+        m.state === "thinking" || m.state === "streaming"
+          ? { ...m, state: "done" }
+          : m,
       );
       return;
     }
@@ -962,7 +1108,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             // Keep whatever partial answer did arrive; say plainly that the
             // rest was lost, and offer Retry. Anything already streamed is
             // more useful to the reader than a blanket error string.
-            content: m.content || "The connection dropped before the response finished.",
+            content:
+              m.content ||
+              "The connection dropped before the response finished.",
             state: "done",
             failed: true,
           }
@@ -1003,7 +1151,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
 
     if (event.event === "conversation") {
-      const p = payload as { id: string; title: string; persona: string; model?: string };
+      const p = payload as {
+        id: string;
+        title: string;
+        persona: string;
+        model?: string;
+      };
       // oldTarget is the per-submission pending key this turn was
       // launched with (e.g. "__pending__:1"). It's distinct from the
       // PENDING_CONV_KEY singleton — the singleton stays reserved for
@@ -1043,7 +1196,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         activeConversationIdRef.current = p.id;
         setActiveConversationId(p.id);
         setSelectedPersona(p.persona);
-        if (typeof p.model === "string") setSelectedModel(p.model || currentDefaultModel());
+        if (typeof p.model === "string")
+          setSelectedModel(p.model || currentDefaultModel());
       }
       // Optimistically insert the row into the sidebar list so the
       // streaming dot can render *during* the turn rather than racing
@@ -1107,7 +1261,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           const prev = aIdx > 0 ? next[aIdx - 1] : null;
           // Replay dedup: on a reattach that kept local state, the bubble is
           // already there.
-          if (prev && prev.role === "user" && prev.content === text) return current;
+          if (prev && prev.role === "user" && prev.content === text)
+            return current;
           const bubble = {
             id: allocMessageIds(),
             role: "user" as const,
@@ -1155,7 +1310,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
 
-    if (event.event === "reasoning.start" || event.event === "reasoning.delta") {
+    if (
+      event.event === "reasoning.start" ||
+      event.event === "reasoning.delta"
+    ) {
       const p = payload as { text?: string };
       if (!p.text) return;
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
@@ -1293,14 +1451,28 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
 
     if (event.event === "tool.result") {
-      const p = payload as { id: string; name: string; text: string; is_err: boolean };
+      const p = payload as {
+        id: string;
+        name: string;
+        text: string;
+        is_err: boolean;
+      };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
         const toolCalls = (m.toolCalls ?? []).map((tc) =>
-          tc.id === p.id ? { ...tc, resultText: p.text, state: (p.is_err ? "error" : "done") as ToolCallState } : tc,
+          tc.id === p.id
+            ? {
+                ...tc,
+                resultText: p.text,
+                state: (p.is_err ? "error" : "done") as ToolCallState,
+              }
+            : tc,
         );
         let pythonStreams = m.pythonStreams;
         if (p.name === "run_python" && p.text) {
-          pythonStreams = [...(m.pythonStreams ?? []), parsePythonStream(p.text)];
+          pythonStreams = [
+            ...(m.pythonStreams ?? []),
+            parsePythonStream(p.text),
+          ];
         }
         return { ...clearRetryNotice(m), toolCalls, pythonStreams };
       });
@@ -1328,7 +1500,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // a scroll-into-view so the user sees the action card without
       // hunting for it. Bash/preview cards stay quiet (preview is always
       // attention-grabbing on its own; bash typically already has focus).
-      const isSendApproval = p.tool === "send_email" || p.tool.endsWith("_send_email");
+      const isSendApproval =
+        p.tool === "send_email" || p.tool.endsWith("_send_email");
       if (isSendApproval) pendingApprovalScrollRef.current = p.approval_id;
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => ({
         ...m,
@@ -1395,7 +1568,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           if (!msg.approvals?.length) return msg;
           const touched = msg.approvals.map((ap) =>
             ap.tool === p.tool && ap.status === "pending" && !ap.executing
-              ? { ...ap, status: "rejected" as ApprovalStatus, resultText: "Superseded by a newer call." }
+              ? {
+                  ...ap,
+                  status: "rejected" as ApprovalStatus,
+                  resultText: "Superseded by a newer call.",
+                }
               : ap,
           );
           return { ...msg, approvals: touched };
@@ -1502,19 +1679,28 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const id = typeof e.id === "number" ? e.id : 0;
         if (!id) continue;
         if (e.role === "user") userMax = Math.max(userMax, id);
-        else if (e.role === "assistant") assistantMax = Math.max(assistantMax, id);
+        else if (e.role === "assistant")
+          assistantMax = Math.max(assistantMax, id);
       }
       if (!userMax && !assistantMax) return;
       setConvMessages(ctx.target, (current) => {
         const next = current.slice();
         const aIdx = next.findIndex((m) => m.id === ctx.assistantId);
         if (aIdx >= 0 && assistantMax) {
-          next[aIdx] = { ...next[aIdx], dbId: Math.max(next[aIdx].dbId ?? 0, assistantMax) };
+          next[aIdx] = {
+            ...next[aIdx],
+            dbId: Math.max(next[aIdx].dbId ?? 0, assistantMax),
+          };
         }
         // The user message sits directly above its assistant slot; only fill a
         // missing dbId (an edited/branched historical message keeps its own).
         const uIdx = aIdx - 1;
-        if (userMax && uIdx >= 0 && next[uIdx].role === "user" && !next[uIdx].dbId) {
+        if (
+          userMax &&
+          uIdx >= 0 &&
+          next[uIdx].role === "user" &&
+          !next[uIdx].dbId
+        ) {
           next[uIdx] = { ...next[uIdx], dbId: userMax };
         }
         return next;
@@ -1540,7 +1726,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // slot means "we missed the answer", not "there was no answer".
         // Leave it empty and let settleStreamedSlot pull the real one from
         // Postgres once the stream has drained.
-        content: m.content || (m.reasoning || ctx.gap ? "" : "No response returned."),
+        content:
+          m.content || (m.reasoning || ctx.gap ? "" : "No response returned."),
         state: "done",
         summary: {
           costUsd: p.cost_usd ?? 0,
@@ -1603,50 +1790,55 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     beat();
 
     const readChunk = async () =>
-      await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
-        let timeoutId: number | null = null;
-        let settled = false;
+      await new Promise<ReadableStreamReadResult<Uint8Array>>(
+        (resolve, reject) => {
+          let timeoutId: number | null = null;
+          let settled = false;
 
-        const cleanup = () => {
-          settled = true;
-          if (timeoutId !== null) window.clearTimeout(timeoutId);
-          document.removeEventListener("visibilitychange", handleVisibilityChange);
-        };
-        const rejectIdle = () => {
-          cleanup();
-          void reader.cancel("idle timeout");
-          reject(new Error("The chat server stopped responding."));
-        };
-        const armTimeout = () => {
-          if (settled) return;
-          if (timeoutId !== null) window.clearTimeout(timeoutId);
-          timeoutId = window.setTimeout(() => {
-            if (document.visibilityState !== "visible") {
-              timeoutId = null;
-              return;
-            }
-            rejectIdle();
-          }, streamIdleTimeoutMs);
-        };
-        const handleVisibilityChange = () => {
-          if (document.visibilityState === "visible") armTimeout();
-        };
+          const cleanup = () => {
+            settled = true;
+            if (timeoutId !== null) window.clearTimeout(timeoutId);
+            document.removeEventListener(
+              "visibilitychange",
+              handleVisibilityChange,
+            );
+          };
+          const rejectIdle = () => {
+            cleanup();
+            void reader.cancel("idle timeout");
+            reject(new Error("The chat server stopped responding."));
+          };
+          const armTimeout = () => {
+            if (settled) return;
+            if (timeoutId !== null) window.clearTimeout(timeoutId);
+            timeoutId = window.setTimeout(() => {
+              if (document.visibilityState !== "visible") {
+                timeoutId = null;
+                return;
+              }
+              rejectIdle();
+            }, streamIdleTimeoutMs);
+          };
+          const handleVisibilityChange = () => {
+            if (document.visibilityState === "visible") armTimeout();
+          };
 
-        document.addEventListener("visibilitychange", handleVisibilityChange);
-        if (document.visibilityState === "visible") {
-          armTimeout();
-        }
-        void reader.read().then(
-          (result) => {
-            cleanup();
-            resolve(result);
-          },
-          (err: unknown) => {
-            cleanup();
-            reject(err);
-          },
-        );
-      });
+          document.addEventListener("visibilitychange", handleVisibilityChange);
+          if (document.visibilityState === "visible") {
+            armTimeout();
+          }
+          void reader.read().then(
+            (result) => {
+              cleanup();
+              resolve(result);
+            },
+            (err: unknown) => {
+              cleanup();
+              reject(err);
+            },
+          );
+        },
+      );
 
     while (true) {
       const { done, value: chunk } = await readChunk();
@@ -1762,7 +1954,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         if (!info.inflight || alreadyStreamedThisTurn) {
           const existing = messagesByConvRef.current[convId] ?? [];
           const last = existing[existing.length - 1];
-          if (last && last.role === "assistant" && last.state === "done") return false;
+          if (last && last.role === "assistant" && last.state === "done")
+            return false;
         }
       }
 
@@ -1772,7 +1965,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // post-restart reissue) — reset lastEventId so id=1 isn't
       // dropped. If the turn_id matches what we already tracked, keep
       // the counter so the replay picks up exactly where we left off.
-      if (info.turn_id && currentTurnIdByConvRef.current.get(convId) !== info.turn_id) {
+      if (
+        info.turn_id &&
+        currentTurnIdByConvRef.current.get(convId) !== info.turn_id
+      ) {
         currentTurnIdByConvRef.current.set(convId, info.turn_id);
         lastEventIdByConvRef.current.set(convId, 0);
       }
@@ -1806,7 +2002,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       markConvStreaming(convId);
 
       const lastSeen = lastEventIdByConvRef.current.get(convId) ?? 0;
-      const qs = info.turn_id ? `?turn_id=${encodeURIComponent(info.turn_id)}` : "";
+      const qs = info.turn_id
+        ? `?turn_id=${encodeURIComponent(info.turn_id)}`
+        : "";
       // Registered like a live turn's controller so unmount cleanup closes
       // this socket too — without it every /chat visit during a long turn
       // opened another reader that outlived the tree it patched.
@@ -1941,7 +2139,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // not a failure and no longer owns these handles; leave them to the
       // replacement.
       if (
-        !(abortController && supersededStreamsRef.current.has(abortController)) &&
+        !(
+          abortController && supersededStreamsRef.current.has(abortController)
+        ) &&
         attachedConvIdsRef.current.has(convId)
       ) {
         attachedConvIdsRef.current.delete(convId);
@@ -2062,7 +2262,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // that arrived in the meantime: aborting someone else's live socket while
   // flagging it "superseded" would silently strand the turn it was reading.
   // Reports whether it actually retired anything.
-  const retireStream = (convId: string, doomed: AbortController | null): boolean => {
+  const retireStream = (
+    convId: string,
+    doomed: AbortController | null,
+  ): boolean => {
     if (!doomed) return false;
     if (abortControllersRef.current.get(convId) !== doomed) return false;
     supersededStreamsRef.current.add(doomed);
@@ -2124,7 +2327,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // produced bytes within the grace window it would otherwise sit through:
     // on an actively streaming conversation, `focus` fires often and every
     // one of those probes could only ever conclude "healthy".
-    if (silentMs < (opts.force ? streamLivenessGraceMs : streamSilenceProbeMs(heartbeatMs))) {
+    if (
+      silentMs <
+      (opts.force ? streamLivenessGraceMs : streamSilenceProbeMs(heartbeatMs))
+    ) {
       return "healthy";
     }
 
@@ -2155,7 +2361,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (!inflight) {
         // The turn is over. Postgres is authoritative; adopt it and retire the
         // socket. reconcileFromPersisted releases the attach handle itself.
-        if ((await reconcileFromPersisted(convId)) !== "adopted") return "healthy";
+        if ((await reconcileFromPersisted(convId)) !== "adopted")
+          return "healthy";
         // If something else has claimed the conversation since we started
         // (loadConversation ends by re-probing for an in-flight turn), that
         // stream owns the streaming flag — leave it be. Otherwise the turn is
@@ -2234,7 +2441,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const sweepStreamLiveness = async (
     opts: { force?: boolean } = {},
   ): Promise<void> => {
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    if (
+      typeof document !== "undefined" &&
+      document.visibilityState !== "visible"
+    )
+      return;
     const attached = Array.from(attachedConvIdsRef.current);
     if (attached.length === 0) return;
     await Promise.all(
@@ -2361,7 +2572,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
     patchAssistantMessage(target, assistantId, (m) => ({
       ...m,
-      content: m.content || (m.reasoning || ctx.gap ? "" : "No response returned."),
+      content:
+        m.content || (m.reasoning || ctx.gap ? "" : "No response returned."),
       state: "done",
     }));
     // A replay gap (server-side sliding-window eviction on a long, chatty
@@ -2373,7 +2585,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     await retryLastUserMessage();
   };
 
-  const resendUserMessage = async (userMessageId: number, editedContent: string) => {
+  const resendUserMessage = async (
+    userMessageId: number,
+    editedContent: string,
+  ) => {
     if (isStreaming) return;
     const trimmedContent = editedContent.trim();
     if (!trimmedContent) return;
@@ -2458,12 +2673,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       for (const a of files) {
         form.append("files", a.file, a.name);
       }
-      const res = await fetch("/api/attachments", { method: "POST", body: form });
+      const res = await fetch("/api/attachments", {
+        method: "POST",
+        body: form,
+      });
       if (!res.ok) {
         const text = await res.text().catch(() => res.statusText);
         throw new Error(`Attachment upload failed: ${text || res.statusText}`);
       }
-      const data = (await res.json()) as { attachments?: UploadedAttachmentMeta[] };
+      const data = (await res.json()) as {
+        attachments?: UploadedAttachmentMeta[];
+      };
       const attachments = data.attachments ?? [];
       if (attachments.length === 0) {
         throw new Error("Server accepted upload but returned no attachments.");
@@ -2652,7 +2872,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const accepted = { value: false };
 
     try {
-      await streamTurn(assistantId, abortController, body, initialTarget, accepted);
+      await streamTurn(
+        assistantId,
+        abortController,
+        body,
+        initialTarget,
+        accepted,
+      );
       await refreshConversations();
       void loadMemories();
     } catch (error) {
@@ -2760,7 +2986,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // Stamping `failed` here is the bug behind a fully-rendered
           // answer that flips to "Turn failed" a beat later. If another
           // path already finalized the turn successfully, leave it.
-          const resolved = messagesByConvRef.current[target]?.find((m) => m.id === assistantId);
+          const resolved = messagesByConvRef.current[target]?.find(
+            (m) => m.id === assistantId,
+          );
           if (resolved && resolved.state === "done" && !resolved.failed) {
             // Already settled successfully by another path — leave it.
           } else {
@@ -2785,7 +3013,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
               // The premature-EOF sentinel is an internal signal, never a
               // user-facing string — only reachable when the turn is genuinely
               // gone (not inflight, no buffer, nothing completed in the DB).
-              const rawMsg = error instanceof Error ? error.message : "Something went wrong.";
+              const rawMsg =
+                error instanceof Error
+                  ? error.message
+                  : "Something went wrong.";
               const msg =
                 rawMsg === "__stream_closed_before_turn_end__"
                   ? "The connection dropped before the response finished."
@@ -2851,7 +3082,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // conversation there would replace the live prompt and assistant slot
     // with an incomplete Postgres transcript, and the chain would then find
     // its slot gone.
-    isRecoveringConv: (convId: string) => recoveryOwnedRef.current.has(convId),
+    isRecoveringConv: (convId: string) =>
+      recoveryOwnedRef.current.has(convId) ||
+      recoveryChaseRef.current.has(convId),
     nudgeRecovery,
     cancelRecovery,
     checkStreamLiveness,

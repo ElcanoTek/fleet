@@ -1578,3 +1578,99 @@ describe("sweepStreamLiveness", () => {
     expect(h.loadConversationCalls).toEqual([OTHER]);
   });
 });
+
+// Codex round 9 on #1584: the successor chase was the one recovery path with
+// no ownership of its own — it could adopt a transcript that had not yet
+// caught up, leave a conversation busy with nothing running, and outlive Stop.
+describe("chasing a successor is owned, gated and cancellable", () => {
+  it("does not adopt a stale transcript while the successor is still running", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      // Postgres answers OUR turn. It has not yet caught up with the
+      // successor's: startTurn exposes a turn before the manager commits its
+      // user message, so this transcript looks "finished" for the successor
+      // too, and only /inflight can say otherwise.
+      persisted: answeredHistory(),
+      streamBodies: [() => severedStream([])],
+      // 0: the submit catch's probe (arms the chain, no identity).
+      // 2: the chase's first reattach probe — the flap is still on, so that
+      //    reattach fails without proving anything about the successor.
+      inflightRejectAt: [0, 2],
+      inflight: [{ inflight: true, turn_id: "t-successor" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    // One reload: the chain adopting OUR answer. The chase's own reattach
+    // failed, but the server still reports the successor running, so nothing
+    // may be adopted on its behalf.
+    expect(h.loadConversationCalls).toEqual([CONV]);
+
+    const attachesBefore = h.attachCount();
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    // It comes back and ATTACHES once the flap clears — the successor is put
+    // on screen rather than replaced by a transcript that predates it.
+    expect(h.attachCount()).toBe(attachesBefore + 1);
+  }, 20000);
+
+  it("frees the conversation after adopting a successor that had already finished", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: answeredHistory(),
+      streamBodies: [() => severedStream([])],
+      inflightRejectAt: [0],
+      // The chain's tick sees a successor; by the time the chase asks, that
+      // successor has finished and its retained buffer has expired, so there
+      // is nothing live and nothing to attach to — ever.
+      inflight: [{ inflight: true, turn_id: "t-successor" }, { inflight: false }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(50);
+    // The answer came from the database, so no turn is running and the
+    // composer must stop offering Stop.
+    expect(h.streaming.has(CONV)).toBe(false);
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+
+  it("stops chasing when the user presses Stop", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: answeredHistory(),
+      streamBodies: [() => severedStream([])],
+      // Every reattach probe after the chain's tick loses the flap, so the
+      // chase keeps coming back until something cancels it.
+      inflightRejectAt: [0, 2, 3, 4, 5, 6, 7, 8],
+      inflight: [{ inflight: true, turn_id: "t-successor" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.streaming.has(CONV)).toBe(true);
+
+    result.current.cancelRecovery(CONV);
+    expect(h.streaming.has(CONV)).toBe(false);
+
+    const attachesAfterStop = h.attachCount();
+    await vi.advanceTimersByTimeAsync(60000);
+    // No further attach, and nothing re-marks the conversation busy behind
+    // the user's back.
+    expect(h.attachCount()).toBe(attachesAfterStop);
+    expect(h.streaming.has(CONV)).toBe(false);
+  }, 20000);
+});
