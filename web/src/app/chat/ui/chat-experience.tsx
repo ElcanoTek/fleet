@@ -80,7 +80,13 @@ import { TeamChatViewer } from "./TeamChatViewer";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
-import { catalogModelRoutes, catalogModelSlug, modelIsAvailable, unavailableModelMessage, type ModelRouting } from "@/app/shared/lib/modelRouting";
+import {
+  catalogModelRoutes,
+  catalogModelSlug,
+  modelIsAvailable,
+  unavailableModelMessage,
+  type ModelRouting,
+} from "@/app/shared/lib/modelRouting";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
@@ -672,10 +678,18 @@ export function ChatExperience({
   } | null>(null);
   // Keep saved selections visible instead of silently changing the provider of
   // an existing conversation. The user repairs it by picking a workspace row.
-  const modelError = !modelIsAvailable(selectedModel, modelRouting,
-    currentTierModels().some((tier) => tier.slug === selectedModel))
-    ? { message: unavailableModelMessage(selectedModel), modelsUrl: "/settings/admin/providers" }
-    : checkedModelError?.slug === selectedModel.trim() ? checkedModelError : null;
+  const modelError = !modelIsAvailable(
+    selectedModel,
+    modelRouting,
+    currentTierModels().some((tier) => tier.slug === selectedModel),
+  )
+    ? {
+        message: unavailableModelMessage(selectedModel),
+        modelsUrl: "/settings/admin/providers",
+      }
+    : checkedModelError?.slug === selectedModel.trim()
+      ? checkedModelError
+      : null;
   // Optional MCP servers the user can toggle on per-conversation. The
   // MCPServerInfo shape is declared at module scope (and exported) so the
   // extracted Composer can type its prop against it.
@@ -1050,11 +1064,14 @@ export function ChatExperience({
     return 0;
   }, [messages]);
   const selectedCatalogSlug = catalogModelSlug(selectedModel, modelRouting);
-  const selectedCatalogModel = useMemo(() =>
-    catalogModels.find((m) => m.slug === selectedCatalogSlug) ??
-    rankedModels.find((m) => m.slug === selectedCatalogSlug),
-  [catalogModels, rankedModels, selectedCatalogSlug]);
-  const contextLength = selectedCatalogModel?.contextLength ??
+  const selectedCatalogModel = useMemo(
+    () =>
+      catalogModels.find((m) => m.slug === selectedCatalogSlug) ??
+      rankedModels.find((m) => m.slug === selectedCatalogSlug),
+    [catalogModels, rankedModels, selectedCatalogSlug],
+  );
+  const contextLength =
+    selectedCatalogModel?.contextLength ??
     workspaceModels.find((m) => m.slug === selectedModel.trim())?.contextLength;
   // Display label for the model chip: tier alias ("default"/"advanced") >
   // catalog/ranked display name > the raw slug (or in-progress typed text).
@@ -1068,9 +1085,15 @@ export function ChatExperience({
     if (selectedCatalogModel && selectedCatalogSlug !== slug) {
       return `${slug.slice(0, slug.indexOf("/"))}: ${selectedCatalogModel.name}`;
     }
-    const known = selectedCatalogModel ?? workspaceModels.find((m) => m.slug === slug);
+    const known =
+      selectedCatalogModel ?? workspaceModels.find((m) => m.slug === slug);
     return known?.name ?? selectedModel;
-  }, [selectedModel, selectedCatalogModel, selectedCatalogSlug, workspaceModels]);
+  }, [
+    selectedModel,
+    selectedCatalogModel,
+    selectedCatalogSlug,
+    workspaceModels,
+  ]);
   // Prices for the currently selected slug, feeding the cost indicator on the
   // composer's model chip. Unknown slugs (a half-typed custom slug, a
   // workspace-provider model) resolve to null and the chip shows no tier.
@@ -1415,16 +1438,27 @@ export function ChatExperience({
       name: labelForModel(slug),
       ...pricesFor(slug),
     }));
-    const defaults = tierModels.filter((model) => modelIsAvailable(model.slug, modelRouting, true));
-    const publicCatalog = new Set([...catalogModels, ...rankedModels].map((model) => model.slug));
-    const catalogChoices = (models: RankedModel[]): RankedModel[] => models.flatMap((model) =>
-      catalogModelRoutes(model.slug, modelRouting, publicCatalog.has(model.slug)).map((route) => ({
-        ...model,
-        slug: route.slug,
-        name: route.provider ? `${route.provider}: ${model.name}` : model.name,
-        workspace: !!route.provider,
-      })),
+    const defaults = tierModels.filter((model) =>
+      modelIsAvailable(model.slug, modelRouting, true),
     );
+    const publicCatalog = new Set(
+      [...catalogModels, ...rankedModels].map((model) => model.slug),
+    );
+    const catalogChoices = (models: RankedModel[]): RankedModel[] =>
+      models.flatMap((model) =>
+        catalogModelRoutes(
+          model.slug,
+          modelRouting,
+          publicCatalog.has(model.slug),
+        ).map((route) => ({
+          ...model,
+          slug: route.slug,
+          name: route.provider
+            ? `${route.provider}: ${model.name}`
+            : model.name,
+          workspace: !!route.provider,
+        })),
+      );
 
     // Lockdown chats are pinned to the operator-configured allow-list.
     // Build a fixed list that mirrors that allow-list (default first,
@@ -1460,7 +1494,11 @@ export function ChatExperience({
       // rankings), then the ranked list.
       const seen = new Set<string>();
       const out: RankedModel[] = [];
-      for (const m of [...defaults, ...workspaceModels, ...catalogChoices([...tierModels, ...rankedModels])]) {
+      for (const m of [
+        ...defaults,
+        ...workspaceModels,
+        ...catalogChoices([...tierModels, ...rankedModels]),
+      ]) {
         if (!modelIsAvailable(m.slug, modelRouting, !m.workspace)) continue;
         if (seen.has(m.slug)) continue;
         seen.add(m.slug);
@@ -1468,13 +1506,19 @@ export function ChatExperience({
       }
       return out;
     }
-    const source = catalogChoices(catalogModels.length > 0 ? catalogModels : rankedModels);
+    const source = catalogChoices(
+      catalogModels.length > 0 ? catalogModels : rankedModels,
+    );
     const matchesQuery = (m: RankedModel) =>
       m.slug.toLowerCase().includes(query) ||
       m.name.toLowerCase().includes(query);
     const seen = new Set<string>();
     const matches: RankedModel[] = [];
-    for (const d of [...defaults, ...workspaceModels, ...catalogChoices(tierModels)]) {
+    for (const d of [
+      ...defaults,
+      ...workspaceModels,
+      ...catalogChoices(tierModels),
+    ]) {
       if (seen.has(d.slug)) continue;
       if (matchesQuery(d)) {
         seen.add(d.slug);
@@ -2114,6 +2158,14 @@ export function ChatExperience({
           supersedes_content?: string;
         }>;
       };
+      // The attach check at the top ran BEFORE the fetch. A reload that took
+      // long enough for recovery to give up waiting on it — and for a queued
+      // successor to attach in the meantime — must touch NOTHING: not the
+      // transcript, and not the view state either. Everything below is
+      // derived from a response that is now stale, and applying any of it
+      // would yank the user back to this conversation and reset the persona,
+      // the model and the summary UI under them (#1584).
+      if (attachedConvIdsRef.current.has(conversationId)) return;
       setActiveConversationId(data.conversation.id);
       // Opening a conversation clears the keyboard focus cursor (#306): the
       // cursor is a transient nav aid, and letting it linger would keep the
@@ -2131,10 +2183,10 @@ export function ChatExperience({
       // Fire-and-forget: the picker shows its own spinner while the
       // fetch is in flight and the conversation body doesn't block on it.
       void loadMcpServerCatalog(data.conversation.id);
-      // The attach check above ran BEFORE the fetch. A reload that took long
-      // enough for recovery to give up waiting on it — and for a queued
-      // successor to attach in the meantime — must not paint its older
-      // database snapshot over that live slot (#1584).
+      // Checked again: the catalog refresh above is fire-and-forget and the
+      // state setters are not instantaneous, so a stream can still claim the
+      // conversation in between. The transcript is the one thing that must
+      // never be painted over live text.
       if (attachedConvIdsRef.current.has(conversationId)) return;
       const next = historyToMessages(data.history ?? []);
 
@@ -5658,10 +5710,16 @@ export function ChatExperience({
                     rel="noreferrer noopener"
                     className="underline"
                   >
-                    {modelError.modelsUrl.startsWith("/") ? "Provider settings" : "Browse models"}
+                    {modelError.modelsUrl.startsWith("/")
+                      ? "Provider settings"
+                      : "Browse models"}
                   </a>
                   {" · "}
-                  <button type="button" className="underline" onClick={() => setModelPickerOpen(true)}>
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={() => setModelPickerOpen(true)}
+                  >
                     Choose a model
                   </button>
                 </div>

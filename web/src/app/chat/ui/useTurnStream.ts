@@ -483,9 +483,23 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const recoveryChaseRef = useRef<Map<string, { timer?: number }>>(
     new Map<string, { timer?: number }>(),
   );
+  // `gen` serializes ticks. A tick deletes its timer entry BEFORE its first
+  // await, so a focus / visibility / online event arriving during that request
+  // reaches nudgeRecovery and arms a second tick for the same slot. Arming
+  // bumps the generation, and every resumed callback checks its own against
+  // the current one: the older tick exits instead of acting on a slot the
+  // newer tick may already have adopted and released (#1584).
   const recoveryOwnedRef = useRef<
-    Map<string, { assistantId: number; gap: boolean; turnID: string }>
-  >(new Map<string, { assistantId: number; gap: boolean; turnID: string }>());
+    Map<
+      string,
+      { assistantId: number; gap: boolean; turnID: string; gen: number }
+    >
+  >(
+    new Map<
+      string,
+      { assistantId: number; gap: boolean; turnID: string; gen: number }
+    >(),
+  );
   // ...and the flag a callback already past its timer checks after each await.
   const recoveryUnmountedRef = useRef(false);
   const refreshQueue = async (
@@ -743,6 +757,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // of which can lose the same connectivity flap, and a `false` return with
   // no chain and no timer left the successor running with nothing on screen
   // until a focus event or a reload. A short bounded retry covers the flap.
+  // lastUnsettledAssistant reads back the slot a just-ended stream left open.
+  // The chase never learns the successor's slot id — reattachToConv created
+  // it — so the transcript is the only place to find it.
+  const lastUnsettledAssistant = (convId: string): number | null => {
+    const messages = messagesByConvRef.current[convId] ?? [];
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return null;
+    return slotNeedsSettling(convId, last.id, false) ? last.id : null;
+  };
+
   const chasingSuccessor = (convId: string): boolean =>
     recoveryChaseRef.current.has(convId);
 
@@ -808,9 +832,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // conversation that is actively generating.
     markConvStreaming(convId);
     if (await reattachToConv(convId)) {
-      // The stream owns the conversation and its busy flag now, and idles it
-      // at its own finalizer.
-      recoveryChaseRef.current.delete(convId);
+      // That await spanned the WHOLE stream, and its finalizer deferred to
+      // this chase rather than settling. So if the successor's socket died
+      // mid-flight its slot is still open, and the chain — not the chase — is
+      // what knows how to resolve an unknown outcome. Hand it over; the busy
+      // flag passes with it. A stream that reached a terminal event leaves
+      // nothing unsettled and the chase simply ends.
+      const unsettled = lastUnsettledAssistant(convId);
+      if (unsettled !== null && !attachedConvIdsRef.current.has(convId)) {
+        recoveryChaseRef.current.delete(convId);
+        scheduleRecoveryRetry(convId, unsettled, false, 0);
+        return;
+      }
+      endSuccessorChase(convId);
       return;
     }
     if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
@@ -872,10 +906,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // chain is recovering is one particular turn, and the server may well be
     // running a different one by the time a tick fires.
     const owned = recoveryOwnedRef.current.get(convId);
+    // Arming supersedes any tick already running for this slot.
+    const gen = (owned?.gen ?? 0) + 1;
     recoveryOwnedRef.current.set(convId, {
       assistantId,
       gap,
       turnID: owned?.turnID ?? currentTurnIdByConvRef.current.get(convId) ?? "",
+      gen,
     });
     const existing = recoveryRetriesRef.current.get(convId);
     if (existing !== undefined) window.clearTimeout(existing);
@@ -883,7 +920,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       recoveryRetriesRef.current.delete(convId);
       void (async () => {
         // Ownership is NOT released here: it is released when the outcome is
-        // known. Everything below re-checks unmount after each await.
+        // known. Everything below re-checks unmount AND generation after each
+        // await: this callback dropped its timer entry before its first
+        // request, so a nudge arriving during that request arms a newer tick
+        // for the same slot, and only one of them may act on it.
+        const superseded = (): boolean =>
+          recoveryOwnedRef.current.get(convId)?.gen !== gen;
         if (recoveryUnmountedRef.current) return;
         if (!slotNeedsSettling(convId, assistantId, gap)) {
           releaseRecovery(convId);
@@ -904,7 +946,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return;
         }
         const probe = await probeInflightTurn(convId);
-        if (recoveryUnmountedRef.current) return;
+        if (recoveryUnmountedRef.current || superseded()) return;
         if (probe.kind === "unreachable") {
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
           return;
@@ -919,7 +961,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // until a reload.
         const adoptOurTurnThenFollow = async (): Promise<void> => {
           await settleStreamedSlot(convId, assistantId, gap, attempt + 1, true);
-          if (recoveryUnmountedRef.current) return;
+          if (recoveryUnmountedRef.current || superseded()) return;
           if (recoveryRetriesRef.current.has(convId)) return;
           releaseRecovery(convId);
           void followSuccessor(convId);
@@ -940,7 +982,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // the live turn is almost certainly still ours, and attaching is
           // right.
           const persisted = await reconcileFromPersisted(convId);
-          if (recoveryUnmountedRef.current) return;
+          if (recoveryUnmountedRef.current || superseded()) return;
           if (persisted === "unreachable") {
             scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
             return;
@@ -956,7 +998,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // reattach's own, our turn can finish and a successor start, and
           // that successor must not be replayed into our bubble.
           await reattachToConv(convId, probe.turnID || undefined);
-          if (recoveryUnmountedRef.current) return;
+          if (recoveryUnmountedRef.current || superseded()) return;
           // The reattach's own finalizer may have re-armed the chain — it
           // settles with the gap IT observed, which can differ from ours (a
           // replacement stream can report missed events our chain never saw).
@@ -991,7 +1033,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // Definitive: nothing in flight, nothing retained. Now a settle is
         // honest — and only this call may bypass the ownership guard.
         await settleStreamedSlot(convId, assistantId, gap, attempt + 1, true);
-        if (recoveryUnmountedRef.current) return;
+        if (recoveryUnmountedRef.current || superseded()) return;
         // Settled (or adopted, or re-armed by settleStreamedSlot when Postgres
         // itself was unreachable). If nothing re-armed the chain, the outcome
         // is known and the conversation is free (releaseRecovery idles it).
@@ -1108,7 +1150,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // STILL RUNNING, and stamps `failed`, after which the chain sees a
     // terminal slot and stops. Ownership spans the chain's awaits, so only the
     // chain's own settle (fromRecovery) passes.
-    if (!fromRecovery && recoveryOwns(convId)) return;
+    // An active successor chase owns its slot the same way. The chase awaits
+    // reattachToConv for the WHOLE stream, so a successor socket that dies
+    // mid-flight runs this finalizer while the chase is still registered: a
+    // reachable database holding the successor's committed prompt but no
+    // answer yet would read as definitive absence and stamp a running turn
+    // failed, with the chase then opening a second slot below it (#1584).
+    if (!fromRecovery && (recoveryOwns(convId) || chasingSuccessor(convId)))
+      return;
     const eligible = slotNeedsSettling(convId, assistantId, gap);
     if (!eligible) return;
     const { slot, midFlight } = eligible;
@@ -2172,7 +2221,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           await settleStreamedSlot(convId, ctx.assistantId, ctx.gap);
           // Free the composer only when the outcome is actually known. If the
           // settle armed a recovery chain the server may still be generating.
-          if (wasAttached && !recoveryOwns(convId)) {
+          if (
+            wasAttached &&
+            !recoveryOwns(convId) &&
+            !chasingSuccessor(convId)
+          ) {
             markConvIdle(convId);
           }
           // Refresh so any server-side state we missed (new title, updated
@@ -3119,7 +3172,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // the server, so the conversation stays BUSY: Stop remains offered, a
         // follow-up queues instead of racing, and nothing treats the slot as
         // finished. The chain idles it when it settles.
-        if (!recoveryOwns(finalTarget)) {
+        if (!recoveryOwns(finalTarget) && !chasingSuccessor(finalTarget)) {
           markConvIdle(finalTarget);
         }
         // Same hand-off as the reattach path: a follow-up the user queued

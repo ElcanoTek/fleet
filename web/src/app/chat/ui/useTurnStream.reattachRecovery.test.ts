@@ -820,7 +820,16 @@ describe("the recovery chain hands the conversation back", () => {
       // Our turn finished and its answer is in Postgres; a queued input then
       // started the NEXT turn, which /inflight reports.
       persisted: answeredHistory(),
-      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+        // The successor's own stream, which the chase attaches and runs to a
+        // terminal event.
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "the successor's answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
       inflight: [
         { inflight: true, turn_id: "t1" }, // reattach's own probe: our turn
         { inflight: true, turn_id: "t2" }, // the retry tick: a different turn
@@ -840,12 +849,17 @@ describe("the recovery chain hands the conversation back", () => {
     // stream may adopt again when it ends; what matters is that an adoption
     // happened and no replay was appended to our slot.)
     expect(h.loadConversationCalls[0]).toBe(CONV);
-    expect(lastOf(h).content).toBe("Done — here are the results.");
+    expect(
+      h.store[CONV].some((m) => m.content === "Done — here are the results."),
+    ).toBe(true);
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
     // The successor is then followed, because a turn the server is running
     // with no stream on screen is the other half of this bug: it would show
-    // nothing until a reload.
+    // nothing until a reload — and its answer lands in its OWN slot, below
+    // ours rather than inside it.
     expect(h.attachCount()).toBe(attachesBefore + 1);
+    expect(lastOf(h).content).toBe("the successor's answer");
+    expect(lastOf(h).state).toBe("done");
   }, 20000);
 
   it("still recovers after React's Strict Mode setup-cleanup-setup cycle", async () => {
@@ -923,7 +937,14 @@ describe("an unidentified turn is resolved by the transcript, not by guessing", 
       // Our slot IS answered in Postgres: our turn finished while we were
       // away, so the live turn /inflight reports must be a successor.
       persisted: answeredHistory(),
-      streamBodies: [() => severedStream([])], // died before turn.started
+      streamBodies: [
+        () => severedStream([]), // died before turn.started
+        () =>
+          truncatedStream([
+            sse(1, "text.delta", { text: "the successor's answer" }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
       inflightRejectAt: [0], // the catch's probe: arms the chain, no identity
       inflight: [{ inflight: true, turn_id: "t-successor" }],
     });
@@ -938,10 +959,13 @@ describe("an unidentified turn is resolved by the transcript, not by guessing", 
     // With no ids to compare, the transcript decides: our answer is adopted
     // instead of the successor's replay being appended to our bubble...
     expect(h.loadConversationCalls[0]).toBe(CONV);
-    expect(lastOf(h).content).toBe("Done — here are the results.");
+    expect(
+      h.store[CONV].some((m) => m.content === "Done — here are the results."),
+    ).toBe(true);
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
-    // ...and the successor is still followed.
+    // ...and the successor is still followed, into its own slot.
     expect(h.attachCount()).toBe(attachesBefore + 1);
+    expect(lastOf(h).content).toBe("the successor's answer");
   }, 20000);
 
   it("attaches when the transcript shows our turn is still unanswered", async () => {
@@ -1716,5 +1740,76 @@ describe("a reattach is bound to the turn its caller identified", () => {
     expect(lastOf(h).content).toBe("");
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
     expect(h.streaming.has(CONV)).toBe(true);
+  }, 20000);
+});
+
+// Codex round 11 on #1584: two ownership holes that only open once a chase or
+// a nudge is in play.
+describe("ownership holds through a chase and across nudged ticks", () => {
+  it("does not settle a successor slot whose own stream was severed", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      // Postgres answers OUR turn, so the chain adopts it and chases the
+      // successor the probe reports.
+      persisted: answeredHistory(),
+      streamBodies: [
+        () => severedStream([]), // ours: died before turn.started
+        // The successor's stream: some text, then the socket dies with no
+        // terminal event. Its outcome is UNKNOWN, not failed.
+        () => severedStream([sse(1, "text.delta", { text: "partial" })]),
+      ],
+      inflightRejectAt: [0],
+      inflight: [{ inflight: true, turn_id: "t-successor" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    // The chase was still registered while that stream's finalizer ran, so
+    // nothing declared an outcome: the partial text is kept, the slot stays
+    // open for the chain the chase handed it to, and the conversation stays
+    // busy. Settling here would have reconciled against a transcript that
+    // answers the PREDECESSOR and thrown the successor's text away.
+    expect(lastOf(h).content).toBe("partial");
+    expect(lastOf(h).state).toBe("streaming");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(h.streaming.has(CONV)).toBe(true);
+  }, 20000);
+
+  it("lets only the newest tick act when a nudge lands mid-probe", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      streamBodies: [() => severedStream([])],
+      inflightRejectAt: [0], // the catch's probe: arms the chain
+      inflightDeferAt: [1], // the first tick's probe hangs until released
+      inflight: [{ inflight: true, turn_id: "t-live" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The tick fires and blocks inside its probe, having already dropped its
+    // timer entry — which is exactly when a focus or online event arrives.
+    await vi.advanceTimersByTimeAsync(1100);
+    const attachesBefore = h.attachCount();
+    result.current.nudgeRecovery(CONV);
+
+    // Release the stale tick's probe: it must exit rather than act on a slot
+    // the newer tick now owns.
+    h.releaseInflight();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.attachCount()).toBe(attachesBefore);
+
+    // The newer tick is what attaches.
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.attachCount()).toBe(attachesBefore + 1);
   }, 20000);
 });
