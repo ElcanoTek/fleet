@@ -18,12 +18,14 @@ bootstrap's work; the installer only gets a checkout in place and hands over.
   operator. With arguments (`| sudo bash -s -- --postgres=local …`), it leaves stdin
   alone, so bootstrap sees no terminal and runs on its flags and defaults without
   prompting.
-- **`--dry-run` changes nothing on the host.** The installer doesn't install git or
-  touch `$FLEET_SRC_DIR`. It prints its own plan, then runs bootstrap's dry run from the
-  kept-as-is checkout (dirty or not on `main`, which a real run would also use unchanged),
-  or otherwise from a throwaway shallow clone of the current remote `main`. That's what
-  a real run would clone or fast-forward to. The temp dir is removed afterwards.
-  If git itself is missing, it says so and stops.
+- **`--dry-run` changes nothing on the host.** Both paths act on one decision,
+  `checkout_state` (absent / clean-main / keep / occupied), so the preview can't drift from
+  a real run. A kept checkout (dirty or not on `main`) is previewed in place, because a real
+  run builds it unchanged. A clean `main` checkout is rehearsed on a local copy with the
+  same commits and the same `origin`: an ahead checkout previews its own commits, and a
+  diverged one fails the same `--ff-only` pull. An absent target is rehearsed in a temp
+  clone. An occupied non-checkout path is refused, as a real run would. Temp copies are
+  removed on exit, and if git itself is missing the dry run says so and stops.
 - **Reruns.** A clean checkout on `main` (no modified *or untracked* files) is
   fast-forwarded, and bootstrap runs again; it's idempotent. A checkout that's dirty or on
   another branch is left alone with a pointer to `sudo fleet update`. A path that
@@ -32,7 +34,10 @@ bootstrap's work; the installer only gets a checkout in place and hands over.
   flags consume the next word), so `--client-config --dry-run` is a bad client-config
   value, not a dry run. A relative local `--client-config` path, or an `--auth-pubkey @file`,
   is made absolute against the caller's directory before the installer `cd`s into the
-  checkout. A trailing `/` on `FLEET_SRC_DIR` is stripped.
+  checkout, and so are relative path-valued environment settings (`FLEET_ENV_FILE`,
+  `FLEET_BACKUP_DIR`, `FLEET_INSTALL_DIR`, `FLEET_STATE_DIR`, and `FLEET_CLIENT_CONFIG_DIR`
+  when it exists relative to the caller; otherwise bootstrap's checkout-relative
+  fallback applies). Every trailing `/` on `FLEET_SRC_DIR` is stripped.
 - **Interrupted clones.** The first clone goes to `$src.partial.<pid>` and is renamed into
   place only on success, so an aborted download never leaves a half-populated
   checkout that blocks the next run.
