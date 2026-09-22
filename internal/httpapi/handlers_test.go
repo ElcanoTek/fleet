@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -555,20 +554,25 @@ func TestSummarize_LockdownDelistedModelRunsOnTheDefault(t *testing.T) {
 		t.Fatalf("Compact must not persist the migration (the launching turn does, and tells the client): model=%q", got.Model)
 	}
 
-	// A genuinely different disallowed request is still refused.
+	// Any disallowed model is treated the same way: a lockdown picker offers
+	// only allowed models, so Compact substitutes the conversation's own
+	// rather than refusing an action the user can only escape by reloading.
 	w = do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/summarize",
 		map[string]string{"model": "evil/unvetted"}, user)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "not allowed in lockdown") {
-		t.Fatalf("different disallowed model should be refused, got %d %s", w.Code, w.Body.String())
+	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "not allowed in lockdown") {
+		t.Fatalf("a disallowed model should be substituted, not refused: %s", w.Body.String())
 	}
 }
 
 // The migration persists the replacement and announces it on the `conversation`
 // event — but emitting an event is not proof the browser received it, and the
 // socket dying in that instant is the very situation the migration exists for.
-// The next submission then echoes the pre-migration slug. Refusing it would
-// leave the conversation at 400 until the user reloaded, so the echo is
-// recognised; a genuinely different disallowed slug is still refused.
+// The next submission then echoes a slug the allow-list refuses. On a lockdown
+// conversation that is a stale echo by construction (the picker only offers
+// allowed models), so it is ignored in favour of the stored model rather than
+// refused with a 400 the user can only escape by reloading. The rule is
+// stateless on purpose: it holds across a process restart, for a second tab,
+// and after any number of migrations.
 func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing.T) {
 	s := serverFixture(t)
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
@@ -606,45 +610,27 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 		t.Fatalf("the echo must not change the stored model, got %q", fresh.Model)
 	}
 
-	// A different disallowed slug is still a deliberate, refusable request.
+	// Any other disallowed slug is treated the same way — it cannot be run,
+	// and the conversation has a perfectly good allowed model to proceed on.
 	fresh = reload()
 	w = httptest.NewRecorder()
-	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "evil/unvetted") {
-		t.Fatalf("a different disallowed model must still be refused")
+	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "evil/unvetted") {
+		t.Fatalf("a disallowed slug must be ignored, not refused: %d %s", w.Code, w.Body.String())
+	}
+	if fresh.Model != "c/d" {
+		t.Fatalf("the ignored slug must not be stored, got %q", fresh.Model)
+	}
+
+	// Only when the STORED model is disallowed too is there nothing safe to
+	// run, and the caller has to choose.
+	stranded := reload()
+	stranded.Model = "a/b"
+	w = httptest.NewRecorder()
+	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, stranded, "evil/unvetted") {
+		t.Fatalf("with no allowed stored model the request must be refused")
 	}
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
-	}
-
-	// A SECOND migration, while an even older tab still holds the first slug.
-	s.cfg.LockdownAllowedModels = []string{"e/f"}
-	fresh = reload()
-	if err := s.reconcileLockdownModelCtx(t.Context(), user, fresh); err != nil {
-		t.Fatalf("second migration: %v", err)
-	}
-	for _, stale := range []string{"a/b", "c/d"} {
-		probe := reload()
-		rec := httptest.NewRecorder()
-		if !s.applyTurnModelOverride(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, probe, stale) {
-			t.Fatalf("a client stranded on %q must still be recognised: %d %s", stale, rec.Code, rec.Body.String())
-		}
-	}
-	s.cfg.LockdownAllowedModels = []string{"c/d"}
-	if err := s.store.SetModel(t.Context(), user, conv.ID, "c/d"); err != nil {
-		t.Fatalf("restore: %v", err)
-	}
-
-	// Another tab acknowledging the migration says nothing about what a third
-	// one is still holding, so the record survives an allowed selection.
-	fresh = reload()
-	w = httptest.NewRecorder()
-	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "c/d") {
-		t.Fatalf("an allowed model must be accepted: %d %s", w.Code, w.Body.String())
-	}
-	fresh = reload()
-	w = httptest.NewRecorder()
-	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
-		t.Fatalf("a second stale client must still be recognised: %d %s", w.Code, w.Body.String())
 	}
 
 	// Once the operator puts that slug back on the allow-list it stops being
@@ -657,6 +643,21 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 	}
 	if got := reload(); got.Model != "a/b" {
 		t.Fatalf("a re-allowed model must actually be selected, stored=%q", got.Model)
+	}
+
+	// A fresh Server — as after a process restart — behaves identically,
+	// because nothing about this is remembered. (Last: its fixture resets the
+	// database the assertions above rely on.)
+	restarted := serverFixture(t)
+	restarted.cfg.SandboxImage = "ghcr.io/x/y:1"
+	restarted.cfg.LockdownAllowedModels = []string{"c/d"}
+	afterRestart := &store.Conversation{ID: conv.ID, UserEmail: user, Model: "c/d", Lockdown: true}
+	w = httptest.NewRecorder()
+	if !restarted.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, afterRestart, "a/b") {
+		t.Fatalf("a restarted server must still ignore the stale echo: %d %s", w.Code, w.Body.String())
+	}
+	if afterRestart.Model != "c/d" {
+		t.Fatalf("the restarted server must keep the stored model, got %q", afterRestart.Model)
 	}
 }
 
@@ -684,46 +685,6 @@ func TestSummarize_LockdownStaleEchoAfterMigration(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "no history to summarize") {
 		t.Fatalf("expected the handler's own no-history check, got %d %s", w.Code, w.Body.String())
-	}
-}
-
-// The memo is bounded: the oldest record is evicted, never the newest.
-func TestMigratedModelMemo_EvictsOldestFirst(t *testing.T) {
-	var memo migratedModelMemo
-	for i := range migratedModelMemoCap + 10 {
-		memo.note(fmt.Sprintf("conv-%d", i), fmt.Sprintf("old/model-%d", i))
-	}
-	if memo.matches("conv-0", "old/model-0") {
-		t.Errorf("the oldest record should have been evicted")
-	}
-	newest := migratedModelMemoCap + 9
-	if !memo.matches(fmt.Sprintf("conv-%d", newest), fmt.Sprintf("old/model-%d", newest)) {
-		t.Errorf("the newest record must survive the cap")
-	}
-	if got := len(memo.from); got > migratedModelMemoCap {
-		t.Errorf("memo grew past its cap: %d", got)
-	}
-	// Every hop is kept: after A→B→C a tab that saw neither event holds A.
-	memo.note("conv-x", "old/one")
-	memo.note("conv-x", "old/two")
-	if !memo.matches("conv-x", "old/one") || !memo.matches("conv-x", "old/two") {
-		t.Errorf("both pre-migration slugs must be recognised")
-	}
-	// Bounded per conversation, oldest hop first.
-	for i := range migratedModelMemoPerConv + 2 {
-		memo.note("conv-x", fmt.Sprintf("hop/%d", i))
-	}
-	if memo.matches("conv-x", "old/one") {
-		t.Errorf("the per-conversation cap must drop the oldest hop")
-	}
-	if !memo.matches("conv-x", fmt.Sprintf("hop/%d", migratedModelMemoPerConv+1)) {
-		t.Errorf("the newest hop must survive")
-	}
-	// A repeated slug is not a new hop.
-	memo.note("conv-y", "same/slug")
-	memo.note("conv-y", "same/slug")
-	if got := len(memo.from["conv-y"]); got != 1 {
-		t.Errorf("a repeated slug stacked %d entries", got)
 	}
 }
 

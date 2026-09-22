@@ -666,39 +666,6 @@ export function ChatExperience({
     modelTouchedRef.current = true;
     setSelectedModel(value);
   }, []);
-  // The very first mount of a session races the client-config fetch: state
-  // seeds from the compiled-in fallback before the workspace's tier pair is
-  // known. When the pair lands, move ONLY a not-yet-started chat still sitting
-  // on that fallback — an open conversation keeps the model its row carries,
-  // and any other pick stays because the values differ. Picking the fallback
-  // slug itself pre-fetch was picking "recommended", which this resolves.
-  useEffect(() => {
-    if (!workspaceModelTiers) return;
-    const previousLiveDefault = lastLiveDefaultRef.current;
-    lastLiveDefaultRef.current = workspaceModelTiers.defaultModel;
-    if (activeConversationId !== null) return;
-    // Deferred to a microtask so the adoption lands outside the effect's
-    // synchronous phase (no cascading render off the effect body); the guard
-    // cancels it if the deps change before the microtask runs.
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      if (modelTouchedRef.current) return;
-      setSelectedModel((cur) =>
-        // Untouched means "still on whatever we last put there": the
-        // compiled-in fallback before any config landed, or the live default
-        // from the previous payload. Moving only off the fallback left a
-        // blank composer sitting on a superseded admin default, which in a
-        // lockdown chat the server then refuses.
-        cur === FALLBACK_DEFAULT_MODEL || (previousLiveDefault !== null && cur === previousLiveDefault)
-          ? workspaceModelTiers.defaultModel
-          : cur,
-      );
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceModelTiers, activeConversationId]);
   const [rankedModels, setRankedModels] = useState<RankedModel[]>([]);
   const [catalogModels, setCatalogModels] = useState<RankedModel[]>([]);
   // Active workspace-provider models, "<provider>/<model>" slugs. Loaded via the
@@ -789,6 +756,58 @@ export function ChatExperience({
   // and cleared once the conversation is actually created. The flag
   // rides along on the first /api/chat POST as `lockdown: true`.
   const [pendingLockdown, setPendingLockdown] = useState(false);
+
+  // The very first mount of a session races the client-config fetch: state
+  // seeds from the compiled-in fallback before the workspace's tier pair is
+  // known. When the pair lands, move ONLY a not-yet-started chat still sitting
+  // on that fallback — an open conversation keeps the model its row carries,
+  // and any other pick stays because the values differ. Picking the fallback
+  // slug itself pre-fetch was picking "recommended", which this resolves.
+  useEffect(() => {
+    if (!workspaceModelTiers) return;
+    const previousLiveDefault = lastLiveDefaultRef.current;
+    lastLiveDefaultRef.current = workspaceModelTiers.defaultModel;
+    if (activeConversationId !== null) return;
+    // Deferred to a microtask so the adoption lands outside the effect's
+    // synchronous phase (no cascading render off the effect body); the guard
+    // cancels it if the deps change before the microtask runs.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (modelTouchedRef.current) return;
+      // A lockdown draft may only run models the operator allows. When that
+      // list is explicit it does not move with the tiers, so adopting a new
+      // default blindly would leave the draft on a model the server refuses.
+      // Adopt only what the list permits; otherwise take its first entry.
+      if (pendingLockdown || serverConfig.lockdownOnly) {
+        const allowed = serverConfig.lockdownAllowedModels;
+        if (allowed.length > 0 && !allowed.includes(workspaceModelTiers.defaultModel)) {
+          const firstAllowed = allowed.find((slug) => !slug.includes("*"));
+          if (firstAllowed) setSelectedModel(firstAllowed);
+          return;
+        }
+      }
+      setSelectedModel((cur) =>
+        // Untouched means "still on whatever we last put there": the
+        // compiled-in fallback before any config landed, or the live default
+        // from the previous payload. Moving only off the fallback left a
+        // blank composer sitting on a superseded admin default, which in a
+        // lockdown chat the server then refuses.
+        cur === FALLBACK_DEFAULT_MODEL || (previousLiveDefault !== null && cur === previousLiveDefault)
+          ? workspaceModelTiers.defaultModel
+          : cur,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    workspaceModelTiers,
+    activeConversationId,
+    pendingLockdown,
+    serverConfig.lockdownOnly,
+    serverConfig.lockdownAllowedModels,
+  ]);
   // activeConversation tracks the currently-active conversation
   // record (or null for a brand-new pending chat). Used so the chat
   // header can render the lockdown badge without re-walking the

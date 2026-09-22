@@ -111,12 +111,15 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 	// server had already replaced. The web's echo of the stored slug is the
 	// only thing substituted; a genuinely different disallowed slug still 400s.
 	if conv.Lockdown && !s.cfg.LockdownAllows(model) {
-		// Two shapes of stale echo, and Compact must survive both: the client
-		// echoing the stored model before any migration, and — after a
-		// migration whose `conversation` event it never received — the slug it
-		// was migrated off, which by then differs from the stored model.
-		staleEcho := model == conv.Model || s.lockdownMigrations.matches(conv.ID, model)
-		if staleEcho {
+		// Same rule as a turn (applyTurnModelOverride): a disallowed slug on a
+		// lockdown conversation is a stale client echo, not a request. Compact
+		// on the conversation's stored model when that is allowed, otherwise
+		// on the lockdown default, rather than refusing an action the user can
+		// only escape by reloading.
+		switch {
+		case s.cfg.LockdownAllows(conv.Model):
+			model = conv.Model
+		default:
 			if next := lockdownDefaultSlug(s.cfg.LockdownModels()); next != "" {
 				model = next
 			}

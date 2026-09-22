@@ -27,10 +27,6 @@ import (
 // Server wires the agent Manager + store + shared-secret auth into an
 // http.Handler that Next.js talks to.
 type Server struct {
-	// lockdownMigrations remembers the model each lockdown conversation was
-	// migrated away from, so a client echoing the old slug is recognised as
-	// stale instead of refused (see migratedModelMemo in chat.go).
-	lockdownMigrations migratedModelMemo
 	// A failed durable outcome write must not masquerade as live execution on
 	// retry. Startup recovers the persisted sentinel after this process exits.
 	approvalPersistenceFailures sync.Map

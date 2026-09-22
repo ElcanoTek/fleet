@@ -12,7 +12,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -130,16 +129,28 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		return true
 	}
 	if conv.Lockdown && !s.cfg.LockdownAllows(reqModel) {
-		// A DISALLOWED slug that this conversation was migrated off is an echo
-		// from a client that never saw the `conversation` event, not a request
-		// for that model: no opinion, keep the stored (allowed) model. Without
-		// this the migration could leave a conversation refusing every turn
-		// until the user reloaded. Note the ordering: once an operator puts
-		// that slug back on the allow-list it stops being an echo and becomes
-		// an ordinary, honourable selection, handled below.
-		if s.lockdownMigrations.matches(conv.ID, reqModel) {
+		// A lockdown conversation's picker only ever offers allow-listed
+		// models, so a disallowed slug arriving on one is a client echoing
+		// something the server itself told it before the list — or the tiers
+		// behind it — moved. It is not a request for that model, and it could
+		// not be honoured in any case. Ignore it and run the conversation's
+		// stored model, which is allowed; the `conversation` event carries the
+		// truth back, and the turn is not lost to a 400 the user can only
+		// escape by reloading.
+		//
+		// This replaced a per-conversation memo of the exact pre-migration
+		// slug. The memo could not survive a process restart, could not speak
+		// for a second tab, and lost the first hop when a conversation was
+		// migrated twice — three ways to strand a client, all of which this
+		// rule dissolves, because it needs no memory at all. The invariant is
+		// untouched: the model that RUNS is one the allow-list permits.
+		if s.cfg.LockdownAllows(conv.Model) {
+			log.Printf("lockdown: conversation %s ignored a disallowed model %q from the client and ran on its stored %q", logSafe(conv.ID), logSafe(reqModel), logSafe(conv.Model))
 			return true
 		}
+		// The stored model is disallowed too, so there is nothing safe to run
+		// and the caller must choose. (reconcileLockdownModelCtx migrates this
+		// conversation when its turn launches, which is the usual way out.)
 		http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 		return false
 	}
@@ -151,89 +162,6 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		conv.Model = reqModel
 	}
 	return true
-}
-
-// migratedModelMemo remembers, per conversation, the slug a lockdown migration
-// moved AWAY from, so a client still echoing it is recognised as stale rather
-// than refused.
-//
-// Why it has to exist: the migration persists the replacement and the
-// `conversation` event announces it, but emitting an event is not proof the
-// browser received it — the socket can die in that instant, which is the very
-// situation the migration exists for. The next submission then echoes the old
-// slug, which no longer equals the stored model, and without this it is read
-// as a deliberate override to a disallowed model and refused; the conversation
-// would be stuck at 400 until the user reloaded. Recognising the echo keeps a
-// genuinely different disallowed slug refusable, which is the distinction a
-// blanket "ignore disallowed models" would lose.
-//
-// A record is NOT dropped when some client acknowledges the migration: the
-// same conversation can be open in several tabs, and one tab sending the new
-// model says nothing about what the others are still holding. Nor does a
-// later migration replace it — after A→B→C a tab that saw neither event still
-// holds A — so the hops accumulate, bounded per conversation and overall. That is safe because
-// the record is only ever consulted for a slug the allow-list currently
-// REFUSES — an echo by construction; once an operator re-allows that slug it
-// is an ordinary selection again and the memo no longer applies.
-//
-// Bounded: entries are small (one conversation id + one slug) and capped, with
-// the oldest evicted first. Losing an entry to the cap costs a reload, never
-// correctness — the allow-list guard is enforced independently on every turn.
-type migratedModelMemo struct {
-	mu    sync.Mutex
-	from  map[string][]string
-	order []string
-}
-
-// migratedModelMemoCap bounds the memo. Far above any plausible number of
-// lockdown conversations migrated in one allow-list change.
-const migratedModelMemoCap = 1024
-
-// migratedModelMemoPerConv bounds the slugs remembered for ONE conversation.
-// A conversation can be migrated more than once (A→B, then B→C) while a tab
-// that saw neither event still holds A, so only remembering the most recent
-// hop would refuse that tab — the case this memo exists to prevent. Four hops
-// is far more allow-list churn than a disconnected client survives.
-const migratedModelMemoPerConv = 4
-
-// note records that convID moved off slug `from`, keeping the previous hops:
-// each migration can strand a different client on a different slug.
-func (m *migratedModelMemo) note(convID, from string) {
-	if convID == "" || from == "" {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.from == nil {
-		m.from = make(map[string][]string)
-	}
-	slugs, seen := m.from[convID]
-	if !seen {
-		m.order = append(m.order, convID)
-	}
-	if slices.Contains(slugs, from) {
-		return
-	}
-	slugs = append(slugs, from)
-	if len(slugs) > migratedModelMemoPerConv {
-		slugs = slugs[len(slugs)-migratedModelMemoPerConv:]
-	}
-	m.from[convID] = slugs
-	for len(m.order) > migratedModelMemoCap {
-		oldest := m.order[0]
-		m.order = m.order[1:]
-		delete(m.from, oldest)
-	}
-}
-
-// matches reports whether slug is a model convID was migrated away from.
-func (m *migratedModelMemo) matches(convID, slug string) bool {
-	if convID == "" || slug == "" {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return slices.Contains(m.from[convID], slug)
 }
 
 // lockdownDefaultSlug picks the slug a delisted lockdown conversation is moved
@@ -282,9 +210,6 @@ func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, con
 		return err
 	}
 	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", logSafe(conv.ID), logSafe(conv.Model), logSafe(next)) //nolint:gosec // G706: logSafe strips CR/LF from the conversation id and both slugs.
-	// The client may never see the `conversation` event that carries this, so
-	// remember what it is still holding (see migratedModelMemo).
-	s.lockdownMigrations.note(conv.ID, conv.Model)
 	conv.Model = next
 	return nil
 }

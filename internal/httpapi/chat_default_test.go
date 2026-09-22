@@ -511,7 +511,11 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		}
 	}
 
-	t.Run("disallowed override on lockdown conversation rejected", func(t *testing.T) {
+	// A disallowed slug never reaches the store and never runs, whichever way
+	// the request is resolved: with an allowed stored model the turn proceeds
+	// on that instead (the picker cannot offer a disallowed model, so this is
+	// a stale client echo); with none, the request is refused.
+	t.Run("disallowed override never persists and never runs", func(t *testing.T) {
 		engine := &fakeEngine{}
 		st := newFakeChatStore()
 		srv := newDefaultChatServer(t, engine, st)
@@ -523,20 +527,20 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 			"model":           "evil/unvetted-model",
 			"message":         "hello",
 		})
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 		}
 		st.mu.Lock()
 		model, setModels := st.convs["conv-1"].Model, st.setModels
 		st.mu.Unlock()
 		if setModels != 0 || model != "a/b" {
-			t.Errorf("rejected override reached the store: SetModel calls = %d, stored model = %q", setModels, model)
+			t.Errorf("disallowed override reached the store: SetModel calls = %d, stored model = %q", setModels, model)
 		}
 		engine.mu.Lock()
-		turns := engine.turns
+		turns, turnModel := engine.turns, engine.lastModel
 		engine.mu.Unlock()
-		if turns != 0 {
-			t.Errorf("turn ran despite the rejected model override (%d turns)", turns)
+		if turns != 1 || turnModel != "a/b" {
+			t.Errorf("the turn must run on the stored model: turns=%d model=%q", turns, turnModel)
 		}
 	})
 
@@ -623,14 +627,44 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		}
 	})
 
-	// A genuinely DIFFERENT disallowed slug is still a 400 — the migration only
-	// ever moves a conversation ONTO the list.
-	t.Run("different disallowed override still rejected after migration exists", func(t *testing.T) {
+	// A lockdown picker offers only allow-listed models, so ANY disallowed
+	// slug arriving on one is a stale client echo. It is ignored in favour of
+	// the conversation's own model — which the turn then runs on — rather than
+	// refused with a 400 the user can only escape by reloading.
+	t.Run("disallowed override is ignored, and the turn runs on the stored model", func(t *testing.T) {
 		engine := &fakeEngine{}
 		st := newFakeChatStore()
 		srv := newDefaultChatServer(t, engine, st)
-		srv.cfg.LockdownAllowedModels = []string{"c/d"}
-		seed(st, true)
+		srv.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+		seed(st, true) // stored a/b, which is allowed
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "evil/unvetted-model",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		engine.mu.Lock()
+		turnModel := engine.lastModel
+		engine.mu.Unlock()
+		if model != "a/b" || turnModel != "a/b" {
+			t.Errorf("the disallowed slug must be ignored: stored=%q turn=%q", model, turnModel)
+		}
+	})
+
+	// With NO allowed stored model there is nothing safe to run: the caller
+	// has to choose, so the request is refused.
+	t.Run("refused when the stored model is disallowed too", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"z/*"} // globs only: no migration target
+		seed(st, true)                                  // stored a/b, disallowed
 
 		w := postChatRequest(t, srv, map[string]any{
 			"conversation_id": "conv-1",
@@ -639,12 +673,6 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 		})
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
-		}
-		st.mu.Lock()
-		model := st.convs["conv-1"].Model
-		st.mu.Unlock()
-		if model != "a/b" {
-			t.Errorf("a rejected submission launches no turn, so nothing should have been migrated: stored=%q", model)
 		}
 	})
 
