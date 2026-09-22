@@ -670,6 +670,7 @@ row below.
 | What you see | What to do |
 | --- | --- |
 | **Retrying** | A connection or a service hiccupped, and the turn is retrying by itself with a short countdown. Wait. It usually clears on its own. |
+| Nothing at all for a while | A model that reasons before it writes can be silent for a minute or more, and that is not a fault. By default the platform allows a model about a minute and a quarter to start, tries once more if it does not, and only then shows a card saying the model did not start responding. Retry from the card, or pick a different model. |
 | **Turn failed** | The turn did not complete. The banner says why when it can. **Retry** resends your last message. If it fails the same way twice, change something: the model, the ask, or the attachment. |
 | Reply seems to stop | On a phone that locked, or a laptop that slept, the screen can lose the connection while the assistant keeps working. Refresh the page. If the turn finished, the full reply is there; if it is still running, the stream picks up where it left off. The work was never lost. |
 | Model unavailable | The banner offers **Pick a different model**. Choose one and resend; the conversation keeps its history. |
