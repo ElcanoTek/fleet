@@ -72,18 +72,24 @@ func (m *repairVerifierModel) Generate(context.Context, fantasy.Call) (*fantasy.
 }
 
 func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing.T) {
+	withFastVerifierRetry(t)
 	for _, tc := range []struct {
 		name      string
 		verdicts  []string
 		wantError bool
 		calls     int
+		// wantWarning: the verifier never produced a verdict, so after its one
+		// retry the clean audit finishes the run with the
+		// completion_unverified_verifier_error warning instead of spending the
+		// three checks and dead-lettering (#1602).
+		wantWarning bool
 	}{
-		{"repaired", []string{`{"missing_actions":["verify inventory"]}`, `{"missing_actions":[]}`}, false, 2},
-		{"repaired at final review", []string{`{"missing_actions":["verify inventory"]}`, `{"missing_actions":["verify inventory"]}`, `{"missing_actions":[]}`}, false, 3},
-		{"unresolved", []string{`{"missing_actions":["verify inventory"]}`}, true, 3},
-		{"malformed", []string{`not a verdict`}, true, 3},
-		{"missing verdict", []string{`{}`}, true, 3},
-		{"null verdict", []string{`{"missing_actions":null}`}, true, 3},
+		{"repaired", []string{`{"missing_actions":["verify inventory"]}`, `{"missing_actions":[]}`}, false, 2, false},
+		{"repaired at final review", []string{`{"missing_actions":["verify inventory"]}`, `{"missing_actions":["verify inventory"]}`, `{"missing_actions":[]}`}, false, 3, false},
+		{"unresolved", []string{`{"missing_actions":["verify inventory"]}`}, true, 3, false},
+		{"malformed", []string{`not a verdict`}, false, 2, true},
+		{"missing verdict", []string{`{}`}, false, 2, true},
+		{"null verdict", []string{`{"missing_actions":null}`}, false, 2, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reviewer := &repairVerifierModel{verdicts: tc.verdicts}
@@ -117,6 +123,9 @@ func TestScheduledCompletionRechecksRepairsAndBoundsUnresolvedReviews(t *testing
 			}
 			if calls > 4 {
 				t.Fatalf("terminal verification failure kept driving the model: %d calls", calls)
+			}
+			if got := hasSessionMessageType(a.logSession, agentcore.MessageTypeCompletionUnverifiedVerifierError); got != tc.wantWarning {
+				t.Fatalf("completion_unverified_verifier_error warning recorded=%t, want %t", got, tc.wantWarning)
 			}
 		})
 	}

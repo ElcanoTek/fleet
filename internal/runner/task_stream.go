@@ -176,11 +176,13 @@ func (b *taskStreamBuffer) Observe(eventType string, payload map[string]any) {
 			"output":  payload["text"],
 			"error":   isErr,
 		})
-	case "fleet.context_checkpoint", "fleet.context_compacted":
+	case "fleet.context_checkpoint", "fleet.context_compacted", "fleet.completion_predicate":
 		// The scheduled tool loop paused at the resend budget / the history was
-		// compacted (docs/SCHEDULED-COMPACTION-CHECKPOINTS.md). Forwarded so an
-		// operator tailing the run can see why the transcript just shrank
-		// instead of only finding the breadcrumb in the session log afterwards.
+		// compacted (docs/SCHEDULED-COMPACTION-CHECKPOINTS.md) / the task's
+		// declared completion predicate finished the run without the model
+		// verifier (docs/CONDITIONAL-TASK-COMPLETION.md). Forwarded so an
+		// operator tailing the run sees why, instead of only finding the
+		// breadcrumb in the session log afterwards.
 		frame := map[string]any{"type": strings.TrimPrefix(eventType, "fleet.")}
 		for k, v := range payload {
 			frame[k] = v

@@ -1154,17 +1154,35 @@ page write, file upload, ...) still require their tool call — a prose report
 never substitutes for one. Repairs are checked again, up to three verifier calls in
 total — the cap counts every verification, including the re-check a
 reviewer-forced repair triggers, and a repair that cannot be re-verified
-within the cap ends the run unverified rather than extending it. A verifier
-error keeps completion blocked; the third unsuccessful check
+within the cap ends the run unverified rather than extending it. Missing
+actions keep completion blocked; the third check that still reports them
 returns `ErrCompletionUnverified` through the core without asking the model to
-abort. Partial work and completed critical actions remain recorded, and the
+abort. A verifier that cannot answer at all — timeout, provider failure,
+empty or unparseable reply — does not spend a check (#1602). It is retried once
+after a short pause. If it still cannot answer:
+
+- **The audit cleared with no failed critical call.** The run succeeds with a
+  `completion_unverified_verifier_error` warning, recorded in the session log
+  and at the head of the task's terminal message, instead of dead-lettering
+  audited work on the verifier's own outage.
+- **A critical tool's last execution failed.** The outage keeps the old
+  semantics: it spends a check, and the third ends the run
+  `ErrCompletionUnverified`. Partial work and completed critical actions remain recorded, and the
 transcript identifies the verification failure without claiming external actions
 were rolled back. Tool evidence is read from complete
 redacted records, before UI preview truncation. So core
 governance — per-tool policy, audit, finish enforcement, MCP credential
 brokering, note staging, usage/cost, **and the end-of-run verifier** — applies to
-every scheduled run. An explicit terminal audit abort skips the extra model
-reviewers and remains a failed result. Conditional task branches are
+every scheduled run, with one declared exception. A task whose
+`EXECUTION REQUIREMENTS` carries a `completion.any_succeeded` clause is complete
+once the audit/finish enforcement clears and a successful execution of a listed
+tool is on the record. The verifier and phone-a-friend are then skipped, with a
+`[completion_predicate] satisfied by <tool>` breadcrumb and a
+`fleet.completion_predicate` event, and no verifier call is metered. The audit
+gate is never skipped, and a task without the clause is verified as before
+([ADR-0072](adr/0072-deterministic-completion-predicate.md)). An explicit
+terminal audit abort skips the extra model reviewers and remains a failed
+result. Conditional task branches are
 verified using bounded structured result evidence, not tool names alone; see
 [Conditional scheduled tasks](CONDITIONAL-TASK-COMPLETION.md).
 

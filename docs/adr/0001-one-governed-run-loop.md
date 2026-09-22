@@ -1,6 +1,6 @@
 # ADR-0001: One governed agent run loop
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0072](0072-deterministic-completion-predicate.md)
 - **Date:** 2026-06-28 (documents a decision that predates this record)
 - **Deciders:** fleet maintainers
 

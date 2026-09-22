@@ -58,12 +58,28 @@ The verifier remains a model-based check, not deterministic proof of a business
 workflow. It runs at most three times: the initial check and two repair
 reviews — the cap counts every verification, including the re-check of a
 reviewer-forced phone-a-friend repair, which cannot buy a fourth call. Missing
-actions or a malformed/failed verifier response keep completion blocked; the
-third unsuccessful check returns `ErrCompletionUnverified` directly through
-the governed core, preserving partial work, usage and the completed-action count.
-It does not ask the model to abort or run more tools: an audit abort may be
-refused after all committed writes succeeded. A verifier failure remains a
-terminal failure under the existing retry policy, never a successful completion.
+actions keep completion blocked. The third check that still reports missing
+actions returns `ErrCompletionUnverified` directly through the governed core,
+preserving partial work, usage and the completed-action count. It does not ask
+the model to abort or run more tools, because an audit abort may be refused
+after all committed writes succeeded. A verifier that *answered* with missing
+actions remains a terminal failure under the existing retry policy, never a
+successful completion.
+
+A verifier that could not answer at all — a timeout, a provider failure, an
+empty or unparseable reply — says nothing about the run. So it does not spend a
+check (#1602): the call is retried once after a short pause. If the verifier
+still cannot answer, what happens depends on the audit:
+
+- **The audit cleared with no failed critical call** (no audit-gated tool whose
+  last execution in the run failed). The run succeeds with a
+  `completion_unverified_verifier_error` warning, recorded in the session log
+  and at the head of the task's terminal message. It is not dead-lettered on
+  the verifier's own outage. The phone-a-friend reviewer already failed open
+  on its errors.
+- **A failed critical call is on the record.** The outcome is genuinely in
+  doubt, so the outage keeps the pre-#1602 semantics: it spends a check, and
+  the third ends the run `ErrCompletionUnverified`.
 Its transcript records `completion_unverified` and explains that completed
 external actions have not been rolled back; the dead-letter reason also names
 the connector calls that succeeded this run (or says none did), so an operator
@@ -103,6 +119,72 @@ the executing workflow must still check those. Unknown companion metadata is
 ignored for forward compatibility, including producer labels such as `mode`.
 Malformed/duplicate declarations fail closed. Ordinary prompts with no marker
 keep their existing behavior.
+
+## Deterministic completion predicate (#1602)
+
+For many workflows, the producer of the prompt knows exactly which tool
+executions mean "done", and that knowledge is not a matter of judgement. A
+Pages refresh either created a new version (`update_page_data`,
+`update_page_data_upload`) or recorded why it did not (`record_refresh_check`,
+the no-update branch the prompt itself calls "a complete run, not a failure").
+The model verifier still read the numbered publish steps as unconditional.
+On the 2026.09.22.4 build it was the largest single cause of dead-lettered
+page refreshes, and every one of those runs had the right outcome already
+recorded on the Pages side:
+
+| task | verifier demanded | what actually happened |
+|---|---|---|
+| `11b2880d` diageo-raptive-campaign | "publish_managed_data_update … update_page_data_upload" | run recorded `blocked`; page correctly untouched |
+| `07e43224` sunbum-elc00176 | "update_page_data publish … expected_version=853" | no new coverage; `record_refresh_check(source_not_updated)` written |
+| `4207d823` diageo-raptive-campaign | "build complete payload … update_page_data_upload" | blocked branch, recorded |
+| `19c59abc` raptive-seller-view | — (the verifier call itself timed out) | dead-lettered after three checks |
+| `00d8224c` central-garden | a wording nit in the report | data published |
+
+The producer can declare that knowledge in the same requirements object:
+
+```text
+EXECUTION REQUIREMENTS (JSON):
+{"mcp_servers":["pages"],"required_tools":["mcp_pages_get_page_data","mcp_pages_record_refresh_check","mcp_pages_update_page_data_upload"],"completion":{"any_succeeded":["mcp_pages_update_page_data","mcp_pages_update_page_data_upload","mcp_pages_record_refresh_check"]}}
+```
+
+**At dispatch**, `completion.any_succeeded` names are validated and resolved
+the way `required_tools` names are:
+
+- They may be native names, bare server tool names, or full
+  `mcp_<server>_<tool>` names. The same identifier rule applies, and at most
+  200 names are allowed.
+- A name that is not in the run's tool roster is the same actionable dispatch
+  error as an unavailable required tool (`completion tool <name>`).
+- A malformed clause fails closed, like any malformed declaration. That covers
+  a bad identifier, a clause that is not an object, and `any_succeeded` that is
+  not an array of strings.
+- An absent, `null`, or empty clause declares nothing. So does a clause holding
+  only keys this Fleet does not know.
+
+**At finish**, once the audit/finish enforcement has cleared, the scheduled
+policy reads the same tool-execution records the verifier reads, with the same
+success classification. Bridged `tool_call` connector calls count under their
+own name.
+
+- **A listed tool has a successful execution.** The run is complete:
+  - the end-of-run verifier and the phone-a-friend review are skipped (zero
+    model calls, and no verifier entry in `aux_usage`);
+  - the session log gains a
+    `[completion_predicate] satisfied by <tool>` breadcrumb;
+  - the run emits a `fleet.completion_predicate` event, which the scheduler
+    stream forwards as a `completion_predicate` frame.
+- **The predicate replaces only the model gates, never the audit.** An
+  outstanding declared commitment still blocks finishing, because the
+  predicate is consulted only after audit/finish enforcement has cleared.
+- **No listed tool succeeded** (failed, blocked, or never called). The
+  verifier runs exactly as before.
+- **No clause.** Nothing changes.
+
+Fleet still interprets nothing about these tools. The list is opaque names
+chosen by the producer, like `required_tools`. Fleet does not know what
+`record_refresh_check` means, and the bundle and the producer own the
+contract that its success is completion. Regenerate producer prompts to gain
+the clause; existing prompts keep the verifier.
 
 ## Scope
 
