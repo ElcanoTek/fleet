@@ -373,6 +373,87 @@ cards explicitly through the approval API. The flag
 no human present and a mocked backend — never enable it in production. fleet logs
 a loud warning at startup when it is on.
 
+### Critical tool aliases: one action under two names (#1604)
+
+A typed `confirm_audit` declaration binds to the exact server-qualified tool
+name ([ADR-0034](adr/0034-audit-gate-commitment-binding.md)). Some servers expose
+**one** write under two names. Pages has `update_page_data` (inline `data`) and
+`update_page_data_upload` (a staged file), and `deploy_page` /
+`deploy_page_upload` are the same kind of pair. The agent chooses the transport
+from the payload size, which it only knows after building the payload. So a run
+could declare one name, publish correctly through the other, and still end as a
+failure, because the declared name stayed owed. Three prod runs did exactly
+that:
+
+- husqvarna `561b0153` (2026-09-21): "Task aborted by its own self-audit:
+  Aborted the stale mcp_pages_update_page_data commitment because the exact
+  audited Husqvarna payload was already successfully published through
+  mcp_pages_update_page_data_upload as live version 874." → `error`, data live.
+- ultima `8486611d` (2026-09-20): the same shape, live version 860.
+- brookfield `89afe409` (2026-09-21): a stale `deploy_page_upload` declaration
+  after the data landed as v872 → `error`.
+
+`agent_policy.critical_tool_aliases` tells the gate those names are one action:
+
+```yaml
+agent_policy:
+  critical_tools: [update_page_data, update_page_data_upload, deploy_page, deploy_page_upload]
+  critical_tool_modes:
+    update_page_data: notify
+    update_page_data_upload: notify
+  critical_tool_aliases:
+    update_page_data: [update_page_data_upload]
+    deploy_page: [deploy_page_upload]
+```
+
+Each key and the suffixes under it form one equivalence class, and entries that
+share a member merge. A declaration on any member works for a call of any other
+member **on the same server/variant prefix**, in both directions: declaring
+`mcp_pages_update_page_data` and publishing through
+`mcp_pages_update_page_data_upload` discharges the commitment, and so does the
+reverse. Concretely, a call through an alias:
+
+- rides the declared commitment, instead of being blocked;
+- discharges it;
+- lets a re-audit that switches variant supersede the stale declaration instead
+  of stacking on it;
+- clears an audited call that was blocked before the audit;
+- stays under a `deal_ids` / `values_digest` batch approval made on the other
+  member. The batch ledgers are keyed by alias class.
+
+What does **not** change:
+
+- `deal_id` / `deal_ids` / `values_digest` binding carries over to the alias as
+  is.
+- An aliased or same-suffix call on a **different** server or client variant is
+  still blocked and discharges nothing.
+- Approval modes stay per suffix, which is why the example gives both Pages
+  write variants `notify`.
+- A manifest without the key behaves exactly as before.
+
+A few rules and caveats:
+
+- **Every member must be in `critical_tools`.** A member that is not is logged
+  and ignored when the policy is installed, and an entry left with fewer than
+  two members is dropped. An alias of a tool the gate never sees would be a way
+  around it.
+- **Legacy free-text audits** honour aliases at suffix level, the way they
+  already honour `critical_tool_substitutes`.
+- **Sub-agents** run in-process under the same installed policy, so they
+  inherit the aliases.
+- **Alias vs substitute.** Use an alias only for names that are the same action
+  with the same blast radius. A lower-level fallback that reaches the same
+  result another way is a one-way `critical_tool_substitutes` entry.
+- **Declare one variant per write.** Declaring both members in one audit
+  registers two commitments: unbound declarations cannot tell one write
+  declared twice from two writes.
+- **Adoption.** The manifest is decoded strictly, so a bundle can adopt the key
+  only once a fleet release that understands it is deployed. After that, the
+  bundle's "Wrong tool variant declared?" abort/re-audit recovery step is no
+  longer needed for aliased pairs.
+
+See [ADR-0071](adr/0071-critical-tool-aliases.md).
+
 ---
 
 ## Context-window pressure (proactive compaction)

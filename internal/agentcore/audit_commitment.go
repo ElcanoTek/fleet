@@ -114,11 +114,12 @@ func (c *typedCommitment) correctsRefusal(fresh *typedCommitment) bool {
 }
 
 // nameMatches reports whether an executed toolName satisfies this
-// commitment's tool binding: the exact declared full name, or a
-// policy-approved substitute (criticalToolSubstitutes) on the SAME
-// server/variant. Cross-server matching is refused: an approval for one
-// server never matches another server's call even though both names end in
-// the same critical suffix, and a base-server approval never matches a
+// commitment's tool binding: the exact declared full name, or — on the SAME
+// server/variant — a policy-approved substitute (criticalToolSubstitutes) or
+// a declared alias (critical_tool_aliases, #1604, either direction).
+// Cross-server matching is refused: an approval for one server never matches
+// another server's call even though both names end in the same critical
+// suffix (or in aliased ones), and a base-server approval never matches a
 // client-variant call.
 func (c *typedCommitment) nameMatches(toolName string) bool {
 	execSuffix := criticalSuffixFor(toolName)
@@ -128,7 +129,7 @@ func (c *typedCommitment) nameMatches(toolName string) bool {
 	if toolName == c.tool {
 		return true
 	}
-	return substituteSatisfies(c.suffix, execSuffix) && sameToolServer(c.tool, toolName)
+	return criticalSuffixCovers(c.suffix, execSuffix) && sameToolServer(c.tool, toolName)
 }
 
 // allowsDeal reports whether this commitment's record binding covers a
@@ -235,6 +236,18 @@ func toolServerPrefix(toolName string) string {
 func sameToolServer(a, b string) bool {
 	pa, pb := toolServerPrefix(a), toolServerPrefix(b)
 	return pa != "" && pa == pb
+}
+
+// sameAliasedTool reports whether two full tool names are the same critical
+// action: identical, or declared aliases (critical_tool_aliases, #1604) on the
+// same server/variant — mcp_pages_update_page_data and
+// mcp_pages_update_page_data_upload when the bundle aliases the two suffixes,
+// never the same pair across two servers.
+func sameAliasedTool(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return criticalAliasesEquivalent(criticalSuffixFor(a), criticalSuffixFor(b)) && sameToolServer(a, b)
 }
 
 // unmarshalArgs decodes a tool call's JSON arguments with UseNumber so numeric
@@ -554,7 +567,11 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		}
 		// Fresh audit envelope for this suffix → clear any per-record
 		// discharge ledger left over from a prior batch on the same suffix.
-		delete(o.dischargedDeals, suffix)
+		// The batch ledgers are keyed by alias class (criticalAliasClassOf,
+		// the suffix itself when the bundle aliases it to nothing), so a
+		// record set approved here binds a batch sent through an alias.
+		batchKey := criticalAliasClassOf(suffix)
+		delete(o.dischargedDeals, batchKey)
 		// Placeholder record ids ("n/a", "none", …) name no record: the entry
 		// registers unbound rather than bound to an id no call can carry.
 		dealIDs := declaredDealIDs(a.DealIDs)
@@ -570,14 +587,14 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		o.committedCriticalActions[suffix] += n
 		registered += n
 		if len(dealIDs) > 0 {
-			if o.approvedDealIDs[suffix] == nil {
-				o.approvedDealIDs[suffix] = make(map[string]bool)
+			if o.approvedDealIDs[batchKey] == nil {
+				o.approvedDealIDs[batchKey] = make(map[string]bool)
 			}
 			for _, id := range dealIDs {
-				o.approvedDealIDs[suffix][id] = true
+				o.approvedDealIDs[batchKey][id] = true
 			}
 			if a.ValuesDigest != "" {
-				o.approvedDigest[suffix] = strings.ToLower(strings.TrimSpace(a.ValuesDigest))
+				o.approvedDigest[batchKey] = strings.ToLower(strings.TrimSpace(a.ValuesDigest))
 			}
 		}
 		tc := &typedCommitment{
@@ -639,9 +656,15 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// Anything else keeps the strict same-shape rule: a differently-bound
 		// commitment no call ever collided with is a legitimately pending
 		// obligation, and retiring it would let the run finish without it.
+		//
+		// "Same tool" includes a declared alias on the same server (#1604): a
+		// re-audit that switches a write from inline to its upload twin is
+		// correcting the transport of ONE action, and stacking the two would
+		// leave the one the run did not use owed forever — the exact shape the
+		// aliases exist to end.
 		for i := 0; i < preExisting; i++ {
 			old := o.typedCommitments[i]
-			if old.remaining <= 0 || old.tool != tc.tool {
+			if old.remaining <= 0 || !sameAliasedTool(old.tool, tc.tool) {
 				continue
 			}
 			sameShape := old.hasDealBinding() == tc.hasDealBinding() && (!tc.hasDealBinding() || old.sameDealSet(tc))
@@ -655,6 +678,8 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			}
 			shape := "same tool+record-set"
 			switch {
+			case old.tool != tc.tool:
+				shape = "aliased tool on the same server (critical_tool_aliases)"
 			case !sameShape:
 				shape = "same tool, re-declared with the binding the earlier declaration refused; nothing executed under it"
 			case !tc.hasDealBinding():
@@ -769,7 +794,7 @@ func (o *orchestrationState) legacySuffixAuthorized(execSuffix string) bool {
 		return true
 	}
 	for suffix := range o.committedCriticalActions {
-		if substituteSatisfies(suffix, execSuffix) && o.legacyHeadroomFor(suffix) > 0 {
+		if criticalSuffixCovers(suffix, execSuffix) && o.legacyHeadroomFor(suffix) > 0 {
 			return true
 		}
 	}
@@ -807,7 +832,7 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 	if !isBatch {
 		return false, ""
 	}
-	suffix := criticalSuffixFor(toolName)
+	suffix := criticalAliasClassOf(criticalSuffixFor(toolName))
 	approved := o.approvedDealIDs[suffix]
 	for _, id := range dealIDs {
 		if !approved[id] {

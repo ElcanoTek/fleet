@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"log"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -45,6 +46,16 @@ type AgentPolicy struct {
 	// statement of how to reverse the action, rendered on a notify record card.
 	// Fleet does not know any client's undo verb and must not invent one.
 	CriticalToolUndoHints map[string]string
+	// CriticalToolAliases declares equivalence classes of critical suffixes
+	// that are the SAME action under different names (#1604) — e.g. an inline
+	// write and its staged-upload twin. Each key and the suffixes listed under
+	// it form one class; entries that share a suffix merge. Unlike
+	// CriticalToolSubstitutes (a one-way "this other action may stand in for
+	// the committed one"), an alias is symmetric: a commitment declared on any
+	// member is authorized and discharged by a call of any other member on the
+	// same server/variant. Members must be critical suffixes; see
+	// buildCriticalAliasClasses. Empty = exact-name binding only, as before.
+	CriticalToolAliases map[string][]string
 }
 
 // Approval modes a bundle may declare per critical tool (#1153).
@@ -95,6 +106,11 @@ var (
 	// mode (#1153). Empty by default: every critical tool blocks on a card.
 	activeCriticalModes     = map[string]string{}
 	activeCriticalUndoHints = map[string]string{}
+
+	// activeCriticalAliasClass maps each aliased critical suffix to its alias
+	// class key (#1604). Empty by default: a suffix with no entry is aliased to
+	// nothing, and every lookup falls back to the suffix itself.
+	activeCriticalAliasClass = map[string]string{}
 )
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
@@ -140,6 +156,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		}
 	}
 	activeCriticalSuffixes = critical
+	activeCriticalAliasClass = buildCriticalAliasClasses(p.CriticalToolAliases, seen)
 
 	subs := make(map[string][]string, len(p.CriticalToolSubstitutes))
 	for k, v := range p.CriticalToolSubstitutes {
@@ -182,6 +199,69 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		}
 	}
 	activeCriticalUndoHints = hints
+}
+
+// buildCriticalAliasClasses turns the bundle's critical_tool_aliases into
+// equivalence classes (#1604): an entry's key and the suffixes listed under it
+// are one class, and entries sharing a suffix merge, so the relation is
+// symmetric and transitive whichever way the manifest spells it. Every member
+// must be a critical suffix: an alias of a tool the audit gate never sees would
+// be a discharge path around the gate, and a misspelled one would be silently
+// inert. Such members are logged and dropped, and an entry left with fewer
+// than two members is dropped whole. Returns suffix -> class key, the class's
+// lexicographically smallest member, so the key does not depend on the order
+// the YAML map decoded in.
+func buildCriticalAliasClasses(aliases map[string][]string, critical map[string]bool) map[string]string {
+	parent := map[string]string{}
+	find := func(s string) string {
+		for parent[s] != s {
+			parent[s] = parent[parent[s]]
+			s = parent[s]
+		}
+		return s
+	}
+	keys := make([]string, 0, len(aliases))
+	for k := range aliases {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		var members []string
+		inEntry := map[string]bool{}
+		for _, s := range append([]string{k}, aliases[k]...) {
+			s = strings.TrimSpace(s)
+			if s == "" || inEntry[s] {
+				continue
+			}
+			inEntry[s] = true
+			if !critical[s] {
+				log.Printf("agent_policy: ignoring critical_tool_aliases member %q (entry %q) — it is not in critical_tools, so the audit gate never sees that tool and it may not discharge a declared commitment", s, k)
+				continue
+			}
+			members = append(members, s)
+		}
+		if len(members) < 2 {
+			log.Printf("agent_policy: ignoring critical_tool_aliases entry %q — fewer than two critical suffixes remain in it", k)
+			continue
+		}
+		for _, m := range members {
+			if _, ok := parent[m]; !ok {
+				parent[m] = m
+			}
+		}
+		for _, m := range members[1:] {
+			ra, rb := find(members[0]), find(m)
+			if rb < ra {
+				ra, rb = rb, ra
+			}
+			parent[rb] = ra // the smaller root wins, so a class's key is its smallest member
+		}
+	}
+	classes := make(map[string]string, len(parent))
+	for s := range parent {
+		classes[s] = find(s)
+	}
+	return classes
 }
 
 // ApprovalModeForTool returns the bundle-declared approval mode for toolName and

@@ -59,6 +59,41 @@ func substituteSatisfies(committedSuffix, executedSuffix string) bool {
 	return false
 }
 
+// criticalAliasesEquivalent reports whether two DIFFERENT critical suffixes
+// are declared aliases — one action under two names — by the bundle's
+// critical_tool_aliases (#1604). Suffix-level only: callers that hold full
+// tool names must still require the same server/variant (sameAliasedTool).
+func criticalAliasesEquivalent(a, b string) bool {
+	if a == "" || b == "" || a == b {
+		return false
+	}
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	class, ok := activeCriticalAliasClass[a]
+	return ok && class == activeCriticalAliasClass[b]
+}
+
+// criticalAliasClassOf returns the alias class key of a critical suffix, or the
+// suffix itself when it is aliased to nothing. The batch-approval ledgers
+// (approvedDealIDs, approvedDigest, dischargedDeals) are keyed by it, so a
+// record set approved on one member binds a batch call made through another —
+// and with no aliases configured every key is the suffix, as before.
+func criticalAliasClassOf(suffix string) string {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	if class, ok := activeCriticalAliasClass[suffix]; ok {
+		return class
+	}
+	return suffix
+}
+
+// criticalSuffixCovers reports whether an executed suffix may stand for a
+// committed one other than itself: a bundle-approved substitute (one way), or
+// a declared alias (both ways).
+func criticalSuffixCovers(committedSuffix, executedSuffix string) bool {
+	return substituteSatisfies(committedSuffix, executedSuffix) || criticalAliasesEquivalent(committedSuffix, executedSuffix)
+}
+
 func isCriticalTool(toolName string) bool {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
@@ -136,7 +171,7 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 			}
 			// Fresh audit envelope for this suffix → clear any per-record
 			// discharge ledger left over from a prior batch on the same suffix.
-			delete(o.dischargedDeals, suffix)
+			delete(o.dischargedDeals, criticalAliasClassOf(suffix))
 			o.committedCriticalActions[suffix]++
 			log.Printf("Enforcement: registered committed critical action %q (from %q); %d outstanding",
 				suffix, decl, o.committedCriticalActions[suffix])
@@ -168,8 +203,9 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 //     a call that failed typed matching can never eat a typed commitment.
 //  3. Allowed substitute via the bundle's critical_tool_substitutes (e.g. a
 //     committed high-level execute tool discharged by its documented
-//     lower-level create fallback), again within legacy headroom; same-server
-//     typed substitutes are handled in pass 1.
+//     lower-level create fallback) or a declared critical_tool_aliases twin
+//     (#1604), again within legacy headroom; same-server typed substitutes and
+//     aliases are handled in pass 1.
 func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest string) {
 	// Pass 1: typed full-name-bound commitments.
 	if o.markTypedExecuted(toolName, dealID, callDigest) {
@@ -187,9 +223,10 @@ func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest 
 		return
 	}
 	// Pass 3: discharge a legacy substitute if the executed tool is an
-	// allowed fallback for an outstanding free-text commitment.
+	// allowed fallback (or a declared alias) for an outstanding free-text
+	// commitment.
 	for suffix := range o.committedCriticalActions {
-		if substituteSatisfies(suffix, executedSuffix) && o.legacyHeadroomFor(suffix) > 0 {
+		if criticalSuffixCovers(suffix, executedSuffix) && o.legacyHeadroomFor(suffix) > 0 {
 			o.committedCriticalActions[suffix]--
 			log.Printf("Enforcement: committed %q discharged via substitute %q (%d remaining)",
 				suffix, toolName, o.committedCriticalActions[suffix])

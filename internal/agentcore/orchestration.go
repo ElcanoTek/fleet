@@ -940,6 +940,18 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) 
 	if fallback >= 0 {
 		log.Printf("Enforcement: discharging pending %s against corrected arguments (blocked-call hash no longer matches)", toolName)
 		o.dischargePendingCriticalAt(fallback)
+		return
+	}
+	// A blocked call's declared alias on the same server is the same action
+	// through the other transport (critical_tool_aliases, #1604): an inline
+	// write blocked pre-audit and then sent as a staged upload is done, and
+	// demanding the inline call afterwards would ask for the write twice.
+	for i, p := range o.pendingCriticalActions {
+		if sameAliasedTool(p.toolName, toolName) {
+			log.Printf("Enforcement: discharging pending %s via its declared alias %s", p.toolName, toolName)
+			o.dischargePendingCriticalAt(i)
+			return
+		}
 	}
 }
 
@@ -990,7 +1002,9 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// an attempt with failures and no new progress counts against it.
 			// This lets a partial batch resume to completion without wedging
 			// the budget on the unchanged full-batch args.
-			suffix := criticalSuffixFor(toolName)
+			// Keyed by alias class (#1604) like the approvals below, so one
+			// record reported by either twin discharges exactly once.
+			suffix := criticalAliasClassOf(criticalSuffixFor(toolName))
 			done := o.dischargedDeals[suffix]
 			if done == nil {
 				done = make(map[string]bool)
