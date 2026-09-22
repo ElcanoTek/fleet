@@ -17,30 +17,65 @@
 # bootstrap's own dry run from a throwaway clone (or the existing checkout).
 # Re-running on a box with a clean main checkout fast-forwards it and re-runs
 # bootstrap (which is idempotent); a dirty or non-main checkout is left alone.
-# Everything lives inside main() so a truncated download never runs.
+# Everything lives inside functions called on the last line, so a truncated
+# download never runs.
 set -euo pipefail
-main() {
-  local src="${FLEET_SRC_DIR:-/opt/fleet/src}"
-  local repo="${FLEET_REPO_URL:-https://github.com/ElcanoTek/fleet.git}"
-  local arg dry_run=0
-  for arg in "$@"; do
-    case "$arg" in
-      --help|-h)
-        cat <<EOF
+
+usage() {
+  cat <<EOF
 Usage: curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash [-s -- BOOTSTRAP_FLAGS...]
 
-Clones fleet main into $src and runs scripts/bootstrap.sh with BOOTSTRAP_FLAGS.
+Clones fleet main into $1 and runs scripts/bootstrap.sh with BOOTSTRAP_FLAGS.
 With no flags on a terminal, bootstrap asks for everything it needs; with flags
 it runs unattended. For automation, download first so a failed fetch is an error:
-  curl -fsSLo /tmp/fleet-install.sh https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh && sudo bash /tmp/fleet-install.sh FLAGS...
+  curl -fsSLo /tmp/fleet-install.sh https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh \\
+    && sudo bash /tmp/fleet-install.sh FLAGS... </dev/null
 Common flags: --postgres=local|external  --enable-service  --enable-web --domain <host>
               --client-config <git-url[#ref]|path>  --dry-run (changes nothing)
 After install: fleet status; sudo fleet doctor; sudo fleet update.
 EOF
-        exit 0 ;;
-      --dry-run) dry_run=1 ;;
+}
+
+# absolutize FLAG VALUE CALLER_PWD — bootstrap runs from the checkout, so a
+# local path the caller gave relative to their own directory must be made
+# absolute first. URLs, absolute paths and non-path values pass through.
+absolutize() {
+  local flag="$1" value="$2" base="$3"
+  case "$flag" in
+    --client-config)
+      if [[ "$value" != /* && "$value" != *://* && "$value" != git@* && -e "$base/${value%%#*}" ]]; then
+        value="$base/$value"
+      fi ;;
+    --auth-pubkey)
+      if [[ "$value" == @* && "$value" != @/* ]]; then value="@$base/${value#@}"; fi ;;
+  esac
+  printf '%s' "$value"
+}
+
+main() {
+  local src="${FLEET_SRC_DIR:-/opt/fleet/src}"
+  src="${src%/}"   # a trailing slash would put the .partial clone inside the target
+  local repo="${FLEET_REPO_URL:-https://github.com/ElcanoTek/fleet.git}"
+  local arg want="" dry_run=0 caller_pwd="$PWD"
+  local -a args=()
+  # Parse the way bootstrap does, so a value-taking flag consumes the next word:
+  # "--client-config --dry-run" is a (bad) client-config value, not a dry run.
+  for arg in "$@"; do
+    if [[ -n "$want" ]]; then
+      args+=("$(absolutize "$want" "$arg" "$caller_pwd")"); want=""; continue
+    fi
+    case "$arg" in
+      --help|-h) usage "$src"; exit 0 ;;
+      --dry-run) dry_run=1; args+=("$arg") ;;
+      --client-config|--auth-pubkey|--domain|--admin|--chat-db-name|--chat-db-user|--sched-db-name|--sched-db-user)
+        want="$arg"; args+=("$arg") ;;
+      --client-config=*|--auth-pubkey=*)
+        args+=("${arg%%=*}=$(absolutize "${arg%%=*}" "${arg#*=}" "$caller_pwd")") ;;
+      *) args+=("$arg") ;;
     esac
   done
+  set -- ${args[@]+"${args[@]}"}
+
   [[ $EUID == 0 ]] || { echo 'Run as root: curl -fsSL …/install.sh | sudo bash' >&2; exit 1; }
   command -v dnf >/dev/null || { echo 'fleet installs on Fedora/RHEL with dnf' >&2; exit 1; }
 

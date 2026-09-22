@@ -153,9 +153,10 @@ curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | s
 Re-running it fast-forwards a clean `main` checkout and re-runs the idempotent
 bootstrap. For a private config bundle, the clone runs as **root**, so cache the
 credential for root, not your user: `sudo git config --global credential.helper store`,
-then `sudo git clone <bundle-url> /tmp/probe && sudo rm -rf /tmp/probe` once (or put a
-token in the `--client-config` URL). In automation, download the script to a file
-and run it (`curl -fsSLo /tmp/fleet-install.sh … && sudo bash /tmp/fleet-install.sh …`)
+then `sudo git clone <bundle-url> /tmp/probe && sudo rm -rf /tmp/probe` once. Don't put a
+token in the `--client-config` URL: bootstrap echoes that argument and git stores it in the
+bundle checkout's `.git/config`. In automation, download the script to a file
+and run it (`curl -fsSLo /tmp/fleet-install.sh … && sudo bash /tmp/fleet-install.sh … </dev/null`)
 so a failed download fails the step instead of piping nothing into `bash`.
 
 On a bare Fedora/RHEL box this is **four steps** — the bootstrap script installs
@@ -164,10 +165,11 @@ the binary, and installs + enables the systemd units:
 
 ```sh
 # 1. Git, and (for a PRIVATE config bundle) cache a read-only token so the box
-#    can clone it. Skip the credential line if your bundle is public or you pass
-#    a token in the --client-config URL.
+#    can clone it. Bootstrap runs as root, so cache it for root. Skip the
+#    credential lines if your bundle is public. Don't put the token in the
+#    --client-config URL: it's echoed and stored in the checkout's .git/config.
 sudo dnf install -y git
-git config --global credential.helper store   # then `git clone` your private bundle once to cache the PAT
+sudo git config --global credential.helper store   # then `sudo git clone` your private bundle once to cache the PAT
 
 # 2. Clone fleet.
 sudo git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src

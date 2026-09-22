@@ -26,6 +26,11 @@ bootstrap's work; the installer only gets a checkout in place and hands over.
   fast-forwarded, and bootstrap runs again; it's idempotent. A checkout that's dirty or on
   another branch is left alone with a pointer to `sudo fleet update`. A path that
   exists but isn't a git checkout is refused.
+- **Argument handling.** The installer parses flags the way bootstrap does (value-taking
+  flags consume the next word), so `--client-config --dry-run` is a bad client-config
+  value, not a dry run. A relative local `--client-config` path, or an `--auth-pubkey @file`,
+  is made absolute against the caller's directory before the installer `cd`s into the
+  checkout. A trailing `/` on `FLEET_SRC_DIR` is stripped.
 - **Interrupted clones.** The first clone goes to `$src.partial.<pid>` and is renamed into
   place only on success, so an aborted download never leaves a half-populated
   checkout that blocks the next run.
@@ -40,12 +45,13 @@ bootstrap's work; the installer only gets a checkout in place and hands over.
   The script can't fix this itself, because it never runs in that case.
 - **Private client bundles** are cloned by bootstrap running as root, so git
   credentials must be cached for root (`sudo git config --global credential.helper store`
-  plus one `sudo git clone`), or passed in the `--client-config` URL. A credential
-  helper configured for the invoking user isn't used.
+  plus one `sudo git clone`). A credential helper configured for the invoking user isn't
+  used. **Don't put a token in the `--client-config` URL**: bootstrap echoes the argument, and
+  git stores the URL, token included, in the bundle checkout's `.git/config`.
 - **Unattended means "whatever the flags leave unset takes bootstrap's default."** A
   flagged run started from a real terminal with `sudo bash /tmp/fleet-install.sh
   FLAGS` (not a pipe) still has a TTY, so bootstrap asks for anything the flags don't cover.
-  Pipe stdin from `/dev/null` to suppress that.
+  The documented automation form ends in `</dev/null` for this reason.
 - **Fedora/RHEL with dnf only**, the same scope as bootstrap.
 
 ## Deliberately deferred

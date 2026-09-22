@@ -339,11 +339,12 @@ curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | s
 ```
 
 For automation, download first so a failed fetch is a failed step (a pipe into
-`bash` exits 0 on an empty download):
+`bash` exits 0 on an empty download), and feed stdin from `/dev/null` so a TTY-allocating
+runner can't leave bootstrap waiting on a prompt:
 
 ```sh
 curl -fsSLo /tmp/fleet-install.sh https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh \
-  && sudo bash /tmp/fleet-install.sh --postgres=local --enable-service --client-config <bundle>
+  && sudo bash /tmp/fleet-install.sh --postgres=local --enable-service --client-config <bundle> </dev/null
 ```
 
 Then `fleet status`, `sudo fleet doctor`, and `sudo fleet update` from there on
