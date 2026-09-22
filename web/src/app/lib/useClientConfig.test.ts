@@ -152,6 +152,38 @@ describe("refreshClientConfig", () => {
   });
 });
 
+describe("out-of-order client-config responses", () => {
+  // The shell and the task modal both hold the hook and focus/online
+  // refreshes overlap, so two fetches can be in flight. An older response
+  // landing last would broadcast the obsolete pair and drag a pristine form
+  // back to the previous default, for as long as the tab kept refreshing.
+  it("ignores a response that a newer one has already overtaken", async () => {
+    let releaseOld: (v: unknown) => void = () => {};
+    const oldResponse = new Promise((resolve) => {
+      releaseOld = resolve;
+    });
+    fetchMock
+      .mockImplementationOnce(() => oldResponse)
+      .mockImplementationOnce(() =>
+        Promise.resolve(okResponse({ models: { default_model: "acme/new", advanced_model: "acme/new-pro" } })),
+      );
+
+    // enabled=false: no mount fetch, so both requests below are ours and the
+    // instance still receives whatever any refresh broadcasts.
+    const { result } = renderHook(() => useClientConfig(false));
+    const stale = refreshClientConfig();
+    const fresh = refreshClientConfig();
+    await expect(fresh).resolves.toBe(true);
+    await waitFor(() => expect(result.current.models?.defaultModel).toBe("acme/new"));
+
+    // The first request now finishes, carrying the superseded pair.
+    releaseOld(okResponse({ models: { default_model: "acme/old", advanced_model: "acme/old-pro" } }));
+    await expect(stale).resolves.toBe(false);
+    expect(result.current.models?.defaultModel).toBe("acme/new");
+    expect(currentDefaultModel()).toBe("acme/new");
+  });
+});
+
 describe("useClientConfig model tiers", () => {
   it("installs the workspace tier pair and returns it", async () => {
     fetchMock.mockResolvedValue(

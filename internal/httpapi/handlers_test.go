@@ -616,8 +616,8 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
 
-	// Once the client picks an allowed model of its own it has moved on, and
-	// the old slug stops being treated as an echo.
+	// Another tab acknowledging the migration says nothing about what a third
+	// one is still holding, so the record survives an allowed selection.
 	fresh = reload()
 	w = httptest.NewRecorder()
 	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "c/d") {
@@ -625,8 +625,47 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 	}
 	fresh = reload()
 	w = httptest.NewRecorder()
-	if s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
-		t.Fatalf("after the client moved on, the old slug is an ordinary disallowed request")
+	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
+		t.Fatalf("a second stale client must still be recognised: %d %s", w.Code, w.Body.String())
+	}
+
+	// Once the operator puts that slug back on the allow-list it stops being
+	// an echo: it is an ordinary selection and must be honoured.
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	fresh = reload()
+	w = httptest.NewRecorder()
+	if !s.applyTurnModelOverride(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/chat", nil), user, fresh, "a/b") {
+		t.Fatalf("a re-allowed model must be accepted: %d %s", w.Code, w.Body.String())
+	}
+	if got := reload(); got.Model != "a/b" {
+		t.Fatalf("a re-allowed model must actually be selected, stored=%q", got.Model)
+	}
+}
+
+// Compact posts the client's selected model. After a migration the client
+// never saw, that slug differs from the stored model, so the pre-migration
+// equality test could not recognise it and Compact 400ed.
+func TestSummarize_LockdownStaleEchoAfterMigration(t *testing.T) {
+	s := serverFixture(t)
+	s.cfg.SandboxImage = "ghcr.io/x/y:1"
+	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "generic", "a/b", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.LockdownAllowedModels = []string{"c/d"}
+	if err := s.reconcileLockdownModelCtx(t.Context(), user, conv); err != nil {
+		t.Fatalf("migration: %v", err)
+	}
+
+	w := do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/summarize",
+		map[string]string{"model": "a/b"}, user)
+	if w.Code == http.StatusBadRequest && strings.Contains(w.Body.String(), "not allowed in lockdown") {
+		t.Fatalf("Compact must recognise the post-migration echo: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "no history to summarize") {
+		t.Fatalf("expected the handler's own no-history check, got %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -651,10 +690,6 @@ func TestMigratedModelMemo_EvictsOldestFirst(t *testing.T) {
 	memo.note("conv-x", "old/two")
 	if memo.matches("conv-x", "old/one") || !memo.matches("conv-x", "old/two") {
 		t.Errorf("only the most recent pre-migration slug is remembered")
-	}
-	memo.forget("conv-x")
-	if memo.matches("conv-x", "old/two") {
-		t.Errorf("forget must drop the record")
 	}
 }
 

@@ -651,6 +651,9 @@ export function ChatExperience({
   const [selectedModel, setSelectedModel] = useState<string>(
     () => restoredSession?.selectedModel ?? currentDefaultModel(),
   );
+  // The live default this shell last installed, so a pristine draft can be
+  // moved off it when the admin changes the tiers again (see below).
+  const lastLiveDefaultRef = useRef<string | null>(null);
   // The very first mount of a session races the client-config fetch: state
   // seeds from the compiled-in fallback before the workspace's tier pair is
   // known. When the pair lands, move ONLY a not-yet-started chat still sitting
@@ -658,7 +661,10 @@ export function ChatExperience({
   // and any other pick stays because the values differ. Picking the fallback
   // slug itself pre-fetch was picking "recommended", which this resolves.
   useEffect(() => {
-    if (!workspaceModelTiers || activeConversationId !== null) return;
+    if (!workspaceModelTiers) return;
+    const previousLiveDefault = lastLiveDefaultRef.current;
+    lastLiveDefaultRef.current = workspaceModelTiers.defaultModel;
+    if (activeConversationId !== null) return;
     // Deferred to a microtask so the adoption lands outside the effect's
     // synchronous phase (no cascading render off the effect body); the guard
     // cancels it if the deps change before the microtask runs.
@@ -666,7 +672,14 @@ export function ChatExperience({
     queueMicrotask(() => {
       if (cancelled) return;
       setSelectedModel((cur) =>
-        cur === FALLBACK_DEFAULT_MODEL ? workspaceModelTiers.defaultModel : cur,
+        // Untouched means "still on whatever we last put there": the
+        // compiled-in fallback before any config landed, or the live default
+        // from the previous payload. Moving only off the fallback left a
+        // blank composer sitting on a superseded admin default, which in a
+        // lockdown chat the server then refuses.
+        cur === FALLBACK_DEFAULT_MODEL || (previousLiveDefault !== null && cur === previousLiveDefault)
+          ? workspaceModelTiers.defaultModel
+          : cur,
       );
     });
     return () => {

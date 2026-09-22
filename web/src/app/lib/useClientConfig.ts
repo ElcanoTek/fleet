@@ -97,8 +97,18 @@ function publishCachedConfig(): void {
   for (const notify of subscribers) notify();
 }
 
+// Monotonic request/apply counters: the shell and the task modal each hold the
+// hook, and focus / online refreshes overlap, so two fetches can be in flight
+// at once. Without this an older response landing last would broadcast the
+// obsolete tier pair and drag a pristine form back to the previous default —
+// and stay there for as long as the tab kept refreshing.
+let configFetchSeq = 0;
+let configAppliedSeq = 0;
+
 export function __resetClientConfigCacheForTests() {
   cachedConfig = null;
+  configFetchSeq = 0;
+  configAppliedSeq = 0;
 }
 
 // refreshClientConfig fetches /api/client-config once and publishes the result
@@ -110,10 +120,15 @@ export function __resetClientConfigCacheForTests() {
 // accepts. Resolves true when a payload landed, false on any failure (the
 // caller keeps whatever it had).
 export async function refreshClientConfig(): Promise<boolean> {
+  configFetchSeq += 1;
+  const seq = configFetchSeq;
   try {
     const res = await fetch("/api/client-config", { cache: "no-store" });
     if (!res.ok) throw new Error(`client-config ${res.status}`);
     const data = (await res.json()) as ClientConfigResponse;
+    // A newer response already won; this one is history.
+    if (seq <= configAppliedSeq) return false;
+    configAppliedSeq = seq;
     // Merge over neutral defaults so a partial branding block still renders.
     const cards = data.empty_state?.cards;
     // Install the workspace tier pair module-wide BEFORE any state update,

@@ -128,14 +128,17 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 	if reqModel == "" {
 		return true
 	}
-	// The slug this conversation was migrated off is an echo from a client
-	// that never saw the `conversation` event, not a request for that model:
-	// no opinion, keep the stored (allowed) model. Without this the migration
-	// could leave a conversation refusing every turn until the user reloaded.
-	if conv.Lockdown && s.lockdownMigrations.matches(conv.ID, reqModel) {
-		return true
-	}
 	if conv.Lockdown && !s.cfg.LockdownAllows(reqModel) {
+		// A DISALLOWED slug that this conversation was migrated off is an echo
+		// from a client that never saw the `conversation` event, not a request
+		// for that model: no opinion, keep the stored (allowed) model. Without
+		// this the migration could leave a conversation refusing every turn
+		// until the user reloaded. Note the ordering: once an operator puts
+		// that slug back on the allow-list it stops being an echo and becomes
+		// an ordinary, honourable selection, handled below.
+		if s.lockdownMigrations.matches(conv.ID, reqModel) {
+			return true
+		}
 		http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 		return false
 	}
@@ -146,9 +149,6 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		}
 		conv.Model = reqModel
 	}
-	// A model the client chose for itself proves it is no longer holding the
-	// pre-migration slug.
-	s.lockdownMigrations.forget(conv.ID)
 	return true
 }
 
@@ -165,6 +165,14 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 // would be stuck at 400 until the user reloaded. Recognising the echo keeps a
 // genuinely different disallowed slug refusable, which is the distinction a
 // blanket "ignore disallowed models" would lose.
+//
+// A record is NOT dropped when some client acknowledges the migration: the
+// same conversation can be open in several tabs, and one tab sending the new
+// model says nothing about what the others are still holding. It is replaced
+// by a later migration and otherwise evicted by the cap. That is safe because
+// the record is only ever consulted for a slug the allow-list currently
+// REFUSES — an echo by construction; once an operator re-allows that slug it
+// is an ordinary selection again and the memo no longer applies.
 //
 // Bounded: entries are small (one conversation id + one slug) and capped, with
 // the oldest evicted first. Losing an entry to the cap costs a reload, never
@@ -210,23 +218,6 @@ func (m *migratedModelMemo) matches(convID, slug string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.from[convID] == slug
-}
-
-// forget drops the record — the client has demonstrably moved on (it sent a
-// different, allowed model of its own).
-func (m *migratedModelMemo) forget(convID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.from[convID]; !ok {
-		return
-	}
-	delete(m.from, convID)
-	for i, id := range m.order {
-		if id == convID {
-			m.order = append(m.order[:i], m.order[i+1:]...)
-			break
-		}
-	}
 }
 
 // lockdownDefaultSlug picks the slug a delisted lockdown conversation is moved

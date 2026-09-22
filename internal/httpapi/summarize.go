@@ -110,9 +110,16 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 	// persisting from Compact would leave the browser echoing a slug the
 	// server had already replaced. The web's echo of the stored slug is the
 	// only thing substituted; a genuinely different disallowed slug still 400s.
-	if conv.Lockdown && model == conv.Model && !s.cfg.LockdownAllows(model) {
-		if next := lockdownDefaultSlug(s.cfg.LockdownModels()); next != "" {
-			model = next
+	if conv.Lockdown && !s.cfg.LockdownAllows(model) {
+		// Two shapes of stale echo, and Compact must survive both: the client
+		// echoing the stored model before any migration, and — after a
+		// migration whose `conversation` event it never received — the slug it
+		// was migrated off, which by then differs from the stored model.
+		staleEcho := model == conv.Model || s.lockdownMigrations.matches(conv.ID, model)
+		if staleEcho {
+			if next := lockdownDefaultSlug(s.cfg.LockdownModels()); next != "" {
+				model = next
+			}
 		}
 	}
 	if conv.Lockdown && !s.cfg.LockdownAllows(model) {
