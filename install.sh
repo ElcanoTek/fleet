@@ -157,24 +157,34 @@ main() {
       keep)
         # A real run builds this tree unchanged, so preview it in place (read-only).
         echo "[dry-run] would keep $src as-is (not a clean main checkout) and run its bootstrap" ;;
-      clean-main|absent)
-        # Both would write (pull or clone), so rehearse on a throwaway copy that
-        # has the same commits and the same upstream: an ahead checkout previews
-        # its own commits, a diverged one fails the same --ff-only pull.
+      clean-main)
+        # A real run pulls, so rehearse on an exact copy of the checkout: same
+        # commits, same git config (the branch's real upstream, whatever remote
+        # it names) and the same ignored working-tree state bootstrap reads
+        # (.env.local). It sits beside the checkout so --reflink makes it cheap
+        # on btrfs/xfs, and it is removed on exit. An ahead checkout previews
+        # its own commits; a diverged one fails the same --ff-only pull.
+        tmp="$(mktemp -d "$(dirname "$src")/.fleet-dry-run.XXXXXX")"
+        CLEANUP+=("$tmp")
+        plan="$tmp/src"
+        cp -a --reflink=auto "$src" "$plan"
+        echo "[dry-run] would: git -C $src pull --ff-only (rehearsed on a copy)"
+        prepare_checkout "$plan" "$repo" || { echo "[dry-run] a real run would stop at the checkout step." >&2; exit 1; } ;;
+      absent)
         tmp="$(mktemp -d)"
         CLEANUP+=("$tmp")
         plan="$tmp/src"
-        if [[ -d "$src/.git" ]]; then
-          git clone -q --no-hardlinks --branch main "$src" "$plan"
-          git -C "$plan" remote set-url origin "$(git -C "$src" remote get-url origin)"
-          echo "[dry-run] would: git -C $src pull --ff-only (rehearsed on a copy)"
-        else
-          echo "[dry-run] would: git clone --branch main $repo $src (rehearsed in a temp dir)"
-        fi
+        echo "[dry-run] would: git clone --branch main $repo $src (rehearsed in a temp dir)"
         prepare_checkout "$plan" "$repo" || { echo "[dry-run] a real run would stop at the checkout step." >&2; exit 1; } ;;
     esac
     cd "$plan"
-    bash scripts/bootstrap.sh "$@" </dev/null
+    # Same stdin rule as the real run below, so a terminal-attached dry run is
+    # asked the same questions and prints the plan those answers produce.
+    if [[ $# == 1 && ! -t 0 ]] && { : </dev/tty; } 2>/dev/null; then
+      bash scripts/bootstrap.sh --dry-run </dev/tty
+    else
+      bash scripts/bootstrap.sh "$@"
+    fi
     return
   fi
 

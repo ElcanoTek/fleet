@@ -18,14 +18,23 @@ bootstrap's work; the installer only gets a checkout in place and hands over.
   operator. With arguments (`| sudo bash -s -- --postgres=local …`), it leaves stdin
   alone, so bootstrap sees no terminal and runs on its flags and defaults without
   prompting.
-- **`--dry-run` changes nothing on the host.** Both paths act on one decision,
+- **`--dry-run` changes nothing the install uses.** Both paths act on one decision,
   `checkout_state` (absent / clean-main / keep / occupied), so the preview can't drift from
-  a real run. A kept checkout (dirty or not on `main`) is previewed in place, because a real
-  run builds it unchanged. A clean `main` checkout is rehearsed on a local copy with the
-  same commits and the same `origin`: an ahead checkout previews its own commits, and a
-  diverged one fails the same `--ff-only` pull. An absent target is rehearsed in a temp
-  clone. An occupied non-checkout path is refused, as a real run would. Temp copies are
-  removed on exit, and if git itself is missing the dry run says so and stops.
+  a real run:
+  - A **kept** checkout (dirty or not on `main`) is previewed in place, because a real run
+    builds it unchanged.
+  - A **clean `main`** checkout is rehearsed on an exact copy (`cp -a --reflink=auto`, placed
+    beside it and removed on exit). The copy has the same commits, the same git config
+    (including the branch's real upstream, whatever remote that is), and the same ignored
+    state bootstrap reads, such as `.env.local`. An ahead checkout previews its own
+    commits, and a diverged one fails the same `--ff-only` pull.
+  - An **absent** target is rehearsed in a temp clone.
+  - An **occupied** non-checkout path is refused, as a real run would.
+
+  Bootstrap's dry run gets the same stdin as a real run, so a terminal-attached dry run is
+  asked the same questions. If git itself is missing, the dry run says so and stops. On a
+  filesystem without reflinks (ext4), the copy is a full copy of the checkout, so it needs
+  that much free space for the duration of the dry run.
 - **Reruns.** A clean checkout on `main` (no modified *or untracked* files) is
   fast-forwarded, and bootstrap runs again; it's idempotent. A checkout that's dirty or on
   another branch is left alone with a pointer to `sudo fleet update`. A path that
