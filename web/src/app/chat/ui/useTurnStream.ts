@@ -33,6 +33,10 @@ import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
 import { enabledOptionalMcpServerNames } from "./mcpSelection";
+import {
+  createRecoveryElection,
+  type RecoveryElection,
+} from "./recoveryElection";
 
 // One pending input in a conversation's #785 queue (wire shape of
 // queue.updated / GET /queue items).
@@ -492,6 +496,12 @@ export interface TurnStreamDeps {
   promoteStreamKey: TurnStreamState["promoteStreamKey"];
   streamingConvsRef: TurnStreamState["streamingConvsRef"];
   isStreaming: boolean;
+  // Cross-tab election for the recovery chain's beat (#1595). Omitted, the
+  // hook builds its own from the platform — `navigator.locks` plus a
+  // BroadcastChannel where both exist, and today's independent per-tab chain
+  // where they do not. Supplied only by tests, which drive several "tabs" in
+  // one process; the hook owns whatever it is given and closes it on unmount.
+  recoveryElection?: RecoveryElection;
 }
 
 // The public entry points the component/JSX still call. applyStreamEvent,
@@ -709,6 +719,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const submissionIdByConvRef = useRef<Map<string, string>>(
     new Map<string, string>(),
   );
+  // Cross-tab election for the chain's beat (#1595). Built on first use rather
+  // than in an effect, because a chain can be armed before effects have run,
+  // and dropped to null by the unmount cleanup so React's Strict Mode
+  // setup-cleanup-setup cycle rebuilds it instead of leaving every later chain
+  // holding a closed channel.
+  const recoveryElectionRef = useRef<RecoveryElection | null>(null);
+  const recoveryElection = (): RecoveryElection => {
+    const existing = recoveryElectionRef.current;
+    if (existing) return existing;
+    // A callback resuming after unmount still reaches the release paths, and
+    // building a real election for it would open a channel and a visibility
+    // listener with nobody left to close them. Hand it an inert one — and do
+    // not cache it, or the Strict Mode re-setup would inherit it.
+    if (recoveryUnmountedRef.current)
+      return createRecoveryElection({ locks: null });
+    const made = deps.recoveryElection ?? createRecoveryElection();
+    recoveryElectionRef.current = made;
+    return made;
+  };
   const refreshQueue = async (
     convId: string,
   ): Promise<QueuedInput[] | null> => {
@@ -1029,6 +1058,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const recoveryOwns = (convId: string): boolean =>
     recoveryOwnedRef.current.has(convId);
 
+  // recoveryTickPending is "the chain has a next tick booked" — the question
+  // every caller that is about to release ownership after an await actually
+  // means. A booked tick is a timer this tab owns, OR a beat parked with the
+  // cross-tab election while another tab waits out the outage (#1595). Reading
+  // only the timer map would make a stood-down chain look abandoned and
+  // release the slot it is still holding open.
+  const recoveryTickPending = (convId: string): boolean =>
+    recoveryRetriesRef.current.has(convId) ||
+    recoveryElection().booked(convId);
+
   // releaseRecovery ends ownership: the outcome is known, or the slot is gone.
   // It also frees the conversation, because ownership is what suppressed the
   // busy flag while the outcome was unknown — both stream finalizers skip
@@ -1042,6 +1081,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       window.clearTimeout(timer);
       recoveryRetriesRef.current.delete(convId);
     }
+    // Leaving the election frees the lock, so a tab that stood down behind
+    // this one is granted it and runs its own beat straight away (#1595).
+    recoveryElection().leave(convId);
     const owned = recoveryOwnedRef.current.delete(convId);
     if (owned) bumpRecoveryEpoch(convId);
     if (owned && !attachedConvIdsRef.current.has(convId)) {
@@ -1411,7 +1453,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     });
     const existing = recoveryRetriesRef.current.get(convId);
     if (existing !== undefined) window.clearTimeout(existing);
-    const timer = window.setTimeout(() => {
+    const runTick = (): void => {
       recoveryRetriesRef.current.delete(convId);
       void (async () => {
         // Ownership is NOT released here: it is released when the outcome is
@@ -1441,6 +1483,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           return;
         }
         const probe = await probeInflightTurn(convId);
+        // What this tab just learned about the server decides two things: its
+        // own next beat, and — when the server answered — a wake-up for every
+        // other tab parked on this conversation, so they resolve their own
+        // slots at the same moment rather than on their own ladders (#1595).
+        // Reported before the generation guard: the fact is about the server,
+        // not about this tick, and it is true even if a newer tick owns the
+        // slot by now.
+        recoveryElection().report(convId, probe.kind === "answer");
         if (recoveryUnmountedRef.current || superseded()) return;
         if (probe.kind === "unreachable") {
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
@@ -1457,7 +1507,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         const adoptOurTurnThenFollow = async (): Promise<void> => {
           await settleStreamedSlot(convId, assistantId, gap, attempt + 1, true);
           if (recoveryUnmountedRef.current || superseded()) return;
-          if (recoveryRetriesRef.current.has(convId)) return;
+          if (recoveryTickPending(convId)) return;
           releaseRecovery(convId);
           void followSuccessor(convId, 0, probe.turnID || undefined);
         };
@@ -1515,7 +1565,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // replacement stream can report missed events our chain never saw).
           // That pending retry owns the slot now; cancelling it here by
           // releasing would strand an empty bubble.
-          if (recoveryRetriesRef.current.has(convId)) return;
+          if (recoveryTickPending(convId)) return;
           // `await` here spans the WHOLE replay, so "is it still attached" is
           // not the question — a reattach that ran a stream to its terminal
           // event has already let the handle go. Judge by the slot: no longer
@@ -1574,15 +1624,25 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // Settled (or adopted, or re-armed by settleStreamedSlot when Postgres
         // itself was unreachable). If nothing re-armed the chain, the outcome
         // is known and the conversation is free (releaseRecovery idles it).
-        if (recoveryRetriesRef.current.has(convId)) return;
+        if (recoveryTickPending(convId)) return;
         releaseRecovery(convId);
         // Same hand-off: this chain's settle is a turn-ends moment reached
         // without any stream's finally, and the follower it displaced has to
         // be started now that ownership is gone.
         void followQueueDrain(convId);
       })();
-    }, recoveryDelayFor(attempt));
-    recoveryRetriesRef.current.set(convId, timer);
+    };
+    // Who books this beat is the one thing the election decides (#1595). While
+    // THIS tab's own last probe could not reach the server, every tab open on
+    // the conversation would re-learn the same nothing, so one of them asks
+    // and the rest park their beat until it reports an answer — or until the
+    // lock comes to them, which is what a tab that dies mid-recovery hands
+    // over. Any other state, including no election at all (no
+    // `navigator.locks`, no BroadcastChannel, or a hidden tab whose ticks cost
+    // nothing anyway), books the timer right here exactly as before.
+    const delayMs = recoveryDelayFor(attempt);
+    if (recoveryElection().book(convId, delayMs, runTick) === "elected") return;
+    recoveryRetriesRef.current.set(convId, window.setTimeout(runTick, delayMs));
   };
 
   // nudgeRecovery pulls a chain's next tick forward. The hidden-tab branch
@@ -1610,6 +1670,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       window.clearTimeout(timer);
       recoveryRetriesRef.current.delete(convId);
     }
+    // A nudge is a person coming back to THIS tab (or its radio returning), so
+    // its next beat is its own however the election stands: the tab being
+    // looked at never waits on another tab's ladder (#1595).
+    recoveryElection().claimNextBeat(convId);
     scheduleRecoveryRetry(convId, owned.assistantId, owned.gap, 0);
   };
 
@@ -1664,6 +1728,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       bumpRecoveryEpoch(convId);
     endSuccessorChase(convId);
     if (owned) releaseRecovery(convId);
+    // releaseRecovery leaves the election for an owned chain; a conversation
+    // Stop found in some other state may still hold a seat from an earlier
+    // one, and a seat left behind would keep its lock from the tabs still
+    // waiting (#1595).
+    recoveryElection().leave(convId);
     // slotNeedsSettling, not a state test: a replay-gap slot already reads as
     // `done` and empty, so a state test would skip it and leave a blank
     // bubble that no stream or retry can ever repair.
@@ -1712,8 +1781,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const owned = recoveryOwnedRef.current;
     const chases = recoveryChaseRef.current;
     const pending = pendingDirectHandoffRef.current;
+    const election = recoveryElectionRef;
     return () => {
       unmounted.current = true;
+      // Drop the locks and the relay channel with the chains they served, and
+      // forget the instance so the Strict Mode re-setup builds a fresh one
+      // rather than booking beats on a closed channel (#1595).
+      election.current?.close();
+      election.current = null;
       for (const chase of chases.values()) {
         if (chase.timer !== undefined) window.clearTimeout(chase.timer);
       }

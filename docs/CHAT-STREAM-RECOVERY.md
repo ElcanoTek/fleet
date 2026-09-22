@@ -477,6 +477,81 @@ its probe named, so without the rule it attaches to the predecessor for real.
 In the chain it is applied only after `reconcileFromPersisted` has come back
 `absent`, so a turn of ours that did finish is still adopted first.
 
+## One tab waits out the outage (#1595)
+
+Everything above is per tab, and for the resolving it should be: each tab
+holds its own slot, sent its own submission, and has its own transcript to
+fill. The *waiting* is not. Two tabs open on the same conversation ran two
+ladders of `/inflight` probes re-learning the same "still nothing" for as long
+as the outage lasted — the overnight-VPN case the ladder above is sized for,
+doubled.
+
+The rule is one sentence.
+
+> **A tab stands down only while its OWN last probe could not reach the
+> server, and any answer — its own, or one another tab relays — puts it
+> straight back on its own ladder.**
+
+`recoveryElection.ts` is that rule and nothing else. It sits between
+`scheduleRecoveryRetry` and `setTimeout`: `book` answers "is this beat mine to
+book?", and where it is not, the module holds the beat until it is worth
+running. Everything the chain does when a beat fires is unchanged.
+
+### Who asks
+
+A tab that has just had a probe refused takes an exclusive **Web Lock** named
+for the conversation (`fleet.chat.recovery:<id>`). Whichever tab is granted it
+keeps its ladder exactly as before. The others queue for the same lock and
+park their beat instead of booking a timer, and the conversation stays busy
+under them: the chain still owns the slot, so Stop is still offered, a
+follow-up still queues, and nothing settles behind their back.
+
+A parked beat runs when any of four things happens:
+
+- **the asking tab's probe is answered.** It relays that over a
+  `BroadcastChannel` before it does anything else with the answer, and every
+  parked tab runs its beat at once — so it probes, attaches and renders in the
+  same moment the asking tab does, rather than waiting out a ladder of its
+  own. This is the case that decides whether standing down is safe: the asking
+  tab may now sit inside a live stream for the length of the turn, ending
+  nothing and releasing nothing.
+- **the lock arrives.** Either the tab holding it finished (its chain settled,
+  adopted or attached, and `releaseRecovery` leaves the election) or it went
+  away. A lock held by a tab that crashes, is closed, or navigates is released
+  by the *browser*, so a tab that dies mid-recovery has its work picked up
+  rather than leaving the others waiting on a dead leader. The beat keeps the
+  deadline it was booked with, so a takeover neither restarts a wait already
+  served nor cuts one short.
+- **the user comes back to that tab.** `nudgeRecovery` — the `online` /
+  `visibilitychange` / `focus` path — takes the next beat back unconditionally.
+  The tab a person is looking at never waits on another tab.
+- **the tab goes hidden.** A hidden tab's chain deliberately spends nothing
+  (it reschedules without probing), so it drops the lock, stands for nothing,
+  and goes back to its own free ladder. A hidden tab holding the lock away
+  from a visible one would starve the only tab that can actually ask.
+
+**The relay is a wake-up, never a verdict.** It names a conversation and says
+"the server answered someone"; it carries no turn id, no outcome and no
+transcript. A woken tab asks the server itself and applies its own rules —
+ownership, the expected turn id, `answersOurSubmission` — to what it gets
+back. So no tab can settle, adopt or fail a turn on another tab's say-so, and
+the server remains the single source of truth for every tab independently.
+
+### Where it exists, and where it does not
+
+Election needs `navigator.locks` **and** `BroadcastChannel`. `navigator.locks`
+is secure-context-only; without it (or without the channel) the module reports
+`mode: "independent"`, every `book` is local, and **every tab runs the
+independent per-tab chain described in the rest of this document** — correct,
+idempotent, convergent, and merely duplicative, exactly as before.
+
+There is no `localStorage` lease, and one would not close that gap:
+`localStorage` has no atomic compare-and-set, so two tabs can both read a
+lapsed lease and both write themselves in. It cannot promise the single owner
+its name would imply, whereas the fallback above says exactly what happens. A
+lock manager that refuses a request is treated the same way — the tab leads
+itself, because a chain must never hang on a grant that is not coming.
+
 ## Tests
 
 - `useTurnStream.reconcile.test.ts` — `persistedAnswersLocalTurn`, including
@@ -514,6 +589,37 @@ In the chain it is applied only after `reconcileFromPersisted` has come back
   brand-new turn `failed`, and disabling either submission-id guard — the
   catch's or the chain's — binds the bubble to the pre-existing turn. Each
   fails exactly one test.
+
+- `recoveryElection.test.ts` — the election itself, driven entirely through
+  injected fakes, because the two primitives it rests on are the two a test
+  environment does not have: Web Locks needs a secure context, and one process
+  cannot model a tab that dies without closing. The fake lock manager can
+  therefore `kill` a holder, which is the case the whole design turns on.
+  Covers: independent mode when either primitive is missing; a tab that does
+  not stand down before its own probe has been refused; a parked beat run by a
+  relayed answer, by the lock arriving, and by the tab going hidden; the
+  deadline a parked beat keeps; a nudge taking the next beat back; a refused
+  lock leading itself; a relay for another conversation, a malformed one, and
+  a channel that throws on post.
+
+- `useTurnStream.election.test.ts` — two tabs on one fake server, so the
+  quantity under test (requests it receives) is counted in one place. Three
+  runs of the same outage: the elected one spends **one** ladder's probes over
+  a window that used to cost two and still lands the answer in both tabs'
+  transcripts, with the stood-down tab mid-flight rather than failed
+  throughout and the lock free again once the chains end; the asking tab is
+  killed mid-recovery and the other picks the work up; and the same scenario
+  with no `navigator.locks`, where both ladders run and both tabs settle —
+  six probes, not three. A fourth pins the case standing down could have
+  broken: the turn is still generating when the radio returns, so the asking
+  tab attaches and stays inside that stream, and the other tab has to be
+  relayed awake to attach and render the same tokens.
+
+  Mutation-checked: removing the relay, the run-on-grant, the own-outage
+  condition, the both-primitives gate, either half of the hidden-tab rule, the
+  nudge's claim, the fail-open on a refused lock, the parked beat's deadline,
+  the chain's report of what its probe learned, or the election-leave in
+  `releaseRecovery` each fails a named test.
 
 - Go: `capabilities_test.go` covers the advertised cadence in both the header
   and the `fleet.capabilities` frame, and that keepalives-off advertises `0`.
@@ -574,22 +680,25 @@ return is caught in the 2.5s grace window alone. Both replace the five-minute
   that particular turn before settling it: see
   [`TURN-OUTCOME.md`](TURN-OUTCOME.md) (#1593).
 
-- **Recovery state is per tab, and stays that way.** Two tabs open on the same
-  conversation run two independent chains: both probe, both may reattach, both
-  may adopt the canonical transcript. That is not a correctness problem — every
-  path is idempotent and the server is the single source of truth — it is
-  duplicate requests and a busy indicator that can briefly disagree between
-  tabs. Electing one tab to recover on the others' behalf was evaluated and
-  rejected (#1595, closed as won't-fix), for three reasons worth keeping here
-  because they also rule out the obvious variants. A chain is not only a stream
-  of requests; it is how *that tab's* transcript gets its content, so a follower
-  that stands down shows a frozen spinner until the leader hands it an outcome —
-  trading duplicate requests for a tab that is visibly wrong. Making the hand-off
-  sound needs more than a lock: a leader killed mid-recovery has to be detected
-  and its work redone, in exactly the case where the duplicate requests were
-  supposed to be saved. And the primitives do not cooperate — a `localStorage`
-  lease has no atomic compare-and-set and is racy by construction, while
-  `navigator.locks`, which is sound and frees on tab death, is
-  secure-context-only, so any fallback puts the race back. The duplicate volume
-  is also small and got smaller: the ladder above cuts a long outage's cost per
-  tab by roughly an order of magnitude.
+- **Recovery state is per tab; the WAITING is shared, and only that (#1595).**
+  One tab per conversation spends the probe ladder while the server is
+  unreachable; the others park their beat and are woken by its answer, by the
+  lock, by the user returning to them, or by going hidden. Everything else is
+  per tab as before: a tab that is being answered never stands down, so two
+  tabs resolving their own slots after an outage still probe twice — that is
+  each tab's own question and no other tab can answer it. The successor chase,
+  the reattach, the live stream, the liveness watchdog and the queue follower
+  are untouched for the same reason: attaching is how a tab's transcript gets
+  its content, so there is nothing there worth sharing.
+- **A tab is never worse off for standing down.** Its slot stays mid-flight,
+  and it is woken the moment the server answers anyone — which is at least as
+  soon as its own ladder would have asked, and usually sooner. Where it might
+  not be (a hidden tab, whose ladder deliberately spends nothing) it does not
+  stand down at all.
+- **What the election cannot claim.** It is per browser profile: two devices,
+  or two profiles, are two elections, and nothing coordinates them — nor needs
+  to, since each converges on the server independently. It does not exist at
+  all without `navigator.locks` and `BroadcastChannel`, where the page keeps
+  today's independent per-tab recovery. And it decides *when* a tab asks,
+  never *what it concludes*: the relay carries no outcome, so a tab's verdict
+  still comes from the server and from that tab's own guards.
