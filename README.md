@@ -322,12 +322,23 @@ agent card, `/triggers/*` and `/webhooks/*`) straight to those backends. Single-
 DB leases and the worker cap is a per-process semaphore, so fleet scales by
 moving to a bigger box, not more replicas.
 
+On a fresh Fedora box, one line — it clones `main` into `/opt/fleet/src` and
+runs the interactive bootstrap (service, web UI + TLS domain, OpenRouter key,
+SSO key, admins):
+
 ```sh
-git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
-sudo bash /opt/fleet/src/scripts/bootstrap.sh --postgres=local --enable-service \
-  --client-config https://github.com/ElcanoTek/example-config.git
-# then add your OPENROUTER_API_KEY to the env file and: fleet restart
+curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash
 ```
+
+Unattended, pass bootstrap flags through:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash -s -- \
+  --postgres=local --enable-web --domain fleet.example.com \
+  --client-config https://github.com/ElcanoTek/example-config.git
+```
+
+Then `fleet status`, `sudo fleet doctor`, and `fleet update` from there on.
 
 **→ Full deployment guide** — host sizing, the one-command web + Caddy/TLS stack,
 the env file, and every option: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**.

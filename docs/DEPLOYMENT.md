@@ -138,6 +138,20 @@ API client ─TLS──▶ Caddy ──▶ /v1/*, /api-info, /.well-known/agent-
 webhooks ───TLS──▶ Caddy ──▶ /webhooks/* ──▶ chat :8080
 ```
 
+**One-liner.** On a fresh Fedora box, this does steps 1–3 below (installs git,
+clones `main` into `/opt/fleet/src`, runs `bootstrap.sh` — interactively on a
+terminal, or with whatever flags you pass after `-s --`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash -s -- \
+  --postgres=local --enable-web --domain fleet.example.com \
+  --client-config https://github.com/ElcanoTek/example-config.git
+```
+
+Re-running it fast-forwards a clean `main` checkout and re-runs the idempotent
+bootstrap. For a private config bundle, cache git credentials first (step 1).
+
 On a bare Fedora/RHEL box this is **four steps** — the bootstrap script installs
 the toolchain (Go, Node, podman, python3), provisions Postgres, builds + installs
 the binary, and installs + enables the systemd units:
