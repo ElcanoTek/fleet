@@ -121,6 +121,9 @@ const makeHarness = (opts: {
   // Indexes of /inflight probes that stay PENDING until releaseInflight() is
   // called — for driving what a callback does when it resumes after unmount.
   inflightDeferAt?: number[];
+  // Zero-based indexes of /inflight probes answered 401 — an expired session
+  // or an invalidated epoch, which says nothing about the TURN.
+  inflightUnauthorizedAt?: number[];
   // Zero-based indexes of ATTACHES whose /stream request never returns its
   // response headers — a blackholed connect, which the reattach's own connect
   // timer is there to abort. The slot has already been created by then.
@@ -198,6 +201,12 @@ const makeHarness = (opts: {
         probes += 1;
         if ((opts.inflightRejectAt ?? []).includes(idx)) {
           throw new TypeError("Failed to fetch");
+        }
+        if ((opts.inflightUnauthorizedAt ?? []).includes(idx)) {
+          return new Response(JSON.stringify({ error: "unauthorized" }), {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          });
         }
         if ((opts.inflightDeferAt ?? []).includes(idx)) {
           await new Promise<void>((resolve) =>
@@ -2092,6 +2101,40 @@ describe("a chase follows the successor it discovered", () => {
     await vi.advanceTimersByTimeAsync(20);
     expect(h.attachCount()).toBe(attachesBefore + 1);
     expect(lastOf(h).content).toBe("the second successor's answer");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+});
+
+// Codex round 16 on #1584: a session that expires mid-turn makes /inflight
+// answer 401. That is silence wearing a different hat — it says nothing about
+// whether the turn is running — but it was classified as a definitive "no turn
+// exists", which stamped the slot failed over a backend turn still generating.
+describe("an authentication failure is indeterminate, not an answer", () => {
+  it("keeps the slot open when /inflight answers 401", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      // Postgres has no answer yet — the turn really is still running.
+      persisted: unansweredHistory(),
+      streamBodies: [() => severedStream([])],
+      inflightRejectAt: [0], // the catch's probe: arms the chain
+      inflightUnauthorizedAt: [1], // the tick's probe: the session expired
+      inflight: [{ inflight: true, turn_id: "t1" }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    // Nothing was settled and nothing was stamped: the chain comes back.
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+    expect(h.streaming.has(CONV)).toBe(true);
+
+    // And it recovers once the session is good again.
+    await vi.advanceTimersByTimeAsync(2100);
+    await vi.advanceTimersByTimeAsync(20);
     expect(h.store[CONV].some((m) => m.failed)).toBe(false);
   }, 20000);
 });

@@ -653,7 +653,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           signal: recoveryRequestSignal(),
         },
       );
-      if (res.status >= 500) return "unreachable";
+      if (indeterminateStatus(res.status)) return "unreachable";
       if (!res.ok) return "absent";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
       const local = messagesByConvRef.current[convId] ?? [];
@@ -671,6 +671,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // running (or finished within the SSE retain window). Like
   // reconcileFromPersisted it separates "the server said" from "we could not
   // ask": only an `answer` may drive a terminal verdict on the slot.
+  // indeterminateStatus: a response that answers nothing about the TURN.
+  //
+  // 5xx is the proxy or the server failing. 401/403 are the same kind of
+  // silence wearing a different hat: a session that expired, or an epoch the
+  // server invalidated, while a turn was still running. Reading those as "no
+  // turn exists" would stamp the slot failed and release ownership over a
+  // backend turn that is still generating and will persist its answer — the
+  // exact verdict-from-an-absence this whole path exists to prevent (#1584).
+  const indeterminateStatus = (status: number): boolean =>
+    status >= 500 || status === 401 || status === 403;
+
   const probeInflightTurn = async (convId: string): Promise<InflightProbe> => {
     if (isPendingKey(convId))
       return { kind: "answer", inflight: false, turnID: "" };
@@ -682,7 +693,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           signal: recoveryRequestSignal(),
         },
       );
-      if (res.status >= 500) return { kind: "unreachable" };
+      if (indeterminateStatus(res.status)) return { kind: "unreachable" };
       if (!res.ok) return { kind: "answer", inflight: false, turnID: "" };
       const info = (await res.json()) as {
         inflight?: boolean;
@@ -899,6 +910,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         return;
       }
       endSuccessorChase(convId);
+      // Same reason as above: the follower this stream's end already tried to
+      // start was turned away by the chase that is only now ending.
+      void followQueueDrain(convId);
       return;
     }
     if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
@@ -928,8 +942,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // finished one's answer on screen from the database before following
       // the new one, or its reply would be skipped and the new one's written
       // under its prompt.
-      await reloadCanonical(convId);
+      const adopted = await reloadCanonical(convId);
       if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+      if (adopted !== "adopted") {
+        // Its transcript never landed. Re-targeting now would attach the new
+        // turn's replay to a transcript still ending in the OLD turn's
+        // prompt, so the new answer would render under the old question and
+        // the old answer would be missing. Keep chasing the one we know.
+        scheduleSuccessorRetry(convId, attempt);
+        return;
+      }
       const chase = recoveryChaseRef.current.get(convId);
       if (!chase) return;
       chase.turnID = probe.turnID;
@@ -968,6 +990,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // through the queue path for a conversation with nothing to queue
         // behind.
         endSuccessorChase(convId);
+        // A further queued input may still be waiting, and the hand-off that
+        // this turn's end already attempted was turned away by the chase that
+        // is only now ending.
+        void followQueueDrain(convId);
         return;
       }
     }
