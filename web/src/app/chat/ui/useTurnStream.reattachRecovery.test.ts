@@ -2001,3 +2001,50 @@ describe("a reattach that never connects does not strand its slot", () => {
     expect(lastOf(h).state).toBe("done");
   }, 20000);
 });
+
+// Codex round 14 on #1584: a chased successor can end in the replay-gap
+// shape — missed events, then a terminal event with no content — which reads
+// as `done` and empty. The handoff helper hard-coded the non-gap shape, so it
+// did not see that slot: the chase ended and idled the conversation over an
+// empty reply whose answer was sitting in the database.
+describe("a successor that ends in the replay-gap shape is still recovered", () => {
+  it("hands the gap slot to the chain instead of leaving an empty reply", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: [],
+      persisted: answeredHistory(),
+      streamBodies: [
+        () => severedStream([]), // ours: died before turn.started
+        // The successor's replay: events were missed and the turn sealed
+        // without delivering any answer content.
+        () =>
+          truncatedStream([
+            sse(1, "reconnect", { type: "resumed", missed_events: 4 }),
+            sse(2, "turn.completed", { cost_usd: 0.01, duration_ms: 10 }),
+          ]),
+      ],
+      inflightRejectAt: [0],
+      inflight: [
+        { inflight: true, turn_id: "t-successor" }, // the chain's tick
+        { inflight: true, turn_id: "t-successor" }, // the chase's reattach
+        { inflight: false }, // by the next tick the successor is over
+      ],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+    await vi.advanceTimersByTimeAsync(10);
+
+    // The chain adopts our answer and chases the successor, whose stream
+    // seals empty.
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+
+    // The chain, armed with the gap shape, adopts the canonical answer.
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.loadConversationCalls.length).toBeGreaterThan(1);
+    expect(lastOf(h).content).toBe("Done — here are the results.");
+    expect(h.store[CONV].some((m) => m.failed)).toBe(false);
+  }, 20000);
+});

@@ -2082,6 +2082,10 @@ export function ChatExperience({
       preserveScroll?: boolean;
       background?: boolean;
       restore?: boolean;
+      // Set ONLY by the recovery reconciler, which is deliberately swapping
+      // in the canonical copy. Every other load leaves a recovery-owned
+      // conversation alone (#1584).
+      adopt?: boolean;
     } = {},
   ) => {
     // Opening a conversation dismisses a project home overlaying the chat
@@ -2103,7 +2107,19 @@ export function ChatExperience({
     // persisted yet. Re-fetching would replace those with whatever's
     // in Postgres (which is empty until the stream completes), so we just
     // re-show what we already have.
-    if (attachedConvIdsRef.current.has(conversationId)) {
+    //
+    // A conversation recovery OWNS is in the same position, and is not in the
+    // attach set: its stream is gone, but the partial answer on screen is
+    // still newer than the database, and its slot id is what the chain is
+    // holding. Reopening that chat from the sidebar used to replace both,
+    // after which the chain found its slot missing, released ownership, and
+    // any trailing reattach opened a blank slot while keeping the old
+    // Last-Event-ID — so the text already received was skipped from the
+    // replay. Only the reconciler's own `adopt` load may make that swap
+    // (#1584).
+    const recoveryHoldsIt =
+      !options.adopt && isRecoveringConvRef.current(conversationId);
+    if (attachedConvIdsRef.current.has(conversationId) || recoveryHoldsIt) {
       setActiveConversationId(conversationId);
       const conv = conversations.find((c) => c.id === conversationId);
       if (conv) {

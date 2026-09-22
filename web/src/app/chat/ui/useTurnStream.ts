@@ -230,13 +230,22 @@ export function classifyQueueSubmitResponse(res: {
 // answer for your turn" stamps a slot failed over an answer sitting right
 // there. Trailing user rows are skipped, and excluded from the count as well:
 // they belong to a LATER turn and cannot be evidence that ours is covered.
+//
+// `requireTrailingAnswer` turns that skipping OFF, for the one caller that
+// must not have it: a successor chase is waiting on the SUCCESSOR's answer,
+// and the predecessor's — which is what sits above a successor's committed
+// prompt — cannot stand in for it. A successor that ended before producing
+// anything would otherwise read as answered (#1584).
 export function persistedAnswersLocalTurn(
   history: HistoryEntry[] | null | undefined,
   localMessages: Message[],
+  options: { requireTrailingAnswer?: boolean } = {},
 ): boolean {
   const persisted = historyToMessages(history ?? []);
   let idx = persisted.length - 1;
-  while (idx >= 0 && persisted[idx].role === "user") idx -= 1;
+  if (!options.requireTrailingAnswer) {
+    while (idx >= 0 && persisted[idx].role === "user") idx -= 1;
+  }
   const reply = persisted[idx];
   if (
     !reply ||
@@ -286,6 +295,10 @@ export interface TurnStreamDeps {
       preserveScroll?: boolean;
       background?: boolean;
       restore?: boolean;
+      // Set ONLY by the recovery reconciler. An ordinary load must leave a
+      // conversation whose slot recovery owns alone; this one is the
+      // deliberate swap to the canonical copy (#1584).
+      adopt?: boolean;
     },
   ) => Promise<void>;
   loadMemories: () => Promise<void>;
@@ -572,6 +585,44 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       ? AbortSignal.timeout(recoveryRequestTimeoutMs)
       : undefined;
 
+  // reloadCanonical swaps the in-memory transcript for the database's, which
+  // is programmatically what the user's manual refresh does.
+  //
+  // loadConversation issues its own fetch, which carries no signal of ours. A
+  // recovery tick awaits this call with its timer already gone, so a
+  // connection blackholed between requests would stall the chain
+  // indefinitely. Bound the WAIT, not the work: the load finishes in the
+  // background either way and its adoption is idempotent.
+  const reloadCanonical = async (
+    convId: string,
+  ): Promise<"adopted" | "unreachable"> => {
+    // Release the attach handle first: loadConversation deliberately
+    // short-circuits for a conversation it believes is still streaming (the
+    // in-memory copy is newer than the DB in that case). Here the opposite is
+    // true — the DB is the newer copy.
+    attachedConvIdsRef.current.delete(convId);
+    const reloadTimedOut = Symbol("reload-timeout");
+    const outcome = await Promise.race([
+      loadConversation(convId, {
+        preserveScroll: true,
+        background: true,
+        restore: true,
+        adopt: true,
+      }),
+      delay(recoveryRequestTimeoutMs).then(() => reloadTimedOut),
+    ]);
+    if (outcome === reloadTimedOut) {
+      // The transcript never landed, so nothing was adopted. Saying otherwise
+      // would have the caller release recovery and idle the conversation over
+      // a slot still marked streaming, with no timer and no stream left to
+      // heal it. "Unreachable" is the truth and the chain comes back (the
+      // load may still complete in the background; its adoption is
+      // idempotent).
+      return "unreachable";
+    }
+    return "adopted";
+  };
+
   // reconcileFromPersisted adopts the canonical transcript when it already
   // answers the turn we are holding open — programmatically what the user's
   // manual refresh does.
@@ -585,6 +636,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // still running on the server got stamped "Turn failed" until a refresh.
   const reconcileFromPersisted = async (
     convId: string,
+    options: { requireTrailingAnswer?: boolean } = {},
   ): Promise<PersistedReconcile> => {
     if (isPendingKey(convId)) return "absent";
     try {
@@ -599,36 +651,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       if (!res.ok) return "absent";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
       const local = messagesByConvRef.current[convId] ?? [];
-      if (!persistedAnswersLocalTurn(data.history, local)) return "absent";
-      // Release the attach handle first: loadConversation deliberately
-      // short-circuits for a conversation it believes is still streaming
-      // (the in-memory copy is newer than the DB in that case). Here the
-      // opposite is true — the DB is the newer copy.
-      attachedConvIdsRef.current.delete(convId);
-      // loadConversation issues its own fetch, which carries no signal of
-      // ours. A recovery tick awaits this call with its timer already gone,
-      // so a connection blackholed between the two requests would stall the
-      // chain indefinitely. Bound the WAIT, not the work: the load finishes
-      // in the background either way and its adoption is idempotent.
-      const reloadTimedOut = Symbol("reload-timeout");
-      const outcome = await Promise.race([
-        loadConversation(convId, {
-          preserveScroll: true,
-          background: true,
-          restore: true,
-        }),
-        delay(recoveryRequestTimeoutMs).then(() => reloadTimedOut),
-      ]);
-      if (outcome === reloadTimedOut) {
-        // The transcript never landed, so nothing was adopted. Saying
-        // otherwise would have the caller release recovery and idle the
-        // conversation over a slot still marked streaming, with no timer and
-        // no stream left to heal it. "Unreachable" is the truth and the chain
-        // comes back (the load may still complete in the background; its
-        // adoption is idempotent).
-        return "unreachable";
-      }
-      return "adopted";
+      if (!persistedAnswersLocalTurn(data.history, local, options))
+        return "absent";
+      return reloadCanonical(convId);
     } catch {
       // The server did not answer — the caller must NOT read this as "no
       // answer exists". It leaves the slot mid-flight and re-asks later.
@@ -763,11 +788,24 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // lastUnsettledAssistant reads back the slot a just-ended stream left open.
   // The chase never learns the successor's slot id — reattachToConv created
   // it — so the transcript is the only place to find it.
-  const lastUnsettledAssistant = (convId: string): number | null => {
+  //
+  // It reports the SHAPE as well as the id. A replay that reported missed
+  // events and then reached a terminal event without content leaves a slot
+  // that is `done` and empty — unresolved, but only recognisable when the gap
+  // flag is carried. Hard-coding it false made this helper miss exactly that
+  // slot, so the chase ended and idled the conversation over an empty reply
+  // whose answer was sitting in the database (#1584).
+  const lastUnsettledAssistant = (
+    convId: string,
+  ): { assistantId: number; gap: boolean } | null => {
     const messages = messagesByConvRef.current[convId] ?? [];
     const last = messages[messages.length - 1];
     if (!last || last.role !== "assistant") return null;
-    return slotNeedsSettling(convId, last.id, false) ? last.id : null;
+    if (slotNeedsSettling(convId, last.id, false))
+      return { assistantId: last.id, gap: false };
+    if (slotNeedsSettling(convId, last.id, true))
+      return { assistantId: last.id, gap: true };
+    return null;
   };
 
   const chasingSuccessor = (convId: string): boolean =>
@@ -844,7 +882,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       const unsettled = lastUnsettledAssistant(convId);
       if (unsettled !== null && !attachedConvIdsRef.current.has(convId)) {
         recoveryChaseRef.current.delete(convId);
-        scheduleRecoveryRetry(convId, unsettled, false, 0);
+        scheduleRecoveryRetry(convId, unsettled.assistantId, unsettled.gap, 0);
         return;
       }
       endSuccessorChase(convId);
@@ -871,8 +909,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Nothing live, nothing retained: reattachToConv can never succeed
       // again, and a turn that reached that state committed its user message
       // long ago. Postgres has both the question and the answer.
-      const persisted = await reconcileFromPersisted(convId);
+      //
+      // Strictly, though. What we are waiting on is the SUCCESSOR's answer,
+      // and the shape that sits above a successor's committed prompt is the
+      // PREDECESSOR's — so the skipping that lets the chain find its own
+      // answer behind a successor's prompt would, here, accept the wrong
+      // turn's reply and call the successor answered.
+      const persisted = await reconcileFromPersisted(convId, {
+        requireTrailingAnswer: true,
+      });
       if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+      if (persisted === "absent") {
+        // The server says that turn is over and the database has no answer
+        // for it: it ended before producing one. Show what a refresh would
+        // show and stop chasing something that has finished — polling on
+        // would hold the conversation busy for ever.
+        await reloadCanonical(convId);
+        if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+        endSuccessorChase(convId);
+        return;
+      }
       if (persisted === "adopted") {
         // The answer came from the database, so no turn is running: the
         // conversation must stop showing Stop. reconcileFromPersisted's
@@ -1096,7 +1152,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // The chain owns an unknown outcome, so the conversation is busy: Stop
     // stays offered and a follow-up queues rather than racing.
     markConvStreaming(convId);
-    scheduleRecoveryRetry(convId, unsettled, false, 0);
+    scheduleRecoveryRetry(convId, unsettled.assistantId, unsettled.gap, 0);
   };
 
   // cancelRecovery ends a chain because the USER stopped the turn. By the time
@@ -1131,7 +1187,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       }));
     };
     if (owned) markCancelled(owned.assistantId, owned.gap);
-    if (chasedSlot !== null) markCancelled(chasedSlot, false);
+    if (chasedSlot !== null)
+      markCancelled(chasedSlot.assistantId, chasedSlot.gap);
     markConvIdle(convId);
   };
 
@@ -2355,6 +2412,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // Another path (a fresh submission, a liveness reconnect) owns the
         // conversation now; its own stream end re-enters here.
         if (attachedConvIdsRef.current.has(convId)) return;
+        // Re-checked every iteration, not just on the way in: an awaited
+        // reattach that loses its socket or its connect arms recovery before
+        // it returns, and the next unbound attach would then reuse the
+        // recovery-owned slot.
+        if (recoveryOwns(convId) || chasingSuccessor(convId)) return;
         const items = await refreshQueue(convId);
         if (items === null) return; // snapshot unknown — don't guess
         if (!hasPendingQueueWork(items)) break;
@@ -2914,6 +2976,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
               0,
               true,
             );
+            // settleStreamedSlot re-arms the chain when Postgres itself was
+            // unreachable: the predecessor's outcome is still UNKNOWN, so
+            // releasing here would throw that chain away and let the attach
+            // below reuse its slot. Leave it to the chain, which chases this
+            // new turn itself once it settles.
+            if (recoveryRetriesRef.current.has(convId)) return;
             releaseRecovery(convId);
           }
           // A chase is already attaching whatever the server is running,
