@@ -1013,10 +1013,15 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// without this the rate-limit / provider-failure card would be
 			// replaced by "the model did not start responding" (#1585).
 			//
-			// Recorded LAST, because fantasy begins the sleep only once this
-			// callback returns: starting the window before the observers run
-			// would hand their execution time to the backoff and let the
-			// record lapse while the provider is still being waited on.
+			// Recorded TWICE, and both are needed. Before the observers,
+			// because they are synchronous and can block: a watchdog firing
+			// while they run must still find the provider's error. And again
+			// after they return, because fantasy begins the sleep only then —
+			// refreshing the window stops the observers' own execution time
+			// being charged to the backoff, which would let the record lapse
+			// while the provider was still being waited on. Each publish is a
+			// single immutable record, so neither can be read half-applied.
+			watchdog.noteProviderError(providerErr, delay)
 			emitTurnRetry(sink, providerErr, delay, nil)
 			if cb := r.engine.onRetry; cb != nil {
 				cb(providerErr, delay)
