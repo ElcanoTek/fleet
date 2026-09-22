@@ -101,6 +101,22 @@ type engine struct {
 	// whole tool loop across checkpoints instead of restarting per pause. Reset
 	// when a round ends on its own (finish or enforcement).
 	checkpointSteps int
+	// resendFloor, resendPrefix, resendFloorStale and resendFloorNoted carry
+	// the checkpoint's floor rule (#1600, see effectiveResendBudget).
+	// resendFloor is the resent size measured at the latest floor point: the
+	// run's first step (no history yet) or the first step after a compaction.
+	// resendPrefix is the smallest floor measured so far — the part of every
+	// call no compaction can shed (system prompt, tool schemas, pinned head).
+	// It is a minimum on purpose: a post-compaction measurement carries the
+	// summary and the kept recent half, so letting it replace the prefix would
+	// ratchet a small-prefix run into the floor rule on the strength of its
+	// own history. resendFloorStale asks the next step to re-measure (every
+	// compaction sets it); resendFloorNoted dedupes the one-time
+	// [context_checkpoint_floor] breadcrumb.
+	resendFloor      int
+	resendPrefix     int
+	resendFloorStale bool
+	resendFloorNoted bool
 	// activeModel is the model the run loop is currently driving — the primary,
 	// or the fallback after a resilience swap. Compaction summaries follow it
 	// (a swapped run must not keep summarizing on a model that just failed or
@@ -366,6 +382,8 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 	out = appendPlanReannounce(out, e.runOrch)
 	out = append(out, tail...)
 	e.consecutiveCompactions++
+	// The next step re-measures the resend-checkpoint floor (#1600).
+	e.resendFloorStale = true
 	return out
 }
 
@@ -486,6 +504,8 @@ func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Messag
 	// compaction — reset the consecutive counter so it never trips
 	// ErrContextBudgetExhausted.
 	e.consecutiveCompactions = 0
+	// The history just shrank: the next step's resent size is the new floor.
+	e.resendFloorStale = true
 
 	return proactiveCompactResult{
 		messages:      out,
@@ -575,22 +595,26 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	// the window-pressure path, which a large-window model never reaches while
 	// every call still pays for the whole transcript. Interactive runs keep the
 	// window-pressure rule only: a chat's history is the user's to keep.
+	//
+	// The threshold is the checkpoint's (effectiveResendBudget): once the floor
+	// rule applies, compacting at the plain budget would summarize the history
+	// at every round start however little of it there is (#1600).
 	if e.requireCompactionOptIn {
-		if budget := contextResendBudgetTokens(e.envPrefix); budget > 0 && used >= budget {
-			pressure := map[string]any{evtFieldUsedTokens: used, evtFieldResendBudget: budget, evtFieldTrigger: "resend_budget"}
+		if budget := contextResendBudgetTokens(e.envPrefix); budget > 0 && used >= e.effectiveResendBudget(budget) {
+			pressure := e.withResendFloorFields(map[string]any{evtFieldUsedTokens: used, evtFieldResendBudget: budget, evtFieldTrigger: "resend_budget"}, budget)
 			if res := e.proactiveCompact(ctx, messages); res.compacted {
 				out.messages = res.messages
 				out.warned = false
 				e.logSession.AddMessage(roleUser, fmt.Sprintf(
-					"[context_compacted] trigger=resend_budget used=%d budget=%d removed_turns=%d — the resent prompt exceeded %s_CONTEXT_RESEND_BUDGET_TOKENS; the oldest half of the history was summarized to cut per-call cost",
-					used, budget, res.removedTurns, e.envPrefix.normalize()), nil, nil)
-				sink.emit(evtContextCompacted, map[string]any{
+					"[context_compacted] trigger=resend_budget used=%d budget=%d%s removed_turns=%d — the resent prompt exceeded %s_CONTEXT_RESEND_BUDGET_TOKENS; the oldest half of the history was summarized to cut per-call cost",
+					used, budget, e.resendFloorCrumb(budget), res.removedTurns, e.envPrefix.normalize()), nil, nil)
+				sink.emit(evtContextCompacted, e.withResendFloorFields(map[string]any{
 					evtFieldRemovedTurns:  res.removedTurns,
 					evtFieldSummaryTokens: res.summaryTokens,
 					evtFieldTrigger:       "resend_budget",
 					evtFieldUsedTokens:    used,
 					evtFieldResendBudget:  budget,
-				})
+				}, budget))
 				return out
 			} else if !out.warned {
 				sink.emit(evtContextPressure, pressure)
@@ -872,8 +896,10 @@ const maxResendCheckpoints = 40
 // budget bounds every call's size rather than the first call after a round.
 //
 // Only a tool-calls finish qualifies: a step that produced the final answer
-// ends the round on its own and must not be re-driven.
-func (e *engine) resendBudgetCheckpoint() fantasy.StopCondition {
+// ends the round on its own and must not be re-driven. The size it compares
+// against is effectiveResendBudget, not the raw budget (#1600), and input is
+// the round's input history, which the minResendCheckpointHistory guard counts.
+func (e *engine) resendBudgetCheckpoint(input []fantasy.Message) fantasy.StopCondition {
 	if !e.requireCompactionOptIn {
 		return nil
 	}
@@ -881,24 +907,149 @@ func (e *engine) resendBudgetCheckpoint() fantasy.StopCondition {
 	if budget <= 0 {
 		return nil
 	}
+	inputHistory := historyAfterHead(input)
 	return func(steps []fantasy.StepResult) bool {
 		if e.resendCheckpoints >= maxResendCheckpoints {
 			return false
 		}
-		return stepAtResendBudget(steps, budget)
+		return stepAtResendBudget(steps, e.effectiveResendBudget(budget), inputHistory)
 	}
 }
 
-// stepAtResendBudget is the checkpoint predicate over a round's steps so far.
-func stepAtResendBudget(steps []fantasy.StepResult, budget int) bool {
-	if len(steps) == 0 || budget <= 0 {
+// minResendCheckpointHistory is the fewest non-head messages a checkpoint
+// needs (#1600). Below it the compaction the pause exists for has next to
+// nothing to summarize — proactiveCompact would trade one exchange for a
+// summarizer call and a cold cache — so the loop runs on instead.
+const minResendCheckpointHistory = 4
+
+// historyAfterHead counts the messages a compaction may summarize: everything
+// after the pinned head (compactionHeadLen).
+func historyAfterHead(messages []fantasy.Message) int {
+	return len(messages) - compactionHeadLen(messages)
+}
+
+// stepAtResendBudget is the checkpoint predicate over a round's steps so far:
+// the last step finished with tool calls, its resent prompt (fresh +
+// cache-read input) reached threshold, and the history — the round's input
+// after the head (inputHistory) plus every step's own messages — holds at
+// least minResendCheckpointHistory messages.
+func stepAtResendBudget(steps []fantasy.StepResult, threshold, inputHistory int) bool {
+	if len(steps) == 0 || threshold <= 0 {
 		return false
 	}
 	last := steps[len(steps)-1]
 	if last.FinishReason != fantasy.FinishReasonToolCalls {
 		return false
 	}
-	return int(last.Usage.InputTokens+last.Usage.CacheReadTokens) >= budget
+	if int(last.Usage.InputTokens+last.Usage.CacheReadTokens) < threshold {
+		return false
+	}
+	history := inputHistory
+	for _, step := range steps {
+		history += len(step.Messages)
+	}
+	return history >= minResendCheckpointHistory
+}
+
+// effectiveResendBudget is the resent size at which the checkpoint — and the
+// pre-round resend-budget compaction in checkContextPressure — fires (#1600).
+//
+// The budget is compared with the WHOLE request, yet part of every request is
+// not history at all: the system prompt, the tool schemas and the pinned task
+// prompt, which no compaction can shed. While that prefix leaves at least half
+// the budget for history the threshold is the budget itself, exactly as
+// before. Past that, summarizing cannot get a call back under the budget:
+// after a compaction the call still carries the prefix, the summary and the
+// kept recent half, so the next checkpoint comes after roughly
+// (budget − prefix)/2 − summary tokens of growth — a quarter of the budget at
+// a half-budget prefix, one step as the prefix nears the budget, and every
+// step beyond it. That is what prod saw: a Pages refresh resends ~140K before
+// any history exists against the 80K default, and paused on every tool step
+// until the 40-pause cap, each pause one summarizer call (~7K completion
+// tokens) and a cold cache. The budget then applies to the history alone: the
+// checkpoint fires once the resent size has grown by a full budget over the
+// floor measured at the latest floor point (the run's first step, or the first
+// step after a compaction — see noteResendFloor), so every pause buys a
+// budget's worth of history.
+func (e *engine) effectiveResendBudget(budget int) int {
+	if !e.resendFloorCrowdsBudget(budget) {
+		return budget
+	}
+	return e.resendFloor + budget
+}
+
+// resendFloorCrowdsBudget reports whether the floor rule applies: the stable
+// prefix (resendPrefix) takes more than half the budget. It is decided on the
+// prefix, never on a post-compaction floor, so a small-prefix run whose kept
+// half happens to be large keeps the plain budget (and the behaviour it had
+// before #1600) for its whole life.
+func (e *engine) resendFloorCrowdsBudget(budget int) bool {
+	return budget > 0 && e.resendPrefix > 0 && 2*e.resendPrefix > budget
+}
+
+// noteResendFloor records a floor point for the checkpoint's floor rule — the
+// run's first measured step, and the first step after every compaction — and,
+// the first time the stable prefix crowds the budget, writes ONE
+// [context_checkpoint_floor] breadcrumb saying what the floor is and what the
+// checkpoint now fires at (where the pre-#1600 loop said it with a
+// checkpoint/compaction pair on every step). Called from the stream's
+// OnStepFinish, which fantasy runs before it evaluates StopWhen, so a floor
+// step is judged against the floor it just set and never pauses on its own
+// size. Scheduled engines only: nothing else reads the floor.
+func (e *engine) noteResendFloor(usage fantasy.Usage) {
+	if !e.requireCompactionOptIn || (e.resendPrefix > 0 && !e.resendFloorStale) {
+		return
+	}
+	resent := int(usage.InputTokens + usage.CacheReadTokens)
+	if resent <= 0 {
+		// No usage reported: leave the point open for the next measured step.
+		return
+	}
+	e.resendFloorStale = false
+	e.resendFloor = resent
+	if e.resendPrefix == 0 || resent < e.resendPrefix {
+		e.resendPrefix = resent
+	}
+	budget := contextResendBudgetTokens(e.envPrefix)
+	if e.resendFloorNoted || !e.resendFloorCrowdsBudget(budget) {
+		return
+	}
+	e.resendFloorNoted = true
+	e.logSession.AddMessage(roleUser, fmt.Sprintf(
+		"[context_checkpoint_floor] floor=%d budget=%d effective_budget=%d — what this run resends before any history (system prompt, tool schemas, task prompt) takes more than half of %s_CONTEXT_RESEND_BUDGET_TOKENS, so summarizing cannot bring a call under the budget; the resend-budget checkpoint now fires once the history has grown by a full budget over the floor, re-measured after each compaction",
+		e.resendFloor, budget, e.effectiveResendBudget(budget), e.envPrefix.normalize()), nil, nil)
+}
+
+// withResendFloorFields adds the floor rule's fields to a resend-budget event
+// payload while the rule applies: the floor the threshold is measured from and
+// the threshold itself. Under the plain budget the payload is left exactly as
+// it was before #1600.
+func (e *engine) withResendFloorFields(payload map[string]any, budget int) map[string]any {
+	if e.resendFloorCrowdsBudget(budget) {
+		payload[evtFieldResendFloor] = e.resendFloor
+		payload[evtFieldEffectiveBudget] = e.effectiveResendBudget(budget)
+	}
+	return payload
+}
+
+// resendFloorCrumb is withResendFloorFields for a session-log breadcrumb: ""
+// under the plain budget, else " floor=… effective_budget=…".
+func (e *engine) resendFloorCrumb(budget int) string {
+	if !e.resendFloorCrowdsBudget(budget) {
+		return ""
+	}
+	return fmt.Sprintf(" floor=%d effective_budget=%d", e.resendFloor, e.effectiveResendBudget(budget))
+}
+
+// resendCheckpointReached names what a checkpoint's resent prompt reached, for
+// the run loop's [context_checkpoint] breadcrumb: the budget knob, plus the
+// floor and effective budget while the floor rule applies.
+func (e *engine) resendCheckpointReached(budget int) string {
+	reached := e.envPrefix.normalize() + "_CONTEXT_RESEND_BUDGET_TOKENS"
+	if !e.resendFloorCrowdsBudget(budget) {
+		return reached
+	}
+	return fmt.Sprintf("%s over the prompt floor (floor=%d effective_budget=%d)", reached, e.resendFloor, e.effectiveResendBudget(budget))
 }
 
 // consumeResendCheckpoint reports whether a finished round stopped at the
@@ -916,8 +1067,10 @@ func stepAtResendBudget(steps []fantasy.StepResult, budget int) bool {
 // roundSteps is the round's TOTAL step count — the final attempt's steps plus
 // any a resilience recovery resumed past (streamRoundOutcome.completedSteps).
 // result.Steps alone undercounts a recovered round, which would hand the next
-// stream nearly the whole cap again.
-func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult, roundSteps int) bool {
+// stream nearly the whole cap again. input is the final attempt's input
+// history (streamRoundOutcome.messages), the same slice its StopCondition
+// counted.
+func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult, roundSteps int, input []fantasy.Message) bool {
 	if result == nil || !e.requireCompactionOptIn || e.resendCheckpoints >= maxResendCheckpoints {
 		return false
 	}
@@ -927,7 +1080,7 @@ func (e *engine) consumeResendCheckpoint(result *fantasy.AgentResult, roundSteps
 	if e.maxIterations > 0 && e.checkpointSteps+roundSteps >= e.maxIterations {
 		return false
 	}
-	if !stepAtResendBudget(result.Steps, contextResendBudgetTokens(e.envPrefix)) {
+	if !stepAtResendBudget(result.Steps, e.effectiveResendBudget(contextResendBudgetTokens(e.envPrefix)), historyAfterHead(input)) {
 		return false
 	}
 	e.resendCheckpoints++
@@ -945,9 +1098,10 @@ func (e *engine) roundEndedOnItsOwn() {
 // roundStopConditions is the round's StopWhen: the step cap (a model that
 // never stops calling tools) plus, for a scheduled engine with a resend budget,
 // the compaction checkpoint. fantasy stops on the FIRST condition that holds.
-func (e *engine) roundStopConditions(stepLimit int) []fantasy.StopCondition {
+// input is the round's input history (see resendBudgetCheckpoint).
+func (e *engine) roundStopConditions(stepLimit int, input []fantasy.Message) []fantasy.StopCondition {
 	stops := stepStopConditions(stepLimit)
-	if cp := e.resendBudgetCheckpoint(); cp != nil {
+	if cp := e.resendBudgetCheckpoint(input); cp != nil {
 		stops = append(stops, cp)
 	}
 	return stops
@@ -1002,7 +1156,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		Temperature:     &temp,
 		ProviderOptions: r.engine.providerOptions(modelSlug),
 		MaxRetries:      &maxRetries,
-		StopWhen:        r.engine.roundStopConditions(stepLimit),
+		StopWhen:        r.engine.roundStopConditions(stepLimit, messages),
 		// Fantasy's inner backoff-and-retry, surfaced two ways: turn.retry to
 		// the Observer (the web client's inline "retrying" badge; journal
 		// recovery resets accumulated text on it) and the engine's session-log
@@ -1078,6 +1232,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		},
 		OnStepFinish: func(step fantasy.StepResult) error {
 			r.orch.updateUsage(modelSlug, step.Usage, step.ProviderMetadata)
+			r.engine.noteResendFloor(step.Usage)
 			if r.engine.usageReporter != nil {
 				r.engine.usageReporter(usageSnapshot(r.orch))
 			}
