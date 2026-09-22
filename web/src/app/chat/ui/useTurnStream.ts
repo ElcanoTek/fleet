@@ -145,6 +145,12 @@ const streamLivenessGraceMs = 2500;
 // the watchdog) remain the way back.
 const recoveryRetryDelaysMs = [1000, 2000, 4000, 8000, 16000];
 
+// After the backoff, the chain keeps a slow steady beat rather than giving up:
+// a conversation left unsettled is no longer in attachedConvIdsRef, so the
+// liveness watchdog does not sweep it, and an outage longer than the backoff
+// would otherwise strand the slot until the user happened to switch tabs.
+const recoverySteadyRetryMs = 30000;
+
 // What reconcileFromPersisted learned from Postgres about the turn we hold open.
 type PersistedReconcile = "adopted" | "absent" | "unreachable";
 
@@ -405,9 +411,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // One drain-follower per conversation (followQueueDrain re-enters itself
   // through the reattach it awaits).
   const queueFollowInFlightRef = useRef<Set<string>>(new Set<string>());
-  // One pending recovery re-probe per conversation (#1583); see
-  // scheduleRecoveryRetry.
+  // Recovery chain state (#1583/#1584); see "Recovery ownership" below.
+  // The pending timer per conversation...
   const recoveryRetriesRef = useRef<Map<string, number>>(new Map<string, number>());
+  // ...the slot each chain is recovering, held for the chain's whole life...
+  const recoveryOwnedRef = useRef<Map<string, { assistantId: number; gap: boolean }>>(
+    new Map<string, { assistantId: number; gap: boolean }>(),
+  );
+  // ...and the flag a callback already past its timer checks after each await.
+  const recoveryUnmountedRef = useRef(false);
   const refreshQueue = async (convId: string): Promise<QueuedInput[] | null> => {
     try {
       const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/queue`);
@@ -545,15 +557,58 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     return { slot, midFlight };
   };
 
-  // scheduleRecoveryRetry re-asks the server about a slot we had to leave
-  // unsettled because the server was unreachable when its stream died. The
-  // online / visibilitychange / focus handlers and the liveness watchdog also
-  // recover such a slot — this is the belt to their braces, for the radio that
-  // comes back without firing any of them. One chain per conversation, short
-  // backoff, and it stops the moment the slot has an outcome or a stream owns
-  // the conversation again. Exhausting the chain leaves the slot as it is:
-  // still unsettled, still recoverable by the event handlers — never a verdict
-  // the server did not give.
+  // Recovery ownership (#1583/#1584).
+  //
+  // When a stream dies and the server cannot be reached, the turn's outcome is
+  // UNKNOWN — very likely still running. Something has to hold that slot open
+  // and keep asking, and while it does, no other finalizer may declare the
+  // turn over. Three refs express that:
+  //
+  //   recoveryOwnedRef   — conversations whose unsettled slot belongs to the
+  //                        chain. Set when the chain is armed, cleared only
+  //                        when the outcome is KNOWN (settled, adopted, or a
+  //                        live stream took the conversation back). It spans
+  //                        the awaits inside a tick, which a pending-timer
+  //                        marker did not: the first tick used to drop the
+  //                        marker before its probe returned, and the submit
+  //                        `finally` could walk in and stamp the still-running
+  //                        turn failed.
+  //   recoveryRetriesRef — the pending timer per conversation, for cancelling.
+  //   recoveryUnmountedRef — set once the hook is gone, checked after every
+  //                        await: a callback already in flight must not open a
+  //                        stream the unmounted parent can no longer abort.
+  //
+  // The chain does not give up while the outcome stays unknown. It backs off
+  // (1, 2, 4, 8, 16 s) and then keeps a slow steady beat, because the
+  // alternative is a slot that stays "thinking" forever on a page whose guide
+  // promises it re-checks by itself: the conversation is no longer in
+  // attachedConvIdsRef, so the liveness watchdog does not sweep it, and
+  // without a focus/visibility/online event nothing else would ever look
+  // again. A hidden tab reschedules without probing — the tab-return handler
+  // covers that case and background polling is waste.
+  const recoveryOwns = (convId: string): boolean => recoveryOwnedRef.current.has(convId);
+
+  // releaseRecovery ends ownership: the outcome is known, or the slot is gone.
+  const releaseRecovery = (convId: string): void => {
+    const timer = recoveryRetriesRef.current.get(convId);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      recoveryRetriesRef.current.delete(convId);
+    }
+    recoveryOwnedRef.current.delete(convId);
+  };
+
+  // recoveryDelayFor is the backoff, then a steady slow beat.
+  const recoveryDelayFor = (attempt: number): number =>
+    attempt < recoveryRetryDelaysMs.length
+      ? recoveryRetryDelaysMs[attempt]
+      : recoverySteadyRetryMs;
+
+  // scheduleRecoveryRetry re-asks the server about a slot left unsettled
+  // because the server was unreachable when its stream died. The online /
+  // visibilitychange / focus handlers and the liveness watchdog also recover
+  // such a slot; this is the belt to their braces, for a radio that comes back
+  // without firing any of them.
   //
   // The chain carries the SLOT it is recovering (assistantId) and whether that
   // slot is the replay-gap shape, because a gap slot already reads as `done`:
@@ -565,48 +620,80 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     gap: boolean,
     attempt = 0,
   ): void => {
-    if (attempt >= recoveryRetryDelaysMs.length) return;
-    if (recoveryRetriesRef.current.has(convId)) return;
+    if (recoveryUnmountedRef.current) return;
+    // Ownership starts here and outlives the individual timers.
+    recoveryOwnedRef.current.set(convId, { assistantId, gap });
+    const existing = recoveryRetriesRef.current.get(convId);
+    if (existing !== undefined) window.clearTimeout(existing);
     const timer = window.setTimeout(() => {
       recoveryRetriesRef.current.delete(convId);
       void (async () => {
-        if (!slotNeedsSettling(convId, assistantId, gap)) return;
-        if (attachedConvIdsRef.current.has(convId)) return;
+        // Ownership is NOT released here: it is released when the outcome is
+        // known. Everything below re-checks unmount after each await.
+        if (recoveryUnmountedRef.current) return;
+        if (!slotNeedsSettling(convId, assistantId, gap)) {
+          releaseRecovery(convId);
+          return;
+        }
+        if (attachedConvIdsRef.current.has(convId)) {
+          // A live stream owns the conversation again — it will settle.
+          releaseRecovery(convId);
+          return;
+        }
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+          // Nothing is on screen to be wrong, and the tab-return handler
+          // probes on the way back. Keep the chain alive, spend nothing.
+          scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
+          return;
+        }
         const probe = await probeInflightTurn(convId);
+        if (recoveryUnmountedRef.current) return;
         if (probe.kind === "unreachable") {
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
           return;
         }
         if (probe.inflight || probe.turnID) {
           await reattachToConv(convId);
-          if (attachedConvIdsRef.current.has(convId)) return;
-        }
-        // reattachToConv also returns false when ANOTHER path is already
-        // inside it (an online/focus/visibility handler that has not yet
-        // claimed the conversation). That is ownership, not absence: settling
-        // now would stamp `failed` on the very turn whose stream is being
-        // opened, and the flag would survive the events that follow. Hand the
-        // slot to that reattach and come back only if it does not take it.
-        if (reattachInFlightRef.current.has(convId)) {
+          if (recoveryUnmountedRef.current) return;
+          if (attachedConvIdsRef.current.has(convId)) {
+            releaseRecovery(convId);
+            return;
+          }
+          // The probe said the turn is LIVE (or retained) and the reattach did
+          // not take it — its own probe or stream fetch lost the same
+          // connectivity flap, or another path is inside it. Either way this
+          // is not evidence the turn is gone, so it must not become a verdict:
+          // come back instead of settling.
           scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
           return;
         }
-        await settleStreamedSlot(convId, assistantId, gap, attempt + 1);
+        // Definitive: nothing in flight, nothing retained. Now a settle is
+        // honest — and only this call may bypass the ownership guard.
+        await settleStreamedSlot(convId, assistantId, gap, attempt + 1, true);
+        if (recoveryUnmountedRef.current) return;
+        // Settled (or adopted, or re-armed by settleStreamedSlot when Postgres
+        // itself was unreachable). If nothing re-armed the chain, the outcome
+        // is known and the conversation is free.
+        if (recoveryRetriesRef.current.has(convId)) return;
+        releaseRecovery(convId);
+        markConvIdle(convId);
       })();
-    }, recoveryRetryDelaysMs[attempt]);
+    }, recoveryDelayFor(attempt));
     recoveryRetriesRef.current.set(convId, timer);
   };
 
-  // Drop every pending recovery timer when the hook goes away. Without this a
-  // timer outliving /chat would probe, reattach, and open an SSE stream that
-  // the unmounted parent's AbortController cleanup can no longer abort —
-  // an orphan socket writing state next to a freshly mounted chat.
+  // Stop every chain when the hook goes away: cancel pending timers AND flag
+  // the callbacks already past their timer, which no timer id can reach. A
+  // callback that resumed after unmount would reattach and open an SSE stream
+  // the unmounted parent's AbortController cleanup can no longer abort.
   useEffect(
     () => () => {
+      recoveryUnmountedRef.current = true;
       for (const timer of recoveryRetriesRef.current.values()) {
         window.clearTimeout(timer);
       }
       recoveryRetriesRef.current.clear();
+      recoveryOwnedRef.current.clear();
     },
     [],
   );
@@ -625,16 +712,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     assistantId: number,
     gap: boolean,
     retryAttempt = 0,
+    fromRecovery = false,
   ): Promise<void> => {
-    // A recovery chain already owns this slot's unknown outcome (#1583): it
-    // re-asks on a backoff and settles when the server actually answers.
-    // Settling here as well — the stream's `finally` runs right behind the
-    // catch that armed the chain — would race it: if connectivity returns in
-    // that instant, our persisted read succeeds, finds no completed answer
-    // for a turn that is STILL RUNNING, and stamps `failed`, after which the
-    // chain sees a terminal slot and gives up. The chain deletes its entry
-    // before calling back in, so its own settle passes this guard.
-    if (recoveryRetriesRef.current.has(convId)) return;
+    // A recovery chain owns this slot's unknown outcome (#1583): it re-asks on
+    // a backoff and settles when the server actually answers. Settling here as
+    // well — the stream's `finally` runs right behind the catch that armed the
+    // chain — would race it: if connectivity returns in that instant, our
+    // persisted read succeeds, finds no completed answer for a turn that is
+    // STILL RUNNING, and stamps `failed`, after which the chain sees a
+    // terminal slot and stops. Ownership spans the chain's awaits, so only the
+    // chain's own settle (fromRecovery) passes.
+    if (!fromRecovery && recoveryOwns(convId)) return;
     const eligible = slotNeedsSettling(convId, assistantId, gap);
     if (!eligible) return;
     const { slot, midFlight } = eligible;
@@ -1584,13 +1672,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             abortControllersRef.current.delete(convId);
           }
         } else {
-          // Release our handles BEFORE settling: settleStreamedSlot may pull
-          // the canonical transcript, and loadConversation short-circuits
-          // while the conversation still looks attached.
-          if (attachedConvIdsRef.current.has(convId)) {
-            attachedConvIdsRef.current.delete(convId);
-            markConvIdle(convId);
-          }
+          // Release the attach handle BEFORE settling: settleStreamedSlot may
+          // pull the canonical transcript, and loadConversation short-circuits
+          // while the conversation still looks attached. The BUSY flag is a
+          // different question and is decided after the settle, below: the
+          // settle may hand this slot to the recovery chain, and a turn whose
+          // outcome is unknown must keep Stop offered and keep a follow-up
+          // queueing rather than racing.
+          const wasAttached = attachedConvIdsRef.current.delete(convId);
           if (abortControllersRef.current.get(convId) === ourController) {
             abortControllersRef.current.delete(convId);
           }
@@ -1600,6 +1689,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // never observed; only a turn the DB has no answer for is settled
           // locally, and then as a retryable dropped connection.
           await settleStreamedSlot(convId, ctx.assistantId, ctx.gap);
+          // Free the composer only when the outcome is actually known. If the
+          // settle armed a recovery chain the server may still be generating.
+          if (wasAttached && !recoveryOwns(convId)) {
+            markConvIdle(convId);
+          }
           // Refresh so any server-side state we missed (new title, updated
           // metrics sidebar) shows.
           void refreshConversations();
@@ -2456,7 +2550,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // over. Everything else below is this stream's own cleanup.
       if (!supersededStreamsRef.current.has(abortController)) {
         attachedConvIdsRef.current.delete(finalTarget);
-        markConvIdle(finalTarget);
         // Last resort: if every path above missed this slot it is still
         // mid-flight, and the indicator would hang until the user refreshed.
         // Settle it — but settle it the same way the rest of the loop does,
@@ -2466,6 +2559,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // finished without a written reply while the DB held the full answer.
         // Any already-terminal slot (done/failed/cancelled) is left alone.
         await settleStreamedSlot(finalTarget, assistantId, false);
+        // Free the composer only when the outcome is actually known. While
+        // recovery owns an unknown outcome the turn may still be running on
+        // the server, so the conversation stays BUSY: Stop remains offered, a
+        // follow-up queues instead of racing, and nothing treats the slot as
+        // finished. The chain idles it when it settles.
+        if (!recoveryOwns(finalTarget)) {
+          markConvIdle(finalTarget);
+        }
         // Same hand-off as the reattach path: a follow-up the user queued
         // while this turn ran drains as its own turn, and this is the only
         // moment we learn about it.

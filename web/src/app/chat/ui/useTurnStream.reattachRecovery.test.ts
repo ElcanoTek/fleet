@@ -93,6 +93,7 @@ type Harness = {
   streaming: Set<string>;
   inflightProbes: number;
   attachCount: () => number;
+  releaseInflight: () => void;
 };
 
 const makeHarness = (opts: {
@@ -108,6 +109,9 @@ const makeHarness = (opts: {
   inflightRejectAt?: number[];
   // Same for the persisted-transcript fetch (GET /api/conversations/<id>).
   persistedRejectAt?: number[];
+  // Indexes of /inflight probes that stay PENDING until releaseInflight() is
+  // called — for driving what a callback does when it resumes after unmount.
+  inflightDeferAt?: number[];
   onLoaded?: () => void;
   // Advertised keepalive cadence, in ms. Omit to send no header at all.
   heartbeatMs?: number;
@@ -127,6 +131,7 @@ const makeHarness = (opts: {
   let probes = 0;
   let persistedFetches = 0;
   let answeredProbes = 0;
+  const deferredProbeReleases: Array<() => void> = [];
 
   const setConvMessages = (
     convId: string,
@@ -179,6 +184,9 @@ const makeHarness = (opts: {
         probes += 1;
         if ((opts.inflightRejectAt ?? []).includes(idx)) {
           throw new TypeError("Failed to fetch");
+        }
+        if ((opts.inflightDeferAt ?? []).includes(idx)) {
+          await new Promise<void>((resolve) => deferredProbeReleases.push(resolve));
         }
         const info = nth(opts.inflight, answeredProbes);
         answeredProbes += 1;
@@ -295,6 +303,9 @@ const makeHarness = (opts: {
       return probes;
     },
     attachCount: () => attaches,
+    releaseInflight: () => {
+      for (const release of deferredProbeReleases.splice(0)) release();
+    },
   };
 };
 
@@ -652,6 +663,116 @@ describe("the recovery chain owns the unsettled slot", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h.inflightProbes).toBe(probesAtUnmount);
     expect(h.attachCount()).toBe(1);
+  }, 20000);
+});
+
+// Codex round 2 on #1584: ownership was a PENDING TIMER, which is absent
+// exactly when it matters — during the tick's awaits, and after the backoff.
+describe("recovery ownership spans the whole chain", () => {
+  it("keeps the conversation busy until the outcome is known", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      inflight: [{ inflight: true, turn_id: "t1" }, { inflight: false }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+    // The turn may still be running on the server: Stop must stay offered and
+    // a follow-up must queue rather than race, so the conversation stays busy.
+    expect(h.streaming.has(CONV)).toBe(true);
+
+    // The chain settles it (nothing in flight, nothing persisted) and only
+    // then is the conversation free.
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(lastOf(h).failed).toBe(true);
+    expect(h.streaming.has(CONV)).toBe(false);
+  }, 20000);
+
+  it("keeps probing at a steady beat after the backoff is spent", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      // Every probe after the reattach's own throws: a long outage.
+      inflightRejectAt: Array.from({ length: 40 }, (_, i) => i + 1),
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(31_100); // the whole backoff
+    const afterBackoff = h.inflightProbes;
+    expect(afterBackoff).toBeGreaterThan(4);
+
+    // The old chain stopped here and nothing else would ever look again: the
+    // conversation is not in attachedConvIdsRef, so the watchdog skips it.
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(h.inflightProbes).toBeGreaterThan(afterBackoff);
+    expect(lastOf(h).failed).toBeUndefined();
+    expect(lastOf(h).state).toBe("streaming");
+  }, 20000);
+
+  it("does not settle when a live turn simply could not be reattached", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [() => severedStream([sse(1, "turn.started", { turn_id: "t1" })])],
+      // probe 0: reattach's own. probe 1: the retry tick — the turn IS live.
+      // probe 2: the reattach it triggers, which loses the same flap.
+      inflightRejectAt: [2],
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(10);
+    // A failed reattach is not evidence the turn is gone — the probe had just
+    // said it was alive. Settling on it would stamp a live turn failed.
+    expect(lastOf(h).failed).toBeUndefined();
+    expect(lastOf(h).state).toBe("streaming");
+    expect(h.streaming.has(CONV)).toBe(true);
+  }, 20000);
+
+  it("a callback already past its timer does nothing after unmount", async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({
+      initial: midTurnTranscript(),
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () => severedStream([sse(1, "turn.started", { turn_id: "t1" })]),
+        () => truncatedStream([sse(2, "text.delta", { text: "late" })]),
+      ],
+      inflightDeferAt: [1], // the retry tick's probe hangs
+      inflight: [{ inflight: true, turn_id: "t1" }],
+      persistedRejectAt: [0],
+    });
+
+    const { result, unmount } = renderHook(() => useTurnStream(h.deps));
+    await result.current.reattachToConv(CONV);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Fire the tick: its probe is now in flight, so no timer id can reach it.
+    await vi.advanceTimersByTimeAsync(1100);
+    const attachesBefore = h.attachCount();
+    unmount();
+    // The probe resolves after the parent's cleanup has run. Opening a stream
+    // now would leave a socket nothing can abort.
+    h.releaseInflight();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.attachCount()).toBe(attachesBefore);
   }, 20000);
 });
 
