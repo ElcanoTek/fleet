@@ -500,8 +500,24 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   // await in the chase re-checks it; the record carries only the pending
   // timer, which is absent precisely while a request is in flight.
   const recoveryChaseRef = useRef<
-    Map<string, { timer?: number; turnID?: string }>
-  >(new Map<string, { timer?: number; turnID?: string }>());
+    Map<string, { timer?: number; turnID?: string; gen: number }>
+  >(new Map<string, { timer?: number; turnID?: string; gen: number }>());
+  // Per-conversation epoch: it changes on EVERY recovery transition — a chain
+  // arming or releasing, a chase starting or ending. A long-running
+  // conversation load captures it before its fetch and drops its response if
+  // it has moved, which the owned generation alone could not do: that reads 0
+  // both before recovery starts and while a chase (unattached, and about to
+  // use the slot) is running, so a load spanning exactly that handover saw no
+  // change at all (#1584).
+  const recoveryEpochRef = useRef<Map<string, number>>(
+    new Map<string, number>(),
+  );
+  const bumpRecoveryEpoch = (convId: string): void => {
+    recoveryEpochRef.current.set(
+      convId,
+      (recoveryEpochRef.current.get(convId) ?? 0) + 1,
+    );
+  };
   // `gen` serializes ticks. A tick deletes its timer entry BEFORE its first
   // await, so a focus / visibility / online event arriving during that request
   // reaches nudgeRecovery and arms a second tick for the same slot. Arming
@@ -659,7 +675,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       const local = messagesByConvRef.current[convId] ?? [];
       if (!persistedAnswersLocalTurn(data.history, local, options))
         return "absent";
-      return reloadCanonical(convId);
+      // Awaited, not returned: loadConversation makes its own request, and a
+      // rejection from it has to become "unreachable" HERE. A recovery tick
+      // has already dropped its timer and runs fire-and-forget, so an escaped
+      // rejection would leave ownership registered with no stream and no
+      // retry — the conversation busy for good.
+      return await reloadCanonical(convId);
     } catch {
       // The server did not answer — the caller must NOT read this as "no
       // answer exists". It leaves the slot mid-flight and re-asks later.
@@ -785,6 +806,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       recoveryRetriesRef.current.delete(convId);
     }
     const owned = recoveryOwnedRef.current.delete(convId);
+    if (owned) bumpRecoveryEpoch(convId);
     if (owned && !attachedConvIdsRef.current.has(convId)) {
       markConvIdle(convId);
     }
@@ -835,6 +857,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     const chase = recoveryChaseRef.current.get(convId);
     if (chase?.timer !== undefined) window.clearTimeout(chase.timer);
     if (!recoveryChaseRef.current.delete(convId)) return;
+    bumpRecoveryEpoch(convId);
     if (!attachedConvIdsRef.current.has(convId)) markConvIdle(convId);
   };
 
@@ -884,8 +907,20 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
     // Registered BEFORE the first await, so Stop and unmount reach a chase
     // that is inside a request and not only one waiting on a timer.
-    if (!recoveryChaseRef.current.has(convId))
-      recoveryChaseRef.current.set(convId, { turnID: expectTurnID });
+    if (!recoveryChaseRef.current.has(convId)) {
+      bumpRecoveryEpoch(convId);
+      recoveryChaseRef.current.set(convId, {
+        turnID: expectTurnID,
+        gen: ++recoveryGenSeqRef.current,
+      });
+    }
+    // This chase's own unrepeatable token. Stop can delete a chase while one
+    // of its bounded requests is in flight and a NEW chase can be registered
+    // before that request resumes, so presence alone would let the old
+    // callback end, retarget or reschedule a chase that is not its own.
+    const myChase = recoveryChaseRef.current.get(convId)?.gen;
+    const stillMine = (): boolean =>
+      recoveryChaseRef.current.get(convId)?.gen === myChase;
     // The turn this chase is FOR. Two queued successors can drain in quick
     // succession, so an unbound attach could take the later one and replay
     // its answer under the earlier one's committed prompt — the first answer
@@ -897,6 +932,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // conversation that is actively generating.
     markConvStreaming(convId);
     if (await reattachToConv(convId, expect)) {
+      // Stop can have dropped this chase and a new one taken its place while
+      // that stream ran; ending or re-arming the newcomer's slot would be
+      // acting on someone else's turn.
+      if (recoveryUnmountedRef.current || !stillMine()) return;
       // That await spanned the WHOLE stream, and its finalizer deferred to
       // this chase rather than settling. So if the successor's socket died
       // mid-flight its slot is still open, and the chain — not the chase — is
@@ -915,7 +954,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       void followQueueDrain(convId);
       return;
     }
-    if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+    if (recoveryUnmountedRef.current || !stillMine()) return;
     if (attachedConvIdsRef.current.has(convId)) {
       endSuccessorChase(convId);
       return;
@@ -931,7 +970,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // turn that is running and show its question to nobody. A live turn, or a
     // server that cannot be asked, means keep chasing.
     const probe = await probeInflightTurn(convId);
-    if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+    if (recoveryUnmountedRef.current || !stillMine()) return;
     if (
       expect &&
       probe.kind === "answer" &&
@@ -943,7 +982,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // the new one, or its reply would be skipped and the new one's written
       // under its prompt.
       const adopted = await reloadCanonical(convId);
-      if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+      if (recoveryUnmountedRef.current || !stillMine()) return;
       if (adopted !== "adopted") {
         // Its transcript never landed. Re-targeting now would attach the new
         // turn's replay to a transcript still ending in the OLD turn's
@@ -971,14 +1010,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       const persisted = await reconcileFromPersisted(convId, {
         requireTrailingAnswer: true,
       });
-      if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+      if (recoveryUnmountedRef.current || !stillMine()) return;
       if (persisted === "absent") {
         // The server says that turn is over and the database has no answer
         // for it: it ended before producing one. Show what a refresh would
         // show and stop chasing something that has finished — polling on
         // would hold the conversation busy for ever.
         await reloadCanonical(convId);
-        if (recoveryUnmountedRef.current || !chasingSuccessor(convId)) return;
+        if (recoveryUnmountedRef.current || !stillMine()) return;
         endSuccessorChase(convId);
         return;
       }
@@ -1029,6 +1068,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // wake up inside a LATER chain that had also reached gen 1, and act on it
     // with the old chain's assistant id.
     const gen = ++recoveryGenSeqRef.current;
+    bumpRecoveryEpoch(convId);
     recoveryOwnedRef.current.set(convId, {
       assistantId,
       gap,
@@ -1130,7 +1170,19 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // not the question — a reattach that ran a stream to its terminal
           // event has already let the handle go. Judge by the slot: no longer
           // needing settlement means the replay finished the turn.
-          if (!slotNeedsSettling(convId, assistantId, gap)) {
+          //
+          // And judge it by the shape it has NOW. A replacement replay can
+          // report missed events this chain never saw, and its finalizer
+          // cannot re-arm with that discovery because the ownership guard
+          // makes its settle return immediately. Testing only the shape we
+          // armed with would read the resulting done-and-empty slot as
+          // settled and release recovery without loading the answer.
+          const gapNow = slotNeedsSettling(convId, assistantId, gap)
+            ? gap
+            : slotNeedsSettling(convId, assistantId, true)
+              ? true
+              : null;
+          if (gapNow === null) {
             releaseRecovery(convId);
             return;
           }
@@ -1148,7 +1200,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // still owns a turn that may well be running, and a UI that hides
           // Stop and offers to clear the conversation would be lying.
           markConvStreaming(convId);
-          scheduleRecoveryRetry(convId, assistantId, gap, attempt + 1);
+          scheduleRecoveryRetry(convId, assistantId, gapNow, attempt + 1);
           return;
         }
         // Definitive: nothing in flight, nothing retained. Now a settle is
@@ -3399,7 +3451,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // the chain's monotonic generation, so a chain that was released and
     // re-armed reads as different rather than identical.
     recoveryToken: (convId: string) =>
-      recoveryOwnedRef.current.get(convId)?.gen ?? 0,
+      recoveryEpochRef.current.get(convId) ?? 0,
     nudgeRecovery,
     cancelRecovery,
     checkStreamLiveness,

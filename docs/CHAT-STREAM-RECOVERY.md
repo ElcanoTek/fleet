@@ -137,8 +137,11 @@ That binding matters. `reattachToConv` takes its own `/inflight` look, and
 between the two the recovered turn can finish and a queued successor start.
 Without an expected turn id it would attach to that successor and reuse the
 caller's still-open assistant slot, pouring one turn's replay into another
-turn's bubble. Callers with no particular turn in mind — the chase below, the
-queue follower — pass nothing and take whatever is running.
+turn's bubble. **The chase is bound too**: it carries the successor id the
+chain discovered, because two queued inputs can drain in quick succession and
+an unbound attach would take the later turn and replay its answer under the
+earlier one's committed prompt. Only the queue follower attaches unbound, and
+it stands down entirely while recovery owns the conversation.
 
 ## Chasing a successor
 
@@ -148,6 +151,13 @@ chain settles its own slot from Postgres, releases ownership and calls
 the same backoff and steady cadence — indefinitely, because a released chain
 is no longer swept by the liveness watchdog and nothing else would put that
 turn on screen without a focus event or a reload.
+
+When the server reports a live turn that is *not* the one being chased, the
+chase first reloads the canonical transcript — putting the finished turn's
+answer on screen — and only then re-targets to the new id. It re-targets only
+if that reload actually landed: the reload is bounded, and accepting its
+timeout as success would attach the new turn's replay to a transcript still
+ending in the old turn's prompt.
 
 The chase is tracked in its own map, registered **before** its first request,
 so three things can reach it: **Stop** (`cancelRecovery` drops it, so it stops
