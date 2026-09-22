@@ -226,6 +226,18 @@ provider a repeated failure. It describes the last attempt only: the resilience
 result carries the final error, not a per-attempt history, so the card never
 claims a number of expiries.
 
+A watchdog expiry that FOLLOWED a provider error is the provider's failure, not
+a silent model: a 429 or 5xx whose retry backoff outlasts the deadline leaves a
+cancellation wearing the watchdog's sentinel. The classifier recovers that
+status and hands it on as the round's provider error (#1590), so the `turn.retry`
+event (`status_code`, and the provider's own title instead of "Provider slow to
+start streaming"), the circuit-breaker record (`HTTP 429` rather than a generic
+`provider error`) and `fleet.provider_failover`'s `status` all tell the same
+story as the card. The class is unchanged — still a stream blip, one same-model
+retry then the fallback swap. Only a status the provider actually returned is
+carried: fantasy reports no status for a transport failure, and the events keep
+the watchdog's own wording there rather than inventing an HTTP code.
+
 **An expired provider prompt cache is a stream blip, not a rejection.** Google
 evicts the implicit prompt cache a long run has been riding on and answers the
 next step with a 400 `Cache content <id> is expired.` (INVALID_ARGUMENT),
