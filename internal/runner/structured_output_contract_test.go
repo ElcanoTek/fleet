@@ -34,7 +34,36 @@ func compactRunnerJSON(raw []byte) string {
 	return out.String()
 }
 
+// retainedTerminalStatus reports the status on the LAST frame of a finished
+// task's retained stream.
+//
+// It waits for that frame to be terminal. The callers get there by waiting on
+// the task ROW (and its notification), and the stream's terminal frame is
+// appended on its own path, which can land a moment later — so sampling once
+// could read the preceding `running` frame and fail a run that was perfectly
+// correct (observed in CI, not reproducible in 55 local runs). Waiting removes
+// the race without weakening the assertion: on timeout the last status seen is
+// returned, so a genuine regression still fails at the caller with the status
+// it actually found.
 func retainedTerminalStatus(t *testing.T, pool *Pool, taskID uuid.UUID) string {
+	t.Helper()
+	var status string
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status = lastRetainedStreamStatus(t, pool, taskID)
+		if status == "succeeded" || status == "failed" || status == "cancelled" {
+			return status
+		}
+		if time.Now().After(deadline) {
+			return status
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// lastRetainedStreamStatus decodes the status of the newest frame on the
+// task's retained stream.
+func lastRetainedStreamStatus(t *testing.T, pool *Pool, taskID uuid.UUID) string {
 	t.Helper()
 	stream, ok := pool.StreamRegistry().Lookup(taskID)
 	if !ok {
