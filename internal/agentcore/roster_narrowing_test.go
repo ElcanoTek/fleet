@@ -459,3 +459,22 @@ func TestNarrowedStandInLegacyNoteAndPlaceholderBatch(t *testing.T) {
 		t.Fatalf("a placeholder-only deal_ids list is not a batch, so its substitute stands in (%s); got %q", want, resp.Content)
 	}
 }
+
+// The stand-in mapping rides every later nudge too: a run that ends its round
+// before calling the stand-in is told again, by finish enforcement, which
+// registered tool discharges the declaration.
+func TestNarrowedStandInRepeatsInFinishEnforcement(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	o := newOrchStateForTest()
+	o.setNarrowedMCPRoster([]string{aliasUploadTool})
+	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: aliasInlineTool}}, nil); resp.IsError {
+		t.Fatalf("audit should pass: %s", resp.Content)
+	}
+	allowed, msgs := o.checkFinishEnforcement()
+	if allowed || len(msgs) == 0 {
+		t.Fatal("finish must be refused while the declaration is outstanding")
+	}
+	if want := aliasInlineTool + " → " + aliasUploadTool; !strings.Contains(strings.Join(msgs, " "), want) {
+		t.Fatalf("the finish nudge must name the stand-in (%s); got %q", want, msgs)
+	}
+}

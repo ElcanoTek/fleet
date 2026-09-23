@@ -673,6 +673,22 @@ func (o *orchestrationState) narrowedStandIn(tool, suffix string, batch bool) st
 	return best
 }
 
+// standInClause is the sentence every "execute the outstanding commitment"
+// instruction carries in a narrowed run whose declared tools are not all
+// registered — the confirm_audit confirmation, the finish-enforcement nudge
+// and the no-matching-commitment BLOCKED — naming the registered stand-in to
+// call. Without it a later nudge sends the model back to a declared tool that
+// answers "tool not found", and the run loops. "" when there is nothing to
+// name. Callers must hold o.mu.
+func (o *orchestrationState) standInClause() string {
+	notes := o.narrowedStandInNotes()
+	if len(notes) == 0 {
+		return ""
+	}
+	return " This run's tools are narrowed, and these declared tools are not in your tool list; call the " +
+		"registered stand-in instead, with the same record(s): " + strings.Join(notes, ", ") + "."
+}
+
 // legacyStandInNote is narrowedStandInNotes' entry for an outstanding legacy
 // commitment to suffix: "" when a registered tool carries suffix itself (the
 // declared name is callable), else "suffix → <registered tool>" for the lowest
@@ -1263,6 +1279,6 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		"call is genuinely required, re-run confirm_audit declaring it in typed critical_actions (tool + deal_id) — "+
 		"a re-audit of the same tool with the binding this call carried supersedes the declaration that refused it, "+
 		"provided nothing has executed under that declaration, so the stale entry will not stack — "+
-		"or abort via confirm_audit(success=false, user_visible_summary=...).",
-		toolName, target, strings.Join(o.outstandingCommitmentSummary(), "; "))
+		"or abort via confirm_audit(success=false, user_visible_summary=...).%s",
+		toolName, target, strings.Join(o.outstandingCommitmentSummary(), "; "), o.standInClause())
 }
