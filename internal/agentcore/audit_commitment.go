@@ -558,14 +558,44 @@ func (o *orchestrationState) unregisteredTypedActions(actions []criticalActionSt
 	return out
 }
 
-// unregisteredActionsRefusal is confirm_audit's answer to a typed declaration
-// naming tools a narrowed run did not register (unregisteredTypedActions).
-func unregisteredActionsRefusal(tools []string) string {
-	return fmt.Sprintf("Audit Rejected: critical_actions names %s, which this run cannot call. The run's MCP tools "+
+// unregisteredLegacyActions is unregisteredTypedActions for the legacy
+// free-text critical_actions_being_unblocked field: the critical suffixes its
+// declarations name (matchCriticalSuffix) that no tool the narrowed run
+// registered carries, compared by alias class (criticalAliasClassOf) — the
+// legacy commitment is suffix-scoped, so any registered tool of the class could
+// discharge it, and one outside every registered class never can. nil when the
+// roster is not narrowed. A declaration naming no critical suffix registers
+// nothing and is left to registerCommittedActions. Callers must hold o.mu.
+func (o *orchestrationState) unregisteredLegacyActions(declared []string) []string {
+	if o.narrowedMCPRoster == nil {
+		return nil
+	}
+	registered := make(map[string]bool, len(o.narrowedMCPRoster))
+	for tool := range o.narrowedMCPRoster {
+		if suffix := criticalSuffixFor(tool); suffix != "" {
+			registered[criticalAliasClassOf(suffix)] = true
+		}
+	}
+	var out []string
+	for _, decl := range declared {
+		suffix := matchCriticalSuffix(decl)
+		if suffix == "" || registered[criticalAliasClassOf(suffix)] || slices.Contains(out, suffix) {
+			continue
+		}
+		out = append(out, suffix)
+	}
+	return out
+}
+
+// unregisteredActionsRefusal is confirm_audit's answer to a declaration in
+// field naming tools a narrowed run did not register (unregisteredTypedActions,
+// unregisteredLegacyActions).
+func unregisteredActionsRefusal(field string, tools []string) string {
+	return fmt.Sprintf("Audit Rejected: %s names %s, which this run cannot call. The run's MCP tools "+
 		"are narrowed to the task's required tools, and a call to any other tool is answered \"tool not found\", "+
 		"so this approval could never be discharged. Declare only tools from your tool list and re-run "+
 		"confirm_audit; a tool the task needs belongs in its EXECUTION REQUIREMENTS required_tools.",
-		strings.Join(tools, ", "))
+		field, strings.Join(tools, ", "))
 }
 
 // registerCommittedActionsTyped records commitments from the typed

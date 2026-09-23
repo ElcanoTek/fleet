@@ -592,7 +592,7 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 					// A narrowed roster (#1603) refuses an approval for a tool
 					// the run cannot call, before anything registers.
 					if missing := orch.unregisteredTypedActions(input.CriticalActions); len(missing) > 0 {
-						return fantasy.NewTextErrorResponse(unregisteredActionsRefusal(missing) + orch.auditProtocolClause()), nil
+						return fantasy.NewTextErrorResponse(unregisteredActionsRefusal("critical_actions", missing) + orch.auditProtocolClause()), nil
 					}
 					if registered := orch.registerCommittedActionsTyped(input.CriticalActions); registered == 0 {
 						// Distinguish a MALFORMED critical declaration from an
@@ -619,6 +619,11 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 						}
 					}
 				} else {
+					// The legacy free-text form gets the same narrowed-roster
+					// refusal (#1603), by suffix class.
+					if missing := orch.unregisteredLegacyActions(input.CriticalActionsBeingUnblocked); len(missing) > 0 {
+						return fantasy.NewTextErrorResponse(unregisteredActionsRefusal(criticalActionsBeingUnblockedField, missing) + orch.auditProtocolClause()), nil
+					}
 					orch.registerCommittedActions(input.CriticalActionsBeingUnblocked)
 				}
 				orch.auditTerminalFailure = false

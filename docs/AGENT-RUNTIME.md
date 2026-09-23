@@ -667,8 +667,8 @@ Consequences worth stating plainly:
     explicit entry for every catalog server before the explore role's filter
     runs: the parent's own entry, or a deny entry when the parent has none. So
     no child sees a tool its parent cannot call.
-  - `confirm_audit` refuses a typed critical action naming an MCP tool the run
-    did not register, before registering anything, since nothing could
+  - `confirm_audit` refuses a critical action, typed or legacy, naming an MCP
+    tool the run did not register, before registering anything, since nothing could
     discharge that approval. The check reads the live roster
     (`recordNarrowedRoster`), refreshed at the first tool build and every
     mid-run MCP rebuild.

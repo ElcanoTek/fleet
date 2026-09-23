@@ -58,8 +58,8 @@ type RunConfig struct {
 	// registered name, with no keying-rule fallback, so one with no entry —
 	// including a `<server>_<account>` seat or a prefix-named server loaded
 	// mid-run — registers no MCP tools, where an absent entry normally means
-	// "allow all". confirm_audit then also refuses a typed critical action
-	// naming an MCP tool the run did not register. The value names the
+	// "allow all". confirm_audit then also refuses a critical action (typed,
+	// or legacy by suffix class) naming an MCP tool the run did not register. The value names the
 	// narrowing for the one-time `[roster] <value>: N mcp tools registered`
 	// session-log breadcrumb — the scheduled driver sets it to
 	// "required_tools_only" from the task's EXECUTION REQUIREMENTS. Native,

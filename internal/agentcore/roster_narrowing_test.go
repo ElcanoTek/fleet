@@ -334,3 +334,41 @@ func TestTypedAuditRosterCheckOnlyUnderNarrowing(t *testing.T) {
 		t.Fatalf("a bare suffix must get the full-name refusal; got %q", resp.Content)
 	}
 }
+
+// The legacy free-text form (critical_actions_being_unblocked) gets the same
+// refusal under a narrowed roster, by critical-suffix class: a declaration
+// whose suffix no registered tool carries is refused and registers nothing,
+// while one naming a registered tool's suffix is accepted as before. Without
+// the check the curated deal was "Audit Confirmed … Execute exactly those
+// call(s) now" while the only registered critical tool stayed blocked.
+func TestLegacyAuditRosterCheckUnderNarrowing(t *testing.T) {
+	narrowed := func() *orchestrationState {
+		o := newOrchStateForTest()
+		o.setNarrowedMCPRoster([]string{"mcp_dsp_create_deal"})
+		return o
+	}
+
+	refused := narrowed()
+	resp := confirmAudit(t, refused, nil, []string{"mcp_dsp_create_curated_deal: curated deal for the spring campaign"})
+	if !resp.IsError || !strings.Contains(resp.Content, "critical_actions_being_unblocked names create_curated_deal") ||
+		!strings.Contains(resp.Content, "cannot call") {
+		t.Fatalf("a legacy declaration outside the narrowed roster must be refused, naming its suffix; got %q", resp.Content)
+	}
+	if len(refused.committedCriticalActions) != 0 || refused.auditConfirmed || refused.selfAuditConfirmedOnce {
+		t.Fatalf("the refusal must register and grant nothing: committed=%v confirmed=%v", refused.committedCriticalActions, refused.auditConfirmed)
+	}
+
+	accepted := narrowed()
+	if resp := confirmAudit(t, accepted, nil, []string{"mcp_dsp_create_deal: deal for the spring campaign"}); resp.IsError {
+		t.Fatalf("a legacy declaration of a registered tool must be accepted; got %q", resp.Content)
+	}
+	if got := accepted.committedCriticalActions["create_deal"]; got != 1 || !accepted.auditConfirmed {
+		t.Fatalf("accepted legacy audit: committed create_deal=%d confirmed=%v, want 1 and true", got, accepted.auditConfirmed)
+	}
+
+	// Without a narrowing the legacy path is unchanged.
+	open := newOrchStateForTest()
+	if resp := confirmAudit(t, open, nil, []string{"mcp_dsp_create_curated_deal: curated deal"}); resp.IsError {
+		t.Fatalf("un-narrowed legacy audit refused: %s", resp.Content)
+	}
+}

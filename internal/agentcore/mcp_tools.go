@@ -64,7 +64,8 @@ var toolCallTimeout = 5 * time.Minute
 // means fail-closed: an Optional base gates its variant seats too.
 //
 // Callers, all of which MUST route through here rather than an exact lookup:
-// mcpAllowlist.toolsFor (Gate-2), optionalServerFor / OptionalServerFor
+// mcpAllowlist.toolsFor (Gate-2 — except under a narrowed roster, whose
+// exhaustive allowlist is looked up exactly, see gateEntry), optionalServerFor / OptionalServerFor
 // (Gate-1), and — via OptionalServerForToolName — internal/agent's
 // system-prompt roster filter. (The per-task credential allowlist's
 // registered-name projection, permittedRegisteredNames, and the persona

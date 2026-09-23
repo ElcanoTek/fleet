@@ -174,9 +174,11 @@ EXECUTION REQUIREMENTS (JSON):
   Narrowing only removes; it never grants a tool the allowlist denies. On the
   local MCP path the check reads the advertised catalog, so a required tool the
   manifest allowlist denies passes it and is still not registered.
-- **Audit declarations.** `confirm_audit` refuses a typed `critical_actions`
-  entry that names an MCP tool the run did not register, and that audit
-  registers nothing. The model re-audits with tools from its list. Accepting
+- **Audit declarations.** `confirm_audit` refuses a declaration that names an
+  MCP tool the run did not register, and that audit registers nothing. This
+  covers typed `critical_actions` entries, matched by exact name, and legacy
+  `critical_actions_being_unblocked` text, whose critical suffix must belong to
+  a registered tool's alias class. The model re-audits with tools from its list. Accepting
   the declaration would create an approval nothing could discharge: the call
   answers `tool not found`, so finish would be refused until the run failed.
 - **Removed tools.** A call to a removed tool is answered `tool not found`.
