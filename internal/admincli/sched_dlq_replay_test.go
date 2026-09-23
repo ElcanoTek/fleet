@@ -15,7 +15,7 @@ import (
 )
 
 // `fleet sched dlq replay` refuses a prompt with a malformed EXECUTION
-// REQUIREMENTS line (it would dead-letter again, exit 6), and --prompt-file
+// REQUIREMENTS line (it would dead-letter again, exit 1: a refused write), and --prompt-file
 // replays the same row with a corrected prompt (ADR-0073). Gated on
 // DATABASE_URL, the sched-suite convention.
 func TestSchedDLQReplayRefusesMalformedAndTakesAPromptFile_DB(t *testing.T) {
@@ -56,8 +56,8 @@ func TestSchedDLQReplayRefusesMalformedAndTakesAPromptFile_DB(t *testing.T) {
 	}
 	id := task.ID.String()
 
-	if code := schedDLQReplay([]string{id}); code != 6 {
-		t.Fatalf("replay of a malformed prompt exit = %d, want 6", code)
+	if code := schedDLQReplay([]string{id}); code != 1 {
+		t.Fatalf("replay of a malformed prompt exit = %d, want 1", code)
 	}
 	if got, _ := st.GetTask(task.ID); got == nil || got.Status != models.TaskStatusDeadLettered {
 		t.Fatalf("a refused replay must leave the row dead-lettered, got %+v", got)

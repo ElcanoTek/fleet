@@ -164,7 +164,7 @@ func schedDLQReplay(argv []string) int {
 			return errf(4, "task %s is not dead-lettered (only dead-lettered tasks can be replayed)", taskID)
 		}
 		if errors.Is(err, storage.ErrReplayMalformedRequirements) {
-			return errf(6, "task %s: %v; replay it with a corrected prompt: fleet sched dlq replay --prompt-file <file> %s", taskID, err, taskID)
+			return errf(1, "task %s: %v; replay it with a corrected prompt: fleet sched dlq replay --prompt-file <file> %s", taskID, err, taskID)
 		}
 		return errf(5, "replay task: %v", err)
 	}
@@ -185,6 +185,11 @@ const maxReplayPromptBytes = 1 << 20
 // every successor, so one the HTTP path would refuse must not enter here
 // either: the task would become one that cannot be edited or cloned.
 const replayPromptMaxLength = 100000
+
+// replayPromptMinLength is the matching lower bound (handlers.taskPromptMinLength).
+// It applies only to a replacement: a legacy task's own short prompt still
+// replays unchanged.
+const replayPromptMinLength = 3
 
 // readReplayPrompt reads a --prompt-file replacement ("-" = stdin), refusing an
 // empty or oversized one.
@@ -208,6 +213,9 @@ func readReplayPrompt(path string) (string, error) {
 	prompt := strings.TrimSpace(string(raw))
 	if prompt == "" {
 		return "", fmt.Errorf("--prompt-file is empty; omit it to replay with the task's own prompt")
+	}
+	if len(prompt) < replayPromptMinLength {
+		return "", fmt.Errorf("--prompt-file prompt must be at least %d characters, the same limit as creating or editing a task", replayPromptMinLength)
 	}
 	if len(prompt) > replayPromptMaxLength {
 		return "", fmt.Errorf("--prompt-file prompt cannot exceed %d characters, the same limit as creating or editing a task", replayPromptMaxLength)

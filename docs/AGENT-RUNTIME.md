@@ -1187,7 +1187,8 @@ fleet sched dlq replay --prompt-file <file> <task_id>   # the same, with a corre
 ```
 
 A replay whose prompt has a malformed EXECUTION REQUIREMENTS line is refused
-(exit 6), because it would dead-letter again. `--prompt-file` replaces the prompt
+(exit 1, a refused write), because it would dead-letter again. `--prompt-file`
+replaces the prompt
 (validated) in the same reset, which is how a chain parked by such a line resumes
 with its task memory (ADR-0073).
 

@@ -1330,7 +1330,7 @@ func prevalidateStagedTaskPrompt(toolName, rawInput string) error {
 	// validates, and the card and the executor report them.
 	_ = json.Unmarshal([]byte(rawInput), &args)
 	if err := models.ValidateExecutionRequirements(args.Prompt); err != nil {
-		return fmt.Errorf("%w. Nothing was staged for approval: fix the prompt's EXECUTION REQUIREMENTS line and call %s again", err, toolName)
+		return &agentcore.StageRefusedError{Reason: fmt.Sprintf("%v. Nothing was staged for approval: fix the prompt's EXECUTION REQUIREMENTS line and call %s again", err, toolName)}
 	}
 	return nil
 }

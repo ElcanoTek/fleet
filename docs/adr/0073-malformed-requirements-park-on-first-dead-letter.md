@@ -59,7 +59,7 @@ nothing that could have gone differently in between.
 3. **Recover by replaying with a corrected prompt.** A plain replay would rerun
    the malformed prompt and dead-letter again, so
    `ReplayDeadLetteredTaskWithPrompt` refuses it with the validator's message,
-   and `fleet sched dlq replay` exits 6.
+   and `fleet sched dlq replay` exits 1 (a refused write).
    - `fleet sched dlq replay --prompt-file <file> <id>` replaces the prompt
      (validated) and replays the same row. The schedule, the task memory and
      the lineage continue, and the successor carries the corrected prompt.

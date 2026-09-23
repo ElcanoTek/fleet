@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -20,6 +22,10 @@ func TestStageRefusesAMalformedTaskPromptBeforeStaging(t *testing.T) {
 		id, err := (&approvalStager{}).Stage(tool, "call-1", bad)
 		if err == nil || id != "" {
 			t.Fatalf("%s: staged a malformed prompt (id=%q)", tool, id)
+		}
+		var refused *agentcore.StageRefusedError
+		if !errors.As(err, &refused) {
+			t.Fatalf("%s: the refusal is not a StageRefusedError, so the gate would report it as APPROVAL_REQUIRED: %v", tool, err)
 		}
 		for _, want := range []string{`invalid server or tool identifier "fast_io + fastio_helpers" in mcp_servers[0]`, "Nothing was staged", tool} {
 			if !strings.Contains(err.Error(), want) {

@@ -67,7 +67,7 @@ func TestSchedDLQListRejectsBadLimit(t *testing.T) {
 }
 
 // TestReadReplayPromptHoldsTheTaskPromptBound — a --prompt-file replacement is
-// held to the same length limit as creating or editing a task, so replay cannot
+// held to the same length limits as creating or editing a task, so replay cannot
 // install a prompt the HTTP path would refuse; the limit itself is accepted.
 func TestReadReplayPromptHoldsTheTaskPromptBound(t *testing.T) {
 	dir := t.TempDir()
@@ -85,5 +85,12 @@ func TestReadReplayPromptHoldsTheTaskPromptBound(t *testing.T) {
 	_, err := readReplayPrompt(write("over.txt", strings.Repeat("a", replayPromptMaxLength+1)))
 	if err == nil || !strings.Contains(err.Error(), "cannot exceed") {
 		t.Fatalf("an over-limit prompt was accepted or refused for the wrong reason: %v", err)
+	}
+	_, err = readReplayPrompt(write("short.txt", " ab \n"))
+	if err == nil || !strings.Contains(err.Error(), "at least 3") {
+		t.Fatalf("a too-short prompt was accepted or refused for the wrong reason: %v", err)
+	}
+	if _, err := readReplayPrompt(write("min.txt", "abc")); err != nil {
+		t.Fatalf("a prompt at the minimum was refused: %v", err)
 	}
 }
