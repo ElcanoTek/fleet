@@ -7,6 +7,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
 // The dispatch-level Gate-2 allowlist of a task (taskRosterAllowlist, #1603).
@@ -18,6 +19,17 @@ func rosterAllowlistRunner() *Runner {
 			"fast_io": {},
 		}
 	}}
+}
+
+// parsedRequirements reads a declaration through the dispatch parser, the
+// shape a real run sees.
+func parsedRequirements(t *testing.T, body string) *executionRequirements {
+	t.Helper()
+	req, err := parseExecutionRequirements(models.ExecutionRequirementsMarker + "\n" + body)
+	if err != nil || req == nil {
+		t.Fatalf("parse %s: %+v, %v", body, req, err)
+	}
+	return req
 }
 
 func remoteCRMOverlay() *agent.RemoteMCPOverlay {
@@ -34,7 +46,7 @@ func remoteCRMOverlay() *agent.RemoteMCPOverlay {
 func TestTaskRosterAllowlistWithoutTheKeyIsTheManifestAllowlist(t *testing.T) {
 	r := rosterAllowlistRunner()
 	want := r.taskMCPToolAllowlist()
-	req := &executionRequirements{Tools: []string{"mcp_pages_get_page_data", "mcp_remote_crm_search"}}
+	req := parsedRequirements(t, `{"required_tools":["mcp_pages_get_page_data","mcp_remote_crm_search"]}`)
 	binding := taskMCPBinding{catalog: pagesCatalog()}
 	for _, tc := range []struct {
 		name    string
@@ -58,7 +70,7 @@ func TestTaskRosterAllowlistWithoutTheKeyIsTheManifestAllowlist(t *testing.T) {
 // at all and register nothing, although checkTools accepted the required tool.
 func TestTaskRosterAllowlistNarrowsTheRemoteOverlay(t *testing.T) {
 	r := rosterAllowlistRunner()
-	req := &executionRequirements{Tools: []string{"mcp_pages_get_page_data", "mcp_remote_crm_search"}}
+	req := parsedRequirements(t, `{"required_tools":["mcp_pages_get_page_data","mcp_remote_crm_search"],"roster":"required_tools_only"}`)
 	got := r.taskRosterAllowlist(req, rosterRequiredToolsOnly, taskMCPBinding{catalog: pagesCatalog()}, remoteCRMOverlay())
 	deny := []string{rosterNarrowingDeniesAll}
 	want := agentcore.MCPAllowlist{
@@ -75,7 +87,7 @@ func TestTaskRosterAllowlistNarrowsTheRemoteOverlay(t *testing.T) {
 
 	// The narrowing still intersects with the manifest allowlist: a required
 	// tool the manifest denies stays denied.
-	denied := &executionRequirements{Tools: []string{"mcp_pages_deploy_page_upload"}}
+	denied := parsedRequirements(t, `{"required_tools":["mcp_pages_deploy_page_upload"]}`)
 	if got := r.taskRosterAllowlist(denied, rosterRequiredToolsOnly, taskMCPBinding{catalog: pagesCatalog()}, nil); !reflect.DeepEqual(got["pages"], deny) {
 		t.Fatalf("a tool the manifest denies was narrowed in: pages = %v", got["pages"])
 	}
