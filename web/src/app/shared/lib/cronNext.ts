@@ -3,12 +3,13 @@
 // "— next run Mon, Jul 13" before the task exists (the backend only computes
 // next_run for already-created tasks).
 //
-// Honest scope: this is a PREVIEW, not the scheduler. It evaluates in the
-// browser's local timezone, while the backend evaluates recurrence in the
-// server's default timezone — so near field boundaries the previewed date can
-// differ from the real first run. The echo therefore shows a date (no time of
-// day) to keep the blast radius of a timezone mismatch small, and callers must
-// treat null as "can't preview" and simply omit the suffix. Only the numeric
+// Honest scope: this is a PREVIEW, not the scheduler. Given a `timeZone` it
+// evaluates in that IANA zone — the task's own, which is what the backend
+// evaluates recurrence in — and otherwise in the browser's local timezone.
+// Wall-clock arithmetic still rides on the browser's Date, so around a DST
+// transition the previewed date can differ from the real first run; the echo
+// therefore shows a date (no time of day) to keep that blast radius small, and
+// callers must treat null as "can't preview" and simply omit the suffix. Only the numeric
 // 5-field subset the form validator accepts is supported; anything else
 // (named tokens, 6-field expressions, out-of-range values) returns null.
 
@@ -96,10 +97,69 @@ function dayMatches(s: CronSchedule, date: Date): boolean {
   return true;
 }
 
-// nextCronOccurrence returns the first local-time occurrence strictly after
-// `from`, or null when the expression can't be previewed (unsupported syntax)
-// or nothing fires within the next 366 days.
-export function nextCronOccurrence(expr: string, from: Date = new Date()): Date | null {
+// wallClockParts reads the calendar fields `at` shows in an IANA zone.
+function wallClockParts(at: Date, timeZone: string): number[] | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    }).formatToParts(at);
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    const fields = [get("year"), get("month"), get("day"), get("hour"), get("minute"), get("second")];
+    return fields.every(Number.isFinite) ? fields : null;
+  } catch {
+    return null;
+  }
+}
+
+// zoneOffsetMs is how far the zone's wall clock runs ahead of UTC at `at`.
+function zoneOffsetMs(at: Date, timeZone: string): number | null {
+  const f = wallClockParts(at, timeZone);
+  if (!f) return null;
+  return Date.UTC(f[0], f[1] - 1, f[2], f[3], f[4], f[5]) - Math.floor(at.getTime() / 1000) * 1000;
+}
+
+// nextCronOccurrence returns the first occurrence strictly after `from` — in
+// `timeZone` when given, else in local time — or null when the expression
+// can't be previewed (unsupported syntax, unknown zone) or nothing fires
+// within the next 366 days.
+export function nextCronOccurrence(
+  expr: string,
+  from: Date = new Date(),
+  timeZone?: string,
+): Date | null {
+  if (!timeZone) return nextLocalOccurrence(expr, from);
+  // Re-express `from` as a local Date carrying the zone's wall-clock fields,
+  // run the local scan, then map the resulting wall-clock back to an instant.
+  const f = wallClockParts(from, timeZone);
+  if (!f) return null;
+  const wall = nextLocalOccurrence(expr, new Date(f[0], f[1] - 1, f[2], f[3], f[4], f[5]));
+  if (!wall) return null;
+  const wallAsUTC = Date.UTC(
+    wall.getFullYear(),
+    wall.getMonth(),
+    wall.getDate(),
+    wall.getHours(),
+    wall.getMinutes(),
+  );
+  // Two passes settle the offset for the target instant (it can differ from
+  // the offset at `from` across a DST change).
+  let instant = wallAsUTC;
+  for (let i = 0; i < 2; i++) {
+    const offset = zoneOffsetMs(new Date(instant), timeZone);
+    if (offset === null) return null;
+    instant = wallAsUTC - offset;
+  }
+  return new Date(instant);
+}
+
+function nextLocalOccurrence(expr: string, from: Date): Date | null {
   const s = parseCronExpression(expr);
   if (!s) return null;
 
@@ -139,7 +199,14 @@ export function nextCronOccurrence(expr: string, from: Date = new Date()): Date 
 }
 
 // formatNextRun renders an occurrence the way the schedule echo shows it:
-// "Mon, Jul 13" — date only (see the timezone note above).
-export function formatNextRun(date: Date): string {
-  return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+// "Mon, Jul 13" — date only (see the timezone note above), read in `timeZone`
+// when given so the date matches the zone the schedule fires in.
+export function formatNextRun(date: Date, timeZone?: string): string {
+  const opts: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric" };
+  if (timeZone) opts.timeZone = timeZone;
+  try {
+    return date.toLocaleDateString("en-US", opts);
+  } catch {
+    return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  }
 }

@@ -10,6 +10,12 @@ import { buildPromptWithRecipients, splitPromptRecipients } from "./taskEmailBlo
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { Icon } from "@/app/shared/ui/Icon";
 import { nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
+import {
+  browserTimeZone,
+  formatTimeZoneLabel,
+  isValidTimeZone,
+  timeZoneOptions,
+} from "@/app/shared/lib/timezones";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
@@ -210,6 +216,10 @@ function taskToFormValues(task: Task | null) {
     scheduledDate,
     scheduledTime,
     recurrence: rec,
+    // The zone the repeat fires in: an edited task keeps its stored zone (a
+    // task created before the form sent one is on the server default, usually
+    // UTC, and the picker says so); a new task starts in the author's own.
+    timezone: task?.timezone?.trim() || browserTimeZone(),
     repeatEditor: (rec && !parsed ? "cron" : "simple") as RepeatEditor,
     endMode: (task?.recurrence_until
       ? "date"
@@ -387,6 +397,8 @@ export function TaskCreateModal({
   const [scheduledDate, setScheduledDate] = useState(init.scheduledDate);
   const [scheduledTime, setScheduledTime] = useState(init.scheduledTime);
   const [recurrence, setRecurrence] = useState(init.recurrence);
+  const [timezone, setTimezone] = useState(init.timezone);
+  const [viewerTimeZone] = useState(browserTimeZone);
   const [repeatEditor, setRepeatEditor] = useState<RepeatEditor>(init.repeatEditor);
   const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>(init.simpleFrequency);
   const [simpleTime, setSimpleTime] = useState(init.simpleTime);
@@ -592,6 +604,7 @@ export function TaskCreateModal({
     scheduledDate,
     scheduledTime,
     recurrence,
+    timezone,
     endMode,
     endDate,
     endCount,
@@ -625,6 +638,7 @@ export function TaskCreateModal({
     init.scheduledDate,
     init.scheduledTime,
     init.recurrence,
+    init.timezone,
     init.endMode,
     init.endDate,
     init.endCount,
@@ -665,6 +679,7 @@ export function TaskCreateModal({
     setScheduledDate("");
     setScheduledTime("09:00");
     setRecurrence("");
+    setTimezone(browserTimeZone());
     setEndMode("never");
     setEndDate("");
     setEndCount("");
@@ -763,6 +778,9 @@ export function TaskCreateModal({
     const templateRecurrence = t.recurrence ?? "";
     const parsedSchedule = parseSimpleSchedule(templateRecurrence);
     setRecurrence(templateRecurrence);
+    // A template may pin the zone its schedule is written for; otherwise the
+    // author's own zone, same as a blank form.
+    setTimezone(t.timezone && isValidTimeZone(t.timezone) ? t.timezone : browserTimeZone());
     setRepeatEditor(templateRecurrence && !parsedSchedule ? "cron" : "simple");
     if (parsedSchedule) {
       setSimpleFrequency(parsedSchedule.frequency);
@@ -902,7 +920,7 @@ export function TaskCreateModal({
   // ── Derived display state ─────────────────────────────────────────────────
 
   const cronDescription = describeCronExpression(recurrence);
-  const cronNext = cronDescription ? nextCronOccurrence(recurrence) : null;
+  const cronNext = cronDescription ? nextCronOccurrence(recurrence, new Date(), timezone) : null;
 
   // The {variables} the picked template still needs from the user (built-ins
   // never appear — they substitute silently at apply time).
@@ -1057,6 +1075,9 @@ export function TaskCreateModal({
     }
     if (scheduleMode === "repeat" && recurrence.trim()) {
       taskData.recurrence = recurrence.trim();
+      // Always explicit: omitted, the server would evaluate the cron in its
+      // default zone (usually UTC), not the one the echo shows the author.
+      if (timezone) taskData.timezone = timezone;
       // End-of-day local time so "ends on July 31" includes July 31's run.
       if (endMode === "date" && endDate) {
         taskData.recurrence_until = new Date(`${endDate}T23:59:59`).toISOString();
@@ -1777,7 +1798,7 @@ export function TaskCreateModal({
                       </div>
                     ) : (
                       <p className="task-schedule-caption">
-                        Runs once at the chosen time, in your local timezone.
+                        Runs once at the chosen time, in your time zone ({viewerTimeZone}).
                       </p>
                     )}
                   </div>
@@ -1938,6 +1959,28 @@ export function TaskCreateModal({
                         ))}
                       </div>
                     ) : null}
+                    <div className="simple-schedule-grid" data-testid="repeat-timezone">
+                      <label className="task-schedule-field">
+                        <span>Time zone</span>
+                        <select
+                          aria-label="Repeat time zone"
+                          aria-describedby={timezone !== viewerTimeZone ? "repeat-timezone-hint" : undefined}
+                          value={timezone}
+                          onChange={(e) => setTimezone(e.target.value)}
+                        >
+                          {timeZoneOptions(viewerTimeZone, timezone).map((zone) => (
+                            <option key={zone} value={zone}>
+                              {zone === viewerTimeZone ? `${zone} (your time zone)` : zone}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    {timezone !== viewerTimeZone ? (
+                      <p className="field-hint" id="repeat-timezone-hint" data-testid="repeat-timezone-hint">
+                        Times above are in {timezone}, not your own time zone ({viewerTimeZone}).
+                      </p>
+                    ) : null}
                     {!errors.recurrence && cronDescription ? (
                       <div className="task-cron-echo" id="recurrence-echo" aria-live="polite">
                         <svg
@@ -1954,8 +1997,10 @@ export function TaskCreateModal({
                           <path d="M5 12l5 5L20 6" />
                         </svg>
                         <span>
-                          <strong>{cronNext ? `Next run ${formatNextRun(cronNext)}` : "Schedule ready"}</strong>
-                          <span>{cronDescription} · local time</span>
+                          <strong>{cronNext ? `Next run ${formatNextRun(cronNext, timezone)}` : "Schedule ready"}</strong>
+                          <span>
+                            {cronDescription} · {formatTimeZoneLabel(timezone)}
+                          </span>
                         </span>
                       </div>
                     ) : null}

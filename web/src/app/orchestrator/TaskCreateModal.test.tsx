@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import { TaskCreateModal, normalizeRunIfTimeout } from "./TaskCreateModal";
 import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { buildPromptWithRecipients } from "./taskEmailBlock";
+import { browserTimeZone } from "@/app/shared/lib/timezones";
 import {
   DEFAULT_MODEL,
   DEFAULT_TASK_FALLBACK_MODEL,
@@ -260,6 +261,41 @@ describe("TaskCreateModal — schedule modes", () => {
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({ recurrence: "30 13 * * 1,3" });
+  });
+
+  it("sends the author's own time zone with a repeat and names it in the echo", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    const zone = browserTimeZone();
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    expect(screen.getByLabelText("Repeat time zone")).toHaveValue(zone);
+    // The echo names the real zone instead of an ambiguous "local time".
+    expect(screen.queryByText(/local time/)).not.toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`· ${zone.replace(/[/+]/g, "\\$&")}`))).toBeInTheDocument();
+    expect(screen.queryByTestId("repeat-timezone-hint")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({ recurrence: "0 9 * * 1-5", timezone: zone });
+  });
+
+  it("an edited task keeps its stored zone and flags a zone other than the viewer's", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    const other = browserTimeZone() === "Asia/Tokyo" ? "America/New_York" : "Asia/Tokyo";
+    renderModal({
+      editTask: { ...baseEdit, recurrence: "0 8 * * 1-5", timezone: other },
+      onUpdated: vi.fn(),
+    });
+    expect(screen.getByLabelText("Repeat time zone")).toHaveValue(other);
+    expect(screen.getByTestId("repeat-timezone-hint")).toHaveTextContent(`Times above are in ${other}`);
+
+    // Switching to UTC is an edit the PUT carries.
+    fireEvent.change(screen.getByLabelText("Repeat time zone"), { target: { value: "UTC" } });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(await screen.findByTestId("edit-scope-definition"));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    expect(updateTask.mock.calls[0][1]).toMatchObject({ recurrence: "0 8 * * 1-5", timezone: "UTC" });
   });
 
   it("hydrates the friendly controls from a supported multi-day cron expression", () => {

@@ -79,3 +79,38 @@ describe("formatNextRun", () => {
     expect(formatNextRun(new Date(2026, 6, 13))).toBe("Mon, Jul 13");
   });
 });
+
+describe("nextCronOccurrence in a named time zone", () => {
+  // 2026-09-23 12:00 UTC = 08:00 EDT, a Wednesday.
+  const NOON_UTC = new Date(Date.UTC(2026, 8, 23, 12, 0, 0));
+
+  it("fires at the zone's wall clock, not UTC's", () => {
+    const next = nextCronOccurrence("0 8 * * 1-5", NOON_UTC, "America/New_York");
+    // Next weekday 08:00 EDT is Thu Sep 24, 12:00 UTC.
+    expect(next!.toISOString()).toBe("2026-09-24T12:00:00.000Z");
+    expect(formatNextRun(next!, "America/New_York")).toBe("Thu, Sep 24");
+  });
+
+  it("UTC evaluates in UTC", () => {
+    const next = nextCronOccurrence("0 8 * * 1-5", NOON_UTC, "UTC");
+    expect(next!.toISOString()).toBe("2026-09-24T08:00:00.000Z");
+  });
+
+  it("uses the target date's offset across a DST change", () => {
+    // New York leaves DST on 2026-11-01: 08:00 EST is 13:00 UTC.
+    const from = new Date(Date.UTC(2026, 9, 31, 20, 0, 0));
+    const next = nextCronOccurrence("0 8 * * *", from, "America/New_York");
+    expect(next!.toISOString()).toBe("2026-11-01T13:00:00.000Z");
+  });
+
+  it("the zone's date decides the day, even when UTC is already tomorrow", () => {
+    // 2026-09-24 02:00 UTC is still Wed Sep 23, 22:00 in New York.
+    const from = new Date(Date.UTC(2026, 8, 24, 2, 0, 0));
+    const next = nextCronOccurrence("30 23 * * 3", from, "America/New_York");
+    expect(next!.toISOString()).toBe("2026-09-24T03:30:00.000Z");
+  });
+
+  it("returns null for an unknown zone", () => {
+    expect(nextCronOccurrence("0 8 * * *", NOON_UTC, "Mars/Olympus_Mons")).toBeNull();
+  });
+});
