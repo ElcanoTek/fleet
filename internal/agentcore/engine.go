@@ -122,6 +122,10 @@ type engine struct {
 	// (a swapped run must not keep summarizing on a model that just failed or
 	// is circuit-open). nil until Run sets it; readers fall back to model.
 	activeModel fantasy.LanguageModel
+	// maxCompletionTokens is the run's per-call completion allowance, which the
+	// in-round context guard reserves out of the window; the resend checkpoint's
+	// window cap reserves the same (#1600). 0 means the default allowance.
+	maxCompletionTokens int
 
 	// usageReporter, when set, is called after each step with the run's
 	// accumulated usage so a driver can ship it out-of-band to an external
@@ -989,14 +993,23 @@ func (e *engine) effectiveResendBudget(budget int) int {
 	return threshold
 }
 
-// resendWindowLimit is the resent size at which the active model's window
-// pressure applies, or 0 when the window is unknown.
+// resendWindowLimit is the largest resent size the checkpoint may wait for on
+// the active model, or 0 when the window is unknown: the lower of the
+// window-pressure point and the input allowance the in-round context guard
+// (modelContextBudgetStep) enforces — the window minus the SAME completion and
+// provider reserves contextAccounting takes. Past either, the round is reduced
+// or refused before StopWhen could observe the threshold.
 func (e *engine) resendWindowLimit() int {
 	window := contextWindowForActiveModel(e.currentModel())
 	if window <= 0 {
 		return 0
 	}
-	return int(float64(window) * contextCompactionThreshold(e.envPrefix))
+	limit := int(float64(window) * contextCompactionThreshold(e.envPrefix))
+	acct := contextAccounting(modelContextPrefixBudget{}, e.maxCompletionTokens, window)
+	if allowance := window - acct.completionTokens - acct.providerTokens; allowance < limit {
+		limit = allowance
+	}
+	return limit
 }
 
 // resendFloorCrowdsBudget reports whether the floor rule applies: the stable

@@ -340,7 +340,7 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	}
 
 	// On a window too small for floor + budget, the threshold stops at the
-	// window-pressure point (window × the compaction threshold) instead of a
+	// largest prompt the run can actually send (see resendWindowLimit) instead of a
 	// checkpoint the in-round context guard would never let the run reach —
 	// and never drops below the plain budget.
 	recordContextMax("cp-floor-128k", 128_000)
@@ -348,8 +348,13 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	narrow.envPrefix = CanonicalEnvPrefix
 	narrow.requireCompactionOptIn = true
 	narrow.noteResendFloor(usage(50_000, 0))
-	if got, want := narrow.effectiveResendBudget(budget), int(128_000*defaultContextCompactionThreshold); got != want {
-		t.Fatalf("128K window, 50K floor: effective = %d, want the window-pressure cap %d (not floor+budget %d)", got, want, 50_000+budget)
+	// The cap is the lower of the pressure point and the input allowance the
+	// in-round guard enforces (window − completion − provider reserve): on a
+	// 128K window with the default completion allowance that allowance is the
+	// binding one, 128000 − 16384 − 6400 = 105216.
+	allowance := 128_000 - DefaultMaxCompletionTokens - max(innerProviderReserveMinTokens, 128_000/innerProviderReserveDivisor)
+	if got, want := narrow.effectiveResendBudget(budget), min(int(128_000*defaultContextCompactionThreshold), allowance); got != want || want != allowance {
+		t.Fatalf("128K window, 50K floor: effective = %d, want the inner guard's input allowance %d (not floor+budget %d)", got, want, 50_000+budget)
 	}
 	recordContextMax("cp-floor-64k", 64_000)
 	tiny := newMockEngine(t, &namedMockModel{name: "cp-floor-64k"})

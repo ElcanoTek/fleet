@@ -429,6 +429,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	}
 
 	maxTokens := runMaxCompletionTokens(cfg)
+	eng.maxCompletionTokens = int(maxTokens)
 
 	optIn := cfg.Selection.OptInSet()
 	hints := runRemediationHints(cfg)
