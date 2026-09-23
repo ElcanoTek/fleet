@@ -1805,7 +1805,7 @@ func (s *Storage) ReplayDeadLetteredTaskWithPrompt(ctx context.Context, taskID u
 	// Recurrence spawn credit (ADR-0070): re-arm iff parked OR still unclaimed.
 	// The parked stamp is the chain-specific durable signal — no successor
 	// pointer or lineage walk. Always clear recurrence_parked_at (and its
-	// reason, migration 072) on replay.
+	// reason, migration 073) on replay.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tasks SET error_analysis = NULL,
 		    recurrence_spawned = CASE
@@ -1951,7 +1951,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// with a corrected prompt resumes the chain with its task memory.
 	//
 	// The reason is persisted with the stamp (recurrence_parked_reason,
-	// migration 072) and copied onto the caller's task, so the dead-letter
+	// migration 073) and copied onto the caller's task, so the dead-letter
 	// notification and the Operations Center can say the schedule stopped and
 	// why, instead of only the log.
 	if current.Status == models.TaskStatusDeadLettered {

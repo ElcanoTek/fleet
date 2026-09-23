@@ -30,7 +30,7 @@ does.
   on the dead-lettered occurrence's prompt before the predecessor check, and
   parks at once on a failure.
 - **Visibility.** The park reason is stored with the stamp
-  (`recurrence_parked_reason`, migration 072). The two-strike park records one
+  (`recurrence_parked_reason`, migration 073). The two-strike park records one
   too.
   - The dead-letter notification's message reads "Schedule stopped: <reason>".
     For a malformed line that is the validator's message, naming the field,

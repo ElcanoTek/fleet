@@ -44,7 +44,7 @@ nothing that could have gone differently in between.
    `storage.scheduleNextRecurrence`, a dead-lettered occurrence whose prompt
    fails that validation parks at once, with no successor. It gets the same
    `recurrence_spawned = TRUE` + `recurrence_parked_at` settlement as the
-   two-strike breaker, plus `recurrence_parked_reason` (migration 072), the
+   two-strike breaker, plus `recurrence_parked_reason` (migration 073), the
    validation error in words the owner can act on.
    - The dead-letter write returns the reason to the runner. The failure
      notification then carries "Schedule stopped: <reason>" in its message

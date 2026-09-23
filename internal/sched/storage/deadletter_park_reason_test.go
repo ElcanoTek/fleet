@@ -17,7 +17,7 @@ import (
 const malformedParkPrompt = "Refresh the page.\n" + models.ExecutionRequirementsMarker + "\n" +
 	`{"mcp_servers":["fast_io + fastio_helpers","pages"]}`
 
-// A chain parked by a malformed declaration records WHY (migration 072): the
+// A chain parked by a malformed declaration records WHY (migration 073): the
 // dead-letter write hands the reason back to the runner for the notification,
 // and the row keeps it for the Operations Center. A plain replay is refused —
 // it would dead-letter again — and changes nothing; a replay with a corrected

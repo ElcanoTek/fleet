@@ -1,4 +1,4 @@
--- 072_add_recurrence_parked_reason.up.sql — why a recurring chain was parked.
+-- 073_add_recurrence_parked_reason.up.sql — why a recurring chain was parked.
 --
 -- recurrence_parked_at (ADR-0070) records THAT the dead-letter breaker parked
 -- a chain; the reason was only logged. A malformed EXECUTION REQUIREMENTS line

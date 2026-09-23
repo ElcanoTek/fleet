@@ -1257,7 +1257,7 @@ type Task struct {
 	// FALSE. Persisted; never exported; not settable by clients.
 	RecurrenceParkedAt *time.Time `json:"recurrence_parked_at,omitempty"`
 	// RecurrenceParkedReason says why the breaker parked the chain, in words
-	// the owner can act on (migration 072): the malformed EXECUTION
+	// the owner can act on (migration 073): the malformed EXECUTION
 	// REQUIREMENTS message on a first-strike park (ADR-0073), or the
 	// two-consecutive-dead-letters rule. nil when not parked, or parked
 	// without a recorded reason (before the column, or by an import).
