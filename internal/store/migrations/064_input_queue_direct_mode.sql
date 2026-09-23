@@ -18,7 +18,7 @@
 -- The CHECK is replaced NOT VALID, which needs no scan, so the ACCESS
 -- EXCLUSIVE lock this statement takes is held only for the swap. Migrations
 -- run one file per transaction and a lock is held until commit, so the
--- validation and the new index live in 064, their own transaction, rather
+-- validation and the new index live in 065, their own transaction, rather
 -- than here under this lock.
 ALTER TABLE chat_input_queue DROP CONSTRAINT IF EXISTS chat_input_queue_mode_check;
 ALTER TABLE chat_input_queue

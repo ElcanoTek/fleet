@@ -925,7 +925,7 @@ func TestQueue_IdempotentSubmission(t *testing.T) {
 	eng.release <- struct{}{}
 }
 
-// A directly started turn records its input_id (migration 063): a resend of
+// A directly started turn records its input_id (migration 064): a resend of
 // the same key while the turn runs, or after it ends, is answered with the
 // original input instead of starting a second turn.
 func TestDirectTurn_InputIDIsIdempotent(t *testing.T) {

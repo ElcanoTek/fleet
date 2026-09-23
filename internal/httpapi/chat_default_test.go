@@ -937,7 +937,7 @@ func (s *fakeChatStore) RemoveQueuedInput(_ context.Context, _, convID, id strin
 	return false, nil
 }
 
-// Direct-turn idempotency claims (migration 063): same key space as the
+// Direct-turn idempotency claims (migration 064): same key space as the
 // queue, mode 'direct', never listed or drained.
 func (s *fakeChatStore) ClaimDirectInput(_ context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error) {
 	s.mu.Lock()

@@ -52,7 +52,7 @@ retention guarantee: after a terminal row is purged, reusing its
   way without knowing which state it reached. `POST /chat` names its turn on
   the `X-Fleet-Turn-Id` response header (beside `X-Fleet-Conversation-Id`), so
   the id is known before any frame.
-- `input_id` is honoured on the **direct** path too (migrations 063 and 064):
+- `input_id` is honoured on the **direct** path too (migrations 064 and 065):
   a submission that starts a turn directly claims its key with a
   `mode:"direct"` row in the same table and unique index, so a resend of the
   same key, while the turn runs or after it ends, is answered `200` with that

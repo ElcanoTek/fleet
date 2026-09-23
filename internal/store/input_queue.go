@@ -22,7 +22,7 @@ const (
 	InputModeQueued = "queued"
 	InputModeSteer  = "steer"
 	// InputModeDirect marks the idempotency record of a submission that
-	// started a turn directly (migration 063). It is never a queue item: the
+	// started a turn directly (migration 064). It is never a queue item: the
 	// listing, drain, sweeps, remove and promote skip it, and recovery
 	// settles it instead of re-queueing it.
 	InputModeDirect = "direct"

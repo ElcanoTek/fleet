@@ -1,6 +1,6 @@
 package store
 
-// Direct-turn idempotency claims (migrations 063 and 064): a submission that started a
+// Direct-turn idempotency claims (migrations 064 and 065): a submission that started a
 // turn directly records its input_id in the queue's key space, so a resend of
 // the same key is recognised instead of run twice.
 

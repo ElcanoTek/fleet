@@ -1,4 +1,4 @@
--- Second half of 063, in its own transaction so 063's ACCESS EXCLUSIVE lock
+-- Second half of 064, in its own transaction so 064's ACCESS EXCLUSIVE lock
 -- is released first (the runner applies each file in one transaction, and a
 -- lock is held until commit).
 --
