@@ -2,6 +2,7 @@ package chattui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -251,5 +252,37 @@ func TestTruncatedQueueAckIsNotAStatus(t *testing.T) {
 	var qe *QueuedError
 	if err == nil || errors.As(err, &se) || errors.As(err, &qe) {
 		t.Fatalf("err = %#v, want a plain unknown-outcome error", err)
+	}
+}
+
+// With ModelNewConversationsOnly, the configured model is sent only on a turn
+// that starts a conversation, never as an override on an existing one.
+func TestModelNewConversationsOnly(t *testing.T) {
+	var models []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		models = append(models, body.Model)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: conversation\ndata: {\"id\":\"c1\"}\n\nevent: turn.completed\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+	for _, newOnly := range []bool{true, false} {
+		models = nil
+		c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "t", Model: "x/model", ModelNewConversationsOnly: newOnly})
+		for _, conv := range []string{"", "c1"} {
+			if _, err := c.StreamInput(context.Background(), "hi", conv, "", func(Event) {}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want := []string{"x/model", ""}
+		if !newOnly {
+			want = []string{"x/model", "x/model"}
+		}
+		if len(models) != 2 || models[0] != want[0] || models[1] != want[1] {
+			t.Errorf("newOnly=%v: models sent = %q, want %q", newOnly, models, want)
+		}
 	}
 }

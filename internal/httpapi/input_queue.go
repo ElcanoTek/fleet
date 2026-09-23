@@ -225,8 +225,24 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A Stop naming this key may have landed before the row existed (it
+	// found nothing to withdraw and left only the in-memory mark). A queued
+	// row can wait longer than the mark lives, so it is withdrawn here, at
+	// insert, rather than left for the mark to refuse at launch. The Stop
+	// set its mark before looking the row up, so either that lookup saw the
+	// row or this check sees the mark.
+	if created && s.inputKeyStopped(conv.ID, clientID) {
+		ok, rerr := s.store.RemoveQueuedInput(context.WithoutCancel(r.Context()), user, conv.ID, row.ID)
+		switch {
+		case rerr != nil:
+			// The mark still refuses the launch while it lives.
+			log.Printf("withdraw stopped input (conv=%s): %v", conv.ID, rerr)
+		case ok:
+			row.State = store.InputStateCancelled
+		}
+	}
 
-	if created && row.Mode == store.InputModeSteer {
+	if created && row.Mode == store.InputModeSteer && row.State != store.InputStateCancelled {
 		if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() && entry.steer != nil {
 			entry.steer.offer(row.ID, req.Message)
 		}

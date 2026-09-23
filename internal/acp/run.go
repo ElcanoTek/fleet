@@ -62,6 +62,8 @@ func run(argv []string, in io.Reader, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "fleet acp: "+cfgErr.Error())
 	}
 	cfg.ClientName = "fleet-acp"
+	cfg.ModelNewConversationsOnly = true // --model is for new sessions
+	cfg.InputIDsUserUnique = true        // keys are random or session-scoped
 	client := chattui.NewClient(cfg)
 	if cfgErr == nil {
 		if err := client.Ping(context.Background()); err != nil {

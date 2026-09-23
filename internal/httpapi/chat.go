@@ -60,6 +60,14 @@ type chatRequest struct {
 	// (conversation, input_id) while queued returns the existing item instead
 	// of duplicating the input. Empty = server-generated.
 	InputID string `json:"input_id,omitempty"`
+	// InputIDScope "user" declares that the caller's input_ids are unique
+	// per user, not just per conversation. Only then is a first submission
+	// (no conversation yet) looked up by (user, input_id), so a resend whose
+	// answer was lost before any header finds the conversation it already
+	// started. Without it the key stays conversation-scoped, as documented,
+	// so a client that numbers keys per conversation is never answered with
+	// another conversation's replay.
+	InputIDScope string `json:"input_id_scope,omitempty"`
 	// Mode selects what a submission does when a turn is already running
 	// (#785): "queue" (default) runs it as the next turn; "steer" offers it
 	// to the running turn's next step boundary, falling back to queue if the
@@ -364,25 +372,11 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		// because the original response was lost before any header) must find
 		// the input it already accepted — before this would create a second
 		// conversation and run the prompt again there.
-		if clientID := strings.TrimSpace(req.InputID); clientID != "" {
-			// Held until the key is claimed (or the request ends), so a
-			// concurrent resend waits here and then finds the claim.
-			unlock, lerr := s.store.LockInputKey(r.Context(), user, clientID)
-			if lerr != nil {
-				http.Error(w, "input lock failed: "+lerr.Error(), http.StatusInternalServerError)
-				return
-			}
-			unlockFirst = sync.OnceFunc(unlock)
-			existing, lerr := s.store.LookupInputForUser(r.Context(), user, clientID)
-			if lerr != nil {
-				http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
-				return
-			}
-			if existing != nil {
-				writeQueueAck(w, http.StatusOK, existing.ConversationID, *existing)
-				return
-			}
+		unlock, handled := s.recoverFirstSubmission(w, r, user, req)
+		if handled {
+			return
 		}
+		unlockFirst = unlock
 		persona := strings.TrimSpace(req.Persona)
 		if persona == "" {
 			persona = s.cfg.PersonaDefault
@@ -490,6 +484,38 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 		s.handleBusySubmit(w, r, user, conv, req)
 	}
+}
+
+// recoverFirstSubmission answers a first submission (no conversation yet)
+// whose user-unique key (input_id_scope "user") was already accepted, with
+// that input's acknowledgement. It takes the key's lock first, held until
+// the key is claimed (the returned unlock; a no-op when nothing was
+// locked), so a concurrent resend waits for the first request's claim
+// instead of both creating a conversation. handled reports that the
+// response was written.
+func (s *Server) recoverFirstSubmission(w http.ResponseWriter, r *http.Request, user string, req chatRequest) (unlock func(), handled bool) {
+	clientID := strings.TrimSpace(req.InputID)
+	if clientID == "" || !strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
+		return func() {}, false
+	}
+	release, err := s.store.LockInputKey(r.Context(), user, clientID)
+	if err != nil {
+		http.Error(w, "input lock failed: "+err.Error(), http.StatusInternalServerError)
+		return func() {}, true
+	}
+	unlock = sync.OnceFunc(release)
+	existing, err := s.store.LookupInputForUser(r.Context(), user, clientID)
+	if err != nil {
+		unlock()
+		http.Error(w, "input lookup failed: "+err.Error(), http.StatusInternalServerError)
+		return func() {}, true
+	}
+	if existing != nil {
+		unlock()
+		writeQueueAck(w, http.StatusOK, existing.ConversationID, *existing)
+		return func() {}, true
+	}
+	return unlock, false
 }
 
 // claimDirectInput claims a direct submission's input_id before its turn

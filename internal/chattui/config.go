@@ -26,6 +26,17 @@ type Config struct {
 	Model     string // optional per-turn model slug ("" = server/conversation default)
 	Persona   string // optional persona for a new conversation
 
+	// ModelNewConversationsOnly sends Model only on a turn that starts a new
+	// conversation, leaving an existing conversation's stored model alone
+	// (`fleet acp --model` picks the model for new sessions; a later switch
+	// made in the web UI must not be silently reverted by the next prompt).
+	// Off for `fleet chat`, where --model is an override for every turn.
+	ModelNewConversationsOnly bool
+	// InputIDsUserUnique declares that the input_ids this client sends are
+	// unique per user (`fleet acp`'s are random or session-scoped), so the
+	// server may look a first submission's key up across conversations.
+	InputIDsUserUnique bool
+
 	// ClientName is the X-Fleet-Client attribution label ("" = "fleet-chat").
 	// `fleet acp` sets "fleet-acp" so a server log can tell the two apart.
 	ClientName string

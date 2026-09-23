@@ -984,12 +984,12 @@ func TestFirstSubmission_ResendFindsTheOriginal(t *testing.T) {
 
 	first := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		first <- postChatJSON(t, s, user, map[string]any{"message": "book the room", "input_id": "first-1"})
+		first <- postChatJSON(t, s, user, map[string]any{"message": "book the room", "input_id": "first-1", "input_id_scope": "user"})
 	}()
 	<-eng.started
 	resend := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		resend <- postChatJSON(t, s, user, map[string]any{"message": "book the room", "input_id": "first-1"})
+		resend <- postChatJSON(t, s, user, map[string]any{"message": "book the room", "input_id": "first-1", "input_id_scope": "user"})
 	}()
 	var w *httptest.ResponseRecorder
 	select {

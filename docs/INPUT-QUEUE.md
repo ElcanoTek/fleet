@@ -47,11 +47,12 @@ retention guarantee: after a terminal row is purged, reusing its
   claimed, or a submission still in transit) is refused when it tries to
   register. The mark and the registration check share one lock, so a keyed
   input is either cancelled or never launched; the mark is kept for 10
-  minutes, and a queued row is withdrawn in the database so it cannot outwait
-  it. A client whose answer was lost (`fleet acp`) stops its own input this
-  way without knowing which state it reached. `POST /chat` names its turn on
-  the `X-Fleet-Turn-Id` response header (beside `X-Fleet-Conversation-Id`), so
-  the id is known before any frame.
+  minutes, and a queued row is withdrawn in the database (at the Stop, or when
+  it is inserted after the Stop) so it cannot outwait it. A client whose
+  answer was lost (`fleet acp`) stops its own input this way without knowing
+  which state it reached. `POST /chat` names its turn on the `X-Fleet-Turn-Id`
+  response header (beside `X-Fleet-Conversation-Id`), so the id is known
+  before any frame.
 - `input_id` is honoured on the **direct** path too (migrations 064 and 065):
   a submission that starts a turn directly claims its key with a
   `mode:"direct"` row in the same table and unique index, so a resend of the
@@ -73,12 +74,13 @@ retention guarantee: after a terminal row is purged, reusing its
   the release cannot be confirmed. A claim is an accepted input, so a Stop
   scope=all that begins after it was accepted covers it: the claim settles
   `cancelled` and the submission answers `409` without running. A first
-  submission names no conversation, so its key is also looked up per user
-  before a conversation is created: a resend after a response lost before any
-  header finds the original conversation instead of starting a second one. So
-  an `input_id` sent without a `conversation_id` must be unique per user, not
-  just per conversation (the web client sends a random UUID; `fleet acp`
-  scopes a client `messageId` to its session). Concurrent first submissions of
+  submission names no conversation, so a client that declares its keys unique
+  per user (`"input_id_scope": "user"`, as `fleet acp` does) has its key also
+  looked up per user before a conversation is created: a resend after a
+  response lost before any header finds the original conversation instead of
+  starting a second one. Without that declaration the key stays
+  conversation-scoped, so a client that numbers keys per conversation is never
+  answered with another conversation's replay. Concurrent first submissions of
   one key are serialized by a Postgres advisory lock on (user, key), held from
   that lookup until the key is claimed, so the second finds the first one's
   claim, across fleet processes too. The `queue.updated` SSE event carries a

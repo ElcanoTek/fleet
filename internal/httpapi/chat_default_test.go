@@ -1340,7 +1340,7 @@ func TestFirstSubmission_ConcurrentSendsRunOnce(t *testing.T) {
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
-	body := map[string]any{"message": "send the report", "persona": "generic", "input_id": "first-1"}
+	body := map[string]any{"message": "send the report", "persona": "generic", "input_id": "first-1", "input_id_scope": "user"}
 	// Each conversation creation waits (bounded) for the other request to
 	// get there too. Unserialized, both have looked the key up and found
 	// nothing, so each creates a conversation and claims the key in it.
@@ -1413,5 +1413,46 @@ func TestDirectClaim_LostClaimAckIsReleased(t *testing.T) {
 	// The resend now runs instead of being answered "already running".
 	if w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": "conv-1", "input_id": "claim-lost-1"}); w.Code != http.StatusOK || eng.turns != 1 {
 		t.Fatalf("resend: status %d, turns %d", w.Code, eng.turns)
+	}
+}
+
+// Without input_id_scope "user", keys stay conversation-scoped as documented:
+// a client that numbers keys per conversation reusing "1" for a new
+// conversation starts that conversation, not another one's replay.
+func TestFirstSubmission_KeysStayConversationScopedByDefault(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	for i := range 2 {
+		w := postChatRequest(t, srv, map[string]any{"message": "hello", "persona": "generic", "input_id": "1"})
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"queued":true`) {
+			t.Fatalf("submission %d: %d %.200s — want a new conversation's turn, not a replay", i, w.Code, w.Body.String())
+		}
+	}
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if eng.turns != 2 || st.createdConversations() != 2 {
+		t.Fatalf("turns %d, conversations %d: want two conversations, each run", eng.turns, st.createdConversations())
+	}
+}
+
+// A Stop by key that lands before its queued row exists leaves only the
+// in-memory mark; the row is withdrawn when it is inserted, so it cannot
+// outwait the mark behind a long turn and run after the confirmed Stop.
+func TestCancelByInputKey_LateQueuedRowIsWithdrawn(t *testing.T) {
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	_, _, tok, _ := srv.registerTurn(conv.ID, func() {}) // another surface's long turn
+	defer srv.finishTurn(conv.ID, tok)
+	srv.cancelInput(context.Background(), "u@x.com", conv.ID, "late-1")
+
+	w := postChatRequest(t, srv, map[string]any{"message": "later", "conversation_id": conv.ID, "input_id": "late-1"})
+	if !strings.Contains(w.Body.String(), `"state":"cancelled"`) {
+		t.Fatalf("ack %d %s: want the late row withdrawn", w.Code, w.Body.String())
+	}
+	row, _ := st.LookupInput(context.Background(), conv.ID, "late-1")
+	if row == nil || row.State != store.InputStateCancelled {
+		t.Fatalf("row = %+v, want cancelled", row)
 	}
 }

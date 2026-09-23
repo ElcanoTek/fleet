@@ -72,7 +72,7 @@ func (c *Client) EffectiveModel() string {
 // Accepting a suggestion hands this conversation back to its stored pin until
 // /model explicitly overrides it again. Workspace defaults apply to new threads.
 func (c *Client) turnModel(convID string) string {
-	if convID != "" && c.serverModelConversations[convID] {
+	if convID != "" && (c.serverModelConversations[convID] || c.cfg.ModelNewConversationsOnly) {
 		return ""
 	}
 	if strings.TrimSpace(c.cfg.Model) != "" {
@@ -89,6 +89,15 @@ func (c *Client) displayModel(convID string) string {
 		return model
 	}
 	return c.turnModel(convID)
+}
+
+// inputIDScope declares user-unique keys when the caller says its keys are
+// (Config.InputIDsUserUnique) and this turn carries one.
+func (c *Client) inputIDScope(inputID string) string {
+	if c.cfg.InputIDsUserUnique && strings.TrimSpace(inputID) != "" {
+		return "user"
+	}
+	return ""
 }
 
 // setAuthHeaders applies the shared-secret + identity headers every chattui
@@ -112,6 +121,9 @@ type turnRequest struct {
 	// SubmissionID names this submission (#1592). It is set to the input_id,
 	// so /inflight echoes it on the turn it started and a caller that lost
 	// the answer can find that turn without resubmitting.
+	// InputIDScope "user" tells the server these input_ids are unique per
+	// user, so a first submission's resend is looked up across conversations.
+	InputIDScope string `json:"input_id_scope,omitempty"`
 	SubmissionID string `json:"submission_id,omitempty"`
 }
 
@@ -179,6 +191,7 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		Persona:        c.cfg.Persona,
 		InputID:        inputID,
 		SubmissionID:   inputID,
+		InputIDScope:   c.inputIDScope(inputID),
 	})
 	if err != nil {
 		return convID, err

@@ -862,6 +862,14 @@ func (s *Server) cancelInputTurn(convID, key string) {
 	}
 }
 
+// inputKeyStopped reports whether a Stop naming key is still in force.
+func (s *Server) inputKeyStopped(convID, key string) bool {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	at, ok := s.cancelledInputs[inputKeyMark(convID, key)]
+	return ok && time.Since(at) <= cancelledInputTTL
+}
+
 // getInflight returns a snapshot of the current entry for convID.
 func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 	s.inflightMu.Lock()
