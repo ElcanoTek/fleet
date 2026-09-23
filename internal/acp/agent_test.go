@@ -1295,3 +1295,45 @@ func TestMessageIdKeysAreScopedPerSession(t *testing.T) {
 		t.Fatalf("the same messageId in two sessions shared a key: %+v", h.fleet.chats)
 	}
 }
+
+// A cancel whose Stop fleet did not accept leaves the original possibly
+// running, so a retry of the same text reuses its key (fleet answers it with
+// that run) instead of starting it again under a fresh one.
+func TestUnconfirmedStopKeepsTheKey(t *testing.T) {
+	started := make(chan struct{}, 1)
+	calls := 0
+	h := newHarness(t, harnessOpts{cancelStatus: http.StatusInternalServerError, turn: func(w *sseWriter, r *http.Request) {
+		calls++
+		w.emit("conversation", map[string]any{"id": "conv-u"})
+		if calls == 1 {
+			w.emit("turn.started", map[string]any{"turn_id": "turn-u"})
+			started <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	done := make(chan struct{})
+	go func() {
+		_, _ = h.prompt(sid, "long job")
+		close(done)
+	}()
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	if _, err := h.prompt(sid, "long job"); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 2 || h.fleet.chats[0].InputID != h.fleet.chats[1].InputID {
+		t.Fatalf("the retry after an unconfirmed stop got a fresh key: %+v", h.fleet.chats)
+	}
+}

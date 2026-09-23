@@ -52,11 +52,18 @@ retention guarantee: after a terminal row is purged, reusing its
   committed and `cancelled` otherwise (nothing ran, so a fresh key may be
   sent). A claim whose turn never launched is released (a failed release is
   retried in the background for about a minute, then left to boot recovery),
-  so the key can be retried. A first submission names no conversation, so its
-  key is also looked up per user before a conversation is created: a resend
-  after a response lost before any header finds the original conversation
-  instead of starting a second one. So an `input_id` sent without a
-  `conversation_id` must be unique per user, not just per conversation (the
+  so the key can be retried. A claim is bound to its turn before the turn
+  runs; if that fails, the turn is dropped and the submission fails (`500`)
+  rather than running with a claim a crash could not match to it. A submission
+  that loses the race to a turn started from another surface is queued only
+  after its claim is released, and fails (`503`, send again) if the release
+  cannot be confirmed. A claim is an accepted input, so a Stop scope=all that
+  begins after it was accepted covers it: the claim settles `cancelled` and
+  the submission answers `409` without running. A first submission names no
+  conversation, so its key is also looked up per user before a conversation is
+  created: a resend after a response lost before any header finds the original
+  conversation instead of starting a second one. So an `input_id` sent without
+  a `conversation_id` must be unique per user, not just per conversation (the
   web client sends a random UUID; `fleet acp` scopes a client `messageId` to
   its session). (Two concurrent first submissions of one key can still race;
   clients that resend only after an answer, such as `fleet acp`, never do.)

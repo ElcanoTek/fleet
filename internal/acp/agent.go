@@ -316,6 +316,12 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		stop.intervened = true
 		stopErr = a.reconcileLost(convID, key)
 	}
+	if stopErr != nil {
+		// The stop is unconfirmed, so the original may still run: a retry of
+		// the same text must reuse its key and be answered with that run,
+		// never started a second time.
+		sess.setUnsettled(message, key)
+	}
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
 	// before any outcome.

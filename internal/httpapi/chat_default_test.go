@@ -140,8 +140,13 @@ type fakeChatStore struct {
 	toolCalls         []store.ToolCallEntry
 	queue             []store.InputQueueRow
 	acceptedSeq       atomic.Int64
-	// releaseFailures makes that many ReleaseDirectInput calls fail first.
-	releaseFailures int
+	// releaseFailures / bindFailures make that many ReleaseDirectInput /
+	// BindInputTurn calls fail first.
+	releaseFailures, bindFailures int
+	// onClaim runs after a direct claim is stored; onMemories when turn
+	// preparation reads memories (both outside the fake's lock).
+	onClaim    func(store.InputQueueRow)
+	onMemories func()
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -223,6 +228,9 @@ func (s *fakeChatStore) CommitTurnHistory(ctx context.Context, convID, _ string,
 func (s *fakeChatStore) InsertTurnJournal(context.Context, store.TurnJournalRow) error { return nil }
 
 func (s *fakeChatStore) ListMemories(context.Context, string) ([]store.Memory, error) {
+	if s.onMemories != nil {
+		s.onMemories()
+	}
 	return nil, nil
 }
 
@@ -923,9 +931,9 @@ func (s *fakeChatStore) RemoveQueuedInput(_ context.Context, _, convID, id strin
 // queue, mode 'direct', never listed or drained.
 func (s *fakeChatStore) ClaimDirectInput(_ context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, it := range s.queue {
 		if it.ConversationID == r.ConversationID && it.ClientInputID == r.ClientInputID {
+			s.mu.Unlock()
 			return it, false, nil
 		}
 	}
@@ -934,6 +942,11 @@ func (s *fakeChatStore) ClaimDirectInput(_ context.Context, r store.InputQueueRo
 	r.Position = int64(len(s.queue) + 1)
 	r.CreatedAt, r.UpdatedAt, r.AcceptedSeq = now, now, s.acceptedSeq.Add(1)
 	s.queue = append(s.queue, r)
+	hook := s.onClaim
+	s.mu.Unlock()
+	if hook != nil {
+		hook(r)
+	}
 	return r, true, nil
 }
 
@@ -955,13 +968,16 @@ func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
 }
 
 // SettleDirectInput mirrors the store: the fake treats any settled turn as
-// committed.
-func (s *fakeChatStore) SettleDirectInput(_ context.Context, id, _ string) error {
+// committed, and a claim settled with no turn as never run.
+func (s *fakeChatStore) SettleDirectInput(_ context.Context, id, turnID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.queue {
 		if s.queue[i].ID == id && s.queue[i].Mode == store.InputModeDirect && s.queue[i].State == store.InputStateRunning {
 			s.queue[i].State = store.InputStateCompleted
+			if turnID == "" {
+				s.queue[i].State = store.InputStateCancelled
+			}
 		}
 	}
 	return nil
@@ -970,6 +986,10 @@ func (s *fakeChatStore) SettleDirectInput(_ context.Context, id, _ string) error
 func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.bindFailures > 0 {
+		s.bindFailures--
+		return errors.New("fake: bind failed")
+	}
 	for i := range s.queue {
 		if s.queue[i].ID == id {
 			s.queue[i].TurnID = turnID
@@ -1065,5 +1085,109 @@ func TestReleaseDirectInput_RetriesAFailedRelease(t *testing.T) {
 			t.Fatal("the direct claim was never released after a failed release")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// shortDirectPauses shortens the in-place release/bind retry pauses.
+func shortDirectPauses(t *testing.T) {
+	t.Helper()
+	prevPause, prevBackoff := directReleasePause, directReleaseBackoff
+	directReleasePause, directReleaseBackoff = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { directReleasePause, directReleaseBackoff = prevPause, prevBackoff })
+}
+
+func (s *fakeChatStore) directRows() []store.InputQueueRow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.InputQueueRow
+	for _, it := range s.queue {
+		if it.Mode == store.InputModeDirect {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// A claim that cannot be bound to its turn fails closed: unbound, a crash
+// would settle it "never ran" and a resend could run the input a second time.
+func TestDirectClaim_BindFailureFailsClosed(t *testing.T) {
+	shortDirectPauses(t)
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	st.bindFailures = directBindAttempts
+	srv := newDefaultChatServer(t, eng, st)
+
+	w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "bind-1"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	eng.mu.Lock()
+	turns := eng.turns
+	eng.mu.Unlock()
+	if turns != 0 {
+		t.Fatalf("the turn ran with an unbound claim (%d turns)", turns)
+	}
+	if rows := st.directRows(); len(rows) != 0 {
+		t.Fatalf("the unbound claim was not released: %+v", rows)
+	}
+}
+
+// Losing the registration race hands the input to the queue only once its
+// claim is released; a release that cannot be confirmed fails the submission
+// instead of acknowledging a row that no turn will ever run.
+func TestDirectClaim_RaceLoserWithoutReleaseFails(t *testing.T) {
+	shortDirectPauses(t)
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	st.releaseFailures = 1000
+	st.onClaim = func(r store.InputQueueRow) {
+		// Another surface's turn registers between the busy check and ours.
+		srv.registerTurn(r.ConversationID, func() {})
+	}
+
+	w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "race-1"})
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A Stop scope=all that begins after a direct claim was accepted covers it,
+// whether it lands before the gate check or while the turn is prepared: the
+// claim is cancelled and the turn never runs.
+func TestDirectClaim_StopBeforeLaunchCancelsIt(t *testing.T) {
+	for _, when := range []string{"after the claim", "during preparation"} {
+		t.Run(when, func(t *testing.T) {
+			eng := &fakeEngine{}
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, eng, st)
+			var convID string
+			stop := func() {
+				srv.beginStopSweep(convID)
+				srv.endStopSweep(convID)
+			}
+			st.onClaim = func(r store.InputQueueRow) {
+				convID = r.ConversationID
+				if when == "after the claim" {
+					stop()
+				}
+			}
+			if when == "during preparation" {
+				st.onMemories = stop
+			}
+
+			w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "stop-1"})
+			if w.Code != http.StatusConflict {
+				t.Fatalf("status %d: %s", w.Code, w.Body.String())
+			}
+			eng.mu.Lock()
+			turns := eng.turns
+			eng.mu.Unlock()
+			if turns != 0 {
+				t.Fatalf("a stopped claim ran (%d turns)", turns)
+			}
+			if rows := st.directRows(); len(rows) != 1 || rows[0].State != store.InputStateCancelled {
+				t.Fatalf("claim = %+v, want one cancelled row", rows)
+			}
+		})
 	}
 }

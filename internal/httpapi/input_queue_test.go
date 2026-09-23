@@ -565,7 +565,7 @@ func TestQueue_SweptLaunchReleasesSlotBeforeQueueRefresh(t *testing.T) {
 	done := make(chan bool, 1)
 	go func() {
 		done <- s.startTurn(nil, nil, user, conv, chatRequest{ConversationID: conv.ID, Message: row.Message},
-			&queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: gen}, func() { released.Store(true) }, "")
+			&queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: gen}, func() { released.Store(true) }, nil)
 	}()
 	select {
 	case ok := <-done:
