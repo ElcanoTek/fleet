@@ -2185,7 +2185,7 @@ export function TaskCreateModal({
                             modelTouched.current = true;
                             setModel(v);
                           }}
-                          placeholder="openai/gpt-5.6-luna-pro"
+                          placeholder={currentDefaultModel()}
                         />
                         {errors.model ? (
                           <div className="validation-error" data-testid="error-model">

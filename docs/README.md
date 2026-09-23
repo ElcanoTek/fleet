@@ -233,6 +233,7 @@ above fails otherwise.
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
 - [`implementation-plans-enhancements.md`](implementation-plans-enhancements.md) — Implementation plan: #984 — Fleet ↔ Buzz bridge
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)
+- [`INSTALLER.md`](INSTALLER.md) — The public one-line installer (`install.sh`)
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts
 - [`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md) — Real-cluster sandbox integration test
 - [`LEGACY-IMPORT.md`](LEGACY-IMPORT.md) — Legacy import — migrating chat + moc data into fleet
