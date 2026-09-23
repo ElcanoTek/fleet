@@ -648,19 +648,30 @@ Consequences worth stating plainly:
   (see [`PROMPT-CACHE-CONTRACT.md`](PROMPT-CACHE-CONTRACT.md) and #1125).
 - Gate-2's per-server tool allowlist (`mcpAllowlist.toolsFor`) resolves through
   the same helper, so a variant seat is filtered by its manifest server's
-  allowlist exactly like the default seat.
-- **A narrowed roster keys the same way (#1603).** A scheduled task whose
-  `EXECUTION REQUIREMENTS` sets `"roster":"required_tools_only"` runs with an
-  allowlist built from its `required_tools` (entries keyed by registered server
-  name), and with Gate-2 **exhaustive** (`RunConfig.MCPRosterNarrowing`). A
-  server with no required tool gets an explicit deny entry, so it registers
-  nothing and never inherits another server's narrowed entry through the keying
-  rule. The catalog cannot tell an account seat from an independent server that
-  shares a prefix, so no server inherits: a `<server>_<account>` seat keeps only
-  the tools `required_tools` names in the seat's own full form or by bare name.
+  allowlist exactly like the default seat. A narrowed roster is the one
+  exception (next bullet).
+- **A narrowed roster does not use the keying rule (#1603).** A scheduled task
+  whose `EXECUTION REQUIREMENTS` sets `"roster":"required_tools_only"` runs with
+  an allowlist built from its `required_tools` (entries keyed by registered
+  server name), and with Gate-2 **exhaustive and exact**
+  (`RunConfig.MCPRosterNarrowing`, `mcpAllowlist.gateEntry`): a server is
+  governed only by an entry under its own registered name. The driver gives
+  every server of the dispatch roster an entry: a server with no required tool
+  gets an explicit deny entry. A server without an entry registers nothing: a
+  `<server>_<account>` seat loaded mid-run with `mcp_load_servers(client=…)`,
+  or a configured server whose name extends a narrowed one (`pages_archive`
+  after `pages`). The catalog cannot tell an account seat from an independent
+  server that shares a prefix, so no server inherits: a seat keeps only the
+  tools `required_tools` names in the seat's own full form or by bare name.
   - A sub-agent of a narrowed run inherits the exhaustive flag, and it gets an
     explicit entry for every catalog server before the explore role's filter
-    runs, so no child sees a tool its parent cannot call.
+    runs: the parent's own entry, or a deny entry when the parent has none. So
+    no child sees a tool its parent cannot call.
+  - `confirm_audit` refuses a critical action, typed or legacy, naming an MCP
+    tool the run did not register, before registering anything, since nothing could
+    discharge that approval. The check reads the live roster
+    (`recordNarrowedRoster`), refreshed at the first tool build and every
+    mid-run MCP rebuild.
   - The run log carries one `[roster] required_tools_only: N mcp tools
     registered` breadcrumb. A call to a tool the narrowing removed is answered
     `tool not found`.

@@ -64,7 +64,8 @@ var toolCallTimeout = 5 * time.Minute
 // means fail-closed: an Optional base gates its variant seats too.
 //
 // Callers, all of which MUST route through here rather than an exact lookup:
-// mcpAllowlist.toolsFor (Gate-2), optionalServerFor / OptionalServerFor
+// mcpAllowlist.toolsFor (Gate-2 — except under a narrowed roster, whose
+// exhaustive allowlist is looked up exactly, see gateEntry), optionalServerFor / OptionalServerFor
 // (Gate-1), and — via OptionalServerForToolName — internal/agent's
 // system-prompt roster filter. (The per-task credential allowlist's
 // registered-name projection, permittedRegisteredNames, and the persona
@@ -110,11 +111,27 @@ func (al mcpAllowlist) toolsFor(registered string) []string {
 	return nil
 }
 
-// AllowlistToolsFor is the driver-visible form of the Gate-2 lookup: the
-// allowlist entry governing a REGISTERED server name under the one keying rule
-// (nil = no entry). Exported so a driver deriving a narrower allowlist (the
-// #1603 required_tools_only roster, a sub-agent's inherited one) resolves
-// entries exactly as Gate-2 does rather than inventing a second rule.
+// gateEntry is the Gate-2 lookup for a REGISTERED server name. An ordinary
+// allowlist resolves through the keying rule (toolsFor). An EXHAUSTIVE one (a
+// narrowed roster, #1603) is looked up EXACTLY: the driver keys it by every
+// registered name it derived it for, so a name without its own entry — a
+// `<server>_<account>` seat loaded mid-run with mcp_load_servers(client=…), or
+// an independent server whose name merely extends a narrowed one (pages_archive
+// → pages) — is a server the narrowing never saw, and it must register
+// nothing rather than inherit another server's narrowed list.
+func (al mcpAllowlist) gateEntry(registered string, exhaustive bool) []string {
+	if exhaustive {
+		return al[registered]
+	}
+	return al.toolsFor(registered)
+}
+
+// AllowlistToolsFor is the driver-visible form of the ordinary Gate-2 lookup:
+// the allowlist entry governing a REGISTERED server name under the one keying
+// rule (nil = no entry). Exported so a driver deriving a narrower allowlist
+// from the manifest's (the #1603 required_tools_only roster) resolves the
+// manifest's entries exactly as Gate-2 does rather than inventing a second
+// rule. The narrowed allowlist itself is exhaustive and exact (gateEntry).
 func AllowlistToolsFor(allow MCPAllowlist, registered string) []string {
 	return allow.toolsFor(registered)
 }
@@ -203,9 +220,9 @@ type toolBuildConfig struct {
 	// none (scheduled/evals). Same placement contract as hooks: on the real
 	// tools, never the disclosure bridge wrappers, so one call journals once.
 	journal TurnJournal
-	// exclusiveAllowlist makes Gate-2 exhaustive (RunConfig.MCPRosterNarrowing,
-	// #1603): a server the allowlist does not govern registers nothing instead
-	// of everything.
+	// exclusiveAllowlist makes Gate-2 exhaustive and exact
+	// (RunConfig.MCPRosterNarrowing, #1603): a server without its own
+	// allowlist entry registers nothing instead of everything (gateEntry).
 	exclusiveAllowlist bool
 }
 
@@ -248,6 +265,11 @@ type toolRoster struct {
 	// deferredByServer counts the deferred tools per registration (server)
 	// name, so the section can name the connectors the bridges reach.
 	deferredByServer map[string]int
+
+	// mcp is every `mcp_<server>_<tool>` name this build registered, direct or
+	// deferred — what the model can reach at all. A narrowed run's audit gate
+	// reads it (recordNarrowedRoster).
+	mcp []string
 }
 
 // buildFantasyToolsWithRoster is buildFantasyTools plus the roster summary the
@@ -301,8 +323,9 @@ func buildFantasyToolsWithRoster(
 		}
 		// Gate 2: per-server tool allowlist. An absent entry allows all, unless
 		// the run narrowed its roster (exclusiveAllowlist, #1603): then the
-		// allowlist is exhaustive and an ungoverned server registers nothing.
-		if list := allow.toolsFor(st.ServerName); (len(list) > 0 || cfg.exclusiveAllowlist) && !slices.Contains(list, st.Tool.Name) {
+		// allowlist is exhaustive and exact, and a server without its own entry
+		// registers nothing.
+		if list := allow.gateEntry(st.ServerName, cfg.exclusiveAllowlist); (len(list) > 0 || cfg.exclusiveAllowlist) && !slices.Contains(list, st.Tool.Name) {
 			mcpSkippedAllowlist++
 			continue
 		}
@@ -388,6 +411,7 @@ func buildFantasyToolsWithRoster(
 		}
 		roster.deferredMCP = len(mcpTools)
 		roster.deferredByServer = mcpByServer
+		roster.mcp = mcpNames
 		// The model-output boundary sits inside the universal panic boundary: a
 		// panic in a tool, policy hook, output screen, artifact stager, or bridge
 		// dispatch becomes one paired in-band result, while every ordinary result
@@ -406,6 +430,7 @@ func buildFantasyToolsWithRoster(
 	}
 	sort.Strings(mcpNames)
 	roster.directMCP = mcpNames
+	roster.mcp = mcpNames
 	return containToolRoster(BoundModelOutputTools(allTools), cfg.panicAttribution, policy), roster, nil
 }
 
@@ -708,4 +733,19 @@ func noteRosterNarrowing(logSession *LogSession, narrowing string, roster toolRo
 	}
 	logSession.AddMessage(roleUser, fmt.Sprintf("[roster] %s: %d mcp tools registered",
 		narrowing, len(roster.directMCP)+roster.deferredMCP), nil, nil)
+}
+
+// recordNarrowedRoster hands a narrowed run's registered MCP roster to its
+// audit gate (#1603): confirm_audit then refuses a typed critical action naming
+// a tool this run cannot call, which would otherwise be an approval no call
+// could ever discharge. Called on the first build and on every mid-run MCP
+// rebuild, so the gate always reads the live roster. A no-op without a
+// narrowing, or for a policy with no orchestration (no confirm_audit).
+func recordNarrowedRoster(policy Policy, narrowing string, roster toolRoster) {
+	if narrowing == "" {
+		return
+	}
+	if orch, ok := policyOrchestration(policy); ok {
+		orch.setNarrowedMCPRoster(roster.mcp)
+	}
 }

@@ -74,10 +74,12 @@ shrink the roster itself. A scheduled task's `EXECUTION REQUIREMENTS` may carry
 [CONDITIONAL-TASK-COMPLETION.md](CONDITIONAL-TASK-COMPLETION.md#copyable-execution-prerequisites)).
 
 The scheduled driver then intersects each server's Gate-2 allowlist with the
-tools `required_tools` names, and makes Gate-2 **exhaustive** for the run
-(`RunConfig.MCPRosterNarrowing`): a selected server none of whose tools is
-required registers nothing. Native, loader and `confirm_audit` tools are
-untouched.
+tools `required_tools` names, and makes Gate-2 **exhaustive and exact** for the
+run (`RunConfig.MCPRosterNarrowing`): a selected server none of whose tools is
+required registers nothing, and so does a server loaded mid-run that has no
+entry of its own, such as a `mcp_load_servers(client=…)` seat. Native, loader
+and `confirm_audit` tools are untouched, but `confirm_audit` refuses a critical
+action, typed or legacy, naming an MCP tool the run did not register.
 
 The live-registry section, the tool list the model is sent, and the disclosure
 threshold count all see the narrowed roster. A narrowed roster usually lands
