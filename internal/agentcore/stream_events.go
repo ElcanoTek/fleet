@@ -67,6 +67,13 @@ const (
 	// #1534); evtFieldResendBudget carries that budget in tokens.
 	evtFieldTrigger      = "trigger"
 	evtFieldResendBudget = "resend_budget_tokens"
+	// evtFieldResendFloor and evtFieldEffectiveBudget ride the resend-budget
+	// events (checkpoint, compaction, pressure) only while the checkpoint's
+	// floor rule applies (#1600): the resent size measured at the latest floor
+	// point, and the size the checkpoint fires at (floor + budget). Absent
+	// under the plain budget, so those payloads are unchanged.
+	evtFieldResendFloor     = "resend_floor_tokens"
+	evtFieldEffectiveBudget = "effective_budget_tokens"
 )
 
 // Context-window pressure SSE event names (#209). Emitted from the enforcement

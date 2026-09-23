@@ -218,7 +218,7 @@ above fails otherwise.
 - [`CUTOVER.md`](CUTOVER.md) — v1 → fleet cutover runbook (a box already running the legacy chat + moc stack)
 - [`DATASETS.md`](DATASETS.md) — Dataset / table agent
 - [`DEAD-LETTER-RECURRENCE.md`](DEAD-LETTER-RECURRENCE.md) — A dead-lettered recurring occurrence spawns its successor (ADR-0070)
-- [`SCHEDULED-COMPACTION-CHECKPOINTS.md`](SCHEDULED-COMPACTION-CHECKPOINTS.md) — Scheduled runs pause their tool loop at the resend budget so compaction recurs, and summarize for real
+- [`SCHEDULED-COMPACTION-CHECKPOINTS.md`](SCHEDULED-COMPACTION-CHECKPOINTS.md) — Scheduled runs pause their tool loop at the resend budget so compaction recurs, and summarize for real; when the prompt floor crowds the budget, the budget applies to the history alone (#1600)
 - [`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md) — Deploying fleet on Kubernetes
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Deploying fleet
 - [`DISCUSS-RUN.md`](DISCUSS-RUN.md) — Discuss this run

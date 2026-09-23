@@ -94,6 +94,13 @@ func criticalSuffixCovers(committedSuffix, executedSuffix string) bool {
 	return substituteSatisfies(committedSuffix, executedSuffix) || criticalAliasesEquivalent(committedSuffix, executedSuffix)
 }
 
+// IsCriticalTool reports whether toolName is audit-gated under the installed
+// agent policy (the bundle's critical_tools plus the base email suffixes). It is
+// the classification the audit gate itself uses, exported for the scheduled
+// driver, which must tell a failed critical call from any other failed call
+// when deciding whether a verifier outage may fail open (#1602).
+func IsCriticalTool(toolName string) bool { return isCriticalTool(toolName) }
+
 func isCriticalTool(toolName string) bool {
 	policyMu.RLock()
 	defer policyMu.RUnlock()

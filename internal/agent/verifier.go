@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -46,6 +47,15 @@ const verifierNoFinalResponseMarker = "(no final response text)"
 
 // Initial review plus at most two repair reviews. Exhaustion never grants success.
 const maxCompletionVerifications = 3
+
+// errVerifierMalformedVerdict marks a verifier that ANSWERED but whose reply is
+// not a verdict — no JSON object, invalid JSON, or no explicit missing_actions
+// array, or an empty reply (#1602 follow-up). It is a content failure, not an
+// outage: a degraded verifier model must not quietly become auto-success, so
+// after one retry it spends a check like before. Only transport failures and
+// timeouts are outages, and may fail open after a clean audit whose critical
+// work landed.
+var errVerifierMalformedVerdict = errors.New("verifier returned a malformed verdict")
 
 type verifierResult struct {
 	Missing   []string `json:"missing_actions"`
@@ -172,9 +182,18 @@ func toolResultLooksFailed(content string) bool {
 			Success *bool  `json:"success"`
 			OK      *bool  `json:"ok"`
 			IsError bool   `json:"isError"`
+			// RawMessage: "error" may be a string or an object.
+			Error json.RawMessage `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(trimmed), &probe); err == nil {
-			return strings.EqualFold(probe.Status, "error") || strings.EqualFold(probe.Status, "failed") || probe.IsError || (probe.Success != nil && !*probe.Success) || (probe.OK != nil && !*probe.OK)
+			// A top-level non-empty "error" with no explicit success field is a
+			// failed call — the same convention agentcore's mcpReportedFailure
+			// applies to commitments. It matters beyond the verifier summary:
+			// a completion.any_succeeded predicate (#1602) reads these records,
+			// and must not complete a run on {"error":"upstream 400"}.
+			e := strings.TrimSpace(string(probe.Error))
+			payloadError := probe.Success == nil && e != "" && e != "null" && e != `""`
+			return strings.EqualFold(probe.Status, "error") || strings.EqualFold(probe.Status, "failed") || probe.IsError || (probe.Success != nil && !*probe.Success) || (probe.OK != nil && !*probe.OK) || payloadError
 		}
 		return strings.HasPrefix(trimmed, `{"status":"error"`) || strings.HasPrefix(trimmed, `{"status": "error"`)
 	}
@@ -279,12 +298,15 @@ func (a *Agent) runEndOfRunVerifier(ctx context.Context, task, finalResponse str
 	logAuxUsage(rec)
 	raw := strings.TrimSpace(out.Response.Content.Text())
 	if raw == "" {
-		return nil, fmt.Errorf("verifier returned empty response")
+		// An empty reply is an answer without a verdict, not an outage: a
+		// reasoning model that spends its whole output budget thinking returns
+		// empty every time, and that must not become auto-success (#1602).
+		return nil, fmt.Errorf("%w: empty response", errVerifierMalformedVerdict)
 	}
 
 	parsed, err := parseVerifierResult(raw)
 	if err != nil {
-		return nil, fmt.Errorf("verifier output parse: %w (raw=%q)", err, summarizeForConsole(raw, 200))
+		return nil, fmt.Errorf("%w: %w (raw=%q)", errVerifierMalformedVerdict, err, summarizeForConsole(raw, 200))
 	}
 	log.Printf("Verifier: missing=%v reasoning=%q", parsed.Missing, summarizeForConsole(parsed.Reasoning, 200))
 	return parsed.Missing, nil

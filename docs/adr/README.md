@@ -26,7 +26,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 
 | ADR | Title | Status |
 | --- | --- | --- |
-| [0001](0001-one-governed-run-loop.md) | One governed agent run loop | Accepted |
+| [0001](0001-one-governed-run-loop.md) | One governed agent run loop | Accepted; amended by ADR-0072 |
 | [0002](0002-mandatory-rootless-podman-sandbox.md) | Mandatory rootless-Podman sandbox; host executor never ships | Accepted |
 | [0003](0003-host-side-mcp-credential-brokering.md) | Host-side MCP credential brokering | Accepted |
 | [0004](0004-single-box-vm-native-deployment.md) | Single-box, VM-native deployment (no Kubernetes) | Accepted; amended by ADR-0049 |
@@ -80,3 +80,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0069](0069-per-job-scheduled-workspaces.md) | A non-worktree scheduled run works in `<workspace-root>/tasks/<lineage_id>/` — one directory per job, carried to occurrences, re-runs and clones — instead of the shared root | Accepted |
 | [0070](0070-dead-lettered-recurrences-spawn-successor.md) | A dead-lettered recurring occurrence spawns its successor; two consecutive dead-letters park the chain | Accepted |
 | [0071](0071-critical-tool-aliases.md) | Bundle-declared critical tool aliases are one commitment (amends ADR-0034) | Accepted |
+| [0072](0072-deterministic-completion-predicate.md) | A declared completion predicate may replace the end-of-run verifier; a verifier outage does not dead-letter an audited run (amends ADR-0001) | Accepted |

@@ -491,7 +491,7 @@ after a `context_length_exceeded` error:
 |---|---|---|
 | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | `0.75` | Emit a `fleet.context_pressure` SSE event (the chat UI shows a non-blocking "conversation is N% full" banner). |
 | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | `0.90` | Proactively summarize the **oldest half** of the history (pinned head + recent half kept verbatim) and emit `fleet.context_compacted`. |
-| `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | `80000` | **Scheduled runs only** (#1534). Compact the same way once the prompt resent on every call exceeds this many tokens, whatever the model's window; `0` disables. |
+| `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | `80000` | **Scheduled runs only** (#1534). Compact the same way once the prompt resent on every call exceeds this many tokens, whatever the model's window; `0` disables. When the prompt floor (system prompt + tool schemas + task prompt) takes more than half of it, it applies to the history on top of the floor instead (#1600). |
 
 Both honor the usual `CHAT_`/`CUTLASS_` prefix aliases, and a value outside
 `(0,1]` falls back to its default. The size signal is the **per-call** input
@@ -547,6 +547,29 @@ condition goes inert and the run is governed by the ceilings alone. The step
 cap (`FLEET_MAX_ITERATIONS`) is counted across a logical round's checkpoints
 and wins a tie, so a pause never becomes a per-pause step allowance. See
 [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md).
+
+**The prompt floor (#1600).** Part of every request is not history: the system
+prompt, the tool schemas and the pinned task prompt, which no compaction can
+shed. A Pages refresh resends ~140K of that before any history exists, against
+the 80K default. With the budget compared against the whole request, those runs
+paused on every tool step until the 40-pause cap. That meant 280–345K
+completion tokens per run where the pre-checkpoint build used 18–67K, about 7K
+per pause, each pause a summarizer call and a cold cache. The run now records
+the resent size at each **floor point**: the run's first step, and the first
+step after every compaction. The smallest such size is the **prefix**. While
+the prefix is at most half the budget the rule is unchanged. Past that, the
+checkpoint (and the between-round trigger above) fires once a call resends the
+latest floor **plus** a full budget, so every pause waits for a budget of new
+history since the last compaction. The first time this happens the run writes
+one `[context_checkpoint_floor] floor=… budget=… effective_budget=…` session-log
+breadcrumb. From then on the resend-budget events carry `resend_floor_tokens`
+and `effective_budget_tokens`. No pause fires with fewer than four messages
+after the pinned head. The trade is stated plainly: under the floor rule the
+per-call prompt is not held under prefix + budget. Each floor carries the kept
+recent half, so across many compactions the pause point settles near
+prefix + 2 × budget. What the rule buys is a handful of pauses per run instead
+of 40. The measurements and the reasoning behind the half-budget switch are in
+[SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#the-prompt-floor-1600).
 
 **Scheduled runs summarize for real.** The scheduled driver now wires a
 `CompactionSummarizer` (the same governed LLM summary the chat path uses,
@@ -1258,17 +1281,38 @@ page write, file upload, ...) still require their tool call — a prose report
 never substitutes for one. Repairs are checked again, up to three verifier calls in
 total — the cap counts every verification, including the re-check a
 reviewer-forced repair triggers, and a repair that cannot be re-verified
-within the cap ends the run unverified rather than extending it. A verifier
-error keeps completion blocked; the third unsuccessful check
+within the cap ends the run unverified rather than extending it. Missing
+actions keep completion blocked; the third check that still reports them
 returns `ErrCompletionUnverified` through the core without asking the model to
-abort. Partial work and completed critical actions remain recorded, and the
+abort. A verifier call that produced no verdict is retried once after a short
+pause (#1602). If the retry fails too:
+
+- **An outage** (timeout, provider failure), after this run's own
+  `confirm_audit` passed, with at least one critical tool that executed
+  successfully and none whose last execution failed.
+  The run succeeds with a `completion_unverified_verifier_error` warning,
+  recorded in the session log and at the head of the task's terminal message,
+  instead of dead-lettering audited work on the verifier's own outage.
+- **Anything else** keeps the old semantics: the check is spent, and the third
+  ends the run `ErrCompletionUnverified`. That covers a malformed or empty verdict
+  (the verifier answered, but not with a verdict), a failed critical call, a
+  run in which no critical call landed, and a
+  policy in which no audit ran (a delegated sub-agent's). Partial work and completed critical actions remain recorded, and the
 transcript identifies the verification failure without claiming external actions
 were rolled back. Tool evidence is read from complete
 redacted records, before UI preview truncation. So core
 governance — per-tool policy, audit, finish enforcement, MCP credential
 brokering, note staging, usage/cost, **and the end-of-run verifier** — applies to
-every scheduled run. An explicit terminal audit abort skips the extra model
-reviewers and remains a failed result. Conditional task branches are
+every scheduled run, with one declared exception. A task whose
+`EXECUTION REQUIREMENTS` carries a `completion.any_succeeded` clause is complete
+once the audit/finish enforcement clears and a successful execution of a listed
+tool is on the record. The verifier and phone-a-friend are then skipped, with a
+`[completion_predicate] satisfied by <tool>` breadcrumb and a
+`fleet.completion_predicate` event, and no verifier call is metered. The audit
+gate is never skipped, and a task without the clause is verified as before
+([ADR-0072](adr/0072-deterministic-completion-predicate.md)). An explicit
+terminal audit abort skips the extra model reviewers and remains a failed
+result. Conditional task branches are
 verified using bounded structured result evidence, not tool names alone; see
 [Conditional scheduled tasks](CONDITIONAL-TASK-COMPLETION.md).
 
