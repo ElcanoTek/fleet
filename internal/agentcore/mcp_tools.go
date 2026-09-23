@@ -110,6 +110,15 @@ func (al mcpAllowlist) toolsFor(registered string) []string {
 	return nil
 }
 
+// AllowlistToolsFor is the driver-visible form of the Gate-2 lookup: the
+// allowlist entry governing a REGISTERED server name under the one keying rule
+// (nil = no entry). Exported so a driver deriving a narrower allowlist (the
+// #1603 required_tools_only roster, a sub-agent's inherited one) resolves
+// entries exactly as Gate-2 does rather than inventing a second rule.
+func AllowlistToolsFor(allow MCPAllowlist, registered string) []string {
+	return allow.toolsFor(registered)
+}
+
 // mcpOptionalSet reports whether a server is Optional (participates only when
 // opted in for the run).
 type mcpOptionalSet map[string]bool
@@ -194,6 +203,10 @@ type toolBuildConfig struct {
 	// none (scheduled/evals). Same placement contract as hooks: on the real
 	// tools, never the disclosure bridge wrappers, so one call journals once.
 	journal TurnJournal
+	// exclusiveAllowlist makes Gate-2 exhaustive (RunConfig.MCPRosterNarrowing,
+	// #1603): a server the allowlist does not govern registers nothing instead
+	// of everything.
+	exclusiveAllowlist bool
 }
 
 // buildFantasyTools combines native tools with discovered MCP tools into the
@@ -286,8 +299,10 @@ func buildFantasyToolsWithRoster(
 			mcpSkippedOptional++
 			continue
 		}
-		// Gate 2: per-server tool allowlist.
-		if list := allow.toolsFor(st.ServerName); len(list) > 0 && !slices.Contains(list, st.Tool.Name) {
+		// Gate 2: per-server tool allowlist. An absent entry allows all, unless
+		// the run narrowed its roster (exclusiveAllowlist, #1603): then the
+		// allowlist is exhaustive and an ungoverned server registers nothing.
+		if list := allow.toolsFor(st.ServerName); (len(list) > 0 || cfg.exclusiveAllowlist) && !slices.Contains(list, st.Tool.Name) {
 			mcpSkippedAllowlist++
 			continue
 		}
@@ -682,3 +697,15 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 
 func (m *mcpTool) ProviderOptions() fantasy.ProviderOptions     { return m.providerOptions }
 func (m *mcpTool) SetProviderOptions(o fantasy.ProviderOptions) { m.providerOptions = o }
+
+// noteRosterNarrowing writes the `[roster] <narrowing>: N mcp tools registered`
+// breadcrumb for a run whose roster was narrowed (RunConfig.MCPRosterNarrowing,
+// #1603); a no-op otherwise. N counts every MCP tool that survived the gates,
+// registered directly or deferred behind the disclosure bridges.
+func noteRosterNarrowing(logSession *LogSession, narrowing string, roster toolRoster) {
+	if narrowing == "" {
+		return
+	}
+	logSession.AddMessage(roleUser, fmt.Sprintf("[roster] %s: %d mcp tools registered",
+		narrowing, len(roster.directMCP)+roster.deferredMCP), nil, nil)
+}
