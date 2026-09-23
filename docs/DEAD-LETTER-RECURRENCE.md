@@ -45,7 +45,7 @@ does.
     stopped", with the reason in the task summary and on hover.
 - **Recovery: replay with a corrected prompt.** A plain replay is refused,
   because it would rerun the malformed prompt: `fleet sched dlq replay` exits
-  6 and names the validation error.
+  1 (a refused write) and names the validation error.
   - `fleet sched dlq replay --prompt-file <file> <task_id>` replaces the prompt
     (validated) and replays the same row. The schedule, task memory and
     lineage continue, and the successor carries the corrected prompt.
@@ -113,5 +113,8 @@ upgrade.
   day continues, two is systemic.
 - Spawning inside the lease-recovery UPDATE itself (would need RETURNING
   the quarantined rows). The sweep covers it.
-- Out-of-band notification when a chain parks. The log line is the signal
-  today.
+- A separate notification when the `ReconcileRecurrences` sweep performs the
+  park (after a transient database error deferred it past the dead-letter
+  write). The usual park, in the dead-letter write, is announced in the
+  failure notification ("Schedule stopped: <reason>"); a sweep park records
+  the same reason for the Operations Center and logs it, but sends nothing.
