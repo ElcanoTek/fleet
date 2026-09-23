@@ -144,9 +144,9 @@ type fakeChatStore struct {
 	// releaseFailures / bindFailures make that many ReleaseDirectInput /
 	// BindInputTurn calls fail first.
 	releaseFailures, bindFailures, settleFailures int
-	// bindLostAcks makes that many binds commit and then report an error
-	// (the database acknowledgement was lost).
-	bindLostAcks int
+	// bindLostAcks / claimLostAcks make that many binds / direct claims
+	// commit and then report an error (the acknowledgement was lost).
+	bindLostAcks, claimLostAcks int
 	// onClaim runs after a direct claim is stored; onMemories when turn
 	// preparation reads memories (both outside the fake's lock).
 	onClaim    func(store.InputQueueRow)
@@ -956,7 +956,14 @@ func (s *fakeChatStore) ClaimDirectInput(_ context.Context, r store.InputQueueRo
 	r.CreatedAt, r.UpdatedAt, r.AcceptedSeq = now, now, s.acceptedSeq.Add(1)
 	s.queue = append(s.queue, r)
 	hook := s.onClaim
+	lost := s.claimLostAcks > 0
+	if lost {
+		s.claimLostAcks--
+	}
 	s.mu.Unlock()
+	if lost {
+		return store.InputQueueRow{}, false, errors.New("fake: claim acknowledgement lost")
+	}
 	if hook != nil {
 		hook(r)
 	}
@@ -1385,5 +1392,26 @@ func TestDirectClaim_BoundClaimOfAnAbortedLaunchIsSettled(t *testing.T) {
 	}
 	if rows := st.directRows(); len(rows) != 1 || rows[0].State != store.InputStateCancelled {
 		t.Fatalf("claim = %+v, want one cancelled row", rows)
+	}
+}
+
+// A claim that committed but reported an error (its acknowledgement lost) runs
+// no turn, so it is released rather than left "running" to answer every
+// resend of its key "already running".
+func TestDirectClaim_LostClaimAckIsReleased(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	st.claimLostAcks = 1
+	srv := newDefaultChatServer(t, eng, st)
+	w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "claim-lost-1"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if rows := st.directRows(); len(rows) != 0 {
+		t.Fatalf("the possibly committed claim was left behind: %+v", rows)
+	}
+	// The resend now runs instead of being answered "already running".
+	if w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": "conv-1", "input_id": "claim-lost-1"}); w.Code != http.StatusOK || eng.turns != 1 {
+		t.Fatalf("resend: status %d, turns %d", w.Code, eng.turns)
 	}
 }

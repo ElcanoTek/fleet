@@ -492,7 +492,14 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 		err = a.reconcileLost(id, key)
 	} else {
 		select {
-		case <-streamDone: // the request ended before fleet started a turn
+		case <-streamDone:
+			// The response ended before naming a conversation. That proves
+			// only that the answer stopped, not that fleet ran nothing: what
+			// the answer was decides (promptOnce reconciles an unknown
+			// outcome, which with no conversation to name is unconfirmed; an
+			// acceptance is stopped by its key; a refusal needs nothing).
+			stopped <- stopOutcome{}
+			return
 		default:
 			err = errors.New("fleet never reported the conversation id, so there was nothing to address the Stop to")
 		}

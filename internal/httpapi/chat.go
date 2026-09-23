@@ -500,13 +500,19 @@ func (s *Server) claimDirectInput(w http.ResponseWriter, r *http.Request, user s
 	if clientID == "" {
 		return nil, false
 	}
+	claimID := uuid.NewString()
 	row, created, err := s.store.ClaimDirectInput(r.Context(), store.InputQueueRow{
-		ID: uuid.NewString(), ConversationID: conv.ID, UserEmail: user,
+		ID: claimID, ConversationID: conv.ID, UserEmail: user,
 		ClientInputID: clientID, SubmissionID: strings.TrimSpace(req.SubmissionID),
 		Message: req.Message, Attachments: inputAttachmentsJSON(req),
 	})
 	if err != nil {
+		// The claim may have committed with its acknowledgement lost. No
+		// turn will run under it, so it is released (by its own id — never
+		// another submission's claim) rather than left 'running' to answer
+		// every resend "already running".
 		releaseSlot()
+		s.releaseDirectInput(claimID)
 		http.Error(w, "input claim failed: "+err.Error(), http.StatusInternalServerError)
 		return nil, true
 	}

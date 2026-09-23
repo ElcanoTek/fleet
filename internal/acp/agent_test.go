@@ -1418,3 +1418,40 @@ func TestServerErrorKeepsTheKey(t *testing.T) {
 		})
 	}
 }
+
+// A cancel that lands before the answer names a conversation, followed by the
+// answer being lost, is not a confirmed stop: fleet may have started the turn.
+func TestCancelThenLostFirstAnswerIsUnconfirmed(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		close(started)
+		<-cancelled
+		if conn, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
+			_ = conn.Close() // accepted, then the whole answer is lost
+		}
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "first job")
+		done <- r
+	}()
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // the stop watcher is waiting on the answer
+	close(cancelled)
+	select {
+	case r := <-done:
+		if r.StopReason != acpsdk.StopReasonCancelled {
+			t.Fatalf("stopReason = %q", r.StopReason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	if !strings.Contains(h.client.text(), "could not confirm") {
+		t.Errorf("a lost first answer after cancel was reported as a confirmed stop: %q", h.client.text())
+	}
+}
