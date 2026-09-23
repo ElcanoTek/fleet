@@ -583,7 +583,7 @@ func (c *Client) RemoveQueued(convID, inputID string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("remove queued input returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
+		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("remove queued input returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))}
 	}
 	return nil
 }

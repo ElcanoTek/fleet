@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -139,6 +140,8 @@ type fakeChatStore struct {
 	toolCalls         []store.ToolCallEntry
 	queue             []store.InputQueueRow
 	acceptedSeq       atomic.Int64
+	// releaseFailures makes that many ReleaseDirectInput calls fail first.
+	releaseFailures int
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -937,6 +940,10 @@ func (s *fakeChatStore) ClaimDirectInput(_ context.Context, r store.InputQueueRo
 func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.releaseFailures > 0 {
+		s.releaseFailures--
+		return errors.New("fake: release failed")
+	}
 	kept := s.queue[:0]
 	for _, it := range s.queue {
 		if it.ID != id || it.Mode != store.InputModeDirect || it.State != store.InputStateRunning || it.TurnID != "" {
@@ -1022,4 +1029,41 @@ func (s *fakeChatStore) PromoteQueuedInput(_ context.Context, _, convID, id stri
 		}
 	}
 	return false, nil
+}
+
+// A direct claim whose turn never launched must not outlive a failed release:
+// left behind with no turn, it would answer every resend of its key "already
+// running" until the next boot. The release is retried until it lands.
+func TestReleaseDirectInput_RetriesAFailedRelease(t *testing.T) {
+	prev := directReleaseBackoff
+	directReleaseBackoff = 5 * time.Millisecond
+	t.Cleanup(func() { directReleaseBackoff = prev })
+
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	row, claimed, err := st.ClaimDirectInput(t.Context(), store.InputQueueRow{
+		ID: "claim-1", ConversationID: "conv-1", UserEmail: "u@x.com", ClientInputID: "key-1",
+	})
+	if err != nil || !claimed {
+		t.Fatalf("claim: %+v %v %v", row, claimed, err)
+	}
+	st.mu.Lock()
+	st.releaseFailures = 3
+	st.mu.Unlock()
+
+	srv.releaseDirectInput("claim-1")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st.mu.Lock()
+		left := len(st.queue)
+		st.mu.Unlock()
+		if left == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the direct claim was never released after a failed release")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

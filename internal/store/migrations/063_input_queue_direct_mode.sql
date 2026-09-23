@@ -15,18 +15,11 @@
 -- promote all skip them, and boot recovery settles them (completed when the
 -- turn's user entry committed, else cancelled) rather than re-queueing them.
 --
--- The CHECK is replaced NOT VALID then validated, so the table is not held
--- under an ACCESS EXCLUSIVE lock while existing rows are scanned (every
--- existing row is 'queued' or 'steer', which the widened check accepts).
+-- The CHECK is replaced NOT VALID, which needs no scan, so the ACCESS
+-- EXCLUSIVE lock this statement takes is held only for the swap. Migrations
+-- run one file per transaction and a lock is held until commit, so the
+-- validation and the new index live in 064, their own transaction, rather
+-- than here under this lock.
 ALTER TABLE chat_input_queue DROP CONSTRAINT IF EXISTS chat_input_queue_mode_check;
 ALTER TABLE chat_input_queue
   ADD CONSTRAINT chat_input_queue_mode_check CHECK (mode IN ('queued', 'steer', 'direct')) NOT VALID;
-ALTER TABLE chat_input_queue VALIDATE CONSTRAINT chat_input_queue_mode_check;
-
--- A first submission carries no conversation id: the server creates the
--- conversation, and a response lost before any header leaves the caller
--- without one. Its resend must still find the input it already accepted, so
--- the key is also looked up per user (LookupInputForUser) before a new
--- conversation is created.
-CREATE INDEX IF NOT EXISTS chat_input_queue_user_key
-  ON chat_input_queue (user_email, client_input_id);

@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -88,6 +89,11 @@ type session struct {
 	mu     sync.Mutex // serializes prompts on this session
 	convID string
 	cwd    string
+	// ns scopes the keys built from a client messageId to this session. fleet
+	// looks a first prompt's key up per user (it has no conversation yet), and
+	// a client may number messageIds per session, so an unscoped key would
+	// match another session's prompt and answer this one with its replay.
+	ns string
 	// unsettled holds, per prompt text, the key of every prompt whose outcome
 	// is unknown (bounded by maxUnsettled): the request may
 	// have been accepted but the answer was lost (a transport failure). A
@@ -173,7 +179,7 @@ func (a *Agent) NewSession(_ context.Context, p acpsdk.NewSessionRequest) (acpsd
 	}
 	id := acpsdk.SessionId("fleet-acp-" + randomID())
 	a.mu.Lock()
-	a.sessions[id] = &session{cwd: p.Cwd}
+	a.sessions[id] = &session{cwd: p.Cwd, ns: randomID()}
 	a.mu.Unlock()
 	return acpsdk.NewSessionResponse{SessionId: id}, nil
 }
@@ -451,7 +457,7 @@ func idempotencyKey(messageID *string, sess *session, message string) string {
 		if k, ok := sess.rekeyed[strings.TrimSpace(*messageID)]; ok {
 			return k
 		}
-		return "acp-msg-" + strings.TrimSpace(*messageID)
+		return "acp-msg-" + sess.ns + "-" + strings.TrimSpace(*messageID)
 	}
 	if k, ok := sess.unsettled[message]; ok {
 		return k
@@ -496,34 +502,97 @@ func (a *Agent) stopAccepted(convID string, q *chattui.QueuedError) error {
 }
 
 // reconcileLost stops a prompt whose answer was lost, found by its key without
-// resubmitting it: a turn running for this submission (/inflight echoes the
-// submission id, which is the key) gets a targeted Stop, and a queue row with
-// this key is withdrawn. With no conversation known there is nothing to look
+// resubmitting it: a queue row with this key is withdrawn, and a turn running
+// for this submission (/inflight echoes the submission id, which is the key)
+// gets a targeted Stop. With no conversation known there is nothing to look
 // in, and the stop is reported as unconfirmed.
+//
+// The queue is read first, because a queued row can start running at any
+// moment. Withdrawing is atomic on the row still being queued, so either the
+// row is withdrawn or it has left the queue for a turn, which /inflight then
+// names. A row that started but whose turn /inflight does not name yet is
+// polled until the turn appears, the row ends, or reconcileWait runs out, and
+// then the stop is reported as unconfirmed rather than confirmed.
 func (a *Agent) reconcileLost(convID, key string) error {
 	if convID == "" {
 		return errors.New("fleet never reported the conversation, so the lost prompt cannot be found to stop")
 	}
-	var errs []error
-	if in, err := a.client.Inflight(convID); err != nil {
-		errs = append(errs, err)
-	} else if in.Running && in.SubmissionID == key && in.TurnID != "" {
-		if err := a.client.Cancel(convID, in.TurnID); err != nil {
-			errs = append(errs, err)
-		}
+	started, err := a.withdrawByKey(convID, key)
+	if err != nil {
+		return err
 	}
-	if items, err := a.client.QueueItems(convID); err != nil {
-		errs = append(errs, err)
-	} else {
-		for _, it := range items {
-			if it.ClientInputID == key && it.State == "queued" {
-				if err := a.client.RemoveQueued(convID, it.ID); err != nil {
-					errs = append(errs, err)
-				}
+	deadline := time.Now().Add(reconcileWait)
+	for {
+		in, err := a.client.Inflight(convID)
+		if err != nil {
+			return err
+		}
+		if in.Running && in.SubmissionID == key && in.TurnID != "" {
+			return a.client.Cancel(convID, in.TurnID)
+		}
+		if !started {
+			return nil
+		}
+		// The row started, but its turn is not (or no longer) running here.
+		if started, err = a.queueRowStarted(convID, key); err != nil || !started {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return errors.New("the lost prompt started running and its turn could not be found to stop")
+		}
+		time.Sleep(reconcilePoll)
+	}
+}
+
+// reconcileWait and reconcilePoll bound reconcileLost's wait for a queue row
+// that started running to show up as the running turn.
+var (
+	reconcileWait = 2 * time.Second
+	reconcilePoll = 50 * time.Millisecond
+)
+
+// withdrawByKey withdraws the queue row carrying key, if it is still queued.
+// started reports a row with this key that has left the queue for a turn
+// (already running, or it started before the withdrawal landed).
+func (a *Agent) withdrawByKey(convID, key string) (started bool, err error) {
+	items, err := a.client.QueueItems(convID)
+	if err != nil {
+		return false, err
+	}
+	for _, it := range items {
+		if it.ClientInputID != key {
+			continue
+		}
+		switch it.State {
+		case "queued":
+			err := a.client.RemoveQueued(convID, it.ID)
+			var se *chattui.StatusError
+			switch {
+			case err == nil:
+			case errors.As(err, &se) && se.Code == http.StatusConflict:
+				started = true // it started between the read and the withdrawal
+			default:
+				return false, err
 			}
+		case "running":
+			started = true
 		}
 	}
-	return errors.Join(errs...)
+	return started, nil
+}
+
+// queueRowStarted reports whether the queue row carrying key is running.
+func (a *Agent) queueRowStarted(convID, key string) (bool, error) {
+	items, err := a.client.QueueItems(convID)
+	if err != nil {
+		return false, err
+	}
+	for _, it := range items {
+		if it.ClientInputID == key && it.State == "running" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // acceptedNote tells the ACP user what became of a prompt fleet accepted

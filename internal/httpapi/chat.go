@@ -488,18 +488,43 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// directReleaseRetries bounds the background retries of a failed release,
+// with delays doubling from directReleaseBackoff (about a minute in total).
+const directReleaseRetries = 6
+
+var directReleaseBackoff = time.Second // a var so tests can shorten it
+
 // releaseDirectInput frees a direct claim whose turn never launched, so its
-// key can be retried. Best-effort and bounded: a leftover claim is settled as
-// cancelled by boot recovery.
+// key can be retried. A failed release is retried in the background: a claim
+// left behind with no turn reads as "already running" to every resend of its
+// key, and nothing would ever settle it before the next boot recovery.
 func (s *Server) releaseDirectInput(id string) {
-	if id == "" {
+	if id == "" || s.tryReleaseDirectInput(id) {
 		return
 	}
+	s.retryReleaseDirectInput(id, 1, directReleaseBackoff)
+}
+
+func (s *Server) tryReleaseDirectInput(id string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.ReleaseDirectInput(ctx, id); err != nil {
 		log.Printf("release direct input (input=%s): %v", id, err)
+		return false
 	}
+	return true
+}
+
+func (s *Server) retryReleaseDirectInput(id string, attempt int, delay time.Duration) {
+	if attempt > directReleaseRetries {
+		log.Printf("release direct input (input=%s): giving up after %d retries; boot recovery settles it", id, directReleaseRetries)
+		return
+	}
+	s.background.After("httpapi.direct_release", delay, func() {
+		if !s.tryReleaseDirectInput(id) {
+			s.retryReleaseDirectInput(id, attempt+1, 2*delay)
+		}
+	})
 }
 
 // inputAttachmentsJSON is the attachments column for an input row.

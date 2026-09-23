@@ -31,6 +31,11 @@ type fakeFleet struct {
 	// inflight and queue are what GET .../inflight and .../queue answer
 	// (JSON bodies); "" answers 404.
 	inflight, queue string
+	// inflightSeq, when set, overrides inflight with one body per GET, the
+	// last one repeating (a turn that appears between probes).
+	inflightSeq []string
+	// removeStatus is what DELETE .../queue/{id} answers (0 = 204).
+	removeStatus int
 
 	mu      sync.Mutex
 	chats   []chatReq
@@ -86,13 +91,30 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sw.emit("text.replace", map[string]any{"text": "Hello there"})
 		sw.emit("turn.completed", map[string]any{"prompt_tokens": 10, "completion_tokens": 4, "cached_tokens": 2})
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/inflight"):
-		f.serveJSON(w, f.inflight)
+		f.mu.Lock()
+		body := f.inflight
+		if len(f.inflightSeq) > 0 {
+			body = f.inflightSeq[0]
+			if len(f.inflightSeq) > 1 {
+				f.inflightSeq = f.inflightSeq[1:]
+			}
+		}
+		f.mu.Unlock()
+		f.serveJSON(w, body)
 	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/queue"):
-		f.serveJSON(w, f.queue)
+		f.mu.Lock()
+		body := f.queue
+		f.mu.Unlock()
+		f.serveJSON(w, body)
 	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/queue/"):
 		f.mu.Lock()
 		f.removed = append(f.removed, strings.TrimPrefix(r.URL.Path, "/conversations/"))
+		status := f.removeStatus
 		f.mu.Unlock()
+		if status != 0 {
+			http.Error(w, "input is no longer queued", status)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(r.URL.Path, "/conversations/") && strings.HasSuffix(r.URL.Path, "/cancel"):
 		b, _ := io.ReadAll(r.Body)
@@ -1013,7 +1035,7 @@ func TestRetryReusesTheIdempotencyKey(t *testing.T) {
 	if k(2) == k(1) {
 		t.Error("a different prompt reused the retried prompt's key")
 	}
-	if k(3) != "acp-msg-"+mid {
+	if !strings.HasPrefix(k(3), "acp-msg-") || !strings.HasSuffix(k(3), "-"+mid) {
 		t.Errorf("messageId key = %q", k(3))
 	}
 }
@@ -1119,7 +1141,7 @@ func TestNeverRunReplayIsResubmittedOnce(t *testing.T) {
 		t.Fatalf("chats = %d, want 3", len(h.fleet.chats))
 	}
 	k0, k1, k2 := h.fleet.chats[0].InputID, h.fleet.chats[1].InputID, h.fleet.chats[2].InputID
-	if k0 != "acp-msg-"+mid || k1 == k0 || k2 != k1 {
+	if !strings.HasPrefix(k0, "acp-msg-") || !strings.HasSuffix(k0, "-"+mid) || k1 == k0 || k2 != k1 {
 		t.Errorf("keys = %q, %q, %q; want the messageId key, then one fresh key reused by the resend", k0, k1, k2)
 	}
 }
@@ -1130,9 +1152,26 @@ func TestNeverRunReplayIsResubmittedOnce(t *testing.T) {
 func TestLostAnswerIsReconciledByKey(t *testing.T) {
 	for name, tc := range map[string]struct {
 		inflight, queue string
+		inflightSeq     []string
+		removeStatus    int
 		wantCancel      string
 		wantRemoved     string
 	}{
+		// The row started running after the previous turn ended: /inflight
+		// named someone else's turn at first, then this submission's.
+		"queued row that started running": {
+			inflightSeq: []string{`{"inflight":true,"turn_id":"someone-elses","submission_id":"other"}`, `{"inflight":true,"turn_id":"turn-L","submission_id":"KEY"}`},
+			queue:       `{"items":[{"id":"row-9","client_input_id":"KEY","state":"running"}]}`,
+			wantCancel:  `conv-L {"scope":"turn","turn_id":"turn-L"}`,
+		},
+		// The row was queued when read, but started before the withdrawal.
+		"queued row that started before the withdrawal": {
+			inflightSeq:  []string{`{"inflight":true,"turn_id":"turn-L","submission_id":"KEY"}`},
+			queue:        `{"items":[{"id":"row-9","client_input_id":"KEY","state":"queued"}]}`,
+			removeStatus: http.StatusConflict,
+			wantCancel:   `conv-L {"scope":"turn","turn_id":"turn-L"}`,
+			wantRemoved:  "conv-L/queue/row-9",
+		},
 		"running turn": {
 			inflight:   `{"inflight":true,"turn_id":"turn-L","submission_id":"KEY"}`,
 			queue:      `{"items":[]}`,
@@ -1171,6 +1210,10 @@ func TestLostAnswerIsReconciledByKey(t *testing.T) {
 			k := h.fleet.chats[1].InputID
 			h.fleet.inflight = strings.ReplaceAll(tc.inflight, "KEY", k)
 			h.fleet.queue = strings.ReplaceAll(tc.queue, "KEY", k)
+			for _, b := range tc.inflightSeq {
+				h.fleet.inflightSeq = append(h.fleet.inflightSeq, strings.ReplaceAll(b, "KEY", k))
+			}
+			h.fleet.removeStatus = tc.removeStatus
 			h.fleet.mu.Unlock()
 			if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
 				t.Fatal(err)
@@ -1228,5 +1271,27 @@ func TestUnresolvedKeysAreKeptPerPrompt(t *testing.T) {
 		if c.InputID == "" {
 			t.Errorf("chat %d sent no input_id", i)
 		}
+	}
+}
+
+// A client may number messageIds per session. fleet looks a first prompt's key
+// up per user, so the same messageId in two sessions must not share a key, or
+// the second session's prompt would be answered with the first one's replay.
+func TestMessageIdKeysAreScopedPerSession(t *testing.T) {
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-" + randomID()})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	mid := "1"
+	for range 2 {
+		sid := h.newSession(t)
+		if _, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("hi")}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 2 || h.fleet.chats[0].InputID == h.fleet.chats[1].InputID {
+		t.Fatalf("the same messageId in two sessions shared a key: %+v", h.fleet.chats)
 	}
 }
