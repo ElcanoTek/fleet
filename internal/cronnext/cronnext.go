@@ -1,18 +1,25 @@
 // Package cronnext computes a cron schedule's next occurrence correctly across
-// DST transitions of any size.
+// UTC-offset changes of any size.
 //
 // robfig/cron's SpecSchedule.Next walks wall-clock fields and repairs DST by
-// adding or subtracting whole hours. In a zone whose offset changes by a
-// fraction of an hour — Australia/Lord_Howe (30 minutes), Pacific/Chatham
-// (+12:45/+13:45) — that repair can land on the wrong side of midnight and
-// skip a day: Lord Howe "0 3 * * *" from 03:00 on 2026-04-04 returns Apr 6,
-// not Apr 5. Next here keeps robfig's parsing and field semantics (including
-// its day-of-month/day-of-week rule) but finds the occurrence by scanning the
-// zone's calendar as UTC-encoded wall clock — UTC has no DST — and mapping each
-// candidate to the real instant(s) that show it. A wall time the zone skips
-// (spring-forward) is not an occurrence; one it repeats (fall-back) can match
-// twice. The web form's next-run preview (web/src/app/shared/lib/cronNext.ts)
-// uses the same algorithm, so the two agree.
+// adding or subtracting whole hours. In a zone whose offset changes by
+// anything else — Australia/Lord_Howe's 30 minutes, Pacific/Chatham's
+// +12:45/+13:45, Pacific/Apia's skipped 2011-12-30 — that repair can skip a
+// day or loop forever: Lord Howe "0 3 * * *" from 03:00 on 2026-04-04
+// returned Apr 6, not Apr 5.
+//
+// Next here keeps robfig's parsing and field semantics but never does
+// wall-clock arithmetic across an offset change. It walks forward in real
+// time one zone period at a time (time.Time.ZoneBounds: a span with a single
+// UTC offset). Inside a period, wall clock = instant + offset exactly, so the
+// next matching wall time comes from robfig's own Next evaluated in UTC —
+// where it has no DST to get wrong — and maps back to a real instant by
+// subtracting that offset. A match that falls past the period's end did not
+// happen at that offset, so the walk moves on to the next period. That one
+// rule covers every case the zone database can throw at it: spring-forward
+// gaps and skipped days are never matched (no period shows them), a
+// fall-back hour's repeated times match in both periods, and offsets with
+// seconds or of any size need no special handling.
 package cronnext
 
 import (
@@ -21,143 +28,57 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const (
-	// UTC offsets span UTC-12 to UTC+14, so a wall-clock time encoded as a
-	// UTC instant is shown by a real instant no later than this after it.
-	maxBehind = 12 * time.Hour
-	// Offsets are probed this far either side of a day: past any transition
-	// that can touch the day's instants (no zone changes offset twice within).
-	probe = 36 * time.Hour
-	// Same horizon robfig uses before giving up.
-	horizonDays = 5 * 366
+// horizon is how far ahead Next looks before reporting no occurrence — the
+// same five years robfig's own Next searches.
+const horizon = 5 * 366 * 24 * time.Hour
 
-	starBit = 1 << 63
-)
+// maxPeriods bounds the walk: real zones change offset a few times a year,
+// so this is never reached before the horizon; it only stops a pathological
+// location from spinning.
+const maxPeriods = 1000
 
 // Next returns the first occurrence of s strictly after t, in t's location,
 // or the zero time when there is none within five years. A schedule that is
-// not a standard minute-resolution SpecSchedule (a seconds field, @every)
-// is delegated to s.Next unchanged.
+// not a SpecSchedule (@every) is delegated to s.Next unchanged.
 func Next(s cron.Schedule, t time.Time) time.Time {
 	spec, ok := s.(*cron.SpecSchedule)
-	if !ok || spec.Second != 1 {
+	if !ok {
 		return s.Next(t)
 	}
 	loc := t.Location()
 	if spec.Location != nil && spec.Location != time.Local {
 		loc = spec.Location // CRON_TZ= prefix, as robfig honours it
 	}
+	utc := *spec
+	utc.Location = time.UTC
 
-	after := t.Truncate(time.Minute).Add(time.Minute) // strictly after t
-	y, mo, d := after.In(loc).Date()
-	// Start a day early: a transition at midnight can put the next instant on
-	// an earlier wall-clock date than `after` reads.
-	day := time.Date(y, mo, d, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
+	deadline := t.Add(horizon)
+	at := t.In(loc)
+	strictlyAfter := true // the first period excludes t itself; later ones start inclusive
+	for i := 0; i < maxPeriods && !at.After(deadline); i++ {
+		_, offsetSecs := at.Zone()
+		offset := time.Duration(offsetSecs) * time.Second
+		_, end := at.ZoneBounds() // zero end: this offset holds forever
 
-	for i := 0; i <= horizonDays; i, day = i+1, day.AddDate(0, 0, 1) {
-		if !bit(spec.Month, int(day.Month())) || !dayMatches(spec, day) {
-			continue
+		// The wall clock `at` shows, as a UTC time, and robfig's next match
+		// after it (at or after it, for a period we just entered).
+		wall := time.Date(at.Year(), at.Month(), at.Day(), at.Hour(), at.Minute(), at.Second(), at.Nanosecond(), time.UTC)
+		if !strictlyAfter {
+			wall = wall.Add(-time.Nanosecond)
 		}
-		if day.Add(24*time.Hour + maxBehind).Before(after) {
-			continue // every instant of this day is already past
+		match := utc.Next(wall)
+		if match.IsZero() {
+			return time.Time{}
 		}
-		before := offsetAt(day.Add(-probe), loc)
-		later := offsetAt(day.Add(24*time.Hour+probe), loc)
-		offsets := []time.Duration{before}
-		if later != before {
-			offsets = append(offsets, later)
-		}
-
-		if len(offsets) == 1 {
-			// No offset change can touch this day: wall → instant is a fixed
-			// shift, so instants are in wall order and the first candidate at
-			// or past `after` is the answer. Jump straight to it rather than
-			// walking the minutes before it (the Upcoming forecast calls this
-			// hundreds of times per task).
-			if next, ok := firstOnDay(spec, day, after.Add(offsets[0])); ok {
-				return next.Add(-offsets[0]).In(t.Location())
+		instant := match.Add(-offset)
+		if end.IsZero() || instant.Before(end) {
+			if instant.After(deadline) {
+				return time.Time{}
 			}
-			continue
+			return instant.In(t.Location())
 		}
-
-		// Around a transition, wall order and instant order disagree inside a
-		// repeated hour, so take the earliest qualifying instant of the day.
-		var best time.Time
-		for h := 0; h < 24; h++ {
-			if !bit(spec.Hour, h) {
-				continue
-			}
-			for m := 0; m < 60; m++ {
-				if !bit(spec.Minute, m) {
-					continue
-				}
-				wall := day.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute)
-				for _, off := range offsets {
-					instant := wall.Add(-off)
-					if instant.Before(after) || (!best.IsZero() && !instant.Before(best)) {
-						continue
-					}
-					// Only an instant that reads back as exactly this wall time
-					// — date included — is real. That drops the wrong-offset
-					// candidate, a spring-forward gap time, and a date the zone
-					// skipped outright (Pacific/Apia jumped from 2011-12-29 to
-					// 2011-12-31, so "30 12" never happened that year).
-					if !readsAs(instant.In(loc), wall) {
-						continue
-					}
-					best = instant
-				}
-			}
-		}
-		if !best.IsZero() {
-			return best.In(t.Location())
-		}
+		at = end.In(loc)
+		strictlyAfter = false
 	}
 	return time.Time{}
-}
-
-// firstOnDay returns the first wall time on day that s matches at or after
-// notBefore (both UTC-encoded wall clock), skipping whole hours at a time.
-func firstOnDay(s *cron.SpecSchedule, day, notBefore time.Time) (time.Time, bool) {
-	for h := 0; h < 24; h++ {
-		hourStart := day.Add(time.Duration(h) * time.Hour)
-		if !bit(s.Hour, h) || !hourStart.Add(time.Hour).After(notBefore) {
-			continue
-		}
-		for m := 0; m < 60; m++ {
-			if !bit(s.Minute, m) {
-				continue
-			}
-			if wall := hourStart.Add(time.Duration(m) * time.Minute); !wall.Before(notBefore) {
-				return wall, true
-			}
-		}
-	}
-	return time.Time{}, false
-}
-
-// readsAs reports whether local shows exactly the UTC-encoded wall time wall.
-func readsAs(local, wall time.Time) bool {
-	y, mo, d := local.Date()
-	wy, wmo, wd := wall.Date()
-	return y == wy && mo == wmo && d == wd && local.Hour() == wall.Hour() && local.Minute() == wall.Minute()
-}
-
-// offsetAt is how far loc's wall clock runs ahead of UTC at instant at.
-func offsetAt(at time.Time, loc *time.Location) time.Duration {
-	_, secs := at.In(loc).Zone()
-	return time.Duration(secs) * time.Second
-}
-
-func bit(field uint64, v int) bool { return field&(1<<uint(v)) != 0 }
-
-// dayMatches is robfig's rule: when either day field is "*" both must match,
-// otherwise either may.
-func dayMatches(s *cron.SpecSchedule, day time.Time) bool {
-	domMatch := bit(s.Dom, day.Day())
-	dowMatch := bit(s.Dow, int(day.Weekday()))
-	if s.Dom&starBit > 0 || s.Dow&starBit > 0 {
-		return domMatch && dowMatch
-	}
-	return domMatch || dowMatch
 }

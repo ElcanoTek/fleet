@@ -7,17 +7,55 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// bruteNext is the ground truth: step one minute at a time from just after t
-// and return the first real instant whose wall clock in loc matches s.
+const starBit = 1 << 63
+
+func bit(field uint64, v int) bool { return field&(1<<uint(v)) != 0 }
+
+// dayMatches is robfig's rule: when either day field is "*" both must match,
+// otherwise either may.
+func dayMatches(s *cron.SpecSchedule, day time.Time) bool {
+	domMatch := bit(s.Dom, day.Day())
+	dowMatch := bit(s.Dow, int(day.Weekday()))
+	if s.Dom&starBit > 0 || s.Dow&starBit > 0 {
+		return domMatch && dowMatch
+	}
+	return domMatch || dowMatch
+}
+
+func offsetAt(at time.Time, loc *time.Location) time.Duration {
+	_, secs := at.In(loc).Zone()
+	return time.Duration(secs) * time.Second
+}
+
+// bruteNext is the ground truth for zones on whole-minute offsets (every
+// modern zone): step one minute at a time from just after t and return the
+// first real instant whose wall clock in loc matches s.
 func bruteNext(s *cron.SpecSchedule, t time.Time, loc *time.Location) time.Time {
 	at := t.Truncate(time.Minute).Add(time.Minute)
 	for i := 0; i < 60*24*40; i, at = i+1, at.Add(time.Minute) {
-		lt := at.In(loc)
-		if bit(s.Month, int(lt.Month())) && dayMatches(s, lt) && bit(s.Hour, lt.Hour()) && bit(s.Minute, lt.Minute()) {
+		if matchesAt(s, at.In(loc)) {
 			return at
 		}
 	}
 	return time.Time{}
+}
+
+// bruteNextSeconds is the ground truth for historical offsets with a seconds
+// part, which put local minute boundaries off the UTC minute grid: step one
+// second at a time, for at most three days.
+func bruteNextSeconds(s *cron.SpecSchedule, t time.Time, loc *time.Location) time.Time {
+	at := t.Truncate(time.Second).Add(time.Second)
+	for i := 0; i < 60*60*24*3; i, at = i+1, at.Add(time.Second) {
+		if matchesAt(s, at.In(loc)) {
+			return at
+		}
+	}
+	return time.Time{}
+}
+
+func matchesAt(s *cron.SpecSchedule, lt time.Time) bool {
+	return lt.Second() == 0 && bit(s.Month, int(lt.Month())) && dayMatches(s, lt) &&
+		bit(s.Hour, lt.Hour()) && bit(s.Minute, lt.Minute())
 }
 
 func mustParse(t *testing.T, expr string) cron.Schedule {
@@ -60,7 +98,8 @@ func TestNext_MatchesBruteForceAroundTransitions(t *testing.T) {
 	zones := []string{
 		"America/New_York", "Europe/London", "Pacific/Auckland", "Australia/Lord_Howe",
 		"Pacific/Chatham", "America/Santiago", "America/Havana", "Asia/Tokyo", "UTC",
-		"Africa/Casablanca", "America/St_Johns",
+		"Africa/Casablanca", "America/St_Johns", "Pacific/Apia", "Antarctica/Casey",
+		"Antarctica/Troll", "America/Godthab", "Asia/Gaza",
 	}
 	exprs := []string{"30 2 * * *", "0 3 * * *", "45 1,2 * * *", "*/15 * * * *", "0 0 * * *", "0 23 * * 1-5", "30 0 1 * *"}
 	for _, z := range zones {
@@ -165,5 +204,34 @@ func TestNext_DenseScheduleIsCheapToChain(t *testing.T) {
 	robfig := chain(s.Next)
 	if ours > 5*robfig+50*time.Millisecond {
 		t.Fatalf("200x366 chained Next took %s; robfig took %s", ours, robfig)
+	}
+}
+
+// Historical zone periods the fixed-offset shortcuts got wrong: a four-second
+// offset change (the 1914 midnight in Manaus never happened), a pre-1845
+// offset beyond UTC-12 (Guam at UTC-14:21), and a backward jump across
+// midnight (Antarctica/Casey, +11 → +8 on 2010-03-05). Each is checked against
+// the second-stepping brute force.
+func TestNext_HistoricalOffsets(t *testing.T) {
+	cases := []struct {
+		zone, expr string
+		from       time.Time // interpreted in zone
+	}{
+		{"America/Manaus", "0 0 * * *", time.Date(1913, 12, 31, 23, 59, 0, 0, time.UTC)},
+		{"Pacific/Guam", "0 23 * * *", time.Date(1840, 6, 1, 22, 0, 0, 0, time.UTC)},
+		{"Antarctica/Casey", "* * * * *", time.Date(2010, 3, 5, 0, 0, 0, 0, time.UTC)},
+		{"Antarctica/Casey", "30 23 * * *", time.Date(2010, 3, 4, 23, 45, 0, 0, time.UTC)},
+	}
+	for _, c := range cases {
+		loc := mustLoad(t, c.zone)
+		from := time.Date(c.from.Year(), c.from.Month(), c.from.Day(), c.from.Hour(), c.from.Minute(), 0, 0, loc)
+		s := mustParse(t, c.expr)
+		want := bruteNextSeconds(s.(*cron.SpecSchedule), from, loc)
+		if want.IsZero() {
+			t.Fatalf("%s %q from %s: brute force found nothing within three days", c.zone, c.expr, from)
+		}
+		if got := Next(s, from); !got.Equal(want) {
+			t.Errorf("%s %q from %s: Next = %s, brute force = %s", c.zone, c.expr, from, got, want.In(loc))
+		}
 	}
 }

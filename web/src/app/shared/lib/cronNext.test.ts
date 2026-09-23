@@ -177,6 +177,14 @@ describe("nextCronOccurrence in a named time zone", () => {
     expect(next!.toISOString()).toBe("2012-01-29T22:00:00.000Z");
   });
 
+  it("a backward jump across midnight is ordered by instant (Antarctica/Casey, 2010)", () => {
+    // +11 → +8 at 2010-03-05 00:00 local: from 13:00Z (00:00 +11), the next
+    // minute is 13:01Z (00:01 +11), not the post-jump 23:00 +8 on Mar 4.
+    const from = new Date(Date.UTC(2010, 2, 4, 13, 0, 0));
+    const next = nextCronOccurrence("* * * * *", from, "Antarctica/Casey");
+    expect(next!.toISOString()).toBe("2010-03-04T13:01:00.000Z");
+  });
+
   it("returns null for an unknown zone", () => {
     expect(nextCronOccurrence("0 8 * * *", NOON_UTC, "Mars/Olympus_Mons")).toBeNull();
   });

@@ -53,9 +53,14 @@ Eastern. What shipped:
   Pacific/Chatham, where robfig itself skipped a day around the transition
   (e.g. Lord Howe `0 3 * * *` from 2026-04-04 03:00 returned Apr 6, not Apr 5).
   The scheduler now computes every zone-aware next run through
-  `internal/cronnext.Next`, the same algorithm in Go, so the preview and the
-  scheduler agree there too (pinned by `TestNext_LordHoweDoesNotSkipADay` and a
-  brute-force differential test around every 2026 transition). Days with no offset
+  `internal/cronnext.Next`, so the preview and the scheduler agree there too.
+  It walks forward one zone period at a time (`time.Time.ZoneBounds`, a span
+  with a single UTC offset) and asks robfig for the next match in UTC inside
+  each one, so it needs no DST repair at all. A throwaway sweep matched a
+  second-stepping brute force in all 497 IANA zones around every transition
+  from 1890 to 2040 (~1.13M cases); the committed tests pin Lord Howe, Apia's
+  skipped day, historical seconds-sized and beyond-UTC−12 offsets, and a
+  brute-force differential around every 2026 transition. Days with no offset
   change are computed by arithmetic, and the form memoizes the preview and
   the zone list, so neither re-runs on unrelated keystrokes. The zone label's
   abbreviation is the one in effect at that next run, and the "not your own
