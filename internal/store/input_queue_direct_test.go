@@ -73,7 +73,7 @@ func TestReleaseDirectInput_OnlyAnUnlaunchedClaim(t *testing.T) {
 	}
 
 	bound, _ := claimDirect(t, s, convID, "bound")
-	if err := s.BindInputTurn(ctx, bound.ID, "t1"); err != nil {
+	if _, err := s.BindInputTurn(ctx, bound.ID, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ReleaseDirectInput(ctx, bound.ID); err != nil {
@@ -90,7 +90,7 @@ func TestSettleDirectInput_CompletedOnlyWhenTheInputRan(t *testing.T) {
 	convID := seedConvAndTurn(t, s, "t1")
 
 	ran, _ := claimDirect(t, s, convID, "ran")
-	if err := s.BindInputTurn(ctx, ran.ID, "t1"); err != nil {
+	if _, err := s.BindInputTurn(ctx, ran.ID, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "do it")); err != nil {
@@ -104,7 +104,7 @@ func TestSettleDirectInput_CompletedOnlyWhenTheInputRan(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed, _ := claimDirect(t, s, convID, "failed")
-	if err := s.BindInputTurn(ctx, failed.ID, "t2"); err != nil {
+	if _, err := s.BindInputTurn(ctx, failed.ID, "t2"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SettleDirectInput(ctx, failed.ID, "t2"); err != nil {
@@ -127,7 +127,7 @@ func TestRecoverInputQueue_SettlesDirectClaims(t *testing.T) {
 	convID := seedConvAndTurn(t, s, "t1")
 
 	ran, _ := claimDirect(t, s, convID, "ran")
-	if err := s.BindInputTurn(ctx, ran.ID, "t1"); err != nil {
+	if _, err := s.BindInputTurn(ctx, ran.ID, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "do it")); err != nil {
@@ -137,7 +137,7 @@ func TestRecoverInputQueue_SettlesDirectClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	died, _ := claimDirect(t, s, convID, "died")
-	if err := s.BindInputTurn(ctx, died.ID, "t2"); err != nil {
+	if _, err := s.BindInputTurn(ctx, died.ID, "t2"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -168,48 +168,6 @@ func TestLookupInputForUser_FindsTheKeyAcrossConversations(t *testing.T) {
 	}
 }
 
-// LockInputKey serializes one (user, key) — across connections, so across
-// fleet processes — and leaves other keys and users alone.
-func TestLockInputKey_SerializesOneKey(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	unlock, err := s.LockInputKey(ctx, "u@example.com", "k1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, other := range [][2]string{{"u@example.com", "k2"}, {"v@example.com", "k1"}} {
-		u2, err := s.LockInputKey(ctx, other[0], other[1])
-		if err != nil {
-			t.Fatalf("lock %v: %v", other, err)
-		}
-		u2()
-	}
-	acquired := make(chan func(), 1)
-	go func() {
-		u, err := s.LockInputKey(ctx, "u@example.com", "k1")
-		if err != nil {
-			t.Errorf("second lock: %v", err)
-			close(acquired)
-			return
-		}
-		acquired <- u
-	}()
-	select {
-	case <-acquired:
-		t.Fatal("the same key was locked twice")
-	case <-time.After(200 * time.Millisecond):
-	}
-	unlock()
-	select {
-	case u := <-acquired:
-		if u != nil {
-			u()
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the key stayed locked after unlock")
-	}
-}
-
 // ReleaseDirectInput on a claim already bound to its (aborted) turn cannot
 // drop it as unbound; it settles it cancelled, since nothing ran.
 func TestReleaseDirectInput_SettlesABoundClaim(t *testing.T) {
@@ -217,7 +175,7 @@ func TestReleaseDirectInput_SettlesABoundClaim(t *testing.T) {
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t-rel")
 	row, _ := claimDirect(t, s, convID, "bound-1")
-	if err := s.BindInputTurn(ctx, row.ID, "aborted-turn"); err != nil {
+	if _, err := s.BindInputTurn(ctx, row.ID, "aborted-turn"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ReleaseDirectInput(ctx, row.ID); err != nil {

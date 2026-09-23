@@ -97,10 +97,9 @@ type chatStore interface {
 	AcceptedInputSeq() int64
 	RemoveQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
 	PromoteQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
-	BindInputTurn(ctx context.Context, id, turnID string) error
+	BindInputTurn(ctx context.Context, id, turnID string) (bool, error)
 	LookupInput(ctx context.Context, convID, clientID string) (*store.InputQueueRow, error)
 	LookupInputForUser(ctx context.Context, userEmail, clientID string) (*store.InputQueueRow, error)
-	LockInputKey(ctx context.Context, userEmail, key string) (func(), error)
 	SettleTurnInputs(ctx context.Context, turnID, drainedID string) (requeued, cancelled int, err error)
 	ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry) error
 	TruncateAfter(ctx context.Context, userEmail, convID string, afterMessageID int64) error

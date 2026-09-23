@@ -81,11 +81,12 @@ retention guarantee: after a terminal row is purged, reusing its
   starting a second one. Without that declaration the key stays
   conversation-scoped, so a client that numbers keys per conversation is never
   answered with another conversation's replay. Concurrent first submissions of
-  one key are serialized by a Postgres advisory lock on (user, key), held from
-  that lookup until the key is claimed, so the second finds the first one's
-  claim, across fleet processes too. The `queue.updated` SSE event carries a
-  full snapshot on every mutation, and `user.message` gains `{steered:true,
-  input_id}` when a steer is accepted.
+  one key are serialized by a per-(user, key) lock held from that lookup until
+  the key is claimed, so the second finds the first one's claim. The lock is
+  in-process, like the inflight registry the Stop gate relies on: the control
+  plane is single-replica by design (the Helm chart pins one replica). The
+  `queue.updated` SSE event carries a full snapshot on every mutation, and
+  `user.message` gains `{steered:true, input_id}` when a steer is accepted.
 
 (These are chat-surface routes; `docs/openapi.yaml` documents the orchestrator
 surface only, so the API contract lives here.)

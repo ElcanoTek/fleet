@@ -153,7 +153,8 @@ type fakeChatStore struct {
 	onMemories func()
 	// onCreate runs on each CreateConversation call, before it creates.
 	onCreate func()
-	keyLocks sync.Map
+	// claimAfterEnqueue marks each enqueued row claimed (running) at once.
+	claimAfterEnqueue bool
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -826,6 +827,10 @@ func (s *fakeChatStore) EnqueueInput(_ context.Context, r store.InputQueueRow) (
 	r.Position = int64(len(s.queue) + 1)
 	r.CreatedAt, r.UpdatedAt, r.AcceptedSeq = now, now, s.acceptedSeq.Add(1)
 	s.queue = append(s.queue, r)
+	if s.claimAfterEnqueue {
+		// A drain claims the row the moment it commits.
+		s.queue[len(s.queue)-1].State = store.InputStateRunning
+	}
 	return r, true, nil
 }
 
@@ -1011,36 +1016,25 @@ func (s *fakeChatStore) SettleDirectInput(_ context.Context, id, turnID string) 
 	return nil
 }
 
-func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) error {
+func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.bindFailures > 0 {
 		s.bindFailures--
-		return errors.New("fake: bind failed")
+		return false, errors.New("fake: bind failed")
+	}
+	bound := false
+	for i := range s.queue {
+		if s.queue[i].ID == id && (s.queue[i].State == store.InputStateRunning || s.queue[i].State == store.InputStateInjected) {
+			s.queue[i].TurnID = turnID
+			bound = true
+		}
 	}
 	if s.bindLostAcks > 0 {
 		s.bindLostAcks--
-		for i := range s.queue {
-			if s.queue[i].ID == id {
-				s.queue[i].TurnID = turnID
-			}
-		}
-		return errors.New("fake: bind acknowledgement lost")
+		return false, errors.New("fake: bind acknowledgement lost")
 	}
-	for i := range s.queue {
-		if s.queue[i].ID == id {
-			s.queue[i].TurnID = turnID
-		}
-	}
-	return nil
-}
-
-// LockInputKey mirrors the store's per-(user, key) lock in-process.
-func (s *fakeChatStore) LockInputKey(_ context.Context, userEmail, key string) (func(), error) {
-	v, _ := s.keyLocks.LoadOrStore(userEmail+"\x00"+key, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock, nil
+	return bound, nil
 }
 
 func (s *fakeChatStore) LookupInputForUser(_ context.Context, userEmail, clientID string) (*store.InputQueueRow, error) {
@@ -1454,5 +1448,52 @@ func TestCancelByInputKey_LateQueuedRowIsWithdrawn(t *testing.T) {
 	row, _ := st.LookupInput(context.Background(), conv.ID, "late-1")
 	if row == nil || row.State != store.InputStateCancelled {
 		t.Fatalf("row = %+v, want cancelled", row)
+	}
+}
+
+// A Stop by key whose queued row a drain claimed between the insert and the
+// withdrawal still cancels it durably, so the drain's bind finds it no longer
+// running and does not launch it (the in-memory mark alone expires).
+func TestCancelByInputKey_LateRowClaimedByADrainIsCancelled(t *testing.T) {
+	st := newFakeChatStore()
+	st.claimAfterEnqueue = true
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	_, _, tok, _ := srv.registerTurn(conv.ID, func() {})
+	defer srv.finishTurn(conv.ID, tok)
+	srv.cancelInput(context.Background(), "u@x.com", conv.ID, "late-2")
+
+	w := postChatRequest(t, srv, map[string]any{"message": "later", "conversation_id": conv.ID, "input_id": "late-2"})
+	if !strings.Contains(w.Body.String(), `"state":"cancelled"`) {
+		t.Fatalf("ack %d %s: want the claimed late row cancelled", w.Code, w.Body.String())
+	}
+	if row, _ := st.LookupInput(context.Background(), conv.ID, "late-2"); row == nil || row.State != store.InputStateCancelled {
+		t.Fatalf("row = %+v, want cancelled", row)
+	}
+}
+
+// A drained row cancelled after its claim is not launched: the bind finds it
+// no longer running.
+func TestQueuedLaunch_CancelledRowIsNotLaunched(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	st.mu.Lock()
+	st.queue = append(st.queue, store.InputQueueRow{ID: "r-c", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "k", Mode: store.InputModeQueued, State: store.InputStateCancelled, TurnID: "placeholder"})
+	st.mu.Unlock()
+	gen, _ := srv.stopGateForRow(conv.ID, 0)
+	var released atomic.Bool
+	ok := srv.startTurn(nil, nil, "u@x.com", conv, chatRequest{ConversationID: conv.ID, Message: "later"},
+		&queuedLaunch{rowID: "r-c", claimTurnID: "placeholder", sweepGen: gen, inputKey: "k"}, func() { released.Store(true) }, nil)
+	if !ok {
+		t.Fatal("startTurn reported a lost registration race")
+	}
+	time.Sleep(50 * time.Millisecond)
+	eng.mu.Lock()
+	turns := eng.turns
+	eng.mu.Unlock()
+	if turns != 0 || !released.Load() {
+		t.Fatalf("turns %d, slot released %v: a cancelled row must not launch", turns, released.Load())
 	}
 }

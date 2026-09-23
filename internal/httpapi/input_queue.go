@@ -232,12 +232,19 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	// set its mark before looking the row up, so either that lookup saw the
 	// row or this check sees the mark.
 	if created && s.inputKeyStopped(conv.ID, clientID) {
-		ok, rerr := s.store.RemoveQueuedInput(context.WithoutCancel(r.Context()), user, conv.ID, row.ID)
-		switch {
-		case rerr != nil:
+		wctx := context.WithoutCancel(r.Context())
+		ok, rerr := s.store.RemoveQueuedInput(wctx, user, conv.ID, row.ID)
+		if rerr == nil && !ok {
+			// A drain claimed it between the insert and here. Cancel it
+			// durably anyway: the drain's bind then finds it no longer
+			// running and does not launch it, however long its turn
+			// preparation takes (the in-memory mark alone expires).
+			rerr = s.store.MarkInputTerminal(wctx, row.ID, store.InputStateCancelled)
+		}
+		if rerr != nil {
 			// The mark still refuses the launch while it lives.
 			log.Printf("withdraw stopped input (conv=%s): %v", conv.ID, rerr)
-		case ok:
+		} else {
 			row.State = store.InputStateCancelled
 		}
 	}

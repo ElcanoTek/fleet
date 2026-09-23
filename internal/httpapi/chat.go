@@ -491,19 +491,17 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 // that input's acknowledgement. It takes the key's lock first, held until
 // the key is claimed (the returned unlock; a no-op when nothing was
 // locked), so a concurrent resend waits for the first request's claim
-// instead of both creating a conversation. handled reports that the
-// response was written.
+// instead of both creating a conversation. The lock is in-process: fleet's
+// control plane is single-replica by design (the inflight registry the Stop
+// gate relies on is too), and an in-process lock holds no database
+// connection while the protected work asks the pool for one. handled
+// reports that the response was written.
 func (s *Server) recoverFirstSubmission(w http.ResponseWriter, r *http.Request, user string, req chatRequest) (unlock func(), handled bool) {
 	clientID := strings.TrimSpace(req.InputID)
 	if clientID == "" || !strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
 		return func() {}, false
 	}
-	release, err := s.store.LockInputKey(r.Context(), user, clientID)
-	if err != nil {
-		http.Error(w, "input lock failed: "+err.Error(), http.StatusInternalServerError)
-		return func() {}, true
-	}
-	unlock = sync.OnceFunc(release)
+	unlock = sync.OnceFunc(s.inputKeyLocks.lock(user + "\x00" + clientID))
 	existing, err := s.store.LookupInputForUser(r.Context(), user, clientID)
 	if err != nil {
 		unlock()
@@ -622,10 +620,10 @@ func (s *Server) bindDirectInput(id, turnID string) bool {
 			time.Sleep(time.Duration(attempt) * directReleasePause)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := s.store.BindInputTurn(ctx, id, turnID)
+		bound, err := s.store.BindInputTurn(ctx, id, turnID)
 		cancel()
 		if err == nil {
-			return true
+			return bound // not bound: the claim is no longer running, so do not launch
 		}
 		log.Printf("bind direct input turn (input=%s turn=%s): %v", id, turnID, err)
 	}
@@ -824,10 +822,20 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// durable #798 record, and a stale placeholder would re-queue —
 		// double-run — an already-committed input after a crash.
 		bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.store.BindInputTurn(bctx, queueRowID, turnID); err != nil {
-			log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err)
-		}
+		bound, err := s.store.BindInputTurn(bctx, queueRowID, turnID)
 		bcancel()
+		if err != nil {
+			log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err)
+		} else if !bound {
+			// The row is no longer running: a Stop cancelled it durably
+			// after the drain claimed it. Its turn must not run.
+			turnCancel()
+			s.finishTurn(conv.ID, turnToken)
+			if releaseSlot != nil {
+				releaseSlot()
+			}
+			return true
+		}
 	}
 
 	// Wire incremental persistence so a crash mid-turn leaves a

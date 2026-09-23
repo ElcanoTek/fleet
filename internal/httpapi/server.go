@@ -131,6 +131,9 @@ type Server struct {
 	// so a key's turn is either cancelled or never launched, whichever side
 	// of registration the Stop lands on. Pruned after cancelledInputTTL.
 	cancelledInputs map[string]time.Time
+	// inputKeyLocks serializes the first submissions of one (user, key)
+	// (recoverFirstSubmission).
+	inputKeyLocks keyedLocks
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
 	// (branding + empty-state). nil in tests / mock mode that don't supply one;
@@ -967,5 +970,41 @@ func writeJSON(w http.ResponseWriter, v any) {
 	setJSONContentType(w)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("write json: %v", err)
+	}
+}
+
+// keyedLocks is a set of mutexes by key, each dropped once nobody holds or
+// waits on it.
+type keyedLocks struct {
+	mu sync.Mutex
+	m  map[string]*keyedLock
+}
+
+type keyedLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lock blocks until key is free, then holds it; the returned func releases it.
+func (k *keyedLocks) lock(key string) func() {
+	k.mu.Lock()
+	if k.m == nil {
+		k.m = make(map[string]*keyedLock)
+	}
+	l := k.m[key]
+	if l == nil {
+		l = &keyedLock{}
+		k.m[key] = l
+	}
+	l.refs++
+	k.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		k.mu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(k.m, key)
+		}
+		k.mu.Unlock()
 	}
 }
