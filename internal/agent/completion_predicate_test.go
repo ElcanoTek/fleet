@@ -484,7 +484,7 @@ func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
 		{"cross-server twin does not", true, toolExecRecord{Name: "mcp_pagesb_update_page_data_upload", Succeeded: true, Arguments: dealX}, []string{"mcp_pages_update_page_data"}},
 		{"client-variant twin does not", true, toolExecRecord{Name: "mcp_pages_client2_update_page_data_upload", Succeeded: true, Arguments: dealX}, []string{"mcp_pages_update_page_data"}},
 		{"no aliases: two actions", false, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: dealX}, []string{"mcp_pages_update_page_data"}},
-		{"last attempt is reported by its own name", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: false, Arguments: dealX}, []string{"mcp_pages_update_page_data_upload"}},
+		{"a failed twin supersedes nothing: both failures are reported", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: false, Arguments: dealX}, []string{"mcp_pages_update_page_data", "mcp_pages_update_page_data_upload"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pagesTwinPolicy(t, tc.aliased)
@@ -496,6 +496,35 @@ func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
 				t.Fatal("a landed twin must count as a succeeded critical call")
 			}
 		})
+	}
+}
+
+// A failed twin must not bridge two records: inline A fails, the upload twin
+// for A fails, then the upload succeeds for B. Nothing landed A, so the inline
+// failure stands — a failure supersedes nothing, and B is another record.
+func TestFailedCriticalCallsFailedTwinBridgesNothing(t *testing.T) {
+	pagesTwinPolicy(t, true)
+	records := []toolExecRecord{
+		{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: map[string]any{"/deal_id": "a"}},
+		{Name: "mcp_pages_update_page_data_upload", Succeeded: false, Arguments: map[string]any{"/deal_id": "a"}},
+		{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_id": "b"}},
+	}
+	if got := failedCriticalCalls(records); fmt.Sprint(got) != "[mcp_pages_update_page_data]" {
+		t.Fatalf("failedCriticalCalls = %v, want [mcp_pages_update_page_data]", got)
+	}
+}
+
+// A deal_ids batch whose members name no record ("n/a", "none") binds to
+// nothing, so two such batches never prove the same record — even when the
+// calls also carry different single-record ids.
+func TestFailedCriticalCallsPlaceholderBatchBindsNothing(t *testing.T) {
+	pagesTwinPolicy(t, true)
+	records := []toolExecRecord{
+		{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: map[string]any{"/deal_id": "a", "/deal_ids": []any{"n/a"}}},
+		{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_id": "b", "/deal_ids": []any{"none"}}},
+	}
+	if got := failedCriticalCalls(records); fmt.Sprint(got) != "[mcp_pages_update_page_data]" {
+		t.Fatalf("failedCriticalCalls = %v, want [mcp_pages_update_page_data]", got)
 	}
 }
 

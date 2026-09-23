@@ -776,10 +776,10 @@ func succeededCriticalCall(records []toolExecRecord) bool {
 	return false
 }
 
-// failedCriticalCalls names the critical actions whose LAST execution in the
-// run failed (same records and success classification as the verifier),
-// reporting the tool name of that last execution. A failed attempt that a
-// later attempt superseded does not count on its own:
+// failedCriticalCalls names the critical tools with a failed attempt that no
+// later SUCCESS superseded (same records and success classification as the
+// verifier), each name once. A failed attempt is superseded only by a later
+// success of:
 //   - the same tool again — a stale-version retry or corrected arguments;
 //   - the action's alias twin on the same server (agentcore.CriticalActionKey,
 //     critical_tool_aliases #1604) that wrote the same record — a failed inline
@@ -807,15 +807,21 @@ func failedCriticalCalls(records []toolExecRecord) []string {
 			if prior.superseded || prior.key != key {
 				continue
 			}
-			if prior.record.Name == r.Name || sameCallTarget(prior.record, r) {
+			// Only a SUCCESS supersedes. A failed attempt proves nothing
+			// landed, so letting it supersede would let it bridge lineages: a
+			// failed twin for record A clears A's failure, and a later success
+			// of that twin's name for record B clears the twin.
+			if r.Succeeded && (prior.record.Name == r.Name || sameCallTarget(prior.record, r)) {
 				prior.superseded = true
 			}
 		}
 		attempts = append(attempts, attempt{key: key, record: r})
 	}
 	var failed []string
+	reported := make(map[string]bool)
 	for _, a := range attempts {
-		if !a.superseded && !a.record.Succeeded {
+		if !a.superseded && !a.record.Succeeded && !reported[a.record.Name] {
+			reported[a.record.Name] = true
 			failed = append(failed, a.record.Name)
 		}
 	}

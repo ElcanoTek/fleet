@@ -285,8 +285,8 @@ something missing, Fleet stops with a “completion verification unresolved”
 error. The transcript retains completed actions and partial work; it does not
 mean a successful publish or send was undone. If the verifier itself cannot be
 reached (a timeout, a provider failure), Fleet retries it once. When the run's
-self-audit passed and its critical actions went through, with none whose last
-attempt failed, the run then succeeds, and its message starts with
+self-audit passed and its critical actions went through, with no failed
+attempt left unresolved, the run then succeeds, and its message starts with
 `[completion_unverified_verifier_error]`. A failed attempt that was then redone
 successfully does not count against it, so the transcript of such a run can
 still show that earlier failure.

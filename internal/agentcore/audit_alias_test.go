@@ -535,3 +535,19 @@ func TestCriticalActionKeyDoesNotCollideAcrossThePrefixBoundary(t *testing.T) {
 		t.Fatalf("sameAliasedTool(%s, %s) = true, want false", a, b)
 	}
 }
+
+// CallRecordBinding: a real batch or single id binds; a batch with any member
+// that names no record binds to nothing (stricter than pendingRecordKey).
+func TestCallRecordBinding(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{`{"deal_id":"d-1"}`, "id:d-1"},
+		{`{"deal_ids":["b","a"]}`, "ids:a\x00b"},
+		{`{"deal_ids":["n/a"]}`, ""},
+		{`{"deal_ids":["a","none"],"deal_id":"a"}`, ""},
+		{`{"slug":"x"}`, ""},
+	} {
+		if got := CallRecordBinding(tc.raw); got != tc.want {
+			t.Errorf("CallRecordBinding(%s) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
