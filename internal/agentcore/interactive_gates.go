@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -213,6 +214,10 @@ func (o *orchestrationState) checkScheduleTaskSafety(toolName, toolCallID, rawIn
 		return true, "SCHEDULE_TASK_UNAVAILABLE: creating scheduled tasks from chat requires an approval-enabled interactive session. Do NOT retry — tell the user to create the task from the Operations Center instead."
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	var refused *StageRefusedError
+	if errors.As(err, &refused) {
+		return true, "SCHEDULE_TASK_REFUSED: " + refused.Reason
+	}
 	if err != nil {
 		log.Printf("approval stage failed (schedule_task): %v", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage schedule_task for user approval (%v). Ask the user what to do.", err)
@@ -238,6 +243,10 @@ func (o *orchestrationState) checkManageTasksSafety(toolName, toolCallID, rawInp
 		return true, "MANAGE_TASKS_UNAVAILABLE: changing scheduled tasks from chat requires an approval-enabled interactive session. Do NOT retry — tell the user to edit the task in the Operations Center instead."
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	var refused *StageRefusedError
+	if errors.As(err, &refused) {
+		return true, "MANAGE_TASKS_REFUSED: " + refused.Reason
+	}
 	if err != nil {
 		log.Printf("approval stage failed (manage_tasks): %v", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage manage_tasks for user approval (%v). Ask the user what to do.", err)

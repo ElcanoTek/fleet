@@ -121,11 +121,16 @@ EXECUTION REQUIREMENTS (JSON):
 - **Validated when the task is saved (#1601)**, as well as at dispatch (below).
   A malformed declaration (a duplicate
   marker, bad JSON, a server or tool name outside `^[a-zA-Z0-9_.-]{1,200}$`, too
-  many names) is refused when the task is saved. That covers create, edit,
-  clone, import (HTTP and CLI) and batch. The message names the identifier,
-  e.g. `invalid server or tool identifier "fast_io + fastio_helpers"; allowed
-  ^[a-zA-Z0-9_.-]{1,200}$`.
-- **Dispatch and save share one grammar** (`models.ValidateExecutionRequirements`),
+  many names) is refused when the task is saved. That covers:
+  - create, edit, clone, import (HTTP and CLI) and batch;
+  - a chat `schedule_task` / `manage_tasks` call, refused before its approval
+    card is staged.
+
+  The message names the field, index and identifier, e.g. `invalid server or
+  tool identifier "fast_io + fastio_helpers" in mcp_servers[0]; allowed
+  ^[a-zA-Z0-9_.-]{1,200}$`. A missing, blank or oversized line after the
+  marker and a duplicate marker each have their own message.
+- **Dispatch and save share one parser** (`models.ParseExecutionRequirements`),
   so a prompt that saved cleanly never fails this check at dispatch. The one
   exception is a webhook or email trigger run: its prompt is rendered from the
   event at run time and is not re-validated on insert, so a rendered
@@ -135,10 +140,17 @@ EXECUTION REQUIREMENTS (JSON):
   still carries a malformed line dead-letters once and parks its chain at
   once, not after two occurrences
   ([ADR-0073](adr/0073-malformed-requirements-park-on-first-dead-letter.md)).
-  Replay reruns the same prompt and editing the finished task starts a one-off
-  run, so recreate the task (or clone it, which keeps the schedule) with a
-  corrected prompt. Imports check live (pending/scheduled) rows only;
-  terminal history is preserved verbatim.
+  The park records why, and the Operations Center says the schedule stopped.
+  The failure notification says so too, except when a transient database
+  error defers the park to the reconciliation sweep, which sends none.
+  - A plain replay is refused, since it would rerun the same line.
+  - `fleet sched dlq replay --prompt-file <file> <task_id>` replays the
+    occurrence with a corrected prompt, keeping its schedule and task memory
+    ([DEAD-LETTER-RECURRENCE.md](DEAD-LETTER-RECURRENCE.md)).
+  - Editing the finished task starts a one-off run.
+
+  Imports check live (pending/scheduled) rows only; terminal history is
+  preserved verbatim.
 
 Fleet checks this optional declaration at **dispatch**, before model execution.
 A sealed task/global lockdown produces an actionable network error. After the

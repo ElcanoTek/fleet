@@ -22,7 +22,14 @@ import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { useToast } from "@/app/shared/ui/Toast";
-import { createdByLabel, scheduleLabel, taskRunLabel, TaskSlaBadge } from "./taskDisplay";
+import {
+  createdByLabel,
+  scheduleLabel,
+  scheduleStoppedReason,
+  scheduleTitle,
+  taskRunLabel,
+  TaskSlaBadge,
+} from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import {
   Checklist,
@@ -144,12 +151,21 @@ function TaskSummary({ task }: { task: Task }) {
     {
       label: "Schedule",
       node: (
-        <span title={task.recurrence || undefined}>{schedule}</span>
+        <span title={scheduleTitle(task)}>{schedule}</span>
       ),
     },
     { label: "Created by", node: <span>{createdByLabel(task)}</span> },
     { label: "Created", node: <span>{formatTimeFirst(task.created_at)}</span> },
   ];
+  // A stopped schedule says so, and why, in the summary itself — a tooltip
+  // alone is invisible on a phone (ADR-0073).
+  const stopped = scheduleStoppedReason(task);
+  if (stopped) {
+    items.push({
+      label: "Schedule stopped",
+      node: <span data-testid="schedule-stopped">{stopped}</span>,
+    });
+  }
   if (task.status === "paused_awaiting_wake") {
     items.push({
       label: "Wake",

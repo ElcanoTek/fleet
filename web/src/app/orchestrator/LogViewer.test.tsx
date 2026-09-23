@@ -235,6 +235,33 @@ describe("LogViewer task-detail modal", () => {
     expect(summary).toHaveTextContent(/9:00 AM · Sat, Sun/);
   });
 
+  it("says a stopped schedule stopped, and why", async () => {
+    mockSession(RICH_SESSION);
+    const reason =
+      'execution requirements: invalid server or tool identifier "fast_io + fastio_helpers" in mcp_servers[0]; allowed ^[a-zA-Z0-9_.-]{1,200}$.';
+    render(
+      <LogViewer
+        task={{
+          ...DONE_TASK,
+          status: "dead_lettered",
+          recurrence_parked_at: "2026-09-22T18:00:05Z",
+          recurrence_parked_reason: reason,
+        }}
+        onClose={() => {}}
+      />,
+    );
+    const summary = await screen.findByTestId("task-summary");
+    expect(summary).toHaveTextContent("⏹ Schedule stopped");
+    expect(screen.getByTestId("schedule-stopped")).toHaveTextContent(reason);
+  });
+
+  it("shows no stop notice for a schedule that continues", async () => {
+    mockSession(RICH_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    await screen.findByTestId("task-summary");
+    expect(screen.queryByTestId("schedule-stopped")).toBeNull();
+  });
+
   it("renders session token totals and cost in the metrics strip", async () => {
     mockSession(RICH_SESSION);
     render(<LogViewer task={DONE_TASK} onClose={() => {}} />);

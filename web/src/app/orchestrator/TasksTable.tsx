@@ -6,7 +6,14 @@ import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { Icon } from "@/app/shared/ui/Icon";
 import { labelChipStyle } from "@/app/shared/lib/labelColors";
-import { createdByLabel, scheduleLabel, slaBadge, taskRunLabel, TaskSlaBadge } from "./taskDisplay";
+import {
+  createdByLabel,
+  scheduleLabel,
+  scheduleTitle,
+  slaBadge,
+  taskRunLabel,
+  TaskSlaBadge,
+} from "./taskDisplay";
 
 // Statuses whose tasks can be edited: pending/scheduled edit in place;
 // terminal ones reopen the form to resubmit with changes. In-flight tasks
@@ -409,7 +416,7 @@ export function TasksTable({
                     <td>
                       <TaskSlaBadge task={task} />
                     </td>
-                    <td title={task.recurrence || undefined}>{scheduleLabel(task)}</td>
+                    <td title={scheduleTitle(task)}>{scheduleLabel(task)}</td>
                     <td>{createdByLabel(task)}</td>
                     <td>{formatTimeFirst(task.created_at)}</td>
                     <td>
@@ -543,7 +550,7 @@ export function TasksTable({
                   <span className="task-card-meta">
                     <code>{task.id.slice(0, 8)}</code>
                     {scheduleLabel(task) !== "-" ? (
-                      <span title={task.recurrence || undefined}>{scheduleLabel(task)}</span>
+                      <span title={scheduleTitle(task)}>{scheduleLabel(task)}</span>
                     ) : null}
                     <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
                       {hasLogs ? "View logs" : "No logs"}

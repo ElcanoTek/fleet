@@ -19,7 +19,7 @@ import (
 // cmdSchedDLQ dispatches the dead-letter-queue operator verbs (#253):
 //
 //	fleet sched dlq list [--tag <tag>] [--limit N] [--offset N] [--json]
-//	fleet sched dlq replay <task_id>
+//	fleet sched dlq replay [--prompt-file <file>] <task_id>
 //
 // These build on the existing fleet sched plumbing (openSchedStorage) and
 // the re-enqueue seam from #270 (TaskToCreate / EnqueueTask) is shared with the
@@ -124,19 +124,32 @@ func renderDLQTable(w io.Writer, tasks []*models.Task) error {
 // schedDLQReplay re-enqueues one dead-lettered task: it resets the row to a fresh
 // pending slate (attempt_count=0, DLQ columns cleared) so the scheduler's normal
 // claim path runs it again. Errors if the task is not currently dead-lettered.
+//
+// --prompt-file replaces the row's prompt first (ADR-0073): the way to resume a
+// schedule parked by a malformed EXECUTION REQUIREMENTS line with its task
+// memory. A replay whose prompt — the replacement or the row's own — is
+// malformed is refused, because the run would dead-letter again.
 func schedDLQReplay(argv []string) int {
 	fs := flag.NewFlagSet("sched dlq replay", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	promptFile := fs.String("prompt-file", "", "replace the task's prompt with this file's contents before replaying (\"-\" = stdin)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return errf(1, "usage: fleet sched dlq replay <task_id>")
+		return errf(1, "usage: fleet sched dlq replay [--prompt-file <file>] <task_id>")
 	}
 	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
 	if err != nil {
 		return errf(1, "invalid task id %q: %v", rest[0], err)
+	}
+	prompt := ""
+	if *promptFile != "" {
+		prompt, err = readReplayPrompt(*promptFile)
+		if err != nil {
+			return errf(1, "%v", err)
+		}
 	}
 
 	st, code := openSchedStorage(*dbURL)
@@ -145,15 +158,69 @@ func schedDLQReplay(argv []string) int {
 	}
 	defer st.Close()
 
-	updated, err := st.ReplayDeadLetteredTask(context.Background(), taskID)
+	updated, err := st.ReplayDeadLetteredTaskWithPrompt(context.Background(), taskID, prompt)
 	if err != nil {
 		if errors.Is(err, storage.ErrTaskNotDeadLettered) {
 			return errf(4, "task %s is not dead-lettered (only dead-lettered tasks can be replayed)", taskID)
 		}
+		if errors.Is(err, storage.ErrReplayMalformedRequirements) {
+			return errf(1, "task %s: %v; replay it with a corrected prompt: fleet sched dlq replay --prompt-file <file> %s", taskID, err, taskID)
+		}
 		return errf(5, "replay task: %v", err)
 	}
-	fmt.Fprintf(os.Stderr, "replayed task %s — re-enqueued as %s (attempt_count reset to 0)\n", updated.ID, updated.Status)
+	how := ""
+	if prompt != "" {
+		how = " with the replacement prompt"
+	}
+	fmt.Fprintf(os.Stderr, "replayed task %s%s — re-enqueued as %s (attempt_count reset to 0)\n", updated.ID, how, updated.Status)
 	return 0
+}
+
+// maxReplayPromptBytes bounds a --prompt-file read; a task prompt is text an
+// operator wrote, and an accidental binary or log file must not be loaded whole.
+const maxReplayPromptBytes = 1 << 20
+
+// replayPromptMaxLength is the prompt bound POST /tasks and task edits enforce
+// (handlers.taskPromptMaxLength). A corrected prompt is copied verbatim onto
+// every successor, so one the HTTP path would refuse must not enter here
+// either: the task would become one that cannot be edited or cloned.
+const replayPromptMaxLength = 100000
+
+// replayPromptMinLength is the matching lower bound (handlers.taskPromptMinLength).
+// It applies only to a replacement: a legacy task's own short prompt still
+// replays unchanged.
+const replayPromptMinLength = 3
+
+// readReplayPrompt reads a --prompt-file replacement ("-" = stdin), refusing an
+// empty or oversized one.
+func readReplayPrompt(path string) (string, error) {
+	var r io.Reader = os.Stdin
+	if path != "-" {
+		f, err := os.Open(path) //nolint:gosec // G304: an operator-named file on the operator's own box.
+		if err != nil {
+			return "", fmt.Errorf("read --prompt-file: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		r = f
+	}
+	raw, err := io.ReadAll(io.LimitReader(r, maxReplayPromptBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read --prompt-file: %w", err)
+	}
+	if len(raw) > maxReplayPromptBytes {
+		return "", fmt.Errorf("--prompt-file is larger than %d bytes", maxReplayPromptBytes)
+	}
+	prompt := strings.TrimSpace(string(raw))
+	if prompt == "" {
+		return "", fmt.Errorf("--prompt-file is empty; omit it to replay with the task's own prompt")
+	}
+	if len(prompt) < replayPromptMinLength {
+		return "", fmt.Errorf("--prompt-file prompt must be at least %d characters, the same limit as creating or editing a task", replayPromptMinLength)
+	}
+	if len(prompt) > replayPromptMaxLength {
+		return "", fmt.Errorf("--prompt-file prompt cannot exceed %d characters, the same limit as creating or editing a task", replayPromptMaxLength)
+	}
+	return prompt, nil
 }
 
 // filterTasksByTag returns the subset of tasks carrying tag (exact match against

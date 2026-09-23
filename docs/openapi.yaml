@@ -294,6 +294,8 @@ components:
         output_schema: { type: object, additionalProperties: true, description: "Declared terminal JSON Schema contract, when structured-output mode is enabled." }
         output_json: { nullable: true, description: "Locally schema-validated result. Non-null on every successful task that declares output_schema." }
         error_message: { type: string }
+        recurrence_parked_at: { type: string, format: date-time, description: "Set on the dead-lettered occurrence whose recurring schedule the dead-letter breaker stopped (ADR-0070/0073). Absent = not parked. Read-only." }
+        recurrence_parked_reason: { type: string, description: "Why the schedule stopped, in words the owner can act on: a malformed EXECUTION REQUIREMENTS line's validation message, or two consecutive dead-lettered occurrences. Absent when not parked or when no reason was recorded. Read-only." }
         files: { type: array, items: { type: string } }
         file_names: { type: array, items: { type: string } }
         serialization_key: { type: string, description: "Opaque mutual-exclusion token: at most one task per key is active at a time. Absent = unserialized. See TaskCreate.serialization_key." }

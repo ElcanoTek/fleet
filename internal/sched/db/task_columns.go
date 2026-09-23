@@ -131,6 +131,7 @@ type taskScanBuf struct {
 	a2aDelegationDepth     int
 	previousOccurrenceID   sql.NullString
 	recurrenceParkedAt     sql.NullTime
+	recurrenceParkedReason sql.NullString
 }
 
 // taskColumn is one row of the task-column registry: one tasks-table column,
@@ -1092,6 +1093,23 @@ var taskColumnRegistry = []taskColumn{
 			if b.recurrenceParkedAt.Valid {
 				v := b.recurrenceParkedAt.Time
 				t.RecurrenceParkedAt = &v
+			}
+		},
+	},
+	{
+		name: "recurrence_parked_reason",
+		read: true,
+		// Why the breaker parked the chain (migration 073, ADR-0070/0073):
+		// written with recurrence_parked_at, cleared with it.
+		noInsert:   "runtime park reason (migration 073): written only with recurrence_parked_at by the breaker; a task insert must never set or clear it",
+		noUpsert:   "runtime park reason (migration 073): a status write routed through the upsert must never clobber or stamp a parked chain's reason",
+		noTxUpdate: "runtime park reason (migration 073): owned by the breaker and ReplayDeadLetteredTask, like recurrence_parked_at",
+		noExport:   "runtime settlement (migration 073): a re-imported definition is not parked",
+		dest:       func(b *taskScanBuf) any { return &b.recurrenceParkedReason },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.recurrenceParkedReason.Valid && b.recurrenceParkedReason.String != "" {
+				v := b.recurrenceParkedReason.String
+				t.RecurrenceParkedReason = &v
 			}
 		},
 	},

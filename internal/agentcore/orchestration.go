@@ -253,6 +253,15 @@ type ApprovalStager interface {
 	StageSuggestion(reason string) (approvalID, msg string, err error)
 }
 
+// StageRefusedError is a Stage error that refused the call's INPUT before any
+// approval card existed (#1601: a schedule_task/manage_tasks prompt whose
+// EXECUTION REQUIREMENTS line is malformed). It is not a staging failure: there
+// is nothing for the user to approve, and the model can fix the arguments and
+// call again, so the gates report it as a refusal rather than APPROVAL_REQUIRED.
+type StageRefusedError struct{ Reason string }
+
+func (e *StageRefusedError) Error() string { return e.Reason }
+
 // ActionRecorder is the OPTIONAL half of ApprovalStager that a `notify`-mode
 // critical tool needs (#1153): post a card recording that an action ran, rather
 // than one asking whether it may. Kept as a separate, type-asserted interface so

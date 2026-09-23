@@ -22,7 +22,7 @@ const malformedRequirementsPrompt = "Refresh the page from today's CSV.\n" +
 	`{"mcp_servers":["fast_io + fastio_helpers","pages"],"required_tools":["mcp_pages_get_page_data"]}` + "\n" +
 	"Finish with a one-line summary."
 
-const wantRequirementsRejection = `execution requirements: invalid server or tool identifier "fast_io + fastio_helpers"; allowed ^[a-zA-Z0-9_.-]{1,200}$`
+const wantRequirementsRejection = `execution requirements: invalid server or tool identifier "fast_io + fastio_helpers" in mcp_servers[0]; allowed ^[a-zA-Z0-9_.-]{1,200}$`
 
 // Every create path funnels into validateTaskCreate (create, edit, clone,
 // rerun, HTTP import, batch, estimate), so a malformed declaration is refused

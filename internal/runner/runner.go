@@ -1408,7 +1408,8 @@ func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
 // external side effect may fire.
 func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass string, leaseOwner uuid.UUID, start time.Time) bool {
 	attempts := task.AttemptCount + 1
-	if _, err := p.store.DeadLetterTaskWithContext(context.Background(), task.ID, leaseOwner, reason, attempts); err != nil {
+	dl, err := p.store.DeadLetterTaskWithContext(context.Background(), task.ID, leaseOwner, reason, attempts)
+	if err != nil {
 		log.Printf("runner: failed to dead-letter task %s: %v; falling back to error status", task.ID, err)
 		landed := true
 		if _, rerr := p.reportStatusForLease(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
@@ -1417,6 +1418,13 @@ func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, r
 		}
 		p.submitLog(task, session, reason)
 		return landed
+	}
+	// The storage write parks the chain when the breaker trips (ADR-0070,
+	// ADR-0073) and returns why; carry it onto the runner's copy so the failure
+	// notification says the schedule stopped (buildEvent).
+	task.RecurrenceParkedReason = nil
+	if dl != nil {
+		task.RecurrenceParkedReason = dl.RecurrenceParkedReason
 	}
 	p.submitLog(task, session, reason)
 	metrics.RecordDeadLetterQueued(reasonClass)

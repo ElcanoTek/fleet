@@ -1,0 +1,13 @@
+-- 073_add_recurrence_parked_reason.up.sql — why a recurring chain was parked.
+--
+-- recurrence_parked_at (ADR-0070) records THAT the dead-letter breaker parked
+-- a chain; the reason was only logged. A malformed EXECUTION REQUIREMENTS line
+-- parks on its first dead-letter (ADR-0073), two consecutive dead-letters park
+-- otherwise, and the owner could not tell from the task which had happened or
+-- that the schedule had stopped at all.
+--
+-- recurrence_parked_reason is written with recurrence_parked_at in the same
+-- statement and cleared wherever the stamp is cleared (replay, a restoring
+-- import, a successor arriving for the row). NULL = not parked, or parked
+-- before this column existed / by an import that carried no reason.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS recurrence_parked_reason TEXT;

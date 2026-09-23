@@ -117,5 +117,25 @@ func (p *Pool) buildEvent(task *models.Task, status notify.Status, session *mode
 		CostUSD:         fmt.Sprintf("%.4f", cost),
 		DurationSeconds: int(dur.Seconds()),
 		LogURL:          logURL,
+		Message:         scheduleStoppedMessage(task),
 	}
+}
+
+// maxScheduleStoppedMessage bounds the park reason a notification carries: the
+// reason quotes a prompt-derived identifier (already clamped by the validator),
+// and the email body is no place for an unbounded line.
+const maxScheduleStoppedMessage = 600
+
+// scheduleStoppedMessage is the notification line for a dead-letter that parked
+// its recurring chain (ADR-0070, ADR-0073): "Schedule stopped: <reason>", so
+// the owner learns the schedule will not fire again and why — for a malformed
+// EXECUTION REQUIREMENTS line that is the validator's message, naming the
+// identifier. "" for every other event. sendToDeadLetter sets the reason from
+// the storage write; nothing else on the runner's copy carries one.
+func scheduleStoppedMessage(task *models.Task) string {
+	if task.RecurrenceParkedReason == nil || strings.TrimSpace(*task.RecurrenceParkedReason) == "" {
+		return ""
+	}
+	line := strings.Join(strings.Fields(*task.RecurrenceParkedReason), " ")
+	return truncate.Clamp("Schedule stopped: "+line, maxScheduleStoppedMessage, "…")
 }

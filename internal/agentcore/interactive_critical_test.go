@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -212,4 +213,28 @@ func TestOneStagedWritePerServer(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A stager that refuses the call's INPUT before any card exists (#1601: a
+// malformed EXECUTION REQUIREMENTS prompt) is a refusal, not a staging failure:
+// the gate must not tell the model to wait on or ask about an approval.
+func TestTaskGatesReportAStageRefusalAsARefusal(t *testing.T) {
+	for _, tc := range []struct {
+		tool  string
+		check func(*orchestrationState, string, string, string) (bool, string)
+		label string
+	}{
+		{"schedule_task", (*orchestrationState).checkScheduleTaskSafety, "SCHEDULE_TASK_REFUSED: "},
+		{"manage_tasks", (*orchestrationState).checkManageTasksSafety, "MANAGE_TASKS_REFUSED: "},
+	} {
+		o := newOrchestrationState(nil, 0)
+		o.approvalSink = &stagerFake{err: fmt.Errorf("stage: %w", &StageRefusedError{Reason: "bad line. Nothing was staged for approval"})}
+		blocked, msg := tc.check(o, tc.tool, "call-1", `{"prompt":"x"}`)
+		if !blocked || !strings.HasPrefix(msg, tc.label) || !strings.Contains(msg, "Nothing was staged") {
+			t.Fatalf("%s: blocked=%v msg=%q, want a %s refusal", tc.tool, blocked, msg, tc.label)
+		}
+		if strings.Contains(msg, "APPROVAL_REQUIRED") {
+			t.Fatalf("%s: a refused input was reported as awaiting approval: %q", tc.tool, msg)
+		}
+	}
 }
