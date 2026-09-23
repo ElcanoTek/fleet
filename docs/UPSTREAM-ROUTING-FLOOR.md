@@ -37,7 +37,8 @@ the fact.
 
 **The default moved to `google/gemini-3.8-flash`** (strict pin, one upstream, no
 floor needed) and then, on 2026-09-21, to **`openai/gpt-5.6-luna-pro`** with
-**`anthropic/claude-opus-5`** as the strong tier (see
+**`anthropic/claude-opus-5`** as the strong tier, and on 2026-09-22 to
+**`openai/gpt-6-luna-pro`** / **`anthropic/claude-opus-5.5`** (see
 [MODEL-DEFAULTS.md](MODEL-DEFAULTS.md)). Both are soft-pinned to their vendor
 with cloud resellers of the *official* weights as the only fallbacks, so neither
 has a third-party quantized pool to degrade onto; `officialPoolSlugs` records
@@ -69,8 +70,13 @@ The list is now the **allow-list on the request**. For a listed slug
 
 | slug | `order` | `only` (provider routing names) |
 |---|---|---|
+| `openai/gpt-6-luna-pro` (default) | OpenAI | OpenAI, Azure, Amazon Bedrock |
+| `anthropic/claude-opus-5.5` (strong) | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
 | `openai/gpt-5.6-luna-pro` | OpenAI | OpenAI, Azure, Amazon Bedrock |
 | `anthropic/claude-opus-5` | Anthropic | Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google |
+
+The previous tiers keep their rows: the slugs stay selectable and an admin tier
+override may still point at them.
 
 `order` still buys prompt-cache locality; `only` closes the set the fallback may
 reach. Be precise about *what* it closes, because the two are easy to conflate:
@@ -107,6 +113,12 @@ pools were re-read from `GET /api/v1/models/{slug}/endpoints` on 2026-09-22:
   on the allow-list so its return needs no code change.)
 - `anthropic/claude-opus-5` — 11 endpoints: Anthropic ×2, Claude Platform on
   AWS ×1, Amazon Bedrock ×3, Azure ×2, Google ×3.
+- `openai/gpt-6-luna-pro` — 3 endpoints, all OpenAI (`openai`, `openai/flex`,
+  `openai/fast`). No Azure yet, so the everyday tier currently has a single
+  provider behind it; Azure/Bedrock stay allow-listed for when they list it.
+- `anthropic/claude-opus-5.5` — 11 endpoints, the same shape as Opus 5:
+  Anthropic ×2 (`anthropic`, `anthropic/fast`), Claude Platform on AWS ×1,
+  Amazon Bedrock ×3, Azure ×2, Google ×3.
 
 Every endpoint in both pools is on the allow-list, so **`only` excludes nothing
 that exists today**: availability is identical to the previous open fallback,
