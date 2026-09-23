@@ -56,6 +56,11 @@ type externalSessionStore interface {
 	RevokeExternalSessions(ctx context.Context, eventID, issuer, subject, email string) (string, bool, error)
 }
 
+type externalAccessStore interface {
+	ExternalAccessState(context.Context, string, string) (store.ExternalAccessState, bool, error)
+	ApplyExternalAccess(context.Context, store.ExternalAccessState) (store.ExternalAccessState, bool, error)
+}
+
 type ctxKey string
 
 const (
@@ -312,6 +317,118 @@ func (s *Server) handleExternalSessionRevoke(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type externalAccessRequest struct {
+	EventID  string            `json:"event_id"`
+	Issuer   string            `json:"issuer"`
+	Subject  string            `json:"subject"`
+	Action   string            `json:"action"`
+	Version  int64             `json:"version"`
+	IssuedAt int64             `json:"issued_at"`
+	Settings map[string]string `json:"settings"`
+}
+
+// handleExternalAccess receives only already signature-verified events from
+// the Next tier. It applies Chat membership non-destructively, then reconciles
+// the independent Ops database. A failed Ops write returns 503; Auth retries
+// the same version and this handler retries Ops even when Chat is already at
+// that version.
+func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	accessStore, ok := s.store.(externalAccessStore)
+	if !ok {
+		http.Error(w, "external access unavailable", http.StatusNotImplemented)
+		return
+	}
+	var body externalAccessRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	allowed := body.Action == "grant"
+	if !allowed && body.Action != "revoke" {
+		http.Error(w, "invalid access action", http.StatusBadRequest)
+		return
+	}
+	previous, hasPrevious, err := accessStore.ExternalAccessState(r.Context(), body.Issuer, body.Subject)
+	if err != nil {
+		http.Error(w, "external access lookup failed", http.StatusInternalServerError)
+		return
+	}
+	chatRole, opsRole := "", ""
+	switch {
+	case body.Settings != nil:
+		chatRole, opsRole = body.Settings["chat_role"], body.Settings["ops_role"]
+		if len(body.Settings) != 2 || !store.ValidRole(chatRole) ||
+			(opsRole != "none" && opsRole != "readonly" && opsRole != "client" && opsRole != "admin") ||
+			((chatRole == "admin") != (opsRole == "admin")) {
+			http.Error(w, "invalid Fleet permissions", http.StatusBadRequest)
+			return
+		}
+	case hasPrevious:
+		chatRole, opsRole = previous.ChatRole, previous.OpsRole
+	default:
+		chatRole, opsRole = store.RoleMember, "none"
+		// Migration backfill carries no settings by design: preserve the roles
+		// Fleet already owns instead of flattening existing administrators.
+		if current, getErr := s.store.GetUser(r.Context(), userFromCtx(r.Context())); getErr == nil {
+			chatRole = current.Role
+		}
+		if s.opsAdmins != nil {
+			if roles, rolesErr := s.opsAdmins.Roles(r.Context()); rolesErr == nil {
+				if role := roles[strings.ToLower(userFromCtx(r.Context()))]; role != "" {
+					opsRole = role
+				}
+			}
+		}
+	}
+	desired := store.ExternalAccessState{
+		Issuer: body.Issuer, Subject: body.Subject, Email: userFromCtx(r.Context()),
+		Version: body.Version, Allowed: allowed, EventID: body.EventID,
+		ChatRole: chatRole, OpsRole: opsRole, IssuedAt: body.IssuedAt,
+	}
+	applied, _, err := accessStore.ApplyExternalAccess(r.Context(), desired)
+	if err != nil {
+		http.Error(w, "external access update failed", http.StatusInternalServerError)
+		return
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		if s.opsAdmins == nil {
+			if applied.Allowed && applied.OpsRole != "none" {
+				http.Error(w, "Ops Center provisioning unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		} else {
+			if !applied.Allowed || applied.OpsRole == "none" {
+				err = s.opsAdmins.SetEnabled(r.Context(), applied.Email, false)
+			} else {
+				err = s.opsAdmins.SetRole(r.Context(), applied.Email, applied.OpsRole)
+			}
+			if err != nil {
+				http.Error(w, "Ops Center provisioning failed", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		// The Chat and Ops databases cannot share a transaction. Re-read the
+		// durable desired state after the Ops write: if a newer event committed
+		// while this request was reconciling, apply that state before replying so
+		// an older in-flight request can never be the final Ops writer.
+		latest, exists, lookupErr := accessStore.ExternalAccessState(r.Context(), applied.Issuer, applied.Subject)
+		if lookupErr != nil {
+			http.Error(w, "external access lookup failed", http.StatusInternalServerError)
+			return
+		}
+		if !exists || latest.Version <= applied.Version {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		applied = latest
+	}
+	http.Error(w, "Ops Center provisioning changed during reconciliation", http.StatusServiceUnavailable)
 }
 
 // rejectViewerWrites blocks the read-only "viewer" role (#237) from MUTATING a

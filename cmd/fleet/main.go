@@ -2915,6 +2915,18 @@ func (o opsAdminsService) SetRole(ctx context.Context, email, role string) error
 	return o.st.EnsureUserWithRole(ctx, email, role)
 }
 
+func (o opsAdminsService) SetEnabled(ctx context.Context, email string, enabled bool) error {
+	username := strings.ToLower(strings.TrimSpace(email))
+	u, err := o.st.GetAnyUserByUsernameWithContext(ctx, username)
+	if err != nil || u == nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	return o.st.SetUserEnabled(ctx, u.ID, enabled)
+}
+
 // Roles returns every sched-plane account's role keyed by lowercased email —
 // the batched lookup the admin users table renders from.
 func (o opsAdminsService) Roles(ctx context.Context) (map[string]string, error) {

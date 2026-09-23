@@ -75,6 +75,12 @@ tooltip is what settles it.
 
 None of the tabs beyond the first two are required for daily work.
 
+Administrators assign access under **Settings → Admin → Users**. Ops Center
+offers **None**, **Viewer** (read-only), and **Contributor** (can create and run
+tasks). **Fleet Admin** grants full Chat and Ops permissions; selecting it again
+turns it off and defaults to Chat Contributor plus Ops None. Central Auth account
+grants apply these selected roles to Fleet automatically.
+
 ### Anatomy of a task row
 
 Each row in **Recent Tasks** shows the task's short **ID**, its **title** in bold

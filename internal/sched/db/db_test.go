@@ -345,6 +345,24 @@ func TestUserOperations(t *testing.T) {
 	if retrieved.ID != user.ID {
 		t.Errorf("Expected ID %s, got %s", user.ID, retrieved.ID)
 	}
+	if err := db.SetUserEnabled(ctx, user.ID, false); err != nil {
+		t.Fatalf("Failed to disable user: %v", err)
+	}
+	if _, err := db.GetUserByUsername(ctx, user.Username); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("disabled username lookup err = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := db.GetUserByToken(ctx, token); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("disabled session token lookup err = %v, want sql.ErrNoRows", err)
+	}
+	if retained, err := db.GetAnyUserByUsername(ctx, user.Username); err != nil || retained.ID != user.ID {
+		t.Fatalf("disabled row not retained: user=%+v err=%v", retained, err)
+	}
+	if err := db.SetUserEnabled(ctx, user.ID, true); err != nil {
+		t.Fatalf("Failed to re-enable user: %v", err)
+	}
+	if _, err := db.GetUserByToken(ctx, token); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("pre-revocation token revived after re-enable: %v", err)
+	}
 
 	if err := db.UpdateUserRole(ctx, user.ID, "client"); err != nil {
 		t.Fatalf("Failed to update user role: %v", err)

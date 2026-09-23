@@ -38,6 +38,9 @@ type OpsAdmins interface {
 	// Roles returns every provisioned sched-plane account's role, keyed by
 	// lowercased email — the batched lookup the users table renders from.
 	Roles(ctx context.Context) (map[string]string, error)
+	// SetEnabled is the non-destructive central-auth gate. false preserves the
+	// sched user UUID, role, and task ownership; SetRole re-enables on grant.
+	SetEnabled(ctx context.Context, email string, enabled bool) error
 }
 
 // WithOpsAdmins injects the Operations-Center admin service. nil (the default)

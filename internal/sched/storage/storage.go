@@ -747,15 +747,17 @@ func (s *Storage) EnsureUserWithRole(ctx context.Context, username, role string)
 	if _, ok := models.RolePermissions[role]; !ok {
 		return fmt.Errorf("invalid ops role %q (want admin|client|readonly)", role)
 	}
-	existing, err := s.db.GetUserByUsername(ctx, username)
+	existing, err := s.db.GetAnyUserByUsername(ctx, username)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if existing != nil {
-		if existing.Role == role {
-			return nil
+		if existing.Role != role {
+			if err := s.db.UpdateUserRole(ctx, existing.ID, role); err != nil {
+				return err
+			}
 		}
-		return s.db.UpdateUserRole(ctx, existing.ID, role)
+		return s.db.SetUserEnabled(ctx, existing.ID, true)
 	}
 	// New account: a 32-byte random secret bcrypt-hashed so the moc password
 	// login can never succeed for this account (cookie-auth only).
@@ -780,6 +782,14 @@ func (s *Storage) EnsureUserWithRole(ctx context.Context, username, role string)
 // GetUserByUsernameWithContext gets a user by username with context.
 func (s *Storage) GetUserByUsernameWithContext(ctx context.Context, username string) (*models.User, error) {
 	return s.db.GetUserByUsername(ctx, username)
+}
+
+func (s *Storage) GetAnyUserByUsernameWithContext(ctx context.Context, username string) (*models.User, error) {
+	return s.db.GetAnyUserByUsername(ctx, username)
+}
+
+func (s *Storage) SetUserEnabled(ctx context.Context, userID uuid.UUID, enabled bool) error {
+	return s.db.SetUserEnabled(ctx, userID, enabled)
 }
 
 // GetUserByToken gets a user by session token.
