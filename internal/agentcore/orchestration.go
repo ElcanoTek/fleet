@@ -93,18 +93,22 @@ type orchestrationState struct {
 	// record ids (and value-set digest) the audit approved, keyed by
 	// critical-tool suffix. When a tool call carries deal_ids (a server-side
 	// batch), every id MUST be in approvedDealIDs[suffix]; and when the audit
-	// declared a digest, the call's values_sha256 MUST be one of the digests
-	// in approvedDigest[suffix] — otherwise the call is blocked. It is a SET:
-	// one envelope may approve two batches under one key (two batches of the
-	// same tool, or one per alias twin, #1604) with different value lists, and
-	// a single slot kept only the last digest and falsely blocked the first
-	// batch. The per-commitment digest check in commitmentAuthorizes still
-	// binds each batch to its own declaration's digest. Empty/absent => no
-	// batch binding, i.e. single-record flows behave exactly as before.
+	// declared a digest, the call's values_sha256 MUST match it. The digest
+	// requirement is kept PER RECORD — approvedDigest[suffix][id] is the set
+	// of digests the declarations naming that record required ("" = one
+	// declared it with no values_digest). One envelope may approve two
+	// batches under one key (two batches of the same tool, or one per alias
+	// twin, #1604) with different value lists or with a digest on only one of
+	// them: a single class-wide slot kept only the last digest and falsely
+	// blocked the first batch, and a class-wide set still refused an
+	// undigested batch against its twin's digest. The per-commitment digest
+	// check in commitmentAuthorizes binds each batch call to ONE declaration's
+	// records and digest. Empty/absent => no batch binding, i.e.
+	// single-record flows behave exactly as before.
 	// This is what stops one audit approval from silently authorizing a batch
 	// over records the approver never saw.
 	approvedDealIDs map[string]map[string]bool
-	approvedDigest  map[string]map[string]bool
+	approvedDigest  map[string]map[string]map[string]bool
 
 	// dischargedDeals tracks, per critical-tool suffix, the record ids whose
 	// commitment has ALREADY been discharged by a successful per-record batch
@@ -313,7 +317,7 @@ func newOrchestrationState(logSession *LogSession, _ int) *orchestrationState {
 		sentEmailFingerprints:       make(map[string]struct{}),
 		committedCriticalActions:    make(map[string]int),
 		approvedDealIDs:             make(map[string]map[string]bool),
-		approvedDigest:              make(map[string]map[string]bool),
+		approvedDigest:              make(map[string]map[string]map[string]bool),
 		dischargedDeals:             make(map[string]map[string]bool),
 		criticalToolFailureAttempts: make(map[string]int),
 		logSession:                  logSession,
@@ -1025,12 +1029,31 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// auto-lock early). With no approved set (non-batch / legacy
 			// audit) behavior is unchanged: discharge per succeeded record by
 			// suffix.
+			//
+			// The approved set is the alias-class UNION (#1604), so it is not
+			// enough on its own: one audit may approve two disjoint batches, one
+			// per twin, and a response to the first batch's call that reports a
+			// record of the SECOND batch would discharge the second commitment
+			// though its action never ran. A call that carried deal_ids may
+			// therefore discharge only the records it named — the ones the
+			// input gate (checkBatchBinding + commitmentAuthorizes) bound to
+			// this call's own declaration and digest.
 			approved := o.approvedDealIDs[suffix]
+			invoked, invokedBatch := batchDealIDs(rawInput)
+			inCall := make(map[string]bool, len(invoked))
+			for _, id := range invoked {
+				inCall[id] = true
+			}
 			callDigest := valuesDigestArg(rawInput)
 			newly, failed := 0, 0
 			for _, oc := range outcomes {
 				if len(approved) > 0 && oc.success && !approved[strings.TrimSpace(oc.dealID)] {
 					log.Printf("Enforcement: ignoring batch result for unapproved record id %q on %q (not in the audit's approved set)",
+						oc.dealID, toolName)
+					continue
+				}
+				if invokedBatch && oc.success && !inCall[strings.TrimSpace(oc.dealID)] {
+					log.Printf("Enforcement: ignoring batch result for record id %q on %q (not in this call's deal_ids)",
 						oc.dealID, toolName)
 					continue
 				}

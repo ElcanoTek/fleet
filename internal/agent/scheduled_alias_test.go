@@ -17,7 +17,7 @@ type pagesWriteBroker struct{ calls map[string]int }
 
 func (b *pagesWriteBroker) CallMCP(_ context.Context, _, tool string, _ map[string]any) (string, bool, error) {
 	b.calls[tool]++
-	return `{"ok":true,"version":{"id":"874"},"published":true}`, false, nil
+	return `{"ok":true,"version":{"id":"42"},"published":true}`, false, nil
 }
 
 // cleanReviewer is the end-of-run verifier: nothing is missing.
@@ -45,7 +45,7 @@ func TestScheduledAliasedWriteDischargesTheDeclaredCommitment(t *testing.T) {
 
 	steps := []struct{ tool, input string }{
 		{"confirm_audit", `{"success":true,"critical_actions":[{"tool":"mcp_pages_update_page_data"}],"reasoning":"Reconciled the refreshed data","artifacts_checked":["page_data.json"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`},
-		{"mcp_pages_update_page_data_upload", `{"slug":"husqvarna","upload_id":"u-1","expected_version":873}`},
+		{"mcp_pages_update_page_data_upload", `{"slug":"page-a","upload_id":"u-1","expected_version":41}`},
 	}
 	calls := 0
 	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
@@ -57,7 +57,7 @@ func TestScheduledAliasedWriteDischargesTheDeclaredCommitment(t *testing.T) {
 				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
 				return
 			}
-			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Husqvarna page refreshed; live version 874."})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Page A refreshed; live version 42."})
 			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop, Usage: fantasy.Usage{InputTokens: 10, OutputTokens: 5}})
 		}, nil
 	}}
@@ -71,7 +71,7 @@ func TestScheduledAliasedWriteDischargesTheDeclaredCommitment(t *testing.T) {
 		{ServerName: "pages", Tool: mcp.Tool{Name: "update_page_data_upload", Description: "Replace a page's data from a staged upload"}},
 	}
 
-	if err := a.Execute(context.Background(), "Refresh the Husqvarna page data."); err != nil {
+	if err := a.Execute(context.Background(), "Refresh the page A data."); err != nil {
 		t.Fatalf("a run whose declared write landed through its alias must succeed, got %v", err)
 	}
 	if broker.calls["update_page_data_upload"] != 1 || broker.calls["update_page_data"] != 0 {

@@ -49,7 +49,7 @@ func assertCleanFinish(t *testing.T, o *orchestrationState) {
 	}
 }
 
-// The prod shape (husqvarna 561b0153, ultima 8486611d): the audit declared the
+// The production shape (a Pages refresh of page A): the audit declared the
 // inline write, the payload went by reference through the upload twin.
 func TestCriticalToolAliases_DeclaredInlineExecutedUpload(t *testing.T) {
 	withPagesPolicy(t, pagesAliases)
@@ -57,10 +57,10 @@ func TestCriticalToolAliases_DeclaredInlineExecutedUpload(t *testing.T) {
 	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: aliasInlineTool}}, nil); resp.IsError {
 		t.Fatalf("audit should pass: %s", resp.Content)
 	}
-	if blocked, msg := o.checkCriticalTool(aliasUploadTool, "", `{"slug":"husqvarna","upload_id":"u-1"}`); blocked {
+	if blocked, msg := o.checkCriticalTool(aliasUploadTool, "", `{"slug":"page-a","upload_id":"u-1"}`); blocked {
 		t.Fatalf("the upload twin of the declared write must ride the audit: %s", msg)
 	}
-	o.recordToolResult(aliasUploadTool, `{"slug":"husqvarna","upload_id":"u-1"}`, `{"ok":true,"version":{"id":"874"}}`, true)
+	o.recordToolResult(aliasUploadTool, `{"slug":"page-a","upload_id":"u-1"}`, `{"ok":true,"version":{"id":"42"}}`, true)
 	assertCleanFinish(t, o)
 }
 
@@ -71,10 +71,10 @@ func TestCriticalToolAliases_DeclaredUploadExecutedInline(t *testing.T) {
 	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: aliasUploadTool}}, nil); resp.IsError {
 		t.Fatalf("audit should pass: %s", resp.Content)
 	}
-	if blocked, msg := o.checkCriticalTool(aliasInlineTool, "", `{"slug":"brookfield","data":{}}`); blocked {
+	if blocked, msg := o.checkCriticalTool(aliasInlineTool, "", `{"slug":"page-b","data":{}}`); blocked {
 		t.Fatalf("the inline twin of the declared write must ride the audit: %s", msg)
 	}
-	o.recordToolResult(aliasInlineTool, `{"slug":"brookfield","data":{}}`, `{"ok":true,"version":{"id":"872"}}`, true)
+	o.recordToolResult(aliasInlineTool, `{"slug":"page-b","data":{}}`, `{"ok":true,"version":{"id":"43"}}`, true)
 	assertCleanFinish(t, o)
 }
 
@@ -168,7 +168,7 @@ func TestCriticalToolAliases_BatchBindingCarriesOver(t *testing.T) {
 }
 
 // A re-audit that switches the transport supersedes the stale declaration of
-// its twin instead of stacking on it (the brookfield 89afe409 shape: a stale
+// its twin instead of stacking on it (the page B production shape: a stale
 // deploy_page_upload declaration outlived the publish).
 func TestCriticalToolAliases_ReauditSwitchingVariantSupersedes(t *testing.T) {
 	withPagesPolicy(t, map[string][]string{"deploy_page": {"deploy_page_upload"}})
@@ -182,7 +182,7 @@ func TestCriticalToolAliases_ReauditSwitchingVariantSupersedes(t *testing.T) {
 	if got := o.outstandingCommitmentSummary(); len(got) != 1 || !strings.HasPrefix(got[0], "mcp_pages_deploy_page ") {
 		t.Fatalf("re-audit must leave exactly the fresh declaration, got %v", got)
 	}
-	o.recordToolResult("mcp_pages_deploy_page", `{"slug":"brookfield"}`, `{"ok":true,"version":{"id":"872"}}`, true)
+	o.recordToolResult("mcp_pages_deploy_page", `{"slug":"page-b"}`, `{"ok":true,"version":{"id":"43"}}`, true)
 	assertCleanFinish(t, o)
 }
 
@@ -322,5 +322,63 @@ func TestCriticalToolAliasProblems(t *testing.T) {
 	p.CriticalToolAliases = map[string][]string{"update_page_data": {"update_page_data_upload"}}
 	if problems := CriticalToolAliasProblems(p); len(problems) != 0 {
 		t.Fatalf("a valid declaration reported problems: %v", problems)
+	}
+}
+
+// Two disjoint batches, one per twin, in one audit share the alias-class
+// approval and discharge ledgers. A server response to the FIRST batch's call
+// that reports a success for a record of the SECOND batch must not discharge
+// the second commitment: that call carried only the first batch's records and
+// digest, so the second critical action never ran (Codex review on PR #1606).
+func TestCriticalToolAliases_BatchResultBoundToInvokedBatch(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	o := newOrchStateForTest()
+	registerTyped(t, o,
+		criticalActionStruct{Tool: aliasInlineTool, DealIDs: []string{"a"}, ValuesDigest: "D1"},
+		criticalActionStruct{Tool: aliasUploadTool, DealIDs: []string{"b"}, ValuesDigest: "D2"})
+	args := `{"deal_ids":["a"],"values_sha256":"d1"}`
+	if blocked, msg := o.checkCriticalTool(aliasInlineTool, "", args); blocked {
+		t.Fatalf("the first batch must ride its own declaration: %s", msg)
+	}
+	o.recordToolResult(aliasInlineTool, args,
+		`{"results":[{"deal_id":"a","success":true},{"deal_id":"b","success":true}]}`, true)
+	got := o.unexecutedCommitments()
+	if len(got) != 1 || !strings.HasSuffix(got[0], "update_page_data_upload") {
+		t.Fatalf("the second batch's commitment was discharged by the first batch's call: outstanding=%v", got)
+	}
+	if allowed, _ := o.checkFinishEnforcement(); allowed {
+		t.Fatal("finish allowed with the second critical action never executed")
+	}
+	// The second batch's own call still discharges it.
+	args2 := `{"deal_ids":["b"],"values_sha256":"d2"}`
+	if blocked, msg := o.checkCriticalTool(aliasUploadTool, "", args2); blocked {
+		t.Fatalf("the second batch must still ride its own declaration: %s", msg)
+	}
+	o.recordToolResult(aliasUploadTool, args2, `{"results":[{"deal_id":"b","success":true}]}`, true)
+	if got := o.unexecutedCommitments(); len(got) != 0 {
+		t.Fatalf("second batch left owed after its own call: %v", got)
+	}
+}
+
+// The digest requirement belongs to each declaration, not to the alias class:
+// an undigested batch for one record set is not refused because a twin's batch
+// in the same audit declared a values_digest for ANOTHER record set, while the
+// digest-bound batch keeps requiring its digest (Codex review on PR #1606).
+func TestCriticalToolAliases_DigestRequirementScopedPerBatch(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	o := newOrchStateForTest()
+	registerTyped(t, o,
+		criticalActionStruct{Tool: aliasInlineTool, DealIDs: []string{"a", "b"}},
+		criticalActionStruct{Tool: aliasUploadTool, DealIDs: []string{"c", "d"}, ValuesDigest: "D2"})
+	if blocked, msg := o.checkCriticalTool(aliasInlineTool, "", `{"deal_ids":["a","b"]}`); blocked {
+		t.Fatalf("the undigested batch was refused by the twin's digest: %s", msg)
+	}
+	for _, args := range []string{`{"deal_ids":["c","d"]}`, `{"deal_ids":["c","d"],"values_sha256":"d9"}`} {
+		if blocked, _ := o.checkCriticalTool(aliasUploadTool, "", args); !blocked {
+			t.Fatalf("the digest-bound batch must still require its digest: %s", args)
+		}
+	}
+	if blocked, msg := o.checkCriticalTool(aliasUploadTool, "", `{"deal_ids":["c","d"],"values_sha256":"d2"}`); blocked {
+		t.Fatalf("the digest-bound batch with its digest must ride: %s", msg)
 	}
 }

@@ -382,16 +382,16 @@ name ([ADR-0034](adr/0034-audit-gate-commitment-binding.md)). Some servers expos
 `deploy_page_upload` are the same kind of pair. The agent chooses the transport
 from the payload size, which it only knows after building the payload. So a run
 could declare one name, publish correctly through the other, and still end as a
-failure, because the declared name stayed owed. Three prod runs did exactly
-that:
+failure, because the declared name stayed owed. Production runs did exactly
+that, in two shapes:
 
-- husqvarna `561b0153` (2026-09-21): "Task aborted by its own self-audit:
-  Aborted the stale mcp_pages_update_page_data commitment because the exact
-  audited Husqvarna payload was already successfully published through
-  mcp_pages_update_page_data_upload as live version 874." → `error`, data live.
-- ultima `8486611d` (2026-09-20): the same shape, live version 860.
-- brookfield `89afe409` (2026-09-21): a stale `deploy_page_upload` declaration
-  after the data landed as v872 → `error`.
+- A Pages data refresh for page A declared `mcp_pages_update_page_data`, then
+  published the audited payload through `mcp_pages_update_page_data_upload`.
+  The write went live, the inline declaration stayed owed, and the run's own
+  self-audit aborted "the stale mcp_pages_update_page_data commitment" → status
+  `error`, with the data live. A second page failed the same way.
+- A Pages deploy for page B left a stale `deploy_page_upload` declaration owed
+  after the publish → status `error`.
 
 `agent_policy.critical_tool_aliases` tells the gate those names are one action:
 
@@ -425,8 +425,15 @@ What does **not** change:
 
 - `deal_id` / `deal_ids` / `values_digest` binding carries over to the alias as
   is. One audit may approve several batches under one key — two batches of the
-  same tool, or one per twin, each with its own `values_digest` — and each
-  batch rides only under its own declaration's records and digest.
+  same tool, or one per twin, each with its own `values_digest` or with a
+  digest on only one of them — and each batch rides only under its own
+  declaration's records and digest. The digest requirement is kept per
+  record, so an undigested batch is not refused over a twin's digest for
+  other records.
+- A batch result discharges only the records **that call** named in its
+  `deal_ids`, and a digest-bound batch commitment only under its own digest. A
+  response to one batch that reports a success for a record of the other
+  batch discharges nothing: the other critical action still has to run.
 - For a **typed** declaration, an aliased or same-suffix call on a
   **different** server or client variant is still blocked and discharges
   nothing. (Legacy free-text declarations carry no server identity and stay

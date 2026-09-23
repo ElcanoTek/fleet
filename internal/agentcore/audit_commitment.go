@@ -496,7 +496,7 @@ func parseDealOutcomes(resultText string) ([]dealOutcome, bool) {
 // comments in registerCommittedActionsTyped). Callers must hold o.mu.
 func (o *orchestrationState) resetBatchApprovals() {
 	o.approvedDealIDs = make(map[string]map[string]bool)
-	o.approvedDigest = make(map[string]map[string]bool)
+	o.approvedDigest = make(map[string]map[string]map[string]bool)
 }
 
 // registerCommittedActionsTyped records commitments from the typed
@@ -590,14 +590,20 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			if o.approvedDealIDs[batchKey] == nil {
 				o.approvedDealIDs[batchKey] = make(map[string]bool)
 			}
+			// The digest requirement is recorded PER RECORD, from this
+			// declaration: "" when it declared no values_digest. A class-wide
+			// digest set would make an undigested batch fail against a twin's
+			// digest for a different record set (#1604).
+			if o.approvedDigest[batchKey] == nil {
+				o.approvedDigest[batchKey] = make(map[string]map[string]bool)
+			}
+			digest := strings.ToLower(strings.TrimSpace(a.ValuesDigest))
 			for _, id := range dealIDs {
 				o.approvedDealIDs[batchKey][id] = true
-			}
-			if a.ValuesDigest != "" {
-				if o.approvedDigest[batchKey] == nil {
-					o.approvedDigest[batchKey] = make(map[string]bool)
+				if o.approvedDigest[batchKey][id] == nil {
+					o.approvedDigest[batchKey][id] = make(map[string]bool)
 				}
-				o.approvedDigest[batchKey][strings.ToLower(strings.TrimSpace(a.ValuesDigest))] = true
+				o.approvedDigest[batchKey][id][digest] = true
 			}
 		}
 		tc := &typedCommitment{
@@ -725,6 +731,16 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest stri
 		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) {
 			continue
 		}
+		// A values_digest-bound batch commitment is discharged only by a call
+		// carrying ITS digest — the only call commitmentAuthorizes let ride it.
+		// Without this, a record approved under two declarations (one per
+		// alias twin, #1604, or two batches of one tool) could be credited to
+		// the exact-name declaration by rank while the call actually rode the
+		// other one's digest, leaving the action that ran still owed and
+		// retiring the one that did not.
+		if len(c.dealIDs) > 0 && c.digest != "" && c.digest != callDigest {
+			continue
+		}
 		exact := c.tool == toolName
 		bound := c.hasDealBinding()
 		rank := 1
@@ -846,9 +862,15 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 				toolName, id)
 		}
 	}
-	if wants := o.approvedDigest[suffix]; len(wants) > 0 {
-		if got := valuesDigestArg(rawInput); !wants[got] {
-			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q is not an approved digest", toolName, got)
+	// Each record carries the digest(s) its own declaration(s) required, ""
+	// meaning one declared it with no values_digest. A record is satisfied by
+	// an undigested declaration or by the call's exact digest; the
+	// per-commitment check in commitmentAuthorizes then binds the whole call
+	// to ONE declaration's records and digest.
+	got := valuesDigestArg(rawInput)
+	for _, id := range dealIDs {
+		if wants := o.approvedDigest[suffix][id]; len(wants) > 0 && !wants[""] && !wants[got] {
+			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q is not an approved digest for record %q", toolName, got, id)
 			return true, fmt.Sprintf("BLOCKED: batch '%s' values_sha256 does not match the "+
 				"audit-approved digest. The approved value list differs from the one being applied — "+
 				"re-audit with the correct values_digest.", toolName)

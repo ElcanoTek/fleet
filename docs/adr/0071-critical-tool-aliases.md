@@ -20,16 +20,17 @@ Pages exposes one write under two names: `update_page_data` (inline `data`) and
 from the payload size, which it only knows after it has built the payload,
 often after the audit. So a run declared one name and published through the
 other. The published call was either blocked, or it left the declared name owed
-after the write. Three prod runs published correctly and then ended as
+after the write. Production runs published correctly and then ended as
 failures:
 
-- `561b0153` (husqvarna, 2026-09-21): "Aborted the stale
-  mcp_pages_update_page_data commitment because the exact audited Husqvarna
-  payload was already successfully published through
-  mcp_pages_update_page_data_upload as live version 874." → status `error`.
-- `8486611d` (ultima, 2026-09-20): the same shape, live version 860.
-- `89afe409` (brookfield, 2026-09-21): a stale `deploy_page_upload`
-  declaration outlived the publish of v872 → `error`.
+- A Pages data refresh for page A declared `mcp_pages_update_page_data` and
+  published through `mcp_pages_update_page_data_upload`. The run's self-audit
+  then "aborted the stale mcp_pages_update_page_data commitment because the
+  exact audited payload was already successfully published through
+  mcp_pages_update_page_data_upload" → status `error`, data live. A refresh of
+  a second page failed the same way.
+- A deploy of page B left a stale `deploy_page_upload` declaration owed after
+  the publish → status `error`.
 
 The bundle's self-audit protocol grew a "Wrong tool variant declared?" recovery
 dance for this: abort, re-audit, execute. That dance is exactly what the gate
@@ -58,6 +59,13 @@ one critical action for the audit gate, in both directions:
 - Batch approvals (`deal_ids`, `values_digest`) and the per-record discharge
   ledger are keyed by the alias class. A record set approved on one member
   therefore binds a batch sent through another, and a record discharges once.
+  The class key is shared, the binding is not: the `values_digest`
+  requirement is kept per declared record (an undigested batch is not refused
+  over a twin's digest for other records), a batch result discharges only the
+  records the invoked call named in its `deal_ids`, and a digest-bound batch
+  commitment discharges only under its own digest. Otherwise, with one batch
+  per twin, a response to the first batch reporting a record of the second
+  would discharge the second commitment although its action never ran.
 
 Nothing else about ADR-0034 changes:
 
@@ -111,6 +119,6 @@ release that understands it has shipped.
 - **Declare two substitutes, one per direction.** The typed matcher already
   honours same-server substitutes, so this would cover authorize and discharge.
   It would not cover the other paths: re-audit superseding stays exact-name
-  (the brookfield shape), a blocked pending call stays exact-name, and batch
+  (the page B shape), a blocked pending call stays exact-name, and batch
   approvals stay per suffix. It would also make "one action, two names" read
   like "a fallback action" in the manifest.
