@@ -19,6 +19,33 @@ fork a second chain.
 
 Cancel still ends the chain. What makes a run fail is unchanged.
 
+**One exception: a malformed `EXECUTION REQUIREMENTS` line parks on the
+first dead-letter** ([ADR-0073](adr/0073-malformed-requirements-park-on-first-dead-letter.md), #1601).
+The declaration is part of the prompt text, which every successor copies
+verbatim, so the next occurrence is certain to fail the same way at dispatch.
+The two-strike rule exists for causes that might not recur, and this one always
+does.
+
+- **Detection.** `scheduleNextRecurrence` runs `models.ValidateExecutionRequirements`
+  on the dead-lettered occurrence's prompt before the predecessor check, and
+  parks at once on a failure. The log line names the offending identifier and
+  says to correct the prompt.
+- **Recovery.** Replay reruns the same prompt, so it cannot continue such a
+  chain. Editing the dead-lettered task in the web editor does not either: for
+  a finished task it saves through `POST /tasks/{id}/rerun`, a one-off copy
+  that drops the recurrence. The schedule comes back only by creating the task
+  again with the corrected prompt and its recurrence (or `POST
+  /tasks/{id}/clone`, which keeps it, then correcting the clone). While a chain
+  is still live, editing its pending/scheduled head in place fixes it before
+  it fires.
+- **Prevention.** Since the same change, a malformed line is refused when a
+  task is saved. Only tasks saved earlier can still reach this. In
+  production, two recurring refreshes dead-lettered on
+  `"fast_io + fastio_helpers"`, and a live successor carried the same line.
+- **What is excluded.** An execution-requirements failure that is *not*
+  malformed (a tool or server missing from the roster, network egress off)
+  keeps the two-strike rule. Those can change without editing the prompt.
+
 Upgrade does **not** auto-resume chains parked before it. Migration 071
 settles every existing `dead_lettered` row so the reconcile sweep cannot
 fork a duplicate chain next to a lineage that already continued, and cannot

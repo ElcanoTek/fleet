@@ -1,6 +1,6 @@
 # ADR-0070: A dead-lettered recurring occurrence spawns its successor
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [ADR-0073](0073-malformed-requirements-park-on-first-dead-letter.md)
 - **Date:** 2026-09-20
 - **Deciders:** fleet maintainers
 

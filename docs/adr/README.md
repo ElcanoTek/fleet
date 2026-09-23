@@ -78,6 +78,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0067](0067-fallback-on-provider-rejection.md) | A per-request 4xx provider rejection promotes the configured fallback model from a safe checkpoint; the relayed upstream cause is named in logs and dead-letter reasons | Accepted; narrows ADR-0033 |
 | [0068](0068-chat-scheduled-tasks-inherit-connectors.md) | A task scheduled from chat inherits the conversation's connector selection; the card names it and warns when there is none | Accepted; amends ADR-0052 |
 | [0069](0069-per-job-scheduled-workspaces.md) | A non-worktree scheduled run works in `<workspace-root>/tasks/<lineage_id>/` — one directory per job, carried to occurrences, re-runs and clones — instead of the shared root | Accepted |
-| [0070](0070-dead-lettered-recurrences-spawn-successor.md) | A dead-lettered recurring occurrence spawns its successor; two consecutive dead-letters park the chain | Accepted |
+| [0070](0070-dead-lettered-recurrences-spawn-successor.md) | A dead-lettered recurring occurrence spawns its successor; two consecutive dead-letters park the chain | Accepted; amended by ADR-0073 |
 | [0071](0071-critical-tool-aliases.md) | Bundle-declared critical tool aliases are one commitment (amends ADR-0034) | Accepted |
 | [0072](0072-deterministic-completion-predicate.md) | A declared completion predicate may replace the end-of-run verifier; a verifier outage does not dead-letter an audited run (amends ADR-0001) | Accepted |
+| [0073](0073-malformed-requirements-park-on-first-dead-letter.md) | A malformed EXECUTION REQUIREMENTS declaration is refused at save time and parks its chain on the first dead-letter (amends ADR-0070) | Accepted |

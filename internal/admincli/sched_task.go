@@ -840,6 +840,16 @@ func validateImportedTask(t *models.Task) error {
 	if strings.TrimSpace(t.Prompt) == "" {
 		return fmt.Errorf("prompt is required")
 	}
+	// Portable too (#1601): the declaration's shape is decided by the prompt
+	// text alone, and a malformed one fails every run at dispatch. Only a LIVE
+	// row (pending/scheduled) can dispatch; terminal history is preserved
+	// verbatim, and one legacy malformed history row must not make a whole
+	// cross-box export unrestorable (importTasks validates the envelope first).
+	if liveImportedStatus(t.Status) {
+		if err := models.ValidateExecutionRequirements(t.Prompt); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(string(t.Status)) == "" {
 		return fmt.Errorf("status is required")
 	}

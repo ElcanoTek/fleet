@@ -699,3 +699,18 @@ func TestImportReplace_ReschedulesScheduleLessRecord(t *testing.T) {
 			got.Status, got.ScheduledFor)
 	}
 }
+
+// The import's up-front structural pass refuses a malformed EXECUTION
+// REQUIREMENTS line (#1601), so a dry run reports it and a multi-record import
+// writes nothing before reaching it.
+func TestValidateExportRecordRefusesMalformedRequirements(t *testing.T) {
+	rec := models.TaskExportRecord{Prompt: "Refresh the page.\n\nEXECUTION REQUIREMENTS (JSON):\n" +
+		`{"mcp_servers":["files + file_helpers","pages"]}`}
+	if err := validateExportRecord(rec); err == nil || !strings.Contains(err.Error(), "files + file_helpers") {
+		t.Fatalf("validateExportRecord must refuse the malformed line and name it, got %v", err)
+	}
+	rec.Prompt = "Refresh the page.\n\nEXECUTION REQUIREMENTS (JSON):\n" + `{"mcp_servers":["files","file_helpers","pages"]}`
+	if err := validateExportRecord(rec); err != nil {
+		t.Fatalf("a well-formed line must pass, got %v", err)
+	}
+}

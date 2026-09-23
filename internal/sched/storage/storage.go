@@ -313,6 +313,13 @@ func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, creat
 	if tc.Prompt == "" {
 		return uuid.Nil, "", time.Time{}, fmt.Errorf("prompt is required")
 	}
+	// Every create path lands here — POST /tasks, an approved schedule_task,
+	// the scheduled-run create_task tool — so the malformed-requirements check
+	// (#1601) lives at this seam too, not only in the HTTP handler: a chat path
+	// must not report "saved" for a declaration that fails every dispatch.
+	if err := models.ValidateExecutionRequirements(tc.Prompt); err != nil {
+		return uuid.Nil, "", time.Time{}, err
+	}
 
 	// Resolve + persist the per-task timezone (defaulting to the org default)
 	// BEFORE evaluating the cron, so the first fire is computed in the task's own
@@ -1018,6 +1025,11 @@ func TaskEditFromTask(t *models.Task) TaskEdit {
 // so an edit can never move a gated task (or a webhook template) off the
 // scheduler path. Returns ErrTaskNotEditable if no longer editable.
 func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit TaskEdit) (*models.Task, error) {
+	// The same malformed-requirements check as create (#1601): an approved
+	// manage_tasks prompt edit reaches this seam without the HTTP handler.
+	if err := models.ValidateExecutionRequirements(edit.Prompt); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
 		return nil, err
@@ -1879,14 +1891,31 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// Consecutive-dead-letter breaker (ADR-0070): two dead-lettered occurrences
 	// in a row parks the chain. Lookup errors roll back so the sweep retries
 	// rather than parking on a transient read failure.
+	//
+	// A malformed EXECUTION REQUIREMENTS declaration parks on the FIRST
+	// dead-letter (#1601). It is a property of the prompt text, which every
+	// successor copies verbatim, so the next occurrence is certain to
+	// dead-letter the same way at dispatch: the two-strike rule exists for
+	// causes that might not recur, and this one always does. Replay cannot fix
+	// it either — it reruns the same prompt — and editing the terminal row saves
+	// a one-off rerun without the recurrence, so the log says to recreate (or
+	// clone) the task with the corrected prompt and its schedule.
 	if current.Status == models.TaskStatusDeadLettered {
-		parked, perr := predecessorIsDeadLettered(ctx, tx, current)
-		if perr != nil {
-			log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
-			return false
+		parkReason := ""
+		if rerr := models.ValidateExecutionRequirements(current.Prompt); rerr != nil {
+			parkReason = fmt.Sprintf("on its first dead-letter: %v — every occurrence would dead-letter the same way; recreate the task (or clone it, which keeps the schedule) with a corrected prompt; replaying the same prompt cannot help, and editing this dead-lettered row starts a one-off run without the schedule", rerr)
+		} else {
+			parked, perr := predecessorIsDeadLettered(ctx, tx, current)
+			if perr != nil {
+				log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
+				return false
+			}
+			if parked {
+				parkReason = "after 2 consecutive dead-lettered occurrences; replay to continue"
+			}
 		}
-		if parked {
-			log.Printf("Recurrence for task %s parked after 2 consecutive dead-lettered occurrences; replay to continue", current.ID)
+		if parkReason != "" {
+			log.Printf("Recurrence for task %s parked %s", current.ID, parkReason)
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE tasks SET recurrence_parked_at = now() WHERE id = $1 AND status = $2`,
 				current.ID, string(models.TaskStatusDeadLettered)); err != nil {

@@ -1008,6 +1008,13 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 	if len(tc.Prompt) > taskPromptMaxLength {
 		return fmt.Errorf("prompt cannot exceed %d characters", taskPromptMaxLength)
 	}
+	// A malformed EXECUTION REQUIREMENTS line fails every run at dispatch
+	// (#1601): refuse it while the author is still looking at the request,
+	// naming the offending identifier, instead of up to a cron period later
+	// in the DLQ.
+	if err := models.ValidateExecutionRequirements(tc.Prompt); err != nil {
+		return err
+	}
 
 	if err := h.validateTaskRouting(tc); err != nil {
 		return err
