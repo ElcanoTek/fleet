@@ -53,12 +53,15 @@ type RunConfig struct {
 	MaxIterations int
 	// Allowlist is the per-server tool allowlist (Gate-2).
 	Allowlist mcpAllowlist
-	// MCPRosterNarrowing, when non-empty, makes Allowlist EXHAUSTIVE for this
-	// run (#1603): a server with no allowlist entry (after the one keying rule,
-	// so a `<server>_<account>` seat falls back to its base entry) registers no
-	// MCP tools, where an absent entry normally means "allow all". The value
-	// names the narrowing for the one-time `[roster] <value>: N mcp tools
-	// registered` session-log breadcrumb — the scheduled driver sets it to
+	// MCPRosterNarrowing, when non-empty, makes Allowlist EXHAUSTIVE and EXACT
+	// for this run (#1603): a server is governed only by an entry under its own
+	// registered name, with no keying-rule fallback, so one with no entry —
+	// including a `<server>_<account>` seat or a prefix-named server loaded
+	// mid-run — registers no MCP tools, where an absent entry normally means
+	// "allow all". confirm_audit then also refuses a typed critical action
+	// naming an MCP tool the run did not register. The value names the
+	// narrowing for the one-time `[roster] <value>: N mcp tools registered`
+	// session-log breadcrumb — the scheduled driver sets it to
 	// "required_tools_only" from the task's EXECUTION REQUIREMENTS. Native,
 	// loader and confirm_audit tools are never affected. Empty = Gate-2 exactly
 	// as before.
@@ -523,6 +526,8 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		if cfg.PersonaPolicy != nil {
 			tools = resolvePersonaTools(cfg.PersonaName, *cfg.PersonaPolicy, tools, deps.Observer)
 		}
+		// A narrowed run's audit gate reads the live roster (#1603).
+		recordNarrowedRoster(deps.Policy, cfg.MCPRosterNarrowing, roster)
 		return tools, roster, observerBoundary.Err()
 	}
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -530,6 +531,41 @@ func parseDealOutcomes(resultText string) ([]dealOutcome, bool) {
 func (o *orchestrationState) resetBatchApprovals() {
 	o.approvedDealIDs = make(map[string]map[string]bool)
 	o.approvedDigest = make(map[string]map[string]map[string]bool)
+}
+
+// unregisteredTypedActions returns the typed critical_actions entries that
+// name a full server-qualified critical tool a NARROWED run did not register
+// (narrowedMCPRoster, #1603); nil when the roster is not narrowed. The narrowing
+// removed such a tool from every path to the model — direct, deferred and
+// tool_call alike — so a call to it is answered "tool not found" and a
+// commitment to it could never be discharged. Entries the full-name check in
+// registerCommittedActionsTyped drops anyway (a bare suffix, a non-critical
+// name) are left to it. Callers must hold o.mu.
+func (o *orchestrationState) unregisteredTypedActions(actions []criticalActionStruct) []string {
+	if o.narrowedMCPRoster == nil {
+		return nil
+	}
+	var out []string
+	for _, a := range actions {
+		tool := strings.TrimSpace(a.Tool)
+		if suffix := criticalSuffixFor(tool); suffix == "" || tool == suffix {
+			continue
+		}
+		if !o.narrowedMCPRoster[tool] && !slices.Contains(out, tool) {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
+// unregisteredActionsRefusal is confirm_audit's answer to a typed declaration
+// naming tools a narrowed run did not register (unregisteredTypedActions).
+func unregisteredActionsRefusal(tools []string) string {
+	return fmt.Sprintf("Audit Rejected: critical_actions names %s, which this run cannot call. The run's MCP tools "+
+		"are narrowed to the task's required tools, and a call to any other tool is answered \"tool not found\", "+
+		"so this approval could never be discharged. Declare only tools from your tool list and re-run "+
+		"confirm_audit; a tool the task needs belongs in its EXECUTION REQUIREMENTS required_tools.",
+		strings.Join(tools, ", "))
 }
 
 // registerCommittedActionsTyped records commitments from the typed

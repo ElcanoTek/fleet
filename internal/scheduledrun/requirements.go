@@ -339,8 +339,9 @@ func (r *Runner) checkTaskRequirementsAndRoster(task *models.Task) (*executionRe
 // required_tools names across the whole checked roster (the run's servers plus
 // the owner's remote overlay). The narrowed allowlist is exhaustive for the run
 // (agent.Options.MCPRosterNarrowing), so a selected server none of whose tools
-// is required registers nothing; checkTools has already proved every required
-// tool is in that roster, so none can be narrowed away.
+// is required registers nothing. checkTools has already proved every required
+// tool is in that roster, so narrowing never removes one the manifest
+// allowlist permits.
 func (r *Runner) taskRosterAllowlist(req *executionRequirements, roster string, binding taskMCPBinding, overlay *agent.RemoteMCPOverlay) agentcore.MCPAllowlist {
 	allow := r.taskMCPToolAllowlist()
 	if roster == "" || req == nil {

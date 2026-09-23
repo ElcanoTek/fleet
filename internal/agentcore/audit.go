@@ -589,6 +589,11 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 				// An UNTYPED audit keeps the legacy suffix-scoped fallback.
 				typedProvided := input.CriticalActions != nil
 				if typedProvided {
+					// A narrowed roster (#1603) refuses an approval for a tool
+					// the run cannot call, before anything registers.
+					if missing := orch.unregisteredTypedActions(input.CriticalActions); len(missing) > 0 {
+						return fantasy.NewTextErrorResponse(unregisteredActionsRefusal(missing) + orch.auditProtocolClause()), nil
+					}
 					if registered := orch.registerCommittedActionsTyped(input.CriticalActions); registered == 0 {
 						// Distinguish a MALFORMED critical declaration from an
 						// explicit no-op. An entry whose text names (or

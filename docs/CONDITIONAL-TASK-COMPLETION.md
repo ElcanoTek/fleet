@@ -158,15 +158,27 @@ EXECUTION REQUIREMENTS (JSON):
 - **What registers.** Each selected server's Gate-2 allowlist is intersected
   with the required tools, which are resolved the same way as the check above.
   A server none of whose tools is required registers nothing: here `fast_io`,
-  `fastio_helpers`, and every Pages layout, template or delete tool.
+  `fastio_helpers`, and every Pages layout, template or delete tool. Gate-2 is
+  exhaustive and exact for the run: a server is governed only by an entry under
+  its own registered name. A server the dispatch roster did not include
+  registers nothing and never inherits a narrowed server's entry. That covers a
+  `<server>_<account>` seat loaded mid-run with `mcp_load_servers(client=…)`
+  and a server whose name merely extends a narrowed one.
 - **What does not change.** Native tools stay (`confirm_audit`,
   `task_tracker`, bash, Python, the file tools). The live-registry section of
   the system prompt follows the roster.
-- **No lost tools.** A required tool can never be narrowed away, because the
-  check above has already proved it is in the roster. A
-  `completion.any_succeeded` tool is kept the same way even when
-  `required_tools` does not list it, so a declared predicate stays reachable. Narrowing only removes;
-  it never grants a tool the allowlist denies.
+- **No lost tools.** Narrowing never removes a required tool the manifest
+  allowlist permits, because the check above has already proved it is in the
+  roster. A `completion.any_succeeded` tool is kept the same way even when
+  `required_tools` does not list it, so a declared predicate stays reachable.
+  Narrowing only removes; it never grants a tool the allowlist denies. On the
+  local MCP path the check reads the advertised catalog, so a required tool the
+  manifest allowlist denies passes it and is still not registered.
+- **Audit declarations.** `confirm_audit` refuses a typed `critical_actions`
+  entry that names an MCP tool the run did not register, and that audit
+  registers nothing. The model re-audits with tools from its list. Accepting
+  the declaration would create an approval nothing could discharge: the call
+  answers `tool not found`, so finish would be refused until the run failed.
 - **Removed tools.** A call to a removed tool is answered `tool not found`.
   The run log carries one `[roster] required_tools_only: N mcp tools
   registered` breadcrumb.
@@ -180,10 +192,12 @@ EXECUTION REQUIREMENTS (JSON):
   roster back, never a tool outside it.
 
 The point is cost and safety. A Pages data refresh resent about 34K tokens of
-tool schemas it never used on every step. Prod run `89afe409` declared a
-layout-mutating `deploy_page_upload` in its audit, which a data refresh must
-never reach; on a narrowed roster that declaration is unrepresentable. Fleet
-still interprets nothing about the tools: the list and the narrowing are the
+tool schemas it never used on every step. One production data refresh
+declared the layout-mutating `deploy_page_upload` in its audit, a tool a data
+refresh must never reach, and ended in error when it could not discharge that
+declaration. On a narrowed roster the tool is not registered, so it cannot be
+called, and `confirm_audit` refuses a declaration that names it. Fleet still
+interprets nothing about the tools: the list and the narrowing are the
 producer's contract.
 
 This declaration only restricts a run. It cannot enable network, bypass the
