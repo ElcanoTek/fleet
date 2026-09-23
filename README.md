@@ -43,9 +43,8 @@ More: [screenshots of every surface](docs/screenshots/).
 ## Contents
 
 - [See it in action](#see-it-in-action) · [Why fleet](#why-fleet) · [Batteries included](#batteries-included) · [Built for trust](#built-for-trust-governed-auditable-delegation) · [Architecture at a glance](#architecture-at-a-glance) · [Standards](#standards)
-- [Repository layout](#repository-layout) · [The client-config bundle](#the-client-config-bundle) · [No lock-in](#no-lock-in-your-agent-ip-is-portable) · [Development](#development)
-- [Deploy](#deploy) · [Operating fleet](#operating-fleet) · [Documentation](#documentation)
-- [Built by Elcano](#built-by-elcano-commercial-support) · [Contributing](#contributing) · [License](#license)
+- [The client-config bundle](#the-client-config-bundle-your-agent-ip-is-portable) · [Development](#development) · [Deploy](#deploy) · [Operating fleet](#operating-fleet) · [Documentation](#documentation)
+- [Built by Elcano](#built-by-elcano-commercial-support) · [Contributing](#contributing) · [Acknowledgements](#acknowledgements) · [License](#license)
 
 ## Why fleet
 
@@ -60,12 +59,10 @@ them.
 
 - **Sandboxed by default.** Model-authored local execution — bash, Python, and
   file I/O — runs in a sandbox: rootless Podman by default, or an ephemeral
-  Kubernetes pod. There is **no fast path around it**. MCP calls are a documented host-side broker exception so their
-  credentials never enter the sandbox or model context. Bundle MCP and inline
-  HTTP-tool execution is owned by a dedicated broker subprocess; the main
-  agent process retains only public catalog metadata and the call transport.
-  Per-user remote MCP token acquisition and calls use the same child-owned
-  scoped boundary ([ADR-0040](docs/adr/0040-child-owned-remote-mcp-runtime.md)).
+  Kubernetes pod. There is **no fast path around it**. MCP calls are a
+  documented host-side broker exception, run by a dedicated broker subprocess,
+  so their credentials never enter the sandbox or model context
+  ([ADR-0040](docs/adr/0040-child-owned-remote-mcp-runtime.md)).
 
 - **Two isolation tiers, one config line.** Set `sandbox.runtime: kata` (or
   `libkrun`) and every sandbox container becomes a **dedicated KVM microVM**
@@ -76,12 +73,6 @@ them.
 - **Cost-controlled.** Per-turn cost and token **ceilings**, an iteration cap,
   and a timeout — enforced, not advisory. A runaway loop costs a capped turn,
   not an open-ended invoice.
-
-- **A real scheduler.** Priority queues with anti-starvation, opt-in retries
-  with backoff for *transient* failures only (deterministic ones never retry),
-  bounded log retention with optional encrypted archival, and per-key priority
-  ceilings. Every knob and default:
-  [`docs/FEATURE-NOTES.md`](docs/FEATURE-NOTES.md).
 
 - **Connected to your data.** fleet speaks [MCP](#standards): a per-deployment
   connector catalog with multi-account credentials brokered host-side, per-task
@@ -112,7 +103,8 @@ yourself are already in the box, tested, and governed by the same core:
 - **A real scheduler, not a cron wrapper.** Priority queues with
   anti-starvation, transient-only retries with backoff, SLA tracking, dead-letter
   + replay, per-task sandbox limits, structured JSON output (`output_schema`),
-  live SSE run streams, batch/import/export, and an Upcoming-runs view.
+  live SSE run streams, batch/import/export, and an Upcoming-runs view. Every
+  knob and default: [`docs/FEATURE-NOTES.md`](docs/FEATURE-NOTES.md).
 - **Automation surface for your own ecosystem.** Typed API keys + an
   OpenAPI-specified HTTP API to enqueue and consume governed agent jobs from CI,
   cron, bots, or other tasks ([`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md));
@@ -169,13 +161,12 @@ so treat bundle write access as production access
 
 ## Architecture at a glance
 
-A single `fleet` process runs, on one box:
-
-1. **Interactive real-time chat** sessions (streamed over SSE), and
-2. A **scheduling engine** that runs recurring background agent tasks,
-
-both executing their tool calls inside the **same** rootless-Podman sandbox, and
-both driven by **one** unified agent runtime (`internal/agentcore`).
+A single `fleet` process runs **interactive real-time chat** (streamed over
+SSE) and a **scheduling engine** for recurring background agent tasks — both
+driven by **one** unified agent runtime (`internal/agentcore`), and both
+executing their tool calls in the **same** sandbox: rootless Podman on the box
+by default, or ephemeral pods under `FLEET_SANDBOX_BACKEND=kubernetes`
+([ADR-0049](docs/adr/0049-kubernetes-backend-split-control-plane.md)).
 
 ## Standards
 
@@ -191,125 +182,67 @@ tested in this repository:
   progressive disclosure (name + description in the prompt; the agent reads
   `SKILL.md` and runs bundled scripts on demand, in the sandbox). Invoke
   explicitly with `/skill-name` in chat.
+- **Agent Plugins.** The bundle's `plugins/` dir loads
+  [Agent Plugins](https://agent-plugins.org) (`plugin.json` + `skills/` +
+  `mcp.json`), the portable package format other agent clients also load.
+  [`docs/AGENT-PLUGINS.md`](docs/AGENT-PLUGINS.md).
+- **A2A — Agent2Agent.** fleet can be called *as an agent* (A2A v1.0.1): an
+  Agent Card plus a JSON-RPC endpoint that lands delegated work on the same
+  governed task seam, and fleet agents can delegate outward to remote A2A
+  agents. Off by default (`FLEET_A2A_ENABLED`). [`docs/A2A.md`](docs/A2A.md).
+- **OpenAPI 3.1.** The orchestrator HTTP API is published at
+  [`docs/openapi.yaml`](docs/openapi.yaml), and a CI drift test keeps its
+  routes, auth schemes and Go-bound component schemas in lockstep with the
+  shipped router.
 
-The orchestrator HTTP API is published as an OpenAPI 3.1 contract at
-[`docs/openapi.yaml`](docs/openapi.yaml); a CI test
-(`cmd/fleet/openapi_drift_test.go`) keeps its routes + auth schemes in lockstep
-with the shipped router, and gates the body schemas of every named component
-schema bound to a Go model (property existence, `required` integrity,
-type-kind). Inline operation schemas, schemas without a reflectable Go type,
-and status codes remain documentary.
+## The client-config bundle: your agent IP is portable
 
-## Repository layout
+fleet ships **no** client-specific content. Everything that defines how your
+agents behave lives in a **client-config bundle** — a plain git repo or
+directory you own (`FLEET_CLIENT_CONFIG_DIR`), not inside fleet's database or
+binary:
 
-Abridged — the load-bearing directories, not every package. `internal/` alone
-holds roughly forty packages; `cmd/` also carries the test/bench helpers
-(`fake-llm`, `fleet-bench`), and `scripts/` and `.github/` hold the operator
-scripts and the CI definition.
-
-```
-cmd/
-  fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
-  sandbox-probe/  deploy-time sandbox smoke test
-internal/
-  agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
-  agent/          input sources, observers, policies, finalize (interactive + scheduled)
-  runner/         in-process capped worker pool (the old "gig", folded in)
-  creds/          MCP credential-account store (host-side credential broker)
-  clientconfig/   loads the pluggable CLIENT BUNDLE (branding, MCP catalog, prompts, skills, ...)
-  mcp/            merged Go MCP client (stdio + HTTP)
-  mcpbroker/      out-of-process bundle MCP broker transport + scoped sessions
-  sandbox/        the single execution backend (ephemeral container over a persistent workspace)
-  tools/          native agent tools (bash, python, ...)
-  store/          interactive (chat) Postgres layer + migrations
-  sched/          orchestrator/scheduler (was moc) + its migrations
-  httpapi/        chat HTTP/SSE/auth layer
-  config/         unified configuration (env loading; the MCP catalog comes from the bundle)
-  ...             (~30 more: agentcore's neighbours, netguard, mcpoauth, observability, ...)
-scripts/          bootstrap / update / doctor, the sandbox image build, and the CI policy checks
-.github/          workflows (the CI + SAST gates), CODEOWNERS, dependabot, the CodeQL gate filter
-web/              one Next.js app: /chat and /orchestrator
-config/default/   the GENERIC client bundle baked into the repo (runs bare),
-                  including config/default/sandbox/Containerfile — the sandbox
-                  image is a per-client bundle artifact (build-on-box default)
-docs/             architecture & operator docs; docs/adr/ records the load-bearing
-                  Architecture Decision Records behind the invariants
-```
-
-> **Naming note (v1 glossary):** `chat`, `moc`, `gig`, and `cutlass` — which
-> appear in code comments, env-var prefixes (`CUTLASS_*`), docs, and the
-> git history — are the names of the internal predecessor stack that fleet
-> consolidates and replaces. They are historical aliases inside this repo, not
-> separate public projects.
-
-## The client-config bundle
-
-fleet ships **no** client-specific content. It loads a **client-config bundle**
-from `FLEET_CLIENT_CONFIG_DIR`: `manifest.yaml` supplies branding, model
-defaults, the connector catalog, and tool policy; `system_prompts/`,
-`personas/`, `protocols/`, `skills/`, and `mcp/` supply the content. Contract:
-[`config/default/README.md`](config/default/README.md).
-
-Three ways in: **run bare** (the in-repo generic bundle — good for a first
-look), **fork the public template**
-([`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config) for
-the single-box podman install,
-[`ElcanoTek/example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config)
-for the Kubernetes one — they are peers, not parent and child), or
-**point at your own private repo** (the box needs a read-only fine-grained PAT
-to clone it). `bootstrap --client-config <git-url[#sha-or-tag]|path>` sets it
-up; **pin the ref in production** — the bundle runs host-side under the service
-identity ([`SECURITY.md`](SECURITY.md)), so a bundle change should be a
-deliberate operator action, not a silent pull.
-
-## No lock-in: your agent IP is portable
-
-Everything that defines how your agents behave lives in the **client-config
-bundle** — a plain git repo or directory you own (`FLEET_CLIENT_CONFIG_DIR`), not
-inside fleet's database or binary:
-
-- **`system_prompts/`** — base prompts for chat and tasks
-- **`personas/`** — reusable agent profiles
-- **`protocols/`** — playbooks your agents follow
-- **`skills/`** — packaged [Agent Skills](#standards) (`SKILL.md` + bundled scripts)
-- **`plugins/`** — [Agent Plugins](https://agent-plugins.org) (`plugin.json` +
-  `skills/` + `mcp.json`), the portable package format other agent clients also
-  load; see [docs/AGENT-PLUGINS.md](docs/AGENT-PLUGINS.md)
+- **`manifest.yaml`** — branding, model defaults, the MCP catalog, tool policy, sandbox block
+- **`system_prompts/`**, **`personas/`**, **`protocols/`** — base prompts, agent profiles, playbooks
+- **`skills/`** and **`plugins/`** — [Agent Skills and Agent Plugins](#standards)
 - **`mcp/`** — your MCP connectors (+ `requirements.txt`)
-- **`manifest.yaml`** — MCP catalog, tool policy, model defaults, sandbox block
 - **`sandbox/Containerfile`** — the exact image your tool calls run in
 
-These files encode how your business actually works — your prompts, playbooks,
-and connectors carry real competitive knowledge. Safety here means owning them
-outright, rather than trusting a vendor's roadmap to stay clear of your market.
-Versioned, under your control, over an open protocol ([MCP](#standards)): your
-agent setup travels with you — fork it per team, share it across orgs, or point
-it at another MCP-capable platform. Moving off fleet doesn't mean starting
-over, which keeps adoption low-risk. The public templates show the full
-layout — [`example-config`](https://github.com/ElcanoTek/example-config) for a
-single box, [`example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config)
-for a cluster.
+These files encode how your business actually works, so owning them outright
+matters. Versioned and over open protocols, your setup travels with you — fork
+it per team, share it across orgs, or point it at another MCP-capable platform.
+Contract: [`config/default/README.md`](config/default/README.md).
+
+Three ways in: **run bare** (the in-repo generic bundle — good for a first
+look), **fork a public template**
+([`example-config`](https://github.com/ElcanoTek/example-config) for a single
+box, [`example-kubernetes-config`](https://github.com/ElcanoTek/example-kubernetes-config)
+for a cluster — peers, not parent and child), or **point at your own private
+repo** (the box needs a read-only fine-grained PAT to clone it).
+`bootstrap --client-config <git-url[#sha-or-tag]|path>` sets it up; **pin the
+ref in production** — the bundle runs host-side under the service identity
+([`SECURITY.md`](SECURITY.md)), so a bundle change should be a deliberate
+operator action, not a silent pull.
 
 ## Development
 
 ```
-make build      # go build ./...
-make test       # go test ./...
-make lint       # golangci-lint run
+make build      # compile-check ./... and emit ./fleet
+make test       # the tagged Go test suite
+make lint       # golangci-lint, ruff, migration + workflow/shell lint
+make ci-local   # the fast PR gates (Go + web), locally
 ```
 
-For the full build/test workflow (including the Postgres-backed Go suites, the
-web app, and the Playwright e2e suites), see [`AGENTS.md`](AGENTS.md) — the
-operating guide for humans and agents alike — and
-[`ONBOARDING.md`](ONBOARDING.md) for the clone-to-first-turn path.
+For the full build/test workflow (the Postgres-backed Go suites, the web app,
+the Playwright e2e suites) and a map of the tree, see [`AGENTS.md`](AGENTS.md);
+[`ONBOARDING.md`](ONBOARDING.md) covers the clone-to-first-turn path.
 
 ### Running one task locally (`fleet task run`)
 
 `fleet task run` executes a **single task YAML** to completion locally — no
 server, no database — through the **same governed runtime** the production
 scheduler uses (sandbox and credential brokering included). A debug
-entrypoint, not a second execution path. _(Formerly the separate `cutlass`
-binary; its deprecation shim has been removed.)_
+entrypoint, not a second execution path.
 
 ```
 fleet task run --log out.json path/to/task.yaml               # run one task through the governed runtime
@@ -404,14 +337,10 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | [`docs/OPERATORS.md`](docs/OPERATORS.md) | Operator runbook — the env file, the client-config checkout, every lifecycle verb |
 | [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md) | Agent runtime mechanics — per-turn sandbox, ceilings, compaction, verifier, artifacts |
 | [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md) | Sandbox OCI runtimes — `runc` / Kata / libkrun isolation tiers |
-| [`docs/CONFIG-RELOAD.md`](docs/CONFIG-RELOAD.md) | Which settings hot-reload without a restart, and how |
-| [`docs/SERVER-STATS.md`](docs/SERVER-STATS.md) | Admin Server tab — lightweight CPU, memory, disk, network, and uptime status |
 | [`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md) | Disaster recovery — backup + restore of both databases |
 | [`docs/WEBHOOK-SIGNING.md`](docs/WEBHOOK-SIGNING.md) · [`docs/TESTING.md`](docs/TESTING.md) | Webhook HMAC signing · the test suite + fake-LLM seam |
-| [`docs/SCANNING.md`](docs/SCANNING.md) | The scanning stack — which of golangci-lint / ruff / govulncheck / Grype / gitleaks / npm audit / CodeQL / Semgrep owns what, what actually blocks a merge, and the known gaps |
-| [`docs/CODEQL.md`](docs/CODEQL.md) | CodeQL specifics — advanced setup, the four-language matrix, the High-band gate + accepted-findings register, and why a PR-event run certifies a diff rather than a tree |
+| [`docs/SCANNING.md`](docs/SCANNING.md) | The scanning stack — which scanner owns what, and what actually blocks a merge |
 | [`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md) | The HTTP API as an automation substrate — keys, kicking off jobs, consuming structured output |
-| [`docs/API-CLIENTS.md`](docs/API-CLIENTS.md) | Reaching the API from another machine — what the TLS front routes, the key store the service reads, `X-API-Key`, the free connection test |
 | [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) | The connector catalog — bundled vs third-party trust classes |
 | [`docs/README.md`](docs/README.md) | The full documentation index — every design note, runbook and ADR, by question |
 | [`docs/adr/`](docs/adr/) | Architecture Decision Records — the *why* behind the non-negotiable invariants |
@@ -460,10 +389,8 @@ fleet stands on the shoulders of excellent open-source projects and open
 standards. Our thanks to the teams and communities behind them:
 
 - **[Podman](https://github.com/containers/podman)** — rootless, daemonless
-  containers. Every agent tool call's model-authored local execution (`bash`,
-  `run_python`, file I/O) executes inside a rootless-Podman sandbox; there is no
-  trusted fast path that skips it. MCP is the documented host-side broker
-  exception (see above).
+  containers — the default sandbox backend every model-authored `bash`,
+  `run_python`, and file-I/O call executes in.
 - **[Kata Containers](https://katacontainers.io)** and
   **[libkrun](https://github.com/containers/libkrun)** — the OCI runtimes behind
   fleet's optional hypervisor-isolation tier: set `sandbox.runtime` and every
@@ -474,17 +401,19 @@ standards. Our thanks to the teams and communities behind them:
   this job: a deliberately small image (less surface to attack), backed by one
   of the fastest CVE-response pipelines in any distribution, with the entire
   Python data stack installed as **signed Fedora RPMs** instead of `pip` at
-  runtime — one audited supply chain, not a thousand PyPI tarballs. fleet
-  deliberately tracks the rolling tag so every on-box rebuild picks up the
-  current patches, and Grype scans keep the claim honest — on every main-targeting
-  PR that is not docs-only, on every push to `main`, plus a weekly scheduled
-  re-scan of the existing image.
-- **[Model Context Protocol](https://modelcontextprotocol.io)** and its SDKs —
-  the open standard fleet speaks (stdio + HTTP) to reach tools and data through a
-  credential-brokered MCP catalog.
-- **[Agent Skills](https://github.com/anthropics/skills)** — the open skill
-  format fleet loads from the client-config bundle (`SKILL.md` + bundled scripts,
-  with progressive disclosure).
+  runtime — one audited supply chain, not a thousand PyPI tarballs. fleet tracks
+  the rolling tag so every on-box rebuild picks up current patches, and Grype
+  scans keep the claim honest.
+- **[Model Context Protocol](https://modelcontextprotocol.io)**,
+  **[Agent Skills](https://github.com/anthropics/skills)**, and
+  **[Agent Plugins](https://agent-plugins.org)** — the open standards for tools,
+  packaged capabilities, and the portable bundles that carry them. fleet speaks
+  MCP (stdio + HTTP) through a credential-brokered catalog and loads skills and
+  plugins straight from the client-config bundle.
+- **[A2A](https://a2a-protocol.org)** and
+  **[ACP](https://agentclientprotocol.com)** — the open agent-to-agent and
+  agent-client specs fleet uses to talk with other agents and with the clients
+  people already work in.
 - **[Charmbracelet](https://github.com/charmbracelet)** — fleet leans on the
   charm stack end to end: **[Fantasy](https://github.com/charmbracelet/fantasy)**
   is the Go framework underneath the multi-provider agent run loop, and the
