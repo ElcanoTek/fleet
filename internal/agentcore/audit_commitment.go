@@ -379,6 +379,14 @@ func pendingRecordKey(rawInput string) string {
 	return ""
 }
 
+// CallRecordBinding is pendingRecordKey exported for the scheduled driver: a
+// call's record binding (its deal_id, or its deal_ids set, under the
+// callRecordIDKeys wire contract), "" when it names no record. Only an equal,
+// non-empty binding proves two calls wrote the same record — the rule a
+// verifier outage uses before a landed alias twin may supersede a failed
+// attempt (#1604 applies the same rule to a blocked pre-audit call).
+func CallRecordBinding(rawInput string) string { return pendingRecordKey(rawInput) }
+
 // recordIDPlaceholders are the strings a model writes when an action names no
 // record at all ("deal_id": "n/a" on a send_email audit). None of them can ever
 // identify a real record, so binding a commitment to one produces an

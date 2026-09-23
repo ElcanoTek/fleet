@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -642,11 +641,11 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		switch {
 		case err != nil && twoOutages && p.verifierOutageMayFailOpen(err, records):
 			// Still no verdict, from an OUTAGE (transport, timeout), after this
-			// run's own audit passed and its critical work landed with no failed
-			// critical call: fail OPEN with a recorded warning instead of dead-lettering
+			// run's own audit passed and its critical work landed with no
+			// unresolved failed critical call: fail OPEN with a recorded warning instead of dead-lettering
 			// audited work on the verifier's own outage (the phone-a-friend
 			// reviewer already fails open on its errors).
-			log.Printf("verifier unavailable twice; the audit passed with no failed critical call, finishing unverified: %v", err)
+			log.Printf("verifier unavailable twice; the audit passed with no unresolved failed critical call, finishing unverified: %v", err)
 			p.verifierWarning = err.Error()
 			p.verified = true
 		case err != nil:
@@ -735,7 +734,7 @@ func (p *scheduledPolicy) persistVerifierWarning() {
 	}
 	t := agentcore.MessageTypeCompletionUnverifiedVerifierError
 	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
-		"[%s] WARNING: the end-of-run verifier could not return a verdict (twice: %s). The run's audit passed and its critical work landed with no failed critical call, so it finished WITHOUT model verification — review the result before relying on it.",
+		"[%s] WARNING: the end-of-run verifier could not return a verdict (twice: %s). The run's audit passed and its critical work landed with no unresolved failed critical call, so it finished WITHOUT model verification — review the result before relying on it.",
 		agentcore.MessageTypeCompletionUnverifiedVerifierError, agentcore.RedactSecrets(p.verifierWarning)), nil, nil, &t, nil, nil, "")
 }
 
@@ -783,12 +782,14 @@ func succeededCriticalCall(records []toolExecRecord) bool {
 // later attempt superseded does not count on its own:
 //   - the same tool again — a stale-version retry or corrected arguments;
 //   - the action's alias twin on the same server (agentcore.CriticalActionKey,
-//     critical_tool_aliases #1604) aimed at the same target — a failed inline
-//     write followed by an upload of the same page (sameCallTarget).
+//     critical_tool_aliases #1604) that wrote the same record — a failed inline
+//     create of deal D followed by an upload that created deal D
+//     (sameCallTarget).
 //
-// A twin aimed at a different record supersedes nothing: an upload that landed
-// page B says nothing about the inline write to page A that failed. A twin on
-// another server or client variant is another action and supersedes nothing.
+// A twin that wrote another record, or whose record cannot be proved the same,
+// supersedes nothing: an upload that landed deal B says nothing about the
+// failed write to deal A. A twin on another server or client variant is
+// another action and supersedes nothing.
 func failedCriticalCalls(records []toolExecRecord) []string {
 	type attempt struct {
 		key        agentcore.CriticalAction
@@ -821,32 +822,36 @@ func failedCriticalCalls(records []toolExecRecord) []string {
 	return failed
 }
 
-// sameCallTarget reports whether two alias-twin calls provably aim at the same
-// target: both argument projections are complete (the verifier's scalar
-// evidence, keyed by JSON Pointer path, dropped nothing), they share at least
-// one argument, and they agree on every one they share. The twins' payload
-// arguments differ by design (inline data vs an upload reference), so only the
-// arguments both carry are compared — the record identifier (a slug, a deal id)
-// among them. An incomplete projection may have dropped exactly that
-// identifier while keeping an unrelated shared flag, so it proves nothing;
-// neither does sharing no argument. Either way the attempt stays failed (fail
-// closed): the outage then spends a check, as it did before twins superseded.
+// sameCallTarget reports whether two alias-twin calls provably wrote the same
+// record: both argument projections are complete (the verifier's evidence
+// dropped nothing), and both name the same non-empty record binding
+// (agentcore.CallRecordBinding — deal_id, or a deal_ids set). Agreeing on
+// other arguments proves nothing: a shared flag such as dry_run identifies no
+// target. A call that names no record under that contract (a page addressed
+// by slug, for one) cannot be proved the same target, so its failure stands
+// and the outage spends a check, as it did before twins superseded.
 func sameCallTarget(a, b toolExecRecord) bool {
 	if a.ArgumentsOmitted || b.ArgumentsOmitted {
 		return false
 	}
-	shared := 0
-	for path, av := range a.Arguments {
-		bv, ok := b.Arguments[path]
-		if !ok {
-			continue
+	ra, rb := recordBinding(a), recordBinding(b)
+	return ra != "" && ra == rb
+}
+
+// recordBinding rebuilds a record's top-level projected arguments (JSON
+// Pointer "/key" paths) into a JSON object and reads its record binding.
+func recordBinding(r toolExecRecord) string {
+	top := make(map[string]any, len(r.Arguments))
+	for path, v := range r.Arguments {
+		if key, ok := strings.CutPrefix(path, "/"); ok && !strings.Contains(key, "/") {
+			top[key] = v
 		}
-		if !reflect.DeepEqual(av, bv) {
-			return false
-		}
-		shared++
 	}
-	return shared > 0
+	raw, err := json.Marshal(top)
+	if err != nil {
+		return ""
+	}
+	return agentcore.CallRecordBinding(string(raw))
 }
 
 // sleepCtx waits d or until ctx is done, reporting whether the full wait
