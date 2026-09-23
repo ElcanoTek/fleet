@@ -271,7 +271,8 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	key := idempotencyKey(p.MessageId, sess, message)
 
 	resp, err := a.promptOnce(ctx, p, sess, message, key, true)
-	if errors.Is(err, errRetryFresh) {
+	var retry retryFreshError
+	if errors.As(err, &retry) {
 		// fleet answered a replay of this key with "accepted earlier, did not
 		// run" (its turn failed before it began). Nothing ran under that key,
 		// so submitting once more under a fresh one is safe — and is what the
@@ -281,8 +282,11 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 			if sess.rekeyed == nil {
 				sess.rekeyed = map[string]string{}
 			}
-			sess.rekeyed[strings.TrimSpace(*p.MessageId)] = fresh
+			sess.rekeyed[*p.MessageId] = fresh
 		}
+		// The fresh key runs where the original was accepted, not in a
+		// conversation the session started since.
+		sess.settle(fresh, retry.conv, true)
 		if ctx.Err() != nil {
 			// Cancelled between the replay answer and the resubmission:
 			// nothing was sent under the fresh key, and nothing may be.
@@ -293,12 +297,14 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	return resp, err
 }
 
-// errRetryFresh is promptOnce's signal that fleet reported the key as accepted
+// retryFreshError is promptOnce's signal that fleet reported the key as accepted
 // earlier but never run, so one fresh submission is safe.
-var errRetryFresh = errors.New("retry under a fresh idempotency key")
+type retryFreshError struct{ conv string } // the conversation that accepted the original
+
+func (retryFreshError) Error() string { return "retry under a fresh idempotency key" }
 
 // promptOnce submits the prompt under one idempotency key and translates the
-// outcome. With allowRetry it returns errRetryFresh instead of reporting a key
+// outcome. With allowRetry it returns a retryFreshError instead of reporting a key
 // fleet accepted earlier but never ran.
 func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *session, message, key string, allowRetry bool) (acpsdk.PromptResponse, error) {
 	// stopCtx ends when the client cancels (session/cancel, or a newer prompt
@@ -361,7 +367,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		// before it began). The key is spent; nothing ran under it.
 		delete(sess.unsettled, message)
 		delete(sess.keyConv, key)
-		return acpsdk.PromptResponse{}, errRetryFresh
+		return acpsdk.PromptResponse{}, retryFreshError{conv: convID}
 	}
 	if isQueued && (ctx.Err() != nil || stopCtx.Err() != nil) {
 		stop.intervened = true
@@ -526,13 +532,15 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 // outcome was lost reuses that prompt's key; otherwise a fresh key.
 func idempotencyKey(messageID *string, sess *session, message string) string {
 	if messageID != nil && strings.TrimSpace(*messageID) != "" {
-		if k, ok := sess.rekeyed[strings.TrimSpace(*messageID)]; ok {
+		// Opaque: trimming decides only whether an id was sent. " job-1 "
+		// and "job-1" are different messages.
+		if k, ok := sess.rekeyed[*messageID]; ok {
 			return k
 		}
 		// Hashed: a client may send a messageId of any length, and the key
 		// lands in a btree index with a size limit. The hash keeps it
 		// deterministic, so a resend of the same messageId finds the run.
-		sum := sha256.Sum256([]byte(strings.TrimSpace(*messageID)))
+		sum := sha256.Sum256([]byte(*messageID))
 		return "acp-msg-" + sess.ns + "-" + hex.EncodeToString(sum[:])
 	}
 	if k, ok := sess.unsettled[message]; ok {

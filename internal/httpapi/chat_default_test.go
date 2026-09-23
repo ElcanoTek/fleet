@@ -1497,3 +1497,21 @@ func TestQueuedLaunch_CancelledRowIsNotLaunched(t *testing.T) {
 		t.Fatalf("turns %d, slot released %v: a cancelled row must not launch", turns, released.Load())
 	}
 }
+
+// input_id is indexed, so an oversized one is refused up front instead of
+// failing as a database error mid-submission.
+func TestChat_OversizedInputIDIsRefused(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	w := postChatRequest(t, srv, map[string]any{"message": "hi", "persona": "generic", "input_id": strings.Repeat("k", maxInputIDLen+1)})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if eng.turns != 0 || len(st.directRows()) != 0 || st.createdConversations() != 0 {
+		t.Fatalf("an oversized key reached the store: turns %d, rows %d, convs %d", eng.turns, len(st.directRows()), st.createdConversations())
+	}
+	if w := postChatRequest(t, srv, map[string]any{"message": "hi", "persona": "generic", "input_id": strings.Repeat("k", maxInputIDLen)}); w.Code != http.StatusOK {
+		t.Fatalf("a key at the limit was refused: %d", w.Code)
+	}
+}

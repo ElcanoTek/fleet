@@ -1498,3 +1498,61 @@ func TestUnresolvedPromptsAreEvictedWhole(t *testing.T) {
 		}
 	}
 }
+
+// messageIds are opaque: "job-1" and " job-1 " are different messages and
+// get different keys; trimming only decides whether an id was sent.
+func TestMessageIdsAreOpaque(t *testing.T) {
+	sess := &session{ns: "ns"}
+	a, b := "job-1", " job-1 "
+	if idempotencyKey(&a, sess, "x") == idempotencyKey(&b, sess, "x") {
+		t.Fatal("distinct messageIds shared a key")
+	}
+	blank := "   "
+	if k := idempotencyKey(&blank, sess, "x"); strings.HasPrefix(k, "acp-msg-") {
+		t.Fatalf("a blank messageId was used as a key: %q", k)
+	}
+}
+
+// A first prompt whose replay reports "accepted but never ran" is resubmitted
+// under a fresh key in the conversation that accepted it, not in a
+// conversation the session started since.
+func TestFreshRetryStaysInTheOriginalConversation(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			if conn, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close() // A's whole answer is lost
+			}
+		case 2:
+			w.emit("conversation", map[string]any{"id": "conv-B"})
+			w.emit("turn.completed", map[string]any{})
+		case 3: // A's retry: fleet had accepted it in conv-A, but it never ran
+			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-a","mode":"direct","state":"cancelled"},"conversation_id":"conv-A"}`)
+		default:
+			w.emit("conversation", map[string]any{"id": "conv-A"})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "prompt A"); err == nil {
+		t.Fatal("want the lost-answer error")
+	}
+	if _, err := h.prompt(sid, "prompt B"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.prompt(sid, "prompt A"); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 4 {
+		t.Fatalf("chats = %d, want 4", len(h.fleet.chats))
+	}
+	if fresh := h.fleet.chats[3]; fresh.ConversationID != "conv-A" || fresh.InputID == h.fleet.chats[0].InputID {
+		t.Fatalf("fresh retry = conv %q key %q, want conv-A under a new key", fresh.ConversationID, fresh.InputID)
+	}
+}

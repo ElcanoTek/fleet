@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -322,6 +323,13 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "message is required", http.StatusBadRequest)
 		return
 	}
+	// The key is indexed (btree entries have a size limit), so it is bounded
+	// here rather than left to fail as a database error: a UUID, or fleet
+	// acp's hashed keys, fit many times over.
+	if len(req.InputID) > maxInputIDLen || len(req.SubmissionID) > maxInputIDLen {
+		http.Error(w, fmt.Sprintf("input_id and submission_id are limited to %d bytes", maxInputIDLen), http.StatusBadRequest)
+		return
+	}
 
 	// Resolve conversation: find existing, or create new.
 	var (
@@ -559,6 +567,9 @@ func (s *Server) claimDirectInput(w http.ResponseWriter, r *http.Request, user s
 	}
 	return &directClaim{id: row.ID, key: clientID, sweepGen: gen}, false
 }
+
+// maxInputIDLen bounds a caller's input_id / submission_id.
+const maxInputIDLen = 256
 
 // directClaim is a direct submission's idempotency claim as startTurn needs
 // it: the claim row, and the Stop generation read when it was accepted (the

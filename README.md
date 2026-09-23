@@ -184,9 +184,10 @@ fleet is built on open protocols:
   ([`docs/A2A.md`](docs/A2A.md)).
 - **[ACP](https://agentclientprotocol.com)** — `fleet acp` lets ACP clients
   (Buzz, Zed, JetBrains) drive governed fleet turns ([`docs/ACP.md`](docs/ACP.md)).
-- **OpenAPI 3.1** — the HTTP API contract
-  ([`docs/openapi.yaml`](docs/openapi.yaml)), kept in lockstep with the router
-  by a CI drift test.
+- **OpenAPI 3.1** — the orchestrator HTTP API
+  ([`docs/openapi.yaml`](docs/openapi.yaml)), kept in lockstep with its routes
+  by a CI drift test. The chat routes are documented in
+  [`docs/INPUT-QUEUE.md`](docs/INPUT-QUEUE.md).
 
 ## The client-config bundle: your agent IP is portable
 

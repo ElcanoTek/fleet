@@ -27,7 +27,8 @@ retention guarantee: after a terminal row is purged, reusing its
 - `POST /chat` gains `input_id` and `mode` (`queue` default, `steer`). While a
   turn runs it returns **202** `{queued:true, input:{...}}` (200 on idempotent
   replay) instead of an SSE stream. A steer submission with attachments
-  downgrades to `queue` (steering is text-only).
+  downgrades to `queue` (steering is text-only). `input_id` and
+  `submission_id` are limited to 256 bytes (400 beyond); the key is indexed.
 - `GET /conversations/{id}/queue` — authoritative pending snapshot.
 - `DELETE /conversations/{id}/queue/{inputID}` — remove while still queued
   (409 once it ran).
