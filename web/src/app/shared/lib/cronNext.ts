@@ -212,11 +212,21 @@ function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date |
           const instant = wall - offset;
           if (instant < after || (best !== null && instant >= best)) continue;
           if (offsets.length > 1) {
-            // Around a transition, only an instant that reads back as the
-            // requested time is real: this drops the wrong-offset candidate
-            // and a spring-forward gap time the zone never shows.
+            // Around a transition, only an instant that reads back as exactly
+            // this wall time — date included — is real: this drops the
+            // wrong-offset candidate, a spring-forward gap time, and a date
+            // the zone skipped outright (Pacific/Apia had no 2011-12-30).
             const got = wallClockParts(new Date(instant), timeZone);
-            if (!got || got[3] !== h || got[4] !== m) continue;
+            if (
+              !got ||
+              got[0] !== d.getUTCFullYear() ||
+              got[1] !== d.getUTCMonth() + 1 ||
+              got[2] !== d.getUTCDate() ||
+              got[3] !== h ||
+              got[4] !== m
+            ) {
+              continue;
+            }
           }
           best = instant;
         }

@@ -169,6 +169,14 @@ describe("nextCronOccurrence in a named time zone", () => {
     expect(performance.now() - started).toBeLessThan(500);
   });
 
+  it("a calendar day the zone skipped is not a match (Pacific/Apia, 2011-12-30)", () => {
+    const from = new Date(Date.UTC(2011, 11, 29, 23, 0, 0)); // Dec 29 13:00 in Apia (UTC-10)
+    // Dec 30 2011 never happened there, so "noon on the 30th" next falls on
+    // Jan 30 2012 (UTC+14) — not on Dec 31, whose noon reads back as 12:00.
+    const next = nextCronOccurrence("0 12 30 * *", from, "Pacific/Apia");
+    expect(next!.toISOString()).toBe("2012-01-29T22:00:00.000Z");
+  });
+
   it("returns null for an unknown zone", () => {
     expect(nextCronOccurrence("0 8 * * *", NOON_UTC, "Mars/Olympus_Mons")).toBeNull();
   });

@@ -23,8 +23,7 @@ import (
 
 const (
 	// UTC offsets span UTC-12 to UTC+14, so a wall-clock time encoded as a
-	// UTC instant is shown by a real instant within this window of it.
-	maxAhead  = 14 * time.Hour
+	// UTC instant is shown by a real instant no later than this after it.
 	maxBehind = 12 * time.Hour
 	// Offsets are probed this far either side of a day: past any transition
 	// that can touch the day's instants (no zone changes offset twice within).
@@ -69,8 +68,20 @@ func Next(s cron.Schedule, t time.Time) time.Time {
 			offsets = append(offsets, later)
 		}
 
-		// Wall order and instant order disagree inside a repeated hour, so
-		// take the earliest qualifying instant of the whole day.
+		if len(offsets) == 1 {
+			// No offset change can touch this day: wall → instant is a fixed
+			// shift, so instants are in wall order and the first candidate at
+			// or past `after` is the answer. Jump straight to it rather than
+			// walking the minutes before it (the Upcoming forecast calls this
+			// hundreds of times per task).
+			if next, ok := firstOnDay(spec, day, after.Add(offsets[0])); ok {
+				return next.Add(-offsets[0]).In(t.Location())
+			}
+			continue
+		}
+
+		// Around a transition, wall order and instant order disagree inside a
+		// repeated hour, so take the earliest qualifying instant of the day.
 		var best time.Time
 		for h := 0; h < 24; h++ {
 			if !bit(spec.Hour, h) {
@@ -81,25 +92,18 @@ func Next(s cron.Schedule, t time.Time) time.Time {
 					continue
 				}
 				wall := day.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute)
-				if wall.Add(maxBehind).Before(after) {
-					continue
-				}
-				if !best.IsZero() && wall.Add(-maxAhead).After(best) {
-					break
-				}
 				for _, off := range offsets {
 					instant := wall.Add(-off)
 					if instant.Before(after) || (!best.IsZero() && !instant.Before(best)) {
 						continue
 					}
-					if len(offsets) > 1 {
-						// Around a transition only an instant that reads back as
-						// the requested time is real: this drops the wrong-offset
-						// candidate and a spring-forward gap time.
-						lt := instant.In(loc)
-						if lt.Hour() != h || lt.Minute() != m {
-							continue
-						}
+					// Only an instant that reads back as exactly this wall time
+					// — date included — is real. That drops the wrong-offset
+					// candidate, a spring-forward gap time, and a date the zone
+					// skipped outright (Pacific/Apia jumped from 2011-12-29 to
+					// 2011-12-31, so "30 12" never happened that year).
+					if !readsAs(instant.In(loc), wall) {
+						continue
 					}
 					best = instant
 				}
@@ -110,6 +114,33 @@ func Next(s cron.Schedule, t time.Time) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// firstOnDay returns the first wall time on day that s matches at or after
+// notBefore (both UTC-encoded wall clock), skipping whole hours at a time.
+func firstOnDay(s *cron.SpecSchedule, day, notBefore time.Time) (time.Time, bool) {
+	for h := 0; h < 24; h++ {
+		hourStart := day.Add(time.Duration(h) * time.Hour)
+		if !bit(s.Hour, h) || !hourStart.Add(time.Hour).After(notBefore) {
+			continue
+		}
+		for m := 0; m < 60; m++ {
+			if !bit(s.Minute, m) {
+				continue
+			}
+			if wall := hourStart.Add(time.Duration(m) * time.Minute); !wall.Before(notBefore) {
+				return wall, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+// readsAs reports whether local shows exactly the UTC-encoded wall time wall.
+func readsAs(local, wall time.Time) bool {
+	y, mo, d := local.Date()
+	wy, wmo, wd := wall.Date()
+	return y == wy && mo == wmo && d == wd && local.Hour() == wall.Hour() && local.Minute() == wall.Minute()
 }
 
 // offsetAt is how far loc's wall clock runs ahead of UTC at instant at.

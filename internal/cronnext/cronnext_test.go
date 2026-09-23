@@ -60,6 +60,7 @@ func TestNext_MatchesBruteForceAroundTransitions(t *testing.T) {
 	zones := []string{
 		"America/New_York", "Europe/London", "Pacific/Auckland", "Australia/Lord_Howe",
 		"Pacific/Chatham", "America/Santiago", "America/Havana", "Asia/Tokyo", "UTC",
+		"Africa/Casablanca", "America/St_Johns",
 	}
 	exprs := []string{"30 2 * * *", "0 3 * * *", "45 1,2 * * *", "*/15 * * * *", "0 0 * * *", "0 23 * * 1-5", "30 0 1 * *"}
 	for _, z := range zones {
@@ -120,5 +121,42 @@ func TestNext_DelegatesNonStandardSchedules(t *testing.T) {
 func TestNext_ImpossibleScheduleIsZero(t *testing.T) {
 	if got := Next(mustParse(t, "0 0 30 2 *"), time.Now()); !got.IsZero() {
 		t.Fatalf("Feb 30 = %s, want zero", got)
+	}
+}
+
+// Pacific/Apia skipped 2011-12-30 entirely (UTC-10 → UTC+14). A candidate that
+// reads back as the right clock time but on another date is not a match, so
+// "Dec 30 at noon" next falls in 2012. (robfig's own Next loops forever on
+// this input, so it is not consulted here.)
+func TestNext_SkippedCalendarDayIsNotAMatch(t *testing.T) {
+	loc := mustLoad(t, "Pacific/Apia")
+	s := mustParse(t, "0 12 30 12 *")
+	from := time.Date(2011, 12, 29, 13, 0, 0, 0, loc)
+	got := Next(s, from)
+	want := time.Date(2012, 12, 30, 12, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Fatalf("Next = %s, want %s", got, want)
+	}
+}
+
+// The Upcoming forecast chains Next up to 366 times for each of up to 500
+// tasks. A dense schedule on ordinary days must be close to O(1) per call:
+// the whole 500×366 projection has to stay well under a second.
+func TestNext_DenseScheduleIsCheapToChain(t *testing.T) {
+	s := mustParse(t, "* * * * *")
+	ny := mustLoad(t, "America/New_York")
+	started := time.Now()
+	for task := 0; task < 500; task++ {
+		at := time.Date(2026, 9, 23, 12, 0, 0, 0, ny)
+		for i := 0; i < 366; i++ {
+			next := Next(s, at)
+			if !next.Equal(at.Truncate(time.Minute).Add(time.Minute)) {
+				t.Fatalf("Next(%s) = %s", at, next)
+			}
+			at = next
+		}
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("500×366 chained Next took %s", elapsed)
 	}
 }
