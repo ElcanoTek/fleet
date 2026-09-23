@@ -198,8 +198,8 @@ type Options struct {
 	OutputSchema   json.RawMessage
 
 	// MCPRosterNarrowing, when non-empty, declares MCPToolAllowlist exhaustive
-	// for the run (agentcore.RunConfig.MCPRosterNarrowing, #1603): a server
-	// with no entry registers no MCP tools. scheduledrun sets it to
+	// and exact for the run (agentcore.RunConfig.MCPRosterNarrowing, #1603): a
+	// server with no entry of its own registers no MCP tools. scheduledrun sets it to
 	// "required_tools_only" with an allowlist narrowed to the task's
 	// EXECUTION REQUIREMENTS required_tools. "" = Gate-2 as before.
 	MCPRosterNarrowing string

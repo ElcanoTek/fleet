@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -530,6 +531,71 @@ func parseDealOutcomes(resultText string) ([]dealOutcome, bool) {
 func (o *orchestrationState) resetBatchApprovals() {
 	o.approvedDealIDs = make(map[string]map[string]bool)
 	o.approvedDigest = make(map[string]map[string]map[string]bool)
+}
+
+// unregisteredTypedActions returns the typed critical_actions entries that
+// name a full server-qualified critical tool a NARROWED run did not register
+// (narrowedMCPRoster, #1603); nil when the roster is not narrowed. The narrowing
+// removed such a tool from every path to the model — direct, deferred and
+// tool_call alike — so a call to it is answered "tool not found" and a
+// commitment to it could never be discharged. Entries the full-name check in
+// registerCommittedActionsTyped drops anyway (a bare suffix, a non-critical
+// name) are left to it. Callers must hold o.mu.
+func (o *orchestrationState) unregisteredTypedActions(actions []criticalActionStruct) []string {
+	if o.narrowedMCPRoster == nil {
+		return nil
+	}
+	var out []string
+	for _, a := range actions {
+		tool := strings.TrimSpace(a.Tool)
+		if suffix := criticalSuffixFor(tool); suffix == "" || tool == suffix {
+			continue
+		}
+		if !o.narrowedMCPRoster[tool] && !slices.Contains(out, tool) {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
+// unregisteredLegacyActions is unregisteredTypedActions for the legacy
+// free-text critical_actions_being_unblocked field: the critical suffixes its
+// declarations name (matchCriticalSuffix) that no tool the narrowed run
+// registered carries, compared by alias class (criticalAliasClassOf) — the
+// legacy commitment is suffix-scoped, so any registered tool of the class could
+// discharge it, and one outside every registered class never can. nil when the
+// roster is not narrowed. A declaration naming no critical suffix registers
+// nothing and is left to registerCommittedActions. Callers must hold o.mu.
+func (o *orchestrationState) unregisteredLegacyActions(declared []string) []string {
+	if o.narrowedMCPRoster == nil {
+		return nil
+	}
+	registered := make(map[string]bool, len(o.narrowedMCPRoster))
+	for tool := range o.narrowedMCPRoster {
+		if suffix := criticalSuffixFor(tool); suffix != "" {
+			registered[criticalAliasClassOf(suffix)] = true
+		}
+	}
+	var out []string
+	for _, decl := range declared {
+		suffix := matchCriticalSuffix(decl)
+		if suffix == "" || registered[criticalAliasClassOf(suffix)] || slices.Contains(out, suffix) {
+			continue
+		}
+		out = append(out, suffix)
+	}
+	return out
+}
+
+// unregisteredActionsRefusal is confirm_audit's answer to a declaration in
+// field naming tools a narrowed run did not register (unregisteredTypedActions,
+// unregisteredLegacyActions).
+func unregisteredActionsRefusal(field string, tools []string) string {
+	return fmt.Sprintf("Audit Rejected: %s names %s, which this run cannot call. The run's MCP tools "+
+		"are narrowed to the task's required tools, and a call to any other tool is answered \"tool not found\", "+
+		"so this approval could never be discharged. Declare only tools from your tool list and re-run "+
+		"confirm_audit; a tool the task needs belongs in its EXECUTION REQUIREMENTS required_tools.",
+		field, strings.Join(tools, ", "))
 }
 
 // registerCommittedActionsTyped records commitments from the typed

@@ -13,21 +13,41 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
+// driverDeniesAll stands in for the scheduled driver's never-matching deny
+// entry (scheduledrun rosterNarrowingDeniesAll).
+const driverDeniesAll = "__roster_narrowing_denies_all_tools__"
+
+// deniesAll reports whether an allowlist entry registers none of a server's
+// tools: the driver's deny entry, or the explore derivation's sentinel.
+func deniesAll(list []string) bool {
+	return len(list) == 1 && (list[0] == driverDeniesAll || list[0] == exploreNoToolsSentinel)
+}
+
 // A sub-agent of a narrowed run (#1603) can never see more MCP tools than its
 // parent: the exhaustive flag carries over, and an explore child's derivation —
 // which reads a missing entry as "allow all" — gets an explicit entry for every
-// catalog server first.
+// catalog server first. The parent's allowlist is the shape the scheduled
+// driver produces for required_tools [mcp_pages_get_page_data]: the required
+// server's own entry and an explicit deny for every other dispatch-catalog
+// server, the seat included. pages_archive stands for a catalog server the
+// allowlist has no entry for: the parent's exact Gate-2 registers nothing of
+// it, so neither child may inherit the pages entry through the keying rule.
 func TestBuildChild_InheritsTheNarrowedRoster(t *testing.T) {
 	catalog := []mcp.ServerTool{
 		{ServerName: "pages", Tool: mcp.Tool{Name: "get_page_data"}},
 		{ServerName: "pages", Tool: mcp.Tool{Name: "deploy_page_upload"}},
 		{ServerName: "pages_acct", Tool: mcp.Tool{Name: "get_page_data"}},
+		{ServerName: "pages_archive", Tool: mcp.Tool{Name: "get_page_data"}},
 		{ServerName: "fast_io", Tool: mcp.Tool{Name: "list_files"}},
 	}
 	parent := NewAgent(Options{
-		Config:             &config.Config{},
-		MCPCatalog:         catalog,
-		MCPToolAllowlist:   agentcore.MCPAllowlist{"pages": {"get_page_data"}},
+		Config:     &config.Config{},
+		MCPCatalog: catalog,
+		MCPToolAllowlist: agentcore.MCPAllowlist{
+			"pages":      {"get_page_data"},
+			"pages_acct": {driverDeniesAll},
+			"fast_io":    {driverDeniesAll},
+		},
 		MCPRosterNarrowing: "required_tools_only",
 		SystemPrompt:       "parent",
 	})
@@ -37,14 +57,13 @@ func TestBuildChild_InheritsTheNarrowedRoster(t *testing.T) {
 			t.Fatalf("%s child lost the exhaustive Gate-2", role)
 		}
 		allow := child.mcpToolAllowlist
-		if got := allow["fast_io"]; len(got) != 1 || got[0] != exploreNoToolsSentinel {
-			t.Fatalf("%s child: fast_io = %v, want the deny-all sentinel (the parent registers none of it)", role, got)
-		}
 		if got := allow["pages"]; !slices.Equal(got, []string{"get_page_data"}) {
 			t.Fatalf("%s child: pages = %v, want the parent's [get_page_data]", role, got)
 		}
-		if got := allow["pages_acct"]; !slices.Equal(got, []string{"get_page_data"}) {
-			t.Fatalf("%s child: the seat = %v, want its base server's narrowed entry", role, got)
+		for _, server := range []string{"pages_acct", "pages_archive", "fast_io"} {
+			if got := allow[server]; !deniesAll(got) {
+				t.Fatalf("%s child: %s = %v, want a deny-all entry (the parent registers none of it)", role, server, got)
+			}
 		}
 	}
 
@@ -75,8 +94,12 @@ func TestScheduledRunSendsOnlyTheNarrowedMCPTools(t *testing.T) {
 		{ServerName: "pages", Tool: mcp.Tool{Name: "get_page_data", InputSchema: map[string]any{"type": "object"}}},
 		{ServerName: "pages", Tool: mcp.Tool{Name: "deploy_page_upload", InputSchema: map[string]any{"type": "object"}}},
 		{ServerName: "fast_io", Tool: mcp.Tool{Name: "share", InputSchema: map[string]any{"type": "object"}}},
+		// A seat with no entry of its own (one loaded mid-run has none).
+		{ServerName: "pages_acct2", Tool: mcp.Tool{Name: "get_page_data", InputSchema: map[string]any{"type": "object"}}},
 	}
-	a.mcpToolAllowlist = agentcore.MCPAllowlist{"pages": {"get_page_data"}}
+	// The driver's shape: the required server's entry, an explicit deny for
+	// every other server it saw at dispatch.
+	a.mcpToolAllowlist = agentcore.MCPAllowlist{"pages": {"get_page_data"}, "fast_io": {driverDeniesAll}}
 	a.mcpRosterNarrowing = "required_tools_only"
 	_ = a.Execute(context.Background(), "Refresh the page data.")
 

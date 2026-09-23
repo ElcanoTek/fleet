@@ -82,6 +82,9 @@ export type Task = {
   // stopped here; the reason can be absent on an older parked row.
   recurrence_parked_at?: string | null;
   recurrence_parked_reason?: string | null;
+  // IANA zone the cron recurrence fires in (e.g. "America/New_York"). The
+  // server always returns the resolved zone; older payloads may omit it.
+  timezone?: string;
   files?: string[];
   run_if?: RunIf | null;
   skip_count?: number;
@@ -126,6 +129,9 @@ export type TaskCreate = {
   recurrence?: string;
   recurrence_until?: string;
   recurrence_remaining?: number;
+  // IANA zone the recurrence is evaluated in. Omitted on create = the server's
+  // FLEET_DEFAULT_TIMEZONE (then UTC); omitted on edit = keep the task's zone.
+  timezone?: string;
   files?: string[];
   tags?: string[];
   retry_policy?: RetryPolicy;

@@ -1,6 +1,6 @@
 # Generating the demo GIFs (TUI + web)
 
-The README demonstrates `fleet chat` with an animated GIF
+The README links to an animated GIF of `fleet chat`
 (`docs/screenshots/tui/demo.gif`) showing a real two-turn session: a question,
 live tool calls (`bash`, `run_python`) resolving to ✓, a glamour-rendered
 markdown answer streaming in, `/help`, and a follow-up. This page documents how
@@ -56,7 +56,15 @@ generator and eyeball the GIF end to end — timing is the only fragile part
 
 The static PNG screenshot (`docs/screenshots/tui/chat.png`, from
 `scripts/generate-tui-screenshot.sh` + `freeze`) still exists for contexts
-where an animation is inappropriate; the README embeds the GIF.
+where an animation is inappropriate.
+
+The README does not embed the GIFs inline: the GitHub mobile app re-renders the
+whole README on every GIF frame, so inline recordings make the page flicker
+nonstop ([community discussion #50309](https://github.com/orgs/community/discussions/50309)).
+It shows each recording's **final frame** as a still (`tui/demo.png`,
+`web/chat-demo.png`, `web/ops-demo.png`) linked to the GIF. Both generator
+scripts write that still next to the GIF (`ffmpeg … -update 1`), so a
+regenerated recording and its still never drift apart — commit them together.
 
 
 ## The web demo GIFs

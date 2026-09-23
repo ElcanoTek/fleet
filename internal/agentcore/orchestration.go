@@ -89,6 +89,14 @@ type orchestrationState struct {
 	// keeps the one-shot semantics.
 	typedAuditActive bool
 
+	// narrowedMCPRoster is the set of MCP tool names a NARROWED run registered
+	// (RunConfig.MCPRosterNarrowing, #1603), refreshed on every tool rebuild;
+	// nil when the run's roster is not narrowed. While set, confirm_audit
+	// refuses a typed critical action outside it: the tool is not callable, so
+	// the commitment could never be discharged and would block finish until
+	// the run failed.
+	narrowedMCPRoster map[string]bool
+
 	// approvedDealIDs / approvedDigest bind a BATCH confirm_audit to the exact
 	// record ids (and value-set digest) the audit approved, keyed by
 	// critical-tool suffix. When a tool call carries deal_ids (a server-side
@@ -356,6 +364,19 @@ func (o *orchestrationState) setDelegatedFinish(v bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.delegatedFinish = v
+}
+
+// setNarrowedMCPRoster records a narrowed run's registered MCP tool names
+// (recordNarrowedRoster). A narrowed run that registered no MCP tool still
+// gets a non-nil, empty set: every typed MCP action is then refused.
+func (o *orchestrationState) setNarrowedMCPRoster(names []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.narrowedMCPRoster = set
 }
 
 // setCeilings configures the per-turn guardrails (interactive).

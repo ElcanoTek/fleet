@@ -269,21 +269,18 @@ const exploreNoToolsSentinel = "__explore_role_denies_all_tools__"
 
 // explicitNarrowedAllowlist turns an EXHAUSTIVE allowlist (a narrowed roster,
 // #1603) into an equivalent explicit one over the catalog: every catalog
-// server gets the entry governing it under the one keying rule, or the
-// never-matching sentinel when none does. Consumers that read a missing entry
-// as "allow all" then see exactly what the narrowed run can call.
+// server keeps its own entry, and one with none gets the never-matching
+// sentinel — the narrowed Gate-2 is an exact lookup, so a server without its
+// own entry (a seat, a prefix-named server) registers nothing in the parent
+// and must not inherit a base server's entry here. Consumers that read a
+// missing entry as "allow all" then see exactly what the narrowed run can call.
 func explicitNarrowedAllowlist(catalog []mcp.ServerTool, narrowed agentcore.MCPAllowlist) agentcore.MCPAllowlist {
 	out := make(agentcore.MCPAllowlist, len(narrowed))
 	for server, list := range narrowed {
 		out[server] = append([]string(nil), list...)
 	}
 	for _, st := range catalog {
-		if _, ok := out[st.ServerName]; ok {
-			continue
-		}
-		if list := agentcore.AllowlistToolsFor(narrowed, st.ServerName); len(list) > 0 {
-			out[st.ServerName] = append([]string(nil), list...)
-		} else {
+		if _, ok := out[st.ServerName]; !ok {
 			out[st.ServerName] = []string{exploreNoToolsSentinel}
 		}
 	}

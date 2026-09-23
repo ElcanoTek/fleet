@@ -135,6 +135,13 @@ team. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-s
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
 and **System** appearance and opens **Settings**.
 
+Administrators manage account access under **Settings → Admin → Users**. Chat
+defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants full
+Chat and Ops Center permissions and highlights the included Contributor choices.
+Selecting Fleet Admin again turns it off and safely defaults to Chat Contributor
+with no Ops access. Accounts created and granted Fleet in central Auth are added
+here automatically with the roles selected there.
+
 ### The header
 
 Above the transcript sit three small controls, left to right: **Keyboard

@@ -54,6 +54,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/cronnext"
 	"github.com/ElcanoTek/fleet/internal/datasets"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/guardrail"
@@ -2732,7 +2733,7 @@ func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *sc
 				loc = tzLoc
 			}
 		}
-		next := schedule.Next(time.Now().In(loc)).UTC()
+		next := cronnext.Next(schedule, time.Now().In(loc)).UTC()
 		edit.Recurrence = req.Cron
 		edit.ScheduledFor = &next
 		changed = append(changed, "schedule "+req.Cron)
@@ -2912,6 +2913,18 @@ func (o opsAdminsService) SetRole(ctx context.Context, email, role string) error
 		return o.Remove(ctx, email)
 	}
 	return o.st.EnsureUserWithRole(ctx, email, role)
+}
+
+func (o opsAdminsService) SetEnabled(ctx context.Context, email string, enabled bool) error {
+	username := strings.ToLower(strings.TrimSpace(email))
+	u, err := o.st.GetAnyUserByUsernameWithContext(ctx, username)
+	if err != nil || u == nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	return o.st.SetUserEnabled(ctx, u.ID, enabled)
 }
 
 // Roles returns every sched-plane account's role keyed by lowercased email —

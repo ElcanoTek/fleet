@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -40,6 +42,25 @@ func TestEnsureAdminUser(t *testing.T) {
 	}
 	if again, _ := store.GetUserByUsername(created); again == nil || again.ID != u.ID || again.Role != "admin" {
 		t.Errorf("idempotent ensure changed the row: %+v (was id=%s)", again, u.ID)
+	}
+
+	// Central revocation disables without deleting. Normal membership lookup
+	// fails, while a later role grant re-enables the same UUID and preserves
+	// the identity tasks are owned by.
+	if err := store.SetUserEnabled(ctx, u.ID, false); err != nil {
+		t.Fatalf("SetUserEnabled(false): %v", err)
+	}
+	if _, err := store.GetUserByUsername(created); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("disabled user lookup err = %v, want sql.ErrNoRows", err)
+	}
+	if retained, err := store.GetAnyUserByUsernameWithContext(ctx, created); err != nil || retained.ID != u.ID || retained.Role != "admin" {
+		t.Fatalf("disabled row not retained: user=%+v err=%v", retained, err)
+	}
+	if err := store.EnsureUserWithRole(ctx, created, "client"); err != nil {
+		t.Fatalf("EnsureUserWithRole(regrant): %v", err)
+	}
+	if again, err := store.GetUserByUsername(created); err != nil || again.ID != u.ID || again.Role != "client" {
+		t.Fatalf("regrant replaced or mis-roled row: user=%+v err=%v", again, err)
 	}
 
 	// 2. Existing non-admin → promoted to admin, same row.
