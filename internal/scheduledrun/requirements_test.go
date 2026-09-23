@@ -74,9 +74,17 @@ func TestParseExecutionRequirementsAgreesWithSaveTimeValidation(t *testing.T) {
 		`{"mcp_servers":["reports"],"required_tools":["mcp_reports_download"],"network":true}`,
 		`{"mcp_servers":["fast_io + fastio_helpers"]}`, `{"required_tools":[" x"]}`, `{}`, `null`, `[]`, `{bad}`,
 		`{"network":"yes"}`, `{"mcp_servers":"x"}`, strings.Repeat("x", 16385), "{}\n" + executionRequirementsMarker + "\n{}",
+		// completion (#1602) and roster (#1603): what dispatch refuses, save refuses.
+		`{"completion":{"any_succeeded":["mcp_pages_record_refresh_check"]}}`, `{"completion":{"any_succeeded":["a + b"]}}`,
+		`{"completion":["x"]}`, `{"completion":{"any_succeeded":"x"}}`,
+		`{"roster":"required_tools_only"}`, `{"roster":null}`, `{"roster":""}`, `{"roster":"everything"}`, `{"roster":["required_tools_only"]}`,
 	} {
 		prompt := "TASK\n" + executionRequirementsMarker + "\n" + body
 		_, dispatchErr := parseExecutionRequirements(prompt)
+		if dispatchErr == nil {
+			// The roster key is parsed separately at dispatch; it must agree too.
+			_, dispatchErr = parseRequirementsRoster(prompt)
+		}
 		saveErr := models.ValidateExecutionRequirements(prompt)
 		if (dispatchErr == nil) != (saveErr == nil) {
 			t.Fatalf("dispatch and save-time validation disagree on %.60q: dispatch=%v save=%v", body, dispatchErr, saveErr)
