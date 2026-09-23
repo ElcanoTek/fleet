@@ -140,23 +140,30 @@ func TestNext_SkippedCalendarDayIsNotAMatch(t *testing.T) {
 }
 
 // The Upcoming forecast chains Next up to 366 times for each of up to 500
-// tasks. A dense schedule on ordinary days must be close to O(1) per call:
-// the whole 500×366 projection has to stay well under a second.
+// tasks, so a dense schedule on ordinary days must cost about what robfig's
+// own Next costs. The bound is relative, not wall-clock, so it holds on a slow
+// runner and under -race alike (both sides slow down together); the minute-
+// walking scan it guards against was ~60x slower than robfig.
 func TestNext_DenseScheduleIsCheapToChain(t *testing.T) {
 	s := mustParse(t, "* * * * *")
 	ny := mustLoad(t, "America/New_York")
-	started := time.Now()
-	for task := 0; task < 500; task++ {
-		at := time.Date(2026, 9, 23, 12, 0, 0, 0, ny)
-		for i := 0; i < 366; i++ {
-			next := Next(s, at)
-			if !next.Equal(at.Truncate(time.Minute).Add(time.Minute)) {
-				t.Fatalf("Next(%s) = %s", at, next)
+	chain := func(next func(time.Time) time.Time) time.Duration {
+		started := time.Now()
+		for task := 0; task < 200; task++ {
+			at := time.Date(2026, 9, 23, 12, 0, 0, 0, ny)
+			for i := 0; i < 366; i++ {
+				n := next(at)
+				if !n.Equal(at.Truncate(time.Minute).Add(time.Minute)) {
+					t.Fatalf("Next(%s) = %s", at, n)
+				}
+				at = n
 			}
-			at = next
 		}
+		return time.Since(started)
 	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("500×366 chained Next took %s", elapsed)
+	ours := chain(func(at time.Time) time.Time { return Next(s, at) })
+	robfig := chain(s.Next)
+	if ours > 5*robfig+50*time.Millisecond {
+		t.Fatalf("200x366 chained Next took %s; robfig took %s", ours, robfig)
 	}
 }
