@@ -180,6 +180,12 @@ func schedDLQReplay(argv []string) int {
 // operator wrote, and an accidental binary or log file must not be loaded whole.
 const maxReplayPromptBytes = 1 << 20
 
+// replayPromptMaxLength is the prompt bound POST /tasks and task edits enforce
+// (handlers.taskPromptMaxLength). A corrected prompt is copied verbatim onto
+// every successor, so one the HTTP path would refuse must not enter here
+// either: the task would become one that cannot be edited or cloned.
+const replayPromptMaxLength = 100000
+
 // readReplayPrompt reads a --prompt-file replacement ("-" = stdin), refusing an
 // empty or oversized one.
 func readReplayPrompt(path string) (string, error) {
@@ -202,6 +208,9 @@ func readReplayPrompt(path string) (string, error) {
 	prompt := strings.TrimSpace(string(raw))
 	if prompt == "" {
 		return "", fmt.Errorf("--prompt-file is empty; omit it to replay with the task's own prompt")
+	}
+	if len(prompt) > replayPromptMaxLength {
+		return "", fmt.Errorf("--prompt-file prompt cannot exceed %d characters, the same limit as creating or editing a task", replayPromptMaxLength)
 	}
 	return prompt, nil
 }

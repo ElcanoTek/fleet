@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -62,5 +63,27 @@ func TestSchedDLQListRejectsBadLimit(t *testing.T) {
 	}
 	if code := schedDLQList([]string{"stray"}); code != 1 {
 		t.Errorf("stray positional: exit %d, want 1", code)
+	}
+}
+
+// TestReadReplayPromptHoldsTheTaskPromptBound — a --prompt-file replacement is
+// held to the same length limit as creating or editing a task, so replay cannot
+// install a prompt the HTTP path would refuse; the limit itself is accepted.
+func TestReadReplayPromptHoldsTheTaskPromptBound(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		t.Helper()
+		path := dir + "/" + name
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	if _, err := readReplayPrompt(write("at.txt", strings.Repeat("a", replayPromptMaxLength))); err != nil {
+		t.Fatalf("a prompt at the limit was refused: %v", err)
+	}
+	_, err := readReplayPrompt(write("over.txt", strings.Repeat("a", replayPromptMaxLength+1)))
+	if err == nil || !strings.Contains(err.Error(), "cannot exceed") {
+		t.Fatalf("an over-limit prompt was accepted or refused for the wrong reason: %v", err)
 	}
 }
