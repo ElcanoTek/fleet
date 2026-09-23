@@ -135,7 +135,10 @@ EXECUTION REQUIREMENTS (JSON):
   still carries a malformed line dead-letters once and parks its chain at
   once, not after two occurrences
   ([ADR-0073](adr/0073-malformed-requirements-park-on-first-dead-letter.md)).
-  Correct the prompt in the task editor; replay reruns the same prompt.
+  Replay reruns the same prompt and editing the finished task starts a one-off
+  run, so recreate the task (or clone it, which keeps the schedule) with a
+  corrected prompt. Imports check live (pending/scheduled) rows only;
+  terminal history is preserved verbatim.
 
 Fleet checks this optional declaration at **dispatch**, before model execution.
 A sealed task/global lockdown produces an actionable network error. After the

@@ -35,3 +35,22 @@ func TestCLIWritePathsRejectMalformedExecutionRequirements(t *testing.T) {
 		t.Fatalf("a well-formed declaration was refused: %v", err)
 	}
 }
+
+// Terminal history is preserved verbatim (docs/LEGACY-IMPORT.md): a legacy
+// malformed declaration on a success/error/cancelled/dead_lettered row cannot
+// dispatch, so it must not make a whole cross-box export unrestorable. Only a
+// live (pending/scheduled) row is refused (#1601).
+func TestImportsPreserveMalformedTerminalHistory(t *testing.T) {
+	bad := "Refresh the page.\n" + models.ExecutionRequirementsMarker + "\n" + `{"mcp_servers":["fast_io + fastio_helpers","pages"]}`
+	for _, status := range []models.TaskStatus{models.TaskStatusSuccess, models.TaskStatusError, models.TaskStatusCancelled, models.TaskStatusDeadLettered} {
+		if err := validateImportedTask(&models.Task{Prompt: bad, Status: status}); err != nil {
+			t.Fatalf("sched task import refused %s history with a legacy malformed line: %v", status, err)
+		}
+		if _, _, err := buildImportedTask(nil, bundleTask{ID: uuid.New(), Prompt: bad, Status: string(status)}, nil, newImportStats()); err != nil && strings.Contains(err.Error(), "fast_io + fastio_helpers") {
+			t.Fatalf("legacy import refused %s history with a legacy malformed line: %v", status, err)
+		}
+	}
+	if err := validateImportedTask(&models.Task{Prompt: bad, Status: models.TaskStatusPending}); err == nil {
+		t.Fatal("a live pending row with a malformed line must still be refused")
+	}
+}

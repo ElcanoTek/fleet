@@ -670,6 +670,12 @@ func resolveSchedTaskCollision(ctx context.Context, st *storage.Storage, task *m
 	return true, true, nil
 }
 
+// liveImportedStatus reports whether an imported row can dispatch (pending or
+// scheduled) — the rows a malformed EXECUTION REQUIREMENTS line would fail.
+func liveImportedStatus(s models.TaskStatus) bool {
+	return s == models.TaskStatusPending || s == models.TaskStatusScheduled
+}
+
 // buildImportedTask converts one bundle task into a models.Task: minted through
 // models.NewTask so every normalization (priority clamp, SLA defaults, timezone
 // fallback, trigger type) matches a task created through the public API, then
@@ -682,10 +688,13 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 	if strings.TrimSpace(bt.Prompt) == "" {
 		return nil, false, fmt.Errorf("empty prompt")
 	}
-	if err := models.ValidateExecutionRequirements(bt.Prompt); err != nil {
-		return nil, false, err
-	}
 	status := models.TaskStatus(bt.Status)
+	// Only a live row can dispatch; history is preserved verbatim (#1601).
+	if liveImportedStatus(status) {
+		if err := models.ValidateExecutionRequirements(bt.Prompt); err != nil {
+			return nil, false, err
+		}
+	}
 	if !importableTaskStatus(status) {
 		return nil, false, fmt.Errorf("unsupported status %q (exporters must normalize transient statuses)", bt.Status)
 	}
