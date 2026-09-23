@@ -177,6 +177,18 @@ func (p *ScheduledPolicy) AuditAborted() bool {
 	return aborted
 }
 
+// AuditConfirmed reports whether this run's own confirm_audit(success=true) was
+// accepted (and not later turned into a terminal abort). A delegated policy
+// skips the self-audit ritual, so for a sub-agent it is true only if the child
+// itself audited a critical action. The scheduled driver requires it before
+// letting a verifier outage fail open (#1602): "the audit passed" must mean an
+// audit actually ran, not merely that finish enforcement let the run end.
+func (p *ScheduledPolicy) AuditConfirmed() bool {
+	p.orch.mu.Lock()
+	defer p.orch.mu.Unlock()
+	return p.orch.selfAuditConfirmedOnce && !p.orch.auditTerminalFailure
+}
+
 // Budget exposes this run's current cost/token ceilings and accumulated spend
 // (#175). The spawn_subagent tool reads the PARENT policy's Budget to size a
 // child's sliced ceiling against the parent's REMAINING budget — the parent

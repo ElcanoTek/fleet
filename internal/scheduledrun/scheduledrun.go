@@ -986,6 +986,10 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: phoneAFriend,
 		ReviewerModel:       reviewer,
+		// Deterministic completion predicate (#1602): the producer-declared
+		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this
+		// run's roster at dispatch. nil = none declared, verifier as before.
+		CompletionAnySucceeded: requirements.completionTools(),
 		// Governed sub-agents / delegation (#175, #264, #1043): ON by default —
 		// registered whenever the fleet-wide flag AND this task's allow_delegation
 		// are both true (each defaults true; each is an independent kill switch,
