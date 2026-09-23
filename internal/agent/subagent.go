@@ -303,7 +303,10 @@ func exploreMCPToolAllowlist(catalog []mcp.ServerTool, parent agentcore.MCPAllow
 	for _, st := range catalog {
 		byServer[st.ServerName] = append(byServer[st.ServerName], st.Tool.Name)
 	}
-	out := make(agentcore.MCPAllowlist, len(byServer)+len(parent))
+	// Capacity is a hint: size it by the catalog alone, never by a sum
+	// (go/allocation-size-overflow flags len(a)+len(b)); parent-only entries
+	// below just grow the map.
+	out := make(agentcore.MCPAllowlist, len(byServer))
 	for server, names := range byServer {
 		parentList := parent[server]
 		allowed := make([]string, 0, len(names))
