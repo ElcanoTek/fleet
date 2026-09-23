@@ -104,6 +104,21 @@ func (s *Store) ClaimDirectInput(ctx context.Context, r InputQueueRow) (InputQue
 	return s.insertInput(ctx, r)
 }
 
+// CancelInputKey records a Stop naming key before any input holds it: a
+// cancelled direct row in the key space, so a submission that arrives later
+// (still in transit when the Stop landed) finds the key taken and is answered
+// "cancelled" instead of running. Unlike the in-memory Stop mark it cannot be
+// evicted or expire before the submission lands; it is purged with the other
+// terminal rows. If a row already holds the key, that row is returned and
+// created is false.
+func (s *Store) CancelInputKey(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
+	r.Mode, r.State = InputModeDirect, InputStateCancelled
+	if r.Attachments == "" {
+		r.Attachments = "[]"
+	}
+	return s.insertInput(ctx, r)
+}
+
 // ReleaseDirectInput resolves a direct claim whose turn never launched —
 // callers use it only on paths that abort before the turn runs. An unbound
 // claim is dropped, so the key is free for the caller to retry. A claim that

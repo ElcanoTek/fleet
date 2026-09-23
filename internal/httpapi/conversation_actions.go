@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -571,7 +573,9 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 	// still-queued row is withdrawn, a running turn for it is cancelled, and
 	// a turn not registered yet (a direct claim still being prepared, a row
 	// the drain just claimed, or a submission still in transit) is refused
-	// when it tries to register. A client whose answer was lost (`fleet acp`)
+	// when it tries to register. A key no row holds yet is taken with a
+	// cancelled row, so a submission still in transit is answered
+	// "cancelled" even after the in-memory mark is gone. A client whose answer was lost (`fleet acp`)
 	// can stop its own input without knowing which of those states it is in.
 	scope := "all"
 	turnID, inputID := "", ""
@@ -660,6 +664,22 @@ func (s *Server) cancelInput(ctx context.Context, user, convID, key string) bool
 	if err != nil {
 		log.Printf("cancel input lookup (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
 		return false
+	}
+	if row == nil {
+		// Nothing holds the key yet: its submission may still be in transit.
+		// Take the key with a cancelled row, so the late submission is
+		// answered "cancelled" rather than run, even once the mark is gone.
+		held, created, err := s.store.CancelInputKey(qctx, store.InputQueueRow{
+			ID: uuid.NewString(), ConversationID: convID, UserEmail: user, ClientInputID: key,
+		})
+		if err != nil {
+			log.Printf("cancel input key (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
+			return false
+		}
+		if created {
+			return true
+		}
+		row = &held // the submission's row landed first: stop it below
 	}
 	if row != nil && row.Mode != store.InputModeDirect && row.State == store.InputStateQueued {
 		removed, err := s.store.RemoveQueuedInput(qctx, user, convID, row.ID)

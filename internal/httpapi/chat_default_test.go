@@ -1001,6 +1001,19 @@ func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
 	return nil
 }
 
+func (s *fakeChatStore) CancelInputKey(_ context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, it := range s.queue {
+		if it.ConversationID == r.ConversationID && it.ClientInputID == r.ClientInputID {
+			return it, false, nil
+		}
+	}
+	r.Mode, r.State = store.InputModeDirect, store.InputStateCancelled
+	s.queue = append(s.queue, r)
+	return r, true, nil
+}
+
 func (s *fakeChatStore) CancelUnlaunchedInput(_ context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1286,8 +1299,8 @@ func TestCancelByInputKey(t *testing.T) {
 		conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
 		srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-t")
 		w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": conv.ID, "input_id": "key-t"})
-		if w.Code != http.StatusConflict || eng.turns != 0 {
-			t.Fatalf("status %d, turns %d: a Stop that arrived first must refuse the late submission", w.Code, eng.turns)
+		if !strings.Contains(w.Body.String(), `"state":"cancelled"`) || eng.turns != 0 {
+			t.Fatalf("status %d %s, turns %d: a Stop that arrived first must refuse the late submission", w.Code, w.Body.String(), eng.turns)
 		}
 	})
 	t.Run("expired mark", func(t *testing.T) {
@@ -1657,5 +1670,43 @@ func TestCancelByInputKey_DrainedRowIsCancelledDurably(t *testing.T) {
 	}
 	if row, _ := st.LookupInput(context.Background(), conv.ID, "key-d"); row == nil || row.State != store.InputStateCancelled {
 		t.Fatalf("row = %+v, want cancelled", row)
+	}
+}
+
+// A Stop by key that lands before its submission holds the key takes the key
+// with a cancelled row, so the late submission is answered "cancelled" and
+// never runs even when the in-memory mark was evicted in between — whether
+// it arrives on an idle conversation or behind another surface's turn.
+func TestCancelByInputKey_KeyIsTakenBeforeTheSubmission(t *testing.T) {
+	for _, busy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "busy"}[busy], func(t *testing.T) {
+			eng := &fakeEngine{}
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, eng, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			if busy {
+				_, _, tok, _ := srv.registerTurn(conv.ID, func() {})
+				defer srv.finishTurn(conv.ID, tok)
+			}
+			if !srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-x") {
+				t.Fatal("cancelInput reported a store failure")
+			}
+			srv.inflightMu.Lock()
+			srv.cancelledInputs = nil // evicted before the submission lands
+			srv.inflightMu.Unlock()
+			w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": conv.ID, "input_id": "key-x"})
+			if !strings.Contains(w.Body.String(), `"state":"cancelled"`) {
+				t.Fatalf("ack %d %s: want the late submission answered cancelled", w.Code, w.Body.String())
+			}
+			eng.mu.Lock()
+			turns := eng.turns
+			eng.mu.Unlock()
+			if turns != 0 {
+				t.Fatalf("a stopped input ran (%d turns)", turns)
+			}
+			if row, _ := st.LookupInput(context.Background(), conv.ID, "key-x"); row == nil || row.State != store.InputStateCancelled {
+				t.Fatalf("row = %+v, want the key held cancelled", row)
+			}
+		})
 	}
 }

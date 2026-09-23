@@ -247,3 +247,34 @@ func TestCancelUnlaunchedInput_OnlyBeforeTheBind(t *testing.T) {
 		t.Fatalf("cancel drained bound = %v, %v; want left alone", ok, err)
 	}
 }
+
+// CancelInputKey takes a free key with a cancelled row that a later claim or
+// enqueue of the key finds instead of running, and leaves a held key alone.
+func TestCancelInputKey_TakesOnlyAFreeKey(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t-cik")
+
+	tomb, created, err := s.CancelInputKey(ctx, InputQueueRow{ID: "tomb-1", ConversationID: convID, UserEmail: "u@example.com", ClientInputID: "cik-1"})
+	if err != nil || !created || tomb.State != InputStateCancelled || tomb.Mode != InputModeDirect {
+		t.Fatalf("tombstone = %+v created=%v err=%v", tomb, created, err)
+	}
+	if row, created := claimDirect(t, s, convID, "cik-1"); created || row.ID != "tomb-1" {
+		t.Fatalf("claim after the Stop = %+v created=%v, want the cancelled row", row, created)
+	}
+	if row, created, err := s.EnqueueInput(ctx, InputQueueRow{ID: "q-cik-1", ConversationID: convID, UserEmail: "u@example.com", ClientInputID: "cik-1", Message: "later", Attachments: "[]", Mode: InputModeQueued}); err != nil || created || row.ID != "tomb-1" {
+		t.Fatalf("enqueue after the Stop = %+v created=%v err=%v, want the cancelled row", row, created, err)
+	}
+	if got, _ := s.LookupInputForUser(ctx, "u@example.com", "cik-1"); got == nil || got.ID != "tomb-1" {
+		t.Fatalf("per-user lookup = %+v, want the cancelled row", got)
+	}
+	if items, _ := s.ListQueuedInputs(ctx, "u@example.com", convID); len(items) != 0 {
+		t.Fatalf("a Stop's row shows in the queue: %+v", items)
+	}
+
+	held, _ := claimDirect(t, s, convID, "cik-2")
+	row, created, err := s.CancelInputKey(ctx, InputQueueRow{ID: "tomb-2", ConversationID: convID, UserEmail: "u@example.com", ClientInputID: "cik-2"})
+	if err != nil || created || row.ID != held.ID || row.State != InputStateRunning {
+		t.Fatalf("held key = %+v created=%v err=%v, want the claim returned unchanged", row, created, err)
+	}
+}

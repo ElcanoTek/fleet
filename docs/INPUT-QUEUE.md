@@ -55,7 +55,10 @@ retention guarantee: after a terminal row is purged, reusing its
   `claim-` placeholder turn id) is cancelled in the database too, so its launch
   is refused (a direct submission answers `409`) even if the mark is gone by
   then. A row already bound to its turn is left to that turn's settlement,
-  since the turn may have run. A client whose answer was lost (`fleet acp`) stops its own input this way without knowing which state
+  since the turn may have run. A Stop that finds no row for the key (its
+  submission still in transit) takes the key with a `cancelled` row, so the
+  late submission is answered "cancelled" and never runs, even once the mark is
+  gone; that row is purged with the other terminal rows. A client whose answer was lost (`fleet acp`) stops its own input this way without knowing which state
   it reached. `POST /chat` names its turn on the `X-Fleet-Turn-Id` response
   header (beside `X-Fleet-Conversation-Id`), so the id is known before any
   frame.
