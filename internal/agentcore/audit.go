@@ -228,7 +228,7 @@ func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest 
 	for suffix := range o.committedCriticalActions {
 		if criticalSuffixCovers(suffix, executedSuffix) && o.legacyHeadroomFor(suffix) > 0 {
 			o.committedCriticalActions[suffix]--
-			log.Printf("Enforcement: committed %q discharged via substitute %q (%d remaining)",
+			log.Printf("Enforcement: committed %q discharged via substitute or alias %q (%d remaining)",
 				suffix, toolName, o.committedCriticalActions[suffix])
 			return
 		}
