@@ -123,7 +123,7 @@ the push run on `main` and the scheduled runs give a tree-wide verdict. See
 
 ## Repository map
 
-See the README "Repository layout" for the annotated tree. In short: `cmd/` (the
+The top-level tree: `cmd/` (the
 one `fleet` binary — `fleet serve` runs the server, every other verb is the
 operator CLI (the `fleet-admin` shim was removed in ADR-0060); plus the
 `fleet-bench`, `fake-llm` and `sandbox-probe` harness binaries), `internal/` (`agentcore` the one run loop, `sandbox`,
