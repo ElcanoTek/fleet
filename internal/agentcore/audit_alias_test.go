@@ -382,3 +382,58 @@ func TestCriticalToolAliases_DigestRequirementScopedPerBatch(t *testing.T) {
 		t.Fatalf("the digest-bound batch with its digest must ride: %s", msg)
 	}
 }
+
+// A pending entry left by a call blocked before the audit is cleared by an
+// alias only when the alias wrote the SAME record: an inline write of record A
+// blocked pre-audit is not done because the upload twin later wrote record B,
+// and must neither leave the pending list nor be recorded as completed (Codex
+// review on PR #1606). Whether finish then passes is the audit's call, not the
+// alias's: the audit declared only B, and without aliases an undeclared
+// pending call is likewise not owed once the token auto-locks (ADR-0034).
+func TestCriticalToolAliases_PendingTwinOfAnotherRecordStaysPending(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	o := newOrchStateForTest()
+	if blocked, _ := o.checkCriticalTool(aliasInlineTool, "", `{"deal_id":"page-a","data":{}}`); !blocked {
+		t.Fatal("a critical call before the audit must be blocked")
+	}
+	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: aliasUploadTool, DealID: "page-b"}}, nil); resp.IsError {
+		t.Fatalf("audit should pass: %s", resp.Content)
+	}
+	args := `{"deal_id":"page-b","upload_id":"u-1"}`
+	if blocked, msg := o.checkCriticalTool(aliasUploadTool, "", args); blocked {
+		t.Fatalf("the declared upload must ride: %s", msg)
+	}
+	o.recordToolResult(aliasUploadTool, args, `{"ok":true}`, true)
+	if len(o.pendingCriticalActions) != 1 || o.pendingCriticalActions[0].toolName != aliasInlineTool {
+		t.Fatalf("record A's blocked inline write was cleared by the twin's write of record B: pending=%v", o.pendingCriticalActions)
+	}
+	if len(o.completedCriticalActions) != 0 {
+		t.Fatalf("record A's blocked write was recorded as completed: %v", o.completedCriticalActions)
+	}
+}
+
+// The batch discharge ledger dedups a record per server/variant: two aliased
+// batch calls on DIFFERENT servers for the same record id are two actions,
+// each owed under its own server-bound commitment, and the second server's
+// success must not be skipped as an echo of the first (Codex review on PR #1606).
+func TestCriticalToolAliases_BatchLedgerKeyedByServer(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	o := newOrchStateForTest()
+	registerTyped(t, o,
+		criticalActionStruct{Tool: aliasInlineTool, DealIDs: []string{"a"}},
+		criticalActionStruct{Tool: aliasOtherServerUpload, DealIDs: []string{"a"}})
+	args := `{"deal_ids":["a"]}`
+	result := `{"results":[{"deal_id":"a","success":true}]}`
+	for _, tool := range []string{aliasInlineTool, aliasOtherServerUpload} {
+		if blocked, msg := o.checkCriticalTool(tool, "", args); blocked {
+			t.Fatalf("%s must ride its own declaration: %s", tool, msg)
+		}
+		o.recordToolResult(tool, args, result, true)
+	}
+	if got := o.unexecutedCommitments(); len(got) != 0 {
+		t.Fatalf("the second server's write of the same record id was skipped: outstanding=%v", got)
+	}
+	if o.criticalExecutedCount != 2 {
+		t.Fatalf("criticalExecutedCount = %d, want 2: two servers, two writes", o.criticalExecutedCount)
+	}
+}

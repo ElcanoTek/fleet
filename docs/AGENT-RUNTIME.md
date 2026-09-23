@@ -417,7 +417,8 @@ reverse. Concretely, a call through an alias:
 - discharges it;
 - lets a re-audit that switches variant supersede the stale declaration instead
   of stacking on it;
-- clears an audited call that was blocked before the audit;
+- clears an audited call that was blocked before the audit, when it wrote
+  the same record (the same `deal_id`, or the same `deal_ids` set);
 - stays under a `deal_ids` / `values_digest` batch approval made on the other
   member. The batch ledgers are keyed by alias class.
 
@@ -433,14 +434,17 @@ What does **not** change:
 - A batch result discharges only the records **that call** named in its
   `deal_ids`, and a digest-bound batch commitment only under its own digest. A
   response to one batch that reports a success for a record of the other
-  batch discharges nothing: the other critical action still has to run.
+  batch discharges nothing: the other critical action still has to run. The
+  discharge ledger dedups a record per server/variant, so the same record id
+  written on two servers counts as two writes.
 - For a **typed** declaration, an aliased or same-suffix call on a
   **different** server or client variant is still blocked and discharges
   nothing. (Legacy free-text declarations carry no server identity and stay
   suffix-level and server-agnostic, exactly as before: see below.)
 - Approval modes stay per suffix, which is why the example gives both Pages
   write variants `notify`.
-- A manifest without the key behaves exactly as before.
+- A manifest without the key behaves as before, except for batch-ledger
+  corrections that apply to every bundle (see the design note).
 
 A few rules and caveats:
 
@@ -470,7 +474,8 @@ A few rules and caveats:
   bundle's "Wrong tool variant declared?" abort/re-audit recovery step is no
   longer needed for aliased pairs.
 
-See [ADR-0071](adr/0071-critical-tool-aliases.md).
+See [ADR-0071](adr/0071-critical-tool-aliases.md) and the design note
+[`CRITICAL-TOOL-ALIASES.md`](CRITICAL-TOOL-ALIASES.md).
 
 ---
 

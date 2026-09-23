@@ -309,6 +309,22 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 	return ids, true
 }
 
+// pendingRecordKey renders a call's record binding for matching a pending
+// (blocked pre-audit) entry against a later success: "ids:" plus the sorted
+// deal_ids of a batch, "id:" plus the single-record id, "" when the call names
+// no record. Only an equal key is the same record set.
+func pendingRecordKey(rawInput string) string {
+	if ids, ok := batchDealIDs(rawInput); ok {
+		sorted := append([]string(nil), ids...)
+		sort.Strings(sorted)
+		return "ids:" + strings.Join(sorted, "\x00")
+	}
+	if id := callDealID(rawInput); id != "" {
+		return "id:" + id
+	}
+	return ""
+}
+
 // recordIDPlaceholders are the strings a model writes when an action names no
 // record at all ("deal_id": "n/a" on a send_email audit). None of them can ever
 // identify a real record, so binding a commitment to one produces an

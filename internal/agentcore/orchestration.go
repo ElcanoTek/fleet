@@ -116,7 +116,12 @@ type orchestrationState struct {
 	// already-done records report success again (idempotent skip) does NOT
 	// double-discharge them, so the outstanding count reflects only the
 	// records that still genuinely need work. Reset per audit envelope
-	// (registerCommitted*).
+	// (registerCommitted*). Keyed by alias class (criticalAliasClassOf), then
+	// by server/variant prefix + record id (dischargedDealKey): the class key
+	// lets one record reported by either twin discharge once, and the server
+	// in the inner key keeps two servers' writes of the same record id two
+	// actions — without it the second server's success was skipped as an echo
+	// and its own commitment stayed owed (#1604).
 	dischargedDeals map[string]map[string]bool
 
 	// criticalToolFailureAttempts counts unsuccessful executions per
@@ -224,6 +229,10 @@ type orchestrationState struct {
 type pendingCriticalAction struct {
 	toolName string
 	argsHash string
+	// record is the blocked call's record binding (pendingRecordKey): its
+	// deal_id, or its deal_ids set, "" when it names no record. An aliased
+	// success clears the entry only when it wrote the same record (#1604).
+	record string
 }
 
 // ApprovalStager is the narrow interface the orchestration layer uses to stage
@@ -932,7 +941,8 @@ func (o *orchestrationState) accumulateUsage(modelSlug string, usage fantasy.Usa
 //
 // Discharging one entry per success keeps the count honest: two distinct pending
 // calls to the same tool still need two successes, exactly as before.
-func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) {
+func (o *orchestrationState) markPendingCriticalDone(toolName, rawInput string) {
+	argsHash := hashString(rawInput)
 	fallback := -1
 	for i, p := range o.pendingCriticalActions {
 		if p.toolName != toolName {
@@ -955,13 +965,27 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) 
 	// through the other transport (critical_tool_aliases, #1604): an inline
 	// write blocked pre-audit and then sent as a staged upload is done, and
 	// demanding the inline call afterwards would ask for the write twice.
+	//
+	// Only for the SAME record, though. The alias makes two names one action,
+	// not two records one record: an inline write of record A blocked
+	// pre-audit is not done because the upload twin later wrote record B, and
+	// clearing it on the names alone would let finish pass (B's commitment
+	// exhausted, nothing pending) with A's mutation never made. Server/variant
+	// identity is already part of sameAliasedTool.
+	record := pendingRecordKey(rawInput)
 	for i, p := range o.pendingCriticalActions {
-		if sameAliasedTool(p.toolName, toolName) {
+		if sameAliasedTool(p.toolName, toolName) && p.record == record {
 			log.Printf("Enforcement: discharging pending %s via its declared alias %s", p.toolName, toolName)
 			o.dischargePendingCriticalAt(i)
 			return
 		}
 	}
+}
+
+// dischargedDealKey is a record's key in its alias class's dischargedDeals
+// ledger: the tool's server/variant prefix and the record id.
+func dischargedDealKey(toolName, dealID string) string {
+	return toolServerPrefix(toolName) + "\x00" + dealID
 }
 
 // dischargePendingCriticalAt moves pendingCriticalActions[i] to completed.
@@ -1058,8 +1082,8 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 					continue
 				}
 				switch {
-				case oc.success && !done[oc.dealID]:
-					done[oc.dealID] = true
+				case oc.success && !done[dischargedDealKey(toolName, oc.dealID)]:
+					done[dischargedDealKey(toolName, oc.dealID)] = true
 					o.markCommittedExecuted(toolName, oc.dealID, callDigest)
 					newly++
 				case !oc.success:
@@ -1069,7 +1093,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			if newly > 0 {
 				o.criticalExecutedCount++
 				delete(o.criticalToolFailureAttempts, key)
-				o.markPendingCriticalDone(toolName, argsHash)
+				o.markPendingCriticalDone(toolName, rawInput)
 				if len(o.pendingCriticalActions) == 0 {
 					o.selfAuditRequested = true
 				}
@@ -1083,7 +1107,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// Single-call critical tool (no per-record results[]).
 			o.criticalExecutedCount++
 			delete(o.criticalToolFailureAttempts, key)
-			o.markPendingCriticalDone(toolName, argsHash)
+			o.markPendingCriticalDone(toolName, rawInput)
 			if len(o.pendingCriticalActions) == 0 {
 				o.selfAuditRequested = true
 			}

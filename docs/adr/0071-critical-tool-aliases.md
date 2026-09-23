@@ -6,6 +6,8 @@
 - **Amends:** [ADR-0034](0034-audit-gate-commitment-binding.md). A commitment
   may now also be matched by a bundle-declared **alias** on the same server,
   alongside the exact tool name and a bundle-declared substitute.
+- **Design note:** [`CRITICAL-TOOL-ALIASES.md`](../CRITICAL-TOOL-ALIASES.md)
+  (what shipped, deviations from #1604, what was deferred).
 
 ## Context
 
@@ -55,15 +57,18 @@ one critical action for the audit gate, in both directions:
 - A re-audit declaring one member supersedes a stale, same-shape declaration of
   another, exactly as a re-audit of the same tool does. Without this, the stale
   declaration would stay owed.
-- An audited call blocked before the audit is discharged by its alias.
+- An audited call blocked before the audit is discharged by its alias, when
+  the alias wrote the same record (`deal_id` or `deal_ids` set).
 - Batch approvals (`deal_ids`, `values_digest`) and the per-record discharge
   ledger are keyed by the alias class. A record set approved on one member
   therefore binds a batch sent through another, and a record discharges once.
   The class key is shared, the binding is not: the `values_digest`
   requirement is kept per declared record (an undigested batch is not refused
   over a twin's digest for other records), a batch result discharges only the
-  records the invoked call named in its `deal_ids`, and a digest-bound batch
-  commitment discharges only under its own digest. Otherwise, with one batch
+  records the invoked call named in its `deal_ids`, a digest-bound batch
+  commitment discharges only under its own digest, and the discharge ledger
+  dedups a record per server/variant, so two servers' writes of one record id
+  stay two actions. Otherwise, with one batch
   per twin, a response to the first batch reporting a record of the second
   would discharge the second commitment although its action never ran.
 
@@ -74,7 +79,8 @@ Nothing else about ADR-0034 changes:
 - A same-suffix or aliased call on a different server or client variant is
   still refused and discharges nothing.
 - Approval modes (`critical_tool_modes`) stay per suffix.
-- A bundle without the key behaves exactly as before.
+- A bundle without the key behaves as before for single-record calls and a
+  single batch. The batch-ledger corrections above apply to every bundle.
 
 Untyped (legacy free-text) audits honour aliases the way they already honour
 substitutes: suffix-level, because a free-text declaration carries no server
