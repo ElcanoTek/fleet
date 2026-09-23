@@ -301,6 +301,7 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	const budget = 80_000
 	usage := func(in, cached int64) fantasy.Usage { return fantasy.Usage{InputTokens: in, CacheReadTokens: cached} }
+	recordContextMax("cp-floor-rule", 10_000_000) // a large window: the floor rule is not capped
 	scheduled := func() *engine {
 		e := newMockEngine(t, &namedMockModel{name: "cp-floor-rule"})
 		e.envPrefix = CanonicalEnvPrefix
@@ -336,6 +337,27 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	e.noteResendFloor(usage(30_000, 0)) // e.g. a smaller tool roster after a rebuild
 	if e.resendPrefix != 30_000 || e.effectiveResendBudget(budget) != budget {
 		t.Fatalf("a floor under half the budget lowers the prefix and restores the plain budget: prefix=%d effective=%d", e.resendPrefix, e.effectiveResendBudget(budget))
+	}
+
+	// On a window too small for floor + budget, the threshold stops at the
+	// window-pressure point (window × the compaction threshold) instead of a
+	// checkpoint the in-round context guard would never let the run reach —
+	// and never drops below the plain budget.
+	recordContextMax("cp-floor-128k", 128_000)
+	narrow := newMockEngine(t, &namedMockModel{name: "cp-floor-128k"})
+	narrow.envPrefix = CanonicalEnvPrefix
+	narrow.requireCompactionOptIn = true
+	narrow.noteResendFloor(usage(50_000, 0))
+	if got, want := narrow.effectiveResendBudget(budget), int(128_000*defaultContextCompactionThreshold); got != want {
+		t.Fatalf("128K window, 50K floor: effective = %d, want the window-pressure cap %d (not floor+budget %d)", got, want, 50_000+budget)
+	}
+	recordContextMax("cp-floor-64k", 64_000)
+	tiny := newMockEngine(t, &namedMockModel{name: "cp-floor-64k"})
+	tiny.envPrefix = CanonicalEnvPrefix
+	tiny.requireCompactionOptIn = true
+	tiny.noteResendFloor(usage(50_000, 0))
+	if got := tiny.effectiveResendBudget(budget); got != budget {
+		t.Fatalf("a window-pressure point under the budget keeps the plain budget: effective = %d, want %d", got, budget)
 	}
 
 	small := scheduled()

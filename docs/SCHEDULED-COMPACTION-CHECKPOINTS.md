@@ -79,8 +79,8 @@ Pages tool catalog (44 tools, 135 KB of descriptions and input schemas ≈ 34K
 tokens), the other tool schemas and the 5–16 KB task prompt. Add the recent half
 of history that a compaction keeps verbatim (7–50 KB `get_page_data` results)
 and the request never got back under 80K, however much was summarized. Each
-checkpoint summarized 2–4 turns and the very next step paused again: task
-`5af5cbbf` logged 81 checkpoint/compaction breadcrumbs for 81 tool calls, the
+checkpoint summarized 2–4 turns and the very next step paused again: one
+run logged 81 checkpoint/compaction breadcrumbs for 81 tool calls, the
 resent prompt going 141K → 162K → 204K across the first three.
 
 Each pause buys one summarizer call (metered into the run, `MaxOutputTokens`
@@ -89,19 +89,19 @@ refresh runs, 2026-09-21..22 (sched DB `logs`):
 
 | run | checkpoints | completion tokens | cost |
 |---|---|---|---|
-| husqvarna `978891fb` (pre-#1577 build) | 0 | 34,516 | $0.227 |
-| husqvarna `5af5cbbf` | 40 | 293,022 | $0.419 |
-| husqvarna `b07c8770` | 40 | 297,281 | $0.486 |
-| husqvarna `561b0153` | 40 | 344,541 | $0.800 |
-| twc-client-overview `fee78c81` (pre) | 0 | 49,616 | — |
-| twc-client-overview `e090d44b` | 40 | 302,288 | $0.694 |
-| brookfield `8ce3dbc0` (pre) | 0 | 42,665 | — |
-| brookfield `89afe409` | 40 | 312,575 | $0.776 |
+| Page refresh A (pre-#1577 build) | 0 | 34,516 | $0.227 |
+| Page refresh A | 40 | 293,022 | $0.419 |
+| Page refresh A | 40 | 297,281 | $0.486 |
+| Page refresh A | 40 | 344,541 | $0.800 |
+| Page refresh B (pre) | 0 | 49,616 | — |
+| Page refresh B | 40 | 302,288 | $0.694 |
+| Page refresh C (pre) | 0 | 42,665 | — |
+| Page refresh C | 40 | 312,575 | $0.776 |
 
 Across all 42 luna-pro refresh runs in the window, completion tokens tracked the
 checkpoint count almost linearly (~7K per checkpoint): runs with 0 checkpoints
 sat at 18–67K, runs with 40 at 280–345K. fleetdev showed the same pattern
-(`957849e8`: 38 checkpoints, 293K completion tokens; `f572133f`: 0, 10K). The
+(one run: 38 checkpoints, 293K completion tokens; its pre-#1577 twin: 0, 10K). The
 summaries also threw away the model's two most recent turns on every step.
 
 ### The rule

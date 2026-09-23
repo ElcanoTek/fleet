@@ -971,11 +971,32 @@ func stepAtResendBudget(steps []fantasy.StepResult, threshold, inputHistory int)
 // floor measured at the latest floor point (the run's first step, or the first
 // step after a compaction — see noteResendFloor), so every pause buys a
 // budget's worth of history.
+//
+// The floor rule never lifts the threshold past the active model's
+// window-pressure point (window × the compaction threshold): on a smaller
+// window, floor + budget can exceed the largest prompt the model accepts, and
+// the in-round context guard would fail the run before the checkpoint it waits
+// for is reachable. Capped there, and never below the plain budget, so a
+// small-window run keeps the pre-#1600 threshold rather than an unreachable one.
 func (e *engine) effectiveResendBudget(budget int) int {
 	if !e.resendFloorCrowdsBudget(budget) {
 		return budget
 	}
-	return e.resendFloor + budget
+	threshold := e.resendFloor + budget
+	if limit := e.resendWindowLimit(); limit > 0 && threshold > limit {
+		threshold = max(budget, limit)
+	}
+	return threshold
+}
+
+// resendWindowLimit is the resent size at which the active model's window
+// pressure applies, or 0 when the window is unknown.
+func (e *engine) resendWindowLimit() int {
+	window := contextWindowForActiveModel(e.currentModel())
+	if window <= 0 {
+		return 0
+	}
+	return int(float64(window) * contextCompactionThreshold(e.envPrefix))
 }
 
 // resendFloorCrowdsBudget reports whether the floor rule applies: the stable
