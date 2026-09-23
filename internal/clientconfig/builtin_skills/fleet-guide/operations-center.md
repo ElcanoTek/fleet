@@ -47,9 +47,11 @@ dead-letter already queued the next run, replay does not queue another; if the
 schedule is parked (two consecutive dead-letters), replay is how it continues.
 The one exception is a prompt whose **EXECUTION REQUIREMENTS (JSON)** line is
 malformed. That schedule parks on its first dead-letter, and replay would rerun
-the same broken line, so correct the prompt in the task editor instead. Fleet
-refuses to save such a line in the first place and names the bad entry, so this
-only affects tasks saved before that check.
+the same broken line. Editing the dead-lettered task does not fix the schedule
+either: saving an edit to a finished task starts a one-off run, not a new
+schedule. To bring the schedule back, create the task again with the corrected
+prompt and its schedule. Fleet refuses to save such a line in the first place
+and names the bad entry, so this only affects tasks saved before that check.
 A zero therefore means nothing is sitting failed from today — which is what
 you usually want to know, but it is not the same as nothing having gone wrong.
 

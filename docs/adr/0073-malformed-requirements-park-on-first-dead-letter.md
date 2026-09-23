@@ -35,7 +35,10 @@ nothing that could have gone differently in between.
    the same `recurrence_spawned = TRUE` + `recurrence_parked_at` settlement as
    the two-strike breaker, and no successor. The log line names the
    validation error and says to correct the prompt. Replay reruns the same
-   prompt and cannot help; the task editor saves a corrected copy.
+   prompt and cannot help, and the web editor's save on a dead-lettered task is a
+   one-off rerun that drops the recurrence. The schedule is restored by
+   recreating the task with the corrected prompt (or cloning it, which keeps
+   the recurrence, and correcting the clone).
 
 Every other dead-letter keeps ADR-0070's two-strike rule unchanged, including
 an execution-requirements failure that is **not** malformed (an unavailable
@@ -70,8 +73,9 @@ prompt.
   (like `1c002f25`) dead-letters once, with the offending identifier in its
   reason, and parks. It sends one notification instead of two.
 - Recovery changes: replay alone does not continue such a chain, because the
-  definition is what is broken. The owner corrects the prompt in the task
-  editor, which saves a corrected copy.
+  definition is what is broken. The owner recreates the task with the corrected
+  prompt and its schedule; an edit from the web editor alone would start one
+  run and leave the schedule dead.
 
 ## Alternatives considered
 

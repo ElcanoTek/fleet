@@ -31,7 +31,13 @@ does.
   parks at once on a failure. The log line names the offending identifier and
   says to correct the prompt.
 - **Recovery.** Replay reruns the same prompt, so it cannot continue such a
-  chain. Correct the prompt in the task editor, which saves a corrected copy.
+  chain. Editing the dead-lettered task in the web editor does not either: for
+  a finished task it saves through `POST /tasks/{id}/rerun`, a one-off copy
+  that drops the recurrence. The schedule comes back only by creating the task
+  again with the corrected prompt and its recurrence (or `POST
+  /tasks/{id}/clone`, which keeps it, then correcting the clone). While a chain
+  is still live, editing its pending/scheduled head in place fixes it before
+  it fires.
 - **Prevention.** Since the same change, a malformed line is refused when a
   task is saved. Only tasks saved earlier can still reach this. Prod
   `f76c1aa0` / `3591c573` dead-lettered on `"fast_io + fastio_helpers"`, and
