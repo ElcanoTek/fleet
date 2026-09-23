@@ -106,13 +106,22 @@ func (s *Store) ClaimDirectInput(ctx context.Context, r InputQueueRow) (InputQue
 	return s.insertInput(ctx, r)
 }
 
-// ReleaseDirectInput drops a direct claim whose turn never launched (turn_id
-// still unset), so the key is free for the caller to retry: nothing ran under
-// it.
+// ReleaseDirectInput resolves a direct claim whose turn never launched —
+// callers use it only on paths that abort before the turn runs. An unbound
+// claim is dropped, so the key is free for the caller to retry. A claim that
+// was bound to its turn before the launch was aborted (the bind committed but
+// its acknowledgement was lost) cannot be dropped as unbound; it is settled
+// cancelled instead (nothing ran), rather than left 'running' to answer every
+// resend "already running".
 func (s *Store) ReleaseDirectInput(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx,
+	if _, err := s.db.ExecContext(ctx,
 		`DELETE FROM chat_input_queue
-		  WHERE id = $1 AND mode = 'direct' AND state = 'running' AND turn_id IS NULL`, id)
+		  WHERE id = $1 AND mode = 'direct' AND state = 'running' AND turn_id IS NULL`, id); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+		  WHERE id = $1 AND mode = 'direct' AND state = 'running'`, id, time.Now().Unix())
 	return err
 }
 

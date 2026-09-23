@@ -712,10 +712,12 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 		inputKey = queued.inputKey
 	}
 	if inputKey != "" {
-		if _, stopped := s.cancelledInputs[inputKeyMark(convID, inputKey)]; stopped {
+		if at, marked := s.cancelledInputs[inputKeyMark(convID, inputKey)]; marked {
 			delete(s.cancelledInputs, inputKeyMark(convID, inputKey))
-			s.inflightMu.Unlock()
-			return nil, "", 0, false, true
+			if time.Since(at) <= cancelledInputTTL {
+				s.inflightMu.Unlock()
+				return nil, "", 0, false, true
+			}
 		}
 	}
 	prev, hadPrev := s.inflight[convID]

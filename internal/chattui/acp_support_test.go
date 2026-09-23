@@ -93,6 +93,21 @@ func TestResolvePublicURL(t *testing.T) {
 			t.Errorf("explicit --public-url = %q err=%v", cfg.PublicURL, err)
 		}
 	})
+	t.Run("an env file that picked the server outranks an ambient public URL", func(t *testing.T) {
+		// --env-file supplies deployment B's token and address; the process
+		// env still carries deployment A's public URL.
+		env := map[string]string{"FLEET_USER_EMAIL": "a@b.c", "FLEET_PUBLIC_URL": "https://deployment-a.example.com"}
+		files := map[string]map[string]string{"/srv/b.env": {"FLEET_SERVER_TOKEN": "tok-b", "FLEET_SERVER_ADDR": "b:8080"}}
+		cfg, err := Resolve(Flags{EnvFile: "/srv/b.env"}, envMap(env), noFile, envFileFrom(files))
+		if err != nil || cfg.PublicURL != "" {
+			t.Errorf("PublicURL = %q err=%v, want none (the ambient one is deployment A's)", cfg.PublicURL, err)
+		}
+		files["/srv/b.env"]["FLEET_PUBLIC_URL"] = "https://deployment-b.example.com"
+		cfg, err = Resolve(Flags{EnvFile: "/srv/b.env"}, envMap(env), noFile, envFileFrom(files))
+		if err != nil || cfg.PublicURL != "https://deployment-b.example.com" {
+			t.Errorf("PublicURL = %q err=%v, want the env file's own", cfg.PublicURL, err)
+		}
+	})
 	t.Run("unset is empty", func(t *testing.T) {
 		cfg, err := Resolve(Flags{}, envMap(base), noFile, noEnvFile)
 		if err != nil || cfg.PublicURL != "" {

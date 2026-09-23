@@ -25,7 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -527,7 +527,13 @@ func outcomeUnknown(err error) bool {
 	}
 	var se *chattui.StatusError
 	var qe *chattui.QueuedError
-	if errors.As(err, &se) || errors.As(err, &qe) || errors.Is(err, context.Canceled) {
+	if errors.As(err, &se) {
+		// A 4xx is a definite refusal. A 5xx is not: the server may have
+		// committed the input and then failed to say so (a commit whose
+		// acknowledgement was lost), so the key is kept for a retry.
+		return se.Code >= http.StatusInternalServerError
+	}
+	if errors.As(err, &qe) || errors.Is(err, context.Canceled) {
 		return false
 	}
 	msg := err.Error()

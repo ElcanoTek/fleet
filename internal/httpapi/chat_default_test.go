@@ -144,6 +144,9 @@ type fakeChatStore struct {
 	// releaseFailures / bindFailures make that many ReleaseDirectInput /
 	// BindInputTurn calls fail first.
 	releaseFailures, bindFailures, settleFailures int
+	// bindLostAcks makes that many binds commit and then report an error
+	// (the database acknowledgement was lost).
+	bindLostAcks int
 	// onClaim runs after a direct claim is stored; onMemories when turn
 	// preparation reads memories (both outside the fake's lock).
 	onClaim    func(store.InputQueueRow)
@@ -969,9 +972,13 @@ func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
 	}
 	kept := s.queue[:0]
 	for _, it := range s.queue {
-		if it.ID != id || it.Mode != store.InputModeDirect || it.State != store.InputStateRunning || it.TurnID != "" {
-			kept = append(kept, it)
+		if it.ID == id && it.Mode == store.InputModeDirect && it.State == store.InputStateRunning {
+			if it.TurnID == "" {
+				continue // unbound: dropped
+			}
+			it.State = store.InputStateCancelled // bound before the launch was aborted
 		}
+		kept = append(kept, it)
 	}
 	s.queue = kept
 	return nil
@@ -1003,6 +1010,15 @@ func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) erro
 	if s.bindFailures > 0 {
 		s.bindFailures--
 		return errors.New("fake: bind failed")
+	}
+	if s.bindLostAcks > 0 {
+		s.bindLostAcks--
+		for i := range s.queue {
+			if s.queue[i].ID == id {
+				s.queue[i].TurnID = turnID
+			}
+		}
+		return errors.New("fake: bind acknowledgement lost")
 	}
 	for i := range s.queue {
 		if s.queue[i].ID == id {
@@ -1254,6 +1270,19 @@ func TestCancelByInputKey(t *testing.T) {
 			t.Fatalf("status %d, turns %d: a Stop that arrived first must refuse the late submission", w.Code, eng.turns)
 		}
 	})
+	t.Run("expired mark", func(t *testing.T) {
+		eng := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, eng, st)
+		conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+		srv.inflightMu.Lock()
+		srv.cancelledInputs = map[string]time.Time{inputKeyMark(conv.ID, "key-old"): time.Now().Add(-cancelledInputTTL - time.Minute)}
+		srv.inflightMu.Unlock()
+		w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": conv.ID, "input_id": "key-old"})
+		if w.Code != http.StatusOK || eng.turns != 1 {
+			t.Fatalf("status %d, turns %d: a Stop mark past its TTL must not refuse the key", w.Code, eng.turns)
+		}
+	})
 	t.Run("running turn", func(t *testing.T) {
 		eng := &gatedEngine{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
 		st := newFakeChatStore()
@@ -1331,5 +1360,30 @@ func TestFirstSubmission_ConcurrentSendsRunOnce(t *testing.T) {
 	eng.mu.Unlock()
 	if turns != 1 || st.createdConversations() != 1 {
 		t.Fatalf("turns %d, conversations %d: the key ran more than once", turns, st.createdConversations())
+	}
+}
+
+// A bind that committed but whose acknowledgement was lost still aborts the
+// launch; the claim it left bound is settled cancelled (nothing ran), not left
+// "running" to answer every resend of its key "already running".
+func TestDirectClaim_BoundClaimOfAnAbortedLaunchIsSettled(t *testing.T) {
+	shortDirectPauses(t)
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	st.bindLostAcks = directBindAttempts
+	srv := newDefaultChatServer(t, eng, st)
+
+	w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "lost-ack-1"})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	eng.mu.Lock()
+	turns := eng.turns
+	eng.mu.Unlock()
+	if turns != 0 {
+		t.Fatalf("the aborted launch ran (%d turns)", turns)
+	}
+	if rows := st.directRows(); len(rows) != 1 || rows[0].State != store.InputStateCancelled {
+		t.Fatalf("claim = %+v, want one cancelled row", rows)
 	}
 }

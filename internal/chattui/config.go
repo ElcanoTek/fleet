@@ -144,20 +144,27 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 
 	// Public web URL (non-secret, best-effort) must describe the SAME
 	// deployment the token and address came from, or a deep link would send
-	// the user to another fleet. So it is read from the env, else from the
-	// file that supplied the server config, else from an explicitly pinned
-	// env file — never probed across the default candidates on its own.
+	// the user to another fleet. In order:
 	//
-	// An explicit --public-url always wins. When the server itself was chosen
-	// explicitly (--server / $FLEET_CHAT_URL), nothing ambient is trusted: an
-	// env or file public URL describes whatever deployment that environment
-	// belongs to, which need not be the one this client was pointed at.
+	//   - an explicit --public-url always wins;
+	//   - when the server was chosen explicitly (--server / $FLEET_CHAT_URL),
+	//     nothing ambient is trusted: an env or file public URL describes
+	//     whatever deployment that environment belongs to;
+	//   - when an env file supplied the token or address, only THAT file's
+	//     public URL is used — the process env may belong to another one;
+	//   - otherwise the env, then an explicitly pinned env file.
+	//
+	// It is never probed across the default candidates on its own.
 	cfg.PublicURL = strings.TrimSpace(f.PublicURL)
+	pinned := strings.TrimSpace(f.EnvFile) != "" || strings.TrimSpace(env("FLEET_ENV_FILE")) != ""
 	publicFile := ""
-	if cfg.PublicURL == "" && !serverExplicit {
-		cfg.PublicURL = strings.TrimSpace(firstNonEmpty(env("FLEET_PUBLIC_BASE_URL"), env("FLEET_PUBLIC_URL")))
+	switch {
+	case cfg.PublicURL != "" || serverExplicit:
+	case serverFile != "":
 		publicFile = serverFile
-		if publicFile == "" && (strings.TrimSpace(f.EnvFile) != "" || strings.TrimSpace(env("FLEET_ENV_FILE")) != "") {
+	default:
+		cfg.PublicURL = strings.TrimSpace(firstNonEmpty(env("FLEET_PUBLIC_BASE_URL"), env("FLEET_PUBLIC_URL")))
+		if pinned {
 			publicFile = candidates[0]
 		}
 	}

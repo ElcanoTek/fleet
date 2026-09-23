@@ -1386,3 +1386,35 @@ func TestRetryStopNeverNamesTheNewerConversation(t *testing.T) {
 		t.Errorf("the retry's stop was not reported unconfirmed: %q", h.client.text())
 	}
 }
+
+// A 5xx may follow a committed input (its commit acknowledgement lost), so the
+// key is kept and a retry of the same text reuses it; a 4xx is a definite
+// refusal, so the next send gets a fresh key.
+func TestServerErrorKeepsTheKey(t *testing.T) {
+	for status, wantSame := range map[int]bool{http.StatusInternalServerError: true, http.StatusBadRequest: false} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			calls := 0
+			h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+				calls++
+				if calls == 1 {
+					http.Error(w.w, "boom", status)
+					return
+				}
+				w.emit("conversation", map[string]any{"id": "c"})
+				w.emit("turn.completed", map[string]any{})
+			}})
+			sid := h.newSession(t)
+			if _, err := h.prompt(sid, "book the room"); err == nil {
+				t.Fatal("want the server error")
+			}
+			if _, err := h.prompt(sid, "book the room"); err != nil {
+				t.Fatal(err)
+			}
+			h.fleet.mu.Lock()
+			defer h.fleet.mu.Unlock()
+			if same := h.fleet.chats[0].InputID == h.fleet.chats[1].InputID; same != wantSame {
+				t.Errorf("status %d: retry reused the key = %v, want %v", status, same, wantSame)
+			}
+		})
+	}
+}

@@ -209,3 +209,29 @@ func TestLockInputKey_SerializesOneKey(t *testing.T) {
 		t.Fatal("the key stayed locked after unlock")
 	}
 }
+
+// ReleaseDirectInput on a claim already bound to its (aborted) turn cannot
+// drop it as unbound; it settles it cancelled, since nothing ran.
+func TestReleaseDirectInput_SettlesABoundClaim(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t-rel")
+	row, _ := claimDirect(t, s, convID, "bound-1")
+	if err := s.BindInputTurn(ctx, row.ID, "aborted-turn"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseDirectInput(ctx, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LookupInput(ctx, convID, "bound-1")
+	if err != nil || got == nil || got.State != InputStateCancelled {
+		t.Fatalf("row = %+v, %v: want the bound claim settled cancelled", got, err)
+	}
+	unbound, _ := claimDirect(t, s, convID, "unbound-1")
+	if err := s.ReleaseDirectInput(ctx, unbound.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.LookupInput(ctx, convID, "unbound-1"); err != nil || got != nil {
+		t.Fatalf("row = %+v, %v: an unbound claim is dropped", got, err)
+	}
+}
