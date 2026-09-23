@@ -170,30 +170,22 @@ by default, or ephemeral pods under `FLEET_SANDBOX_BACKEND=kubernetes`
 
 ## Standards
 
-fleet is built on open protocols. We list only what is actually implemented and
-tested in this repository:
+fleet is built on open protocols:
 
-- **MCP — Model Context Protocol.** A merged Go client (stdio + HTTP) drives the
-  deployment's connector catalog, and each **user** can OAuth into hosted MCP
-  servers from the GUI (OAuth 2.1 + PKCE, dynamic registration, tokens encrypted
-  at rest, host-side). [ADR-0009](docs/adr/0009-per-user-remote-mcp-oauth.md).
-- **Agent Skills.** The bundle's `skills/` dir holds capabilities in the open
-  [Agent Skills format](https://github.com/anthropics/skills), loaded with
-  progressive disclosure (name + description in the prompt; the agent reads
-  `SKILL.md` and runs bundled scripts on demand, in the sandbox). Invoke
-  explicitly with `/skill-name` in chat.
-- **Agent Plugins.** The bundle's `plugins/` dir loads
-  [Agent Plugins](https://agent-plugins.org) (`plugin.json` + `skills/` +
-  `mcp.json`), the portable package format other agent clients also load.
-  [`docs/AGENT-PLUGINS.md`](docs/AGENT-PLUGINS.md).
-- **A2A — Agent2Agent.** fleet can be called *as an agent* (A2A v1.0.1): an
-  Agent Card plus a JSON-RPC endpoint that lands delegated work on the same
-  governed task seam, and fleet agents can delegate outward to remote A2A
-  agents. Off by default (`FLEET_A2A_ENABLED`). [`docs/A2A.md`](docs/A2A.md).
-- **OpenAPI 3.1.** The orchestrator HTTP API is published at
-  [`docs/openapi.yaml`](docs/openapi.yaml), and a CI drift test keeps its
-  routes, auth schemes and Go-bound component schemas in lockstep with the
-  shipped router.
+- **[MCP](https://modelcontextprotocol.io)** — the connector catalog (stdio +
+  HTTP), plus per-user OAuth into hosted MCP servers
+  ([ADR-0009](docs/adr/0009-per-user-remote-mcp-oauth.md)).
+- **[Agent Skills](https://github.com/anthropics/skills)** and
+  **[Agent Plugins](https://agent-plugins.org)** — packaged capabilities loaded
+  from the bundle's `skills/` and `plugins/`
+  ([`docs/AGENT-PLUGINS.md`](docs/AGENT-PLUGINS.md)).
+- **[A2A](https://a2a-protocol.org)** — call fleet as an agent, or delegate
+  out to remote A2A agents ([`docs/A2A.md`](docs/A2A.md)).
+- **[ACP](https://agentclientprotocol.com)** — ACP clients talk to fleet
+  directly.
+- **OpenAPI 3.1** — the HTTP API contract
+  ([`docs/openapi.yaml`](docs/openapi.yaml)), kept in lockstep with the router
+  by a CI drift test.
 
 ## The client-config bundle: your agent IP is portable
 
