@@ -421,6 +421,25 @@ func pagesTwinPolicy(t *testing.T, aliased bool) {
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 }
 
+// A failed critical action is not superseded by a landed action whose name
+// merely ends in the same text: mcp_x_bulk_create_deal and
+// mcp_x_bulk_create_deal_upload (class create_deal on prefix mcp_x_bulk) are two
+// actions, so the verifier outage must not fail open over the failure.
+func TestFailedCriticalCallsDoesNotCollideAcrossThePrefixBoundary(t *testing.T) {
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolSuffixes: []string{"create_deal", "create_deal_upload", "bulk_create_deal"},
+		CriticalToolAliases:  map[string][]string{"create_deal": {"create_deal_upload"}},
+	})
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	records := []toolExecRecord{
+		{Name: "mcp_x_bulk_create_deal", Succeeded: false},
+		{Name: "mcp_x_bulk_create_deal_upload", Succeeded: true},
+	}
+	if got := failedCriticalCalls(records); fmt.Sprint(got) != "[mcp_x_bulk_create_deal]" {
+		t.Fatalf("failedCriticalCalls = %v, want [mcp_x_bulk_create_deal]", got)
+	}
+}
+
 // A failed inline write superseded by a successful upload of the same data on
 // the same server is ONE critical action that landed: with the twins aliased,
 // a verifier outage fails open exactly like any clean audited publish.

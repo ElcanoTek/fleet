@@ -480,20 +480,44 @@ func TestCriticalToolAliases_PartialSupersedeKeepsUncoveredRecords(t *testing.T)
 // class — so same-server twins share it and nothing else does.
 func TestCriticalActionKey(t *testing.T) {
 	withPagesPolicy(t, pagesAliases)
-	inline := CriticalActionKey(aliasInlineTool)
-	if inline == "" || CriticalActionKey(aliasUploadTool) != inline {
-		t.Fatalf("same-server twins must share a key: %q vs %q", inline, CriticalActionKey(aliasUploadTool))
+	inline, ok := CriticalActionKey(aliasInlineTool)
+	upload, uploadOK := CriticalActionKey(aliasUploadTool)
+	if !ok || !uploadOK || upload != inline {
+		t.Fatalf("same-server twins must share a key: %+v vs %+v", inline, upload)
 	}
 	for _, other := range []string{aliasOtherServerUpload, aliasVariantUpload, "mcp_pagesb_update_page_data"} {
-		if CriticalActionKey(other) == inline {
+		if key, _ := CriticalActionKey(other); key == inline {
 			t.Errorf("%s must not share the key of %s", other, aliasInlineTool)
 		}
 	}
-	if got := CriticalActionKey("mcp_pages_get_page_data"); got != "" {
-		t.Errorf("a non-critical tool keyed %q, want \"\"", got)
+	if key, critical := CriticalActionKey("mcp_pages_get_page_data"); critical {
+		t.Errorf("a non-critical tool keyed %+v", key)
 	}
 	withPagesPolicy(t, nil)
-	if got := CriticalActionKey(aliasUploadTool); got != aliasUploadTool {
-		t.Errorf("without aliases the key is the tool name, got %q", got)
+	inline, _ = CriticalActionKey(aliasInlineTool)
+	if upload, _ := CriticalActionKey(aliasUploadTool); upload == inline {
+		t.Errorf("without aliases the two spellings are two actions, both keyed %+v", inline)
+	}
+}
+
+// A critical suffix that ends in "_"+another alias class must not key onto
+// that class's twin one segment up the prefix: mcp_x_bulk_create_deal (suffix
+// bulk_create_deal) and mcp_x_bulk_create_deal_upload (prefix mcp_x_bulk,
+// suffix create_deal_upload, class create_deal) are different actions — a
+// joined "prefix_class" string would collide them; sameAliasedTool agrees.
+func TestCriticalActionKeyDoesNotCollideAcrossThePrefixBoundary(t *testing.T) {
+	t.Cleanup(func() { ConfigureAgentPolicy(testFixturePolicy()) })
+	p := testFixturePolicy()
+	p.CriticalToolSuffixes = append(p.CriticalToolSuffixes, "create_deal", "create_deal_upload", "bulk_create_deal")
+	p.CriticalToolAliases = map[string][]string{"create_deal": {"create_deal_upload"}}
+	ConfigureAgentPolicy(p)
+	a, b := "mcp_x_bulk_create_deal", "mcp_x_bulk_create_deal_upload"
+	ka, _ := CriticalActionKey(a)
+	kb, _ := CriticalActionKey(b)
+	if ka == kb {
+		t.Fatalf("%s and %s share key %+v", a, b, ka)
+	}
+	if sameAliasedTool(a, b) {
+		t.Fatalf("sameAliasedTool(%s, %s) = true, want false", a, b)
 	}
 }

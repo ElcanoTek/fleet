@@ -766,7 +766,10 @@ func (p *scheduledPolicy) verifierOutageMayFailOpen(err error, records []toolExe
 // agentcore.CriticalActionKey classification as failedCriticalCalls).
 func succeededCriticalCall(records []toolExecRecord) bool {
 	for _, r := range records {
-		if r.Succeeded && agentcore.CriticalActionKey(r.Name) != "" {
+		if !r.Succeeded {
+			continue
+		}
+		if _, critical := agentcore.CriticalActionKey(r.Name); critical {
 			return true
 		}
 	}
@@ -786,11 +789,11 @@ func failedCriticalCalls(records []toolExecRecord) []string {
 		name      string
 		succeeded bool
 	}
-	last := make(map[string]outcome)
-	var order []string
+	last := make(map[agentcore.CriticalAction]outcome)
+	var order []agentcore.CriticalAction
 	for _, r := range records {
-		key := agentcore.CriticalActionKey(r.Name)
-		if key == "" {
+		key, critical := agentcore.CriticalActionKey(r.Name)
+		if !critical {
 			continue
 		}
 		if _, seen := last[key]; !seen {

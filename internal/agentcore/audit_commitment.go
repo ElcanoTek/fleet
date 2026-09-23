@@ -255,26 +255,33 @@ func sameToolServer(a, b string) bool {
 	return pa != "" && pa == pb
 }
 
-// CriticalActionKey identifies the critical ACTION a tool name performs: its
-// server/variant prefix (toolServerPrefix) joined to the alias class of its
-// critical suffix (criticalAliasClassOf, critical_tool_aliases #1604), or ""
-// for a tool that is not critical. Twins on the same server share a key —
+// CriticalAction identifies one critical ACTION: the server/variant prefix of
+// the tool name (toolServerPrefix, "" for a bare suffix) and the alias class of
+// its critical suffix (criticalAliasClassOf, critical_tool_aliases #1604). The
+// two stay separate fields rather than one joined string: a join is ambiguous
+// when one critical suffix ends in "_"+another alias class
+// (mcp_x_bulk_create_deal vs mcp_x_bulk + create_deal_upload→create_deal), and
+// such a collision would let a success on one action supersede a failure on
+// another. Comparing the pair is exactly sameAliasedTool's rule.
+type CriticalAction struct {
+	Prefix string
+	Class  string
+}
+
+// CriticalActionKey returns the critical action a tool name performs, and
+// false for a tool that is not critical. Twins on the same server share a key —
 // mcp_pages_update_page_data and mcp_pages_update_page_data_upload when the
 // bundle aliases the two suffixes — while the same pair on another server, or
 // on a client-variant seat, keys apart. With no aliases the class is the
-// suffix itself, so the key is the tool name. Exported for the scheduled
-// driver, which judges "the last attempt at this action failed" per action,
-// not per spelling of it.
-func CriticalActionKey(toolName string) string {
+// suffix itself, so each tool name is its own action. Exported for the
+// scheduled driver, which judges "the last attempt at this action failed" per
+// action, not per spelling of it.
+func CriticalActionKey(toolName string) (CriticalAction, bool) {
 	suffix := criticalSuffixFor(toolName)
 	if suffix == "" {
-		return ""
+		return CriticalAction{}, false
 	}
-	class := criticalAliasClassOf(suffix)
-	if prefix := toolServerPrefix(toolName); prefix != "" {
-		return prefix + "_" + class
-	}
-	return class
+	return CriticalAction{Prefix: toolServerPrefix(toolName), Class: criticalAliasClassOf(suffix)}, true
 }
 
 // sameAliasedTool reports whether two full tool names are the same critical
