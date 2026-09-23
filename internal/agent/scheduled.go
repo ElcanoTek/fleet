@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -779,35 +780,67 @@ func succeededCriticalCall(records []toolExecRecord) bool {
 // failedCriticalCalls names the critical actions whose LAST execution in the
 // run failed (same records and success classification as the verifier),
 // reporting the tool name of that last execution. A failed attempt that a
-// later success of the same action superseded does not count: a stale-version
-// retry, corrected arguments, or the action's alias twin on the same server
-// (agentcore.CriticalActionKey, critical_tool_aliases #1604) — a failed inline
-// write followed by a successful upload of the same data. A twin on another
-// server or client variant is another action and supersedes nothing.
+// later attempt superseded does not count on its own:
+//   - the same tool again — a stale-version retry or corrected arguments;
+//   - the action's alias twin on the same server (agentcore.CriticalActionKey,
+//     critical_tool_aliases #1604) aimed at the same target — a failed inline
+//     write followed by an upload of the same page (sameCallTarget).
+//
+// A twin aimed at a different record supersedes nothing: an upload that landed
+// page B says nothing about the inline write to page A that failed. A twin on
+// another server or client variant is another action and supersedes nothing.
 func failedCriticalCalls(records []toolExecRecord) []string {
-	type outcome struct {
-		name      string
-		succeeded bool
+	type attempt struct {
+		key        agentcore.CriticalAction
+		record     toolExecRecord
+		superseded bool
 	}
-	last := make(map[agentcore.CriticalAction]outcome)
-	var order []agentcore.CriticalAction
+	var attempts []attempt
 	for _, r := range records {
 		key, critical := agentcore.CriticalActionKey(r.Name)
 		if !critical {
 			continue
 		}
-		if _, seen := last[key]; !seen {
-			order = append(order, key)
+		for i := range attempts {
+			prior := &attempts[i]
+			if prior.superseded || prior.key != key {
+				continue
+			}
+			if prior.record.Name == r.Name || sameCallTarget(prior.record, r) {
+				prior.superseded = true
+			}
 		}
-		last[key] = outcome{name: r.Name, succeeded: r.Succeeded}
+		attempts = append(attempts, attempt{key: key, record: r})
 	}
 	var failed []string
-	for _, key := range order {
-		if !last[key].succeeded {
-			failed = append(failed, last[key].name)
+	for _, a := range attempts {
+		if !a.superseded && !a.record.Succeeded {
+			failed = append(failed, a.record.Name)
 		}
 	}
 	return failed
+}
+
+// sameCallTarget reports whether two alias-twin calls provably aim at the same
+// target: they share at least one projected argument (the verifier's scalar
+// evidence, keyed by JSON Pointer path) and agree on every one they share. The
+// twins' payload arguments differ by design (inline data vs an upload
+// reference), so only the arguments both carry are compared — the record
+// identifier (a slug, a deal id) among them. Sharing none proves nothing, and
+// the attempt stays failed (fail closed).
+func sameCallTarget(a, b toolExecRecord) bool {
+	shared := 0
+	for path, av := range a.Arguments {
+		bv, ok := b.Arguments[path]
+		if !ok {
+			continue
+		}
+		if !reflect.DeepEqual(av, bv) {
+			return false
+		}
+		shared++
+	}
+	return shared > 0
 }
 
 // sleepCtx waits d or until ctx is done, reporting whether the full wait

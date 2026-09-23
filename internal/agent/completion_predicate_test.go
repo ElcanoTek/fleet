@@ -469,18 +469,21 @@ func TestScheduledVerifierOutageAfterUploadTwinSupersedesFailedInline(t *testing
 // server or client-variant seat does not, and without aliases the two
 // spellings stay two actions (the pre-#1604 behaviour).
 func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
-	inlineFailed := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: false}
+	pageX := map[string]any{"/slug": "x"}
+	inlineFailed := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: map[string]any{"/slug": "x"}, ArgumentsOmitted: true}
 	for _, tc := range []struct {
 		name    string
 		aliased bool
 		then    toolExecRecord
 		want    []string
 	}{
-		{"same-server twin supersedes", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true}, nil},
-		{"cross-server twin does not", true, toolExecRecord{Name: "mcp_pagesb_update_page_data_upload", Succeeded: true}, []string{"mcp_pages_update_page_data"}},
-		{"client-variant twin does not", true, toolExecRecord{Name: "mcp_pages_client2_update_page_data_upload", Succeeded: true}, []string{"mcp_pages_update_page_data"}},
-		{"no aliases: two actions", false, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true}, []string{"mcp_pages_update_page_data"}},
-		{"last attempt is reported by its own name", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: false}, []string{"mcp_pages_update_page_data_upload"}},
+		{"same-server twin supersedes", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/slug": "x", "/upload_id": "u-1"}}, nil},
+		{"twin on another record does not", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/slug": "y", "/upload_id": "u-1"}}, []string{"mcp_pages_update_page_data"}},
+		{"twin sharing no argument does not", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/upload_id": "u-1"}}, []string{"mcp_pages_update_page_data"}},
+		{"cross-server twin does not", true, toolExecRecord{Name: "mcp_pagesb_update_page_data_upload", Succeeded: true, Arguments: pageX}, []string{"mcp_pages_update_page_data"}},
+		{"client-variant twin does not", true, toolExecRecord{Name: "mcp_pages_client2_update_page_data_upload", Succeeded: true, Arguments: pageX}, []string{"mcp_pages_update_page_data"}},
+		{"no aliases: two actions", false, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: pageX}, []string{"mcp_pages_update_page_data"}},
+		{"last attempt is reported by its own name", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: false, Arguments: pageX}, []string{"mcp_pages_update_page_data_upload"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pagesTwinPolicy(t, tc.aliased)
@@ -492,5 +495,23 @@ func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
 				t.Fatal("a landed twin must count as a succeeded critical call")
 			}
 		})
+	}
+}
+
+// The end-to-end shape of a twin aimed at another record: the inline write to
+// page x fails, the upload twin lands page y, and the verifier is down. Page x
+// never landed, so the outage must not fail open.
+func TestScheduledVerifierOutageAfterUploadTwinForAnotherPageStaysFailed(t *testing.T) {
+	withFastVerifierRetry(t)
+	pagesTwinPolicy(t, true)
+	verifier := &scriptedVerifier{replies: []string{"ERR"}}
+	broker := &pagesBroker{calls: map[string]int{}, failing: map[string]bool{"update_page_data": true}}
+	_, _, _, err := scriptedRun(t, []struct{ tool, input string }{
+		{"confirm_audit", publishAudit},
+		{"mcp_pages_update_page_data", `{"slug":"x","data":{}}`},
+		{"mcp_pages_update_page_data_upload", `{"slug":"y","upload_id":"u-1"}`},
+	}, verifier, nil, broker, nil)
+	if !errors.Is(err, agentcore.ErrCompletionUnverified) {
+		t.Fatalf("a verifier outage must not fail open while the failed inline write's page never landed: got %v, want ErrCompletionUnverified", err)
 	}
 }

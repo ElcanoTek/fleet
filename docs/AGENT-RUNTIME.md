@@ -1309,8 +1309,12 @@ pause (#1602). If the retry fails too:
   successfully and none whose last execution failed. The "last execution" is
   per critical *action*: a declared alias twin on the same server
   (`critical_tool_aliases`) supersedes a failed attempt, so a failed inline
-  write followed by a successful upload of the same data counts as landed. The
-  same twin on another server or client variant is a different action.
+  write followed by a successful upload of the same data counts as landed. A
+  twin supersedes only an attempt aimed at the same target: the two calls must
+  share at least one recorded argument and agree on every one they share (the
+  page slug, the record id), so an upload that landed page B leaves a failed
+  write to page A failed. The same twin on another server or client variant is
+  a different action.
   The run succeeds with a `completion_unverified_verifier_error` warning,
   recorded in the session log and at the head of the task's terminal message,
   instead of dead-lettering audited work on the verifier's own outage.
