@@ -40,7 +40,11 @@ Eastern. What shipped:
   run: the edit path re-derives `scheduled_for` from the cron in the request's
   zone (pinned by `TestUpdateTask_TimezoneChangeMovesNextRun`).
 - The next-run preview evaluates in the selected zone
-  (`nextCronOccurrence(expr, from, timeZone)`) and formats its date there.
+  (`nextCronOccurrence(expr, from, timeZone)`) and formats its date there. It
+  scans the zone's calendar with DST-free UTC arithmetic, so the browser's own
+  DST rules never shift another zone's preview, and a time the zone skips (a
+  spring-forward gap) is not shown as an occurrence. It is still a date-only
+  preview, not the scheduler: the saved `scheduled_for` is the server's.
 
 Not changed: existing tasks are not migrated — one saved in UTC stays in UTC
 until someone edits it, because the server cannot know which zone its author

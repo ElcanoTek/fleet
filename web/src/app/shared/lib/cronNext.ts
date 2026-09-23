@@ -5,11 +5,12 @@
 //
 // Honest scope: this is a PREVIEW, not the scheduler. Given a `timeZone` it
 // evaluates in that IANA zone — the task's own, which is what the backend
-// evaluates recurrence in — and otherwise in the browser's local timezone.
-// Wall-clock arithmetic still rides on the browser's Date, so around a DST
-// transition the previewed date can differ from the real first run; the echo
-// therefore shows a date (no time of day) to keep that blast radius small, and
-// callers must treat null as "can't preview" and simply omit the suffix. Only the numeric
+// evaluates recurrence in — scanning the zone's calendar with DST-free UTC
+// arithmetic so the browser's own zone never leaks in; without one it
+// evaluates in the browser's local timezone. A wall-clock time the zone skips
+// (a spring-forward gap) is not previewed as an occurrence. The echo shows a
+// date (no time of day), and callers must treat null as "can't preview" and
+// simply omit the suffix. Only the numeric
 // 5-field subset the form validator accepts is supported; anything else
 // (named tokens, 6-field expressions, out-of-range values) returns null.
 
@@ -88,9 +89,9 @@ export function parseCronExpression(expr: string): CronSchedule | null {
 // dayMatches applies standard cron day semantics: when BOTH day-of-month and
 // day-of-week are restricted the day matches if EITHER does; otherwise the
 // restricted one (or neither) decides.
-function dayMatches(s: CronSchedule, date: Date): boolean {
-  const domOk = s.dom.has(date.getDate());
-  const dowOk = s.dow.has(date.getDay());
+function dayMatches(s: CronSchedule, dayOfMonth: number, dayOfWeek: number): boolean {
+  const domOk = s.dom.has(dayOfMonth);
+  const dowOk = s.dow.has(dayOfWeek);
   if (s.domRestricted && s.dowRestricted) return domOk || dowOk;
   if (s.domRestricted) return domOk;
   if (s.dowRestricted) return dowOk;
@@ -135,28 +136,60 @@ export function nextCronOccurrence(
   timeZone?: string,
 ): Date | null {
   if (!timeZone) return nextLocalOccurrence(expr, from);
-  // Re-express `from` as a local Date carrying the zone's wall-clock fields,
-  // run the local scan, then map the resulting wall-clock back to an instant.
+  return nextZonedOccurrence(expr, from, timeZone);
+}
+
+const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
+
+// nextZonedOccurrence scans the zone's calendar as "wall clock encoded as a
+// UTC epoch" — UTC has no DST, so only the target zone's rules ever apply —
+// and maps each candidate wall-clock time back to a real instant.
+function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date | null {
+  const s = parseCronExpression(expr);
+  if (!s) return null;
   const f = wallClockParts(from, timeZone);
   if (!f) return null;
-  const wall = nextLocalOccurrence(expr, new Date(f[0], f[1] - 1, f[2], f[3], f[4], f[5]));
-  if (!wall) return null;
-  const wallAsUTC = Date.UTC(
-    wall.getFullYear(),
-    wall.getMonth(),
-    wall.getDate(),
-    wall.getHours(),
-    wall.getMinutes(),
-  );
-  // Two passes settle the offset for the target instant (it can differ from
-  // the offset at `from` across a DST change).
+
+  const minutes = [...s.minutes].sort((a, b) => a - b);
+  const hours = [...s.hours].sort((a, b) => a - b);
+
+  // Next whole minute of the zone's wall clock.
+  const start = new Date(Date.UTC(f[0], f[1] - 1, f[2], f[3], f[4]) + MINUTE_MS);
+  let day = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
+  for (let i = 0; i <= 366; i++, day += DAY_MS) {
+    const d = new Date(day);
+    if (!s.months.has(d.getUTCMonth() + 1) || !dayMatches(s, d.getUTCDate(), d.getUTCDay())) continue;
+    for (const h of hours) {
+      for (const m of minutes) {
+        if (i === 0 && (h < start.getUTCHours() || (h === start.getUTCHours() && m < start.getUTCMinutes()))) {
+          continue;
+        }
+        const wall = day + h * 3_600_000 + m * MINUTE_MS;
+        const instant = wallToInstant(wall, timeZone);
+        if (instant === null) return null;
+        // A wall-clock time the zone skips (spring-forward) maps to a
+        // different reading; it is not an occurrence.
+        const got = wallClockParts(new Date(instant), timeZone);
+        if (!got || got[3] !== h || got[4] !== m) continue;
+        return new Date(instant);
+      }
+    }
+  }
+  return null;
+}
+
+// wallToInstant maps a zone wall-clock time (encoded as a UTC epoch) to the
+// instant that shows it. Two passes settle the offset for the target instant,
+// which can differ from a first guess across a DST change.
+function wallToInstant(wallAsUTC: number, timeZone: string): number | null {
   let instant = wallAsUTC;
   for (let i = 0; i < 2; i++) {
     const offset = zoneOffsetMs(new Date(instant), timeZone);
     if (offset === null) return null;
     instant = wallAsUTC - offset;
   }
-  return new Date(instant);
+  return instant;
 }
 
 function nextLocalOccurrence(expr: string, from: Date): Date | null {
@@ -174,7 +207,7 @@ function nextLocalOccurrence(expr: string, from: Date): Date | null {
 
   const day = new Date(start.getTime());
   for (let i = 0; i <= 366; i++) {
-    if (s.months.has(day.getMonth() + 1) && dayMatches(s, day)) {
+    if (s.months.has(day.getMonth() + 1) && dayMatches(s, day.getDate(), day.getDay())) {
       const isFirstDay = i === 0;
       for (const h of hours) {
         for (const m of minutes) {

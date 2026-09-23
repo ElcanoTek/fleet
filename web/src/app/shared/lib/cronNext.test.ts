@@ -110,6 +110,23 @@ describe("nextCronOccurrence in a named time zone", () => {
     expect(next!.toISOString()).toBe("2026-09-24T03:30:00.000Z");
   });
 
+  it("the browser's own DST never leaks into another zone's schedule", () => {
+    // 02:30 on Sun Mar 8 2026 is a spring-forward gap in New York but a real
+    // time in Tokyo (no DST). From 2026-03-07 12:00Z (21:00 Sat in Tokyo) the
+    // next Tokyo Sunday 02:30 is Mar 8, whatever zone the browser is in.
+    const from = new Date(Date.UTC(2026, 2, 7, 12, 0, 0));
+    const next = nextCronOccurrence("30 2 * * 0", from, "Asia/Tokyo");
+    expect(next!.toISOString()).toBe("2026-03-07T17:30:00.000Z");
+    expect(formatNextRun(next!, "Asia/Tokyo")).toBe("Sun, Mar 8");
+  });
+
+  it("skips a wall-clock time the zone itself jumps over", () => {
+    // New York has no 02:30 on Mar 8 2026; the next 02:30 is Mar 9.
+    const from = new Date(Date.UTC(2026, 2, 7, 12, 0, 0));
+    const next = nextCronOccurrence("30 2 * * *", from, "America/New_York");
+    expect(next!.toISOString()).toBe("2026-03-09T06:30:00.000Z");
+  });
+
   it("returns null for an unknown zone", () => {
     expect(nextCronOccurrence("0 8 * * *", NOON_UTC, "Mars/Olympus_Mons")).toBeNull();
   });
