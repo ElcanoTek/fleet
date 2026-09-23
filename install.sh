@@ -1,64 +1,220 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# install.sh — public one-line installer for fleet.
+# install.sh — public one-line installer for fleet. Design note: docs/INSTALLER.md.
 #
 #   curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash
 #
 # Clones main into /opt/fleet/src (or FLEET_SRC_DIR) and hands off to
-# scripts/bootstrap.sh, which prompts for the service / web / domain / key
-# choices when it has a terminal. Any arguments are passed straight through, so
-# an unattended install is:
+# scripts/bootstrap.sh. With no arguments on a terminal, bootstrap prompts for
+# the service / web / domain / key choices. Any arguments are passed straight
+# through and bootstrap runs non-interactively on them:
 #
 #   curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh \
 #     | sudo bash -s -- --postgres=local --enable-web --domain fleet.example.com \
 #         --client-config https://github.com/ElcanoTek/example-config.git
 #
-# Re-running on a box that already has a clean checkout fast-forwards it and
-# re-runs bootstrap (which is idempotent); a dirty or non-main checkout is left
-# alone. Everything lives inside main() so a truncated download never runs.
+# --dry-run changes nothing on the host: it runs the same checkout preparation
+# as a real install (against a throwaway copy where that would write), then
+# bootstrap's own dry run. Re-running on a box with a clean main checkout
+# fast-forwards it and re-runs bootstrap (which is idempotent); a dirty or
+# non-main checkout is left alone. Everything lives inside functions, and the
+# call on the last line is wrapped in { …; } so a truncated download is a
+# syntax error rather than a partial run.
 set -euo pipefail
-main() {
-  local src="${FLEET_SRC_DIR:-/opt/fleet/src}"
-  local repo="${FLEET_REPO_URL:-https://github.com/ElcanoTek/fleet.git}"
-  if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
-    cat <<EOF
+# Paths to remove on exit (a .partial clone, a dry-run copy). One global list and
+# one trap, so no step can drop another step's cleanup by resetting the trap.
+CLEANUP=()
+trap 'rm -rf "${CLEANUP[@]}"' EXIT
+
+usage() {
+  cat <<EOF
 Usage: curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash [-s -- BOOTSTRAP_FLAGS...]
 
-Clones fleet main into $src and runs scripts/bootstrap.sh with BOOTSTRAP_FLAGS.
-With no flags on a terminal, bootstrap asks for everything it needs.
+Clones fleet main into $1 and runs scripts/bootstrap.sh with BOOTSTRAP_FLAGS.
+With no flags on a terminal, bootstrap asks for everything it needs. With flags
+and no terminal on stdin (curl | bash, CI, or </dev/null) it runs unattended; run
+directly from a terminal, it still asks about anything the flags leave unset.
+For automation, download first so a failed fetch is an error:
+  curl -fsSLo /tmp/fleet-install.sh https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh \\
+    && sudo bash /tmp/fleet-install.sh FLAGS... </dev/null
 Common flags: --postgres=local|external  --enable-service  --enable-web --domain <host>
-              --client-config <git-url[#ref]|path>  --dry-run
-After install: fleet status; sudo fleet doctor; fleet update.
+              --client-config <git-url[#ref]|path>  --dry-run (changes nothing)
+After install: fleet status; sudo fleet doctor; sudo fleet update.
 EOF
-    exit 0
+}
+
+# absolutize FLAG VALUE CALLER_PWD — bootstrap runs from the checkout, so a
+# local path the caller gave relative to their own directory must be made
+# absolute first. URLs, absolute paths and non-path values pass through.
+absolutize() {
+  local flag="$1" value="$2" base="$3"
+  case "$flag" in
+    --client-config)
+      # Test the whole value first: bootstrap allows "#" in a filesystem path
+      # and treats it as a ref separator only for URLs, so bundles/acme#prod
+      # may be a directory. Fall back to the part before "#" (path#ref form).
+      if [[ "$value" != /* && "$value" != *://* && "$value" != git@* ]] \
+         && [[ -e "$base/$value" || -e "$base/${value%%#*}" ]]; then
+        value="$base/$value"
+      fi ;;
+    --auth-pubkey)
+      if [[ "$value" == @* && "$value" != @/* ]]; then value="@$base/${value#@}"; fi ;;
+  esac
+  printf '%s' "$value"
+}
+
+# absolutize_env CALLER_PWD — the same for bootstrap's path-valued environment
+# settings (the complete set it reads: every other FLEET_* is a URL, name or number). FLEET_CLIENT_CONFIG_DIR keeps bootstrap's own rule (the caller's
+# path when it exists there, else relative to the checkout), so it is only
+# rewritten when it exists relative to the caller.
+absolutize_env() {
+  local base="$1" name value
+  for name in FLEET_ENV_FILE FLEET_BACKUP_DIR FLEET_INSTALL_DIR FLEET_STATE_DIR FLEET_CLIENT_CONFIG_CHECKOUT FLEET_CLIENT_CONFIG_DIR; do
+    value="${!name:-}"
+    [[ -n "$value" && "$value" != /* ]] || continue
+    if [[ "$name" == FLEET_CLIENT_CONFIG_DIR && ! -e "$base/$value" ]]; then continue; fi
+    export "$name=$base/$value"
+  done
+}
+
+# redact URL — drop any userinfo (user:token@) before a URL is printed.
+redact() {
+  sed -E 's#(://)[^/@]+@#\1***@#' <<<"$1"
+}
+
+# checkout_state DIR — absent | clean-main | keep | occupied: the one decision
+# both the real run and --dry-run act on.
+checkout_state() {
+  local dir="$1"
+  if [[ -d "$dir/.git" ]]; then
+    # Untracked non-ignored files count as local changes: bootstrap would build them in.
+    if [[ "$(git -C "$dir" rev-parse --abbrev-ref HEAD)" == main && -z "$(git -C "$dir" status --porcelain)" ]]; then
+      echo clean-main
+    else
+      echo keep
+    fi
+  elif [[ -e "$dir" ]]; then
+    echo occupied
+  else
+    echo absent
   fi
+}
+
+# prepare_checkout DIR REPO [GIT_OPT...] — act on checkout_state: clone into an absent DIR
+# (via a .partial dir renamed on success), fast-forward a clean main checkout
+# (aborting if it has diverged), keep anything else as-is, refuse a path that
+# exists but is not a checkout.
+prepare_checkout() {
+  local dir="$1" repo="$2"
+  shift 2
+  case "$(checkout_state "$dir")" in
+    clean-main)
+      echo "Updating existing checkout at $dir"
+      git "$@" -C "$dir" pull --ff-only ;;
+    keep)
+      echo "Keeping $dir as-is (not a clean main checkout); use sudo fleet update to move it." >&2 ;;
+    occupied)
+      echo "$dir exists but is not a git checkout; move it aside or set FLEET_SRC_DIR." >&2
+      return 1 ;;
+    absent)
+      mkdir -p "$(dirname "$dir")"
+      # Clone next to the target and rename, so an interrupted clone never leaves
+      # a half-populated dir that blocks the next run.
+      local partial="$dir.partial.$$"
+      CLEANUP+=("$partial")
+      git "$@" clone --branch main --single-branch "$repo" "$partial"
+      # -T: fail rather than move the clone INSIDE a $dir that another
+      # installer created meanwhile.
+      mv -T "$partial" "$dir" || { echo "$dir appeared during the clone (another install running?); not using it." >&2; return 1; } ;;
+  esac
+}
+
+main() {
+  local arg want="" dry_run=0 caller_pwd="$PWD"
+  local src="${FLEET_SRC_DIR:-/opt/fleet/src}"
+  # Absolute and normalized (no ./.., no trailing slash), so the .partial clone
+  # and the dry-run copy are always siblings of the checkout, never inside it.
+  [[ "$src" == /* ]] || src="$caller_pwd/$src"
+  src="$(realpath -m -- "$src")"
+  local repo="${FLEET_REPO_URL:-https://github.com/ElcanoTek/fleet.git}"
+  local -a args=()
+  # Parse the way bootstrap does, so a value-taking flag consumes the next word:
+  # "--client-config --dry-run" is a (bad) client-config value, not a dry run.
+  for arg in "$@"; do
+    if [[ -n "$want" ]]; then
+      args+=("$(absolutize "$want" "$arg" "$caller_pwd")"); want=""; continue
+    fi
+    case "$arg" in
+      --help|-h) usage "$src"; exit 0 ;;
+      --dry-run) dry_run=1; args+=("$arg") ;;
+      --client-config|--auth-pubkey|--domain|--admin|--chat-db-name|--chat-db-user|--sched-db-name|--sched-db-user)
+        want="$arg"; args+=("$arg") ;;
+      --client-config=*|--auth-pubkey=*)
+        args+=("${arg%%=*}=$(absolutize "${arg%%=*}" "${arg#*=}" "$caller_pwd")") ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+  set -- ${args[@]+"${args[@]}"}
+  absolutize_env "$caller_pwd"
+
   [[ $EUID == 0 ]] || { echo 'Run as root: curl -fsSL …/install.sh | sudo bash' >&2; exit 1; }
   command -v dnf >/dev/null || { echo 'fleet installs on Fedora/RHEL with dnf' >&2; exit 1; }
-  command -v git >/dev/null || dnf install -y git ca-certificates
 
-  if [[ -d "$src/.git" ]]; then
-    local branch dirty
-    branch="$(git -C "$src" rev-parse --abbrev-ref HEAD)"
-    dirty="$(git -C "$src" status --porcelain --untracked-files=no)"
-    if [[ "$branch" == main && -z "$dirty" ]]; then
-      echo "Updating existing checkout at $src"
-      git -C "$src" pull --ff-only
+  if [[ "$dry_run" == 1 ]]; then
+    command -v git >/dev/null || { echo "[dry-run] would: dnf install -y git ca-certificates (git is needed for the rest of the plan)"; exit 0; }
+    local plan="$src" tmp
+    case "$(checkout_state "$src")" in
+      occupied)
+        prepare_checkout "$src" "$repo" || { echo "[dry-run] a real run would stop here." >&2; exit 1; } ;;
+      keep)
+        # A real run builds this tree unchanged, so preview it in place (read-only).
+        echo "[dry-run] would keep $src as-is (not a clean main checkout) and run its bootstrap" ;;
+      clean-main)
+        # A real run pulls, so rehearse on an exact copy of the checkout: same
+        # commits, same git config (the branch's real upstream, whatever remote
+        # it names) and the same ignored working-tree state bootstrap reads
+        # (.env.local). Hooks are disabled for the rehearsal pull (a post-merge
+        # hook could act on the host). It sits beside the checkout so --reflink makes it cheap
+        # on btrfs/xfs, and it is removed on exit. An ahead checkout previews
+        # its own commits; a diverged one fails the same --ff-only pull.
+        tmp="$(mktemp -d "$(dirname "$src")/.fleet-dry-run.XXXXXX")"
+        CLEANUP+=("$tmp")
+        plan="$tmp/src"
+        cp -a --reflink=auto "$src" "$plan"
+        echo "[dry-run] would: git -C $src pull --ff-only (rehearsed on a copy)"
+        prepare_checkout "$plan" "$repo" -c core.hooksPath=/dev/null || { echo "[dry-run] a real run would stop at the checkout step." >&2; exit 1; } ;;
+      absent)
+        tmp="$(mktemp -d)"
+        CLEANUP+=("$tmp")
+        plan="$tmp/src"
+        echo "[dry-run] would: git clone --branch main $(redact "$repo") $src (rehearsed in a temp dir)"
+        prepare_checkout "$plan" "$repo" -c core.hooksPath=/dev/null || { echo "[dry-run] a real run would stop at the checkout step." >&2; exit 1; } ;;
+    esac
+    cd "$plan"
+    # Same stdin rule as the real run below, so a terminal-attached dry run is
+    # asked the same questions and prints the plan those answers produce.
+    if [[ $# == 1 && ! -t 0 ]] && { : </dev/tty; } 2>/dev/null; then
+      bash scripts/bootstrap.sh --dry-run </dev/tty
     else
-      echo "Keeping $src as-is (branch $branch${dirty:+, local changes}); use fleet update to move it." >&2
+      bash scripts/bootstrap.sh "$@"
     fi
-  elif [[ -e "$src" ]]; then
-    echo "$src exists but is not a git checkout; move it aside or set FLEET_SRC_DIR." >&2
-    exit 1
-  else
-    mkdir -p "$(dirname "$src")"
-    git clone --branch main --single-branch "$repo" "$src"
+    return
   fi
 
-  # curl | bash leaves stdin on the pipe; give bootstrap the terminal so its
-  # prompts work. Without one it runs non-interactively on flags/defaults.
-  if [[ ! -t 0 ]] && { : </dev/tty; } 2>/dev/null; then
-    exec bash "$src/scripts/bootstrap.sh" "$@" </dev/tty
+  command -v git >/dev/null || dnf install -y git ca-certificates
+  prepare_checkout "$src" "$repo"
+
+  # Run from the checkout so relative paths (a dev-mode .env.local) land in one
+  # stable place across reruns, whatever directory curl was started from.
+  cd "$src"
+  # curl | bash leaves stdin on the pipe. Only the no-argument form is the
+  # interactive install, so only then reattach the terminal for bootstrap's
+  # prompts; with flags, stdin stays non-interactive and bootstrap never asks.
+  if [[ $# == 0 && ! -t 0 ]] && { : </dev/tty; } 2>/dev/null; then
+    exec bash scripts/bootstrap.sh </dev/tty
   fi
-  exec bash "$src/scripts/bootstrap.sh" "$@"
+  exec bash scripts/bootstrap.sh "$@"
 }
-main "$@"
+# The call sits inside a group whose closing brace is the last byte that matters:
+# a download cut off anywhere before it is a syntax error, never a bare "main".
+{ main "$@"; }

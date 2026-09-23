@@ -54,9 +54,10 @@ const (
 	envEmailS3Prefix     = "EMAIL_S3_PREFIX"
 )
 
-// DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL.
-// Mirrors the frontend's DEFAULT_MODEL (the recommended everyday pick).
-const DefaultTitleModel = "openai/gpt-5.6-luna-pro"
+// DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL:
+// the everyday tier itself, so a default-model swap moves titles and the
+// auxiliary jobs below with it (docs/MODEL-DEFAULTS.md).
+const DefaultTitleModel = agentcore.DefaultCoreModel
 
 // Sub-agent caps (#175, tightened for delegation #264): deliberately SMALL
 // defaults. Depth bounds recursion; fan-out bounds how many children one parent

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"charm.land/fantasy"
@@ -17,12 +18,41 @@ import (
 
 const executionRequirementsMarker = "EXECUTION REQUIREMENTS (JSON):"
 
-// Optional, copyable handoff from a prompt producer. Requirements only narrow
-// execution: they never enable network, load credentials, or widen MCP scope.
+// Optional, copyable handoff from a prompt producer. Requirements never enable
+// network, load credentials, or widen MCP scope. The one clause that relaxes
+// anything is completion (#1602): a successful listed tool finishes the run
+// without the end-of-run verifier and phone-a-friend review (ADR-0072).
 type executionRequirements struct {
-	Servers []string `json:"mcp_servers"`
-	Tools   []string `json:"required_tools"`
-	Network bool     `json:"network"`
+	Servers    []string               `json:"mcp_servers"`
+	Tools      []string               `json:"required_tools"`
+	Network    bool                   `json:"network"`
+	Completion *completionRequirement `json:"completion"`
+
+	// completionRoster is Completion.AnySucceeded resolved against the run's
+	// actual tool roster (full mcp_<server>_<tool> and native names), filled by
+	// buildTaskRemoteOverlayChecked once the roster is known.
+	completionRoster []string
+}
+
+// completionRequirement is the producer's deterministic completion predicate
+// (#1602): the run is complete once ANY listed tool has a successful execution,
+// judged by the same success classification the end-of-run verifier's tool
+// summary uses. Names take the forms required_tools accepts. Like the rest of
+// the declaration it is opaque to Fleet — a list of tool names, never a meaning
+// assigned to them — and an empty or absent list declares no predicate, so the
+// verifier runs as before. Unknown sibling keys are ignored for forward
+// compatibility, like unknown top-level keys.
+type completionRequirement struct {
+	AnySucceeded []string `json:"any_succeeded"`
+}
+
+// completionTools returns the resolved completion predicate names, nil when
+// the run declared none.
+func (r *executionRequirements) completionTools() []string {
+	if r == nil {
+		return nil
+	}
+	return r.completionRoster
 }
 
 var requirementName = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,200}$`)
@@ -41,10 +71,14 @@ func parseExecutionRequirements(prompt string) (*executionRequirements, error) {
 		if err := json.Unmarshal([]byte(lines[i+1]), &req); err != nil || req == nil {
 			return nil, fmt.Errorf("execution requirements: invalid JSON object")
 		}
-		if len(req.Servers) > 100 || len(req.Tools) > 200 {
+		var completion []string
+		if req.Completion != nil {
+			completion = req.Completion.AnySucceeded
+		}
+		if len(req.Servers) > 100 || len(req.Tools) > 200 || len(completion) > 200 {
 			return nil, fmt.Errorf("execution requirements: too many servers or tools")
 		}
-		for _, name := range append(append([]string{}, req.Servers...), req.Tools...) {
+		for _, name := range append(append(append([]string{}, req.Servers...), req.Tools...), completion...) {
 			if !requirementName.MatchString(name) {
 				return nil, fmt.Errorf("execution requirements: invalid server or tool identifier")
 			}
@@ -61,20 +95,53 @@ func (r *executionRequirements) checkNetwork(networked bool) error {
 	return nil
 }
 
+// rosterNames indexes a run's tool roster by every identifier a declaration may
+// use — native name, bare server tool name, or full mcp_<server>_<tool> name —
+// mapping each to the full roster names it denotes (a bare name shared by two
+// servers denotes both), plus the set of servers present.
+func rosterNames(catalog []mcp.ServerTool, native []fantasy.AgentTool) (servers map[string]bool, tools map[string][]string) {
+	servers = make(map[string]bool)
+	tools = make(map[string][]string)
+	for _, item := range catalog {
+		full := "mcp_" + item.ServerName + "_" + item.Tool.Name
+		servers[item.ServerName] = true
+		tools[full] = append(tools[full], full)
+		tools[item.Tool.Name] = append(tools[item.Tool.Name], full)
+	}
+	for _, tool := range native {
+		name := tool.Info().Name
+		tools[name] = append(tools[name], name)
+	}
+	return servers, tools
+}
+
+// resolveCompletion resolves the completion predicate against the roster into
+// the deduplicated, sorted full names a successful execution may carry. A name
+// that resolves to nothing is reported by checkTools, which runs first.
+func (r *executionRequirements) resolveCompletion(catalog []mcp.ServerTool, native []fantasy.AgentTool) []string {
+	if r == nil || r.Completion == nil || len(r.Completion.AnySucceeded) == 0 {
+		return nil
+	}
+	_, tools := rosterNames(catalog, native)
+	seen := make(map[string]bool)
+	var out []string
+	for _, name := range r.Completion.AnySucceeded {
+		for _, full := range tools[name] {
+			if !seen[full] {
+				seen[full] = true
+				out = append(out, full)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (r *executionRequirements) checkTools(catalog []mcp.ServerTool, native []fantasy.AgentTool) error {
 	if r == nil {
 		return nil
 	}
-	servers := make(map[string]bool)
-	tools := make(map[string]bool)
-	for _, item := range catalog {
-		servers[item.ServerName] = true
-		tools["mcp_"+item.ServerName+"_"+item.Tool.Name] = true
-		tools[item.Tool.Name] = true
-	}
-	for _, tool := range native {
-		tools[tool.Info().Name] = true
-	}
+	servers, tools := rosterNames(catalog, native)
 	var missing []string
 	for _, server := range r.Servers {
 		if !servers[server] {
@@ -82,8 +149,18 @@ func (r *executionRequirements) checkTools(catalog []mcp.ServerTool, native []fa
 		}
 	}
 	for _, tool := range r.Tools {
-		if !tools[tool] {
+		if len(tools[tool]) == 0 {
 			missing = append(missing, "tool "+tool)
+		}
+	}
+	// A completion tool the run cannot call would make the predicate
+	// unsatisfiable while looking declared: the same dispatch error as an
+	// unavailable required tool, before any model execution.
+	if r.Completion != nil {
+		for _, tool := range r.Completion.AnySucceeded {
+			if len(tools[tool]) == 0 {
+				missing = append(missing, "completion tool "+tool)
+			}
 		}
 	}
 	if len(missing) != 0 {
@@ -124,6 +201,7 @@ func (r *Runner) buildTaskRemoteOverlayChecked(ctx context.Context, task *models
 			overlay.Close()
 			return nil, err
 		}
+		req.completionRoster = req.resolveCompletion(catalog, native)
 	}
 	return overlay, nil
 }

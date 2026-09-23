@@ -1533,13 +1533,35 @@ func (p *Pool) reportSuccess(taskID, leaseOwner uuid.UUID, output json.RawMessag
 // structured-output run whose final text is its JSON keeps the constant too:
 // the payload is already on the row in output_json, and repeating it as prose
 // would just make the task list unreadable).
+//
+// A run that finished after its end-of-run verifier could not answer carries
+// the completion_unverified_verifier_error warning in its session (#1602); the
+// flag leads the message so the task list says the success is unverified,
+// without touching the final answer itself (which is also the email reply body
+// and, for a structured task, its output).
 func successMessage(session *models.LogSession) string {
 	const fallback = "Task completed successfully"
 	summary := collapseWhitespace(finalAssistantText(session))
 	if summary == "" || strings.HasPrefix(summary, "{") || strings.HasPrefix(summary, "[") {
-		return fallback
+		summary = fallback
+	}
+	if hasMessageType(session, agentcore.MessageTypeCompletionUnverifiedVerifierError) {
+		summary = "[" + agentcore.MessageTypeCompletionUnverifiedVerifierError + "] " + summary
 	}
 	return truncateRunes(summary, maxTerminalMessageRunes)
+}
+
+// hasMessageType reports whether any session message carries messageType.
+func hasMessageType(session *models.LogSession, messageType string) bool {
+	if session == nil {
+		return false
+	}
+	for _, m := range session.Messages {
+		if m.MessageType != nil && *m.MessageType == messageType {
+			return true
+		}
+	}
+	return false
 }
 
 // collapseWhitespace folds newlines and runs of spaces into single spaces. A

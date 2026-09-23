@@ -217,7 +217,7 @@ above fails otherwise.
 - [`CUTOVER.md`](CUTOVER.md) — v1 → fleet cutover runbook (a box already running the legacy chat + moc stack)
 - [`DATASETS.md`](DATASETS.md) — Dataset / table agent
 - [`DEAD-LETTER-RECURRENCE.md`](DEAD-LETTER-RECURRENCE.md) — A dead-lettered recurring occurrence spawns its successor (ADR-0070)
-- [`SCHEDULED-COMPACTION-CHECKPOINTS.md`](SCHEDULED-COMPACTION-CHECKPOINTS.md) — Scheduled runs pause their tool loop at the resend budget so compaction recurs, and summarize for real
+- [`SCHEDULED-COMPACTION-CHECKPOINTS.md`](SCHEDULED-COMPACTION-CHECKPOINTS.md) — Scheduled runs pause their tool loop at the resend budget so compaction recurs, and summarize for real; when the prompt floor crowds the budget, the budget applies to the history alone (#1600)
 - [`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md) — Deploying fleet on Kubernetes
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Deploying fleet
 - [`DISCUSS-RUN.md`](DISCUSS-RUN.md) — Discuss this run
@@ -233,6 +233,7 @@ above fails otherwise.
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
 - [`implementation-plans-enhancements.md`](implementation-plans-enhancements.md) — Implementation plan: #984 — Fleet ↔ Buzz bridge
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)
+- [`INSTALLER.md`](INSTALLER.md) — The public one-line installer (`install.sh`)
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts
 - [`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md) — Real-cluster sandbox integration test
 - [`LEGACY-IMPORT.md`](LEGACY-IMPORT.md) — Legacy import — migrating chat + moc data into fleet

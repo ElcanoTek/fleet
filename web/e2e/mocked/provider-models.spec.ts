@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 import { mockChatBoot, fulfillSse } from "./_mocks";
+import { DEFAULT_MODEL } from "../../src/app/lib/modelAliases";
 
 test("native-only chat repairs an unavailable default and retries with the newly selected model", async ({ page, context }) => {
   await loginViaCookie(context);
@@ -60,7 +61,7 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
     models: [],
   } }));
   await page.route("**/api/model-catalog", (route) => route.fulfill({ json: {
-    models: [{ slug: "openai/gpt-5.6-luna-pro", name: "Luna Pro", context_length: 100000,
+    models: [{ slug: DEFAULT_MODEL, name: "Luna Pro", context_length: 100000,
       price_prompt: 0.000003, price_completion: 0.000015 }],
   } }));
   let sent = "";
@@ -80,7 +81,7 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
   await composer.fill("Check the model route");
   await composer.press("Enter");
   await expect(page.getByText("Explicit OpenRouter route selected.")).toBeVisible();
-  expect(sent).toBe("router/openai/gpt-5.6-luna-pro");
+  expect(sent).toBe(`router/${DEFAULT_MODEL}`);
   await expect(page.getByTestId("composer-model-label-full")).toHaveText("router: Luna Pro");
   await expect(page.locator("button[aria-haspopup='listbox']").first().locator(".model-cost")).toHaveAttribute("data-cost-tier", "3");
   await expect(page.getByRole("button", { name: "Context 10% full — click to compact" })).toBeVisible();

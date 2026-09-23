@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/fantasy"
 
@@ -97,6 +98,9 @@ type Agent struct {
 	// the review degrades to a no-op (it requires a reviewer model to run).
 	phoneAFriendEnabled bool
 	reviewerModel       fantasy.LanguageModel
+	// completionAnySucceeded is Options.CompletionAnySucceeded as a set; empty
+	// means no deterministic completion predicate.
+	completionAnySucceeded map[string]bool
 
 	// ── sub-agents (#175, part b) ──
 	// subagent carries the spawn_subagent feature gate, recursion/fan-out caps,
@@ -264,6 +268,15 @@ type Options struct {
 	PhoneAFriendEnabled bool
 	ReviewerModel       fantasy.LanguageModel
 
+	// CompletionAnySucceeded is the task's deterministic completion predicate
+	// (#1602): full roster tool names (mcp_<server>_<tool> or native), resolved
+	// by the driver from the EXECUTION REQUIREMENTS completion.any_succeeded
+	// clause. When a listed tool has a successful execution by the time the
+	// audit/finish enforcement clears, the run is complete without the
+	// end-of-run verifier or phone-a-friend. nil = no predicate: every finish
+	// is verified exactly as before.
+	CompletionAnySucceeded []string
+
 	// ── sub-agents (#175 part b, #1043) ──
 	// Subagent configures the spawn_subagent native tool. The DRIVERS compose
 	// Enabled — scheduledrun: fleet flag AND task.allow_delegation (both default
@@ -374,6 +387,12 @@ func NewAgent(opts Options) *Agent {
 		phoneAFriendEnabled:  opts.PhoneAFriendEnabled,
 		reviewerModel:        opts.ReviewerModel,
 		subagent:             newSubagentConfig(opts.Subagent),
+	}
+	if len(opts.CompletionAnySucceeded) > 0 {
+		a.completionAnySucceeded = make(map[string]bool, len(opts.CompletionAnySucceeded))
+		for _, name := range opts.CompletionAnySucceeded {
+			a.completionAnySucceeded[name] = true
+		}
 	}
 	// The parent task id labels any sub-agent this run spawns (#264 traceability).
 	// A child inherits this same value (buildChild), so every descendant's session
@@ -509,7 +528,20 @@ type scheduledPolicy struct {
 	// deadline/cancellation (CanFinish itself takes no ctx). Falls back to
 	// context.Background() if unset.
 	runCtx context.Context
+	// observer is the run's Observer (set by Execute once composed), through
+	// which the completion predicate announces itself. nil-safe.
+	observer agentcore.Observer
+	// verifierWarning is set when Gate 1 failed open on a verifier that could
+	// not return a verdict after a clean audit (#1602): the reason, persisted
+	// as the completion_unverified_verifier_error warning once the run has
+	// actually succeeded. A later verdict (a re-verification after a
+	// phone-a-friend repair) clears it.
+	verifierWarning string
 }
+
+// verifierRetryDelay is the pause before the one retry of a verifier call that
+// errored (#1602). A variable so tests do not sleep.
+var verifierRetryDelay = 5 * time.Second
 
 // SetRoundFinalText records the round's closing assistant text for the finish
 // gates. Called by agentcore.Run before every CanFinish consultation.
@@ -538,12 +570,16 @@ func (p *scheduledPolicy) RecordToolResult(toolName, rawInput, resultText string
 	p.inner.RecordToolResult(toolName, rawInput, resultText, succeeded)
 }
 
-// CanFinish first defers to the audit/finish enforcement. When that clears, it
-// runs the end-of-run verifier until a clean verdict or the bounded review cap
-// (missing actions become repair rounds) and then the phone-a-friend review once (material issues become a final
-// enforcement round). Each gate requires its model — the verifier the fallback
-// model, the review the reviewer model — and is skipped when its model is absent;
-// the review gate is additionally skipped unless phoneAFriendEnabled.
+// CanFinish first defers to the audit/finish enforcement. When that clears, a
+// task-declared completion predicate that is satisfied finishes the run with no
+// model gate (#1602). Otherwise it runs the end-of-run verifier until a clean
+// verdict or the bounded review cap (missing actions become repair rounds) and
+// then the phone-a-friend review once (material issues become a final
+// enforcement round). A verifier that cannot answer is retried once and, after
+// a clean audit, fails open with a recorded warning instead of spending a check.
+// Each gate requires its model — the verifier the fallback model, the review the
+// reviewer model — and is skipped when its model is absent; the review gate is
+// additionally skipped unless phoneAFriendEnabled.
 func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	if p.terminalErr != nil {
 		return false, nil
@@ -559,6 +595,23 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		ctx = context.Background()
 	}
 
+	// Deterministic completion predicate (#1602). The task's producer declared
+	// the tools whose success IS completion (EXECUTION REQUIREMENTS
+	// completion.any_succeeded); a successful execution of any of them — the
+	// same records and success classification the verifier reads — completes
+	// the run without either model gate. It replaces only those gates: the
+	// audit/finish enforcement above has already cleared, so an outstanding
+	// declared commitment still blocks. No success of a listed tool falls
+	// through to the verifier exactly as before.
+	if tool := p.completionPredicateTool(); tool != "" {
+		// A warning left by an earlier fail-open (a verifier outage, then a
+		// phone-a-friend repair round) no longer describes how this run
+		// finished: the predicate, not an unverified pass, completed it.
+		p.verifierWarning = ""
+		p.recordCompletionPredicate(tool)
+		return true, nil
+	}
+
 	// Gate 1: end-of-run verifier (completeness re-check).
 	if !p.verified && p.agent != nil && p.agent.fallbackModel != nil {
 		// The three-call cap counts EVERY verification, including the re-check
@@ -568,16 +621,50 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		if p.verificationAttempts >= maxCompletionVerifications {
 			return p.verificationFailed("a reviewer-forced repair could not be re-verified within the cap", buildToolExecSummary(p.agent.logSession))
 		}
-		p.verificationAttempts++
 		records := buildToolExecSummary(p.agent.logSession)
 		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
+		// twoOutages records that BOTH attempts ran and both were outages: the
+		// fail-open is for a verifier that is down, not for a run whose own
+		// deadline expired mid-check (the retry never ran), nor for a malformed
+		// first verdict followed by a transport error.
+		twoOutages := false
 		if err != nil {
+			// A verifier call that produced no verdict is retried once before
+			// anything else is decided (#1602).
+			log.Printf("verifier failed, retrying once in %s: %v", verifierRetryDelay, err)
+			firstOutage := !errors.Is(err, errVerifierMalformedVerdict) && ctx.Err() == nil
+			if sleepCtx(ctx, verifierRetryDelay) {
+				missing, err = p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
+				twoOutages = firstOutage && err != nil && ctx.Err() == nil
+			}
+		}
+		switch {
+		case err != nil && twoOutages && p.verifierOutageMayFailOpen(err, records):
+			// Still no verdict, from an OUTAGE (transport, timeout), after this
+			// run's own audit passed and its critical work landed with no failed
+			// critical call: fail OPEN with a recorded warning instead of dead-lettering
+			// audited work on the verifier's own outage (the phone-a-friend
+			// reviewer already fails open on its errors).
+			log.Printf("verifier unavailable twice; the audit passed with no failed critical call, finishing unverified: %v", err)
+			p.verifierWarning = err.Error()
+			p.verified = true
+		case err != nil:
+			// A malformed or empty verdict (the verifier answered, but not with
+			// a verdict), a run whose audit never actually passed, a run with no
+			// critical call that landed, or a failed critical call on the
+			// record: the pre-#1602 semantics — the check is spent.
+			p.verificationAttempts++
 			log.Printf("verifier failed: %v", err)
 			return p.verificationFailed("Completion verification could not produce a valid verdict: "+err.Error(), records)
-		} else if len(missing) > 0 {
+		case len(missing) > 0:
+			p.verificationAttempts++
+			p.verifierWarning = ""
 			return p.verificationFailed(fmt.Sprintf("End-of-run verification found unresolved required actions: %v", missing), records)
+		default:
+			p.verificationAttempts++
+			p.verifierWarning = ""
+			p.verified = true
 		}
-		p.verified = true
 	}
 
 	// Gate 2: phone-a-friend super-LLM review (quality re-check, part of #175).
@@ -606,6 +693,130 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	}
 
 	return true, nil
+}
+
+// completionPredicateTool returns the first listed completion tool with a
+// successful execution in the run's tool records, or "" when the task declared
+// no predicate or none of its tools has succeeded (#1602).
+func (p *scheduledPolicy) completionPredicateTool() string {
+	if p.agent == nil || len(p.agent.completionAnySucceeded) == 0 {
+		return ""
+	}
+	for _, r := range buildToolExecSummary(p.agent.logSession) {
+		if r.Succeeded && p.agent.completionAnySucceeded[r.Name] {
+			return r.Name
+		}
+	}
+	return ""
+}
+
+// recordCompletionPredicate writes the [completion_predicate] breadcrumb and
+// the fleet.completion_predicate event for the tool that satisfied the
+// predicate.
+func (p *scheduledPolicy) recordCompletionPredicate(tool string) {
+	log.Printf("Completion predicate satisfied by %s; skipping the end-of-run verifier and phone-a-friend review", tool)
+	t := messageTypeCompletionPredicate
+	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
+		"[completion_predicate] satisfied by %s — the task's EXECUTION REQUIREMENTS completion clause lists it and it executed successfully, so the end-of-run verifier and the phone-a-friend review were skipped",
+		tool), nil, nil, &t, nil, nil, "")
+	if p.observer != nil {
+		p.observer.Observe(evtCompletionPredicate, map[string]any{"tool": tool, "clause": "any_succeeded"})
+	}
+}
+
+// persistVerifierWarning records the completion_unverified_verifier_error
+// warning for a run that finished after Gate 1 failed open (#1602). Called only
+// once the run has returned success, so a run that fails later for another
+// reason never carries it. The runner flags the task's terminal message from it.
+func (p *scheduledPolicy) persistVerifierWarning() {
+	if p == nil || p.verifierWarning == "" || p.agent == nil {
+		return
+	}
+	t := agentcore.MessageTypeCompletionUnverifiedVerifierError
+	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
+		"[%s] WARNING: the end-of-run verifier could not return a verdict (twice: %s). The run's audit passed and its critical work landed with no failed critical call, so it finished WITHOUT model verification — review the result before relying on it.",
+		agentcore.MessageTypeCompletionUnverifiedVerifierError, agentcore.RedactSecrets(p.verifierWarning)), nil, nil, &t, nil, nil, "")
+}
+
+// verifierOutageMayFailOpen reports whether a verifier that still has no
+// verdict after its retry may let the run finish unverified (#1602). All four
+// must hold:
+//   - it was an outage, not a malformed verdict (errVerifierMalformedVerdict);
+//   - this run's OWN audit passed (ScheduledPolicy.AuditConfirmed), not merely
+//     finish enforcement — a delegated policy skips the self-audit ritual, so
+//     a sub-agent that never audited keeps the old spend-a-check path (today
+//     children do not run this gate at all; this keeps the premise true if
+//     they ever do);
+//   - no critical tool's last execution failed (failedCriticalCalls);
+//   - at least one critical tool executed successfully. The audit alone proves
+//     nothing here: finish enforcement already demands it of every run, and
+//     confirm_audit(success=true, critical_actions=[]) is the model grading
+//     itself. A run that never attempted its audited work — a refresh that
+//     wrongly decided there was nothing to do — has no failed critical call
+//     either, so without a landed one it keeps the spend-a-check path.
+func (p *scheduledPolicy) verifierOutageMayFailOpen(err error, records []toolExecRecord) bool {
+	if errors.Is(err, errVerifierMalformedVerdict) || p.inner == nil || !p.inner.AuditConfirmed() {
+		return false
+	}
+	return len(failedCriticalCalls(records)) == 0 && succeededCriticalCall(records)
+}
+
+// succeededCriticalCall reports whether any critical tool executed
+// successfully in the run (same records and success classification as
+// failedCriticalCalls).
+func succeededCriticalCall(records []toolExecRecord) bool {
+	for _, r := range records {
+		if r.Succeeded && agentcore.IsCriticalTool(r.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+// failedCriticalCalls names the critical tools whose LAST execution in the run
+// failed (same records and success classification as the verifier). A failed
+// attempt a later success of the same tool superseded — a stale-version retry,
+// corrected arguments — does not count.
+//
+// TODO(#1606): key by alias class once critical_tool_aliases lands
+// (agentcore's criticalAliasClassOf / sameAliasedTool, via an exported helper):
+// a failed inline write superseded by its successful upload twin still counts
+// as failed here, which fails closed (the check is spent) but is wrong.
+func failedCriticalCalls(records []toolExecRecord) []string {
+	last := make(map[string]bool)
+	var order []string
+	for _, r := range records {
+		if !agentcore.IsCriticalTool(r.Name) {
+			continue
+		}
+		if _, seen := last[r.Name]; !seen {
+			order = append(order, r.Name)
+		}
+		last[r.Name] = r.Succeeded
+	}
+	var failed []string
+	for _, name := range order {
+		if !last[name] {
+			failed = append(failed, name)
+		}
+	}
+	return failed
+}
+
+// sleepCtx waits d or until ctx is done, reporting whether the full wait
+// elapsed.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (p *scheduledPolicy) verificationFailed(detail string, records []toolExecRecord) (bool, []string) {
@@ -845,6 +1056,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	// Captured so this run's spawn_subagent calls can stream their children's
 	// progress to whoever is watching (see Agent.spawnObserver).
 	a.spawnObserver = observer
+	policy.observer = observer
 
 	deps := agentcore.Deps{
 		Input:             scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
@@ -942,7 +1154,11 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if len(res.OutputJSON) > 0 {
 		a.logSession.SetOutputJSON(string(res.OutputJSON))
 	}
-	return scheduledTerminalError(ctx, res)
+	if err := scheduledTerminalError(ctx, res); err != nil {
+		return err
+	}
+	policy.persistVerifierWarning()
+	return nil
 }
 
 // messageTypeRoundCapTruncated marks the session-log records a round-cap
@@ -951,6 +1167,15 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 // "system_enforcement" / "error" — descriptive metadata for log readers and
 // replay, not an authorization or classification signal.
 const messageTypeRoundCapTruncated = "round_cap_truncated"
+
+// messageTypeCompletionPredicate marks the [completion_predicate] breadcrumb a
+// run leaves when its declared completion predicate replaced the model finish
+// gates (#1602); evtCompletionPredicate is the matching observer event, which
+// the scheduler SSE forwards as a completion_predicate frame.
+const (
+	messageTypeCompletionPredicate = "completion_predicate"
+	evtCompletionPredicate         = "fleet.completion_predicate"
+)
 
 func persistUnverifiedPartial(session *LogSession, res agentcore.Result) {
 	if session == nil {

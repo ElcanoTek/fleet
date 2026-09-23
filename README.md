@@ -338,7 +338,17 @@ curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | s
   --client-config https://github.com/ElcanoTek/example-config.git
 ```
 
-Then `fleet status`, `sudo fleet doctor`, and `fleet update` from there on.
+For automation, download first so a failed fetch is a failed step (a pipe into
+`bash` exits 0 on an empty download), and feed stdin from `/dev/null` so a TTY-allocating
+runner can't leave bootstrap waiting on a prompt:
+
+```sh
+curl -fsSLo /tmp/fleet-install.sh https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh \
+  && sudo bash /tmp/fleet-install.sh --postgres=local --enable-service --client-config <bundle> </dev/null
+```
+
+Then `fleet status`, `sudo fleet doctor`, and `sudo fleet update` from there on
+(the checkout and installed binaries are root-owned). Design note: [`docs/INSTALLER.md`](docs/INSTALLER.md).
 
 **→ Full deployment guide** — host sizing, the one-command web + Caddy/TLS stack,
 the env file, and every option: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**.
