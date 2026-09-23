@@ -2,6 +2,8 @@ package scheduledrun
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -38,8 +40,8 @@ func TestExecutionRequirementsLegacyAndInvalid(t *testing.T) {
 	if err != nil || req != nil || req.checkNetwork(false) != nil || req.checkTools(nil, nil) != nil {
 		t.Fatal("legacy behavior changed")
 	}
-	for _, body := range []string{"", "null", "[]", "{bad}", `{"mcp_servers":["invalid secret value"]}`, strings.Repeat("x", 16385), "{}\n" + executionRequirementsMarker + "\n{}"} {
-		if _, err := parseExecutionRequirements(executionRequirementsMarker + "\n" + body); err == nil {
+	for _, body := range []string{"", "null", "[]", "{bad}", `{"mcp_servers":["invalid secret value"]}`, strings.Repeat("x", 16385), "{}\n" + models.ExecutionRequirementsMarker + "\n{}"} {
+		if _, err := parseExecutionRequirements(models.ExecutionRequirementsMarker + "\n" + body); err == nil {
 			t.Fatalf("invalid requirements accepted: %.50q", body)
 		}
 	}
@@ -49,8 +51,8 @@ func TestRunWorkerChecksRequirementsBeforeModelSetup(t *testing.T) {
 	// No manager/config is installed: reaching model setup would panic. A bad
 	// handoff must fail before any provider work or source processing happens.
 	for _, prompt := range []string{
-		executionRequirementsMarker + "\n{\"network\":true}",
-		executionRequirementsMarker + "\nnull",
+		models.ExecutionRequirementsMarker + "\n{\"network\":true}",
+		models.ExecutionRequirementsMarker + "\nnull",
 	} {
 		task := &models.Task{Prompt: prompt}
 		session, _, _, err := (&Runner{}).runWorker(context.Background(), task, "", nil, "")
@@ -63,34 +65,33 @@ func TestRunWorkerChecksRequirementsBeforeModelSetup(t *testing.T) {
 	}
 }
 
-// The dispatch parser and the save-time validator (models, #1601) accept and
-// refuse exactly the same prompts: a declaration that reaches dispatch has
-// been validated the same way when the task was saved.
-func TestParseExecutionRequirementsAgreesWithSaveTimeValidation(t *testing.T) {
-	if executionRequirementsMarker != models.ExecutionRequirementsMarker {
-		t.Fatal("dispatch and save-time validation must key on the same marker")
-	}
+// Dispatch reads the declaration through the one parser (models, #1601): the
+// same prompts are refused with the same message as at save time, and an
+// accepted one carries exactly the parsed declaration, roster included. There
+// is no second grammar left to drift.
+func TestParseExecutionRequirementsIsTheModelsParser(t *testing.T) {
 	for _, body := range []string{
 		`{"mcp_servers":["reports"],"required_tools":["mcp_reports_download"],"network":true}`,
-		`{"mcp_servers":["fast_io + fastio_helpers"]}`, `{"required_tools":[" x"]}`, `{}`, `null`, `[]`, `{bad}`,
-		`{"network":"yes"}`, `{"mcp_servers":"x"}`, strings.Repeat("x", 16385), "{}\n" + executionRequirementsMarker + "\n{}",
-		// completion (#1602) and roster (#1603): what dispatch refuses, save refuses.
+		`{"mcp_servers":["fast_io + fastio_helpers"]}`, `{"required_tools":[" x"]}`, `{}`, `null`, `[]`, `{bad}`, "",
+		`{"network":"yes"}`, `{"mcp_servers":"x"}`, strings.Repeat("x", 16385), "{}\n" + models.ExecutionRequirementsMarker + "\n{}",
 		`{"completion":{"any_succeeded":["mcp_pages_record_refresh_check"]}}`, `{"completion":{"any_succeeded":["a + b"]}}`,
 		`{"completion":["x"]}`, `{"completion":{"any_succeeded":"x"}}`,
 		`{"roster":"required_tools_only"}`, `{"roster":null}`, `{"roster":""}`, `{"roster":"everything"}`, `{"roster":["required_tools_only"]}`,
 	} {
-		prompt := "TASK\n" + executionRequirementsMarker + "\n" + body
-		_, dispatchErr := parseExecutionRequirements(prompt)
-		if dispatchErr == nil {
-			// The roster key is parsed separately at dispatch; it must agree too.
-			_, dispatchErr = parseRequirementsRoster(prompt)
+		prompt := "TASK\n" + models.ExecutionRequirementsMarker + "\n" + body
+		got, dispatchErr := parseExecutionRequirements(prompt)
+		want, saveErr := models.ParseExecutionRequirements(prompt)
+		if fmt.Sprint(dispatchErr) != fmt.Sprint(saveErr) {
+			t.Fatalf("dispatch and save-time parsing disagree on %.60q: dispatch=%v save=%v", body, dispatchErr, saveErr)
 		}
-		saveErr := models.ValidateExecutionRequirements(prompt)
-		if (dispatchErr == nil) != (saveErr == nil) {
-			t.Fatalf("dispatch and save-time validation disagree on %.60q: dispatch=%v save=%v", body, dispatchErr, saveErr)
+		if want == nil {
+			if got != nil {
+				t.Fatalf("%.60q: dispatch parsed %+v where the parser found nothing", body, got)
+			}
+			continue
 		}
-		if dispatchErr != nil && dispatchErr.Error() != saveErr.Error() {
-			t.Fatalf("dispatch must report the save-time message, got %q vs %q", dispatchErr, saveErr)
+		if !reflect.DeepEqual(got.ExecutionRequirements, *want) {
+			t.Fatalf("%.60q: dispatch = %+v, want the parsed declaration %+v", body, got.ExecutionRequirements, *want)
 		}
 	}
 }

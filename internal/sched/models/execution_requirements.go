@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // ExecutionRequirementsMarker is the literal line a prompt producer puts
@@ -24,76 +26,152 @@ var executionRequirementName = regexp.MustCompile(ExecutionRequirementNamePatter
 // value (#1603); any other value, the empty string included, is refused.
 const ExecutionRequirementsRosterRequiredToolsOnly = "required_tools_only"
 
-// ValidateExecutionRequirements reports whether a task prompt's optional
-// EXECUTION REQUIREMENTS declaration is well-formed (#1601): at most one
-// marker, followed by one bounded JSON object whose mcp_servers,
+// Bounds of the declaration, stated in the rejection messages.
+const (
+	maxExecutionRequirementsLine    = 16384
+	maxExecutionRequirementsServers = 100
+	maxExecutionRequirementsTools   = 200
+	// maxQuotedRequirementIdentifier clamps the identifier a rejection quotes:
+	// the message reaches the task editor, the run log, the dead-letter
+	// notification and the parked schedule's reason, and an invalid name can
+	// be as long as the whole JSON line.
+	maxQuotedRequirementIdentifier = 120
+)
+
+// ExecutionRequirements is a task prompt's EXECUTION REQUIREMENTS declaration
+// (docs/CONDITIONAL-TASK-COMPLETION.md) as the one parser reads it. The
+// scheduled runner embeds it and adds only what the run's roster resolves, so
+// dispatch and every save path read one grammar into one type. Keys it does
+// not know are ignored for forward compatibility.
+type ExecutionRequirements struct {
+	Servers []string `json:"mcp_servers"`
+	Tools   []string `json:"required_tools"`
+	Network bool     `json:"network"`
+	// Completion is the producer's deterministic completion predicate (#1602);
+	// nil or an empty list declares none.
+	Completion *ExecutionCompletion `json:"completion"`
+	// Roster is the optional roster narrowing (#1603): nil when absent or
+	// null, otherwise ExecutionRequirementsRosterRequiredToolsOnly — the
+	// parser refuses every other value. Read it through RosterNarrowing.
+	Roster *string `json:"roster"`
+}
+
+// ExecutionCompletion is the completion clause (#1602): the run is complete
+// once ANY listed tool has a successful execution. Names take the forms
+// required_tools accepts. Unknown sibling keys are ignored.
+type ExecutionCompletion struct {
+	AnySucceeded []string `json:"any_succeeded"`
+}
+
+// RosterNarrowing is the declared roster narrowing: "" for none (no
+// declaration, or no roster key), else ExecutionRequirementsRosterRequiredToolsOnly.
+func (r *ExecutionRequirements) RosterNarrowing() string {
+	if r == nil || r.Roster == nil {
+		return ""
+	}
+	return *r.Roster
+}
+
+// ParseExecutionRequirements is the one parser of a task prompt's optional
+// EXECUTION REQUIREMENTS declaration (#1601): at most one marker line, followed
+// on the very next line by one bounded JSON object whose mcp_servers,
 // required_tools and completion.any_succeeded are identifier arrays within
-// their limits, and whose roster, when present, is "required_tools_only". A prompt with no
-// marker is valid — the declaration is optional.
+// their limits, and whose roster, when present, is "required_tools_only".
+// (nil, nil) means the prompt declares nothing — the declaration is optional.
 //
-// It is the one grammar for the declaration. The scheduled runner calls it
-// first at dispatch (scheduledrun.parseExecutionRequirements), and every
-// task write path calls it before saving — POST /tasks and everything that
-// funnels into validateTaskCreate (edit, clone, rerun, HTTP import, batch,
-// estimate) and the CLI imports — because a malformed declaration is a property
-// of the prompt text: it would fail every run identically, and at dispatch it
-// used to be found only by a $0 dead-letter. Lives in models so storage (the
-// ADR-0070 parking breaker) and the handlers can use it without importing the
-// runner.
+// The scheduled runner parses the declaration with it at dispatch, and every
+// task write path validates with it (ValidateExecutionRequirements) before
+// saving, because a malformed declaration is a property of the prompt text:
+// it would fail every run identically, and at dispatch it used to be found
+// only by a $0 dead-letter. It lives in models so storage (the ADR-0073
+// parking breaker and the replay guard) and the handlers use it without
+// importing the runner.
 //
 // It checks shape only. Whether the named servers and tools exist in a run's
 // roster, and what they mean, is decided at dispatch; Fleet interprets
-// nothing about them. Keys it does not know are ignored for forward
-// compatibility, exactly as at dispatch.
-func ValidateExecutionRequirements(prompt string) error {
+// nothing about them.
+func ParseExecutionRequirements(prompt string) (*ExecutionRequirements, error) {
 	lines := strings.Split(prompt, "\n")
-	found := false
+	var found *ExecutionRequirements
+	seen := false
 	for i, line := range lines {
 		if strings.TrimSpace(line) != ExecutionRequirementsMarker {
 			continue
 		}
-		if found || i+1 == len(lines) || len(lines[i+1]) > 16384 {
-			return fmt.Errorf("execution requirements: expected one bounded JSON object after the marker")
+		if seen {
+			return nil, fmt.Errorf("execution requirements: the %q marker appears more than once; keep exactly one", ExecutionRequirementsMarker)
 		}
-		var req *struct {
-			Servers []string `json:"mcp_servers"`
-			Tools   []string `json:"required_tools"`
-			Network bool     `json:"network"`
-			// completion (#1602) and roster (#1603) are checked here too, with
-			// the dispatch rules, so a clause dispatch would refuse is refused
-			// at save — and parks on its first dead-letter like any other
-			// malformed line — instead of saving fine and dead-lettering at $0.
-			Completion *struct {
-				AnySucceeded []string `json:"any_succeeded"`
-			} `json:"completion"`
-			Roster *string `json:"roster"`
+		seen = true
+		if i+1 == len(lines) {
+			return nil, fmt.Errorf("execution requirements: nothing follows the marker; put the JSON object on the line directly after it")
 		}
-		if err := json.Unmarshal([]byte(lines[i+1]), &req); err != nil || req == nil {
-			detail := "not a JSON object"
-			if err != nil {
-				detail = err.Error()
-			}
-			return fmt.Errorf("execution requirements: invalid JSON object after the marker (%s)", detail)
+		body := lines[i+1]
+		if strings.TrimSpace(body) == "" {
+			return nil, fmt.Errorf("execution requirements: the line after the marker is blank; put the JSON object on the line directly after it")
 		}
-		if len(req.Servers) > 100 || len(req.Tools) > 200 {
-			return fmt.Errorf("execution requirements: too many servers or tools (at most 100 mcp_servers and 200 required_tools)")
+		if len(body) > maxExecutionRequirementsLine {
+			return nil, fmt.Errorf("execution requirements: the JSON line after the marker is %d bytes; at most %d", len(body), maxExecutionRequirementsLine)
 		}
-		var completion []string
-		if req.Completion != nil {
-			completion = req.Completion.AnySucceeded
+		req, err := decodeExecutionRequirements(body)
+		if err != nil {
+			return nil, err
 		}
-		if len(completion) > 200 {
-			return fmt.Errorf("execution requirements: too many completion tools (at most 200)")
-		}
-		for _, name := range append(append(append([]string{}, req.Servers...), req.Tools...), completion...) {
-			if !executionRequirementName.MatchString(name) {
-				return fmt.Errorf("execution requirements: invalid server or tool identifier %q; allowed %s", name, ExecutionRequirementNamePattern)
-			}
-		}
-		if req.Roster != nil && *req.Roster != ExecutionRequirementsRosterRequiredToolsOnly {
-			return fmt.Errorf("execution requirements: unknown roster %q (supported: %q)", *req.Roster, ExecutionRequirementsRosterRequiredToolsOnly)
-		}
-		found = true
+		found = req
 	}
-	return nil
+	return found, nil
+}
+
+// ValidateExecutionRequirements reports whether a task prompt's optional
+// EXECUTION REQUIREMENTS declaration is well-formed: ParseExecutionRequirements
+// without the result. A prompt with no marker is valid.
+func ValidateExecutionRequirements(prompt string) error {
+	_, err := ParseExecutionRequirements(prompt)
+	return err
+}
+
+// decodeExecutionRequirements decodes and checks the one JSON line after the
+// marker.
+func decodeExecutionRequirements(body string) (*ExecutionRequirements, error) {
+	var req *ExecutionRequirements
+	if err := json.Unmarshal([]byte(body), &req); err != nil || req == nil {
+		detail := "not a JSON object"
+		if err != nil {
+			detail = err.Error()
+		}
+		return nil, fmt.Errorf("execution requirements: invalid JSON object after the marker (%s)", detail)
+	}
+	if len(req.Servers) > maxExecutionRequirementsServers || len(req.Tools) > maxExecutionRequirementsTools {
+		return nil, fmt.Errorf("execution requirements: too many servers or tools (at most %d mcp_servers and %d required_tools)",
+			maxExecutionRequirementsServers, maxExecutionRequirementsTools)
+	}
+	var completion []string
+	if req.Completion != nil {
+		completion = req.Completion.AnySucceeded
+	}
+	if len(completion) > maxExecutionRequirementsTools {
+		return nil, fmt.Errorf("execution requirements: too many completion tools (at most %d)", maxExecutionRequirementsTools)
+	}
+	for _, field := range []struct {
+		name  string
+		names []string
+	}{
+		{"mcp_servers", req.Servers},
+		{"required_tools", req.Tools},
+		{"completion.any_succeeded", completion},
+	} {
+		for i, name := range field.names {
+			if !executionRequirementName.MatchString(name) {
+				return nil, fmt.Errorf("execution requirements: invalid server or tool identifier %q in %s[%d]; allowed %s",
+					truncate.Clamp(name, maxQuotedRequirementIdentifier, "…"), field.name, i, ExecutionRequirementNamePattern)
+			}
+		}
+	}
+	if req.Roster != nil && *req.Roster != ExecutionRequirementsRosterRequiredToolsOnly {
+		// An explicitly empty value is refused like any other: an unset
+		// template variable must not silently turn off an opt-in that exists
+		// to constrain a run.
+		return nil, fmt.Errorf("execution requirements: unknown roster %q (supported: %q)",
+			truncate.Clamp(*req.Roster, maxQuotedRequirementIdentifier, "…"), ExecutionRequirementsRosterRequiredToolsOnly)
+	}
+	return req, nil
 }

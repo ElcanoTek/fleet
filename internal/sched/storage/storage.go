@@ -37,6 +37,13 @@ var ErrTaskNotEditable = errors.New("task is no longer editable")
 // task is not in the dead_lettered state (#253) — only quarantined tasks replay.
 var ErrTaskNotDeadLettered = errors.New("task is not dead-lettered")
 
+// ErrReplayMalformedRequirements is returned (wrapping the validator's message)
+// when a replay would run a prompt whose EXECUTION REQUIREMENTS line is
+// malformed (#1601): the run is certain to dead-letter again at dispatch, so
+// the replay is refused and nothing changes. Replay with a corrected prompt
+// (ReplayDeadLetteredTaskWithPrompt) instead.
+var ErrReplayMalformedRequirements = errors.New("refusing to replay: the prompt's EXECUTION REQUIREMENTS line is malformed, so the run would dead-letter again")
+
 // ErrStructuredOutputContract identifies a refused write that would create an
 // impossible task state (success without schema-valid output_json, or output
 // without a declared schema).
@@ -313,10 +320,16 @@ func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, creat
 	if tc.Prompt == "" {
 		return uuid.Nil, "", time.Time{}, fmt.Errorf("prompt is required")
 	}
-	// Every create path lands here — POST /tasks, an approved schedule_task,
-	// the scheduled-run create_task tool — so the malformed-requirements check
-	// (#1601) lives at this seam too, not only in the HTTP handler: a chat path
+	// The create paths that bypass the HTTP handler land here — an approved
+	// chat schedule_task and the scheduled-run create_task tool — so the
+	// malformed-requirements check (#1601) lives at this seam too: a chat path
 	// must not report "saved" for a declaration that fails every dispatch.
+	// POST /tasks does NOT come through here: it validates in the handler
+	// (validateTaskCreate) and writes with AddTaskWithContext. That function,
+	// AddTaskBatch and ReplaceTaskDefinition do not validate the declaration;
+	// every caller of theirs validates first (the handlers, the CLI imports and
+	// batch), except the webhook/email trigger run, whose prompt is rendered
+	// from the event and can still fail the check at dispatch.
 	if err := models.ValidateExecutionRequirements(tc.Prompt); err != nil {
 		return uuid.Nil, "", time.Time{}, err
 	}
@@ -1704,19 +1717,35 @@ func (s *Storage) MarkBudgetSoftAlert(ctx context.Context, id uuid.UUID, windowS
 	return s.db.MarkBudgetSoftAlert(ctx, id, windowStart)
 }
 
-// ReplayDeadLetteredTask re-enqueues a dead-lettered task (#253): it resets the
-// SAME row to a fresh pending slate — AttemptCount=0, the DLQ columns cleared,
-// status=pending, scheduled_for/started_at/completed_at/error cleared — so the
-// scheduler's normal claim path picks it up again. It is gated on the task being
-// in the dead_lettered state (ErrTaskNotDeadLettered otherwise), mirroring the
-// editability guards on the other operator mutations.
+// ReplayDeadLetteredTask re-enqueues a dead-lettered task (#253) with its own
+// prompt. See ReplayDeadLetteredTaskWithPrompt.
+func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
+	return s.ReplayDeadLetteredTaskWithPrompt(ctx, taskID, "")
+}
+
+// ReplayDeadLetteredTaskWithPrompt re-enqueues a dead-lettered task (#253): it
+// resets the SAME row to a fresh pending slate — AttemptCount=0, the DLQ
+// columns cleared, status=pending, scheduled_for/started_at/completed_at/error
+// cleared — so the scheduler's normal claim path picks it up again. It is gated
+// on the task being in the dead_lettered state (ErrTaskNotDeadLettered
+// otherwise), mirroring the editability guards on the other operator mutations.
+//
+// A non-empty prompt replaces the row's prompt in the same transaction. That is
+// the correct-and-resume path for a chain parked by a malformed EXECUTION
+// REQUIREMENTS line (ADR-0073): the same row keeps its schedule, its task
+// memory and its lineage, and the successor it spawns carries the corrected
+// prompt. Recreating or cloning the task loses the memory. The prompt that
+// would run — the replacement, or the row's own — must pass
+// models.ValidateExecutionRequirements: a malformed one is certain to
+// dead-letter again, so the replay is refused with
+// ErrReplayMalformedRequirements and nothing changes.
 //
 // Recurrence spawn credit (ADR-0070): re-armed to FALSE iff the chain is
 // parked (recurrence_parked_at set) or the spawn credit is still unclaimed.
 // Otherwise the DLQ path already spawned (or the row is settled history)
-// and replay must not fork a second chain. recurrence_parked_at is cleared
-// either way. Returns the updated task.
-func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
+// and replay must not fork a second chain. recurrence_parked_at and its
+// reason are cleared either way. Returns the updated task.
+func (s *Storage) ReplayDeadLetteredTaskWithPrompt(ctx context.Context, taskID uuid.UUID, prompt string) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
 		return nil, err
@@ -1729,6 +1758,12 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	}
 	if task.Status != models.TaskStatusDeadLettered {
 		return nil, ErrTaskNotDeadLettered
+	}
+	if replacement := strings.TrimSpace(prompt); replacement != "" {
+		task.Prompt = replacement
+	}
+	if verr := models.ValidateExecutionRequirements(task.Prompt); verr != nil {
+		return nil, fmt.Errorf("%w (%w)", ErrReplayMalformedRequirements, verr)
 	}
 
 	task.Status = models.TaskStatusPending
@@ -1758,18 +1793,22 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	//
 	// Recurrence spawn credit (ADR-0070): re-arm iff parked OR still unclaimed.
 	// The parked stamp is the chain-specific durable signal — no successor
-	// pointer or lineage walk. Always clear recurrence_parked_at on replay.
+	// pointer or lineage walk. Always clear recurrence_parked_at (and its
+	// reason, migration 072) on replay.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tasks SET error_analysis = NULL,
 		    recurrence_spawned = CASE
 		        WHEN recurrence_parked_at IS NOT NULL OR NOT recurrence_spawned THEN FALSE
 		        ELSE recurrence_spawned
 		    END,
-		    recurrence_parked_at = NULL
+		    recurrence_parked_at = NULL,
+		    recurrence_parked_reason = NULL
 		WHERE id = $1`, taskID); err != nil {
 		return nil, err
 	}
 	task.ErrorAnalysis = nil
+	task.RecurrenceParkedAt = nil
+	task.RecurrenceParkedReason = nil
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -1893,32 +1932,27 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// rather than parking on a transient read failure.
 	//
 	// A malformed EXECUTION REQUIREMENTS declaration parks on the FIRST
-	// dead-letter (#1601). It is a property of the prompt text, which every
-	// successor copies verbatim, so the next occurrence is certain to
+	// dead-letter (#1601, ADR-0073). It is a property of the prompt text, which
+	// every successor copies verbatim, so the next occurrence is certain to
 	// dead-letter the same way at dispatch: the two-strike rule exists for
-	// causes that might not recur, and this one always does. Replay cannot fix
-	// it either — it reruns the same prompt — and editing the terminal row saves
-	// a one-off rerun without the recurrence, so the log says to recreate (or
-	// clone) the task with the corrected prompt and its schedule.
+	// causes that might not recur, and this one always does. A plain replay is
+	// refused for the same reason (ReplayDeadLetteredTaskWithPrompt); a replay
+	// with a corrected prompt resumes the chain with its task memory.
+	//
+	// The reason is persisted with the stamp (recurrence_parked_reason,
+	// migration 072) and copied onto the caller's task, so the dead-letter
+	// notification and the Operations Center can say the schedule stopped and
+	// why, instead of only the log.
 	if current.Status == models.TaskStatusDeadLettered {
-		parkReason := ""
-		if rerr := models.ValidateExecutionRequirements(current.Prompt); rerr != nil {
-			parkReason = fmt.Sprintf("on its first dead-letter: %v — every occurrence would dead-letter the same way; recreate the task (or clone it, which keeps the schedule) with a corrected prompt; replaying the same prompt cannot help, and editing this dead-lettered row starts a one-off run without the schedule", rerr)
-		} else {
-			parked, perr := predecessorIsDeadLettered(ctx, tx, current)
-			if perr != nil {
-				log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
-				return false
-			}
-			if parked {
-				parkReason = "after 2 consecutive dead-lettered occurrences; replay to continue"
-			}
+		parkReason, ok := deadLetterParkReason(ctx, tx, current)
+		if !ok {
+			return false
 		}
 		if parkReason != "" {
-			log.Printf("Recurrence for task %s parked %s", current.ID, parkReason)
+			log.Printf("Recurrence for task %s parked: %s", current.ID, parkReason)
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE tasks SET recurrence_parked_at = now() WHERE id = $1 AND status = $2`,
-				current.ID, string(models.TaskStatusDeadLettered)); err != nil {
+				`UPDATE tasks SET recurrence_parked_at = now(), recurrence_parked_reason = $3 WHERE id = $1 AND status = $2`,
+				current.ID, string(models.TaskStatusDeadLettered), parkReason); err != nil {
 				log.Printf("Error parking recurrence for task %s: %v (the reconciliation sweep will retry)", current.ID, err)
 				return false
 			}
@@ -1926,6 +1960,9 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 				log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
 				return false
 			}
+			parkedAt := time.Now().UTC()
+			task.RecurrenceParkedAt = &parkedAt
+			task.RecurrenceParkedReason = &parkReason
 			return false
 		}
 	}
@@ -1985,6 +2022,27 @@ func (s *Storage) settleDeadLetteredRecurrenceSpawn(ctx context.Context, taskID 
 		taskID, string(models.TaskStatusDeadLettered)); err != nil {
 		log.Printf("Failed to settle recurrence spawn for task %s: %v", taskID, err)
 	}
+}
+
+// deadLetterParkReason is the dead-letter breaker's verdict for a
+// dead-lettered occurrence (ADR-0070, ADR-0073): the owner-facing reason its
+// chain parks for, or "" to spawn the successor. ok=false means the breaker
+// lookup failed; the caller rolls back so the sweep retries rather than
+// parking on a transient read failure.
+func deadLetterParkReason(ctx context.Context, tx *sql.Tx, current *models.Task) (reason string, ok bool) {
+	if rerr := models.ValidateExecutionRequirements(current.Prompt); rerr != nil {
+		return fmt.Sprintf("%v. Every occurrence would dead-letter the same way, so the schedule stopped on the first one. "+
+			"Replay this occurrence with a corrected prompt (fleet sched dlq replay --prompt-file) to resume it with its task memory.", rerr), true
+	}
+	parked, perr := predecessorIsDeadLettered(ctx, tx, current)
+	if perr != nil {
+		log.Printf("Error checking dead-letter recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, perr)
+		return "", false
+	}
+	if parked {
+		return "2 consecutive occurrences were dead-lettered. Replay this occurrence to resume the schedule.", true
+	}
+	return "", true
 }
 
 // predecessorIsDeadLettered reports whether this occurrence's immediate

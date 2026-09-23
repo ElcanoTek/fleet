@@ -2,9 +2,7 @@ package scheduledrun
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -16,17 +14,16 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-const executionRequirementsMarker = "EXECUTION REQUIREMENTS (JSON):"
-
-// Optional, copyable handoff from a prompt producer. Requirements never enable
-// network, load credentials, or widen MCP scope. The one clause that relaxes
-// anything is completion (#1602): a successful listed tool finishes the run
-// without the end-of-run verifier and phone-a-friend review (ADR-0072).
+// executionRequirements is a run's view of its task's optional, copyable
+// handoff from a prompt producer: the declaration exactly as
+// models.ParseExecutionRequirements reads it — the one grammar every task save
+// path also validates with (#1601) — plus what dispatch resolves against the
+// run's roster. Requirements never enable network, load credentials, or widen
+// MCP scope. The one clause that relaxes anything is completion (#1602): a
+// successful listed tool finishes the run without the end-of-run verifier and
+// phone-a-friend review (ADR-0072).
 type executionRequirements struct {
-	Servers    []string               `json:"mcp_servers"`
-	Tools      []string               `json:"required_tools"`
-	Network    bool                   `json:"network"`
-	Completion *completionRequirement `json:"completion"`
+	models.ExecutionRequirements
 
 	// completionRoster is Completion.AnySucceeded resolved against the run's
 	// actual tool roster (full mcp_<server>_<tool> and native names), filled by
@@ -37,14 +34,10 @@ type executionRequirements struct {
 // completionRequirement is the producer's deterministic completion predicate
 // (#1602): the run is complete once ANY listed tool has a successful execution,
 // judged by the same success classification the end-of-run verifier's tool
-// summary uses. Names take the forms required_tools accepts. Like the rest of
-// the declaration it is opaque to Fleet — a list of tool names, never a meaning
-// assigned to them — and an empty or absent list declares no predicate, so the
-// verifier runs as before. Unknown sibling keys are ignored for forward
-// compatibility, like unknown top-level keys.
-type completionRequirement struct {
-	AnySucceeded []string `json:"any_succeeded"`
-}
+// summary uses. Like the rest of the declaration it is opaque to Fleet — a
+// list of tool names, never a meaning assigned to them — and an empty or
+// absent list declares no predicate, so the verifier runs as before.
+type completionRequirement = models.ExecutionCompletion
 
 // completionTools returns the resolved completion predicate names, nil when
 // the run declared none.
@@ -55,43 +48,15 @@ func (r *executionRequirements) completionTools() []string {
 	return r.completionRoster
 }
 
-var requirementName = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,200}$`)
-
+// parseExecutionRequirements is the dispatch adapter over the one parser: a
+// declaration refused here would have been refused when the task was saved,
+// with the same message. nil when the prompt declares nothing.
 func parseExecutionRequirements(prompt string) (*executionRequirements, error) {
-	// The declaration's grammar lives in models (#1601), shared with every
-	// task write path, so a declaration refused here would have been refused
-	// when the task was saved — and its message names the offending identifier.
-	if err := models.ValidateExecutionRequirements(prompt); err != nil {
+	decl, err := models.ParseExecutionRequirements(prompt)
+	if err != nil || decl == nil {
 		return nil, err
 	}
-	var found *executionRequirements
-	lines := strings.Split(prompt, "\n")
-	for i, line := range lines {
-		if strings.TrimSpace(line) != executionRequirementsMarker {
-			continue
-		}
-		if found != nil || i+1 == len(lines) || len(lines[i+1]) > 16384 {
-			return nil, fmt.Errorf("execution requirements: expected one bounded JSON object after the marker")
-		}
-		var req *executionRequirements
-		if err := json.Unmarshal([]byte(lines[i+1]), &req); err != nil || req == nil {
-			return nil, fmt.Errorf("execution requirements: invalid JSON object")
-		}
-		var completion []string
-		if req.Completion != nil {
-			completion = req.Completion.AnySucceeded
-		}
-		if len(req.Servers) > 100 || len(req.Tools) > 200 || len(completion) > 200 {
-			return nil, fmt.Errorf("execution requirements: too many servers or tools")
-		}
-		for _, name := range append(append(append([]string{}, req.Servers...), req.Tools...), completion...) {
-			if !requirementName.MatchString(name) {
-				return nil, fmt.Errorf("execution requirements: invalid server or tool identifier")
-			}
-		}
-		found = req
-	}
-	return found, nil
+	return &executionRequirements{ExecutionRequirements: *decl}, nil
 }
 
 func (r *executionRequirements) checkNetwork(networked bool) error {
@@ -214,41 +179,17 @@ func (r *Runner) buildTaskRemoteOverlayChecked(ctx context.Context, task *models
 
 // rosterRequiredToolsOnly is the one roster narrowing a requirements block may
 // request (#1603): the run registers only the MCP tools its required_tools
-// names. An unknown value fails dispatch like any malformed declaration.
-const rosterRequiredToolsOnly = "required_tools_only"
+// names. The parser refuses any other value, so an unknown one fails dispatch
+// like any malformed declaration.
+const rosterRequiredToolsOnly = models.ExecutionRequirementsRosterRequiredToolsOnly
 
-// parseRequirementsRoster reads the optional "roster" key of the task's
-// EXECUTION REQUIREMENTS object (#1603). It reads the same line
-// parseExecutionRequirements validated (one bounded JSON object after the one
-// marker), so it runs only after that preflight has passed; the key lives
-// beside executionRequirements rather than in it only so the two can evolve in
-// parallel changes. "" = no narrowing (the key absent or null). Any other value
-// than rosterRequiredToolsOnly — including a non-string — is a dispatch error,
-// before any model or MCP work.
-func parseRequirementsRoster(prompt string) (string, error) {
-	lines := strings.Split(prompt, "\n")
-	for i, line := range lines {
-		if strings.TrimSpace(line) != executionRequirementsMarker || i+1 == len(lines) {
-			continue
-		}
-		var req struct {
-			Roster *string `json:"roster"`
-		}
-		if err := json.Unmarshal([]byte(lines[i+1]), &req); err != nil {
-			return "", fmt.Errorf("execution requirements: roster must be a string")
-		}
-		if req.Roster == nil {
-			return "", nil
-		}
-		// An explicitly empty value is refused like any other unknown value:
-		// an unset template variable must not silently turn off an opt-in
-		// that exists to constrain a run.
-		if *req.Roster != rosterRequiredToolsOnly {
-			return "", fmt.Errorf("execution requirements: unknown roster %q (supported: %q)", *req.Roster, rosterRequiredToolsOnly)
-		}
-		return rosterRequiredToolsOnly, nil
+// rosterNarrowing is the declared narrowing, "" for none (no declaration, or
+// no roster key).
+func (r *executionRequirements) rosterNarrowing() string {
+	if r == nil {
+		return ""
 	}
-	return "", nil
+	return r.RosterNarrowing()
 }
 
 // narrowedAllowlist is the Gate-2 allowlist of a required_tools_only run
@@ -319,19 +260,14 @@ func listHas(list []string, name string) bool {
 }
 
 // checkTaskRequirementsAndRoster is the whole dispatch preflight of a task's
-// EXECUTION REQUIREMENTS: the declaration (checkTaskRequirements) and its
-// roster narrowing (parseRequirementsRoster), both before any MCP or model
-// work.
+// EXECUTION REQUIREMENTS: the declaration (checkTaskRequirements) and the
+// roster narrowing it declares, both before any MCP or model work.
 func (r *Runner) checkTaskRequirementsAndRoster(task *models.Task) (*executionRequirements, string, error) {
 	req, err := r.checkTaskRequirements(task)
 	if err != nil {
 		return nil, "", err
 	}
-	roster, err := parseRequirementsRoster(task.Prompt)
-	if err != nil {
-		return nil, "", err
-	}
-	return req, roster, nil
+	return req, req.rosterNarrowing(), nil
 }
 
 // taskRosterAllowlist is the run's Gate-2 allowlist: the manifest's, or — for a

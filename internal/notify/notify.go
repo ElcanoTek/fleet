@@ -141,9 +141,12 @@ type Event struct {
 	// LogURL is the absolute link to the run's log in the orchestrator UI, or ""
 	// when no public base URL is configured.
 	LogURL string
-	// Message is an optional free-text line for a StatusProgress event (#510):
-	// the notify/ask text. Empty for terminal events. Rendered into the email
-	// body; the default webhook template omits it (additive, no template churn).
+	// Message is an optional free-text line: for a StatusProgress event (#510)
+	// the notify/ask text, and for a failure that parked a recurring schedule
+	// "Schedule stopped: <reason>" (ADR-0070, ADR-0073). Empty for every other
+	// terminal event. Rendered into the email body; the default webhook
+	// template omits it (additive, no template churn) and a custom template may
+	// use {{.Message}}. Web Push never carries it (lock-screen privacy).
 	Message string
 	// Audience is the task owner's email (#292): the per-USER routing key the
 	// browser Web Push backend fans out to, resolved by the runner from the

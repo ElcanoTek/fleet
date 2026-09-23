@@ -38,6 +38,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/croncount"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/webpush"
@@ -258,6 +259,12 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 }
 
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
+	// A task prompt the create/edit seam will refuse is refused BEFORE a card
+	// exists (#1601): the model learns the error now, and nobody is asked to
+	// approve a call that is certain to fail after they click Approve.
+	if err := prevalidateStagedTaskPrompt(toolName, rawInput); err != nil {
+		return "", err
+	}
 	// Auto-approve-in-test (#225): a CI/test escape hatch (FLEET_AUTO_APPROVE_IN_TEST,
 	// off by default) for pipelines that have no human present and run against a
 	// mocked backend. Return the pre-approved sentinel so the tool runs normally,
@@ -1303,6 +1310,29 @@ type approvalRequest struct {
 	// approving, instead of blindly accepting or starting over. nil field =
 	// keep the staged value. Ignored for every other tool kind.
 	Edits *scheduleTaskEdits `json:"edits,omitempty"`
+}
+
+// prevalidateStagedTaskPrompt checks the prompt of a schedule_task or
+// manage_tasks call with the same EXECUTION REQUIREMENTS grammar every task
+// write path uses (models.ValidateExecutionRequirements, #1601). The approved
+// call reaches storage.EnqueueTaskAs / UpdateEditableTask, which refuse a
+// malformed declaration; this moves that refusal ahead of the card. Any other
+// tool, args that do not parse (the card and the executor report those), and
+// a manage_tasks call that changes no prompt pass.
+func prevalidateStagedTaskPrompt(toolName, rawInput string) error {
+	if toolName != tools.ScheduleTaskToolName && toolName != tools.ManageTasksToolName {
+		return nil
+	}
+	var args struct {
+		Prompt string `json:"prompt"`
+	}
+	// Best effort: args that do not parse leave the prompt empty, which
+	// validates, and the card and the executor report them.
+	_ = json.Unmarshal([]byte(rawInput), &args)
+	if err := models.ValidateExecutionRequirements(args.Prompt); err != nil {
+		return fmt.Errorf("%w. Nothing was staged for approval: fix the prompt's EXECUTION REQUIREMENTS line and call %s again", err, toolName)
+	}
+	return nil
 }
 
 // Handler-only tools have no runnable tool body. A session sentinel would be

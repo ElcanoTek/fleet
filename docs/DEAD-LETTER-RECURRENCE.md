@@ -28,16 +28,33 @@ does.
 
 - **Detection.** `scheduleNextRecurrence` runs `models.ValidateExecutionRequirements`
   on the dead-lettered occurrence's prompt before the predecessor check, and
-  parks at once on a failure. The log line names the offending identifier and
-  says to correct the prompt.
-- **Recovery.** Replay reruns the same prompt, so it cannot continue such a
-  chain. Editing the dead-lettered task in the web editor does not either: for
-  a finished task it saves through `POST /tasks/{id}/rerun`, a one-off copy
-  that drops the recurrence. The schedule comes back only by creating the task
-  again with the corrected prompt and its recurrence (or `POST
-  /tasks/{id}/clone`, which keeps it, then correcting the clone). While a chain
-  is still live, editing its pending/scheduled head in place fixes it before
-  it fires.
+  parks at once on a failure.
+- **Visibility.** The park reason is stored with the stamp
+  (`recurrence_parked_reason`, migration 072). The two-strike park records one
+  too.
+  - The dead-letter notification's message reads "Schedule stopped: <reason>".
+    For a malformed line that is the validator's message, naming the field,
+    index and identifier. Email shows it. The default webhook template omits
+    the message (a custom template can use `.Message`). Web Push never carries
+    it.
+  - The Operations Center shows the occurrence's schedule as "⏹ Schedule
+    stopped", with the reason in the task summary and on hover.
+- **Recovery: replay with a corrected prompt.** A plain replay is refused,
+  because it would rerun the malformed prompt: `fleet sched dlq replay` exits
+  6 and names the validation error.
+  - `fleet sched dlq replay --prompt-file <file> <task_id>` replaces the prompt
+    (validated) and replays the same row. The schedule, task memory and
+    lineage continue, and the successor carries the corrected prompt.
+  - The alternatives start a new chain and **lose the chain's task memory**,
+    which only the recurrence spawn carries forward:
+    - create the task again with the corrected prompt and its recurrence;
+    - clone it with the prompt overridden: `POST /tasks/{id}/clone` with
+      `{"overrides":{"prompt":"…"}}`. A clone without the override copies the
+      malformed prompt and is refused, and the web UI has no clone action.
+  - Editing the dead-lettered task in the web editor does not restore the
+    schedule: for a finished task it saves through `POST /tasks/{id}/rerun`,
+    a one-off copy that drops the recurrence. While a chain is still live,
+    editing its pending/scheduled head in place fixes it before it fires.
 - **Prevention.** Since the same change, a malformed line is refused when a
   task is saved. Only tasks saved earlier can still reach this. In
   production, two recurring refreshes dead-lettered on

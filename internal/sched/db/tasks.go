@@ -172,7 +172,7 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 	// this only ever fires for restored history).
 	if !existed && task.PreviousOccurrenceID != nil {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE tasks SET recurrence_parked_at = NULL WHERE id = $1 AND recurrence_parked_at IS NOT NULL`,
+			`UPDATE tasks SET recurrence_parked_at = NULL, recurrence_parked_reason = NULL WHERE id = $1 AND recurrence_parked_at IS NOT NULL`,
 			*task.PreviousOccurrenceID); err != nil {
 			return err
 		}
@@ -210,7 +210,7 @@ func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task
 		// park stamp survive every intermediate status; the row being restored
 		// to a live status is the signal, not what it was restored from.
 		if existed && !liveTaskStatus(existingStatus) && liveTaskStatus(task.Status) {
-			_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = FALSE, recurrence_parked_at = NULL WHERE id = $1`, task.ID)
+			_, err = tx.ExecContext(ctx, `UPDATE tasks SET recurrence_spawned = FALSE, recurrence_parked_at = NULL, recurrence_parked_reason = NULL WHERE id = $1`, task.ID)
 			return err
 		}
 		return nil

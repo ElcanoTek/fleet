@@ -33,7 +33,27 @@ export function taskRunLabel(task: Task, maxLength = 60): string {
   return firstLine ? truncate(firstLine, maxLength) : task.id.slice(0, 8);
 }
 
+// scheduleStoppedReason is why a recurring task's schedule stopped at this
+// occurrence (the dead-letter breaker parked it), or null when it did not.
+// An older parked row may carry no recorded reason.
+export function scheduleStoppedReason(task: Task): string | null {
+  if (!task.recurrence || !task.recurrence_parked_at) return null;
+  return (
+    (task.recurrence_parked_reason ?? "").trim() ||
+    "The schedule was stopped after dead-lettered runs. Replay this run to resume it."
+  );
+}
+
+// scheduleTitle is the hover text of a schedule cell: the stop reason for a
+// stopped schedule, else the exact cron expression.
+export function scheduleTitle(task: Task): string | undefined {
+  const stopped = scheduleStoppedReason(task);
+  if (stopped) return `Schedule stopped: ${stopped}`;
+  return task.recurrence || undefined;
+}
+
 export function scheduleLabel(task: Task): string {
+  if (scheduleStoppedReason(task)) return "⏹ Schedule stopped";
   if (task.recurrence) {
     // Compact plain English, not raw cron ("9:00 AM · Sat, Sun", not
     // "0 9 * * 6,0"), falling back to the verbose description and then the

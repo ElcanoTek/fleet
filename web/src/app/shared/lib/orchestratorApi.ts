@@ -75,6 +75,13 @@ export type Task = {
   // remaining-run count. Absent = repeat forever.
   recurrence_until?: string | null;
   recurrence_remaining?: number | null;
+  // Set on the dead-lettered occurrence whose recurring schedule the
+  // dead-letter breaker stopped (ADR-0070/0073), with the reason in words the
+  // owner can act on: a malformed EXECUTION REQUIREMENTS line's message, or
+  // two consecutive dead-lettered occurrences. Absent = the schedule was not
+  // stopped here; the reason can be absent on an older parked row.
+  recurrence_parked_at?: string | null;
+  recurrence_parked_reason?: string | null;
   files?: string[];
   run_if?: RunIf | null;
   skip_count?: number;

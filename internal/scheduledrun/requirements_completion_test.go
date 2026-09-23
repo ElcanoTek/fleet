@@ -8,6 +8,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
 // The completion clause (#1602): parsed leniently like the rest of the
@@ -15,7 +16,7 @@ import (
 // at dispatch.
 
 func TestExecutionRequirementsCompletionClause(t *testing.T) {
-	req, err := parseExecutionRequirements(executionRequirementsMarker + "\n" +
+	req, err := parseExecutionRequirements(models.ExecutionRequirementsMarker + "\n" +
 		`{"mcp_servers":["pages"],"required_tools":["mcp_pages_get_page_data","mcp_pages_record_refresh_check","mcp_pages_update_page_data_upload"],` +
 		`"completion":{"any_succeeded":["mcp_pages_update_page_data","update_page_data_upload","mcp_pages_record_refresh_check","finish_note"],"future_key":true}}`)
 	if err != nil || req == nil || req.Completion == nil || len(req.Completion.AnySucceeded) != 4 {
@@ -54,7 +55,7 @@ func TestExecutionRequirementsCompletionAbsentOrEmptyDeclaresNothing(t *testing.
 		`{"completion":{"any_succeeded":[]}}`,
 		`{"completion":{"all_succeeded":["x"]}}`,
 	} {
-		req, err := parseExecutionRequirements(executionRequirementsMarker + "\n" + body)
+		req, err := parseExecutionRequirements(models.ExecutionRequirementsMarker + "\n" + body)
 		if err != nil || req == nil {
 			t.Fatalf("%s: %v", body, err)
 		}
@@ -78,7 +79,7 @@ func TestExecutionRequirementsCompletionMalformedFailsClosed(t *testing.T) {
 		`{"completion":["mcp_pages_record_refresh_check"]}`,
 		`{"completion":{"any_succeeded":[` + strings.Repeat(`"t",`, 200) + `"t"]}}`,
 	} {
-		if _, err := parseExecutionRequirements(executionRequirementsMarker + "\n" + body); err == nil {
+		if _, err := parseExecutionRequirements(models.ExecutionRequirementsMarker + "\n" + body); err == nil {
 			t.Fatalf("malformed completion clause accepted: %.80s", body)
 		}
 	}

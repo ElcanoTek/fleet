@@ -1172,7 +1172,13 @@ Review and replay are operator actions on the box, via the admin CLI:
 ```sh
 fleet sched dlq list [--tag <tag>] [--limit N] [--offset N] [--json]
 fleet sched dlq replay <task_id>   # reset to pending; the scheduler re-runs it
+fleet sched dlq replay --prompt-file <file> <task_id>   # the same, with a corrected prompt
 ```
+
+A replay whose prompt has a malformed EXECUTION REQUIREMENTS line is refused
+(exit 6), because it would dead-letter again. `--prompt-file` replaces the prompt
+(validated) in the same reset, which is how a chain parked by such a line resumes
+with its task memory (ADR-0073).
 
 `replay` resets the same task to a fresh pending slate (`attempt_count = 0`, the
 dead-letter columns cleared) and the normal claim path re-runs it. If the task
