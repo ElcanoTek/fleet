@@ -235,3 +235,23 @@ func TestNext_HistoricalOffsets(t *testing.T) {
 		}
 	}
 }
+
+// The search horizon is robfig's calendar-year rule, not a fixed duration:
+// Feb 29 from 2099 (no leap day until 2104) is found by robfig, so it must be
+// found here too — and one year further is not.
+func TestNext_HorizonMatchesRobfig(t *testing.T) {
+	for _, c := range []struct {
+		expr string
+		from time.Time
+	}{
+		{"0 0 29 2 *", time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{"0 0 29 2 *", time.Date(2098, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{"0 0 29 2 *", time.Date(2026, 9, 23, 12, 0, 0, 0, mustLoad(t, "America/New_York"))},
+		{"0 0 30 2 *", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+	} {
+		s := mustParse(t, c.expr)
+		if got, want := Next(s, c.from), s.Next(c.from); !got.Equal(want) {
+			t.Errorf("%q from %s: Next = %s, robfig = %s", c.expr, c.from, got, want)
+		}
+	}
+}

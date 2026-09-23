@@ -28,9 +28,10 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// horizon is how far ahead Next looks before reporting no occurrence — the
-// same five years robfig's own Next searches.
-const horizon = 5 * 366 * 24 * time.Hour
+// yearHorizon is how far ahead Next looks before reporting no occurrence:
+// robfig's own rule, a match in a wall-clock year more than five past the
+// starting one does not count (so "0 0 29 2 *" from 2099 still finds 2104).
+const yearHorizon = 5
 
 // maxPeriods bounds the walk: real zones change offset a few times a year,
 // so this is never reached before the horizon; it only stops a pathological
@@ -52,10 +53,10 @@ func Next(s cron.Schedule, t time.Time) time.Time {
 	utc := *spec
 	utc.Location = time.UTC
 
-	deadline := t.Add(horizon)
 	at := t.In(loc)
+	lastYear := at.Year() + yearHorizon
 	strictlyAfter := true // the first period excludes t itself; later ones start inclusive
-	for i := 0; i < maxPeriods && !at.After(deadline); i++ {
+	for i := 0; i < maxPeriods && at.Year() <= lastYear; i++ {
 		_, offsetSecs := at.Zone()
 		offset := time.Duration(offsetSecs) * time.Second
 		_, end := at.ZoneBounds() // zero end: this offset holds forever
@@ -67,14 +68,11 @@ func Next(s cron.Schedule, t time.Time) time.Time {
 			wall = wall.Add(-time.Nanosecond)
 		}
 		match := utc.Next(wall)
-		if match.IsZero() {
-			return time.Time{}
+		if match.IsZero() || match.Year() > lastYear {
+			return time.Time{} // robfig's horizon, counted from where Next started
 		}
 		instant := match.Add(-offset)
 		if end.IsZero() || instant.Before(end) {
-			if instant.After(deadline) {
-				return time.Time{}
-			}
 			return instant.In(t.Location())
 		}
 		at = end.In(loc)
