@@ -18,7 +18,8 @@ type fakeOpsAdmins struct {
 	admins           []string
 	// roles: explicit per-email sched-plane roles set via SetRole; admins
 	// listed above are reported as role "admin" alongside.
-	roles map[string]string
+	roles     map[string]string
+	onSetRole func(email, role string)
 }
 
 func (f *fakeOpsAdmins) Ensure(_ context.Context, email string) error {
@@ -44,6 +45,9 @@ func (f *fakeOpsAdmins) List(context.Context) ([]string, error) {
 }
 
 func (f *fakeOpsAdmins) SetRole(_ context.Context, email, role string) error {
+	if f.onSetRole != nil {
+		f.onSetRole(email, role)
+	}
 	if f.roles == nil {
 		f.roles = map[string]string{}
 	}
@@ -57,6 +61,13 @@ func (f *fakeOpsAdmins) SetRole(_ context.Context, email, role string) error {
 		f.admins = append(f.admins, email)
 	}
 	return nil
+}
+
+func (f *fakeOpsAdmins) SetEnabled(_ context.Context, email string, enabled bool) error {
+	if enabled {
+		return nil
+	}
+	return f.Remove(context.Background(), email)
 }
 
 func (f *fakeOpsAdmins) Roles(context.Context) (map[string]string, error) {

@@ -296,8 +296,8 @@ func (s *Store) Close() error {
 // dropped its conversations FK (usage history outlives conversation
 // deletion), so it stopped cascading — which quietly made the usage-analytics
 // tests non-rerunnable (rows accumulated across suite runs). projects,
-// user_connector_prefs, and user_skills have no FK into any truncated table
-// and are named for the same reason.
+// user_connector_prefs, user_skills, and external_access_state have no FK into
+// any truncated table and are named for the same reason.
 // The lock discipline below exists because a bare TRUNCATE here deadlocked in
 // CI (SQLSTATE 40P01), failing PRs whose diffs touched nothing nearby. TRUNCATE
 // takes ACCESS EXCLUSIVE on every listed table plus everything CASCADE reaches,
@@ -415,7 +415,7 @@ func (s *Store) truncateAllForTestOnce(ctx context.Context, queue bool) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, memory_entities, users, external_auth_epochs, external_logout_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, turn_metrics, projects, user_connector_prefs, user_skills, shared_files RESTART IDENTITY CASCADE`); err != nil {
+		`TRUNCATE TABLE conversations, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, turn_metrics, projects, user_connector_prefs, user_skills, shared_files RESTART IDENTITY CASCADE`); err != nil {
 		return err
 	}
 	return tx.Commit()

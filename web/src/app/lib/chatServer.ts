@@ -117,6 +117,35 @@ export async function revokeExternalSessions(
   }
 }
 
+export async function provisionExternalAccess(event: {
+  email: string;
+  eventId: string;
+  issuer: string;
+  subject: string;
+  action: "grant" | "revoke";
+  version: number;
+  issuedAt: number;
+  settings?: Record<string, string>;
+}): Promise<boolean> {
+  try {
+    const upstream = await chatServerFetch({ email: event.email }, "/auth/external-access", {
+      method: "POST",
+      body: JSON.stringify({
+        event_id: event.eventId,
+        issuer: event.issuer,
+        subject: event.subject,
+        action: event.action,
+        version: event.version,
+        issued_at: event.issuedAt,
+        ...(event.settings === undefined ? {} : { settings: event.settings }),
+      }),
+    });
+    return upstream.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Fetch from chat-server; throws on network errors, but passes through
  * non-2xx responses so the caller can forward status codes to the browser.

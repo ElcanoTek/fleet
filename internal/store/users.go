@@ -172,7 +172,7 @@ func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
 	var u User
 	var teamID sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT `+userColumns+` FROM users WHERE email = $1`, email).
+		`SELECT `+userColumns+` FROM users WHERE email = $1 AND enabled = TRUE`, email).
 		Scan(&u.Email, &u.Role, &teamID, &u.SessionEpoch, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -576,7 +576,7 @@ func SetPasswordHashCostForTests(cost int) {
 func (s *Store) VerifyUser(ctx context.Context, email, plainPassword string) error {
 	email = normalizeEmail(email)
 	row := s.db.QueryRowContext(ctx,
-		`SELECT password_hash FROM users WHERE email = $1`, email)
+		`SELECT password_hash FROM users WHERE email = $1 AND enabled = TRUE`, email)
 	var hash string
 	if err := row.Scan(&hash); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -605,7 +605,7 @@ func (s *Store) IsUser(ctx context.Context, email string) (bool, error) {
 	}
 	var one int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT 1 FROM users WHERE email = $1`, email).Scan(&one)
+		`SELECT 1 FROM users WHERE email = $1 AND enabled = TRUE`, email).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -781,7 +781,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 // and should therefore reject every login attempt with a dedicated
 // error telling the operator to run `chat user add`.
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`)
+	row := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE enabled = TRUE`)
 	var n int
 	if err := row.Scan(&n); err != nil {
 		return 0, err

@@ -82,3 +82,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0071](0071-critical-tool-aliases.md) | Bundle-declared critical tool aliases are one commitment (amends ADR-0034) | Accepted |
 | [0072](0072-deterministic-completion-predicate.md) | A declared completion predicate may replace the end-of-run verifier; a verifier outage does not dead-letter an audited run (amends ADR-0001) | Accepted |
 | [0073](0073-malformed-requirements-park-on-first-dead-letter.md) | A malformed EXECUTION REQUIREMENTS declaration is refused at save time and parks its chain on the first dead-letter (amends ADR-0070) | Accepted |
+| [0074](0074-central-auth-owns-fleet-membership-state.md) | Central Auth owns Fleet membership desired state | Accepted |

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CostForecast, McpServer, MCPChoice, Task, TaskCreate, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { applyTemplateVars, humanizeVarName, promptableVars } from "@/app/shared/lib/taskTemplates";
@@ -9,7 +9,14 @@ import { isValidEmail } from "@/app/shared/lib/format";
 import { buildPromptWithRecipients, splitPromptRecipients } from "./taskEmailBlock";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { Icon } from "@/app/shared/ui/Icon";
-import { nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
+import { dateInZone, endOfDayInZone, nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
+import {
+  browserTimeZone,
+  formatTimeZoneLabel,
+  isValidTimeZone,
+  sameTimeZone,
+  timeZoneOptions,
+} from "@/app/shared/lib/timezones";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
@@ -210,13 +217,23 @@ function taskToFormValues(task: Task | null) {
     scheduledDate,
     scheduledTime,
     recurrence: rec,
+    // The zone the repeat fires in: an edited task keeps its stored zone (a
+    // task created before the form sent one is on the server default, usually
+    // UTC, and the picker says so); a new task starts in the author's own.
+    timezone: task?.timezone?.trim() || browserTimeZone(),
     repeatEditor: (rec && !parsed ? "cron" : "simple") as RepeatEditor,
     endMode: (task?.recurrence_until
       ? "date"
       : typeof task?.recurrence_remaining === "number"
         ? "count"
         : "never") as RepeatEndMode,
-    endDate: task?.recurrence_until ? String(task.recurrence_until).slice(0, 10) : "",
+    // The end date is a calendar day in the task's zone (see buildTaskData),
+    // so read it back there — not off the UTC timestamp, which is already the
+    // next day for any zone west of UTC.
+    endDate: task?.recurrence_until
+      ? (dateInZone(new Date(task.recurrence_until), task.timezone?.trim() || browserTimeZone()) ??
+        String(task.recurrence_until).slice(0, 10))
+      : "",
     endCount:
       typeof task?.recurrence_remaining === "number" ? String(task.recurrence_remaining) : "",
     simpleFrequency: parsed?.frequency ?? ("weekdays" as SimpleFrequency),
@@ -387,6 +404,19 @@ export function TaskCreateModal({
   const [scheduledDate, setScheduledDate] = useState(init.scheduledDate);
   const [scheduledTime, setScheduledTime] = useState(init.scheduledTime);
   const [recurrence, setRecurrence] = useState(init.recurrence);
+  const [timezone, setTimezone] = useState(init.timezone);
+  const [viewerTimeZone] = useState(browserTimeZone);
+  const zoneIsViewers = sameTimeZone(timezone, viewerTimeZone);
+  // The full zone list (~400 entries) is built and labelled only when the
+  // selected zone changes, not on every keystroke elsewhere in the form.
+  const timeZoneChoices = useMemo(
+    () =>
+      timeZoneOptions(viewerTimeZone, timezone).map((zone) => ({
+        zone,
+        label: sameTimeZone(zone, viewerTimeZone) ? `${zone} (your time zone)` : zone,
+      })),
+    [viewerTimeZone, timezone],
+  );
   const [repeatEditor, setRepeatEditor] = useState<RepeatEditor>(init.repeatEditor);
   const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>(init.simpleFrequency);
   const [simpleTime, setSimpleTime] = useState(init.simpleTime);
@@ -592,6 +622,7 @@ export function TaskCreateModal({
     scheduledDate,
     scheduledTime,
     recurrence,
+    timezone,
     endMode,
     endDate,
     endCount,
@@ -625,6 +656,7 @@ export function TaskCreateModal({
     init.scheduledDate,
     init.scheduledTime,
     init.recurrence,
+    init.timezone,
     init.endMode,
     init.endDate,
     init.endCount,
@@ -665,6 +697,7 @@ export function TaskCreateModal({
     setScheduledDate("");
     setScheduledTime("09:00");
     setRecurrence("");
+    setTimezone(browserTimeZone());
     setEndMode("never");
     setEndDate("");
     setEndCount("");
@@ -763,6 +796,9 @@ export function TaskCreateModal({
     const templateRecurrence = t.recurrence ?? "";
     const parsedSchedule = parseSimpleSchedule(templateRecurrence);
     setRecurrence(templateRecurrence);
+    // A template may pin the zone its schedule is written for; otherwise the
+    // author's own zone, same as a blank form.
+    setTimezone(t.timezone && isValidTimeZone(t.timezone) ? t.timezone : browserTimeZone());
     setRepeatEditor(templateRecurrence && !parsedSchedule ? "cron" : "simple");
     if (parsedSchedule) {
       setSimpleFrequency(parsedSchedule.frequency);
@@ -897,12 +933,28 @@ export function TaskCreateModal({
     }
   };
 
+  // Recomputed when the schedule or zone changes, not on every render (a
+  // hook, so it sits above the closed-modal early return).
+  const cronDescription = describeCronExpression(recurrence);
+  // A minute tick keeps it honest while the modal sits open: without it, a
+  // preview computed at 23:59 would still show a run that has since passed.
+  const [previewTick, setPreviewTick] = useState(0);
+  useEffect(() => {
+    if (!open || scheduleMode !== "repeat") return;
+    const id = window.setInterval(() => setPreviewTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, [open, scheduleMode]);
+  const cronNext = useMemo(
+    () => (cronDescription ? nextCronOccurrence(recurrence, new Date(), timezone) : null),
+    // previewTick is the clock input: it re-runs the memo once a minute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cronDescription, recurrence, timezone, previewTick],
+  );
+
   if (!open) return null;
 
   // ── Derived display state ─────────────────────────────────────────────────
 
-  const cronDescription = describeCronExpression(recurrence);
-  const cronNext = cronDescription ? nextCronOccurrence(recurrence) : null;
 
   // The {variables} the picked template still needs from the user (built-ins
   // never appear — they substitute silently at apply time).
@@ -1057,9 +1109,14 @@ export function TaskCreateModal({
     }
     if (scheduleMode === "repeat" && recurrence.trim()) {
       taskData.recurrence = recurrence.trim();
-      // End-of-day local time so "ends on July 31" includes July 31's run.
+      // Always explicit: omitted, the server would evaluate the cron in its
+      // default zone (usually UTC), not the one the echo shows the author.
+      if (timezone) taskData.timezone = timezone;
+      // End of that day in the repeat's own zone, so "ends on July 31"
+      // includes July 31's run there, whatever the viewer's zone.
       if (endMode === "date" && endDate) {
-        taskData.recurrence_until = new Date(`${endDate}T23:59:59`).toISOString();
+        const until = endOfDayInZone(endDate, timezone) ?? new Date(`${endDate}T23:59:59`);
+        taskData.recurrence_until = until.toISOString();
       }
       if (endMode === "count" && endCount.trim()) {
         const n = Number.parseInt(endCount, 10);
@@ -1777,7 +1834,7 @@ export function TaskCreateModal({
                       </div>
                     ) : (
                       <p className="task-schedule-caption">
-                        Runs once at the chosen time, in your local timezone.
+                        Runs once at the chosen time, in your time zone ({viewerTimeZone}).
                       </p>
                     )}
                   </div>
@@ -1938,6 +1995,28 @@ export function TaskCreateModal({
                         ))}
                       </div>
                     ) : null}
+                    <div className="simple-schedule-grid" data-testid="repeat-timezone">
+                      <label className="task-schedule-field">
+                        <span>Time zone</span>
+                        <select
+                          aria-label="Repeat time zone"
+                          aria-describedby={zoneIsViewers ? undefined : "repeat-timezone-hint"}
+                          value={timezone}
+                          onChange={(e) => setTimezone(e.target.value)}
+                        >
+                          {timeZoneChoices.map(({ zone, label }) => (
+                            <option key={zone} value={zone}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    {!zoneIsViewers ? (
+                      <p className="field-hint" id="repeat-timezone-hint" data-testid="repeat-timezone-hint">
+                        Times above are in {timezone}, not your own time zone ({viewerTimeZone}).
+                      </p>
+                    ) : null}
                     {!errors.recurrence && cronDescription ? (
                       <div className="task-cron-echo" id="recurrence-echo" aria-live="polite">
                         <svg
@@ -1954,8 +2033,10 @@ export function TaskCreateModal({
                           <path d="M5 12l5 5L20 6" />
                         </svg>
                         <span>
-                          <strong>{cronNext ? `Next run ${formatNextRun(cronNext)}` : "Schedule ready"}</strong>
-                          <span>{cronDescription} · local time</span>
+                          <strong>{cronNext ? `Next run ${formatNextRun(cronNext, timezone)}` : "Schedule ready"}</strong>
+                          <span>
+                            {cronDescription} · {formatTimeZoneLabel(timezone, cronNext ?? undefined)}
+                          </span>
                         </span>
                       </div>
                     ) : null}

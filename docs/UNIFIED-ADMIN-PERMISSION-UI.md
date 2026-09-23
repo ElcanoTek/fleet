@@ -5,11 +5,11 @@
 Settings → Admin → Users presents three permission sections when editing an
 account:
 
-- **Admin** — one Admin option that grants admin on both planes.
+- **Fleet Admin** — one option that grants admin on both planes.
 - **Chat** — Viewer or Contributor.
 - **Ops Center** — None, Viewer, or Contributor.
 
-Admin appears first so the broadest, cross-plane grant is visually distinct
+Fleet Admin appears first so the broadest, cross-plane grant is visually distinct
 before the two narrower per-plane role selectors.
 
 The Add user form uses the same permission sections and Team field as the edit
@@ -20,7 +20,7 @@ Every role option has an immediate hover and keyboard-focus description that
 explains its effective access. The descriptions are shared by the edit and
 account-creation controls.
 
-The Admin control sets both `role: "admin"` and `ops_role: "admin"` in the
+The Fleet Admin control sets both `role: "admin"` and `ops_role: "admin"` in the
 pending edit; the PATCH sends whichever fields changed. This is a UI expression
 of the existing server contract: promoting a chat account to admin also ensures
 the matching scheduler account is an admin. A unified admin has one Admin badge
@@ -30,6 +30,11 @@ Choosing a narrower Chat or Ops Center permission while editing a unified admin
 leaves unified-admin mode. The other plane falls back to its least-privileged
 state (Chat Contributor or no Ops access), after which either narrower role can
 be selected explicitly before saving.
+
+Selecting Fleet Admin gives it a branded gradient outline and applies the same
+outline to Chat Contributor and Ops Contributor, the highest displayed options
+whose permissions it includes. Selecting Fleet Admin again unchecks it and
+defaults to Chat Contributor plus Ops None.
 
 ## Deliberate scope
 

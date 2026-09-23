@@ -420,7 +420,7 @@ describe("AdminUsersPage", () => {
     expect(within(bobRow).getByText("ops: admin")).toBeInTheDocument();
   });
 
-  it("presents Admin once and grants both permission planes", async () => {
+  it("presents Fleet Admin once and grants both permission planes", async () => {
     const calls: { body: string }[] = [];
     mockFetch((url, init) => {
       if (url === "/api/admin/users/bob%40x.com" && init?.method === "PATCH") {
@@ -444,12 +444,12 @@ describe("AdminUsersPage", () => {
 
     const chat = screen.getByRole("group", { name: "Chat permissions" });
     const ops = screen.getByRole("group", { name: "Ops Center permissions" });
-    const admin = screen.getByRole("group", { name: "Admin permissions" });
+    const admin = screen.getByRole("group", { name: "Fleet Admin permissions" });
     const permissionGroups = within(
       screen.getByRole("dialog", { name: "Edit bob@x.com" }),
     ).getAllByRole("group");
     expect(permissionGroups.map((group) => group.getAttribute("aria-label"))).toEqual([
-      "Admin permissions",
+      "Fleet Admin permissions",
       "Chat permissions",
       "Ops Center permissions",
     ]);
@@ -468,7 +468,7 @@ describe("AdminUsersPage", () => {
       );
     };
     expectTooltip(
-      within(admin).getByRole("button", { name: "Admin" }),
+      within(admin).getByRole("button", { name: "Fleet Admin" }),
       "Full permissions in both Chat and the Ops Center.",
     );
     expectTooltip(
@@ -495,7 +495,18 @@ describe("AdminUsersPage", () => {
     expect(within(ops).queryByRole("button", { name: "Admin" })).toBeNull();
     expect(within(admin).getAllByRole("button")).toHaveLength(1);
 
-    fireEvent.click(within(admin).getByRole("button", { name: "Admin" }));
+    fireEvent.click(within(admin).getByRole("button", { name: "Fleet Admin" }));
+    expect(admin.className).toContain("gradient");
+    expect(chat.className).toContain("gradient");
+    expect(ops.className).toContain("gradient");
+    expect(within(chat).getByRole("button", { name: "Contributor" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(ops).getByRole("button", { name: "Contributor" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(calls).toHaveLength(1));
@@ -508,6 +519,56 @@ describe("AdminUsersPage", () => {
       expect(within(bobRow).getAllByText("Admin")).toHaveLength(1),
     );
     expect(within(bobRow).queryByText("ops: admin")).toBeNull();
+  });
+
+  it("unchecking Fleet Admin defaults to Chat Contributor and Ops None", async () => {
+    const adminUser = {
+      ...USERS[0],
+      ops_center_admin: true,
+      ops_center_role: "admin",
+    };
+    const calls: { body: string }[] = [];
+    mockFetch((url, init) => {
+      if (url === "/api/admin/users/alice%40x.com" && init?.method === "PATCH") {
+        calls.push({ body: String(init.body) });
+        return new Response(
+          JSON.stringify({
+            ...adminUser,
+            role: "member",
+            ops_center_admin: false,
+            ops_center_role: "",
+          }),
+          { status: 200 },
+        );
+      }
+      return listImpl([adminUser, USERS[1]])(url);
+    });
+
+    render(<AdminUsersPage />);
+    await screen.findByText("alice@x.com");
+    openKebab("alice@x.com");
+
+    const admin = screen.getByRole("group", { name: "Fleet Admin permissions" });
+    const chat = screen.getByRole("group", { name: "Chat permissions" });
+    const ops = screen.getByRole("group", { name: "Ops Center permissions" });
+    fireEvent.click(within(admin).getByRole("button", { name: "Fleet Admin" }));
+
+    expect(within(admin).getByRole("button", { name: "Fleet Admin" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(within(chat).getByRole("button", { name: "Contributor" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(ops).getByRole("button", { name: "None" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(JSON.parse(calls[0].body)).toEqual({ role: "member", ops_role: "none" });
   });
 
   it("leaves unified Admin safely when a narrower Chat role is selected", async () => {
@@ -537,8 +598,8 @@ describe("AdminUsersPage", () => {
     await screen.findByText("alice@x.com");
     openKebab("alice@x.com");
 
-    const admin = screen.getByRole("group", { name: "Admin permissions" });
-    expect(within(admin).getByRole("button", { name: "Admin" })).toHaveAttribute(
+    const admin = screen.getByRole("group", { name: "Fleet Admin permissions" });
+    expect(within(admin).getByRole("button", { name: "Fleet Admin" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -548,7 +609,7 @@ describe("AdminUsersPage", () => {
         { name: "Viewer" },
       ),
     );
-    expect(within(admin).getByRole("button", { name: "Admin" })).toHaveAttribute(
+    expect(within(admin).getByRole("button", { name: "Fleet Admin" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -603,7 +664,7 @@ describe("AdminUsersPage", () => {
       target: { value: "carol-pw-123" },
     });
     const admin = screen.getByRole("group", {
-      name: "New user Admin permissions",
+      name: "New user Fleet Admin permissions",
     });
     const chat = screen.getByRole("group", {
       name: "New user Chat permissions",
@@ -677,8 +738,8 @@ describe("AdminUsersPage", () => {
     });
     fireEvent.click(
       within(
-        screen.getByRole("group", { name: "New user Admin permissions" }),
-      ).getByRole("button", { name: "Admin" }),
+        screen.getByRole("group", { name: "New user Fleet Admin permissions" }),
+      ).getByRole("button", { name: "Fleet Admin" }),
     );
     fireEvent.click(screen.getByRole("button", { name: /^add user$/i }));
 

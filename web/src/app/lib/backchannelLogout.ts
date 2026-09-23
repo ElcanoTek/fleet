@@ -1,4 +1,5 @@
 const logoutEvent = "http://schemas.openid.net/event/backchannel-logout";
+const applicationAccessEvent = "urn:elcanotek:event:application-access";
 const encoder = new TextEncoder();
 
 export type BackchannelLogout = {
@@ -8,8 +9,16 @@ export type BackchannelLogout = {
   issuer: string;
 };
 
+export type ApplicationAccess = BackchannelLogout & {
+  action: "grant" | "revoke";
+  version: number;
+  issuedAt: number;
+  settings?: Record<string, string>;
+};
+
 function base64UrlBytes(value: string): Uint8Array<ArrayBuffer> {
-  if (!value || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("invalid logout token");
+  if (!value || !/^[A-Za-z0-9_-]+$/.test(value))
+    throw new Error("invalid logout token");
   const decoded = Buffer.from(value, "base64url");
   const bytes = new Uint8Array(decoded.length);
   bytes.set(decoded);
@@ -38,7 +47,10 @@ const maxJwksBytes = 64 * 1024;
 type JwksCache = { keys: string[]; fetchedAt: number; lastAttempt: number };
 const jwksCache = new Map<string, JwksCache>();
 
-async function fetchJwksKeys(issuer: string, fetchImpl: typeof fetch): Promise<string[] | null> {
+async function fetchJwksKeys(
+  issuer: string,
+  fetchImpl: typeof fetch,
+): Promise<string[] | null> {
   try {
     const res = await fetchImpl(`${issuer.replace(/\/+$/, "")}/jwks.json`, {
       headers: { Accept: "application/json" },
@@ -53,7 +65,12 @@ async function fetchJwksKeys(issuer: string, fetchImpl: typeof fetch): Promise<s
     for (const entry of doc.keys) {
       if (!entry || typeof entry !== "object") continue;
       const jwk = entry as Record<string, unknown>;
-      if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string") continue;
+      if (
+        jwk.kty !== "OKP" ||
+        jwk.crv !== "Ed25519" ||
+        typeof jwk.x !== "string"
+      )
+        continue;
       let raw: Buffer;
       try {
         raw = Buffer.from(jwk.x, "base64url");
@@ -69,7 +86,12 @@ async function fetchJwksKeys(issuer: string, fetchImpl: typeof fetch): Promise<s
   }
 }
 
-async function refreshJwks(issuer: string, now: number, fetchImpl: typeof fetch, force = false): Promise<void> {
+async function refreshJwks(
+  issuer: string,
+  now: number,
+  fetchImpl: typeof fetch,
+  force = false,
+): Promise<void> {
   const cached = jwksCache.get(issuer);
   if (!force && cached && now - cached.lastAttempt < jwksMinRefreshMs) return;
   const previous = cached ?? { keys: [], fetchedAt: 0, lastAttempt: 0 };
@@ -82,7 +104,9 @@ async function refreshJwks(issuer: string, now: number, fetchImpl: typeof fetch,
 async function kidForKey(encoded: string): Promise<string | null> {
   const publicKey = Uint8Array.from(Buffer.from(encoded, "base64"));
   if (publicKey.length !== 32) return null;
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", publicKey));
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", publicKey),
+  );
   return Buffer.from(digest.slice(0, 16)).toString("base64url");
 }
 
@@ -97,12 +121,13 @@ export async function resolveSigningKeys(
   fetchImpl: typeof fetch = fetch,
   now: number = Date.now(),
 ): Promise<string[]> {
-  const cached = jwksCache.get(issuer);
-  if (!cached || now - cached.fetchedAt > jwksCacheMs) await refreshJwks(issuer, now, fetchImpl);
   const merge = () => {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const key of [...staticSigningPublicKeys(), ...(jwksCache.get(issuer)?.keys ?? [])]) {
+    for (const key of [
+      ...staticSigningPublicKeys(),
+      ...(jwksCache.get(issuer)?.keys ?? []),
+    ]) {
       if (!seen.has(key)) {
         seen.add(key);
         out.push(key);
@@ -110,6 +135,18 @@ export async function resolveSigningKeys(
     }
     return out;
   };
+  // A configured key is the bootstrap and offline path. When it already
+  // matches the token, do not make receipt of a signed back-channel event
+  // depend on Auth also being reachable for JWKS at that instant.
+  if (kid) {
+    const knownKeys = merge();
+    for (const key of knownKeys) {
+      if ((await kidForKey(key)) === kid) return knownKeys;
+    }
+  }
+  const cached = jwksCache.get(issuer);
+  if (!cached || now - cached.fetchedAt > jwksCacheMs)
+    await refreshJwks(issuer, now, fetchImpl);
   let keys = merge();
   if (kid) {
     let known = false;
@@ -145,27 +182,46 @@ export async function verifyBackchannelLogoutToken(
   let header: Record<string, unknown>;
   let claims: Record<string, unknown>;
   try {
-    header = JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[0]))) as Record<string, unknown>;
-    claims = JSON.parse(new TextDecoder().decode(base64UrlBytes(parts[1]))) as Record<string, unknown>;
+    header = JSON.parse(
+      new TextDecoder().decode(base64UrlBytes(parts[0])),
+    ) as Record<string, unknown>;
+    claims = JSON.parse(
+      new TextDecoder().decode(base64UrlBytes(parts[1])),
+    ) as Record<string, unknown>;
   } catch {
     throw new Error("invalid logout token");
   }
-  if (header.typ !== "logout+jwt" || header.alg !== "EdDSA" || typeof header.kid !== "string") {
+  if (
+    header.typ !== "logout+jwt" ||
+    header.alg !== "EdDSA" ||
+    typeof header.kid !== "string"
+  ) {
     throw new Error("invalid logout token");
   }
 
   let verified = false;
-  const candidateKeys = await resolveSigningKeys(issuer, header.kid, fetchImpl, nowSeconds * 1000);
+  const candidateKeys = await resolveSigningKeys(
+    issuer,
+    header.kid,
+    fetchImpl,
+    nowSeconds * 1000,
+  );
   for (const encoded of candidateKeys) {
     try {
       const publicKey = Uint8Array.from(Buffer.from(encoded, "base64"));
       if (publicKey.length !== 32) continue;
-      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", publicKey));
+      const digest = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", publicKey),
+      );
       const kid = Buffer.from(digest.slice(0, 16)).toString("base64url");
       if (kid !== header.kid) continue;
-      const key = await crypto.subtle.importKey("raw", publicKey, { name: "Ed25519" }, false, [
-        "verify",
-      ]);
+      const key = await crypto.subtle.importKey(
+        "raw",
+        publicKey,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
       verified = await crypto.subtle.verify(
         { name: "Ed25519" },
         key,
@@ -181,12 +237,14 @@ export async function verifyBackchannelLogoutToken(
 
   const normalizedIssuer = issuer.replace(/\/+$/, "");
   const subject = typeof claims.sub === "string" ? claims.sub.trim() : "";
-  const email = typeof claims.email === "string" ? claims.email.trim().toLowerCase() : "";
+  const email =
+    typeof claims.email === "string" ? claims.email.trim().toLowerCase() : "";
   const at = email.lastIndexOf("@");
   const eventId = typeof claims.jti === "string" ? claims.jti.trim() : "";
   const events = claims.events as Record<string, unknown> | undefined;
   if (
-    (typeof claims.iss !== "string" ? "" : claims.iss.replace(/\/+$/, "")) !== normalizedIssuer ||
+    (typeof claims.iss !== "string" ? "" : claims.iss.replace(/\/+$/, "")) !==
+      normalizedIssuer ||
     claims.aud !== audience ||
     !subject ||
     subject.length > 255 ||
@@ -213,4 +271,138 @@ export async function verifyBackchannelLogoutToken(
     throw new Error("invalid logout token");
   }
   return { eventId, subject, email, issuer: normalizedIssuer };
+}
+
+export async function verifyApplicationAccessToken(
+  raw: string,
+  issuer: string,
+  audience: string,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+  fetchImpl: typeof fetch = fetch,
+): Promise<ApplicationAccess> {
+  if (raw.length > 16_384) throw new Error("invalid access token");
+  const parts = raw.split(".");
+  if (parts.length !== 3) throw new Error("invalid access token");
+  let header: Record<string, unknown>;
+  let claims: Record<string, unknown>;
+  try {
+    header = JSON.parse(
+      new TextDecoder().decode(base64UrlBytes(parts[0])),
+    ) as Record<string, unknown>;
+    claims = JSON.parse(
+      new TextDecoder().decode(base64UrlBytes(parts[1])),
+    ) as Record<string, unknown>;
+  } catch {
+    throw new Error("invalid access token");
+  }
+  if (
+    header.typ !== "access+jwt" ||
+    header.alg !== "EdDSA" ||
+    typeof header.kid !== "string"
+  ) {
+    throw new Error("invalid access token");
+  }
+  let verified = false;
+  const candidateKeys = await resolveSigningKeys(
+    issuer,
+    header.kid,
+    fetchImpl,
+    nowSeconds * 1000,
+  );
+  for (const encoded of candidateKeys) {
+    try {
+      const publicKey = Uint8Array.from(Buffer.from(encoded, "base64"));
+      if (publicKey.length !== 32) continue;
+      const digest = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", publicKey),
+      );
+      if (Buffer.from(digest.slice(0, 16)).toString("base64url") !== header.kid)
+        continue;
+      const key = await crypto.subtle.importKey(
+        "raw",
+        publicKey,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      verified = await crypto.subtle.verify(
+        { name: "Ed25519" },
+        key,
+        base64UrlBytes(parts[2]),
+        encoder.encode(`${parts[0]}.${parts[1]}`),
+      );
+      if (verified) break;
+    } catch {
+      continue;
+    }
+  }
+  if (!verified) throw new Error("invalid access token");
+  const normalizedIssuer = issuer.replace(/\/+$/, "");
+  const subject = typeof claims.sub === "string" ? claims.sub.trim() : "";
+  const email =
+    typeof claims.email === "string" ? claims.email.trim().toLowerCase() : "";
+  const eventId = typeof claims.jti === "string" ? claims.jti.trim() : "";
+  const at = email.lastIndexOf("@");
+  const events = claims.events as Record<string, unknown> | undefined;
+  const access = events?.[applicationAccessEvent] as
+    Record<string, unknown> | undefined;
+  const action = access?.action;
+  const version = access?.version;
+  const rawSettings = access?.settings;
+  let settings: Record<string, string> | undefined;
+  if (rawSettings !== undefined) {
+    if (
+      !rawSettings ||
+      typeof rawSettings !== "object" ||
+      Array.isArray(rawSettings)
+    ) {
+      throw new Error("invalid access token");
+    }
+    settings = {};
+    for (const [key, value] of Object.entries(
+      rawSettings as Record<string, unknown>,
+    )) {
+      if (typeof value !== "string" || key.length > 64 || value.length > 64) {
+        throw new Error("invalid access token");
+      }
+      settings[key] = value;
+    }
+  }
+  if (
+    (typeof claims.iss !== "string" ? "" : claims.iss.replace(/\/+$/, "")) !==
+      normalizedIssuer ||
+    claims.aud !== audience ||
+    !subject ||
+    subject.length > 255 ||
+    !email ||
+    email.length > 254 ||
+    at <= 0 ||
+    at === email.length - 1 ||
+    !eventId ||
+    eventId.length > 255 ||
+    typeof claims.iat !== "number" ||
+    !Number.isInteger(claims.iat) ||
+    claims.iat <= 0 ||
+    claims.iat > nowSeconds + 60 ||
+    typeof claims.exp !== "number" ||
+    !Number.isInteger(claims.exp) ||
+    claims.exp + 60 <= nowSeconds ||
+    (action !== "grant" && action !== "revoke") ||
+    typeof version !== "number" ||
+    !Number.isInteger(version) ||
+    version <= 0 ||
+    "nonce" in claims
+  ) {
+    throw new Error("invalid access token");
+  }
+  return {
+    eventId,
+    subject,
+    email,
+    issuer: normalizedIssuer,
+    action,
+    version,
+    issuedAt: claims.iat,
+    ...(settings === undefined ? {} : { settings }),
+  };
 }

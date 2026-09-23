@@ -99,9 +99,34 @@ func (db *Database) GetUser(ctx context.Context, userID uuid.UUID) (*models.User
 // GetUserByUsername gets a user by username.
 func (db *Database) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	row := db.conn.QueryRowContext(ctx,
+		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE username = $1 AND enabled = TRUE",
+		username)
+	return db.rowToUser(row)
+}
+
+// GetAnyUserByUsername includes centrally disabled rows for provisioning and
+// admin reconciliation. Login and membership must use GetUserByUsername.
+func (db *Database) GetAnyUserByUsername(ctx context.Context, username string) (*models.User, error) {
+	row := db.conn.QueryRowContext(ctx,
 		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE username = $1",
 		username)
 	return db.rowToUser(row)
+}
+
+func (db *Database) SetUserEnabled(ctx context.Context, userID uuid.UUID, enabled bool) error {
+	// Disabling preserves the stable UUID/role/task ownership, but must not let
+	// a pre-revocation scheduler session spring back to life on a later grant.
+	res, err := db.conn.ExecContext(ctx, `UPDATE users SET enabled = $1,
+		session_token = CASE WHEN $1 THEN session_token ELSE NULL END,
+		token_expires_at = CASE WHEN $1 THEN token_expires_at ELSE NULL END
+		WHERE id = $2`, enabled, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // ListUsers returns all users ordered by username. Used by the admin CLI.
@@ -148,7 +173,7 @@ func (db *Database) CountUsers(ctx context.Context) (int, error) {
 func (db *Database) GetUserByToken(ctx context.Context, token string) (*models.User, error) {
 	token = models.HashToken(token)
 	row := db.conn.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE session_token = $1 AND (token_expires_at IS NULL OR token_expires_at > $2)",
+		"SELECT id, username, password_hash, role, created_at, last_login, session_token, token_expires_at FROM users WHERE session_token = $1 AND enabled = TRUE AND (token_expires_at IS NULL OR token_expires_at > $2)",
 		token, time.Now().UTC())
 	return db.rowToUser(row)
 }
