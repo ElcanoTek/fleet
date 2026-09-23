@@ -836,6 +836,9 @@ func (s *Server) cancelInflightTurn(convID, turnID string) {
 // turn that has not registered yet.
 const cancelledInputTTL = 10 * time.Minute
 
+// maxCancelledInputs bounds the Stop-by-key marks held at once.
+const maxCancelledInputs = 4096
+
 func inputKeyMark(convID, key string) string { return convID + "\x00" + key }
 
 // cancelInputTurn stops the turn for the input with idempotency key key, on
@@ -853,6 +856,17 @@ func (s *Server) cancelInputTurn(convID, key string) {
 		if now.Sub(at) > cancelledInputTTL {
 			delete(s.cancelledInputs, k)
 		}
+	}
+	if len(s.cancelledInputs) >= maxCancelledInputs {
+		// Full of live marks: drop the oldest, so the set stays bounded
+		// however many distinct keys are stopped.
+		oldest, oldestAt := "", now
+		for k, at := range s.cancelledInputs {
+			if at.Before(oldestAt) {
+				oldest, oldestAt = k, at
+			}
+		}
+		delete(s.cancelledInputs, oldest)
 	}
 	entry, ok := s.inflight[convID]
 	running := ok && entry.IsRunning() && entry.inputKey == key

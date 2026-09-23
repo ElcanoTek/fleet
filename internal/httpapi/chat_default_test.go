@@ -155,6 +155,8 @@ type fakeChatStore struct {
 	onCreate func()
 	// claimAfterEnqueue marks each enqueued row claimed (running) at once.
 	claimAfterEnqueue bool
+	// memoriesErr makes ListMemories (turn preparation) fail.
+	memoriesErr error
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -244,6 +246,9 @@ func (s *fakeChatStore) InsertTurnJournal(context.Context, store.TurnJournalRow)
 func (s *fakeChatStore) ListMemories(context.Context, string) ([]store.Memory, error) {
 	if s.onMemories != nil {
 		s.onMemories()
+	}
+	if s.memoriesErr != nil {
+		return nil, s.memoriesErr
 	}
 	return nil, nil
 }
@@ -1166,8 +1171,8 @@ func TestDirectClaim_BindFailureFailsClosed(t *testing.T) {
 	if turns != 0 {
 		t.Fatalf("the turn ran with an unbound claim (%d turns)", turns)
 	}
-	if rows := st.directRows(); len(rows) != 0 {
-		t.Fatalf("the unbound claim was not released: %+v", rows)
+	if rows := st.directRows(); len(rows) != 1 || rows[0].State != store.InputStateCancelled {
+		t.Fatalf("claim = %+v, want it settled cancelled (did not run), never left running", rows)
 	}
 }
 
@@ -1390,9 +1395,9 @@ func TestDirectClaim_BoundClaimOfAnAbortedLaunchIsSettled(t *testing.T) {
 }
 
 // A claim that committed but reported an error (its acknowledgement lost) runs
-// no turn, so it is released rather than left "running" to answer every
-// resend of its key "already running".
-func TestDirectClaim_LostClaimAckIsReleased(t *testing.T) {
+// no turn, so it is settled "did not run" rather than left "running" to answer
+// every resend of its key "already running".
+func TestDirectClaim_LostClaimAckIsSettled(t *testing.T) {
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	st.claimLostAcks = 1
@@ -1401,12 +1406,14 @@ func TestDirectClaim_LostClaimAckIsReleased(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
-	if rows := st.directRows(); len(rows) != 0 {
-		t.Fatalf("the possibly committed claim was left behind: %+v", rows)
+	if rows := st.directRows(); len(rows) != 1 || rows[0].State != store.InputStateCancelled {
+		t.Fatalf("claim = %+v, want it settled cancelled", rows)
 	}
-	// The resend now runs instead of being answered "already running".
-	if w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": "conv-1", "input_id": "claim-lost-1"}); w.Code != http.StatusOK || eng.turns != 1 {
-		t.Fatalf("resend: status %d, turns %d", w.Code, eng.turns)
+	// The resend is told the input did not run (so a fresh key may be sent),
+	// not "already running".
+	w = postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": "conv-1", "input_id": "claim-lost-1"})
+	if !strings.Contains(w.Body.String(), `"state":"cancelled"`) || eng.turns != 0 {
+		t.Fatalf("resend: %d %s, turns %d", w.Code, w.Body.String(), eng.turns)
 	}
 }
 
@@ -1513,5 +1520,46 @@ func TestChat_OversizedInputIDIsRefused(t *testing.T) {
 	}
 	if w := postChatRequest(t, srv, map[string]any{"message": "hi", "persona": "generic", "input_id": strings.Repeat("k", maxInputIDLen)}); w.Code != http.StatusOK {
 		t.Fatalf("a key at the limit was refused: %d", w.Code)
+	}
+}
+
+// A claim whose turn fails in preparation is settled "did not run", not
+// deleted: a concurrent resend may already have been told it is running, and
+// its next look must find an outcome rather than a missing row.
+func TestDirectClaim_PrepFailureLeavesAnOutcome(t *testing.T) {
+	st := newFakeChatStore()
+	st.memoriesErr = errors.New("fake: memories unavailable")
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	if w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "prep-1"}); w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if rows := st.directRows(); len(rows) != 1 || rows[0].State != store.InputStateCancelled {
+		t.Fatalf("claim = %+v, want it settled cancelled", rows)
+	}
+}
+
+// Stop-by-key marks are bounded however many distinct keys are stopped, and an
+// oversized key is refused at the endpoint.
+func TestCancelByInputKey_MarksAreBounded(t *testing.T) {
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	for i := range maxCancelledInputs + 100 {
+		srv.cancelInputTurn("conv-x", fmt.Sprintf("k-%d", i))
+	}
+	srv.inflightMu.Lock()
+	n := len(srv.cancelledInputs)
+	srv.inflightMu.Unlock()
+	if n > maxCancelledInputs {
+		t.Fatalf("marks = %d, want at most %d", n, maxCancelledInputs)
+	}
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	raw, _ := json.Marshal(map[string]any{"scope": "turn", "input_id": strings.Repeat("k", maxInputIDLen+1)})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", bytes.NewReader(raw))
+	req.Header.Set("X-Chat-Server-Token", "tok")
+	req.Header.Set("X-User-Email", "u@x.com")
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("oversized cancel key: %d %s", w.Code, w.Body.String())
 	}
 }

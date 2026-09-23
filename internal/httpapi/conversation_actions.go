@@ -589,6 +589,10 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 			inputID = strings.TrimSpace(body.InputID)
 		}
 	}
+	if len(inputID) > maxInputIDLen {
+		http.Error(w, fmt.Sprintf("input_id is limited to %d bytes", maxInputIDLen), http.StatusBadRequest)
+		return
+	}
 	if inputID != "" {
 		if !s.cancelInput(r.Context(), user, id, inputID) {
 			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)

@@ -544,7 +544,7 @@ func (s *Server) claimDirectInput(w http.ResponseWriter, r *http.Request, user s
 		// another submission's claim) rather than left 'running' to answer
 		// every resend "already running".
 		releaseSlot()
-		s.releaseDirectInput(claimID)
+		s.settleDirectInput(claimID, "") // settled "did not run", never left running
 		http.Error(w, "input claim failed: "+err.Error(), http.StatusInternalServerError)
 		return nil, true
 	}
@@ -734,7 +734,12 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// pre-#785 flow errored before admission; the extraction inverted it).
 		releaseSlot()
 		if w != nil {
-			s.releaseDirectInput(directInputID)
+			// Settled cancelled, not deleted: a concurrent resend may
+			// already have been told this claim is running, and it must
+			// then find an outcome ("did not run"), not a missing row.
+			if directInputID != "" {
+				s.settleDirectInput(directInputID, "")
+			}
 			http.Error(w, err.Error(), status)
 			return
 		}

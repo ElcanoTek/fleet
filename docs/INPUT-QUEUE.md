@@ -47,13 +47,14 @@ retention guarantee: after a terminal row is purged, reusing its
   registered yet (a direct claim still being prepared, a row the drain just
   claimed, or a submission still in transit) is refused when it tries to
   register. The mark and the registration check share one lock, so a keyed
-  input is either cancelled or never launched; the mark is kept for 10
-  minutes, and a queued row is withdrawn in the database (at the Stop, or when
-  it is inserted after the Stop) so it cannot outwait it. A client whose
-  answer was lost (`fleet acp`) stops its own input this way without knowing
-  which state it reached. `POST /chat` names its turn on the `X-Fleet-Turn-Id`
-  response header (beside `X-Fleet-Conversation-Id`), so the id is known
-  before any frame.
+  input is either cancelled or never launched; the mark is kept for 10 minutes
+  (at most 4096 marks at once; `input_id` is limited to 256 bytes here too),
+  and a queued row is withdrawn in the database (at the Stop, or when it is
+  inserted after the Stop) so it cannot outwait it. A client whose answer was
+  lost (`fleet acp`) stops its own input this way without knowing which state
+  it reached. `POST /chat` names its turn on the `X-Fleet-Turn-Id` response
+  header (beside `X-Fleet-Conversation-Id`), so the id is known before any
+  frame.
 - `input_id` is honoured on the **direct** path too (migrations 064 and 065):
   a submission that starts a turn directly claims its key with a
   `mode:"direct"` row in the same table and unique index, so a resend of the
@@ -65,20 +66,23 @@ retention guarantee: after a terminal row is purged, reusing its
   committed and `cancelled` otherwise (nothing ran, so a fresh key may be
   sent). Settlement at turn end runs on its own bounded context and is retried
   in the background if it fails, so a finished claim does not keep answering
-  "running". A claim whose turn never launched is released (a failed release
-  is retried in the background for about a minute, then left to boot
-  recovery), so the key can be retried. A claim is bound to its turn before
-  the turn runs; if that fails, the turn is dropped and the submission fails
-  (`500`) rather than running with a claim a crash could not match to it. A
-  submission that loses the race to a turn started from another surface is
-  queued only after its claim is released, and fails (`503`, send again) if
-  the release cannot be confirmed. A claim is an accepted input, so a Stop
-  scope=all that begins after it was accepted covers it: the claim settles
-  `cancelled` and the submission answers `409` without running. A first
-  submission names no conversation, so a client that declares its keys unique
-  per user (`"input_id_scope": "user"`, as `fleet acp` does) has its key also
-  looked up per user before a conversation is created: a resend after a
-  response lost before any header finds the original conversation instead of
+  "running". A claim whose turn fails before it launches is settled
+  `cancelled` (a resend is told it did not run, so a fresh key may be sent),
+  never deleted: a concurrent resend may already have been told it is running.
+  A claim that loses the race to another surface's turn is released, so its
+  input can be queued instead (a failed release is retried in the background
+  for about a minute, then left to boot recovery). A claim is bound to its
+  turn before the turn runs; if that fails, the turn is dropped and the
+  submission fails (`500`) rather than running with a claim a crash could not
+  match to it. A submission that loses the race to a turn started from another
+  surface is queued only after its claim is released, and fails (`503`, send
+  again) if the release cannot be confirmed. A claim is an accepted input, so
+  a Stop scope=all that begins after it was accepted covers it: the claim
+  settles `cancelled` and the submission answers `409` without running. A
+  first submission names no conversation, so a client that declares its keys
+  unique per user (`"input_id_scope": "user"`, as `fleet acp` does) has its
+  key also looked up per user before a conversation is created: a resend after
+  a response lost before any header finds the original conversation instead of
   starting a second one. Without that declaration the key stays
   conversation-scoped, so a client that numbers keys per conversation is never
   answered with another conversation's replay. Concurrent first submissions of

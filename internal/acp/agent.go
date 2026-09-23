@@ -103,6 +103,11 @@ type session struct {
 	// under after fleet reported its first attempt as never run, so a later
 	// resend of that messageId finds the run instead of starting another.
 	rekeyed map[string]string
+	// pinned maps each rekeyed fresh key to the conversation that accepted
+	// the original, for as long as the rekeying is remembered: a later resend
+	// of the messageId reuses the fresh key and must go back there, since
+	// fleet recognises a key only in its own conversation.
+	pinned map[string]string
 	// keyConv maps each unresolved key to the conversation it was first
 	// submitted to ("" = it started the session's conversation). A retry
 	// goes back there: fleet recognises a key only in the conversation that
@@ -121,7 +126,27 @@ func (s *session) target(key string) string {
 	if c, ok := s.keyConv[key]; ok {
 		return c
 	}
+	if c, ok := s.pinned[key]; ok {
+		return c
+	}
 	return s.convID
+}
+
+// rekey remembers that messageID now runs under fresh, in conv. Bounded like
+// the unresolved-key memory; a rekeying and its pin are evicted together.
+func (s *session) rekey(messageID, fresh, conv string) {
+	if s.rekeyed == nil {
+		s.rekeyed, s.pinned = map[string]string{}, map[string]string{}
+	}
+	if _, ok := s.rekeyed[messageID]; !ok && len(s.rekeyed) >= maxUnsettled {
+		for m, k := range s.rekeyed { // any entry; the map is small
+			delete(s.rekeyed, m)
+			delete(s.pinned, k)
+			break
+		}
+	}
+	s.rekeyed[messageID] = fresh
+	s.pinned[fresh] = conv
 }
 
 // settle records whether key is still unresolved after a prompt: retained,
@@ -279,10 +304,7 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 		// user asked for.
 		fresh := "fleet-acp-" + randomID()
 		if p.MessageId != nil && strings.TrimSpace(*p.MessageId) != "" {
-			if sess.rekeyed == nil {
-				sess.rekeyed = map[string]string{}
-			}
-			sess.rekeyed[*p.MessageId] = fresh
+			sess.rekey(*p.MessageId, fresh, retry.conv)
 		}
 		// The fresh key runs where the original was accepted, not in a
 		// conversation the session started since.
@@ -428,6 +450,13 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		// Stopped from another fleet surface (the web chat's Stop, where these
 		// conversations are visible): the server's turn.cancelled is a normal
 		// cancellation, not a failure.
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled, Meta: meta}, nil
+	}
+	var se *chattui.StatusError
+	if errors.As(streamErr, &se) && se.Code == http.StatusConflict {
+		// POST /chat answers 409 only when a Stop (from another surface)
+		// cancelled this input before its turn started: nothing ran, and the
+		// Stop succeeded.
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled, Meta: meta}, nil
 	}
 	if streamErr != nil {

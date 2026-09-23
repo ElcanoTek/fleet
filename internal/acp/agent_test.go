@@ -1556,3 +1556,65 @@ func TestFreshRetryStaysInTheOriginalConversation(t *testing.T) {
 		t.Fatalf("fresh retry = conv %q key %q, want conv-A under a new key", fresh.ConversationID, fresh.InputID)
 	}
 }
+
+// A Stop from another surface that cancels this prompt's input before its turn
+// starts is answered 409 by POST /chat; nothing ran and the Stop succeeded, so
+// the prompt ends cancelled, not with an internal error.
+func TestPreLaunchStopFromAnotherSurfaceIsCancelled(t *testing.T) {
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		http.Error(w.w, "a Stop in this conversation cancelled this message before it started", http.StatusConflict)
+	}})
+	sid := h.newSession(t)
+	r, err := h.prompt(sid, "do it")
+	if err != nil || r.StopReason != acpsdk.StopReasonCancelled {
+		t.Fatalf("got %+v, %v; want stopReason cancelled", r, err)
+	}
+}
+
+// A messageId rekeyed after "never ran" stays pinned to the conversation that
+// accepted it: a later resend of that messageId goes back there, where fleet
+// recognises the fresh key, not to the session's newer conversation.
+func TestRekeyedMessageIdStaysPinned(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			if conn, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close() // A's whole answer is lost
+			}
+		case 2:
+			w.emit("conversation", map[string]any{"id": "conv-B"})
+			w.emit("turn.completed", map[string]any{})
+		case 3:
+			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-a","mode":"direct","state":"cancelled"},"conversation_id":"conv-A"}`)
+		default:
+			w.emit("conversation", map[string]any{"id": "conv-A"})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	sid := h.newSession(t)
+	mid := "msg-A"
+	send := func(text string, id *string) error {
+		_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: id, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock(text)}})
+		return err
+	}
+	_ = send("prompt A", &mid) // lost
+	if err := send("prompt B", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := send("prompt A", &mid); err != nil { // replay "never ran", then the fresh key
+		t.Fatal(err)
+	}
+	if err := send("prompt A", &mid); err != nil { // a later resend of the same messageId
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	fresh, resend := h.fleet.chats[3], h.fleet.chats[4]
+	if resend.InputID != fresh.InputID || resend.ConversationID != "conv-A" {
+		t.Fatalf("resend = key %q conv %q, want the fresh key %q in conv-A", resend.InputID, resend.ConversationID, fresh.InputID)
+	}
+}
