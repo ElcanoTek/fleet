@@ -27,7 +27,10 @@ import {
   stepStreamDedup,
   type ServerEvent,
 } from "@/app/lib/sse";
-import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import {
+  conversationApiPath,
+  conversationApiUrl,
+} from "@/app/lib/conversationApiUrl";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
@@ -777,10 +780,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   const refreshQueue = async (
     convId: string,
   ): Promise<QueuedInput[] | null> => {
+    const url = conversationApiUrl(convId, "/queue");
+    if (!url) return null;
     try {
-      const res = await fetch(
-        `/api/conversations/${encodeURIComponent(convId)}/queue`,
-      );
+      const res = await fetch(url);
       if (!res.ok) return null;
       const body = (await res.json()) as { items?: QueuedInput[] };
       const items = body.items ?? [];
@@ -793,20 +796,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
   };
   const removeQueuedInput = async (convId: string, inputId: string) => {
     try {
-      await fetch(
-        `/api/conversations/${encodeURIComponent(convId)}/queue/${encodeURIComponent(inputId)}`,
-        { method: "DELETE" },
-      );
+      const url = conversationApiPath(convId, "queue", inputId);
+      if (url) await fetch(url, { method: "DELETE" });
     } finally {
       void refreshQueue(convId);
     }
   };
   const sendNowQueuedInput = async (convId: string, inputId: string) => {
     try {
-      await fetch(
-        `/api/conversations/${encodeURIComponent(convId)}/queue/${encodeURIComponent(inputId)}/send-now`,
-        { method: "POST" },
-      );
+      const url = conversationApiPath(convId, "queue", inputId, "send-now");
+      if (url) await fetch(url, { method: "POST" });
     } finally {
       void refreshQueue(convId);
     }
@@ -899,14 +898,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     options: { requireTrailingAnswer?: boolean } = {},
   ): Promise<PersistedReconcile> => {
     if (isPendingKey(convId)) return "absent";
+    // An id that fails the URL gate has no server copy we could ask for.
+    const url = conversationApiUrl(convId);
+    if (!url) return "absent";
     try {
-      const res = await fetch(
-        `/api/conversations/${encodeURIComponent(convId)}`,
-        {
-          cache: "no-store",
-          signal: recoveryRequestSignal(),
-        },
-      );
+      const res = await fetch(url, {
+        cache: "no-store",
+        signal: recoveryRequestSignal(),
+      });
       if (indeterminateStatus(res.status)) return "unreachable";
       if (!res.ok) return "absent";
       const data = (await res.json()) as { history?: HistoryEntry[] | null };
@@ -942,16 +941,17 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     status >= 500 || status === 401 || status === 403;
 
   const probeInflightTurn = async (convId: string): Promise<InflightProbe> => {
-    if (isPendingKey(convId))
+    // A pending key, or an id that fails the URL gate, has no server turn.
+    const url = isPendingKey(convId)
+      ? null
+      : conversationApiUrl(convId, "/inflight");
+    if (!url)
       return { kind: "answer", inflight: false, turnID: "", submissionID: "" };
     try {
-      const res = await fetch(
-        `/api/conversations/${encodeURIComponent(convId)}/inflight`,
-        {
-          cache: "no-store",
-          signal: recoveryRequestSignal(),
-        },
-      );
+      const res = await fetch(url, {
+        cache: "no-store",
+        signal: recoveryRequestSignal(),
+      });
       if (indeterminateStatus(res.status)) return { kind: "unreachable" };
       if (!res.ok)
         return {
@@ -993,11 +993,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     turnID: string,
   ): Promise<TurnOutcomeProbe> => {
     if (isPendingKey(convId) || !turnID) return { kind: "unknown" };
+    const url = conversationApiPath(convId, "turns", turnID);
+    if (!url) return { kind: "unknown" };
     try {
-      const res = await fetch(
-        `/api/conversations/${encodeURIComponent(convId)}/turns/${encodeURIComponent(turnID)}`,
-        { cache: "no-store", signal: recoveryRequestSignal() },
-      );
+      const res = await fetch(url, {
+        cache: "no-store",
+        signal: recoveryRequestSignal(),
+      });
       if (indeterminateStatus(res.status)) return { kind: "unreachable" };
       if (!res.ok) return { kind: "unknown" };
       const body = (await res.json()) as Partial<TurnOutcome>;
@@ -3308,10 +3310,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       let inflight = false;
       let serverLastEventId = 0;
       try {
-        const probe = await fetch(
-          `/api/conversations/${encodeURIComponent(convId)}/inflight`,
-          { cache: "no-store" },
-        );
+        const probeUrl = conversationApiUrl(convId, "/inflight");
+        // Same answer as a failed probe: nothing to say about this socket.
+        if (!probeUrl) return "healthy";
+        const probe = await fetch(probeUrl, { cache: "no-store" });
         if (!probe.ok) return "healthy";
         const info = (await probe.json()) as {
           inflight?: boolean;
@@ -3632,14 +3634,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setConvMessages(targetKey, trimmed);
 
     const convId = activeConversationIdRef.current;
-    if (convId) {
+    const truncateUrl = convId
+      ? conversationApiUrl(convId, "/truncate?mode=edit_last")
+      : null;
+    if (truncateUrl) {
       try {
         // mode=edit_last drops the previous user turn AND its assistant
         // tail, so submitPrompt below can start fresh with the edit as the
         // current-last user message.
-        await fetch(`/api/conversations/${convId}/truncate?mode=edit_last`, {
-          method: "POST",
-        });
+        await fetch(truncateUrl, { method: "POST" });
       } catch {
         /* non-fatal */
       }
@@ -3672,13 +3675,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setConvMessages(targetKey, trimmed);
 
     const convId = activeConversationIdRef.current;
-    if (convId) {
+    const truncateUrl = convId
+      ? conversationApiUrl(convId, "/truncate?mode=edit_last")
+      : null;
+    if (truncateUrl) {
       try {
         // mode=edit_last drops the last user turn AND its assistant tail
         // server-side, so the re-submit below starts from a clean point.
-        await fetch(`/api/conversations/${convId}/truncate?mode=edit_last`, {
-          method: "POST",
-        });
+        await fetch(truncateUrl, { method: "POST" });
       } catch {
         // Non-fatal — the turn still works, history just contains the
         // cancelled tail (the model can handle it).

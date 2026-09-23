@@ -17,6 +17,8 @@
 // can be coaxed into fetching an arbitrary same-origin or remote URL
 // (no SSRF / tracking-pixel / authenticated-GET vector — see #271, #1113).
 
+import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
+
 // Sentinel for messages that belong to a brand-new chat whose server
 // id we haven't received yet. Mirrors the constant in chat-experience.tsx.
 export const PENDING_CONV_KEY = "__pending__";
@@ -52,14 +54,17 @@ export function resolveWorkspaceHref(
   raw: string | undefined | null,
   conversationId: string | null,
 ): WorkspaceHref {
-  if (!conversationId || conversationId === PENDING_CONV_KEY) {
+  // A pending key, or an id that fails the conversation URL gate, has no
+  // workspace to point at: the href passes through unrewritten.
+  const base =
+    conversationId && conversationId !== PENDING_CONV_KEY
+      ? conversationWorkspaceUrl(conversationId)
+      : null;
+  if (!base) {
     const value = typeof raw === "string" ? raw : "";
     return { href: value, isWorkspaceFile: false, downloadFilename: "" };
   }
-  return resolveScopedWorkspaceHref(
-    raw,
-    `/api/conversations/${encodeURIComponent(conversationId)}/workspace/`,
-  );
+  return resolveScopedWorkspaceHref(raw, base);
 }
 
 /**

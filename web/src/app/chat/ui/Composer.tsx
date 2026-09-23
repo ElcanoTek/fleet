@@ -19,6 +19,7 @@
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
+import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { Icon } from "./Icon";
 import {
   ContextRing,
@@ -1388,13 +1389,12 @@ export function Composer({
                   // server round trip and must not wait on one.
                   abortControllersRef.current.get(convKey)?.abort();
                   if (isPendingKey(convKey)) return;
+                  const cancelUrl = conversationApiUrl(convKey, "/cancel");
+                  if (!cancelUrl) return;
                   void (async () => {
                     let cancelled = false;
                     try {
-                      const res = await fetch(
-                        `/api/conversations/${convKey}/cancel`,
-                        { method: "POST" },
-                      );
+                      const res = await fetch(cancelUrl, { method: "POST" });
                       cancelled = res.ok;
                     } catch {
                       cancelled = false;

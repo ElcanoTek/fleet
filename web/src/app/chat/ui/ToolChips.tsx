@@ -23,6 +23,7 @@ import {
 // pull the lazy-loaded ReactMarkdown pipeline back into the initial bundle.
 import { WorkspaceImage } from "./WorkspaceImage";
 import { resolveWorkspaceHref } from "./workspaceHref";
+import { conversationApiPath } from "@/app/lib/conversationApiUrl";
 
 // The syntax highlighter (react-syntax-highlighter + grammars, ~75 KiB
 // transfer) is the single largest dependency of the initial /chat bundle,
@@ -916,12 +917,15 @@ function SubagentChatTranscript({
   const [note, setNote] = useState("");
   const [messages, setMessages] = useState<SubagentTranscriptMessage[]>([]);
   const load = async () => {
+    const url = conversationApiPath(conversationId, "subagents", childId);
+    if (!url) {
+      setNote("Transcript not available (invalid subagent id).");
+      setState("error");
+      return;
+    }
     setState("loading");
     try {
-      const res = await fetch(
-        `/api/conversations/${encodeURIComponent(conversationId)}/subagents/${encodeURIComponent(childId)}`,
-        { cache: "no-store" },
-      );
+      const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) {
         setNote(
           res.status === 404

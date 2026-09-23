@@ -1824,12 +1824,11 @@ export function ChatExperience({
   // the backend is a cheap JSON read.
   const loadMcpServerCatalog = async (conversationId: string) => {
     if (isLoadingMcpServers) return;
+    const url = conversationApiUrl(conversationId, "/mcp-servers");
+    if (!url) return;
     setIsLoadingMcpServers(true);
     try {
-      const response = await fetch(
-        `/api/conversations/${encodeURIComponent(conversationId)}/mcp-servers`,
-        { cache: "no-store" },
-      );
+      const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) return;
       const data = (await response.json()) as { servers?: MCPServerInfo[] };
       setMcpServers(data.servers ?? []);
@@ -1941,18 +1940,20 @@ export function ChatExperience({
     prev: MCPServerInfo[],
   ) => {
     const requested = enabledOptionalMcpServerNames(next);
+    const url = conversationApiUrl(conversationId, "/mcp-servers");
+    if (!url) {
+      setMcpServers(prev);
+      return;
+    }
     try {
-      const response = await fetch(
-        `/api/conversations/${encodeURIComponent(conversationId)}/mcp-servers`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            enabled_optional: requested,
-            accounts: mcpAccountOverrides(next),
-          }),
-        },
-      );
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled_optional: requested,
+          accounts: mcpAccountOverrides(next),
+        }),
+      });
       if (!response.ok) {
         setMcpServers(prev);
         return;
@@ -2673,9 +2674,14 @@ export function ChatExperience({
   const deleteConversationById = async (
     conversationId: string,
   ): Promise<boolean> => {
+    const url = conversationApiUrl(conversationId);
+    if (!url) {
+      showRailError("Couldn't delete the chat — it has an invalid id.");
+      return false;
+    }
     let response: Response;
     try {
-      response = await fetch(`/api/conversations/${conversationId}`, {
+      response = await fetch(url, {
         method: "DELETE",
       });
     } catch (err) {
@@ -2773,19 +2779,18 @@ export function ChatExperience({
   const summarizeConversation = async () => {
     if (!activeConversationId) return;
     if (isStreaming || isSummarizing) return;
+    const summarizeUrl = conversationApiUrl(activeConversationId, "/summarize");
+    if (!summarizeUrl) return;
     setIsSummarizing(true);
     setSummarizeError(null);
     setSummarizeStream("");
     setSummarizeStartedAt(nowMs());
     try {
-      const response = await fetch(
-        `/api/conversations/${encodeURIComponent(activeConversationId)}/summarize`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: selectedModel }),
-        },
-      );
+      const response = await fetch(summarizeUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: selectedModel }),
+      });
       if (!response.ok) {
         if (response.status === 409) {
           throw new Error(
@@ -2857,6 +2862,8 @@ export function ChatExperience({
   const togglePin = async (
     conversation: ConversationSummary,
   ): Promise<boolean> => {
+    const pinUrl = conversationApiUrl(conversation.id, "/pin");
+    if (!pinUrl) return false;
     const nextPinned = !conversation.pinned;
     // Optimistic update
     setConversations((current) =>
@@ -2870,14 +2877,11 @@ export function ChatExperience({
         }),
     );
     try {
-      const response = await fetch(
-        `/api/conversations/${conversation.id}/pin`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pinned: nextPinned }),
-        },
-      );
+      const response = await fetch(pinUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned: nextPinned }),
+      });
       if (!response.ok) {
         // revert on failure
         await refreshConversations();
@@ -2901,8 +2905,10 @@ export function ChatExperience({
   const branchFromMessage = async (message: Message) => {
     const parentId = activeConversationId;
     if (!parentId || !message.dbId) return;
+    const branchUrl = conversationApiUrl(parentId, "/branch");
+    if (!branchUrl) return;
     try {
-      const response = await fetch(`/api/conversations/${parentId}/branch`, {
+      const response = await fetch(branchUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ branch_point_message_id: message.dbId }),
@@ -3364,6 +3370,11 @@ export function ChatExperience({
     conversationId: string,
     projectID: string,
   ): Promise<boolean> => {
+    const projectUrl = conversationApiUrl(conversationId, "/project");
+    if (!projectUrl) {
+      showRailError("Couldn't move the chat — it has an invalid id.");
+      return false;
+    }
     // An ARCHIVED chat can be moved too — the Share dialog reaches one, and it
     // resolves its conversation from either list. Updating only the active
     // list left the archived row (and the still-open dialog) showing the old
@@ -3391,14 +3402,11 @@ export function ChatExperience({
     setConversations((cs) => cs.map(refile));
     setArchivedConversations((cs) => cs.map(refile));
     try {
-      const response = await fetch(
-        `/api/conversations/${encodeURIComponent(conversationId)}/project`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ project_id: projectID }),
-        },
-      );
+      const response = await fetch(projectUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: projectID }),
+      });
       if (!response.ok) {
         console.error(
           "move to project failed:",
@@ -3506,11 +3514,16 @@ export function ChatExperience({
   const shareConversation = async (
     conversation: ConversationSummary,
   ): Promise<boolean> => {
+    const shareUrl = conversationApiUrl(conversation.id, "/share");
+    if (!shareUrl) {
+      setShareError("Couldn't create a link — this chat has an invalid id.");
+      return false;
+    }
     setShareBusy(true);
     setShareError(null);
     let response: Response;
     try {
-      response = await fetch(`/api/conversations/${conversation.id}/share`, {
+      response = await fetch(shareUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -3557,14 +3570,16 @@ export function ChatExperience({
   // kept resolving for anyone holding the URL. Saying a link is dead when it
   // is live is the one failure this control must not have.
   const unshareConversation = async (conversation: ConversationSummary) => {
+    const shareUrl = conversationApiUrl(conversation.id, "/share");
+    if (!shareUrl) {
+      setShareError("Couldn't stop sharing — this chat has an invalid id.");
+      return;
+    }
     patchShareToken(conversation.id, "");
     setShareBusy(true);
     setShareError(null);
     try {
-      const response = await fetch(
-        `/api/conversations/${conversation.id}/share`,
-        { method: "DELETE" },
-      );
+      const response = await fetch(shareUrl, { method: "DELETE" });
       if (!response.ok) {
         setShareError(
           `Couldn't stop sharing the link (HTTP ${response.status}) — it is still live.`,
@@ -3586,6 +3601,11 @@ export function ChatExperience({
     conversation: ConversationSummary,
     visible: boolean,
   ): Promise<void> => {
+    const teamShareUrl = conversationApiUrl(conversation.id, "/share-with-team");
+    if (!teamShareUrl) {
+      setShareError("Couldn't change team sharing — this chat has an invalid id.");
+      return;
+    }
     setShareBusy(true);
     setShareError(null);
     const patch = (c: ConversationSummary) =>
@@ -3593,14 +3613,11 @@ export function ChatExperience({
     setConversations((current) => current.map(patch));
     setArchivedConversations((current) => current.map(patch));
     try {
-      const response = await fetch(
-        `/api/conversations/${encodeURIComponent(conversation.id)}/share-with-team`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ visible }),
-        },
-      );
+      const response = await fetch(teamShareUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visible }),
+      });
       if (!response.ok) {
         // 409 is the server naming a precondition the user can act on — no
         // team, or a chat with no team-shared project to appear in
@@ -3641,6 +3658,11 @@ export function ChatExperience({
     conversation: ConversationSummary,
     archived: boolean,
   ) => {
+    const archiveUrl = conversationApiUrl(conversation.id, "/archive");
+    if (!archiveUrl) {
+      showRailError("Couldn't update the chat — it has an invalid id.");
+      return;
+    }
     const prev = conversations;
     const prevArchived = archivedConversations;
     if (archived) {
@@ -3670,14 +3692,11 @@ export function ChatExperience({
     }
     const verb = archived ? "archive" : "unarchive";
     try {
-      const response = await fetch(
-        `/api/conversations/${conversation.id}/archive`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ archived }),
-        },
-      );
+      const response = await fetch(archiveUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived }),
+      });
       if (!response.ok) {
         console.error(`${verb} failed:`, response.status);
         showRailError(`Couldn't ${verb} the chat (HTTP ${response.status}).`);
@@ -3701,6 +3720,8 @@ export function ChatExperience({
     const before = conversations.find((c) => c.id === conversationId);
     if (!before) return false;
     if (before.title === trimmed) return true;
+    const renameUrl = conversationApiUrl(conversationId, "/rename");
+    if (!renameUrl) return false;
     // Optimistic; rollback puts the old title back on that one row rather
     // than restoring a whole-list snapshot, so a conversation that landed in
     // the rail while the request was out is not lost with it.
@@ -3710,14 +3731,11 @@ export function ChatExperience({
       );
     setTitle(trimmed);
     try {
-      const response = await fetch(
-        `/api/conversations/${conversationId}/rename`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: trimmed }),
-        },
-      );
+      const response = await fetch(renameUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
       if (!response.ok) {
         console.error("rename conversation failed:", response.status);
         showRailError(`Couldn't rename the chat (HTTP ${response.status}).`);
@@ -3746,14 +3764,15 @@ export function ChatExperience({
     conversation: ConversationSummary,
     { format, includeWork }: DownloadOptions,
   ) => {
+    const exportUrl = conversationApiUrl(conversation.id, "/export");
+    if (!exportUrl) throw new Error("This chat has an invalid id.");
     const query = new URLSearchParams({ format });
     if (format !== "json") {
       query.set("include", includeWork ? "full" : "conversation");
     }
-    const response = await fetch(
-      `/api/conversations/${conversation.id}/export?${query.toString()}`,
-      { method: "GET" },
-    );
+    const response = await fetch(`${exportUrl}?${query.toString()}`, {
+      method: "GET",
+    });
     if (!response.ok) {
       const detail = await response.text();
       console.error("export failed", response.status, detail);
@@ -3785,13 +3804,12 @@ export function ChatExperience({
   // ScheduleTaskCard appears for the user to review and approve (or cancel) —
   // the task is created only on approve, via the existing #239 path.
   const promoteConversation = async (conversation: ConversationSummary) => {
+    const promoteUrl = conversationApiUrl(conversation.id, "/promote-to-task");
+    if (!promoteUrl) return;
     try {
-      const response = await fetch(
-        `/api/conversations/${conversation.id}/promote-to-task`,
-        {
-          method: "POST",
-        },
-      );
+      const response = await fetch(promoteUrl, {
+        method: "POST",
+      });
       if (!response.ok) {
         console.error(
           "promote-to-task failed",

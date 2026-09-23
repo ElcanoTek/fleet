@@ -169,9 +169,16 @@ describe("resolveWorkspaceHref", () => {
     });
   });
 
-  it("URL-encodes the conversation id to defend against malformed callers", () => {
-    const result = resolveWorkspaceHref("x.png", "weird id/with slash");
-    expect(result.href.startsWith("/api/conversations/weird%20id%2Fwith%20slash/workspace/")).toBe(true);
+  it("does not rewrite onto a malformed conversation id (fails closed)", () => {
+    // The id gate (conversationApiUrl) refuses anything that is not one
+    // path-safe token, so a malformed caller gets no workspace URL at all.
+    for (const id of ["weird id/with slash", "../x", "http://evil", "%2e%2e"]) {
+      expect(resolveWorkspaceHref("x.png", id)).toEqual({
+        href: "x.png",
+        isWorkspaceFile: false,
+        downloadFilename: "",
+      });
+    }
   });
 
   it("refuses . / .. / encoded-dot segments instead of rewriting them (#1113)", () => {

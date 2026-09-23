@@ -10,6 +10,7 @@ import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { Icon } from "./Icon";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { formatBytes, stripMarkdown } from "./formatters";
+import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
 
 // Project home (#509 follow-up): the page a project's rail row opens — title,
 // this member's chats in the project, the TEAM's shared chats beside them, a
@@ -461,10 +462,11 @@ export function ProjectHome({
   // URL is revoked on the next tick — long enough for the click to be taken.
   const downloadFile = async (f: ProjectFileEntry) => {
     setFileError(null);
-    const href = `/api/conversations/${encodeURIComponent(f.conversation_id)}/workspace/${f.path
-      .split("/")
-      .map(encodeURIComponent)
-      .join("/")}`;
+    const href = conversationWorkspaceUrl(f.conversation_id, f.path);
+    if (!href) {
+      setFileError(`Couldn’t open “${f.name}” — its path isn’t a valid workspace file.`);
+      return;
+    }
     try {
       const res = await fetch(href, { cache: "no-store" });
       if (!res.ok) {

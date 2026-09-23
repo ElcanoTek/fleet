@@ -25,6 +25,7 @@ import {
   approvalStatusFromOutcome,
 } from "./history";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
+import { conversationApprovalApiUrl } from "@/app/lib/conversationApiUrl";
 
 // Preview viewport presets for the inline email preview. These mirror the
 // widths real clients render at — 375px ≈ iPhone portrait, 700px is the
@@ -388,18 +389,22 @@ export function ApprovalCard({
     setSubmitting(approved ? "send" : "cancel");
     setSubmitError(null);
     try {
-      const response = await fetch(
-        `/api/conversations/${conversationId}/approvals/${approval.id}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            approved,
-            scope: executing ? "once" : applyAll ? "session" : "once",
-            ...(!executing && edits && Object.keys(edits).length > 0 ? { edits } : {}),
-          }),
-        },
-      );
+      const approvalUrl = conversationApprovalApiUrl(conversationId, approval.id);
+      if (!approvalUrl) {
+        // Both ids are server-minted UUIDs; anything else is not sent, so
+        // no id can steer this POST to another path or origin.
+        setSubmitError("This approval has an invalid id and can't be sent.");
+        return;
+      }
+      const response = await fetch(approvalUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          approved,
+          scope: executing ? "once" : applyAll ? "session" : "once",
+          ...(!executing && edits && Object.keys(edits).length > 0 ? { edits } : {}),
+        }),
+      });
       if (!response.ok) {
         // The server did not record a decision, so the approval is still
         // pending there — keep the card pending here too and let the user
@@ -1475,17 +1480,21 @@ function SuggestAdvancedModelCard({
     setPending(action);
     setSubmitError(null);
     try {
-      const response = await fetch(
-        `/api/conversations/${conversationId}/approvals/${approval.id}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            approved: action !== "dismiss",
-            action,
-          }),
-        },
-      );
+      const approvalUrl = conversationApprovalApiUrl(conversationId, approval.id);
+      if (!approvalUrl) {
+        // Both ids are server-minted UUIDs; anything else is not sent, so
+        // no id can steer this POST to another path or origin.
+        setSubmitError("This approval has an invalid id and can't be sent.");
+        return;
+      }
+      const response = await fetch(approvalUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          approved: action !== "dismiss",
+          action,
+        }),
+      });
       if (!response.ok) {
         setSubmitError(await describeSubmitFailure(response));
         return;

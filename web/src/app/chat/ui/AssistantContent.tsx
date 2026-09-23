@@ -17,6 +17,7 @@ import { CopyButton } from "./ChatChips";
 import { DiffBlock } from "./DiffBlock";
 import { isUnifiedDiff } from "@/app/lib/diffUtils";
 import { PENDING_CONV_KEY, resolveWorkspaceHref } from "./workspaceHref";
+import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
 // WorkspaceImage moved to its own module so ToolChips can use it without
 // statically importing this (now lazy-loaded) ReactMarkdown pipeline.
 import { WorkspaceImage } from "./WorkspaceImage";
@@ -343,8 +344,11 @@ function InlineHtmlPreview({
   // resolve to the workspace API. This allows charts and other files generated
   // by the agent to render correctly inside the sandboxed iframe.
   let processedHtml = html;
-  if (conversationId && conversationId !== PENDING_CONV_KEY) {
-    const baseHref = `/api/conversations/${encodeURIComponent(conversationId)}/workspace/`;
+  const baseHref =
+    conversationId && conversationId !== PENDING_CONV_KEY
+      ? conversationWorkspaceUrl(conversationId)
+      : null;
+  if (baseHref) {
     const baseTag = `<base href="${baseHref}">`;
     if (/<head[^>]*>/i.test(processedHtml)) {
       processedHtml = processedHtml.replace(/(<head[^>]*>)/i, `$1\n${baseTag}`);
