@@ -403,6 +403,7 @@ func run() error {
 		CriticalToolTimeouts:    bundlePolicy.CriticalToolTimeouts,
 		CriticalToolModes:       bundlePolicy.CriticalToolModes,
 		CriticalToolUndoHints:   bundlePolicy.CriticalToolUndoHints,
+		CriticalToolAliases:     bundlePolicy.CriticalToolAliases,
 	})
 
 	// Connector credentials cross exactly one process boundary at boot: the child

@@ -129,6 +129,7 @@ func run(argv []string, progName string) error {
 		ParallelSafeTools:       bp.ParallelSafeTools,
 		CriticalToolSuffixes:    bp.CriticalToolSuffixes,
 		CriticalToolSubstitutes: bp.CriticalToolSubstitutes,
+		CriticalToolAliases:     bp.CriticalToolAliases,
 	})
 
 	// Install the bundle's custom model-pricing overrides (#297) before any turn

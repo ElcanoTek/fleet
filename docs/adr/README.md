@@ -43,7 +43,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0015](0015-remote-mcp-tls-pinning-mtls.md) | TLS pinning and mTLS for remote MCP servers | Accepted |
 | [0032](0032-host-side-ingress-guardrails.md) | Host-side untrusted-ingress guardrails | Accepted |
 | [0033](0033-cross-provider-failover.md) | Cross-provider failover before stream commitment | Accepted |
-| [0034](0034-audit-gate-commitment-binding.md) | Audit-gate commitment binding, payload-level failure, and create reconciliation | Accepted |
+| [0034](0034-audit-gate-commitment-binding.md) | Audit-gate commitment binding, payload-level failure, and create reconciliation | Accepted; amended by ADR-0071 |
 | [0035](0035-side-effect-gated-stream-recovery.md) | Side-effect-gated recovery after stream commitment | Accepted |
 | [0036](0036-sandboxed-file-tools-and-host-io-exceptions.md) | Sandboxed file tools, and the host-side I/O exception classes | Accepted |
 | [0037](0037-agent-tool-panic-containment.md) | Contain panics at the AgentTool dispatch boundary | Accepted |
@@ -79,4 +79,5 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0068](0068-chat-scheduled-tasks-inherit-connectors.md) | A task scheduled from chat inherits the conversation's connector selection; the card names it and warns when there is none | Accepted; amends ADR-0052 |
 | [0069](0069-per-job-scheduled-workspaces.md) | A non-worktree scheduled run works in `<workspace-root>/tasks/<lineage_id>/` — one directory per job, carried to occurrences, re-runs and clones — instead of the shared root | Accepted |
 | [0070](0070-dead-lettered-recurrences-spawn-successor.md) | A dead-lettered recurring occurrence spawns its successor; two consecutive dead-letters park the chain | Accepted |
+| [0071](0071-critical-tool-aliases.md) | Bundle-declared critical tool aliases are one commitment (amends ADR-0034) | Accepted |
 | [0072](0072-deterministic-completion-predicate.md) | A declared completion predicate may replace the end-of-run verifier; a verifier outage does not dead-letter an audited run (amends ADR-0001) | Accepted |

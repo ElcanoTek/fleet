@@ -93,13 +93,22 @@ type orchestrationState struct {
 	// record ids (and value-set digest) the audit approved, keyed by
 	// critical-tool suffix. When a tool call carries deal_ids (a server-side
 	// batch), every id MUST be in approvedDealIDs[suffix]; and when the audit
-	// declared a digest, the call's values_sha256 MUST equal
-	// approvedDigest[suffix] — otherwise the call is blocked. Empty/absent =>
-	// no batch binding, i.e. single-record flows behave exactly as before.
+	// declared a digest, the call's values_sha256 MUST match it. The digest
+	// requirement is kept PER RECORD — approvedDigest[suffix][id] is the set
+	// of digests the declarations naming that record required ("" = one
+	// declared it with no values_digest). One envelope may approve two
+	// batches under one key (two batches of the same tool, or one per alias
+	// twin, #1604) with different value lists or with a digest on only one of
+	// them: a single class-wide slot kept only the last digest and falsely
+	// blocked the first batch, and a class-wide set still refused an
+	// undigested batch against its twin's digest. The per-commitment digest
+	// check in commitmentAuthorizes binds each batch call to ONE declaration's
+	// records and digest. Empty/absent => no batch binding, i.e.
+	// single-record flows behave exactly as before.
 	// This is what stops one audit approval from silently authorizing a batch
 	// over records the approver never saw.
 	approvedDealIDs map[string]map[string]bool
-	approvedDigest  map[string]string
+	approvedDigest  map[string]map[string]map[string]bool
 
 	// dischargedDeals tracks, per critical-tool suffix, the record ids whose
 	// commitment has ALREADY been discharged by a successful per-record batch
@@ -107,7 +116,12 @@ type orchestrationState struct {
 	// already-done records report success again (idempotent skip) does NOT
 	// double-discharge them, so the outstanding count reflects only the
 	// records that still genuinely need work. Reset per audit envelope
-	// (registerCommitted*).
+	// (registerCommitted*). Keyed by alias class (criticalAliasClassOf), then
+	// by server/variant prefix + record id (dischargedDealKey): the class key
+	// lets one record reported by either twin discharge once, and the server
+	// in the inner key keeps two servers' writes of the same record id two
+	// actions — without it the second server's success was skipped as an echo
+	// and its own commitment stayed owed (#1604).
 	dischargedDeals map[string]map[string]bool
 
 	// criticalToolFailureAttempts counts unsuccessful executions per
@@ -215,6 +229,10 @@ type orchestrationState struct {
 type pendingCriticalAction struct {
 	toolName string
 	argsHash string
+	// record is the blocked call's record binding (pendingRecordKey): its
+	// deal_id, or its deal_ids set, "" when it names no record. An aliased
+	// success clears the entry only when it wrote the same record (#1604).
+	record string
 }
 
 // ApprovalStager is the narrow interface the orchestration layer uses to stage
@@ -308,7 +326,7 @@ func newOrchestrationState(logSession *LogSession, _ int) *orchestrationState {
 		sentEmailFingerprints:       make(map[string]struct{}),
 		committedCriticalActions:    make(map[string]int),
 		approvedDealIDs:             make(map[string]map[string]bool),
-		approvedDigest:              make(map[string]string),
+		approvedDigest:              make(map[string]map[string]map[string]bool),
 		dischargedDeals:             make(map[string]map[string]bool),
 		criticalToolFailureAttempts: make(map[string]int),
 		logSession:                  logSession,
@@ -923,7 +941,8 @@ func (o *orchestrationState) accumulateUsage(modelSlug string, usage fantasy.Usa
 //
 // Discharging one entry per success keeps the count honest: two distinct pending
 // calls to the same tool still need two successes, exactly as before.
-func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) {
+func (o *orchestrationState) markPendingCriticalDone(toolName, rawInput string) {
+	argsHash := hashString(rawInput)
 	fallback := -1
 	for i, p := range o.pendingCriticalActions {
 		if p.toolName != toolName {
@@ -940,7 +959,33 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) 
 	if fallback >= 0 {
 		log.Printf("Enforcement: discharging pending %s against corrected arguments (blocked-call hash no longer matches)", toolName)
 		o.dischargePendingCriticalAt(fallback)
+		return
 	}
+	// A blocked call's declared alias on the same server is the same action
+	// through the other transport (critical_tool_aliases, #1604): an inline
+	// write blocked pre-audit and then sent as a staged upload is done, and
+	// demanding the inline call afterwards would ask for the write twice.
+	//
+	// Only for the SAME record, though. The alias makes two names one action,
+	// not two records one record: an inline write of record A blocked
+	// pre-audit is not done because the upload twin later wrote record B, and
+	// clearing it on the names alone would let finish pass (B's commitment
+	// exhausted, nothing pending) with A's mutation never made. Server/variant
+	// identity is already part of sameAliasedTool.
+	record := pendingRecordKey(rawInput)
+	for i, p := range o.pendingCriticalActions {
+		if sameAliasedTool(p.toolName, toolName) && p.record == record {
+			log.Printf("Enforcement: discharging pending %s via its declared alias %s", p.toolName, toolName)
+			o.dischargePendingCriticalAt(i)
+			return
+		}
+	}
+}
+
+// dischargedDealKey is a record's key in its alias class's dischargedDeals
+// ledger: the tool's server/variant prefix and the record id.
+func dischargedDealKey(toolName, dealID string) string {
+	return toolServerPrefix(toolName) + "\x00" + dealID
 }
 
 // dischargePendingCriticalAt moves pendingCriticalActions[i] to completed.
@@ -990,7 +1035,9 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// an attempt with failures and no new progress counts against it.
 			// This lets a partial batch resume to completion without wedging
 			// the budget on the unchanged full-batch args.
-			suffix := criticalSuffixFor(toolName)
+			// Keyed by alias class (#1604) like the approvals below, so one
+			// record reported by either twin discharges exactly once.
+			suffix := criticalAliasClassOf(criticalSuffixFor(toolName))
 			done := o.dischargedDeals[suffix]
 			if done == nil {
 				done = make(map[string]bool)
@@ -1006,7 +1053,21 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// auto-lock early). With no approved set (non-batch / legacy
 			// audit) behavior is unchanged: discharge per succeeded record by
 			// suffix.
+			//
+			// The approved set is the alias-class UNION (#1604), so it is not
+			// enough on its own: one audit may approve two disjoint batches, one
+			// per twin, and a response to the first batch's call that reports a
+			// record of the SECOND batch would discharge the second commitment
+			// though its action never ran. A call that carried deal_ids may
+			// therefore discharge only the records it named — the ones the
+			// input gate (checkBatchBinding + commitmentAuthorizes) bound to
+			// this call's own declaration and digest.
 			approved := o.approvedDealIDs[suffix]
+			invoked, invokedBatch := batchDealIDs(rawInput)
+			inCall := make(map[string]bool, len(invoked))
+			for _, id := range invoked {
+				inCall[id] = true
+			}
 			callDigest := valuesDigestArg(rawInput)
 			newly, failed := 0, 0
 			for _, oc := range outcomes {
@@ -1015,9 +1076,14 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 						oc.dealID, toolName)
 					continue
 				}
+				if invokedBatch && oc.success && !inCall[strings.TrimSpace(oc.dealID)] {
+					log.Printf("Enforcement: ignoring batch result for record id %q on %q (not in this call's deal_ids)",
+						oc.dealID, toolName)
+					continue
+				}
 				switch {
-				case oc.success && !done[oc.dealID]:
-					done[oc.dealID] = true
+				case oc.success && !done[dischargedDealKey(toolName, oc.dealID)]:
+					done[dischargedDealKey(toolName, oc.dealID)] = true
 					o.markCommittedExecuted(toolName, oc.dealID, callDigest)
 					newly++
 				case !oc.success:
@@ -1027,7 +1093,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			if newly > 0 {
 				o.criticalExecutedCount++
 				delete(o.criticalToolFailureAttempts, key)
-				o.markPendingCriticalDone(toolName, argsHash)
+				o.markPendingCriticalDone(toolName, rawInput)
 				if len(o.pendingCriticalActions) == 0 {
 					o.selfAuditRequested = true
 				}
@@ -1041,7 +1107,7 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 			// Single-call critical tool (no per-record results[]).
 			o.criticalExecutedCount++
 			delete(o.criticalToolFailureAttempts, key)
-			o.markPendingCriticalDone(toolName, argsHash)
+			o.markPendingCriticalDone(toolName, rawInput)
 			if len(o.pendingCriticalActions) == 0 {
 				o.selfAuditRequested = true
 			}

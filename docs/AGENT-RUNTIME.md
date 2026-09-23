@@ -373,6 +373,110 @@ cards explicitly through the approval API. The flag
 no human present and a mocked backend — never enable it in production. fleet logs
 a loud warning at startup when it is on.
 
+### Critical tool aliases: one action under two names (#1604)
+
+A typed `confirm_audit` declaration binds to the exact server-qualified tool
+name ([ADR-0034](adr/0034-audit-gate-commitment-binding.md)). Some servers expose
+**one** write under two names. Pages has `update_page_data` (inline `data`) and
+`update_page_data_upload` (a staged file), and `deploy_page` /
+`deploy_page_upload` are the same kind of pair. The agent chooses the transport
+from the payload size, which it only knows after building the payload. So a run
+could declare one name, publish correctly through the other, and still end as a
+failure, because the declared name stayed owed. Production runs did exactly
+that, in two shapes:
+
+- A Pages data refresh for page A declared `mcp_pages_update_page_data`, then
+  published the audited payload through `mcp_pages_update_page_data_upload`.
+  The write went live, the inline declaration stayed owed, and the run's own
+  self-audit aborted "the stale mcp_pages_update_page_data commitment" → status
+  `error`, with the data live. A second page failed the same way.
+- A Pages deploy for page B left a stale `deploy_page_upload` declaration owed
+  after the publish → status `error`.
+
+`agent_policy.critical_tool_aliases` tells the gate those names are one action:
+
+```yaml
+agent_policy:
+  critical_tools: [update_page_data, update_page_data_upload, deploy_page, deploy_page_upload]
+  critical_tool_modes:
+    update_page_data: notify
+    update_page_data_upload: notify
+  critical_tool_aliases:
+    update_page_data: [update_page_data_upload]
+    deploy_page: [deploy_page_upload]
+```
+
+Each key and the suffixes under it form one equivalence class, and entries that
+share a member merge. A declaration on any member works for a call of any other
+member **on the same server/variant prefix**, in both directions: declaring
+`mcp_pages_update_page_data` and publishing through
+`mcp_pages_update_page_data_upload` discharges the commitment, and so does the
+reverse. Concretely, a call through an alias:
+
+- rides the declared commitment, instead of being blocked;
+- discharges it;
+- lets a re-audit that switches variant supersede the stale declaration instead
+  of stacking on it;
+- clears an audited call that was blocked before the audit, when it wrote
+  the same record (the same `deal_id`, or the same `deal_ids` set);
+- stays under a `deal_ids` / `values_digest` batch approval made on the other
+  member. The batch ledgers are keyed by alias class.
+
+What does **not** change:
+
+- `deal_id` / `deal_ids` / `values_digest` binding carries over to the alias as
+  is. One audit may approve several batches under one key — two batches of the
+  same tool, or one per twin, each with its own `values_digest` or with a
+  digest on only one of them — and each batch rides only under its own
+  declaration's records and digest. The digest requirement is kept per
+  record, so an undigested batch is not refused over a twin's digest for
+  other records.
+- A batch result discharges only the records **that call** named in its
+  `deal_ids`, and a digest-bound batch commitment only under its own digest. A
+  response to one batch that reports a success for a record of the other
+  batch discharges nothing: the other critical action still has to run. The
+  discharge ledger dedups a record per server/variant, so the same record id
+  written on two servers counts as two writes.
+- For a **typed** declaration, an aliased or same-suffix call on a
+  **different** server or client variant is still blocked and discharges
+  nothing. (Legacy free-text declarations carry no server identity and stay
+  suffix-level and server-agnostic, exactly as before: see below.)
+- Approval modes stay per suffix, which is why the example gives both Pages
+  write variants `notify`.
+- A manifest without the key behaves as before, except for batch-ledger
+  corrections that apply to every bundle (see the design note).
+
+A few rules and caveats:
+
+- **Every member must be in `critical_tools`.** A member that is not is logged
+  and ignored when the policy is installed, and an entry left with fewer than
+  two members is dropped. An alias of a tool the gate never sees would be a way
+  around it. `fleet validate-config` reports both as an `agent_policy=fail`
+  check, from the same validation the boot path runs — at boot they are only a
+  log line, and a typo'd member silently leaves the wedge the alias was meant
+  to end. Run it after adding the key.
+- **Legacy free-text audits** honour aliases at suffix level, the way they
+  already honour `critical_tool_substitutes`. They were never bound to a
+  server: a legacy `update_page_data` declaration already let another server's
+  `…_update_page_data` ride, and with the alias another server's
+  `…_update_page_data_upload` rides too. The cross-server refusal above is a
+  property of typed declarations.
+- **Sub-agents** run in-process under the same installed policy, so they
+  inherit the aliases.
+- **Alias vs substitute.** Use an alias only for names that are the same action
+  with the same blast radius. A lower-level fallback that reaches the same
+  result another way is a one-way `critical_tool_substitutes` entry.
+- **Declare one variant per write.** Declaring both members in one audit
+  registers two commitments: unbound declarations cannot tell one write
+  declared twice from two writes.
+- **Adoption.** The manifest is decoded strictly, so a bundle can adopt the key
+  only once a fleet release that understands it is deployed. After that, the
+  bundle's "Wrong tool variant declared?" abort/re-audit recovery step is no
+  longer needed for aliased pairs.
+
+See [ADR-0071](adr/0071-critical-tool-aliases.md) and the design note
+[`CRITICAL-TOOL-ALIASES.md`](CRITICAL-TOOL-ALIASES.md).
+
 ---
 
 ## Context-window pressure (proactive compaction)

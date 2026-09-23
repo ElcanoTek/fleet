@@ -36,6 +36,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver for the probe
 
 	"github.com/ElcanoTek/fleet/internal/admincli"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/creds"
@@ -214,6 +215,7 @@ func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 	results = append(results, checkMCPCatalog(bundle, bundleErr))
 	results = append(results, checkManifestFiles(bundle, bundleErr))
 	results = append(results, checkBundleSkills(bundle, bundleErr))
+	results = append(results, checkAgentPolicy(bundle, bundleErr))
 	results = append(results, checkDatabase(ctx, cfg, cfgErr, opts))
 	results = append(results, checkCredentials(bundle, bundleErr))
 	results = append(results, checkSandbox(ctx, cfg, bundle))
@@ -1086,6 +1088,45 @@ func checkBundleSkills(bundle *clientconfig.Bundle, bundleErr error) checkResult
 	}
 	res.Status = statusOK
 	res.Detail = "bundle skills well-formed"
+	return res
+}
+
+// ── 3e. Agent policy (CI gate, non-blocking) ──
+
+// checkAgentPolicy surfaces what the boot-time agent-policy install would
+// silently ignore in agent_policy.critical_tool_aliases (#1604): a member that
+// is not a critical suffix (checked against the SAME merged list the audit gate
+// uses — the base email suffixes, critical_tools, and the critical http_tools /
+// a2a_peers names), or an entry left with fewer than two members. At boot each
+// is one log line and the alias quietly does nothing, so a typo leaves exactly
+// the wrong-variant wedge the alias was declared to end. The problems come from
+// agentcore.CriticalToolAliasProblems, the same code ConfigureAgentPolicy runs,
+// so this check and the running gate cannot disagree. Decided entirely by the
+// bundle's own files, so it belongs in the floor, and non-blocking like the
+// other floor checks: CI keys on the status, operators on the exit code.
+func checkAgentPolicy(bundle *clientconfig.Bundle, bundleErr error) checkResult {
+	res := checkResult{Name: "agent_policy", Blocking: false}
+	if bundle == nil || bundleErr != nil {
+		res.Status = statusWarn
+		res.Detail = "skipped (bundle not loaded)"
+		return res
+	}
+	p := bundle.AgentPolicy()
+	problems := agentcore.CriticalToolAliasProblems(agentcore.AgentPolicy{
+		CriticalToolSuffixes: p.CriticalToolSuffixes,
+		CriticalToolAliases:  p.CriticalToolAliases,
+	})
+	if len(problems) > 0 {
+		res.Status = statusFail
+		res.Detail = strings.Join(problems, "; ")
+		return res
+	}
+	res.Status = statusOK
+	if n := len(p.CriticalToolAliases); n > 0 {
+		res.Detail = fmt.Sprintf("critical_tool_aliases: %d entr%s, every member a critical suffix", n, map[bool]string{true: "y", false: "ies"}[n == 1])
+	} else {
+		res.Detail = "no critical_tool_aliases declared"
+	}
 	return res
 }
 
