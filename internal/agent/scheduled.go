@@ -593,6 +593,10 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	// declared commitment still blocks. No success of a listed tool falls
 	// through to the verifier exactly as before.
 	if tool := p.completionPredicateTool(); tool != "" {
+		// A warning left by an earlier fail-open (a verifier outage, then a
+		// phone-a-friend repair round) no longer describes how this run
+		// finished: the predicate, not an unverified pass, completed it.
+		p.verifierWarning = ""
 		p.recordCompletionPredicate(tool)
 		return true, nil
 	}
