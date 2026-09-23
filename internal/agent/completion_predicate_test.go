@@ -450,7 +450,7 @@ func TestScheduledVerifierOutageAfterUploadTwinSupersedesFailedInline(t *testing
 	broker := &pagesBroker{calls: map[string]int{}, failing: map[string]bool{"update_page_data": true}}
 	a, _, _, err := scriptedRun(t, []struct{ tool, input string }{
 		{"confirm_audit", publishAudit},
-		{"mcp_pages_update_page_data", `{"slug":"x","data":{}}`},
+		{"mcp_pages_update_page_data", `{"slug":"x","data":{"title":"Q3"}}`},
 		{"mcp_pages_update_page_data_upload", `{"slug":"x","upload_id":"u-1"}`},
 	}, verifier, nil, broker, nil)
 	if err != nil {
@@ -470,7 +470,7 @@ func TestScheduledVerifierOutageAfterUploadTwinSupersedesFailedInline(t *testing
 // spellings stay two actions (the pre-#1604 behaviour).
 func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
 	pageX := map[string]any{"/slug": "x"}
-	inlineFailed := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: map[string]any{"/slug": "x"}, ArgumentsOmitted: true}
+	inlineFailed := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: map[string]any{"/slug": "x"}}
 	for _, tc := range []struct {
 		name    string
 		aliased bool
@@ -479,6 +479,7 @@ func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
 	}{
 		{"same-server twin supersedes", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/slug": "x", "/upload_id": "u-1"}}, nil},
 		{"twin on another record does not", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/slug": "y", "/upload_id": "u-1"}}, []string{"mcp_pages_update_page_data"}},
+		{"twin with an incomplete projection does not", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/slug": "x"}, ArgumentsOmitted: true}, []string{"mcp_pages_update_page_data"}},
 		{"twin sharing no argument does not", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/upload_id": "u-1"}}, []string{"mcp_pages_update_page_data"}},
 		{"cross-server twin does not", true, toolExecRecord{Name: "mcp_pagesb_update_page_data_upload", Succeeded: true, Arguments: pageX}, []string{"mcp_pages_update_page_data"}},
 		{"client-variant twin does not", true, toolExecRecord{Name: "mcp_pages_client2_update_page_data_upload", Succeeded: true, Arguments: pageX}, []string{"mcp_pages_update_page_data"}},
@@ -498,6 +499,34 @@ func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
 	}
 }
 
+// An incomplete projection may have dropped the real target while keeping an
+// unrelated shared flag: two tickets filtered out, /dry_run kept on both. The
+// flag agreeing proves nothing, so the failure stands.
+func TestFailedCriticalCallsIncompleteProjectionProvesNoTarget(t *testing.T) {
+	pagesTwinPolicy(t, true)
+	records := []toolExecRecord{
+		{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: map[string]any{"/dry_run": false}, ArgumentsOmitted: true},
+		{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/dry_run": false}, ArgumentsOmitted: true},
+	}
+	if got := failedCriticalCalls(records); fmt.Sprint(got) != "[mcp_pages_update_page_data]" {
+		t.Fatalf("failedCriticalCalls = %v, want [mcp_pages_update_page_data]", got)
+	}
+}
+
+// Bare suffixes carry no server identity, so a landed bare twin cannot be
+// proved to be the failed bare tool's twin on the same server.
+func TestFailedCriticalCallsBareTwinsStayApart(t *testing.T) {
+	pagesTwinPolicy(t, true)
+	args := map[string]any{"/slug": "x"}
+	records := []toolExecRecord{
+		{Name: "update_page_data", Succeeded: false, Arguments: args},
+		{Name: "update_page_data_upload", Succeeded: true, Arguments: args},
+	}
+	if got := failedCriticalCalls(records); fmt.Sprint(got) != "[update_page_data]" {
+		t.Fatalf("failedCriticalCalls = %v, want [update_page_data]", got)
+	}
+}
+
 // The end-to-end shape of a twin aimed at another record: the inline write to
 // page x fails, the upload twin lands page y, and the verifier is down. Page x
 // never landed, so the outage must not fail open.
@@ -508,7 +537,7 @@ func TestScheduledVerifierOutageAfterUploadTwinForAnotherPageStaysFailed(t *test
 	broker := &pagesBroker{calls: map[string]int{}, failing: map[string]bool{"update_page_data": true}}
 	_, _, _, err := scriptedRun(t, []struct{ tool, input string }{
 		{"confirm_audit", publishAudit},
-		{"mcp_pages_update_page_data", `{"slug":"x","data":{}}`},
+		{"mcp_pages_update_page_data", `{"slug":"x","data":{"title":"Q3"}}`},
 		{"mcp_pages_update_page_data_upload", `{"slug":"y","upload_id":"u-1"}`},
 	}, verifier, nil, broker, nil)
 	if !errors.Is(err, agentcore.ErrCompletionUnverified) {

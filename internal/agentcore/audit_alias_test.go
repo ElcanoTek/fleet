@@ -500,6 +500,20 @@ func TestCriticalActionKey(t *testing.T) {
 	}
 }
 
+// A bare suffix has no server prefix, so bare alias members key apart — the
+// same fail-closed answer sameToolServer gives for them.
+func TestCriticalActionKeyKeepsBareTwinsApart(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	inline, _ := CriticalActionKey("update_page_data")
+	upload, _ := CriticalActionKey("update_page_data_upload")
+	if inline == upload {
+		t.Fatalf("bare twins share key %+v", inline)
+	}
+	if again, _ := CriticalActionKey("update_page_data"); again != inline {
+		t.Fatalf("a bare name must key consistently: %+v vs %+v", again, inline)
+	}
+}
+
 // A critical suffix that ends in "_"+another alias class must not key onto
 // that class's twin one segment up the prefix: mcp_x_bulk_create_deal (suffix
 // bulk_create_deal) and mcp_x_bulk_create_deal_upload (prefix mcp_x_bulk,

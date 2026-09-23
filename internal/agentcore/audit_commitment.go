@@ -272,8 +272,9 @@ type CriticalAction struct {
 // false for a tool that is not critical. Twins on the same server share a key —
 // mcp_pages_update_page_data and mcp_pages_update_page_data_upload when the
 // bundle aliases the two suffixes — while the same pair on another server, or
-// on a client-variant seat, keys apart. With no aliases the class is the
-// suffix itself, so each tool name is its own action. Exported for the
+// on a client-variant seat, keys apart. A bare suffix (no server prefix) keys
+// by its own name. With no aliases the class is the suffix itself, so each
+// tool name is its own action. Exported for the
 // scheduled driver, which judges "the last attempt at this action failed" per
 // action, not per spelling of it.
 func CriticalActionKey(toolName string) (CriticalAction, bool) {
@@ -281,7 +282,14 @@ func CriticalActionKey(toolName string) (CriticalAction, bool) {
 	if suffix == "" {
 		return CriticalAction{}, false
 	}
-	return CriticalAction{Prefix: toolServerPrefix(toolName), Class: criticalAliasClassOf(suffix)}, true
+	prefix := toolServerPrefix(toolName)
+	if prefix == "" {
+		// A bare suffix carries no server identity, so it cannot be proved to
+		// share a server with its twin (sameToolServer fails closed on it):
+		// each bare name is its own action.
+		return CriticalAction{Class: toolName}, true
+	}
+	return CriticalAction{Prefix: prefix, Class: criticalAliasClassOf(suffix)}, true
 }
 
 // sameAliasedTool reports whether two full tool names are the same critical

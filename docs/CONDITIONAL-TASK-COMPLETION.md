@@ -81,9 +81,11 @@ on the audit:
   not dead-lettered on the verifier's own outage. The phone-a-friend reviewer
   already failed open on its errors. "Last execution" is judged per critical action: a
   same-server alias twin (`critical_tool_aliases`) that landed supersedes a
-  failed attempt of its twin aimed at the same target (every argument the two
-  calls share agrees, and they share at least one), while a twin aimed at
-  another record, or on another server or client variant, does not.
+  failed attempt of its twin aimed at the same target (both calls' recorded
+  arguments are complete, every argument they share agrees, and they share at
+  least one), while a twin aimed at another record, one whose evidence is
+  incomplete, a bare-suffix twin, or one on another server or client variant
+  does not.
 - **A malformed verdict** (the verifier answered, but with prose, invalid
   JSON, no explicit `missing_actions` array, or an empty reply) is a content failure, not an
   outage. A degraded verifier model must not quietly become auto-success, so

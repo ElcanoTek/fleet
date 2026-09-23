@@ -822,13 +822,19 @@ func failedCriticalCalls(records []toolExecRecord) []string {
 }
 
 // sameCallTarget reports whether two alias-twin calls provably aim at the same
-// target: they share at least one projected argument (the verifier's scalar
-// evidence, keyed by JSON Pointer path) and agree on every one they share. The
-// twins' payload arguments differ by design (inline data vs an upload
-// reference), so only the arguments both carry are compared — the record
-// identifier (a slug, a deal id) among them. Sharing none proves nothing, and
-// the attempt stays failed (fail closed).
+// target: both argument projections are complete (the verifier's scalar
+// evidence, keyed by JSON Pointer path, dropped nothing), they share at least
+// one argument, and they agree on every one they share. The twins' payload
+// arguments differ by design (inline data vs an upload reference), so only the
+// arguments both carry are compared — the record identifier (a slug, a deal id)
+// among them. An incomplete projection may have dropped exactly that
+// identifier while keeping an unrelated shared flag, so it proves nothing;
+// neither does sharing no argument. Either way the attempt stays failed (fail
+// closed): the outage then spends a check, as it did before twins superseded.
 func sameCallTarget(a, b toolExecRecord) bool {
+	if a.ArgumentsOmitted || b.ArgumentsOmitted {
+		return false
+	}
 	shared := 0
 	for path, av := range a.Arguments {
 		bv, ok := b.Arguments[path]
