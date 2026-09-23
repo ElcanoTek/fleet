@@ -74,12 +74,19 @@ on the audit:
   If both attempts ran and both were outages while the run's own context was
   still live (a run deadline that expired mid-check does not count, nor does a
   malformed first verdict), this run's **own** `confirm_audit` passed, at least one audit-gated tool
-  executed successfully, and no audit-gated tool's last execution failed, the
+  executed successfully, and no audit-gated tool has a failed attempt that a
+  later success did not supersede, the
   run succeeds with a
   `completion_unverified_verifier_error` warning. The warning is recorded in
   the session log and at the head of the task's terminal message; the run is
   not dead-lettered on the verifier's own outage. The phone-a-friend reviewer
-  already failed open on its errors.
+  already failed open on its errors. Only a later success supersedes a
+  failure, and only a success of the same tool or of a same-server alias twin
+  (`critical_tool_aliases`) that wrote the same record: both calls' recorded
+  arguments are complete and name the same `deal_id` / `deal_ids` binding. A
+  failed retry supersedes nothing, and neither does a twin that wrote another
+  record, names no record, has incomplete evidence, is a bare-suffix name, or
+  sits on another server or client variant.
 - **A malformed verdict** (the verifier answered, but with prose, invalid
   JSON, no explicit `missing_actions` array, or an empty reply) is a content failure, not an
   outage. A degraded verifier model must not quietly become auto-success, so

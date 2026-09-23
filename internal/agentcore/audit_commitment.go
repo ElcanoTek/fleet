@@ -256,6 +256,43 @@ func sameToolServer(a, b string) bool {
 	return pa != "" && pa == pb
 }
 
+// CriticalAction identifies one critical ACTION: the server/variant prefix of
+// the tool name (toolServerPrefix, "" for a bare suffix) and the alias class of
+// its critical suffix (criticalAliasClassOf, critical_tool_aliases #1604). The
+// two stay separate fields rather than one joined string: a join is ambiguous
+// when one critical suffix ends in "_"+another alias class
+// (mcp_x_bulk_create_deal vs mcp_x_bulk + create_deal_upload→create_deal), and
+// such a collision would let a success on one action supersede a failure on
+// another. Comparing the pair is exactly sameAliasedTool's rule.
+type CriticalAction struct {
+	Prefix string
+	Class  string
+}
+
+// CriticalActionKey returns the critical action a tool name performs, and
+// false for a tool that is not critical. Twins on the same server share a key —
+// mcp_pages_update_page_data and mcp_pages_update_page_data_upload when the
+// bundle aliases the two suffixes — while the same pair on another server, or
+// on a client-variant seat, keys apart. A bare suffix (no server prefix) keys
+// by its own name. With no aliases the class is the suffix itself, so each
+// tool name is its own action. Exported for the
+// scheduled driver, which judges "the last attempt at this action failed" per
+// action, not per spelling of it.
+func CriticalActionKey(toolName string) (CriticalAction, bool) {
+	suffix := criticalSuffixFor(toolName)
+	if suffix == "" {
+		return CriticalAction{}, false
+	}
+	prefix := toolServerPrefix(toolName)
+	if prefix == "" {
+		// A bare suffix carries no server identity, so it cannot be proved to
+		// share a server with its twin (sameToolServer fails closed on it):
+		// each bare name is its own action.
+		return CriticalAction{Class: toolName}, true
+	}
+	return CriticalAction{Prefix: prefix, Class: criticalAliasClassOf(suffix)}, true
+}
+
 // sameAliasedTool reports whether two full tool names are the same critical
 // action: identical, or declared aliases (critical_tool_aliases, #1604) on the
 // same server/variant — mcp_pages_update_page_data and
@@ -333,6 +370,32 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 // no record. Only an equal key is the same record set.
 func pendingRecordKey(rawInput string) string {
 	if ids, ok := batchDealIDs(rawInput); ok {
+		sorted := append([]string(nil), ids...)
+		sort.Strings(sorted)
+		return "ids:" + strings.Join(sorted, "\x00")
+	}
+	if id := callDealID(rawInput); id != "" {
+		return "id:" + id
+	}
+	return ""
+}
+
+// CallRecordBinding is a call's record binding for the scheduled driver: "id:"
+// plus its deal_id (under the callRecordIDKeys wire contract), or "ids:" plus
+// its sorted deal_ids set, "" when it names no record. Only an equal,
+// non-empty binding proves two calls wrote the same record — the rule a
+// verifier outage uses before a landed alias twin may supersede a failed
+// attempt (#1604 applies the same rule to a blocked pre-audit call). Stricter
+// than pendingRecordKey: a batch with any member that names no record ("n/a",
+// an empty string) proves nothing and binds to "", so two placeholder batches
+// never compare equal.
+func CallRecordBinding(rawInput string) string {
+	if ids, ok := batchDealIDs(rawInput); ok {
+		for _, id := range ids {
+			if id == "" {
+				return ""
+			}
+		}
 		sorted := append([]string(nil), ids...)
 		sort.Strings(sorted)
 		return "ids:" + strings.Join(sorted, "\x00")

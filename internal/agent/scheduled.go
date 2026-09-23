@@ -641,11 +641,11 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		switch {
 		case err != nil && twoOutages && p.verifierOutageMayFailOpen(err, records):
 			// Still no verdict, from an OUTAGE (transport, timeout), after this
-			// run's own audit passed and its critical work landed with no failed
-			// critical call: fail OPEN with a recorded warning instead of dead-lettering
+			// run's own audit passed and its critical work landed with no
+			// unresolved failed critical call: fail OPEN with a recorded warning instead of dead-lettering
 			// audited work on the verifier's own outage (the phone-a-friend
 			// reviewer already fails open on its errors).
-			log.Printf("verifier unavailable twice; the audit passed with no failed critical call, finishing unverified: %v", err)
+			log.Printf("verifier unavailable twice; the audit passed with no unresolved failed critical call, finishing unverified: %v", err)
 			p.verifierWarning = err.Error()
 			p.verified = true
 		case err != nil:
@@ -734,7 +734,7 @@ func (p *scheduledPolicy) persistVerifierWarning() {
 	}
 	t := agentcore.MessageTypeCompletionUnverifiedVerifierError
 	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
-		"[%s] WARNING: the end-of-run verifier could not return a verdict (twice: %s). The run's audit passed and its critical work landed with no failed critical call, so it finished WITHOUT model verification — review the result before relying on it.",
+		"[%s] WARNING: the end-of-run verifier could not return a verdict (twice: %s). The run's audit passed and its critical work landed with no unresolved failed critical call, so it finished WITHOUT model verification — review the result before relying on it.",
 		agentcore.MessageTypeCompletionUnverifiedVerifierError, agentcore.RedactSecrets(p.verifierWarning)), nil, nil, &t, nil, nil, "")
 }
 
@@ -761,46 +761,103 @@ func (p *scheduledPolicy) verifierOutageMayFailOpen(err error, records []toolExe
 	return len(failedCriticalCalls(records)) == 0 && succeededCriticalCall(records)
 }
 
-// succeededCriticalCall reports whether any critical tool executed
-// successfully in the run (same records and success classification as
-// failedCriticalCalls).
+// succeededCriticalCall reports whether any critical action executed
+// successfully in the run (same records, success classification and
+// agentcore.CriticalActionKey classification as failedCriticalCalls).
 func succeededCriticalCall(records []toolExecRecord) bool {
 	for _, r := range records {
-		if r.Succeeded && agentcore.IsCriticalTool(r.Name) {
+		if !r.Succeeded {
+			continue
+		}
+		if _, critical := agentcore.CriticalActionKey(r.Name); critical {
 			return true
 		}
 	}
 	return false
 }
 
-// failedCriticalCalls names the critical tools whose LAST execution in the run
-// failed (same records and success classification as the verifier). A failed
-// attempt a later success of the same tool superseded — a stale-version retry,
-// corrected arguments — does not count.
+// failedCriticalCalls names the critical tools with a failed attempt that no
+// later SUCCESS superseded (same records and success classification as the
+// verifier), each name once. A failed attempt is superseded only by a later
+// success of:
+//   - the same tool again — a stale-version retry or corrected arguments;
+//   - the action's alias twin on the same server (agentcore.CriticalActionKey,
+//     critical_tool_aliases #1604) that wrote the same record — a failed inline
+//     create of deal D followed by an upload that created deal D
+//     (sameCallTarget).
 //
-// TODO(#1606): key by alias class once critical_tool_aliases lands
-// (agentcore's criticalAliasClassOf / sameAliasedTool, via an exported helper):
-// a failed inline write superseded by its successful upload twin still counts
-// as failed here, which fails closed (the check is spent) but is wrong.
+// A twin that wrote another record, or whose record cannot be proved the same,
+// supersedes nothing: an upload that landed deal B says nothing about the
+// failed write to deal A. A twin on another server or client variant is
+// another action and supersedes nothing.
 func failedCriticalCalls(records []toolExecRecord) []string {
-	last := make(map[string]bool)
-	var order []string
+	type attempt struct {
+		key        agentcore.CriticalAction
+		record     toolExecRecord
+		superseded bool
+	}
+	var attempts []attempt
 	for _, r := range records {
-		if !agentcore.IsCriticalTool(r.Name) {
+		key, critical := agentcore.CriticalActionKey(r.Name)
+		if !critical {
 			continue
 		}
-		if _, seen := last[r.Name]; !seen {
-			order = append(order, r.Name)
+		for i := range attempts {
+			prior := &attempts[i]
+			if prior.superseded || prior.key != key {
+				continue
+			}
+			// Only a SUCCESS supersedes. A failed attempt proves nothing
+			// landed, so letting it supersede would let it bridge lineages: a
+			// failed twin for record A clears A's failure, and a later success
+			// of that twin's name for record B clears the twin.
+			if r.Succeeded && (prior.record.Name == r.Name || sameCallTarget(prior.record, r)) {
+				prior.superseded = true
+			}
 		}
-		last[r.Name] = r.Succeeded
+		attempts = append(attempts, attempt{key: key, record: r})
 	}
 	var failed []string
-	for _, name := range order {
-		if !last[name] {
-			failed = append(failed, name)
+	reported := make(map[string]bool)
+	for _, a := range attempts {
+		if !a.superseded && !a.record.Succeeded && !reported[a.record.Name] {
+			reported[a.record.Name] = true
+			failed = append(failed, a.record.Name)
 		}
 	}
 	return failed
+}
+
+// sameCallTarget reports whether two alias-twin calls provably wrote the same
+// record: both argument projections are complete (the verifier's evidence
+// dropped nothing), and both name the same non-empty record binding
+// (agentcore.CallRecordBinding — deal_id, or a deal_ids set). Agreeing on
+// other arguments proves nothing: a shared flag such as dry_run identifies no
+// target. A call that names no record under that contract (a page addressed
+// by slug, for one) cannot be proved the same target, so its failure stands
+// and the outage spends a check, as it did before twins superseded.
+func sameCallTarget(a, b toolExecRecord) bool {
+	if a.ArgumentsOmitted || b.ArgumentsOmitted {
+		return false
+	}
+	ra, rb := recordBinding(a), recordBinding(b)
+	return ra != "" && ra == rb
+}
+
+// recordBinding rebuilds a record's top-level projected arguments (JSON
+// Pointer "/key" paths) into a JSON object and reads its record binding.
+func recordBinding(r toolExecRecord) string {
+	top := make(map[string]any, len(r.Arguments))
+	for path, v := range r.Arguments {
+		if key, ok := strings.CutPrefix(path, "/"); ok && !strings.Contains(key, "/") {
+			top[key] = v
+		}
+	}
+	raw, err := json.Marshal(top)
+	if err != nil {
+		return ""
+	}
+	return agentcore.CallRecordBinding(string(raw))
 }
 
 // sleepCtx waits d or until ctx is done, reporting whether the full wait

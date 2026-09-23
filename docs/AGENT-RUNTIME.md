@@ -1324,7 +1324,19 @@ pause (#1602). If the retry fails too:
 
 - **An outage** (timeout, provider failure), after this run's own
   `confirm_audit` passed, with at least one critical tool that executed
-  successfully and none whose last execution failed.
+  successfully and no failed critical attempt that a later success did not
+  supersede. A failure is superseded only by a later *success* (a failed retry
+  proves nothing): of the same tool, or of a declared alias twin on the same
+  server (`critical_tool_aliases`), so a failed inline create of a deal
+  followed by a successful upload of that same deal counts as landed. A twin supersedes only an attempt that wrote the same record: both calls'
+  recorded arguments must be complete (nothing dropped from the verifier's
+  evidence), and both must name the same record through the record-binding
+  keys the audit gate uses (`deal_id` and its siblings, or a `deal_ids` set).
+  Agreeing on other arguments (a `dry_run` flag, a page slug) proves nothing,
+  so a twin that names no such record, or whose evidence is incomplete, or a
+  tool exposed under its bare suffix with no server prefix, leaves the failure
+  standing. The same twin on another server or client variant is a different
+  action.
   The run succeeds with a `completion_unverified_verifier_error` warning,
   recorded in the session log and at the head of the task's terminal message,
   instead of dead-lettering audited work on the verifier's own outage.
