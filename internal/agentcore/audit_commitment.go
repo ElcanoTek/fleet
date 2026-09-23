@@ -113,6 +113,23 @@ func (c *typedCommitment) correctsRefusal(fresh *typedCommitment) bool {
 	}
 }
 
+// coversOutstanding reports whether this (fresh) commitment's record binding
+// re-declares every record a stale BATCH commitment still owes, so retiring
+// the stale one drops no obligation. A non-batch stale commitment names at
+// most one record, which the #1535 correction replaces by design, so it is
+// always covered.
+func (c *typedCommitment) coversOutstanding(old *typedCommitment) bool {
+	for id := range old.dealIDs {
+		if old.discharged[id] {
+			continue
+		}
+		if !c.dealIDs[id] && c.dealID != id {
+			return false
+		}
+	}
+	return true
+}
+
 // nameMatches reports whether an executed toolName satisfies this
 // commitment's tool binding: the exact declared full name, or — on the SAME
 // server/variant — a policy-approved substitute (criticalToolSubstitutes) or
@@ -682,6 +699,14 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// commitment no call ever collided with is a legitimately pending
 		// obligation, and retiring it would let the run finish without it.
 		//
+		// The refusal correction retires a stale BATCH commitment only when the
+		// re-declaration covers every record it still owes (coversOutstanding).
+		// A refused batch can straddle two declarations — inline A/B plus
+		// upload C, a blocked upload for A/C — and a re-audit for A/C corrects
+		// the A and C halves; retiring the whole A/B entry on the overlap would
+		// drop B, whose mutation nothing has run or re-declared, and let finish
+		// pass without it. Keeping the entry fails closed: B stays owed.
+		//
 		// "Same tool" includes a declared alias on the same server (#1604): a
 		// re-audit that switches a write from inline to its upload twin is
 		// correcting the transport of ONE action, and stacking the two would
@@ -693,7 +718,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 				continue
 			}
 			sameShape := old.hasDealBinding() == tc.hasDealBinding() && (!tc.hasDealBinding() || old.sameDealSet(tc))
-			if !sameShape && !old.correctsRefusal(tc) {
+			if !sameShape && !(old.correctsRefusal(tc) && tc.coversOutstanding(old)) {
 				continue
 			}
 			if o.committedCriticalActions[old.suffix] >= old.remaining {

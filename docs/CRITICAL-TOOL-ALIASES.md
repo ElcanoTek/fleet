@@ -17,7 +17,9 @@ reference is the "Critical tool aliases" section of
   server/variant prefix** are one commitment, in both directions. That covers
   the pre-call authorization check, discharge, re-audit superseding (a
   re-audit that switches variant retires the stale declaration instead of
-  stacking on it), and the pending list (an audited call blocked before the
+  stacking on it; a stale batch is retired as the correction of a refused
+  call only when the re-audit re-declares every record it still owes), and
+  the pending list (an audited call blocked before the
   audit is cleared by its alias, but only when the alias wrote the same
   record: the same `deal_id`, or the same `deal_ids` set).
 - **Batches.** The batch approval and discharge ledgers are keyed by alias

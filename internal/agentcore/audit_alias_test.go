@@ -437,3 +437,41 @@ func TestCriticalToolAliases_BatchLedgerKeyedByServer(t *testing.T) {
 		t.Fatalf("criticalExecutedCount = %d, want 2: two servers, two writes", o.criticalExecutedCount)
 	}
 }
+
+// A re-audit that corrects a refused batch supersedes the stale batch
+// commitment only when it re-declares every record the stale one still owes.
+// Inline batch A/B plus upload batch C; a blocked upload for A/C is refused by
+// both; re-auditing the upload for A/C must not retire the A/B commitment,
+// because B is not in the correction and would never be owed again (Codex
+// review on PR #1606).
+func TestCriticalToolAliases_PartialSupersedeKeepsUncoveredRecords(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	o := newOrchStateForTest()
+	if resp := confirmAudit(t, o, []criticalActionStruct{
+		{Tool: aliasInlineTool, DealIDs: []string{"a", "b"}},
+		{Tool: aliasUploadTool, DealIDs: []string{"c"}},
+	}, nil); resp.IsError {
+		t.Fatalf("audit should pass: %s", resp.Content)
+	}
+	if blocked, _ := o.checkCriticalTool(aliasUploadTool, "", `{"deal_ids":["a","c"]}`); !blocked {
+		t.Fatal("a batch spanning two declarations must be blocked")
+	}
+	if resp := confirmAudit(t, o, []criticalActionStruct{{Tool: aliasUploadTool, DealIDs: []string{"a", "c"}}}, nil); resp.IsError {
+		t.Fatalf("re-audit should pass: %s", resp.Content)
+	}
+	args := `{"deal_ids":["a","c"]}`
+	if blocked, msg := o.checkCriticalTool(aliasUploadTool, "", args); blocked {
+		t.Fatalf("the re-audited batch must ride: %s", msg)
+	}
+	o.recordToolResult(aliasUploadTool, args, `{"results":[{"deal_id":"a","success":true},{"deal_id":"c","success":true}]}`, true)
+	if allowed, _ := o.checkFinishEnforcement(); allowed {
+		t.Fatalf("finish allowed with record B never written: outstanding=%v", o.outstandingCommitmentSummary())
+	}
+	var owesB bool
+	for _, s := range o.outstandingCommitmentSummary() {
+		owesB = owesB || strings.HasSuffix(s, "b)")
+	}
+	if !owesB {
+		t.Fatalf("record B is no longer owed: %v", o.outstandingCommitmentSummary())
+	}
+}
