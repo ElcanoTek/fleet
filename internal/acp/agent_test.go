@@ -2,6 +2,8 @@ package acp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -989,7 +991,7 @@ func TestRetryReusesTheIdempotencyKey(t *testing.T) {
 	if k(2) == k(1) {
 		t.Error("a different prompt reused the retried prompt's key")
 	}
-	if !strings.HasPrefix(k(3), "acp-msg-") || !strings.HasSuffix(k(3), "-"+mid) {
+	if !strings.HasPrefix(k(3), "acp-msg-") || !strings.HasSuffix(k(3), "-"+msgHash(mid)) {
 		t.Errorf("messageId key = %q", k(3))
 	}
 }
@@ -1096,7 +1098,7 @@ func TestNeverRunReplayIsResubmittedOnce(t *testing.T) {
 		t.Fatalf("chats = %d, want 3", len(h.fleet.chats))
 	}
 	k0, k1, k2 := h.fleet.chats[0].InputID, h.fleet.chats[1].InputID, h.fleet.chats[2].InputID
-	if !strings.HasPrefix(k0, "acp-msg-") || !strings.HasSuffix(k0, "-"+mid) || k1 == k0 || k2 != k1 {
+	if !strings.HasPrefix(k0, "acp-msg-") || !strings.HasSuffix(k0, "-"+msgHash(mid)) || k1 == k0 || k2 != k1 {
 		t.Errorf("keys = %q, %q, %q; want the messageId key, then one fresh key reused by the resend", k0, k1, k2)
 	}
 }
@@ -1453,5 +1455,46 @@ func TestCancelThenLostFirstAnswerIsUnconfirmed(t *testing.T) {
 	}
 	if !strings.Contains(h.client.text(), "could not confirm") {
 		t.Errorf("a lost first answer after cancel was reported as a confirmed stop: %q", h.client.text())
+	}
+}
+
+func msgHash(mid string) string {
+	sum := sha256.Sum256([]byte(mid))
+	return hex.EncodeToString(sum[:])
+}
+
+// A messageId of any length becomes a bounded key (it lands in a btree index
+// with a size limit), and the same messageId always maps to the same key.
+func TestLongMessageIdIsBoundedAndStable(t *testing.T) {
+	long := strings.Repeat("m", 10000)
+	sess := &session{ns: "ns"}
+	k1, k2 := idempotencyKey(&long, sess, "x"), idempotencyKey(&long, sess, "y")
+	if len(k1) > 128 || k1 != k2 {
+		t.Fatalf("key len %d, stable %v", len(k1), k1 == k2)
+	}
+}
+
+// Past the bound, an unresolved prompt is forgotten as one record: its retry
+// key and its target conversation go together, so no retained key is left
+// without its conversation (a retry into a newer one would run it again).
+func TestUnresolvedPromptsAreEvictedWhole(t *testing.T) {
+	sess := &session{convID: "newer"}
+	for i := range maxUnsettled {
+		msg, key := fmt.Sprintf("prompt %d", i), fmt.Sprintf("key-%d", i)
+		sess.setUnsettled(msg, key)
+		sess.settle(key, "", true) // first prompts: no conversation yet
+	}
+	// messageId prompts are unresolved too, but keyed by messageId rather
+	// than by text: they fill the conversation map and force evictions there.
+	for i := range 20 {
+		sess.settle(fmt.Sprintf("acp-msg-%d", i), "newer", true)
+	}
+	if len(sess.unsettled) > maxUnsettled || len(sess.keyConv) > maxUnsettled {
+		t.Fatalf("bounds exceeded: %d unsettled, %d keyConv", len(sess.unsettled), len(sess.keyConv))
+	}
+	for msg, key := range sess.unsettled {
+		if c, ok := sess.keyConv[key]; !ok || c != "" {
+			t.Fatalf("%q kept key %q but lost its target conversation (got %q, %v)", msg, key, c, ok)
+		}
 	}
 }

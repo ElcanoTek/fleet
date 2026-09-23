@@ -22,6 +22,7 @@ package acp
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -135,11 +136,23 @@ func (s *session) settle(key, conv string, retain bool) {
 	}
 	if _, ok := s.keyConv[key]; !ok && len(s.keyConv) >= maxUnsettled {
 		for k := range s.keyConv { // any entry; the map is small
-			delete(s.keyConv, k)
+			s.forgetKey(k)
 			break
 		}
 	}
 	s.keyConv[key] = conv
+}
+
+// forgetKey drops everything remembered about an unresolved key at once — its
+// retry key and the conversation it targets — so a retained key never loses
+// its target (a retry into the wrong conversation would run the input again).
+func (s *session) forgetKey(key string) {
+	delete(s.keyConv, key)
+	for m, k := range s.unsettled {
+		if k == key {
+			delete(s.unsettled, m)
+		}
+	}
 }
 
 func (s *session) setUnsettled(message, key string) {
@@ -147,8 +160,8 @@ func (s *session) setUnsettled(message, key string) {
 		s.unsettled = map[string]string{}
 	}
 	if _, ok := s.unsettled[message]; !ok && len(s.unsettled) >= maxUnsettled {
-		for m := range s.unsettled { // any entry; the map is small
-			delete(s.unsettled, m)
+		for _, k := range s.unsettled { // any entry; the map is small
+			s.forgetKey(k)
 			break
 		}
 	}
@@ -516,7 +529,11 @@ func idempotencyKey(messageID *string, sess *session, message string) string {
 		if k, ok := sess.rekeyed[strings.TrimSpace(*messageID)]; ok {
 			return k
 		}
-		return "acp-msg-" + sess.ns + "-" + strings.TrimSpace(*messageID)
+		// Hashed: a client may send a messageId of any length, and the key
+		// lands in a btree index with a size limit. The hash keeps it
+		// deterministic, so a resend of the same messageId finds the run.
+		sum := sha256.Sum256([]byte(strings.TrimSpace(*messageID)))
+		return "acp-msg-" + sess.ns + "-" + hex.EncodeToString(sum[:])
 	}
 	if k, ok := sess.unsettled[message]; ok {
 		return k
