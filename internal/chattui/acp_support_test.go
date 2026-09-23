@@ -60,6 +60,17 @@ func TestResolvePublicURL(t *testing.T) {
 			t.Errorf("PublicURL = %q, err %v", cfg.PublicURL, err)
 		}
 	})
+	t.Run("a file that supplied nothing is not the deployment", func(t *testing.T) {
+		// The token came from the env; .env.local matched only on a token key
+		// and has no address, so the client talks to the loopback default —
+		// its (possibly stale) public URL must not be used.
+		cfg, err := Resolve(Flags{}, envMap(base), noFile, envFileFrom(map[string]map[string]string{
+			".env.local": {"FLEET_SERVER_TOKEN": "other", "FLEET_PUBLIC_URL": "https://stale.example.com"},
+		}))
+		if err != nil || cfg.PublicURL != "" || cfg.Token != "tok" {
+			t.Errorf("token=%q PublicURL=%q err=%v", cfg.Token, cfg.PublicURL, err)
+		}
+	})
 	t.Run("token from env and no pinned file: not probed", func(t *testing.T) {
 		cfg, err := Resolve(Flags{}, envMap(base), noFile, envFileFrom(map[string]map[string]string{
 			"/etc/fleet/fleet.env": {"FLEET_PUBLIC_URL": "https://maybe-other.example.com"},
@@ -175,5 +186,24 @@ func TestCancelNamesTheTurn(t *testing.T) {
 	}
 	if gotBody != `{"scope":"turn","turn_id":"turn-9"}` {
 		t.Errorf("body = %s", gotBody)
+	}
+}
+
+func TestStreamSurfacesTheHeaderTurnID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Fleet-Conversation-Id", "c")
+		w.Header().Set("X-Fleet-Turn-Id", "t-1")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	var turn string
+	_, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "", func(ev Event) {
+		if ev.Name == "turn.identified" {
+			turn = ev.Str("turn_id")
+		}
+	})
+	if turn != "t-1" {
+		t.Errorf("turn id = %q", turn)
 	}
 }

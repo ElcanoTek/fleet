@@ -90,6 +90,12 @@ type chatRequest struct {
 // costs nothing and closes the window.
 const conversationIDHeaderName = "X-Fleet-Conversation-Id"
 
+// turnIDHeaderName names the turn a POST /chat response is streaming, beside
+// the conversation header and for the same reason: it is known the moment the
+// turn registers, so a client that must address THIS turn later (a targeted
+// Stop, `fleet acp`) never has to wait for the turn.started frame.
+const turnIDHeaderName = "X-Fleet-Turn-Id"
+
 // memoryContents renders the injectable memory bullets (#515): retired and
 // still-proposed rows are EXCLUDED (retirement is the mechanism that stops
 // stale-fact citations — the annotations below are explainability/tiebreaker
@@ -727,6 +733,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// arrives with the response itself, so a stream that dies immediately
 		// still leaves the browser holding an id the recovery chain can probe.
 		w.Header().Set(conversationIDHeaderName, conv.ID)
+		w.Header().Set(turnIDHeaderName, turnID)
 		// Attach this HTTP response as the initial subscriber. Blocks until
 		// the turn finishes or the client disconnects. The client's declared SSE
 		// capabilities (#194) filter which event types it receives; absent header =

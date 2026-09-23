@@ -39,7 +39,8 @@ retention guarantee: after a terminal row is purged, reusing its
   only while it is the running turn, and the request is a 204 no-op once it
   has ended, so a client stopping the turn it watched (`fleet acp`) can never
   cancel a successor. A targeted Stop is turn-scoped and never sweeps the
-  queue. The
+  queue. `POST /chat` names its turn on the `X-Fleet-Turn-Id` response header
+  (beside `X-Fleet-Conversation-Id`), so the id is known before any frame. The
   `queue.updated` SSE event carries a full snapshot on every mutation, and
   `user.message` gains `{steered:true, input_id}` when a steer is accepted.
 

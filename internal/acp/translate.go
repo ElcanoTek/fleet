@@ -128,7 +128,7 @@ func (t *translator) handle(ev chattui.Event) {
 	switch ev.Name {
 	case "conversation":
 		t.setConversation(ev.Str("id"))
-	case "turn.started":
+	case "turn.started", "turn.identified":
 		t.setTurn(ev.Str("turn_id"))
 	case "text.delta":
 		if s := ev.Str("text"); s != "" {

@@ -85,7 +85,14 @@ type session struct {
 	mu     sync.Mutex // serializes prompts on this session
 	convID string
 	cwd    string
+	// unsettled is the last prompt whose outcome is unknown: the request may
+	// have been accepted but the answer was lost (a transport failure). A
+	// retry of the same text reuses its idempotency key, so fleet recognises
+	// the input it already accepted instead of running it a second time.
+	unsettled *unsettledPrompt
 }
+
+type unsettledPrompt struct{ message, key string }
 
 var _ acpsdk.Agent = (*Agent)(nil)
 
@@ -181,6 +188,13 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	// A prompt cancelled while it waited for this session (an earlier prompt
+	// still running) must never be submitted: once POSTed, fleet may start
+	// the turn or dispatch a tool before any Stop could land.
+	if ctx.Err() != nil {
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+	}
+	key := idempotencyKey(p.MessageId, sess.unsettled, message)
 
 	// stopCtx ends when the client cancels (session/cancel, or a newer prompt
 	// superseding this one) or the timeout fires. The stream itself runs on a
@@ -207,9 +221,7 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
 	go a.stopTurn(stopCtx, tr, streamDone, stopped, cancelStream)
-	// One idempotency key per prompt: if the server accepted this message but
-	// the answer was lost, a re-POST with the same key cannot run it twice.
-	convID, streamErr := a.client.StreamInput(streamCtx, message, sess.convID, "fleet-acp-"+randomID(), tr.handle)
+	convID, streamErr := a.client.StreamInput(streamCtx, message, sess.convID, key, tr.handle)
 	close(streamDone)
 	stop := <-stopped
 	stopErr := stop.err
@@ -217,6 +229,10 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 		convID = tr.conversationID()
 	}
 	sess.convID = convID
+	sess.unsettled = nil
+	if outcomeUnknown(streamErr) {
+		sess.unsettled = &unsettledPrompt{message: message, key: key}
+	}
 
 	meta := map[string]any{"fleet.conversationId": convID}
 	// A staged approval stays pending in fleet whatever ended the turn —
@@ -267,7 +283,7 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if streamErr != nil {
 		return acpsdk.PromptResponse{}, requestError(streamErr)
 	}
-	resp := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: meta}
+	resp := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: meta, UserMessageId: p.MessageId}
 	if tr.usage != nil {
 		resp.Usage = tr.usage
 	}
@@ -329,12 +345,15 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 		return
 	}
 	var err error
-	if id := tr.conversationID(); id != "" {
-		// Targeted at the watched turn when its id is known, so the server
-		// refuses to cancel any other turn — the Stop cannot hit a successor
-		// that started after the watched turn ended. Only a stream that died
-		// before turn.started falls back to "whichever turn is running".
-		err = a.client.Cancel(id, tr.turnID())
+	if id, turn := tr.conversationID(), tr.turnID(); id != "" && turn != "" {
+		// Always targeted at the watched turn: the server refuses to cancel
+		// any other turn, so the Stop cannot hit a successor that started
+		// after the watched turn ended.
+		err = a.client.Cancel(id, turn)
+	} else if id != "" {
+		// Never an untargeted Stop: "whichever turn is running" could be a
+		// successor by the time it lands. Report the stop as unconfirmed.
+		err = errors.New("fleet did not report which turn to stop")
 	} else {
 		select {
 		case <-streamDone: // the request ended before fleet started a turn
@@ -344,6 +363,36 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 	}
 	cancelStream()
 	stopped <- stopOutcome{intervened: true, err: err}
+}
+
+// idempotencyKey is the input_id for one prompt. The ACP client's own message
+// id (stable across its retries) wins; otherwise a retry of the prompt whose
+// outcome was lost reuses that prompt's key; otherwise a fresh key.
+func idempotencyKey(messageID *string, unsettled *unsettledPrompt, message string) string {
+	if messageID != nil && strings.TrimSpace(*messageID) != "" {
+		return "acp-msg-" + strings.TrimSpace(*messageID)
+	}
+	if unsettled != nil && unsettled.message == message {
+		return unsettled.key
+	}
+	return "fleet-acp-" + randomID()
+}
+
+// outcomeUnknown reports whether a failed submission may still have been
+// accepted by fleet: a transport failure (the POST may have landed), as
+// opposed to a definite answer — a refusal status, a queue acknowledgement,
+// a terminal turn error, or success.
+func outcomeUnknown(err error) bool {
+	if err == nil {
+		return false
+	}
+	var se *chattui.StatusError
+	var qe *chattui.QueuedError
+	if errors.As(err, &se) || errors.As(err, &qe) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	msg := err.Error()
+	return !strings.HasPrefix(msg, "turn failed:") && !strings.HasPrefix(msg, "turn requires another model:")
 }
 
 // conversationPointer says where a person can see (and stop) a conversation.

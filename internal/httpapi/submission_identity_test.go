@@ -50,6 +50,12 @@ func TestPostChat_NamesTheConversationOnTheResponseHeader(t *testing.T) {
 	if conv, err := s.store.Get(context.Background(), "u@x.com", named); err != nil || conv == nil {
 		t.Fatalf("header named a conversation the store does not have: conv=%v err=%v", conv, err)
 	}
+	// The turn is named too, and it is the turn the stream announces — what a
+	// targeted Stop (turn_id) must carry.
+	turn := w.Header().Get("X-Fleet-Turn-Id")
+	if turn == "" || !strings.Contains(w.Body.String(), `"turn_id":"`+turn+`"`) {
+		t.Fatalf("X-Fleet-Turn-Id %q is missing or is not the streamed turn", turn)
+	}
 }
 
 // conversationFrameID pulls the id out of the SSE `conversation` frame.

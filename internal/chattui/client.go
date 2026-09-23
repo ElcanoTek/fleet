@@ -213,6 +213,12 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		newConvID = hdr
 		onEvent(Event{Name: "conversation", Data: map[string]any{"id": hdr}})
 	}
+	// The turn is named on the headers too; surfaced as a synthetic
+	// `turn.identified` event (renderers ignore it) for callers that must
+	// address this exact turn later, such as a targeted Stop.
+	if hdr := strings.TrimSpace(resp.Header.Get("X-Fleet-Turn-Id")); hdr != "" {
+		onEvent(Event{Name: "turn.identified", Data: map[string]any{"turn_id": hdr}})
+	}
 	terminalSeen := false
 	var terminalErr error
 	perr := parseSSE(resp.Body, func(ev Event) {

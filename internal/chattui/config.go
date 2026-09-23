@@ -117,13 +117,17 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	serverFile := ""
 	if cfg.Token == "" || cfg.ServerURL == "" {
 		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
-			serverFile = path
+			// serverFile is recorded only when the file actually fills a
+			// missing value: a file that merely matched on a key we already
+			// had says nothing about which deployment we are talking to.
 			if cfg.Token == "" {
-				cfg.Token = strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"]))
+				if tok := strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"])); tok != "" {
+					cfg.Token, serverFile = tok, path
+				}
 			}
 			if cfg.ServerURL == "" {
 				if addr := strings.TrimSpace(vals["FLEET_SERVER_ADDR"]); addr != "" {
-					cfg.ServerURL = "http://" + addr
+					cfg.ServerURL, serverFile = "http://"+addr, path
 				}
 			}
 		}

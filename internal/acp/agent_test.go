@@ -386,6 +386,7 @@ func TestCancelBeforeTheConversationIsKnown(t *testing.T) {
 		close(requested)
 		<-release // the turn is accepted, but no frame has been written yet
 		w.emit("conversation", map[string]any{"id": "conv-late"})
+		w.emit("turn.started", map[string]any{"turn_id": "turn-late"})
 		<-r.Context().Done()
 	}})
 	sid := h.newSession(t)
@@ -764,6 +765,7 @@ func TestConversationIDFromTheResponseHeader(t *testing.T) {
 		started := make(chan struct{})
 		h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
 			w.w.Header().Set("X-Fleet-Conversation-Id", "conv-hdr2")
+			w.w.Header().Set("X-Fleet-Turn-Id", "turn-hdr2")
 			w.w.(http.Flusher).Flush()
 			close(started)
 			<-r.Context().Done()
@@ -785,7 +787,7 @@ func TestConversationIDFromTheResponseHeader(t *testing.T) {
 		}
 		h.fleet.mu.Lock()
 		defer h.fleet.mu.Unlock()
-		if len(h.fleet.cancels) != 1 || !strings.HasPrefix(h.fleet.cancels[0], "conv-hdr2 ") {
+		if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-hdr2 {"scope":"turn","turn_id":"turn-hdr2"}` {
 			t.Errorf("cancels = %q, want the header's conversation stopped", h.fleet.cancels)
 		}
 	})
@@ -883,5 +885,111 @@ func TestStopNamesTheWatchedTurn(t *testing.T) {
 	defer h.fleet.mu.Unlock()
 	if len(h.fleet.cancels) != 1 || !strings.Contains(h.fleet.cancels[0], `"turn_id":"turn-42"`) {
 		t.Errorf("cancels = %q, want the Stop targeted at turn-42", h.fleet.cancels)
+	}
+}
+
+// Without the watched turn's id the adapter never sends an untargeted Stop
+// (it could land on a successor); it reports the stop as unconfirmed.
+func TestNoUntargetedStop(t *testing.T) {
+	started := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-n"}) // no turn id, header or frame
+		close(started)
+		<-r.Context().Done()
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "x")
+		done <- r
+	}()
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		if r.StopReason != acpsdk.StopReasonCancelled {
+			t.Fatalf("stopReason = %q", r.StopReason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 0 {
+		t.Errorf("an untargeted Stop was sent: %q", h.fleet.cancels)
+	}
+	if got := h.client.text(); !strings.Contains(got, "could not confirm this turn stopped") {
+		t.Errorf("no unconfirmed-stop notice: %q", got)
+	}
+}
+
+// A prompt already cancelled when it gets the session is never submitted.
+func TestCancelledPromptIsNeverSubmitted(t *testing.T) {
+	ff := &fakeFleet{t: t}
+	srv := httptest.NewServer(ff)
+	defer srv.Close()
+	ag := NewAgent(chattui.NewClient(chattui.Config{ServerURL: srv.URL, Email: "bot@example.com", Token: "test-token"}), nil, "", 0, "test")
+	s, err := ag.NewSession(context.Background(), acpsdk.NewSessionRequest{Cwd: "/", McpServers: []acpsdk.McpServer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	resp, err := ag.Prompt(ctx, acpsdk.PromptRequest{SessionId: s.SessionId, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("x")}})
+	if err != nil || resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Fatalf("got %+v, %v; want cancelled", resp, err)
+	}
+	ff.mu.Lock()
+	defer ff.mu.Unlock()
+	if len(ff.chats) != 0 {
+		t.Errorf("a cancelled prompt was POSTed: %+v", ff.chats)
+	}
+}
+
+// A retry of a prompt whose outcome was lost reuses its idempotency key, so
+// fleet recognises the input it may already have accepted; a new prompt, or
+// one the client identifies with its own messageId, gets its own key.
+func TestRetryReusesTheIdempotencyKey(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.w.WriteHeader(http.StatusOK) // accepted, then the stream is lost
+			return
+		}
+		w.emit("conversation", map[string]any{"id": "c"})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "book the room"); err == nil {
+		t.Fatal("want the lost-stream error")
+	}
+	if _, err := h.prompt(sid, "book the room"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.prompt(sid, "something else"); err != nil {
+		t.Fatal(err)
+	}
+	mid := "3f0c7a52-8a4e-4a57-9d0a-3c1f5b9e2d11"
+	resp, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("y")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.UserMessageId == nil || *resp.UserMessageId != mid {
+		t.Errorf("userMessageId = %v, want the echoed messageId", resp.UserMessageId)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	k := func(i int) string { return h.fleet.chats[i].InputID }
+	if k(0) == "" || k(0) != k(1) {
+		t.Errorf("retry key %q != original %q", k(1), k(0))
+	}
+	if k(2) == k(1) {
+		t.Error("a different prompt reused the retried prompt's key")
+	}
+	if k(3) != "acp-msg-"+mid {
+		t.Errorf("messageId key = %q", k(3))
 	}
 }
