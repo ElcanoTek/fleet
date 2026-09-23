@@ -44,7 +44,18 @@ Eastern. What shipped:
   scans the zone's calendar with DST-free UTC arithmetic, so the browser's own
   DST rules never shift another zone's preview; a time the zone skips (a
   spring-forward gap) is not an occurrence, and a fall-back hour's repeated
-  time can match twice — both as robfig/cron's `Next` does. The zone label's
+  time can match twice — both as robfig/cron's `Next` does. A throwaway
+  differential run (not committed) compared the preview with robfig's `Next`
+  over ~110k samples across 13 zones and a year, and with a minute-by-minute
+  brute-force search over ~174k samples every 5 minutes within ±30h of every
+  2026 transition in 11 zones: it matched the brute force everywhere, and
+  matched robfig everywhere except Australia/Lord_Howe (30-minute DST) and
+  Pacific/Chatham, where robfig itself skips a day around the transition
+  (e.g. Lord Howe `0 3 * * *` from 2026-04-04 03:00 returns Apr 6, not Apr 5).
+  There the preview shows the correct day and the scheduler fires a day late —
+  a pre-existing backend edge case, not changed here. Days with no offset
+  change are computed by arithmetic, and the form memoizes the preview and
+  the zone list, so neither re-runs on unrelated keystrokes. The zone label's
   abbreviation is the one in effect at that next run, and the "not your own
   time zone" hint compares canonical names, so an alias such as `US/Eastern`
   counts as `America/New_York`. It is still a date-only

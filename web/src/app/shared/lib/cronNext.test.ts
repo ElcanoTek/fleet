@@ -148,6 +148,27 @@ describe("nextCronOccurrence in a named time zone", () => {
     expect(next!.toISOString()).toBe("2026-11-01T06:45:00.000Z");
   });
 
+  it("takes the first of a repeated time even for a large offset (Auckland)", () => {
+    // Pacific/Auckland falls back 03:00 NZDT → 02:00 NZST on 2026-04-05
+    // (14:00Z Apr 4). The first 02:30 is 13:30Z under +13 — what cron.Next
+    // returns — not the second at 14:30Z.
+    const from = new Date(Date.UTC(2026, 3, 4, 12, 0, 0));
+    const next = nextCronOccurrence("30 2 * * *", from, "Pacific/Auckland");
+    expect(next!.toISOString()).toBe("2026-04-04T13:30:00.000Z");
+  });
+
+  it("an every-minute schedule is the next whole minute, cheaply", () => {
+    const from = new Date(Date.UTC(2026, 8, 23, 12, 0, 30));
+    const started = performance.now();
+    for (let i = 0; i < 50; i++) {
+      expect(nextCronOccurrence("* * * * *", from, "America/New_York")!.toISOString()).toBe(
+        "2026-09-23T12:01:00.000Z",
+      );
+    }
+    // Generous bound: the brute-force scan took far longer than this.
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it("returns null for an unknown zone", () => {
     expect(nextCronOccurrence("0 8 * * *", NOON_UTC, "Mars/Olympus_Mons")).toBeNull();
   });

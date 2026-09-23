@@ -31,12 +31,21 @@ export function isValidTimeZone(zone: string): boolean {
 // canonicalTimeZone resolves an alias to the runtime's canonical name
 // ("US/Eastern" → "America/New_York"), or returns the input unchanged when the
 // runtime doesn't know it.
+// Cached: the picker compares every zone it lists, and each lookup would
+// otherwise construct an Intl.DateTimeFormat.
+const canonicalZones = new Map<string, string>();
+
 export function canonicalTimeZone(zone: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone || zone;
-  } catch {
-    return zone;
+  let canonical = canonicalZones.get(zone);
+  if (canonical === undefined) {
+    try {
+      canonical = new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone || zone;
+    } catch {
+      canonical = zone;
+    }
+    canonicalZones.set(zone, canonical);
   }
+  return canonical;
 }
 
 // sameTimeZone reports whether two zone names are the same zone, aliases

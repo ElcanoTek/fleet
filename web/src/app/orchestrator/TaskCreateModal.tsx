@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CostForecast, McpServer, MCPChoice, Task, TaskCreate, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { applyTemplateVars, humanizeVarName, promptableVars } from "@/app/shared/lib/taskTemplates";
@@ -401,6 +401,16 @@ export function TaskCreateModal({
   const [timezone, setTimezone] = useState(init.timezone);
   const [viewerTimeZone] = useState(browserTimeZone);
   const zoneIsViewers = sameTimeZone(timezone, viewerTimeZone);
+  // The full zone list (~400 entries) is built and labelled only when the
+  // selected zone changes, not on every keystroke elsewhere in the form.
+  const timeZoneChoices = useMemo(
+    () =>
+      timeZoneOptions(viewerTimeZone, timezone).map((zone) => ({
+        zone,
+        label: sameTimeZone(zone, viewerTimeZone) ? `${zone} (your time zone)` : zone,
+      })),
+    [viewerTimeZone, timezone],
+  );
   const [repeatEditor, setRepeatEditor] = useState<RepeatEditor>(init.repeatEditor);
   const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>(init.simpleFrequency);
   const [simpleTime, setSimpleTime] = useState(init.simpleTime);
@@ -917,12 +927,18 @@ export function TaskCreateModal({
     }
   };
 
+  // Recomputed when the schedule or zone changes, not on every render (a
+  // hook, so it sits above the closed-modal early return).
+  const cronDescription = describeCronExpression(recurrence);
+  const cronNext = useMemo(
+    () => (cronDescription ? nextCronOccurrence(recurrence, new Date(), timezone) : null),
+    [cronDescription, recurrence, timezone],
+  );
+
   if (!open) return null;
 
   // ── Derived display state ─────────────────────────────────────────────────
 
-  const cronDescription = describeCronExpression(recurrence);
-  const cronNext = cronDescription ? nextCronOccurrence(recurrence, new Date(), timezone) : null;
 
   // The {variables} the picked template still needs from the user (built-ins
   // never appear — they substitute silently at apply time).
@@ -1970,9 +1986,9 @@ export function TaskCreateModal({
                           value={timezone}
                           onChange={(e) => setTimezone(e.target.value)}
                         >
-                          {timeZoneOptions(viewerTimeZone, timezone).map((zone) => (
+                          {timeZoneChoices.map(({ zone, label }) => (
                             <option key={zone} value={zone}>
-                              {sameTimeZone(zone, viewerTimeZone) ? `${zone} (your time zone)` : zone}
+                              {label}
                             </option>
                           ))}
                         </select>

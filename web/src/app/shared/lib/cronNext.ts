@@ -98,19 +98,38 @@ function dayMatches(s: CronSchedule, dayOfMonth: number, dayOfWeek: number): boo
   return true;
 }
 
+// Constructing an Intl.DateTimeFormat is the expensive part of reading a wall
+// clock, so keep one per zone (null = the runtime rejected the zone).
+const wallClockFormatters = new Map<string, Intl.DateTimeFormat | null>();
+
+function wallClockFormatter(timeZone: string): Intl.DateTimeFormat | null {
+  let fmt = wallClockFormatters.get(timeZone);
+  if (fmt === undefined) {
+    try {
+      fmt = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hourCycle: "h23",
+        year: "numeric",
+        month: "numeric",
+        day: "numeric",
+        hour: "numeric",
+        minute: "numeric",
+        second: "numeric",
+      });
+    } catch {
+      fmt = null;
+    }
+    wallClockFormatters.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
 // wallClockParts reads the calendar fields `at` shows in an IANA zone.
 function wallClockParts(at: Date, timeZone: string): number[] | null {
+  const fmt = wallClockFormatter(timeZone);
+  if (!fmt) return null;
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hourCycle: "h23",
-      year: "numeric",
-      month: "numeric",
-      day: "numeric",
-      hour: "numeric",
-      minute: "numeric",
-      second: "numeric",
-    }).formatToParts(at);
+    const parts = fmt.formatToParts(at);
     const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
     const fields = [get("year"), get("month"), get("day"), get("hour"), get("minute"), get("second")];
     return fields.every(Number.isFinite) ? fields : null;
@@ -142,12 +161,23 @@ export function nextCronOccurrence(
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
+// UTC offsets span UTC-12 to UTC+14, so a wall-clock time (encoded as a UTC
+// epoch) is shown by an instant within this window of it.
+const MAX_AHEAD_MS = 14 * 3_600_000;
+const MAX_BEHIND_MS = 12 * 3_600_000;
+// Probe offsets this far either side of a day: past any transition that can
+// touch the day's instants, and no zone changes offset twice within it.
+const PROBE_MS = 36 * 3_600_000;
+
 // nextZonedOccurrence scans the zone's calendar as "wall clock encoded as a
 // UTC epoch" — UTC has no DST, so only the target zone's rules ever apply —
 // and maps each candidate wall-clock time to the real instant(s) that show it.
 // Candidates are compared as instants, not wall-clock readings: in a fall-back
 // hour one wall time happens twice, and the second can still be ahead of
-// `from` (robfig/cron's Next fires it too).
+// `from` (robfig/cron's Next fires it too). It runs on every edit of the
+// form, so a day with no offset change is pure arithmetic, and candidates that
+// are provably past (or provably later than the day's best) are skipped
+// before any Intl call.
 function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date | null {
   const s = parseCronExpression(expr);
   if (!s) return null;
@@ -165,38 +195,36 @@ function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date |
   for (let i = 0; i <= 367; i++, day += DAY_MS) {
     const d = new Date(day);
     if (!s.months.has(d.getUTCMonth() + 1) || !dayMatches(s, d.getUTCDate(), d.getUTCDay())) continue;
+    if (day + DAY_MS + MAX_BEHIND_MS < after) continue; // every instant of this day is past
+    const before = zoneOffsetMs(new Date(day - PROBE_MS), timeZone);
+    const later = zoneOffsetMs(new Date(day + DAY_MS + PROBE_MS), timeZone);
+    if (before === null || later === null) return null;
+    const offsets = before === later ? [before] : [before, later];
     // Wall order and instant order disagree inside a repeated hour, so take
     // the earliest qualifying instant of the whole day.
     let best: number | null = null;
     for (const h of hours) {
       for (const m of minutes) {
-        const candidates = wallToInstants(day + h * 3_600_000 + m * MINUTE_MS, timeZone);
-        if (candidates === null) return null;
-        for (const instant of candidates) {
-          if (instant < after) continue;
-          // A wall time the zone skips (spring-forward) maps to a different
-          // reading; it is not an occurrence.
-          const got = wallClockParts(new Date(instant), timeZone);
-          if (!got || got[3] !== h || got[4] !== m) continue;
-          if (best === null || instant < best) best = instant;
+        const wall = day + h * 3_600_000 + m * MINUTE_MS;
+        if (wall + MAX_BEHIND_MS < after) continue;
+        if (best !== null && wall - MAX_AHEAD_MS > best) break;
+        for (const offset of offsets) {
+          const instant = wall - offset;
+          if (instant < after || (best !== null && instant >= best)) continue;
+          if (offsets.length > 1) {
+            // Around a transition, only an instant that reads back as the
+            // requested time is real: this drops the wrong-offset candidate
+            // and a spring-forward gap time the zone never shows.
+            const got = wallClockParts(new Date(instant), timeZone);
+            if (!got || got[3] !== h || got[4] !== m) continue;
+          }
+          best = instant;
         }
       }
     }
     if (best !== null) return new Date(best);
   }
   return null;
-}
-
-// wallToInstants maps a zone wall-clock time (encoded as a UTC epoch) to the
-// instants that could show it: one per offset in effect 12h either side (no
-// zone changes offset twice within a day). Normally both agree; in a
-// fall-back hour they are the two real instants, and in a spring-forward gap
-// neither reads back as the requested time (the caller filters that).
-function wallToInstants(wallAsUTC: number, timeZone: string): number[] | null {
-  const before = zoneOffsetMs(new Date(wallAsUTC - DAY_MS / 2), timeZone);
-  const later = zoneOffsetMs(new Date(wallAsUTC + DAY_MS / 2), timeZone);
-  if (before === null || later === null) return null;
-  return before === later ? [wallAsUTC - before] : [wallAsUTC - before, wallAsUTC - later];
 }
 
 function nextLocalOccurrence(expr: string, from: Date): Date | null {
