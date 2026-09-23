@@ -13,8 +13,8 @@ compute, your data, your know-how. You own the means of production.
 
 One story, three surfaces: **plan the work in chat, automate the
 follow-through, ride along from anywhere.** These show the current web app and
-terminal client with scripted example data; no live model is used. Tap a
-screenshot to watch its recording ([how they're made](docs/generating-demo-gif.md)).
+terminal client with scripted example data; no live model is used. Each
+screenshot is its recording's final frame; tap it to watch ([how they're made](docs/generating-demo-gif.md)).
 
 <!-- Keep the GIFs linked, not inlined: the GitHub mobile app re-renders the
      whole README on every GIF frame, so inline recordings make the page flicker
@@ -22,19 +22,19 @@ screenshot to watch its recording ([how they're made](docs/generating-demo-gif.m
 
 **Chat — plan the kickoff** _(scripted example)_
 
-[![Fleet chat UI — a chat turn with an example answer](docs/screenshots/web/chat.png)](docs/screenshots/web/chat-demo.gif)
+[![Fleet chat UI — a six-week customer kickoff plan with owners](docs/screenshots/web/chat-demo.png)](docs/screenshots/web/chat-demo.gif)
 
 ▶ [Watch the chat recording](docs/screenshots/web/chat-demo.gif)
 
 **Operations Center — the follow-through, automated** _(example tasks)_
 
-[![Fleet Operations Center — task counts, sleeping tasks and recent runs](docs/screenshots/web/orchestrator.png)](docs/screenshots/web/ops-demo.gif)
+[![Fleet Operations Center — agent slots, task counts and upcoming scheduled runs](docs/screenshots/web/ops-demo.png)](docs/screenshots/web/ops-demo.gif)
 
 ▶ [Watch the Operations Center recording](docs/screenshots/web/ops-demo.gif)
 
 **Terminal chat (`fleet chat`) — the same fleet, from your shell**
 
-[![Fleet terminal chat — asking which scheduled tasks failed](docs/screenshots/tui/chat.png)](docs/screenshots/tui/demo.gif)
+[![Fleet terminal chat — a kickoff meeting agenda drafted in the TUI](docs/screenshots/tui/demo.png)](docs/screenshots/tui/demo.gif)
 
 ▶ [Watch the terminal recording](docs/screenshots/tui/demo.gif)
 

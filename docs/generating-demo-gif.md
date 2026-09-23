@@ -56,12 +56,15 @@ generator and eyeball the GIF end to end — timing is the only fragile part
 
 The static PNG screenshot (`docs/screenshots/tui/chat.png`, from
 `scripts/generate-tui-screenshot.sh` + `freeze`) still exists for contexts
-where an animation is inappropriate. The README shows the static PNGs
-(`tui/chat.png`, `web/chat.png`, `web/orchestrator.png`) and links each one to
-its GIF instead of embedding the GIF inline: the GitHub mobile app re-renders
-the whole README on every GIF frame, so inline recordings make the page flicker
+where an animation is inappropriate.
+
+The README does not embed the GIFs inline: the GitHub mobile app re-renders the
+whole README on every GIF frame, so inline recordings make the page flicker
 nonstop ([community discussion #50309](https://github.com/orgs/community/discussions/50309)).
-If you regenerate a GIF, refresh the matching PNG so the still stays current.
+It shows each recording's **final frame** as a still (`tui/demo.png`,
+`web/chat-demo.png`, `web/ops-demo.png`) linked to the GIF. Both generator
+scripts write that still next to the GIF (`ffmpeg … -update 1`), so a
+regenerated recording and its still never drift apart — commit them together.
 
 
 ## The web demo GIFs

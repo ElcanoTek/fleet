@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate docs/screenshots/tui/demo.gif — the `fleet chat` TUI demo (#540).
+# Regenerate docs/screenshots/tui/demo.gif (+ its demo.png still) — the `fleet chat` TUI demo (#540).
 #
 # Records the REAL TUI with charm's vhs (a headless terminal recorder) against
 # the deterministic local mock server in mock_chat_server.py, so the demo is
@@ -37,4 +37,8 @@ for attempt in 1 2 3; do
     [ "$attempt" = 3 ] && { echo "generate-tui-gif: all takes froze" >&2; exit 1; }
 done
 rm -f docs/screenshots/tui/demo.txt
-ls -la docs/screenshots/tui/demo.gif
+# The README shows this still and links it to the GIF (inline GIFs make the
+# GitHub mobile app flicker), so the still is the GIF's final frame.
+# -update 1 rewrites one image per frame, leaving the last one.
+ffmpeg -y -v error -i docs/screenshots/tui/demo.gif -update 1 docs/screenshots/tui/demo.png
+ls -la docs/screenshots/tui/demo.gif docs/screenshots/tui/demo.png

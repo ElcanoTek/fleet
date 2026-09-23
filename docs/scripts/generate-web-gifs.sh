@@ -30,6 +30,10 @@ to_gif() {
         gifsicle -O3 --lossy=35 --colors 128 -b "$out"
     fi
     ls -la "$out"
+    # The README shows this still and links it to the GIF (inline GIFs make
+    # the GitHub mobile app flicker), so the still is the GIF's final frame.
+    # -update 1 rewrites one image per frame, leaving the last one.
+    ffmpeg -y -v error -i "$out" -update 1 "${out%.gif}.png"
 }
 
 # Keep the complete short tours at their recorded pace.
