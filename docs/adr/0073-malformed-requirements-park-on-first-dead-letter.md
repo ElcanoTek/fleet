@@ -137,7 +137,8 @@ prompt.
   or cloning with a corrected prompt starts a new chain without it. An edit
   from the web editor alone would start one run and leave the schedule dead.
 - **Operator-only recovery.** The correct-and-resume path is CLI-only, like
-  replay itself. There is no web control for it yet.
+  replay itself, and stays that way by decision: the web UI shows the stop and
+  its reason, and recovery is an operator action.
 
 ## Alternatives considered
 

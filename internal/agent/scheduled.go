@@ -780,7 +780,9 @@ func succeededCriticalCall(records []toolExecRecord) bool {
 // later SUCCESS superseded (same records and success classification as the
 // verifier), each name once. A failed attempt is superseded only by a later
 // success of:
-//   - the same tool again — a stale-version retry or corrected arguments;
+//   - the same tool again — a stale-version retry or corrected arguments —
+//     unless both calls name different records (provablyOtherRecord): a
+//     landed write of deal B says nothing about the failed write of deal A;
 //   - the action's alias twin on the same server (agentcore.CriticalActionKey,
 //     critical_tool_aliases #1604) that wrote the same record — a failed inline
 //     create of deal D followed by an upload that created deal D
@@ -811,7 +813,7 @@ func failedCriticalCalls(records []toolExecRecord) []string {
 			// landed, so letting it supersede would let it bridge lineages: a
 			// failed twin for record A clears A's failure, and a later success
 			// of that twin's name for record B clears the twin.
-			if r.Succeeded && (prior.record.Name == r.Name || sameCallTarget(prior.record, r)) {
+			if r.Succeeded && ((prior.record.Name == r.Name && !provablyOtherRecord(prior.record, r)) || sameCallTarget(prior.record, r)) {
 				prior.superseded = true
 			}
 		}
@@ -842,6 +844,16 @@ func sameCallTarget(a, b toolExecRecord) bool {
 	}
 	ra, rb := recordBinding(a), recordBinding(b)
 	return ra != "" && ra == rb
+}
+
+// provablyOtherRecord reports whether two calls of the same tool name different
+// records: both carry a non-empty record binding and the bindings differ. A
+// retry that names no record (a page by slug), or whose evidence is incomplete,
+// still supersedes as a retry always has — only a proof of another target
+// withholds it.
+func provablyOtherRecord(a, b toolExecRecord) bool {
+	ra, rb := recordBinding(a), recordBinding(b)
+	return ra != "" && rb != "" && ra != rb
 }
 
 // recordBinding rebuilds a record's top-level projected arguments (JSON

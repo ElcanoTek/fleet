@@ -372,3 +372,47 @@ func TestLegacyAuditRosterCheckUnderNarrowing(t *testing.T) {
 		t.Fatalf("un-narrowed legacy audit refused: %s", resp.Content)
 	}
 }
+
+// A narrowed run accepts a typed declaration that a registered tool can
+// discharge even though the declared name itself is not registered: a
+// same-server alias twin (critical_tool_aliases) or an approved substitute
+// (critical_tool_substitutes), the typedCommitment nameMatches rule. The same
+// twin on another server still has nothing to discharge it and is refused.
+func TestTypedAuditRosterCheckAcceptsARegisteredStandIn(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	twin := newOrchStateForTest()
+	twin.setNarrowedMCPRoster([]string{aliasUploadTool})
+	if resp := confirmAudit(t, twin, []criticalActionStruct{{Tool: aliasInlineTool}}, nil); resp.IsError {
+		t.Fatalf("the inline write must be accepted when its registered upload twin can discharge it; got %q", resp.Content)
+	}
+	if len(twin.typedCommitments) != 1 || !twin.auditConfirmed {
+		t.Fatalf("accepted twin audit: commitments=%d confirmed=%v, want 1 and true", len(twin.typedCommitments), twin.auditConfirmed)
+	}
+
+	cross := newOrchStateForTest()
+	cross.setNarrowedMCPRoster([]string{aliasUploadTool})
+	if resp := confirmAudit(t, cross, []criticalActionStruct{{Tool: "mcp_pagesb_update_page_data"}}, nil); !resp.IsError || !strings.Contains(resp.Content, "mcp_pagesb_update_page_data") {
+		t.Fatalf("a twin on another server has no registered stand-in and must be refused; got %q", resp.Content)
+	}
+
+	ConfigureAgentPolicy(testFixturePolicy())
+	sub := newOrchStateForTest()
+	sub.setNarrowedMCPRoster([]string{"mcp_dsp_create_deal"})
+	if resp := confirmAudit(t, sub, []criticalActionStruct{{Tool: "mcp_dsp_execute_deal_from_prompt_inputs"}}, nil); resp.IsError {
+		t.Fatalf("a declaration whose approved substitute is registered must be accepted; got %q", resp.Content)
+	}
+}
+
+// The legacy form accepts a suffix an approved substitute covers, exactly as
+// markCommittedExecuted's pass 3 would discharge it; a suffix nothing covers
+// (create_curated_deal against a create_deal-only roster) is still refused.
+func TestLegacyAuditRosterCheckAcceptsASubstitute(t *testing.T) {
+	o := newOrchStateForTest()
+	o.setNarrowedMCPRoster([]string{"mcp_dsp_create_deal"})
+	if resp := confirmAudit(t, o, nil, []string{"mcp_dsp_execute_deal_from_prompt_inputs: the spring campaign"}); resp.IsError {
+		t.Fatalf("a legacy declaration with a registered substitute must be accepted; got %q", resp.Content)
+	}
+	if got := o.committedCriticalActions["execute_deal_from_prompt_inputs"]; got != 1 || !o.auditConfirmed {
+		t.Fatalf("accepted legacy audit: committed=%d confirmed=%v, want 1 and true", got, o.auditConfirmed)
+	}
+}

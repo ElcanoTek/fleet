@@ -499,6 +499,33 @@ func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
 	}
 }
 
+// A same-tool retry supersedes a failure (stale version, corrected arguments),
+// but not when the two calls name different records: a landed write of deal B
+// says nothing about the failed write of deal A. A retry naming no record
+// supersedes as it always has.
+func TestFailedCriticalCallsSameToolRetryOfAnotherRecordStaysFailed(t *testing.T) {
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"create_deal"}})
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	for _, tc := range []struct {
+		name    string
+		a, b    map[string]any
+		wantHit bool
+	}{
+		{"another record stays failed", map[string]any{"/deal_id": "a"}, map[string]any{"/deal_id": "b"}, true},
+		{"the same record supersedes", map[string]any{"/deal_id": "a"}, map[string]any{"/deal_id": "a", "/version": "2"}, false},
+		{"a retry naming no record supersedes", map[string]any{"/slug": "x"}, map[string]any{"/slug": "x", "/version": "2"}, false},
+	} {
+		records := []toolExecRecord{
+			{Name: "mcp_dsp_create_deal", Succeeded: false, Arguments: tc.a},
+			{Name: "mcp_dsp_create_deal", Succeeded: true, Arguments: tc.b},
+		}
+		got := failedCriticalCalls(records)
+		if (len(got) == 1) != tc.wantHit {
+			t.Fatalf("%s: failedCriticalCalls = %v", tc.name, got)
+		}
+	}
+}
+
 // A failed twin must not bridge two records: inline A fails, the upload twin
 // for A fails, then the upload succeeds for B. Nothing landed A, so the inline
 // failure stands — a failure supersedes nothing, and B is another record.
@@ -509,8 +536,11 @@ func TestFailedCriticalCallsFailedTwinBridgesNothing(t *testing.T) {
 		{Name: "mcp_pages_update_page_data_upload", Succeeded: false, Arguments: map[string]any{"/deal_id": "a"}},
 		{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_id": "b"}},
 	}
-	if got := failedCriticalCalls(records); fmt.Sprint(got) != "[mcp_pages_update_page_data]" {
-		t.Fatalf("failedCriticalCalls = %v, want [mcp_pages_update_page_data]", got)
+	// Both failures stand: nothing landed A, and the upload's own retry wrote
+	// another record, so it does not supersede the failed upload for A either.
+	want := "[mcp_pages_update_page_data mcp_pages_update_page_data_upload]"
+	if got := failedCriticalCalls(records); fmt.Sprint(got) != want {
+		t.Fatalf("failedCriticalCalls = %v, want %s", got, want)
 	}
 }
 

@@ -81,12 +81,16 @@ on the audit:
   the session log and at the head of the task's terminal message; the run is
   not dead-lettered on the verifier's own outage. The phone-a-friend reviewer
   already failed open on its errors. Only a later success supersedes a
-  failure, and only a success of the same tool or of a same-server alias twin
-  (`critical_tool_aliases`) that wrote the same record: both calls' recorded
-  arguments are complete and name the same `deal_id` / `deal_ids` binding. A
-  failed retry supersedes nothing, and neither does a twin that wrote another
-  record, names no record, has incomplete evidence, is a bare-suffix name, or
-  sits on another server or client variant.
+  failure. A success of the same tool does, unless the two calls name
+  different records (`deal_id` / `deal_ids`). A success of a same-server alias
+  twin (`critical_tool_aliases`) does only when it wrote the same record: both
+  calls' recorded arguments are complete and name the same `deal_id` /
+  `deal_ids` binding. A failed retry supersedes nothing, and neither does a
+  twin that wrote another record, names no record, has incomplete evidence, is
+  a bare-suffix name, or sits on another server or client variant. Page twins
+  addressed only by slug therefore never supersede each other, by decision:
+  supersession trusts only the record-binding contract the audit gate already
+  uses, and fleet does not special-case one server's identifier.
 - **A malformed verdict** (the verifier answered, but with prose, invalid
   JSON, no explicit `missing_actions` array, or an empty reply) is a content failure, not an
   outage. A degraded verifier model must not quietly become auto-success, so
@@ -194,12 +198,16 @@ EXECUTION REQUIREMENTS (JSON):
   local MCP path the check reads the advertised catalog, so a required tool the
   manifest allowlist denies passes it and is still not registered.
 - **Audit declarations.** `confirm_audit` refuses a declaration that names an
-  MCP tool the run did not register, and that audit registers nothing. This
-  covers typed `critical_actions` entries, matched by exact name, and legacy
-  `critical_actions_being_unblocked` text, whose critical suffix must belong to
-  a registered tool's alias class. The model re-audits with tools from its list. Accepting
-  the declaration would create an approval nothing could discharge: the call
-  answers `tool not found`, so finish would be refused until the run failed.
+  MCP tool the run did not register and that no registered tool can stand in
+  for, and that audit registers nothing. A typed `critical_actions` entry is
+  accepted when the run registered that exact tool, or a same-server alias twin
+  (`critical_tool_aliases`) or approved substitute (`critical_tool_substitutes`)
+  of it: the tools that would discharge it. Legacy
+  `critical_actions_being_unblocked` text is accepted when its critical suffix
+  shares an alias class with, or is substituted by, a registered tool's suffix.
+  The model re-audits with tools from its list. Accepting any other declaration
+  would create an approval nothing could discharge: the call answers
+  `tool not found`, so finish would be refused until the run failed.
 - **Removed tools.** A call to a removed tool is answered `tool not found`.
   The run log carries one `[roster] required_tools_only: N mcp tools
   registered` breadcrumb.
