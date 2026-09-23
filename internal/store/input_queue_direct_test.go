@@ -194,15 +194,16 @@ func TestReleaseDirectInput_SettlesABoundClaim(t *testing.T) {
 	}
 }
 
-// CancelUnboundDirectInput cancels only a claim not yet bound to a turn; the
-// bind that follows then finds it no longer running.
-func TestCancelUnboundDirectInput_OnlyBeforeTheBind(t *testing.T) {
+// CancelUnlaunchedInput cancels only a claimed row not yet bound to a turn —
+// a direct claim with no turn id, or a drained row holding its placeholder —
+// and the bind that follows then finds it no longer running.
+func TestCancelUnlaunchedInput_OnlyBeforeTheBind(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t-cub")
 
 	unbound, _ := claimDirect(t, s, convID, "cub-1")
-	if ok, err := s.CancelUnboundDirectInput(ctx, unbound.ID); err != nil || !ok {
+	if ok, err := s.CancelUnlaunchedInput(ctx, unbound.ID); err != nil || !ok {
 		t.Fatalf("cancel unbound = %v, %v; want cancelled", ok, err)
 	}
 	if bound, err := s.BindInputTurn(ctx, unbound.ID, "t-cub"); err != nil || bound {
@@ -213,10 +214,36 @@ func TestCancelUnboundDirectInput_OnlyBeforeTheBind(t *testing.T) {
 	if _, err := s.BindInputTurn(ctx, bound.ID, "t-cub"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.CancelUnboundDirectInput(ctx, bound.ID); err != nil || ok {
+	if ok, err := s.CancelUnlaunchedInput(ctx, bound.ID); err != nil || ok {
 		t.Fatalf("cancel bound = %v, %v; want left alone", ok, err)
 	}
 	if got, _ := s.LookupInput(ctx, convID, "cub-2"); got == nil || got.State != InputStateRunning {
 		t.Fatalf("bound claim = %+v, want still running", got)
+	}
+
+	drain := func(key string) *InputQueueRow {
+		t.Helper()
+		if _, _, err := s.EnqueueInput(ctx, InputQueueRow{
+			ID: "q-" + key, ConversationID: convID, UserEmail: "u@example.com",
+			ClientInputID: key, Message: "later", Attachments: "[]", Mode: InputModeQueued,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		row, err := s.ClaimNextQueuedInput(ctx, convID, ClaimTurnPrefix+key)
+		if err != nil || row == nil {
+			t.Fatalf("drain claim = %+v, %v", row, err)
+		}
+		return row
+	}
+	placeholder := drain("cub-3")
+	if ok, err := s.CancelUnlaunchedInput(ctx, placeholder.ID); err != nil || !ok {
+		t.Fatalf("cancel drained placeholder = %v, %v; want cancelled", ok, err)
+	}
+	launched := drain("cub-4")
+	if _, err := s.BindInputTurn(ctx, launched.ID, "t-cub"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.CancelUnlaunchedInput(ctx, launched.ID); err != nil || ok {
+		t.Fatalf("cancel drained bound = %v, %v; want left alone", ok, err)
 	}
 }

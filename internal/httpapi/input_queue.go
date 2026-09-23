@@ -402,7 +402,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	}
 	dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	claimTurnID := uuid.NewString()
+	claimTurnID := store.ClaimTurnPrefix + uuid.NewString()
 	row, err := s.store.ClaimNextQueuedInput(dctx, convID, claimTurnID)
 	if err != nil {
 		log.Printf("input queue claim (conv=%s): %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF; convID is a server-generated UUID.

@@ -647,8 +647,8 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 // cancelInput stops one input by its idempotency key (see
 // handleConversationCancel). The turn side is atomic with registration
 // (cancelInputTurn). A row still queued is also withdrawn, since a queued
-// row can outwait the in-memory mark, and so is a direct claim whose turn is
-// still being prepared (its bind is then refused). A steer already injected into a running
+// row can outwait the in-memory mark, and a claimed row whose turn is still
+// being prepared is cancelled durably (its bind is then refused). A steer already injected into a running
 // turn cannot be taken back out of it, so its row is cancelled first (or the
 // turn's settlement would return it to the queue) and then the turn carrying
 // it is stopped. false means a store write failed and the input may run on.
@@ -678,15 +678,19 @@ func (s *Server) cancelInput(ctx context.Context, user, convID, key string) bool
 			return false
 		}
 	}
-	if row != nil && row.Mode == store.InputModeDirect && row.State == store.InputStateRunning && row.TurnID == "" {
-		// A direct claim whose turn is still being prepared: cancel it
-		// durably too, so its bind is refused even if the in-memory mark is
-		// evicted or expires first. Guarded on "not yet bound" — a bound
-		// claim's turn may have run, and the Stop above already cancelled it.
-		// Not a queue item, so there is no queue update to emit.
-		if _, err := s.store.CancelUnboundDirectInput(qctx, row.ID); err != nil {
-			log.Printf("cancel unbound direct input (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+	if row != nil && row.State == store.InputStateRunning {
+		// Claimed, and maybe still being prepared (a direct claim, a drained
+		// row): cancel it durably too, so its bind is refused even if the
+		// in-memory mark is evicted or expires first. The store guards on
+		// "not yet bound" — a bound row's turn may have run, and the Stop
+		// above already cancelled that turn.
+		cancelled, err := s.store.CancelUnlaunchedInput(qctx, row.ID)
+		if err != nil {
+			log.Printf("cancel unlaunched input (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
 			return false
+		}
+		if cancelled && row.Mode != store.InputModeDirect {
+			s.emitQueueUpdate(qctx, user, convID)
 		}
 		return true
 	}

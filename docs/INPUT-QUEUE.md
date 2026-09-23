@@ -50,11 +50,12 @@ retention guarantee: after a terminal row is purged, reusing its
   input is either cancelled or never launched; the mark is kept for 10 minutes
   (at most 4096 marks at once; `input_id` is limited to 256 bytes here too),
   a queued row is withdrawn in the database (at the Stop, or when it is
-  inserted after the Stop) so it cannot outwait it, and a direct claim not yet
-  bound to its turn is cancelled in the database too, so its launch is refused
-  (`409`) even if the mark is gone by then. A claim already bound to its turn
-  is left to that turn's settlement, since the turn may have run. A client whose answer was
-  lost (`fleet acp`) stops its own input this way without knowing which state
+  inserted after the Stop) so it cannot outwait it, and a claimed input not yet
+  bound to its turn (a direct claim, or a drained row still holding its
+  `claim-` placeholder turn id) is cancelled in the database too, so its launch
+  is refused (a direct submission answers `409`) even if the mark is gone by
+  then. A row already bound to its turn is left to that turn's settlement,
+  since the turn may have run. A client whose answer was lost (`fleet acp`) stops its own input this way without knowing which state
   it reached. `POST /chat` names its turn on the `X-Fleet-Turn-Id` response
   header (beside `X-Fleet-Conversation-Id`), so the id is known before any
   frame.

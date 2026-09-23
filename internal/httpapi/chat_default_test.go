@@ -1001,11 +1001,13 @@ func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
 	return nil
 }
 
-func (s *fakeChatStore) CancelUnboundDirectInput(_ context.Context, id string) (bool, error) {
+func (s *fakeChatStore) CancelUnlaunchedInput(_ context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.queue {
-		if s.queue[i].ID == id && s.queue[i].Mode == store.InputModeDirect && s.queue[i].State == store.InputStateRunning && s.queue[i].TurnID == "" {
+		it := s.queue[i]
+		unbound := (it.Mode == store.InputModeDirect && it.TurnID == "") || strings.HasPrefix(it.TurnID, store.ClaimTurnPrefix)
+		if it.ID == id && it.State == store.InputStateRunning && unbound {
 			s.queue[i].State = store.InputStateCancelled
 			return true, nil
 		}
@@ -1621,5 +1623,39 @@ func TestCancelByInputKey_BoundClaimIsNotMarkedCancelled(t *testing.T) {
 	}
 	if row, _ := st.LookupInput(context.Background(), conv.ID, "key-b"); row == nil || row.State != store.InputStateRunning {
 		t.Fatalf("row = %+v, want the bound claim left to its turn's settlement", row)
+	}
+}
+
+// A Stop by key that lands after a drain claimed the row but before its turn
+// registered cancels the row durably, so the launch is refused even if the
+// in-memory mark is gone by then.
+func TestCancelByInputKey_DrainedRowIsCancelledDurably(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	claim := store.ClaimTurnPrefix + "drain-1"
+	st.mu.Lock()
+	st.queue = append(st.queue, store.InputQueueRow{ID: "r-d", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-d", Mode: store.InputModeQueued, State: store.InputStateRunning, TurnID: claim})
+	st.mu.Unlock()
+	gen, _ := srv.stopGateForRow(conv.ID, 0)
+	if !srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-d") {
+		t.Fatal("cancelInput reported a store failure")
+	}
+	srv.inflightMu.Lock()
+	srv.cancelledInputs = nil // the mark is evicted before the turn registers
+	srv.inflightMu.Unlock()
+	var released atomic.Bool
+	srv.startTurn(nil, nil, "u@x.com", conv, chatRequest{ConversationID: conv.ID, Message: "later"},
+		&queuedLaunch{rowID: "r-d", claimTurnID: claim, sweepGen: gen, inputKey: "key-d"}, func() { released.Store(true) }, nil)
+	time.Sleep(50 * time.Millisecond)
+	eng.mu.Lock()
+	turns := eng.turns
+	eng.mu.Unlock()
+	if turns != 0 {
+		t.Fatalf("a stopped drained row ran (%d turns)", turns)
+	}
+	if row, _ := st.LookupInput(context.Background(), conv.ID, "key-d"); row == nil || row.State != store.InputStateCancelled {
+		t.Fatalf("row = %+v, want cancelled", row)
 	}
 }

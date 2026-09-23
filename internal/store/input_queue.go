@@ -123,16 +123,24 @@ func (s *Store) ReleaseDirectInput(ctx context.Context, id string) error {
 	return err
 }
 
-// CancelUnboundDirectInput cancels a direct claim whose turn has not been
-// bound yet — a Stop naming its key while the turn is still being prepared.
+// ClaimTurnPrefix marks the placeholder turn id a drain stamps on a row it
+// claims, until BindInputTurn replaces it with the real turn id. It is what
+// tells a claimed row whose turn has not launched from one bound to a turn.
+const ClaimTurnPrefix = "claim-"
+
+// CancelUnlaunchedInput cancels a claimed input whose turn has not been bound
+// yet — a direct claim with no turn id, or a drained row still holding its
+// drain placeholder — for a Stop naming its key while the turn is prepared.
 // The later bind then finds it no longer running and the launch is refused,
-// even if the in-memory Stop mark is gone by then. A bound claim is left
-// alone: its turn may have run, and "cancelled" would tell a resend of the
-// key that nothing ran. It reports whether it cancelled the claim.
-func (s *Store) CancelUnboundDirectInput(ctx context.Context, id string) (bool, error) {
+// even if the in-memory Stop mark is gone by then. A row bound to its turn is
+// left alone: the turn may have run, and "cancelled" would tell a resend of
+// the key that nothing ran. It reports whether it cancelled the row.
+func (s *Store) CancelUnlaunchedInput(ctx context.Context, id string) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
-		  WHERE id = $1 AND mode = 'direct' AND state = 'running' AND turn_id IS NULL`, id, time.Now().Unix())
+		  WHERE id = $1 AND state = 'running'
+		    AND ((mode = 'direct' AND turn_id IS NULL) OR turn_id LIKE $3)`,
+		id, time.Now().Unix(), ClaimTurnPrefix+"%")
 	if err != nil {
 		return false, err
 	}
