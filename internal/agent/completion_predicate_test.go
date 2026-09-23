@@ -408,3 +408,70 @@ func TestScheduledMalformedVerdictStillSpendsChecks(t *testing.T) {
 		}
 	}
 }
+
+// pagesTwinPolicy installs the Pages write twins as critical and, when
+// aliased, as one action (critical_tool_aliases, #1604).
+func pagesTwinPolicy(t *testing.T, aliased bool) {
+	t.Helper()
+	p := agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_page_data", "update_page_data_upload"}}
+	if aliased {
+		p.CriticalToolAliases = map[string][]string{"update_page_data": {"update_page_data_upload"}}
+	}
+	agentcore.ConfigureAgentPolicy(p)
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+}
+
+// A failed inline write superseded by a successful upload of the same data on
+// the same server is ONE critical action that landed: with the twins aliased,
+// a verifier outage fails open exactly like any clean audited publish.
+func TestScheduledVerifierOutageAfterUploadTwinSupersedesFailedInline(t *testing.T) {
+	withFastVerifierRetry(t)
+	pagesTwinPolicy(t, true)
+	verifier := &scriptedVerifier{replies: []string{"ERR"}}
+	broker := &pagesBroker{calls: map[string]int{}, failing: map[string]bool{"update_page_data": true}}
+	a, _, _, err := scriptedRun(t, []struct{ tool, input string }{
+		{"confirm_audit", publishAudit},
+		{"mcp_pages_update_page_data", `{"slug":"x","data":{}}`},
+		{"mcp_pages_update_page_data_upload", `{"slug":"x","upload_id":"u-1"}`},
+	}, verifier, nil, broker, nil)
+	if err != nil {
+		t.Fatalf("an audited publish that landed through the upload twin must fail open on a verifier outage, got %v", err)
+	}
+	if broker.calls["update_page_data"] != 1 || broker.calls["update_page_data_upload"] != 1 {
+		t.Fatalf("writes = %v, want the failed inline attempt and the landed upload", broker.calls)
+	}
+	if verifier.calls != 2 || !hasSessionMessageType(a.logSession, agentcore.MessageTypeCompletionUnverifiedVerifierError) {
+		t.Fatalf("want the outage retried once and the fail-open warning (verifier calls=%d)", verifier.calls)
+	}
+}
+
+// failedCriticalCalls judges the LAST attempt at each critical action: an alias
+// twin on the same server supersedes a failure, the same twin on another
+// server or client-variant seat does not, and without aliases the two
+// spellings stay two actions (the pre-#1604 behaviour).
+func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
+	inlineFailed := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: false}
+	for _, tc := range []struct {
+		name    string
+		aliased bool
+		then    toolExecRecord
+		want    []string
+	}{
+		{"same-server twin supersedes", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true}, nil},
+		{"cross-server twin does not", true, toolExecRecord{Name: "mcp_pagesb_update_page_data_upload", Succeeded: true}, []string{"mcp_pages_update_page_data"}},
+		{"client-variant twin does not", true, toolExecRecord{Name: "mcp_pages_client2_update_page_data_upload", Succeeded: true}, []string{"mcp_pages_update_page_data"}},
+		{"no aliases: two actions", false, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true}, []string{"mcp_pages_update_page_data"}},
+		{"last attempt is reported by its own name", true, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: false}, []string{"mcp_pages_update_page_data_upload"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pagesTwinPolicy(t, tc.aliased)
+			records := []toolExecRecord{inlineFailed, tc.then}
+			if got := failedCriticalCalls(records); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Fatalf("failedCriticalCalls = %v, want %v", got, tc.want)
+			}
+			if !succeededCriticalCall(records) && tc.then.Succeeded {
+				t.Fatal("a landed twin must count as a succeeded critical call")
+			}
+		})
+	}
+}

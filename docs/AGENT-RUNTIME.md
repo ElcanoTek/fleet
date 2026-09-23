@@ -1306,7 +1306,11 @@ pause (#1602). If the retry fails too:
 
 - **An outage** (timeout, provider failure), after this run's own
   `confirm_audit` passed, with at least one critical tool that executed
-  successfully and none whose last execution failed.
+  successfully and none whose last execution failed. The "last execution" is
+  per critical *action*: a declared alias twin on the same server
+  (`critical_tool_aliases`) supersedes a failed attempt, so a failed inline
+  write followed by a successful upload of the same data counts as landed. The
+  same twin on another server or client variant is a different action.
   The run succeeds with a `completion_unverified_verifier_error` warning,
   recorded in the session log and at the head of the task's terminal message,
   instead of dead-lettering audited work on the verifier's own outage.

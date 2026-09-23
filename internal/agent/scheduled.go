@@ -761,43 +761,47 @@ func (p *scheduledPolicy) verifierOutageMayFailOpen(err error, records []toolExe
 	return len(failedCriticalCalls(records)) == 0 && succeededCriticalCall(records)
 }
 
-// succeededCriticalCall reports whether any critical tool executed
-// successfully in the run (same records and success classification as
-// failedCriticalCalls).
+// succeededCriticalCall reports whether any critical action executed
+// successfully in the run (same records, success classification and
+// agentcore.CriticalActionKey classification as failedCriticalCalls).
 func succeededCriticalCall(records []toolExecRecord) bool {
 	for _, r := range records {
-		if r.Succeeded && agentcore.IsCriticalTool(r.Name) {
+		if r.Succeeded && agentcore.CriticalActionKey(r.Name) != "" {
 			return true
 		}
 	}
 	return false
 }
 
-// failedCriticalCalls names the critical tools whose LAST execution in the run
-// failed (same records and success classification as the verifier). A failed
-// attempt a later success of the same tool superseded — a stale-version retry,
-// corrected arguments — does not count.
-//
-// TODO(#1606): key by alias class once critical_tool_aliases lands
-// (agentcore's criticalAliasClassOf / sameAliasedTool, via an exported helper):
-// a failed inline write superseded by its successful upload twin still counts
-// as failed here, which fails closed (the check is spent) but is wrong.
+// failedCriticalCalls names the critical actions whose LAST execution in the
+// run failed (same records and success classification as the verifier),
+// reporting the tool name of that last execution. A failed attempt that a
+// later success of the same action superseded does not count: a stale-version
+// retry, corrected arguments, or the action's alias twin on the same server
+// (agentcore.CriticalActionKey, critical_tool_aliases #1604) — a failed inline
+// write followed by a successful upload of the same data. A twin on another
+// server or client variant is another action and supersedes nothing.
 func failedCriticalCalls(records []toolExecRecord) []string {
-	last := make(map[string]bool)
+	type outcome struct {
+		name      string
+		succeeded bool
+	}
+	last := make(map[string]outcome)
 	var order []string
 	for _, r := range records {
-		if !agentcore.IsCriticalTool(r.Name) {
+		key := agentcore.CriticalActionKey(r.Name)
+		if key == "" {
 			continue
 		}
-		if _, seen := last[r.Name]; !seen {
-			order = append(order, r.Name)
+		if _, seen := last[key]; !seen {
+			order = append(order, key)
 		}
-		last[r.Name] = r.Succeeded
+		last[key] = outcome{name: r.Name, succeeded: r.Succeeded}
 	}
 	var failed []string
-	for _, name := range order {
-		if !last[name] {
-			failed = append(failed, name)
+	for _, key := range order {
+		if !last[key].succeeded {
+			failed = append(failed, last[key].name)
 		}
 	}
 	return failed

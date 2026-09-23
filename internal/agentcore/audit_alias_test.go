@@ -475,3 +475,25 @@ func TestCriticalToolAliases_PartialSupersedeKeepsUncoveredRecords(t *testing.T)
 		t.Fatalf("record B is no longer owed: %v", o.outstandingCommitmentSummary())
 	}
 }
+
+// CriticalActionKey: one key per action — server/variant prefix plus the alias
+// class — so same-server twins share it and nothing else does.
+func TestCriticalActionKey(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	inline := CriticalActionKey(aliasInlineTool)
+	if inline == "" || CriticalActionKey(aliasUploadTool) != inline {
+		t.Fatalf("same-server twins must share a key: %q vs %q", inline, CriticalActionKey(aliasUploadTool))
+	}
+	for _, other := range []string{aliasOtherServerUpload, aliasVariantUpload, "mcp_pagesb_update_page_data"} {
+		if CriticalActionKey(other) == inline {
+			t.Errorf("%s must not share the key of %s", other, aliasInlineTool)
+		}
+	}
+	if got := CriticalActionKey("mcp_pages_get_page_data"); got != "" {
+		t.Errorf("a non-critical tool keyed %q, want \"\"", got)
+	}
+	withPagesPolicy(t, nil)
+	if got := CriticalActionKey(aliasUploadTool); got != aliasUploadTool {
+		t.Errorf("without aliases the key is the tool name, got %q", got)
+	}
+}
