@@ -3,6 +3,7 @@ import {
   browserTimeZone,
   formatTimeZoneLabel,
   isValidTimeZone,
+  sameTimeZone,
   timeZoneOptions,
 } from "./timezones";
 
@@ -32,5 +33,11 @@ describe("timezones", () => {
     expect(formatTimeZoneLabel("America/New_York", summer)).toBe("America/New_York (EDT)");
     expect(formatTimeZoneLabel("America/New_York", winter)).toBe("America/New_York (EST)");
     expect(formatTimeZoneLabel("UTC", summer)).toBe("UTC");
+  });
+
+  it("treats IANA aliases as the same zone", () => {
+    expect(sameTimeZone("US/Eastern", "America/New_York")).toBe(true);
+    expect(sameTimeZone("Etc/UTC", "UTC")).toBe(true);
+    expect(sameTimeZone("America/Chicago", "America/New_York")).toBe(false);
   });
 });

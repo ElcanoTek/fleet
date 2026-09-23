@@ -28,6 +28,23 @@ export function isValidTimeZone(zone: string): boolean {
   }
 }
 
+// canonicalTimeZone resolves an alias to the runtime's canonical name
+// ("US/Eastern" → "America/New_York"), or returns the input unchanged when the
+// runtime doesn't know it.
+export function canonicalTimeZone(zone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone || zone;
+  } catch {
+    return zone;
+  }
+}
+
+// sameTimeZone reports whether two zone names are the same zone, aliases
+// included — the backend preserves whatever IANA name a task was saved with.
+export function sameTimeZone(a: string, b: string): boolean {
+  return a === b || canonicalTimeZone(a) === canonicalTimeZone(b);
+}
+
 // timeZoneOptions lists the zones the picker offers: every zone the runtime
 // knows, with UTC and any `include` entries (the browser's zone, an edited
 // task's stored zone) guaranteed present even on a runtime that can't

@@ -14,6 +14,7 @@ import {
   browserTimeZone,
   formatTimeZoneLabel,
   isValidTimeZone,
+  sameTimeZone,
   timeZoneOptions,
 } from "@/app/shared/lib/timezones";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
@@ -399,6 +400,7 @@ export function TaskCreateModal({
   const [recurrence, setRecurrence] = useState(init.recurrence);
   const [timezone, setTimezone] = useState(init.timezone);
   const [viewerTimeZone] = useState(browserTimeZone);
+  const zoneIsViewers = sameTimeZone(timezone, viewerTimeZone);
   const [repeatEditor, setRepeatEditor] = useState<RepeatEditor>(init.repeatEditor);
   const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>(init.simpleFrequency);
   const [simpleTime, setSimpleTime] = useState(init.simpleTime);
@@ -1964,19 +1966,19 @@ export function TaskCreateModal({
                         <span>Time zone</span>
                         <select
                           aria-label="Repeat time zone"
-                          aria-describedby={timezone !== viewerTimeZone ? "repeat-timezone-hint" : undefined}
+                          aria-describedby={zoneIsViewers ? undefined : "repeat-timezone-hint"}
                           value={timezone}
                           onChange={(e) => setTimezone(e.target.value)}
                         >
                           {timeZoneOptions(viewerTimeZone, timezone).map((zone) => (
                             <option key={zone} value={zone}>
-                              {zone === viewerTimeZone ? `${zone} (your time zone)` : zone}
+                              {sameTimeZone(zone, viewerTimeZone) ? `${zone} (your time zone)` : zone}
                             </option>
                           ))}
                         </select>
                       </label>
                     </div>
-                    {timezone !== viewerTimeZone ? (
+                    {!zoneIsViewers ? (
                       <p className="field-hint" id="repeat-timezone-hint" data-testid="repeat-timezone-hint">
                         Times above are in {timezone}, not your own time zone ({viewerTimeZone}).
                       </p>
@@ -1999,7 +2001,7 @@ export function TaskCreateModal({
                         <span>
                           <strong>{cronNext ? `Next run ${formatNextRun(cronNext, timezone)}` : "Schedule ready"}</strong>
                           <span>
-                            {cronDescription} · {formatTimeZoneLabel(timezone)}
+                            {cronDescription} · {formatTimeZoneLabel(timezone, cronNext ?? undefined)}
                           </span>
                         </span>
                       </div>

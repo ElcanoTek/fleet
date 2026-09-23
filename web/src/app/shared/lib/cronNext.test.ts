@@ -127,6 +127,27 @@ describe("nextCronOccurrence in a named time zone", () => {
     expect(next!.toISOString()).toBe("2026-03-09T06:30:00.000Z");
   });
 
+  it("fires the second 01:30 of a fall-back night, like the backend", () => {
+    // 2026-11-01 05:45Z is 01:45 EDT; clocks then fall back to 01:00 EST, so
+    // 01:30 EST (06:30Z) is still ahead.
+    const from = new Date(Date.UTC(2026, 10, 1, 5, 45, 0));
+    const next = nextCronOccurrence("30 1 * * *", from, "America/New_York");
+    expect(next!.toISOString()).toBe("2026-11-01T06:30:00.000Z");
+  });
+
+  it("takes the first 01:30 of a fall-back night when both are ahead", () => {
+    const from = new Date(Date.UTC(2026, 10, 1, 4, 0, 0)); // 00:00 EDT
+    const next = nextCronOccurrence("30 1 * * *", from, "America/New_York");
+    expect(next!.toISOString()).toBe("2026-11-01T05:30:00.000Z");
+  });
+
+  it("orders a fall-back day by instant, not wall clock", () => {
+    // From 01:50 EDT (05:50Z): 01:45 EST (06:45Z) comes before 02:00 EST.
+    const from = new Date(Date.UTC(2026, 10, 1, 5, 50, 0));
+    const next = nextCronOccurrence("45 1,2 * * *", from, "America/New_York");
+    expect(next!.toISOString()).toBe("2026-11-01T06:45:00.000Z");
+  });
+
   it("returns null for an unknown zone", () => {
     expect(nextCronOccurrence("0 8 * * *", NOON_UTC, "Mars/Olympus_Mons")).toBeNull();
   });

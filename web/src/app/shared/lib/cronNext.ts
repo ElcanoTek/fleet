@@ -144,7 +144,10 @@ const DAY_MS = 86_400_000;
 
 // nextZonedOccurrence scans the zone's calendar as "wall clock encoded as a
 // UTC epoch" — UTC has no DST, so only the target zone's rules ever apply —
-// and maps each candidate wall-clock time back to a real instant.
+// and maps each candidate wall-clock time to the real instant(s) that show it.
+// Candidates are compared as instants, not wall-clock readings: in a fall-back
+// hour one wall time happens twice, and the second can still be ahead of
+// `from` (robfig/cron's Next fires it too).
 function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date | null {
   const s = parseCronExpression(expr);
   if (!s) return null;
@@ -154,42 +157,46 @@ function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date |
   const minutes = [...s.minutes].sort((a, b) => a - b);
   const hours = [...s.hours].sort((a, b) => a - b);
 
-  // Next whole minute of the zone's wall clock.
-  const start = new Date(Date.UTC(f[0], f[1] - 1, f[2], f[3], f[4]) + MINUTE_MS);
-  let day = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
-  for (let i = 0; i <= 366; i++, day += DAY_MS) {
+  // Strictly after `from`, at whole-minute resolution.
+  const after = Math.floor(from.getTime() / MINUTE_MS) * MINUTE_MS + MINUTE_MS;
+  // Start a day early: a transition at midnight can put the next instant on
+  // an earlier wall-clock date than `from` reads.
+  let day = Date.UTC(f[0], f[1] - 1, f[2]) - DAY_MS;
+  for (let i = 0; i <= 367; i++, day += DAY_MS) {
     const d = new Date(day);
     if (!s.months.has(d.getUTCMonth() + 1) || !dayMatches(s, d.getUTCDate(), d.getUTCDay())) continue;
+    // Wall order and instant order disagree inside a repeated hour, so take
+    // the earliest qualifying instant of the whole day.
+    let best: number | null = null;
     for (const h of hours) {
       for (const m of minutes) {
-        if (i === 0 && (h < start.getUTCHours() || (h === start.getUTCHours() && m < start.getUTCMinutes()))) {
-          continue;
+        const candidates = wallToInstants(day + h * 3_600_000 + m * MINUTE_MS, timeZone);
+        if (candidates === null) return null;
+        for (const instant of candidates) {
+          if (instant < after) continue;
+          // A wall time the zone skips (spring-forward) maps to a different
+          // reading; it is not an occurrence.
+          const got = wallClockParts(new Date(instant), timeZone);
+          if (!got || got[3] !== h || got[4] !== m) continue;
+          if (best === null || instant < best) best = instant;
         }
-        const wall = day + h * 3_600_000 + m * MINUTE_MS;
-        const instant = wallToInstant(wall, timeZone);
-        if (instant === null) return null;
-        // A wall-clock time the zone skips (spring-forward) maps to a
-        // different reading; it is not an occurrence.
-        const got = wallClockParts(new Date(instant), timeZone);
-        if (!got || got[3] !== h || got[4] !== m) continue;
-        return new Date(instant);
       }
     }
+    if (best !== null) return new Date(best);
   }
   return null;
 }
 
-// wallToInstant maps a zone wall-clock time (encoded as a UTC epoch) to the
-// instant that shows it. Two passes settle the offset for the target instant,
-// which can differ from a first guess across a DST change.
-function wallToInstant(wallAsUTC: number, timeZone: string): number | null {
-  let instant = wallAsUTC;
-  for (let i = 0; i < 2; i++) {
-    const offset = zoneOffsetMs(new Date(instant), timeZone);
-    if (offset === null) return null;
-    instant = wallAsUTC - offset;
-  }
-  return instant;
+// wallToInstants maps a zone wall-clock time (encoded as a UTC epoch) to the
+// instants that could show it: one per offset in effect 12h either side (no
+// zone changes offset twice within a day). Normally both agree; in a
+// fall-back hour they are the two real instants, and in a spring-forward gap
+// neither reads back as the requested time (the caller filters that).
+function wallToInstants(wallAsUTC: number, timeZone: string): number[] | null {
+  const before = zoneOffsetMs(new Date(wallAsUTC - DAY_MS / 2), timeZone);
+  const later = zoneOffsetMs(new Date(wallAsUTC + DAY_MS / 2), timeZone);
+  if (before === null || later === null) return null;
+  return before === later ? [wallAsUTC - before] : [wallAsUTC - before, wallAsUTC - later];
 }
 
 function nextLocalOccurrence(expr: string, from: Date): Date | null {

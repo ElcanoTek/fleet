@@ -42,8 +42,12 @@ Eastern. What shipped:
 - The next-run preview evaluates in the selected zone
   (`nextCronOccurrence(expr, from, timeZone)`) and formats its date there. It
   scans the zone's calendar with DST-free UTC arithmetic, so the browser's own
-  DST rules never shift another zone's preview, and a time the zone skips (a
-  spring-forward gap) is not shown as an occurrence. It is still a date-only
+  DST rules never shift another zone's preview; a time the zone skips (a
+  spring-forward gap) is not an occurrence, and a fall-back hour's repeated
+  time can match twice — both as robfig/cron's `Next` does. The zone label's
+  abbreviation is the one in effect at that next run, and the "not your own
+  time zone" hint compares canonical names, so an alias such as `US/Eastern`
+  counts as `America/New_York`. It is still a date-only
   preview, not the scheduler: the saved `scheduled_for` is the server's.
 
 Not changed: existing tasks are not migrated — one saved in UTC stays in UTC
