@@ -190,9 +190,6 @@ tested in this repository:
   Agent Card plus a JSON-RPC endpoint that lands delegated work on the same
   governed task seam, and fleet agents can delegate outward to remote A2A
   agents. Off by default (`FLEET_A2A_ENABLED`). [`docs/A2A.md`](docs/A2A.md).
-
-On the roadmap, not shipped: **ACP (Agent Client Protocol)**, so ACP clients
-can talk to fleet ([#984](https://github.com/ElcanoTek/fleet/issues/984)).
 - **OpenAPI 3.1.** The orchestrator HTTP API is published at
   [`docs/openapi.yaml`](docs/openapi.yaml), and a CI drift test keeps its
   routes, auth schemes and Go-bound component schemas in lockstep with the
@@ -415,8 +412,8 @@ standards. Our thanks to the teams and communities behind them:
   plugins straight from the client-config bundle.
 - **[A2A](https://a2a-protocol.org)** and
   **[ACP](https://agentclientprotocol.com)** — the open agent-to-agent and
-  agent-client specs. fleet speaks A2A in both directions today; ACP support
-  is on the roadmap ([#984](https://github.com/ElcanoTek/fleet/issues/984)).
+  agent-client specs fleet uses to talk with other agents and with the clients
+  people already work in.
 - **[Charmbracelet](https://github.com/charmbracelet)** — fleet leans on the
   charm stack end to end: **[Fantasy](https://github.com/charmbracelet/fantasy)**
   is the Go framework underneath the multi-provider agent run loop, and the
