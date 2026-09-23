@@ -526,10 +526,11 @@ Consequences worth stating plainly:
   `EXECUTION REQUIREMENTS` sets `"roster":"required_tools_only"` runs with an
   allowlist built from its `required_tools` (entries keyed by registered server
   name), and with Gate-2 **exhaustive** (`RunConfig.MCPRosterNarrowing`). A
-  server with no entry — after the same keying rule — registers nothing, where
-  an absent entry otherwise means "allow all". So a `<server>_<account>` seat
-  whose tools are not named in its own full form falls back to its base server's
-  narrowed entry and narrows the same way.
+  server with no required tool gets an explicit deny entry, so it registers
+  nothing and never inherits another server's narrowed entry through the keying
+  rule. The catalog cannot tell an account seat from an independent server that
+  shares a prefix, so no server inherits: a `<server>_<account>` seat keeps only
+  the tools `required_tools` names in the seat's own full form or by bare name.
   - A sub-agent of a narrowed run inherits the exhaustive flag, and it gets an
     explicit entry for every catalog server before the explore role's filter
     runs, so no child sees a tool its parent cannot call.

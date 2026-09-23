@@ -117,8 +117,14 @@ EXECUTION REQUIREMENTS (JSON):
 - **Removed tools.** A call to a removed tool is answered `tool not found`.
   The run log carries one `[roster] required_tools_only: N mcp tools
   registered` breadcrumb.
-- **Unknown values.** Any other `roster` value is a dispatch error. Without
-  the key, the roster is exactly as before.
+- **Unknown values.** Any other `roster` value, the empty string included, is
+  a dispatch error. Without the key (or with `null`), the roster is exactly as
+  before.
+- **Where it is enforced.** The narrowing is applied in the run's own tool
+  registration (Gate-2). The credential-owning MCP broker still authorizes
+  against the manifest's allowlist (ADR-0042) and does not know about the
+  narrowing, so a parent-side bug could at worst give a run the normal manifest
+  roster back, never a tool outside it.
 
 The point is cost and safety. A Pages data refresh resent about 34K tokens of
 tool schemas it never used on every step. Prod run `89afe409` declared a

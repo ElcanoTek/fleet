@@ -153,9 +153,12 @@ func parseRequirementsRoster(prompt string) (string, error) {
 		if err := json.Unmarshal([]byte(lines[i+1]), &req); err != nil {
 			return "", fmt.Errorf("execution requirements: roster must be a string")
 		}
-		if req.Roster == nil || *req.Roster == "" {
+		if req.Roster == nil {
 			return "", nil
 		}
+		// An explicitly empty value is refused like any other unknown value:
+		// an unset template variable must not silently turn off an opt-in
+		// that exists to constrain a run.
 		if *req.Roster != rosterRequiredToolsOnly {
 			return "", fmt.Errorf("execution requirements: unknown roster %q (supported: %q)", *req.Roster, rosterRequiredToolsOnly)
 		}
@@ -168,11 +171,10 @@ func parseRequirementsRoster(prompt string) (string, error) {
 // (#1603): for every server in the run's MCP roster, the tools required_tools
 // names — as the full mcp_<server>_<tool> name or the bare tool name, the forms
 // checkTools resolves — that the base allowlist already permits. It only ever
-// subtracts. Entries are keyed by the REGISTERED server name; a
-// <server>_<account> seat whose tools are not named in its own full form
-// narrows the same way as the base server it falls back to by the one keying
-// rule, pinned as an explicit entry filtered against the seat's OWN base
-// allowlist (so inheriting never registers a tool the seat forbids). It is always non-nil and is paired with an EXHAUSTIVE
+// subtracts. Entries are keyed by the REGISTERED server name, and every other
+// catalog server gets an explicit deny entry, so no server inherits another's
+// narrowed list through the keying rule (a <server>_<account> seat keeps only
+// the tools named in its own full form or by bare name). It is always non-nil and is paired with an EXHAUSTIVE
 // Gate-2 (agent.Options.MCPRosterNarrowing), under which a server with no
 // entry registers nothing. Native tools are not in the MCP roster and are
 // untouched.
@@ -194,38 +196,24 @@ func (r *executionRequirements) narrowedAllowlist(catalog []mcp.ServerTool, base
 			out[item.ServerName] = append(out[item.ServerName], item.Tool.Name)
 		}
 	}
-	// A seat with no entry of its own inherits the entry of the server key that
-	// governs it. That inherited list was filtered against the OTHER server's
-	// base allowlist, so a same-named tool the seat's own allowlist forbids
-	// would register. Pin each inheriting seat to an explicit entry: the
-	// inherited names the seat's own base entry permits, or the never-matching
-	// sentinel when none remain. Narrowing still only subtracts.
+	// Every other catalog server is denied EXPLICITLY. Leaving it without an
+	// entry would let Gate-2's longest-prefix keying resolve it to another
+	// server's narrowed entry — an account seat to its base server, but equally
+	// an independent server that merely shares a prefix (foo_archive → foo) —
+	// and register a same-named tool nothing required. The catalog cannot tell
+	// the two apart, so no server inherits: a seat's tools are kept only when
+	// required_tools names them in the seat's own full form or by bare name.
 	for _, item := range catalog {
-		if _, own := out[item.ServerName]; own {
-			continue
+		if _, own := out[item.ServerName]; !own {
+			out[item.ServerName] = []string{rosterNarrowingDeniesAll}
 		}
-		inherited := agentcore.AllowlistToolsFor(out, item.ServerName)
-		if len(inherited) == 0 {
-			continue
-		}
-		seatBase := agentcore.AllowlistToolsFor(base, item.ServerName)
-		kept := []string{}
-		for _, name := range inherited {
-			if len(seatBase) == 0 || listHas(seatBase, name) {
-				kept = append(kept, name)
-			}
-		}
-		if len(kept) == 0 {
-			kept = []string{rosterNarrowingDeniesAll}
-		}
-		out[item.ServerName] = kept
 	}
 	return out
 }
 
-// rosterNarrowingDeniesAll is the entry of a seat whose inherited narrowed
-// list its own allowlist forbids entirely: an EMPTY entry reads as "allow all"
-// under the allowlist semantics, so denying needs one never-matching name.
+// rosterNarrowingDeniesAll is the entry of a catalog server none of whose tools
+// a narrowed run requires: an EMPTY entry reads as "allow all" under the
+// allowlist semantics, so denying needs one never-matching name.
 const rosterNarrowingDeniesAll = "__roster_narrowing_denies_all_tools__"
 
 func listHas(list []string, name string) bool {

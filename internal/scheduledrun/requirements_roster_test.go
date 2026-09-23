@@ -22,6 +22,7 @@ func TestParseRequirementsRoster(t *testing.T) {
 		{"An ordinary prompt", "", false},
 		{executionRequirementsMarker + "\n" + `{"required_tools":["mcp_pages_get_page_data"]}`, "", false},
 		{executionRequirementsMarker + "\n" + `{"roster":null}`, "", false},
+		{executionRequirementsMarker + "\n" + `{"roster":""}`, "", true}, // an unset template variable must not disable the opt-in
 		{executionRequirementsMarker + "\n" + `{"required_tools":["mcp_pages_get_page_data"],"roster":"required_tools_only"}`, rosterRequiredToolsOnly, false},
 		{executionRequirementsMarker + "\n" + `{"roster":"everything"}`, "", true},
 		{executionRequirementsMarker + "\n" + `{"roster":["required_tools_only"]}`, "", true},
@@ -64,45 +65,54 @@ func TestNarrowedAllowlist(t *testing.T) {
 		"run_python", // native: not in the MCP roster, untouched
 	}}
 	got := req.narrowedAllowlist(pagesCatalog(), nil)
-	want := []string{"get_page_data", "record_refresh_check", "update_page_data_upload"}
-	if fmt.Sprint(got) != fmt.Sprint(agentcore.MCPAllowlist{"pages": want, "pages_acct": want}) {
-		t.Fatalf("narrowed = %v, want exactly the required pages tools (fast_io, fastio_helpers and the layout tools gone)", got)
+	deny := []string{rosterNarrowingDeniesAll}
+	want := agentcore.MCPAllowlist{
+		"pages":          {"get_page_data", "record_refresh_check", "update_page_data_upload"},
+		"pages_acct":     deny,
+		"fast_io":        deny,
+		"fastio_helpers": deny,
 	}
-	// The seat is not named in its own full form, so it narrows the same way
-	// as the base server it falls back to — pinned as an explicit entry.
-	if list := agentcore.AllowlistToolsFor(got, "pages_acct"); fmt.Sprint(list) != fmt.Sprint(got["pages"]) {
-		t.Fatalf("seat narrows to %v, want the base server's %v", list, got["pages"])
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("narrowed = %v, want exactly the required pages tools and every other server denied", got)
+	}
+	// No server inherits another's narrowed entry through the keying rule: the
+	// seat is not named in its own full form, so it registers nothing.
+	if list := agentcore.AllowlistToolsFor(got, "pages_acct"); fmt.Sprint(list) != fmt.Sprint(deny) {
+		t.Fatalf("seat narrows to %v, want an explicit deny", list)
 	}
 
-	// A seat's inherited entry is filtered against the SEAT's own base
-	// allowlist: a same-named tool the seat's allowlist forbids must not
-	// register through the base server's narrowed entry, and a seat whose
-	// allowlist forbids every inherited name is denied outright rather than
-	// left with an empty ("allow all") entry.
-	seatBase := agentcore.MCPAllowlist{"pages_acct": {"get_page_data", "patch_page"}}
-	if got := req.narrowedAllowlist(pagesCatalog(), seatBase); fmt.Sprint(got["pages_acct"]) != fmt.Sprint([]string{"get_page_data"}) {
-		t.Fatalf("seat narrowing leaked past its own allowlist: %v", got["pages_acct"])
+	// An independent server that merely shares a prefix (foo_archive → foo)
+	// must not pick up foo's narrowed tools either.
+	prefixed := []mcp.ServerTool{
+		{ServerName: "foo", Tool: mcp.Tool{Name: "search"}},
+		{ServerName: "foo_archive", Tool: mcp.Tool{Name: "search"}},
 	}
-	deny := agentcore.MCPAllowlist{"pages_acct": {"patch_page"}}
-	if got := req.narrowedAllowlist(pagesCatalog(), deny); fmt.Sprint(got["pages_acct"]) != fmt.Sprint([]string{rosterNarrowingDeniesAll}) {
-		t.Fatalf("a seat allowed none of the inherited tools must be denied, got %v", got["pages_acct"])
+	got2 := (&executionRequirements{Tools: []string{"mcp_foo_search"}}).narrowedAllowlist(prefixed, nil)
+	if list := agentcore.AllowlistToolsFor(got2, "foo_archive"); fmt.Sprint(list) != fmt.Sprint(deny) {
+		t.Fatalf("prefix-named server inherited %v, want an explicit deny", list)
 	}
 
 	// A bare name narrows every server that has it, the seat's own entry included.
 	bare := (&executionRequirements{Tools: []string{"get_page_data"}}).narrowedAllowlist(pagesCatalog(), nil)
-	if fmt.Sprint(bare) != fmt.Sprint(agentcore.MCPAllowlist{"pages": {"get_page_data"}, "pages_acct": {"get_page_data"}}) {
+	if fmt.Sprint(bare) != fmt.Sprint(agentcore.MCPAllowlist{"pages": {"get_page_data"}, "pages_acct": {"get_page_data"}, "fast_io": {rosterNarrowingDeniesAll}, "fastio_helpers": {rosterNarrowingDeniesAll}}) {
 		t.Fatalf("bare-name narrowing = %v", bare)
 	}
 
 	// Narrowing only subtracts: a required tool the base Gate-2 already
 	// removes stays removed.
 	base := agentcore.MCPAllowlist{"pages": {"get_page_data", "patch_page"}}
-	if got := req.narrowedAllowlist(pagesCatalog(), base); fmt.Sprint(got) != fmt.Sprint(agentcore.MCPAllowlist{"pages": {"get_page_data"}, "pages_acct": {"get_page_data"}}) {
+	if got := req.narrowedAllowlist(pagesCatalog(), base); fmt.Sprint(got["pages"]) != fmt.Sprint([]string{"get_page_data"}) {
 		t.Fatalf("narrowing widened the base allowlist: %v", got)
 	}
 
 	// No required MCP tool at all: a non-nil, empty (exhaustive) allowlist.
-	if got := (&executionRequirements{Tools: []string{"run_python"}}).narrowedAllowlist(pagesCatalog(), nil); got == nil || len(got) != 0 {
-		t.Fatalf("native-only required_tools must narrow to no MCP tool, got %v", got)
+	nativeOnly := (&executionRequirements{Tools: []string{"run_python"}}).narrowedAllowlist(pagesCatalog(), nil)
+	for server, list := range nativeOnly {
+		if fmt.Sprint(list) != fmt.Sprint(deny) {
+			t.Fatalf("native-only required_tools must narrow to no MCP tool, %s got %v", server, list)
+		}
+	}
+	if nativeOnly == nil {
+		t.Fatalf("native-only required_tools must narrow to no MCP tool, got %v", nativeOnly)
 	}
 }
