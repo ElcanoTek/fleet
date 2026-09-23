@@ -40,7 +40,7 @@ export function scheduleStoppedReason(task: Task): string | null {
   if (!task.recurrence || !task.recurrence_parked_at) return null;
   return (
     (task.recurrence_parked_reason ?? "").trim() ||
-    "The schedule was stopped after dead-lettered runs. Replay this run to resume it."
+    "The schedule was stopped after dead-lettered runs. Replay this run to resume it; if its EXECUTION REQUIREMENTS line is malformed, replay it with a corrected prompt instead."
   );
 }
 

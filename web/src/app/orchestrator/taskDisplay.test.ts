@@ -23,6 +23,7 @@ describe("schedule display of a stopped schedule (ADR-0073)", () => {
   it("falls back to a generic reason for an older parked row", () => {
     const parked: Task = { ...recurring, recurrence_parked_at: "2026-09-01T00:00:00Z", recurrence_parked_reason: null };
     expect(scheduleStoppedReason(parked)).toMatch(/Replay this run to resume it/);
+    expect(scheduleStoppedReason(parked)).toMatch(/corrected prompt/);
   });
 
   it("leaves a running schedule and a one-off task alone", () => {
