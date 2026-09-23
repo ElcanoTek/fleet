@@ -34,6 +34,11 @@ type translator struct {
 	convMu    sync.Mutex
 	convID    string
 	convKnown chan struct{}
+	// turn is the watched turn's id (turn.started), under convMu; turnKnown
+	// closes once it is set. A Stop names it so the server cannot cancel a
+	// different turn.
+	turn      string
+	turnKnown chan struct{}
 
 	// sent is the assistant text the client has been told is visible, so a
 	// text.replace can be reconciled against it.
@@ -53,6 +58,7 @@ type translator struct {
 	// cancelled, errored, model-required). Read by the stop watcher.
 	terminalMu sync.Mutex
 	terminal   bool
+	endedCh    chan struct{} // closed when terminal is set
 }
 
 type stagedApproval struct{ id, tool string }
@@ -61,8 +67,16 @@ type stagedApproval struct{ id, tool string }
 // staged for approval rather than run.
 const approvalSentinel = "APPROVAL_REQUIRED:"
 
+// previewEmailTool stages a display-only card (a draft preview whose one
+// action is Dismiss), announced with the same tool.approval_required event as
+// a real approval; previewSentinel prefixes its placeholder result.
+const (
+	previewEmailTool = "preview_email"
+	previewSentinel  = "PREVIEW_DISPLAYED:"
+)
+
 func newTranslator(sessionID acpsdk.SessionId, convID string, send func(acpsdk.SessionUpdate)) *translator {
-	t := &translator{sessionID: sessionID, send: send, convKnown: make(chan struct{}), awaiting: map[string]int{}}
+	t := &translator{sessionID: sessionID, send: send, convKnown: make(chan struct{}), turnKnown: make(chan struct{}), endedCh: make(chan struct{}), awaiting: map[string]int{}}
 	t.setConversation(convID)
 	return t
 }
@@ -86,6 +100,24 @@ func (t *translator) ended() bool {
 	return t.terminal
 }
 
+func (t *translator) setTurn(id string) {
+	if id == "" {
+		return
+	}
+	t.convMu.Lock()
+	defer t.convMu.Unlock()
+	if t.turn == "" {
+		close(t.turnKnown)
+	}
+	t.turn = id
+}
+
+func (t *translator) turnID() string {
+	t.convMu.Lock()
+	defer t.convMu.Unlock()
+	return t.turn
+}
+
 func (t *translator) conversationID() string {
 	t.convMu.Lock()
 	defer t.convMu.Unlock()
@@ -96,6 +128,8 @@ func (t *translator) handle(ev chattui.Event) {
 	switch ev.Name {
 	case "conversation":
 		t.setConversation(ev.Str("id"))
+	case "turn.started":
+		t.setTurn(ev.Str("turn_id"))
 	case "text.delta":
 		if s := ev.Str("text"); s != "" {
 			t.sent.WriteString(s)
@@ -117,6 +151,10 @@ func (t *translator) handle(ev chattui.Event) {
 			status := acpsdk.ToolCallStatusCompleted
 			name := ev.Str("name")
 			switch isErr, _ := ev.Data["is_err"].(bool); {
+			case strings.HasPrefix(ev.Str("text"), previewSentinel):
+				// preview_email has no execution path: its card IS the result
+				// (display-only, Dismiss is the one action). Shown, not failed.
+				status = acpsdk.ToolCallStatusCompleted
 			case strings.HasPrefix(ev.Str("text"), approvalSentinel) && t.awaiting[name] > 0:
 				// A staged critical tool resolves its call with an is_err
 				// APPROVAL_REQUIRED placeholder. When a card was actually
@@ -134,7 +172,9 @@ func (t *translator) handle(ev chattui.Event) {
 	case "tool.approval_required":
 		if id := ev.Str("approval_id"); id != "" {
 			t.approvals = append(t.approvals, stagedApproval{id: id, tool: ev.Str("tool")})
-			t.awaiting[ev.Str("tool")]++
+			if ev.Str("tool") != previewEmailTool {
+				t.awaiting[ev.Str("tool")]++
+			}
 		}
 	case "tool.approval_superseded":
 		kept := t.approvals[:0]
@@ -152,7 +192,10 @@ func (t *translator) handle(ev chattui.Event) {
 	switch ev.Name {
 	case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
 		t.terminalMu.Lock()
-		t.terminal = true
+		if !t.terminal {
+			t.terminal = true
+			close(t.endedCh)
+		}
 		t.terminalMu.Unlock()
 	}
 }

@@ -106,6 +106,24 @@ type turnRequest struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 	Model          string `json:"model,omitempty"`
 	Persona        string `json:"persona,omitempty"`
+	// InputID is the server's idempotency key (#785): a re-POST of the same
+	// id is answered with the input already accepted instead of a new one.
+	InputID string `json:"input_id,omitempty"`
+}
+
+// QueuedError is POST /chat's queue acknowledgement: the conversation already
+// had a running turn (typically started from another surface), so the server
+// durably QUEUED this message to run after it (#785) instead of streaming a
+// turn. It is not a failure — the message will run — but this call has no
+// stream to follow.
+type QueuedError struct {
+	ConversationID string
+	InputID        string
+	Position       int
+}
+
+func (e *QueuedError) Error() string {
+	return fmt.Sprintf("a turn is already running in this conversation, so the message was queued (position %d) and will run after it", e.Position)
 }
 
 // StatusError is a non-2xx answer to POST /chat. Code lets a caller tell an
@@ -124,11 +142,18 @@ func (e *StatusError) Error() string { return e.msg }
 // the thread going. A non-2xx response is returned as an error carrying the
 // status + a short body excerpt (never the token).
 func (c *Client) Stream(ctx context.Context, message, convID string, onEvent func(Event)) (string, error) {
+	return c.StreamInput(ctx, message, convID, "", onEvent)
+}
+
+// StreamInput is Stream with an idempotency key (inputID, "" = none): a
+// retried POST carrying the same id cannot start or queue the message twice.
+func (c *Client) StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(Event)) (string, error) {
 	body, err := json.Marshal(turnRequest{
 		Message:        message,
 		ConversationID: convID,
 		Model:          c.turnModel(convID),
 		Persona:        c.cfg.Persona,
+		InputID:        inputID,
 	})
 	if err != nil {
 		return convID, err
@@ -147,6 +172,24 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 	}
 	defer resp.Body.Close()
 
+	// A queue acknowledgement is JSON, not a stream: 202 for a newly queued
+	// message, 200 for an idempotent replay of one already accepted.
+	if resp.StatusCode == http.StatusAccepted ||
+		(resp.StatusCode == http.StatusOK && strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json")) {
+		var ack struct {
+			Queued         bool   `json:"queued"`
+			ConversationID string `json:"conversation_id"`
+			Input          struct {
+				ID       string `json:"id"`
+				Position int    `json:"position"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ack); err == nil && ack.Queued {
+			id := orDefault(ack.ConversationID, convID)
+			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position}
+		}
+		return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("server returned %d without a stream", resp.StatusCode)}
+	}
 	if resp.StatusCode != http.StatusOK {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		msg := strings.TrimSpace(string(excerpt))
@@ -398,18 +441,25 @@ func (c *Client) ResolveApprovalWithOptions(ctx context.Context, convID, approva
 // Cancel stops the conversation's in-flight turn server-side: POST
 // /conversations/{convID}/cancel with scope "turn" — the web Stop button's
 // call, narrowed so follow-ups already queued on the conversation still run.
+// turnID ("" = whichever turn is running) targets one turn: the server cancels
+// it only while it is the running turn, so a Stop for a turn that already
+// ended can never hit a successor.
 // Aborting the Stream context alone does not stop the turn: the server
 // deliberately detaches a turn from its HTTP request so a dropped connection
 // cannot kill work mid-flight. The caller's ctx may already be cancelled, so
 // Cancel uses its own short deadline rather than inheriting it.
-func (c *Client) Cancel(convID string) error {
+func (c *Client) Cancel(convID, turnID string) error {
 	if strings.TrimSpace(convID) == "" {
 		return nil // no conversation yet → nothing is running server-side
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	u := c.cfg.ServerURL + "/conversations/" + url.PathEscape(convID) + "/cancel"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(`{"scope":"turn"}`))
+	payload := []byte(`{"scope":"turn"}`)
+	if id := strings.TrimSpace(turnID); id != "" {
+		payload, _ = json.Marshal(map[string]string{"scope": "turn", "turn_id": id})
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

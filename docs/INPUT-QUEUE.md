@@ -34,7 +34,12 @@ retention guarantee: after a terminal row is purged, reusing its
 - `POST /conversations/{id}/queue/{inputID}/send-now` — promote to the head;
   a running turn is also offered it at the next boundary.
 - `POST /conversations/{id}/cancel` gains `{"scope":"turn"|"all"}` — default
-  **all**: Stop cancels the active turn AND every still-queued input. The
+  **all**: Stop cancels the active turn AND every still-queued input. An
+  optional `turn_id` (from `turn.started`) targets one turn: it is cancelled
+  only while it is the running turn, and the request is a 204 no-op once it
+  has ended, so a client stopping the turn it watched (`fleet acp`) can never
+  cancel a successor. A targeted Stop is turn-scoped and never sweeps the
+  queue. The
   `queue.updated` SSE event carries a full snapshot on every mutation, and
   `user.message` gains `{steered:true, input_id}` when a steer is accepted.
 

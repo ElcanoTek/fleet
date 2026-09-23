@@ -39,6 +39,7 @@ type chatReq struct {
 	Message        string `json:"message"`
 	ConversationID string `json:"conversation_id"`
 	Model          string `json:"model"`
+	InputID        string `json:"input_id"`
 }
 
 type sseWriter struct {
@@ -332,6 +333,7 @@ func TestTextReplaceReconcilesAppendOnly(t *testing.T) {
 func blockingTurn(started chan<- struct{}) func(w *sseWriter, r *http.Request) {
 	return func(w *sseWriter, r *http.Request) {
 		w.emit("conversation", map[string]any{"id": "conv-slow"})
+		w.emit("turn.started", map[string]any{"turn_id": "turn-slow"})
 		w.emit("text.delta", map[string]any{"text": "working"})
 		close(started)
 		<-r.Context().Done()
@@ -368,7 +370,7 @@ func TestCancelStopsTheFleetTurn(t *testing.T) {
 	// have been sent, scoped to the turn so queued follow-ups survive.
 	h.fleet.mu.Lock()
 	defer h.fleet.mu.Unlock()
-	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-slow {"scope":"turn"}` {
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-slow {"scope":"turn","turn_id":"turn-slow"}` {
 		t.Errorf("cancel calls = %q", h.fleet.cancels)
 	}
 }
@@ -787,4 +789,99 @@ func TestConversationIDFromTheResponseHeader(t *testing.T) {
 			t.Errorf("cancels = %q, want the header's conversation stopped", h.fleet.cancels)
 		}
 	})
+}
+
+// A preview_email card is display-only (its one action is Dismiss), even though
+// it arrives as tool.approval_required: no approve instructions, and the call
+// is shown as completed, not failed or pending.
+func TestPreviewCardIsNotAnApproval(t *testing.T) {
+	h := newHarness(t, harnessOpts{publicURL: "https://fleet.example.com", turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-p"})
+		w.emit("tool.call", map[string]any{"id": "call-p", "name": "preview_email"})
+		w.emit("tool.approval_required", map[string]any{"approval_id": "prev-1", "tool": "preview_email"})
+		w.emit("tool.result", map[string]any{"id": "call-p", "name": "preview_email", "text": "PREVIEW_DISPLAYED: the user is now viewing your draft", "is_err": true})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	if _, err := h.prompt(h.newSession(t), "draft an email"); err != nil {
+		t.Fatal(err)
+	}
+	got := h.client.text()
+	if strings.Contains(got, "--approve") || strings.Contains(got, "allow or deny") {
+		t.Errorf("a preview must not be presented as an approval: %q", got)
+	}
+	if !strings.Contains(got, "draft email preview") || !strings.Contains(got, "https://fleet.example.com/chat?c=conv-p") {
+		t.Errorf("no preview pointer: %q", got)
+	}
+	for _, u := range h.client.updates {
+		if u.ToolCallUpdate != nil && u.ToolCallUpdate.Status != nil && *u.ToolCallUpdate.Status != acpsdk.ToolCallStatusCompleted {
+			t.Errorf("preview status = %q, want completed", *u.ToolCallUpdate.Status)
+		}
+	}
+}
+
+// A prompt sent while another surface is running a turn in the conversation is
+// durably queued by fleet (202): an accepted prompt, not an error, and each
+// prompt carries an idempotency key so a re-POST cannot queue it twice.
+func TestQueuedPromptIsAcceptedNotFailed(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.emit("conversation", map[string]any{"id": "conv-q"})
+			w.emit("turn.completed", map[string]any{})
+			return
+		}
+		w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"in-7","position":2,"state":"queued"},"conversation_id":"conv-q"}`)
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "first"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := h.prompt(sid, "second, while the web chat is busy")
+	if err != nil || resp.StopReason != acpsdk.StopReasonEndTurn {
+		t.Fatalf("got %+v, %v; want an accepted end_turn", resp, err)
+	}
+	if got := h.client.text(); !strings.Contains(got, "queued (position 2)") {
+		t.Errorf("no queued notice: %q", got)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if a, b := h.fleet.chats[0].InputID, h.fleet.chats[1].InputID; a == "" || b == "" || a == b {
+		t.Errorf("input ids = %q, %q; want one distinct idempotency key per prompt", a, b)
+	}
+}
+
+// The Stop names the watched turn once turn.started has been seen, so the
+// server cannot cancel a successor with it.
+func TestStopNamesTheWatchedTurn(t *testing.T) {
+	started := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-t"})
+		w.emit("turn.started", map[string]any{"turn_id": "turn-42"})
+		close(started)
+		<-r.Context().Done()
+	}})
+	sid := h.newSession(t)
+	done := make(chan struct{})
+	go func() {
+		_, _ = h.prompt(sid, "long job")
+		close(done)
+	}()
+	<-started
+	time.Sleep(50 * time.Millisecond) // let turn.started be read
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 1 || !strings.Contains(h.fleet.cancels[0], `"turn_id":"turn-42"`) {
+		t.Errorf("cancels = %q, want the Stop targeted at turn-42", h.fleet.cancels)
+	}
 }

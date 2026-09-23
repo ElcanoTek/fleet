@@ -558,14 +558,32 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 	// AND every still-queued follow-up — Stop means "stop working", not
 	// "stop this one and surprise me with the next". scope=turn cancels
 	// only the active turn and lets the queue drain.
+	//
+	// turn_id targets ONE turn: it is cancelled only while it is the running
+	// turn, and the request is a no-op (still 204 — the named turn is not
+	// running, which is what the caller asked for) once it has ended. A
+	// client that watched a specific turn (`fleet acp`) therefore cannot
+	// cancel a successor that started between its decision to stop and this
+	// request landing. A targeted Stop is turn-scoped: it never sweeps the
+	// queue.
 	scope := "all"
+	turnID := ""
 	if r.Body != nil {
 		var body struct {
-			Scope string `json:"scope"`
+			Scope  string `json:"scope"`
+			TurnID string `json:"turn_id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && strings.EqualFold(body.Scope, "turn") {
-			scope = "turn"
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			if strings.EqualFold(body.Scope, "turn") {
+				scope = "turn"
+			}
+			turnID = strings.TrimSpace(body.TurnID)
 		}
+	}
+	if turnID != "" {
+		s.cancelInflightTurn(id, turnID)
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 	if scope == "all" {
 		// One lock section records the Stop boundary, arms the drain

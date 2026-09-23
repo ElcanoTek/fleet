@@ -792,6 +792,20 @@ func (s *Server) cancelInflight(convID string) bool {
 	return true
 }
 
+// cancelInflightTurn cancels convID's running turn only if it is turnID. The
+// check and the cancel read one snapshot taken under inflightMu, and a turn id
+// is never reused, so a successor registered after turnID ended is never hit.
+func (s *Server) cancelInflightTurn(convID, turnID string) bool {
+	s.inflightMu.Lock()
+	entry, ok := s.inflight[convID]
+	s.inflightMu.Unlock()
+	if !ok || entry.turnID != turnID || !entry.IsRunning() {
+		return false
+	}
+	entry.cancel()
+	return true
+}
+
 // getInflight returns a snapshot of the current entry for convID.
 func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 	s.inflightMu.Lock()

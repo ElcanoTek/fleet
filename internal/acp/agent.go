@@ -50,8 +50,8 @@ const revisedMarker = "\n\n— revised answer —\n\n"
 // turnClient is the slice of chattui.Client the adapter needs: stream one
 // governed turn, and stop one server-side.
 type turnClient interface {
-	Stream(ctx context.Context, message, convID string, onEvent func(chattui.Event)) (string, error)
-	Cancel(convID string) error
+	StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, error)
+	Cancel(convID, turnID string) error
 }
 
 // updater sends session/update notifications (the AgentSideConnection in
@@ -207,7 +207,9 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
 	go a.stopTurn(stopCtx, tr, streamDone, stopped, cancelStream)
-	convID, streamErr := a.client.Stream(streamCtx, message, sess.convID, tr.handle)
+	// One idempotency key per prompt: if the server accepted this message but
+	// the answer was lost, a re-POST with the same key cannot run it twice.
+	convID, streamErr := a.client.StreamInput(streamCtx, message, sess.convID, "fleet-acp-"+randomID(), tr.handle)
 	close(streamDone)
 	stop := <-stopped
 	stopErr := stop.err
@@ -245,6 +247,17 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if tr.policyBlocked {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonRefusal, Meta: meta}, nil
 	}
+	var queued *chattui.QueuedError
+	if errors.As(streamErr, &queued) {
+		// The conversation already had a running turn (started from another
+		// surface, such as the web chat), so fleet durably queued this message
+		// to run after it. That is an accepted prompt, not a failure: say so,
+		// and where to follow it, instead of inviting a retry that would queue
+		// it again.
+		tr.send(acpsdk.UpdateAgentMessageText(fmt.Sprintf(
+			"fleet is already running a turn in this conversation, so your message was queued (position %d) and will run after it. Follow it at %s", queued.Position, a.conversationPointer(convID))))
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: meta}, nil
+	}
 	if errors.Is(streamErr, context.Canceled) {
 		// Stopped from another fleet surface (the web chat's Stop, where these
 		// conversations are visible): the server's turn.cancelled is a normal
@@ -262,10 +275,13 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 }
 
 // conversationWait bounds how long a cancelled prompt waits to learn its
-// conversation id. A cancel can arrive before the stream's first frame (the
+// conversation and turn ids. A cancel can arrive before the stream's first frame (the
 // `conversation` event) has been read; without the id there is nothing to
 // stop, and the turn would run on server-side with no client.
 const conversationWait = 5 * time.Second
+
+// turnGrace bounds the wait for turn.started once the conversation is known.
+const turnGrace = time.Second
 
 // stopOutcome is what the stop watcher did: intervened is true when it sent
 // (or tried to send) a Stop, and err is that Stop's failure, if any.
@@ -289,9 +305,22 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 		return
 	case <-stop.Done():
 	}
+	// Wait (bounded) to learn which turn to stop. fleet sends the
+	// conversation frame and turn.started back to back, so once the
+	// conversation is known the turn id follows within turnGrace or not at
+	// all (an older server); either way the wait ends as soon as the turn is
+	// over or the stream is gone.
 	select {
-	case <-tr.convKnown:
+	case <-tr.turnKnown:
+	case <-tr.endedCh:
 	case <-streamDone:
+	case <-tr.convKnown:
+		select {
+		case <-tr.turnKnown:
+		case <-tr.endedCh:
+		case <-streamDone:
+		case <-time.After(turnGrace):
+		}
 	case <-time.After(conversationWait):
 	}
 	if tr.ended() {
@@ -301,7 +330,11 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 	}
 	var err error
 	if id := tr.conversationID(); id != "" {
-		err = a.client.Cancel(id)
+		// Targeted at the watched turn when its id is known, so the server
+		// refuses to cancel any other turn — the Stop cannot hit a successor
+		// that started after the watched turn ended. Only a stream that died
+		// before turn.started falls back to "whichever turn is running".
+		err = a.client.Cancel(id, tr.turnID())
 	} else {
 		select {
 		case <-streamDone: // the request ended before fleet started a turn
@@ -329,6 +362,11 @@ func (a *Agent) conversationPointer(convID string) string {
 // Approvals stay in fleet (the default-deny card is the control); ACP's
 // session/request_permission is deliberately not used to reimplement it.
 func (a *Agent) approvalPointer(convID, approvalID, tool string) string {
+	if tool == previewEmailTool {
+		// A display-only card: there is nothing to allow or deny, only a draft
+		// to look at (its one action is Dismiss).
+		return fmt.Sprintf("\n\nA draft email preview is open in fleet (nothing was sent, and no approval is needed): %s", a.conversationPointer(convID))
+	}
 	where := "fleet chat --conversation " + convID + " --approve " + approvalID + "   (or --deny)"
 	if a.publicURL != "" {
 		where = a.publicURL + "/chat?c=" + url.QueryEscape(convID)

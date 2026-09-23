@@ -174,6 +174,38 @@ func TestCancelEndpoint_OwnerScoped(t *testing.T) {
 	}
 }
 
+// TestCancelEndpoint_TurnTargeted pins the turn_id form of Stop: it cancels
+// the named turn while it runs, and is a 204 no-op for any other turn — so a
+// client stopping the turn it watched can never cancel a successor.
+func TestCancelEndpoint_TurnTargeted(t *testing.T) {
+	s := serverFixture(t)
+	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, turnID, tok, _ := s.registerTurn(conv.ID, cancel)
+	defer s.finishTurn(conv.ID, tok)
+	h := s.Routes()
+
+	rr := do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "turn_id": "some-earlier-turn"}, "alice@x.com")
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("mismatched turn_id: status %d, want 204", rr.Code)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("a Stop naming another turn cancelled the running one")
+	}
+
+	rr = do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "turn_id": turnID}, "alice@x.com")
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("matching turn_id: status %d, want 204", rr.Code)
+	}
+	if ctx.Err() == nil {
+		t.Error("a Stop naming the running turn did not cancel it")
+	}
+}
+
 func TestCancelEndpoint_NoInflightStillReturns204(t *testing.T) {
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)

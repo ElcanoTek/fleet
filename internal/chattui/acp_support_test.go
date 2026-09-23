@@ -86,7 +86,7 @@ func TestCancelStopsTheTurnServerSide(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok", ClientName: "fleet-acp"})
-	if err := c.Cancel("conv 1"); err != nil {
+	if err := c.Cancel("conv 1", ""); err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "POST /conversations/conv 1/cancel" || gotBody != `{"scope":"turn"}` {
@@ -95,7 +95,7 @@ func TestCancelStopsTheTurnServerSide(t *testing.T) {
 	if gotClient != "fleet-acp" || gotToken != "tok" {
 		t.Errorf("headers: client=%q token=%q", gotClient, gotToken)
 	}
-	if err := c.Cancel(""); err != nil {
+	if err := c.Cancel("", ""); err != nil {
 		t.Errorf("no conversation yet must be a no-op, got %v", err)
 	}
 }
@@ -141,5 +141,39 @@ func TestStreamReportsTheHeaderConversationID(t *testing.T) {
 	id, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "conv-mine", func(Event) {})
 	if id != "conv-mine" {
 		t.Errorf("resumed id = %q", id)
+	}
+}
+
+// A queue acknowledgement (202, or a 200 JSON replay of an accepted input) is
+// reported as *QueuedError, not a stream failure.
+func TestStreamReportsAQueuedSubmission(t *testing.T) {
+	for _, status := range []int{http.StatusAccepted, http.StatusOK} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, `{"queued":true,"input":{"id":"in-1","position":3},"conversation_id":"conv-q"}`)
+		}))
+		id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "conv-q", "key-1", func(Event) {})
+		srv.Close()
+		var q *QueuedError
+		if !errors.As(err, &q) || q.Position != 3 || q.InputID != "in-1" || id != "conv-q" {
+			t.Errorf("status %d: id=%q err=%#v, want *QueuedError position 3", status, id, err)
+		}
+	}
+}
+
+func TestCancelNamesTheTurn(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	if err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Cancel("c", "turn-9"); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody != `{"scope":"turn","turn_id":"turn-9"}` {
+		t.Errorf("body = %s", gotBody)
 	}
 }
