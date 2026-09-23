@@ -25,6 +25,14 @@ type Config struct {
 	Token     string // X-Chat-Server-Token shared secret
 	Model     string // optional per-turn model slug ("" = server/conversation default)
 	Persona   string // optional persona for a new conversation
+
+	// ClientName is the X-Fleet-Client attribution label ("" = "fleet-chat").
+	// `fleet acp` sets "fleet-acp" so a server log can tell the two apart.
+	ClientName string
+	// PublicURL is the web UI's base URL (FLEET_PUBLIC_BASE_URL, else
+	// FLEET_PUBLIC_URL, from the env or the server env file), used to build
+	// deep links such as an approval card's conversation. "" when unset.
+	PublicURL string
 }
 
 // Flags are the command-line overrides; empty fields fall back to env.
@@ -105,7 +113,7 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	// env file. Skipped entirely once both are already resolved.
 	candidates := envFileCandidates(f.EnvFile, env)
 	if cfg.Token == "" || cfg.ServerURL == "" {
-		if vals, _ := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
+		if vals := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
 			if cfg.Token == "" {
 				cfg.Token = strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"]))
 			}
@@ -119,6 +127,17 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	if cfg.ServerURL == "" {
 		cfg.ServerURL = "http://127.0.0.1:8080"
 	}
+
+	// Public web URL: non-secret, best-effort, so it is read on its own rather
+	// than folded into the token discovery above (which is skipped once the
+	// token and address are known).
+	cfg.PublicURL = strings.TrimSpace(firstNonEmpty(env("FLEET_PUBLIC_BASE_URL"), env("FLEET_PUBLIC_URL")))
+	if cfg.PublicURL == "" {
+		if vals := discoverEnvValues(evf, candidates, "FLEET_PUBLIC_BASE_URL", "FLEET_PUBLIC_URL"); vals != nil {
+			cfg.PublicURL = strings.TrimSpace(firstNonEmpty(vals["FLEET_PUBLIC_BASE_URL"], vals["FLEET_PUBLIC_URL"]))
+		}
+	}
+	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
 
 	// Email (required) — never inferred. Not from $USER, and deliberately NOT
@@ -136,6 +155,13 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	return cfg, nil
 }
 
+// ResolveFromEnvironment is Resolve against the real process environment,
+// filesystem and server env file — the entry point other CLI front-ends
+// (`fleet acp`) use so they resolve identity exactly as `fleet chat` does.
+func ResolveFromEnvironment(f Flags) (Config, error) {
+	return Resolve(f, osEnv, osReadFile, osReadEnvValues)
+}
+
 // envFileCandidates returns the env files `fleet chat` will probe, in order. An
 // explicit --env-file (or $FLEET_ENV_FILE) pins a SINGLE path, so a wrong
 // explicit path is a clear miss rather than a silent fallback; otherwise the two
@@ -151,22 +177,22 @@ func envFileCandidates(explicit string, env getenv) []string {
 }
 
 // discoverEnvValues reads the requested keys from the first readable candidate
-// that yields any of them, returning the values and the path used. An unreadable
+// that yields any of them, returning the values. An unreadable
 // candidate (missing file, or a 0600 file the caller can't read) is skipped, not
 // fatal — so a non-admin who can't read the credential file simply gets the
 // normal "no server token" error rather than a crash.
-func discoverEnvValues(evf envValuesReader, candidates []string, keys ...string) (map[string]string, string) {
+func discoverEnvValues(evf envValuesReader, candidates []string, keys ...string) map[string]string {
 	if evf == nil {
-		return nil, ""
+		return nil
 	}
 	for _, p := range candidates {
 		vals, err := evf(p, keys...)
 		if err != nil || len(vals) == 0 {
 			continue
 		}
-		return vals, p
+		return vals
 	}
-	return nil, ""
+	return nil
 }
 
 // osEnv / osReadFile / osReadEnvValues are the production accessors.

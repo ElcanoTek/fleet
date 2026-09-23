@@ -97,7 +97,7 @@ func (c *Client) displayModel(convID string) string {
 func (c *Client) setAuthHeaders(req *http.Request) {
 	req.Header.Set("X-Chat-Server-Token", c.cfg.Token)
 	req.Header.Set("X-User-Email", c.cfg.Email)
-	req.Header.Set("X-Fleet-Client", "fleet-chat")
+	req.Header.Set("X-Fleet-Client", orDefault(c.cfg.ClientName, "fleet-chat"))
 }
 
 // turnRequest is the subset of the server's chatRequest the TUI sends.
@@ -107,6 +107,16 @@ type turnRequest struct {
 	Model          string `json:"model,omitempty"`
 	Persona        string `json:"persona,omitempty"`
 }
+
+// StatusError is a non-2xx answer to POST /chat. Code lets a caller tell an
+// auth failure (401/403) from any other refusal without matching on text; the
+// message never carries the token.
+type StatusError struct {
+	Code int
+	msg  string
+}
+
+func (e *StatusError) Error() string { return e.msg }
 
 // Stream POSTs a turn and invokes onEvent for every SSE frame until the stream
 // ends, the turn completes, or ctx is cancelled. It returns the (possibly new)
@@ -142,11 +152,11 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 		msg := strings.TrimSpace(string(excerpt))
 		switch resp.StatusCode {
 		case http.StatusForbidden:
-			return convID, fmt.Errorf("server rejected the request (403): check FLEET_SERVER_TOKEN matches the server")
+			return convID, &StatusError{Code: resp.StatusCode, msg: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server"}
 		case http.StatusUnauthorized, http.StatusBadRequest:
-			return convID, fmt.Errorf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)
+			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
 		default:
-			return convID, fmt.Errorf("server returned %d: %s", resp.StatusCode, msg)
+			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("server returned %d: %s", resp.StatusCode, msg)}
 		}
 	}
 
@@ -374,6 +384,38 @@ func (c *Client) ResolveApprovalWithOptions(ctx context.Context, convID, approva
 		return out.Status, out.ResultText, out.Model, fmt.Errorf("approval resolved as %q: %s", out.Status, out.ResultText)
 	}
 	return out.Status, out.ResultText, out.Model, nil
+}
+
+// Cancel stops the conversation's in-flight turn server-side: POST
+// /conversations/{convID}/cancel with scope "turn" — the web Stop button's
+// call, narrowed so follow-ups already queued on the conversation still run.
+// Aborting the Stream context alone does not stop the turn: the server
+// deliberately detaches a turn from its HTTP request so a dropped connection
+// cannot kill work mid-flight. The caller's ctx may already be cancelled, so
+// Cancel uses its own short deadline rather than inheriting it.
+func (c *Client) Cancel(convID string) error {
+	if strings.TrimSpace(convID) == "" {
+		return nil // no conversation yet → nothing is running server-side
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	u := c.cfg.ServerURL + "/conversations/" + url.PathEscape(convID) + "/cancel"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(`{"scope":"turn"}`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("cancel returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
+	}
+	return nil
 }
 
 // Ping reports whether the server's /healthz answers quickly — a fast, friendly

@@ -18,6 +18,7 @@
 //	fleet logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
 //	fleet timers install [--backup] [--maintenance] [--src <dir>] [--dry-run]
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
+//	fleet acp                                         (Agent Client Protocol agent on stdio, #984 — for ACP clients to launch)
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
 //	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key|set-env|unset-env   (guided credential/env-file writes)
 //	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
@@ -56,6 +57,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ElcanoTek/fleet/internal/acp"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
 
@@ -100,6 +102,8 @@ func Run(argv []string) int {
 		return cmdMOTD(argv[1:])
 	case "chat":
 		return cmdChat(argv[1:])
+	case "acp":
+		return acp.Run(argv[1:])
 	case "sched":
 		return cmdSched(argv[1:])
 	case "admin":
@@ -159,6 +163,9 @@ Chat with the agent (TUI, #457):
   fleet chat                                          (interactive Bubble Tea chat with the fleet agent)
   fleet chat --message "<text>" [--no-tui]            (one-shot: stream the reply to stdout; scriptable)
   fleet chat [--conversation <id>] [--model <slug>] [--email …] [--server …] [--token-file <path>]
+
+Serve an ACP client (Agent Client Protocol over stdio — buzz-acp, Zed, JetBrains, …; docs/ACP.md):
+  fleet acp [--email …] [--server …] [--model <slug>] [--timeout 30m]
 
 Preflight & diagnostics (in-binary; no server needed):
   fleet validate-config [--bundle-path <dir>] [--skip-network-checks] [--json]

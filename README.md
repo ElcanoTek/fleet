@@ -181,8 +181,8 @@ fleet is built on open protocols:
   ([`docs/AGENT-PLUGINS.md`](docs/AGENT-PLUGINS.md)).
 - **[A2A](https://a2a-protocol.org)** — call fleet as an agent, or delegate
   out to remote A2A agents ([`docs/A2A.md`](docs/A2A.md)).
-- **[ACP](https://agentclientprotocol.com)** — ACP clients talk to fleet
-  directly.
+- **[ACP](https://agentclientprotocol.com)** — `fleet acp` lets ACP clients
+  (Buzz, Zed, JetBrains) drive governed fleet turns ([`docs/ACP.md`](docs/ACP.md)).
 - **OpenAPI 3.1** — the HTTP API contract
   ([`docs/openapi.yaml`](docs/openapi.yaml)), kept in lockstep with the router
   by a CI drift test.

@@ -94,6 +94,17 @@ Text fields keep spaces as you type; larger text boxes accept several lines.
 The prompt preview preserves those line breaks so you can check what will be
 sent before pressing the card's run button.
 
+### ACP clients (Buzz, Zed, JetBrains)
+
+`fleet acp` lets an Agent Client Protocol client talk to fleet. The client
+launches it (for Buzz: `BUZZ_ACP_AGENT_COMMAND=fleet`, `BUZZ_ACP_AGENT_ARGS=acp`),
+and each message becomes a normal fleet chat turn as the user named by
+`--email` or `FLEET_USER_EMAIL`. The conversation appears in the web chat like
+any other. Replies, reasoning and tool steps stream to the client. If a step
+needs approval, the reply ends with a link or a `fleet chat --approve` command,
+because approvals are settled in fleet, not in the client. Images and audio are
+not accepted.
+
 ### What happens when you ask
 
 The assistant does the work rather than describing it. It has a private working

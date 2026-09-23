@@ -189,6 +189,7 @@ Every page under `docs/`, A–Z. Add a row when you add a page; the test named
 above fails otherwise.
 
 - [`A2A.md`](A2A.md) — The A2A protocol server
+- [`ACP.md`](ACP.md) — `fleet acp` — fleet as an Agent Client Protocol agent
 - [`ADMIN-SETTINGS.md`](ADMIN-SETTINGS.md) — Admin-managed workspace feature settings
 - [`AGENT-PLUGINS.md`](AGENT-PLUGINS.md) — Agent Plugins (#1166)
 - [`AGENT-RUNTIME.md`](AGENT-RUNTIME.md) — The fleet agent runtime
