@@ -272,7 +272,7 @@ describe("TaskCreateModal — schedule modes", () => {
     expect(screen.getByLabelText("Repeat time zone")).toHaveValue(zone);
     // The echo names the real zone instead of an ambiguous "local time".
     expect(screen.queryByText(/local time/)).not.toBeInTheDocument();
-    expect(screen.getByText(new RegExp(`· ${zone.replace(/[/+]/g, "\\$&")}`))).toBeInTheDocument();
+    expect(document.getElementById("recurrence-echo")).toHaveTextContent(`· ${zone}`);
     expect(screen.queryByTestId("repeat-timezone-hint")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
 
