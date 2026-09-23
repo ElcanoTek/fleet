@@ -718,7 +718,8 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 				continue
 			}
 			sameShape := old.hasDealBinding() == tc.hasDealBinding() && (!tc.hasDealBinding() || old.sameDealSet(tc))
-			if !sameShape && !(old.correctsRefusal(tc) && tc.coversOutstanding(old)) {
+			corrects := old.correctsRefusal(tc) && tc.coversOutstanding(old)
+			if !sameShape && !corrects {
 				continue
 			}
 			if o.committedCriticalActions[old.suffix] >= old.remaining {
