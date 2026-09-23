@@ -83,13 +83,17 @@ retention guarantee: after a terminal row is purged, reusing its
   submission fails (`500`) rather than running with a claim a crash could not
   match to it. A submission that loses the race to a turn started from another
   surface is queued only after its claim is released, and fails (`503`, send
-  again) if the release cannot be confirmed. A claim is an accepted input, so
+  again) if the release cannot be confirmed; if the queue then refuses it (full,
+  or a store error), the key is settled `cancelled` so a resend already told
+  "running" finds an outcome. A claim is an accepted input, so
   a Stop scope=all that begins after it was accepted covers it: the claim
   settles `cancelled` and the submission answers `409` without running. A
-  first submission names no conversation, so a client that declares its keys
-  unique per user (`"input_id_scope": "user"`, as `fleet acp` does) has its
-  key also looked up per user before a conversation is created: a resend after
-  a response lost before any header finds the original conversation instead of
+  resend is answered before the request touches the conversation, so a replay
+  never re-applies the original request's model or un-archives it. A client
+  that declares its keys unique per user (`"input_id_scope": "user"`, as
+  `fleet acp` does) has every key looked up per user: a resend finds its input
+  whichever conversation accepted it, and a first submission's resend after a
+  response lost before any header finds the original conversation instead of
   starting a second one. Without that declaration the key stays
   conversation-scoped, so a client that numbers keys per conversation is never
   answered with another conversation's replay. Concurrent first submissions of

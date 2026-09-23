@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -99,15 +100,6 @@ type session struct {
 	// retry of the same text reuses its idempotency key, so fleet recognises
 	// the input it already accepted instead of running it a second time.
 	unsettled map[string]string
-	// rekeyed maps a client messageId to the fresh key it was resubmitted
-	// under after fleet reported its first attempt as never run, so a later
-	// resend of that messageId finds the run instead of starting another.
-	rekeyed map[string]string
-	// pinned maps each rekeyed fresh key to the conversation that accepted
-	// the original, for as long as the rekeying is remembered: a later resend
-	// of the messageId reuses the fresh key and must go back there, since
-	// fleet recognises a key only in its own conversation.
-	pinned map[string]string
 	// keyConv maps each unresolved key to the conversation it was first
 	// submitted to ("" = it started the session's conversation). A retry
 	// goes back there: fleet recognises a key only in the conversation that
@@ -126,30 +118,7 @@ func (s *session) target(key string) string {
 	if c, ok := s.keyConv[key]; ok {
 		return c
 	}
-	if c, ok := s.pinned[key]; ok {
-		return c
-	}
 	return s.convID
-}
-
-// rekey remembers that messageID now runs under fresh, in conv. Bounded like
-// the unresolved-key memory; a rekeying and its pin are evicted together.
-func (s *session) rekey(messageID, fresh, conv string) {
-	if s.rekeyed == nil {
-		s.rekeyed, s.pinned = map[string]string{}, map[string]string{}
-	}
-	if _, ok := s.rekeyed[messageID]; !ok && len(s.rekeyed) >= maxUnsettled {
-		for m, k := range s.rekeyed { // any entry; the map is small
-			delete(s.rekeyed, m)
-			delete(s.pinned, k)
-			break
-		}
-	}
-	if prev, ok := s.rekeyed[messageID]; ok {
-		delete(s.pinned, prev) // replaced: its pin must not linger
-	}
-	s.rekeyed[messageID] = fresh
-	s.pinned[fresh] = conv
 }
 
 // settle records whether key is still unresolved after a prompt: retained,
@@ -307,16 +276,24 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	}
 	key := idempotencyKey(p.MessageId, sess, message)
 
+	// A messageId's retry keys are derived from it (key-r1, key-r2, ...), so
+	// a later resend of the messageId walks the same chain to the attempt
+	// that ran, with nothing to remember or evict; a text-only prompt gets
+	// one random retry key.
+	hasMessageID := p.MessageId != nil && strings.TrimSpace(*p.MessageId) != ""
 	resp, err := a.promptOnce(ctx, p, sess, message, key, true)
-	var retry retryFreshError
-	if errors.As(err, &retry) {
+	for gen := 1; ; gen++ {
+		var retry retryFreshError
+		if !errors.As(err, &retry) {
+			return resp, err
+		}
 		// fleet answered a replay of this key with "accepted earlier, did not
 		// run" (its turn failed before it began). Nothing ran under that key,
-		// so submitting once more under a fresh one is safe — and is what the
-		// user asked for.
+		// so submitting under the next one is safe — and is what the user
+		// asked for.
 		fresh := "fleet-acp-" + randomID()
-		if p.MessageId != nil && strings.TrimSpace(*p.MessageId) != "" {
-			sess.rekey(*p.MessageId, fresh, retry.conv)
+		if hasMessageID {
+			fresh = key + "-r" + strconv.Itoa(gen)
 		}
 		// The fresh key runs where the original was accepted, not in a
 		// conversation the session started since.
@@ -326,10 +303,14 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 			// nothing was sent under the fresh key, and nothing may be.
 			return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 		}
-		resp, err = a.promptOnce(ctx, p, sess, message, fresh, false)
+		resp, err = a.promptOnce(ctx, p, sess, message, fresh, hasMessageID && gen < maxRetryKeys)
 	}
-	return resp, err
 }
+
+// maxRetryKeys bounds the chain of retry keys a messageId walks: each link is
+// an attempt fleet reported as never run, so a longer chain means repeated
+// failures before any turn began, and the prompt then reports the last one.
+const maxRetryKeys = 8
 
 // retryFreshError is promptOnce's signal that fleet reported the key as accepted
 // earlier but never run, so one fresh submission is safe.
@@ -575,9 +556,6 @@ func idempotencyKey(messageID *string, sess *session, message string) string {
 	if messageID != nil && strings.TrimSpace(*messageID) != "" {
 		// Opaque: trimming decides only whether an id was sent. " job-1 "
 		// and "job-1" are different messages.
-		if k, ok := sess.rekeyed[*messageID]; ok {
-			return k
-		}
 		// Hashed: a client may send a messageId of any length, and the key
 		// lands in a btree index with a size limit. The hash keeps it
 		// deterministic, so a resend of the same messageId finds the run.

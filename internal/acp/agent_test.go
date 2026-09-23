@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1068,8 +1067,10 @@ func TestReplayOfAnAcceptedInput(t *testing.T) {
 }
 
 // "Accepted earlier but did not run" means the key is spent and nothing ran,
-// so the prompt is resubmitted once under a fresh key — and a client that
-// resends the same messageId afterwards is mapped to that fresh key.
+// so the prompt is resubmitted under the messageId's next key (key-r1). A
+// client that resends the same messageId afterwards starts from its key again
+// and walks the same chain, so nothing needs remembering (the chain itself is
+// covered end to end by TestResentMessageIdFindsItsRetryRun).
 func TestNeverRunReplayIsResubmittedOnce(t *testing.T) {
 	calls := 0
 	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
@@ -1099,8 +1100,8 @@ func TestNeverRunReplayIsResubmittedOnce(t *testing.T) {
 		t.Fatalf("chats = %d, want 3", len(h.fleet.chats))
 	}
 	k0, k1, k2 := h.fleet.chats[0].InputID, h.fleet.chats[1].InputID, h.fleet.chats[2].InputID
-	if !strings.HasPrefix(k0, "acp-msg-") || !strings.HasSuffix(k0, "-"+msgHash(mid)) || k1 == k0 || k2 != k1 {
-		t.Errorf("keys = %q, %q, %q; want the messageId key, then one fresh key reused by the resend", k0, k1, k2)
+	if !strings.HasPrefix(k0, "acp-msg-") || !strings.HasSuffix(k0, "-"+msgHash(mid)) || k1 != k0+"-r1" || k2 != k0 {
+		t.Errorf("keys = %q, %q, %q; want the messageId key, its -r1 retry, then the resend from the messageId key", k0, k1, k2)
 	}
 }
 
@@ -1572,54 +1573,6 @@ func TestPreLaunchStopFromAnotherSurfaceIsCancelled(t *testing.T) {
 	}
 }
 
-// A messageId rekeyed after "never ran" stays pinned to the conversation that
-// accepted it: a later resend of that messageId goes back there, where fleet
-// recognises the fresh key, not to the session's newer conversation.
-func TestRekeyedMessageIdStaysPinned(t *testing.T) {
-	calls := 0
-	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
-		calls++
-		switch calls {
-		case 1:
-			if conn, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
-				_ = conn.Close() // A's whole answer is lost
-			}
-		case 2:
-			w.emit("conversation", map[string]any{"id": "conv-B"})
-			w.emit("turn.completed", map[string]any{})
-		case 3:
-			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-a","mode":"direct","state":"cancelled"},"conversation_id":"conv-A"}`)
-		default:
-			w.emit("conversation", map[string]any{"id": "conv-A"})
-			w.emit("turn.completed", map[string]any{})
-		}
-	}})
-	sid := h.newSession(t)
-	mid := "msg-A"
-	send := func(text string, id *string) error {
-		_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: id, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock(text)}})
-		return err
-	}
-	_ = send("prompt A", &mid) // lost
-	if err := send("prompt B", nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := send("prompt A", &mid); err != nil { // replay "never ran", then the fresh key
-		t.Fatal(err)
-	}
-	if err := send("prompt A", &mid); err != nil { // a later resend of the same messageId
-		t.Fatal(err)
-	}
-	h.fleet.mu.Lock()
-	defer h.fleet.mu.Unlock()
-	fresh, resend := h.fleet.chats[3], h.fleet.chats[4]
-	if resend.InputID != fresh.InputID || resend.ConversationID != "conv-A" {
-		t.Fatalf("resend = key %q conv %q, want the fresh key %q in conv-A", resend.InputID, resend.ConversationID, fresh.InputID)
-	}
-}
-
 // A prompt with a messageId that shares its text with an earlier, unresolved
 // text-only prompt must not wipe that prompt's retained key: the earlier
 // prompt's retry still reuses its own key, so fleet does not run it twice.
@@ -1650,18 +1603,6 @@ func TestSameTextUnderAMessageIdKeepsTheOtherPromptsKey(t *testing.T) {
 	}
 }
 
-// Rekeying the same messageId again replaces its pin rather than leaving the
-// old fresh key pinned: the pins stay bounded by the rekeyings remembered.
-func TestRekeyReplacesTheOldPin(t *testing.T) {
-	s := &session{}
-	for i := 0; i < 3; i++ {
-		s.rekey("msg-A", "fresh-"+strconv.Itoa(i), "conv-A")
-	}
-	if len(s.pinned) != 1 || s.pinned["fresh-2"] != "conv-A" {
-		t.Fatalf("pinned = %v, want only the latest fresh key", s.pinned)
-	}
-}
-
 // Whitespace inside the prompt is the user's (an indented code block, a
 // trailing newline a tool relies on): it is sent exactly, not trimmed.
 func TestPromptWhitespaceIsPreserved(t *testing.T) {
@@ -1669,5 +1610,101 @@ func TestPromptWhitespaceIsPreserved(t *testing.T) {
 	got, err := promptText([]acpsdk.ContentBlock{acpsdk.TextBlock(in)})
 	if err != nil || got != in {
 		t.Fatalf("promptText = %q, %v; want %q unchanged", got, err, in)
+	}
+}
+
+// keyedFleet is a fake /chat that remembers every input_id it accepted, the
+// way fleet's queue does (per user, as input_id_scope "user" declares): a
+// resend of a known key is answered with that input's replay, whatever
+// conversation it is posted to. firstRun decides a new key's fate: it
+// returns the state the input ends in ("completed" streams a turn;
+// "cancelled" records an accepted input that never ran, and answers with its
+// replay; "lost" records it as completed but drops the answer).
+type keyedFleet struct {
+	mu       sync.Mutex
+	state    map[string]string // input_id -> completed | cancelled
+	conv     map[string]string // input_id -> conversation that accepted it
+	runs     int               // turns actually streamed
+	firstRun func(key, conv string) string
+}
+
+func newKeyedHarness(t *testing.T, k *keyedFleet) *harness {
+	k.state, k.conv = map[string]string{}, map[string]string{}
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		h.fleet.mu.Lock()
+		req := h.fleet.chats[len(h.fleet.chats)-1]
+		h.fleet.mu.Unlock()
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		replay := func(key string) {
+			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w.w, `{"queued":true,"input":{"id":"row-%s","mode":"direct","state":%q},"conversation_id":%q}`, key, k.state[key], k.conv[key])
+		}
+		if _, seen := k.state[req.InputID]; seen {
+			replay(req.InputID)
+			return
+		}
+		conv := req.ConversationID
+		if conv == "" {
+			conv = "conv-" + req.InputID[len(req.InputID)-4:]
+		}
+		k.conv[req.InputID] = conv
+		switch k.firstRun(req.InputID, conv) {
+		case "cancelled":
+			k.state[req.InputID] = "cancelled"
+			replay(req.InputID)
+		case "lost":
+			k.state[req.InputID] = "completed"
+			k.runs++
+			if c, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
+				_ = c.Close()
+			}
+		default:
+			k.state[req.InputID] = "completed"
+			k.runs++
+			w.emit("conversation", map[string]any{"id": conv})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	return h
+}
+
+// A messageId whose first attempt never ran is retried under a key derived
+// from it, so a later resend of the messageId — however many other
+// messageIds were retried in between — walks to the attempt that ran and is
+// answered "already ran" instead of running a second time.
+func TestResentMessageIdFindsItsRetryRun(t *testing.T) {
+	k := &keyedFleet{firstRun: func(key, _ string) string {
+		if strings.HasPrefix(key, "acp-msg-") && !strings.Contains(key, "-r") {
+			return "cancelled" // every messageId's first attempt: accepted, never ran
+		}
+		return "completed"
+	}}
+	h := newKeyedHarness(t, k)
+	sid := h.newSession(t)
+	send := func(mid string) error {
+		_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("do " + mid)}})
+		return err
+	}
+	for i := range maxUnsettled + 10 {
+		if err := send(fmt.Sprintf("msg-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k.mu.Lock()
+	before := k.runs
+	k.mu.Unlock()
+	if before != maxUnsettled+10 {
+		t.Fatalf("runs = %d, want one per messageId", before)
+	}
+	if err := send("msg-0"); err != nil {
+		t.Fatal(err)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.runs != before {
+		t.Fatalf("resending the oldest messageId ran it again (%d runs, want %d)", k.runs, before)
 	}
 }

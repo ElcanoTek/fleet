@@ -351,6 +351,12 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
+		// A resend of an accepted input is answered before anything below
+		// touches the conversation: a replay must not re-apply the original
+		// request's model or un-archive the conversation.
+		if s.replayAcceptedInput(w, r, user, conv.ID, req) {
+			return
+		}
 		// The web echoes the conversation's stored model on every turn. An echo
 		// is "no opinion" — it can never be an override — so it must not trip
 		// the lockdown guard when that stored model has since been delisted.
@@ -420,32 +426,6 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Idempotent replay (#785): an input_id that was already ACCEPTED (queued,
-	// running, or terminal) never runs a duplicate turn — even when the retry
-	// lands after the conversation went idle.
-	if clientID := strings.TrimSpace(req.InputID); clientID != "" {
-		existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID)
-		if lerr != nil {
-			// Fail closed: proceeding without the lookup could run (and bill) a
-			// duplicate turn for an input_id that was already accepted. A 500
-			// lets the client retry the same input_id safely.
-			http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
-			return
-		}
-		if existing != nil {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			writeJSONStatus(w, http.StatusOK, map[string]any{
-				"queued": true,
-				"input": map[string]any{
-					"id": existing.ID, "client_input_id": existing.ClientInputID,
-					"mode": existing.Mode, "state": existing.State, "position": existing.Position,
-				},
-				"conversation_id": conv.ID,
-			})
-			return
-		}
-	}
-
 	// Busy path (#785): a running turn means this submission QUEUES — never an
 	// implicit cancel. The row is durable before the 202 acknowledgement;
 	// steer-mode rows are additionally offered to the running turn's next
@@ -490,8 +470,49 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "the message could not be queued behind the running turn; send it again", http.StatusServiceUnavailable)
 			return
 		}
-		s.handleBusySubmit(w, r, user, conv, req)
+		if !s.handleBusySubmit(w, r, user, conv, req) && direct != nil {
+			// The queue refused it (full, or a store error). A concurrent
+			// resend may already have been told the claim is running, so the
+			// key must not be left without an outcome: it is settled
+			// "cancelled" (nothing ran), which a resend reads as safe to send
+			// again, rather than vanishing.
+			s.settleUnqueuedInput(user, conv.ID, strings.TrimSpace(req.InputID))
+		}
 	}
+}
+
+// replayAcceptedInput answers a resend of an input_id that was already
+// ACCEPTED (queued, running, or terminal) with that input's acknowledgement,
+// so it never runs a duplicate turn — even when the retry lands after the
+// conversation went idle (#785). A caller declaring user-unique keys
+// (input_id_scope "user") is looked up per user, so a resend finds its input
+// whichever conversation accepted it; otherwise keys are conversation-scoped.
+// A first submission (no conversation yet) is recoverFirstSubmission's.
+// handled reports that the response was written.
+func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, user, convID string, req chatRequest) (handled bool) {
+	clientID := strings.TrimSpace(req.InputID)
+	if clientID == "" {
+		return false
+	}
+	var existing *store.InputQueueRow
+	var err error
+	if strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
+		existing, err = s.store.LookupInputForUser(r.Context(), user, clientID)
+	} else {
+		existing, err = s.store.LookupInput(r.Context(), convID, clientID)
+	}
+	if err != nil {
+		// Fail closed: proceeding without the lookup could run (and bill) a
+		// duplicate turn for an input_id that was already accepted. A 500
+		// lets the client retry the same input_id safely.
+		http.Error(w, "input lookup failed: "+err.Error(), http.StatusInternalServerError)
+		return true
+	}
+	if existing == nil {
+		return false
+	}
+	writeQueueAck(w, http.StatusOK, existing.ConversationID, *existing)
+	return true
 }
 
 // recoverFirstSubmission answers a first submission (no conversation yet)

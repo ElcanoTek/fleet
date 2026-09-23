@@ -333,6 +333,19 @@ func (s *fakeChatStore) SetModel(_ context.Context, _, convID, model string) err
 	}
 	return nil
 }
+func (s *fakeChatStore) SetArchived(_ context.Context, _, convID string, archived bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.convs[convID]; c != nil {
+		if archived {
+			now := time.Now().Unix()
+			c.ArchivedAt = &now
+		} else {
+			c.ArchivedAt = nil
+		}
+	}
+	return nil
+}
 func (s *fakeChatStore) SetRuntime(context.Context, string, string, string) error { return nil }
 func (s *fakeChatStore) SetConversationMCPAccounts(context.Context, string, string, map[string]string) error {
 	return nil
@@ -1708,5 +1721,92 @@ func TestCancelByInputKey_KeyIsTakenBeforeTheSubmission(t *testing.T) {
 				t.Fatalf("row = %+v, want the key held cancelled", row)
 			}
 		})
+	}
+}
+
+// A resend of an accepted input is answered before the request touches the
+// conversation: it does not roll the model back to the original request's,
+// nor un-archive a conversation archived since.
+func TestReplay_DoesNotMutateTheConversation(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "model/y", false)
+	archived := time.Now().Unix()
+	st.mu.Lock()
+	conv.ArchivedAt = &archived
+	st.queue = append(st.queue, store.InputQueueRow{ID: "d-k", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-k", Mode: store.InputModeDirect, State: store.InputStateCompleted, TurnID: "t-1"})
+	st.mu.Unlock()
+
+	w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": conv.ID, "model": "model/x", "input_id": "key-k"})
+	if !strings.Contains(w.Body.String(), `"state":"completed"`) {
+		t.Fatalf("ack %d %s: want the replay", w.Code, w.Body.String())
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if got := st.convs[conv.ID]; got.Model != "model/y" || got.ArchivedAt == nil || eng.turns != 0 {
+		t.Fatalf("model %q archived %v turns %d: a replay must leave the conversation alone", got.Model, got.ArchivedAt != nil, eng.turns)
+	}
+}
+
+// A caller declaring user-unique keys finds its accepted input whichever
+// conversation accepted it: a resend posted to another conversation is
+// answered with that input, never run there a second time.
+func TestReplay_UserScopedKeyIsFoundAcrossConversations(t *testing.T) {
+	for _, scope := range []string{"user", ""} {
+		t.Run("scope="+scope, func(t *testing.T) {
+			eng := &fakeEngine{}
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, eng, st)
+			a, _ := st.CreateConversation(context.Background(), "u@x.com", "a", "generic", "", false)
+			b, _ := st.CreateConversation(context.Background(), "u@x.com", "b", "generic", "", false)
+			st.mu.Lock()
+			st.queue = append(st.queue, store.InputQueueRow{ID: "d-u", ConversationID: a.ID, UserEmail: "u@x.com", ClientInputID: "key-u", Mode: store.InputModeDirect, State: store.InputStateCompleted, TurnID: "t-1"})
+			st.mu.Unlock()
+			w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": b.ID, "input_id": "key-u", "input_id_scope": scope})
+			eng.mu.Lock()
+			turns := eng.turns
+			eng.mu.Unlock()
+			if scope == "user" {
+				if turns != 0 || !strings.Contains(w.Body.String(), `"conversation_id":"`+a.ID+`"`) {
+					t.Fatalf("ack %d %s, turns %d: want the input found in its own conversation", w.Code, w.Body.String(), turns)
+				}
+				return
+			}
+			if turns != 1 {
+				t.Fatalf("turns %d: a conversation-scoped key is new in another conversation", turns)
+			}
+		})
+	}
+}
+
+// A direct claim released for the queue (it lost the race to another turn)
+// and then refused by it is settled "cancelled", not left without a row: a
+// concurrent resend already told "running" finds an outcome.
+func TestDirectClaim_RaceLoserRefusedByTheQueueIsSettled(t *testing.T) {
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	st.onClaim = func(r store.InputQueueRow) {
+		srv.registerTurn(r.ConversationID, func() {}) // another surface's turn wins the race
+		st.mu.Lock()
+		for i := range maxPendingInputs { // and the queue is full
+			st.queue = append(st.queue, store.InputQueueRow{ID: fmt.Sprintf("q-%d", i), ConversationID: r.ConversationID, UserEmail: "u@x.com", ClientInputID: fmt.Sprintf("k-%d", i), Mode: store.InputModeQueued, State: store.InputStateQueued})
+		}
+		st.mu.Unlock()
+	}
+	w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "race-q"})
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	st.mu.Lock()
+	var row *store.InputQueueRow
+	for i := range st.queue {
+		if st.queue[i].ClientInputID == "race-q" {
+			row = &st.queue[i]
+		}
+	}
+	st.mu.Unlock()
+	if row == nil || row.State != store.InputStateCancelled {
+		t.Fatalf("key row = %+v, want it settled cancelled", row)
 	}
 }
