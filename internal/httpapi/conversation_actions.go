@@ -566,19 +566,36 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 	// cancel a successor that started between its decision to stop and this
 	// request landing. A targeted Stop is turn-scoped: it never sweeps the
 	// queue.
+	//
+	// input_id targets ONE input by its idempotency key, wherever it is: a
+	// still-queued row is withdrawn, a running turn for it is cancelled, and
+	// a turn not registered yet (a direct claim still being prepared, a row
+	// the drain just claimed, or a submission still in transit) is refused
+	// when it tries to register. A client whose answer was lost (`fleet acp`)
+	// can stop its own input without knowing which of those states it is in.
 	scope := "all"
-	turnID := ""
+	turnID, inputID := "", ""
 	if r.Body != nil {
 		var body struct {
-			Scope  string `json:"scope"`
-			TurnID string `json:"turn_id"`
+			Scope   string `json:"scope"`
+			TurnID  string `json:"turn_id"`
+			InputID string `json:"input_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			if strings.EqualFold(body.Scope, "turn") {
 				scope = "turn"
 			}
 			turnID = strings.TrimSpace(body.TurnID)
+			inputID = strings.TrimSpace(body.InputID)
 		}
+	}
+	if inputID != "" {
+		if !s.cancelInput(r.Context(), user, id, inputID) {
+			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 	if turnID != "" {
 		s.cancelInflightTurn(id, turnID)
@@ -621,4 +638,28 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		s.cancelInflight(id)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// cancelInput stops one input by its idempotency key (see
+// handleConversationCancel). The turn side is atomic with registration
+// (cancelInputTurn); a row still queued is also withdrawn, since a queued
+// row can outwait the in-memory mark. false means the withdrawal failed.
+func (s *Server) cancelInput(ctx context.Context, user, convID, key string) bool {
+	s.cancelInputTurn(convID, key)
+	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	row, err := s.store.LookupInput(qctx, convID, key)
+	if err != nil {
+		log.Printf("cancel input lookup (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
+		return false
+	}
+	if row == nil || row.Mode == store.InputModeDirect || row.State != store.InputStateQueued {
+		return true
+	}
+	if _, err := s.store.RemoveQueuedInput(qctx, user, convID, row.ID); err != nil {
+		log.Printf("cancel input withdraw (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+		return false
+	}
+	s.emitQueueUpdate(qctx, user, convID)
+	return true
 }

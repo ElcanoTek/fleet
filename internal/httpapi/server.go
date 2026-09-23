@@ -123,6 +123,14 @@ type Server struct {
 	// conversation ever stopped in this process is cheap.
 	stopSweepGens   map[string]uint64
 	inflightCounter uint64
+	// cancelledInputs records a Stop that named an input by its key
+	// (POST /conversations/{id}/cancel with input_id), keyed by
+	// inputKeyMark, with the time it was recorded. registerTurnGated refuses
+	// to launch a turn for a marked key, under the same inflightMu section
+	// that records the mark and cancels an already-registered turn for it —
+	// so a key's turn is either cancelled or never launched, whichever side
+	// of registration the Stop lands on. Pruned after cancelledInputTTL.
+	cancelledInputs map[string]time.Time
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
 	// (branding + empty-state). nil in tests / mock mode that don't supply one;
@@ -545,6 +553,9 @@ type inflightEntry struct {
 	// submission named (webhooks, scheduled runs, pre-#1592 clients), which
 	// reads as "no evidence" rather than "not yours".
 	submissionID string
+	// inputKey is the idempotency key (client_input_id) of the input this
+	// turn runs, "" when none: a Stop that names the key cancels this turn.
+	inputKey string
 }
 
 // IsRunning reports whether the turn is still generating (buffer open).
@@ -696,6 +707,17 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true
 	}
+	inputKey := ""
+	if queued != nil {
+		inputKey = queued.inputKey
+	}
+	if inputKey != "" {
+		if _, stopped := s.cancelledInputs[inputKeyMark(convID, inputKey)]; stopped {
+			delete(s.cancelledInputs, inputKeyMark(convID, inputKey))
+			s.inflightMu.Unlock()
+			return nil, "", 0, false, true
+		}
+	}
 	prev, hadPrev := s.inflight[convID]
 	if hadPrev && prev.IsRunning() {
 		s.inflightMu.Unlock()
@@ -715,6 +737,7 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 		turnID:       turnID,
 		steer:        steer,
 		submissionID: submissionID,
+		inputKey:     inputKey,
 	}
 	s.inflightMu.Unlock()
 
@@ -804,6 +827,39 @@ func (s *Server) cancelInflightTurn(convID, turnID string) bool {
 	}
 	entry.cancel()
 	return true
+}
+
+// cancelledInputTTL bounds how long a Stop by input key is remembered for a
+// turn that has not registered yet.
+const cancelledInputTTL = 10 * time.Minute
+
+func inputKeyMark(convID, key string) string { return convID + "\x00" + key }
+
+// cancelInputTurn stops the turn for the input with idempotency key key, on
+// whichever side of registration it is: a registered turn for the key is
+// cancelled, and the key is marked so a turn not registered yet is refused
+// by registerTurnGated. Both happen in one inflightMu section, the one
+// registration takes, so no launch can slip between them.
+func (s *Server) cancelInputTurn(convID, key string) {
+	now := time.Now()
+	s.inflightMu.Lock()
+	if s.cancelledInputs == nil {
+		s.cancelledInputs = make(map[string]time.Time)
+	}
+	for k, at := range s.cancelledInputs {
+		if now.Sub(at) > cancelledInputTTL {
+			delete(s.cancelledInputs, k)
+		}
+	}
+	entry, ok := s.inflight[convID]
+	running := ok && entry.IsRunning() && entry.inputKey == key
+	if !running {
+		s.cancelledInputs[inputKeyMark(convID, key)] = now
+	}
+	s.inflightMu.Unlock()
+	if running {
+		entry.cancel()
+	}
 }
 
 // getInflight returns a snapshot of the current entry for convID.

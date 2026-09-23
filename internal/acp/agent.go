@@ -25,7 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
+
 	"net/url"
 	"strings"
 	"sync"
@@ -54,8 +54,7 @@ type turnClient interface {
 	StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, error)
 	Cancel(convID, turnID string) error
 	RemoveQueued(convID, inputID string) error
-	Inflight(convID string) (chattui.InflightTurn, error)
-	QueueItems(convID string) ([]chattui.QueueItem, error)
+	CancelInput(convID, inputID string) error
 }
 
 // updater sends session/update notifications (the AgentSideConnection in
@@ -104,11 +103,45 @@ type session struct {
 	// under after fleet reported its first attempt as never run, so a later
 	// resend of that messageId finds the run instead of starting another.
 	rekeyed map[string]string
+	// keyConv maps each unresolved key to the conversation it was first
+	// submitted to ("" = it started the session's conversation). A retry
+	// goes back there: fleet recognises a key only in the conversation that
+	// accepted it (or, sent with no conversation, per user), so a retry
+	// posted into a conversation created since would run the input again.
+	keyConv map[string]string
 }
 
 // maxUnsettled bounds the unresolved-key memory per session. Past it the
 // oldest entry is dropped — a retry of that text then gets a fresh key.
 const maxUnsettled = 64
+
+// target returns the conversation a prompt under key is sent to: the one
+// its key was first submitted to while it is unresolved, else the session's.
+func (s *session) target(key string) string {
+	if c, ok := s.keyConv[key]; ok {
+		return c
+	}
+	return s.convID
+}
+
+// settle records whether key is still unresolved after a prompt: retained,
+// it keeps the conversation it was first sent to; resolved, it is forgotten.
+func (s *session) settle(key, conv string, retain bool) {
+	if !retain {
+		delete(s.keyConv, key)
+		return
+	}
+	if s.keyConv == nil {
+		s.keyConv = map[string]string{}
+	}
+	if _, ok := s.keyConv[key]; !ok && len(s.keyConv) >= maxUnsettled {
+		for k := range s.keyConv { // any entry; the map is small
+			delete(s.keyConv, k)
+			break
+		}
+	}
+	s.keyConv[key] = conv
+}
 
 func (s *session) setUnsettled(message, key string) {
 	if s.unsettled == nil {
@@ -281,14 +314,23 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
 	go a.stopTurn(stopCtx, tr, key, streamDone, stopped, cancelStream)
-	convID, streamErr := a.client.StreamInput(streamCtx, message, sess.convID, key, tr.handle)
+	target := sess.target(key)
+	convID, streamErr := a.client.StreamInput(streamCtx, message, target, key, tr.handle)
 	close(streamDone)
 	stop := <-stopped
 	stopErr := stop.err
 	if convID == "" {
 		convID = tr.conversationID()
 	}
-	sess.convID = convID
+	if convID == "" {
+		convID = target
+	}
+	// The session's conversation is set by its first answered prompt only:
+	// a retry sent back to an earlier conversation (keyConv) does not move
+	// the session there.
+	if sess.convID == "" {
+		sess.convID = convID
+	}
 	// Only THIS prompt's entry is reconciled here; other unresolved prompts
 	// keep their keys until they are retried and answered.
 	delete(sess.unsettled, message)
@@ -303,6 +345,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		// A replay of a key whose earlier attempt never ran (its turn failed
 		// before it began). The key is spent; nothing ran under it.
 		delete(sess.unsettled, message)
+		delete(sess.keyConv, key)
 		return acpsdk.PromptResponse{}, errRetryFresh
 	}
 	if isQueued && (ctx.Err() != nil || stopCtx.Err() != nil) {
@@ -322,6 +365,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		// never started a second time.
 		sess.setUnsettled(message, key)
 	}
+	sess.settle(key, target, outcomeUnknown(streamErr) || stopErr != nil)
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
 	// before any outcome.
@@ -507,98 +551,19 @@ func (a *Agent) stopAccepted(convID string, q *chattui.QueuedError) error {
 	}
 }
 
-// reconcileLost stops a prompt whose answer was lost, found by its key without
-// resubmitting it: a queue row with this key is withdrawn, and a turn running
-// for this submission (/inflight echoes the submission id, which is the key)
-// gets a targeted Stop. With no conversation known there is nothing to look
-// in, and the stop is reported as unconfirmed.
-//
-// The queue is read first, because a queued row can start running at any
-// moment. Withdrawing is atomic on the row still being queued, so either the
-// row is withdrawn or it has left the queue for a turn, which /inflight then
-// names. A row that started but whose turn /inflight does not name yet is
-// polled until the turn appears, the row ends, or reconcileWait runs out, and
-// then the stop is reported as unconfirmed rather than confirmed.
+// reconcileLost stops a prompt whose answer was lost, found by its key
+// without resubmitting it. fleet does the finding (a Stop naming the input_id):
+// a still-queued row is withdrawn, a running turn for the key is cancelled,
+// and a turn that has not registered yet (a direct claim still being
+// prepared, a row just claimed, a request still in transit) is refused when
+// it tries — atomically with registration, so there is no gap between
+// looking and stopping. With no conversation known there is nothing to name,
+// and the stop is reported as unconfirmed.
 func (a *Agent) reconcileLost(convID, key string) error {
 	if convID == "" {
 		return errors.New("fleet never reported the conversation, so the lost prompt cannot be found to stop")
 	}
-	started, err := a.withdrawByKey(convID, key)
-	if err != nil {
-		return err
-	}
-	deadline := time.Now().Add(reconcileWait)
-	for {
-		in, err := a.client.Inflight(convID)
-		if err != nil {
-			return err
-		}
-		if in.Running && in.SubmissionID == key && in.TurnID != "" {
-			return a.client.Cancel(convID, in.TurnID)
-		}
-		if !started {
-			return nil
-		}
-		// The row started, but its turn is not (or no longer) running here.
-		if started, err = a.queueRowStarted(convID, key); err != nil || !started {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return errors.New("the lost prompt started running and its turn could not be found to stop")
-		}
-		time.Sleep(reconcilePoll)
-	}
-}
-
-// reconcileWait and reconcilePoll bound reconcileLost's wait for a queue row
-// that started running to show up as the running turn.
-var (
-	reconcileWait = 2 * time.Second
-	reconcilePoll = 50 * time.Millisecond
-)
-
-// withdrawByKey withdraws the queue row carrying key, if it is still queued.
-// started reports a row with this key that has left the queue for a turn
-// (already running, or it started before the withdrawal landed).
-func (a *Agent) withdrawByKey(convID, key string) (started bool, err error) {
-	items, err := a.client.QueueItems(convID)
-	if err != nil {
-		return false, err
-	}
-	for _, it := range items {
-		if it.ClientInputID != key {
-			continue
-		}
-		switch it.State {
-		case "queued":
-			err := a.client.RemoveQueued(convID, it.ID)
-			var se *chattui.StatusError
-			switch {
-			case err == nil:
-			case errors.As(err, &se) && se.Code == http.StatusConflict:
-				started = true // it started between the read and the withdrawal
-			default:
-				return false, err
-			}
-		case "running":
-			started = true
-		}
-	}
-	return started, nil
-}
-
-// queueRowStarted reports whether the queue row carrying key is running.
-func (a *Agent) queueRowStarted(convID, key string) (bool, error) {
-	items, err := a.client.QueueItems(convID)
-	if err != nil {
-		return false, err
-	}
-	for _, it := range items {
-		if it.ClientInputID == key && it.State == "running" {
-			return true, nil
-		}
-	}
-	return false, nil
+	return a.client.CancelInput(convID, key)
 }
 
 // acceptedNote tells the ACP user what became of a prompt fleet accepted

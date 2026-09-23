@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -142,11 +143,14 @@ type fakeChatStore struct {
 	acceptedSeq       atomic.Int64
 	// releaseFailures / bindFailures make that many ReleaseDirectInput /
 	// BindInputTurn calls fail first.
-	releaseFailures, bindFailures int
+	releaseFailures, bindFailures, settleFailures int
 	// onClaim runs after a direct claim is stored; onMemories when turn
 	// preparation reads memories (both outside the fake's lock).
 	onClaim    func(store.InputQueueRow)
 	onMemories func()
+	// onCreate runs on each CreateConversation call, before it creates.
+	onCreate func()
+	keyLocks sync.Map
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -176,10 +180,16 @@ func (s *fakeChatStore) ListSharedFiles(_ context.Context) ([]store.SharedFile, 
 }
 
 func (s *fakeChatStore) CreateConversation(_ context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
+	if s.onCreate != nil {
+		s.onCreate()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.created++
 	id := "conv-1"
+	if s.created > 1 {
+		id = fmt.Sprintf("conv-%d", s.created)
+	}
 	conv := &store.Conversation{ID: id, UserEmail: userEmail, Title: title, Persona: persona, Model: model, Lockdown: lockdown}
 	s.convs[id] = conv
 	return conv, nil
@@ -972,6 +982,10 @@ func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
 func (s *fakeChatStore) SettleDirectInput(_ context.Context, id, turnID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.settleFailures > 0 {
+		s.settleFailures--
+		return errors.New("fake: settle failed")
+	}
 	for i := range s.queue {
 		if s.queue[i].ID == id && s.queue[i].Mode == store.InputModeDirect && s.queue[i].State == store.InputStateRunning {
 			s.queue[i].State = store.InputStateCompleted
@@ -996,6 +1010,14 @@ func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) erro
 		}
 	}
 	return nil
+}
+
+// LockInputKey mirrors the store's per-(user, key) lock in-process.
+func (s *fakeChatStore) LockInputKey(_ context.Context, userEmail, key string) (func(), error) {
+	v, _ := s.keyLocks.LoadOrStore(userEmail+"\x00"+key, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock, nil
 }
 
 func (s *fakeChatStore) LookupInputForUser(_ context.Context, userEmail, clientID string) (*store.InputQueueRow, error) {
@@ -1189,5 +1211,125 @@ func TestDirectClaim_StopBeforeLaunchCancelsIt(t *testing.T) {
 				t.Fatalf("claim = %+v, want one cancelled row", rows)
 			}
 		})
+	}
+}
+
+func (s *fakeChatStore) createdConversations() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.created
+}
+
+// A Stop naming an input by its key stops it on whichever side of turn
+// registration it lands: a claim still being prepared is refused when it
+// registers, a key marked before its submission arrives never launches, and
+// a running turn for the key is cancelled.
+func TestCancelByInputKey(t *testing.T) {
+	t.Run("claim still being prepared", func(t *testing.T) {
+		eng := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, eng, st)
+		var convID string
+		st.onClaim = func(r store.InputQueueRow) { convID = r.ConversationID }
+		st.onMemories = func() { srv.cancelInput(context.Background(), "u@x.com", convID, "key-p") }
+		w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "key-p"})
+		if w.Code != http.StatusConflict {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		if eng.turns != 0 {
+			t.Fatalf("a stopped input ran (%d turns)", eng.turns)
+		}
+		if rows := st.directRows(); len(rows) != 1 || rows[0].State != store.InputStateCancelled {
+			t.Fatalf("claim = %+v, want one cancelled row", rows)
+		}
+	})
+	t.Run("submission still in transit", func(t *testing.T) {
+		eng := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, eng, st)
+		conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+		srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-t")
+		w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": conv.ID, "input_id": "key-t"})
+		if w.Code != http.StatusConflict || eng.turns != 0 {
+			t.Fatalf("status %d, turns %d: a Stop that arrived first must refuse the late submission", w.Code, eng.turns)
+		}
+	})
+	t.Run("running turn", func(t *testing.T) {
+		eng := &gatedEngine{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, eng, st)
+		done := make(chan struct{})
+		go func() {
+			postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "key-r"})
+			close(done)
+		}()
+		<-eng.started
+		srv.cancelInput(context.Background(), "u@x.com", "conv-1", "key-r")
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the running turn for the key was not cancelled")
+		}
+		if eng.cancelled.Load() != 1 {
+			t.Fatalf("cancelled = %d, want the key's turn cancelled", eng.cancelled.Load())
+		}
+	})
+}
+
+// A direct claim whose settlement fails at turn end is settled on retry, not
+// left "running" to answer every resend of its key "already running".
+func TestDirectClaim_SettleIsRetried(t *testing.T) {
+	shortDirectPauses(t)
+	st := newFakeChatStore()
+	st.settleFailures = 2
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	if w := postChatRequest(t, srv, map[string]any{"message": "hi", "persona": "generic", "input_id": "settle-1"}); w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if rows := st.directRows(); len(rows) == 1 && rows[0].State == store.InputStateCompleted {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("claim never settled: %+v", st.directRows())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Two concurrent first submissions of one key (no conversation yet) run once:
+// the second waits on the key's lock, then finds the first one's claim.
+func TestFirstSubmission_ConcurrentSendsRunOnce(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	body := map[string]any{"message": "send the report", "persona": "generic", "input_id": "first-1"}
+	// Each conversation creation waits (bounded) for the other request to
+	// get there too. Unserialized, both have looked the key up and found
+	// nothing, so each creates a conversation and claims the key in it.
+	// Serialized, the second is still waiting on the key's lock, so the
+	// first times out here and claims, and the second then finds that claim.
+	var arrived atomic.Int32
+	st.onCreate = func() {
+		arrived.Add(1)
+		deadline := time.Now().Add(300 * time.Millisecond)
+		for arrived.Load() < 2 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	second := make(chan int, 1)
+	go func() { second <- postChatRequest(t, srv, body).Code }()
+	if w := postChatRequest(t, srv, body); w.Code != http.StatusOK {
+		t.Fatalf("first: %d %s", w.Code, w.Body.String())
+	}
+	if code := <-second; code != http.StatusOK {
+		t.Fatalf("second: %d", code)
+	}
+	eng.mu.Lock()
+	turns := eng.turns
+	eng.mu.Unlock()
+	if turns != 1 || st.createdConversations() != 1 {
+		t.Fatalf("turns %d, conversations %d: the key ran more than once", turns, st.createdConversations())
 	}
 }

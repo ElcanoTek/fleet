@@ -28,14 +28,6 @@ type fakeFleet struct {
 	turn func(w *sseWriter, r *http.Request)
 	// cancelStatus is what the Stop endpoint answers (0 = 204).
 	cancelStatus int
-	// inflight and queue are what GET .../inflight and .../queue answer
-	// (JSON bodies); "" answers 404.
-	inflight, queue string
-	// inflightSeq, when set, overrides inflight with one body per GET, the
-	// last one repeating (a turn that appears between probes).
-	inflightSeq []string
-	// removeStatus is what DELETE .../queue/{id} answers (0 = 204).
-	removeStatus int
 
 	mu      sync.Mutex
 	chats   []chatReq
@@ -90,31 +82,10 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sw.emit("text.delta", map[string]any{"text": "there"})
 		sw.emit("text.replace", map[string]any{"text": "Hello there"})
 		sw.emit("turn.completed", map[string]any{"prompt_tokens": 10, "completion_tokens": 4, "cached_tokens": 2})
-	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/inflight"):
-		f.mu.Lock()
-		body := f.inflight
-		if len(f.inflightSeq) > 0 {
-			body = f.inflightSeq[0]
-			if len(f.inflightSeq) > 1 {
-				f.inflightSeq = f.inflightSeq[1:]
-			}
-		}
-		f.mu.Unlock()
-		f.serveJSON(w, body)
-	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/queue"):
-		f.mu.Lock()
-		body := f.queue
-		f.mu.Unlock()
-		f.serveJSON(w, body)
 	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/queue/"):
 		f.mu.Lock()
 		f.removed = append(f.removed, strings.TrimPrefix(r.URL.Path, "/conversations/"))
-		status := f.removeStatus
 		f.mu.Unlock()
-		if status != 0 {
-			http.Error(w, "input is no longer queued", status)
-			return
-		}
 		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(r.URL.Path, "/conversations/") && strings.HasSuffix(r.URL.Path, "/cancel"):
 		b, _ := io.ReadAll(r.Body)
@@ -129,15 +100,6 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
-}
-
-func (f *fakeFleet) serveJSON(w http.ResponseWriter, body string) {
-	if body == "" {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = io.WriteString(w, body)
 }
 
 // recordingClient is the ACP client side: it records every session/update.
@@ -197,20 +159,19 @@ type harness struct {
 }
 
 type harnessOpts struct {
-	turn            func(w *sseWriter, r *http.Request)
-	cancelStatus    int
-	inflight, queue string
-	cfgErr          error
-	publicURL       string
-	timeout         time.Duration
-	serverURL       string // override (e.g. a closed port)
+	turn         func(w *sseWriter, r *http.Request)
+	cancelStatus int
+	cfgErr       error
+	publicURL    string
+	timeout      time.Duration
+	serverURL    string // override (e.g. a closed port)
 }
 
 // newHarness wires a real SDK client to the real Agent over in-memory pipes,
 // the way an ACP client wires to `fleet acp`'s stdio.
 func newHarness(t *testing.T, o harnessOpts) *harness {
 	t.Helper()
-	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus, inflight: o.inflight, queue: o.queue}
+	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus}
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
 	serverURL := srv.URL
@@ -935,7 +896,8 @@ func TestStopNamesTheWatchedTurn(t *testing.T) {
 }
 
 // Without the watched turn's id the adapter never sends an untargeted Stop
-// (it could land on a successor); it reports the stop as unconfirmed.
+// (it could land on a successor): the Stop names this prompt's own input key,
+// which fleet resolves to its turn or refuses to launch.
 func TestNoUntargetedStop(t *testing.T) {
 	started := make(chan struct{})
 	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
@@ -963,11 +925,9 @@ func TestNoUntargetedStop(t *testing.T) {
 	}
 	h.fleet.mu.Lock()
 	defer h.fleet.mu.Unlock()
-	if len(h.fleet.cancels) != 0 {
-		t.Errorf("an untargeted Stop was sent: %q", h.fleet.cancels)
-	}
-	if got := h.client.text(); !strings.Contains(got, "could not confirm this turn stopped") {
-		t.Errorf("no unconfirmed-stop notice: %q", got)
+	key := h.fleet.chats[0].InputID
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-n {"input_id":"`+key+`","scope":"turn"}` {
+		t.Errorf("cancels = %q, want one Stop naming input %q", h.fleet.cancels, key)
 	}
 }
 
@@ -1146,51 +1106,20 @@ func TestNeverRunReplayIsResubmittedOnce(t *testing.T) {
 	}
 }
 
-// A cancel whose answer was lost (no turn id, no acknowledgement) finds the
-// prompt by its key: the turn /inflight names for this submission gets a
-// targeted Stop, and a queue row with this key is withdrawn.
+// A cancel whose answer was lost (no turn id, no acknowledgement) stops the
+// prompt by its key: fleet withdraws it, cancels its turn or refuses to launch
+// it, atomically with registration. A Stop fleet refuses is reported as
+// unconfirmed, never as stopped.
 func TestLostAnswerIsReconciledByKey(t *testing.T) {
-	for name, tc := range map[string]struct {
-		inflight, queue string
-		inflightSeq     []string
-		removeStatus    int
-		wantCancel      string
-		wantRemoved     string
-	}{
-		// The row started running after the previous turn ended: /inflight
-		// named someone else's turn at first, then this submission's.
-		"queued row that started running": {
-			inflightSeq: []string{`{"inflight":true,"turn_id":"someone-elses","submission_id":"other"}`, `{"inflight":true,"turn_id":"turn-L","submission_id":"KEY"}`},
-			queue:       `{"items":[{"id":"row-9","client_input_id":"KEY","state":"running"}]}`,
-			wantCancel:  `conv-L {"scope":"turn","turn_id":"turn-L"}`,
-		},
-		// The row was queued when read, but started before the withdrawal.
-		"queued row that started before the withdrawal": {
-			inflightSeq:  []string{`{"inflight":true,"turn_id":"turn-L","submission_id":"KEY"}`},
-			queue:        `{"items":[{"id":"row-9","client_input_id":"KEY","state":"queued"}]}`,
-			removeStatus: http.StatusConflict,
-			wantCancel:   `conv-L {"scope":"turn","turn_id":"turn-L"}`,
-			wantRemoved:  "conv-L/queue/row-9",
-		},
-		"running turn": {
-			inflight:   `{"inflight":true,"turn_id":"turn-L","submission_id":"KEY"}`,
-			queue:      `{"items":[]}`,
-			wantCancel: `conv-L {"scope":"turn","turn_id":"turn-L"}`,
-		},
-		"queued row": {
-			inflight:    `{"inflight":true,"turn_id":"someone-elses","submission_id":"other"}`,
-			queue:       `{"items":[{"id":"row-9","client_input_id":"KEY","state":"queued"}]}`,
-			wantRemoved: "conv-L/queue/row-9",
-		},
-	} {
+	for name, cancelStatus := range map[string]int{"accepted": 0, "refused": http.StatusInternalServerError} {
 		t.Run(name, func(t *testing.T) {
-			var key string
+			seeded := false
 			started := make(chan struct{})
-			h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
-				if key == "" { // the first prompt seeds the session's conversation
+			h := newHarness(t, harnessOpts{cancelStatus: cancelStatus, turn: func(w *sseWriter, r *http.Request) {
+				if !seeded { // the first prompt seeds the session's conversation
+					seeded = true
 					w.emit("conversation", map[string]any{"id": "conv-L"})
 					w.emit("turn.completed", map[string]any{})
-					key = "seeded"
 					return
 				}
 				close(started) // accepted, but the answer never comes
@@ -1206,15 +1135,6 @@ func TestLostAnswerIsReconciledByKey(t *testing.T) {
 				close(done)
 			}()
 			<-started
-			h.fleet.mu.Lock()
-			k := h.fleet.chats[1].InputID
-			h.fleet.inflight = strings.ReplaceAll(tc.inflight, "KEY", k)
-			h.fleet.queue = strings.ReplaceAll(tc.queue, "KEY", k)
-			for _, b := range tc.inflightSeq {
-				h.fleet.inflightSeq = append(h.fleet.inflightSeq, strings.ReplaceAll(b, "KEY", k))
-			}
-			h.fleet.removeStatus = tc.removeStatus
-			h.fleet.mu.Unlock()
 			if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
 				t.Fatal(err)
 			}
@@ -1225,14 +1145,13 @@ func TestLostAnswerIsReconciledByKey(t *testing.T) {
 			}
 			h.fleet.mu.Lock()
 			defer h.fleet.mu.Unlock()
-			if tc.wantCancel != "" && (len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != tc.wantCancel) {
-				t.Errorf("cancels = %q, want %q", h.fleet.cancels, tc.wantCancel)
+			key := h.fleet.chats[1].InputID
+			if want := `conv-L {"input_id":"` + key + `","scope":"turn"}`; len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != want {
+				t.Errorf("cancels = %q, want %q", h.fleet.cancels, want)
 			}
-			if tc.wantCancel == "" && len(h.fleet.cancels) != 0 {
-				t.Errorf("a Stop was sent for someone else's turn: %q", h.fleet.cancels)
-			}
-			if tc.wantRemoved != "" && (len(h.fleet.removed) != 1 || h.fleet.removed[0] != tc.wantRemoved) {
-				t.Errorf("removed = %q, want %q", h.fleet.removed, tc.wantRemoved)
+			unconfirmed := strings.Contains(h.client.text(), "could not confirm this turn stopped")
+			if unconfirmed != (cancelStatus != 0) {
+				t.Errorf("unconfirmed notice = %v with cancel status %d: %q", unconfirmed, cancelStatus, h.client.text())
 			}
 		})
 	}
@@ -1335,5 +1254,44 @@ func TestUnconfirmedStopKeepsTheKey(t *testing.T) {
 	defer h.fleet.mu.Unlock()
 	if len(h.fleet.chats) != 2 || h.fleet.chats[0].InputID != h.fleet.chats[1].InputID {
 		t.Fatalf("the retry after an unconfirmed stop got a fresh key: %+v", h.fleet.chats)
+	}
+}
+
+// A first prompt whose whole answer was lost (no header) keeps the
+// conversation it was sent to — none — for its retry, even after a later
+// prompt created the session's conversation: fleet recognises a first
+// submission's key per user only when it names no conversation, so a retry
+// posted into the newer conversation would run the prompt again.
+func TestUnresolvedFirstPromptRetriesWithoutTheNewerConversation(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			conn, _, err := w.w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close() // the whole answer is lost, headers included
+			}
+			return
+		}
+		w.emit("conversation", map[string]any{"id": "conv-B"})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "prompt A"); err == nil {
+		t.Fatal("want the lost-answer error")
+	}
+	for _, msg := range []string{"prompt B", "prompt A", "prompt C"} {
+		if _, err := h.prompt(sid, msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	a, b, retry, c := h.fleet.chats[0], h.fleet.chats[1], h.fleet.chats[2], h.fleet.chats[3]
+	if retry.InputID != a.InputID || retry.ConversationID != "" {
+		t.Errorf("retry of A = key %q conv %q, want key %q and no conversation", retry.InputID, retry.ConversationID, a.InputID)
+	}
+	if b.ConversationID != "" || c.ConversationID != "conv-B" {
+		t.Errorf("B conv %q, C conv %q: the session must stay on the conversation B created", b.ConversationID, c.ConversationID)
 	}
 }

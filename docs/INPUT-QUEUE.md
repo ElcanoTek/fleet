@@ -39,8 +39,17 @@ retention guarantee: after a terminal row is purged, reusing its
   only while it is the running turn, and the request is a 204 no-op once it
   has ended, so a client stopping the turn it watched (`fleet acp`) can never
   cancel a successor. A targeted Stop is turn-scoped and never sweeps the
-  queue. `POST /chat` names its turn on the `X-Fleet-Turn-Id` response header
-  (beside `X-Fleet-Conversation-Id`), so the id is known before any frame.
+  queue. An optional `input_id` targets one input by its idempotency key,
+  wherever it is: a still-queued row is withdrawn, a running turn for it is
+  cancelled, and a turn not registered yet (a direct claim still being
+  prepared, a row the drain just claimed, or a submission still in transit) is
+  refused when it tries to register. The mark and the registration check share
+  one lock, so a keyed input is either cancelled or never launched; the mark
+  is kept for 10 minutes, and a queued row is withdrawn in the database so it
+  cannot outwait it. A client whose answer was lost (`fleet acp`) stops its
+  own input this way without knowing which state it reached. `POST /chat`
+  names its turn on the `X-Fleet-Turn-Id` response header (beside
+  `X-Fleet-Conversation-Id`), so the id is known before any frame.
 - `input_id` is honoured on the **direct** path too (migrations 063 and 064):
   a submission that starts a turn directly claims its key with a
   `mode:"direct"` row in the same table and unique index, so a resend of the
@@ -50,25 +59,29 @@ retention guarantee: after a terminal row is purged, reusing its
   listing, drain, Stop sweeps, remove and promote skip them. At turn end (and
   at boot recovery) they settle `completed` when the turn's user entry
   committed and `cancelled` otherwise (nothing ran, so a fresh key may be
-  sent). A claim whose turn never launched is released (a failed release is
-  retried in the background for about a minute, then left to boot recovery),
-  so the key can be retried. A claim is bound to its turn before the turn
-  runs; if that fails, the turn is dropped and the submission fails (`500`)
-  rather than running with a claim a crash could not match to it. A submission
-  that loses the race to a turn started from another surface is queued only
-  after its claim is released, and fails (`503`, send again) if the release
-  cannot be confirmed. A claim is an accepted input, so a Stop scope=all that
-  begins after it was accepted covers it: the claim settles `cancelled` and
-  the submission answers `409` without running. A first submission names no
-  conversation, so its key is also looked up per user before a conversation is
-  created: a resend after a response lost before any header finds the original
-  conversation instead of starting a second one. So an `input_id` sent without
-  a `conversation_id` must be unique per user, not just per conversation (the
-  web client sends a random UUID; `fleet acp` scopes a client `messageId` to
-  its session). (Two concurrent first submissions of one key can still race;
-  clients that resend only after an answer, such as `fleet acp`, never do.)
-  The `queue.updated` SSE event carries a full snapshot on every mutation, and
-  `user.message` gains `{steered:true, input_id}` when a steer is accepted.
+  sent). Settlement at turn end runs on its own bounded context and is retried
+  in the background if it fails, so a finished claim does not keep answering
+  "running". A claim whose turn never launched is released (a failed release
+  is retried in the background for about a minute, then left to boot
+  recovery), so the key can be retried. A claim is bound to its turn before
+  the turn runs; if that fails, the turn is dropped and the submission fails
+  (`500`) rather than running with a claim a crash could not match to it. A
+  submission that loses the race to a turn started from another surface is
+  queued only after its claim is released, and fails (`503`, send again) if
+  the release cannot be confirmed. A claim is an accepted input, so a Stop
+  scope=all that begins after it was accepted covers it: the claim settles
+  `cancelled` and the submission answers `409` without running. A first
+  submission names no conversation, so its key is also looked up per user
+  before a conversation is created: a resend after a response lost before any
+  header finds the original conversation instead of starting a second one. So
+  an `input_id` sent without a `conversation_id` must be unique per user, not
+  just per conversation (the web client sends a random UUID; `fleet acp`
+  scopes a client `messageId` to its session). Concurrent first submissions of
+  one key are serialized by a Postgres advisory lock on (user, key), held from
+  that lookup until the key is claimed, so the second finds the first one's
+  claim, across fleet processes too. The `queue.updated` SSE event carries a
+  full snapshot on every mutation, and `user.message` gains `{steered:true,
+  input_id}` when a steer is accepted.
 
 (These are chat-surface routes; `docs/openapi.yaml` documents the orchestrator
 surface only, so the API contract lives here.)

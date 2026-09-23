@@ -167,3 +167,45 @@ func TestLookupInputForUser_FindsTheKeyAcrossConversations(t *testing.T) {
 		t.Fatal("another user's key must not be found")
 	}
 }
+
+// LockInputKey serializes one (user, key) — across connections, so across
+// fleet processes — and leaves other keys and users alone.
+func TestLockInputKey_SerializesOneKey(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	unlock, err := s.LockInputKey(ctx, "u@example.com", "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, other := range [][2]string{{"u@example.com", "k2"}, {"v@example.com", "k1"}} {
+		u2, err := s.LockInputKey(ctx, other[0], other[1])
+		if err != nil {
+			t.Fatalf("lock %v: %v", other, err)
+		}
+		u2()
+	}
+	acquired := make(chan func(), 1)
+	go func() {
+		u, err := s.LockInputKey(ctx, "u@example.com", "k1")
+		if err != nil {
+			t.Errorf("second lock: %v", err)
+			close(acquired)
+			return
+		}
+		acquired <- u
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("the same key was locked twice")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case u := <-acquired:
+		if u != nil {
+			u()
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the key stayed locked after unlock")
+	}
+}

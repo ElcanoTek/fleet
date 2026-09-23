@@ -408,6 +408,9 @@ func (s *Server) maybeDrainQueue(convID string) {
 type queuedLaunch struct {
 	rowID, claimTurnID string
 	sweepGen           uint64
+	// inputKey is the input's idempotency key: a Stop naming it refuses
+	// the launch (cancelInputTurn).
+	inputKey string
 }
 
 // launchQueuedTurn runs one claimed queue row as an ordinary turn — the same
@@ -474,7 +477,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// finally runs it from any other.
 		SubmissionID: row.SubmissionID,
 	}
-	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen}, releaseSlot, nil) {
+	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen, inputKey: row.ClientInputID}, releaseSlot, nil) {
 		releaseSlot()
 		return false
 	}

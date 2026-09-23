@@ -320,6 +320,10 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		conv *store.Conversation
 		err  error
 	)
+	// unlockFirst releases a first submission's key lock (LockInputKey)
+	// once its key is claimed; deferred too, for every earlier return.
+	unlockFirst := func() {}
+	defer func() { unlockFirst() }()
 	reqModel := strings.TrimSpace(req.Model)
 	if req.ConversationID != "" {
 		conv, err = s.store.Get(r.Context(), user, req.ConversationID)
@@ -361,6 +365,14 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		// the input it already accepted — before this would create a second
 		// conversation and run the prompt again there.
 		if clientID := strings.TrimSpace(req.InputID); clientID != "" {
+			// Held until the key is claimed (or the request ends), so a
+			// concurrent resend waits here and then finds the claim.
+			unlock, lerr := s.store.LockInputKey(r.Context(), user, clientID)
+			if lerr != nil {
+				http.Error(w, "input lock failed: "+lerr.Error(), http.StatusInternalServerError)
+				return
+			}
+			unlockFirst = sync.OnceFunc(unlock)
 			existing, lerr := s.store.LookupInputForUser(r.Context(), user, clientID)
 			if lerr != nil {
 				http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
@@ -458,6 +470,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// The replay lookup above answers most repeats; the claim is what closes
 	// the race between two concurrent submissions of one key.
 	direct, handled := s.claimDirectInput(w, r, user, conv, req, releaseSlot)
+	unlockFirst() // the key is claimed (or answered): later sends find it
 	if handled {
 		return
 	}
@@ -514,25 +527,21 @@ func (s *Server) claimDirectInput(w http.ResponseWriter, r *http.Request, user s
 		s.cancelStoppedDirectInput(w, row.ID)
 		return nil, true
 	}
-	return &directClaim{id: row.ID, sweepGen: gen}, false
+	return &directClaim{id: row.ID, key: clientID, sweepGen: gen}, false
 }
 
 // directClaim is a direct submission's idempotency claim as startTurn needs
 // it: the claim row, and the Stop generation read when it was accepted (the
 // registration gate refuses the launch if a Stop scope=all begins after).
 type directClaim struct {
-	id       string
+	id, key  string
 	sweepGen uint64
 }
 
 // cancelStoppedDirectInput settles a claim that a Stop scope=all covered
 // before its turn launched as cancelled (nothing ran), and tells the caller.
 func (s *Server) cancelStoppedDirectInput(w http.ResponseWriter, id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := s.store.SettleDirectInput(ctx, id, ""); err != nil {
-		log.Printf("settle stopped direct input (input=%s): %v", id, err)
-	}
+	s.settleDirectInput(id, "")
 	http.Error(w, "a Stop in this conversation cancelled this message before it started", http.StatusConflict)
 }
 
@@ -602,15 +611,41 @@ func (s *Server) tryReleaseDirectInput(id string) bool {
 }
 
 func (s *Server) retryReleaseDirectInput(id string, attempt int, delay time.Duration) {
+	s.retryDirectInput("release", id, attempt, delay, func() bool { return s.tryReleaseDirectInput(id) })
+}
+
+// retryDirectInput retries one write to a direct claim in the background,
+// doubling the delay, until it lands or directReleaseRetries run out (boot
+// recovery then settles the claim). A claim left 'running' with no live turn
+// would answer every resend of its key "already running".
+func (s *Server) retryDirectInput(what, id string, attempt int, delay time.Duration, try func() bool) {
 	if attempt > directReleaseRetries {
-		log.Printf("release direct input (input=%s): giving up after %d retries; boot recovery settles it", id, directReleaseRetries)
+		log.Printf("%s direct input (input=%s): giving up after %d retries; boot recovery settles it", what, id, directReleaseRetries)
 		return
 	}
-	s.background.After("httpapi.direct_release", delay, func() {
-		if !s.tryReleaseDirectInput(id) {
-			s.retryReleaseDirectInput(id, attempt+1, 2*delay)
+	s.background.After("httpapi.direct_"+what, delay, func() {
+		if !try() {
+			s.retryDirectInput(what, id, attempt+1, 2*delay, try)
 		}
 	})
+}
+
+// settleDirectInput resolves a direct claim (completed when turnID's user
+// entry committed, otherwise cancelled) on its own bounded context, retrying
+// a failure in the background.
+func (s *Server) settleDirectInput(id, turnID string) {
+	try := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.store.SettleDirectInput(ctx, id, turnID); err != nil {
+			log.Printf("settle direct input (input=%s turn=%s): %v", id, turnID, err)
+			return false
+		}
+		return true
+	}
+	if !try() {
+		s.retryDirectInput("settle", id, 1, directReleaseBackoff, try)
+	}
 }
 
 // inputAttachmentsJSON is the attachments column for an input row.
@@ -646,7 +681,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	directInputID := ""
 	if direct != nil {
 		directInputID = direct.id
-		gate = &queuedLaunch{sweepGen: direct.sweepGen}
+		gate = &queuedLaunch{sweepGen: direct.sweepGen, inputKey: direct.key}
 	}
 	reqCtx := context.Background()
 	if r != nil {
@@ -704,8 +739,8 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, gate, strings.TrimSpace(req.SubmissionID))
 	if swept && queued == nil {
 		// A Stop scope=all began while this direct claim's turn was being
-		// prepared: the claim belongs to the stopped set, so it is cancelled,
-		// never launched.
+		// prepared, or a Stop named its key: the claim belongs to the
+		// stopped set, so it is cancelled, never launched.
 		turnCancel()
 		releaseSlot()
 		s.cancelStoppedDirectInput(w, directInputID)
@@ -920,12 +955,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// rows cancel instead).
 		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
 		requeued, cancelledSteers, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
-		if directInputID != "" {
-			if derr := s.store.SettleDirectInput(sctx, directInputID, turnID); derr != nil {
-				log.Printf("settle direct input (input=%s turn=%s): %v", directInputID, turnID, derr)
-			}
-		}
 		scancel()
+		if directInputID != "" {
+			s.settleDirectInput(directInputID, turnID)
+		}
 		if serr != nil {
 			log.Printf("settle turn inputs (turn=%s): %v", turnID, serr)
 		}

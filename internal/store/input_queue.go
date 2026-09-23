@@ -11,7 +11,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -511,6 +513,35 @@ func (s *Store) LookupInput(ctx context.Context, convID, clientID string) (*Inpu
 		return nil, err
 	}
 	return &row, nil
+}
+
+// LockInputKey serializes the first submissions of one (user, key) — those
+// that name no conversation yet — across every fleet process on the database,
+// with a session-level advisory lock on a dedicated connection. A first
+// submission's lookup, conversation creation and claim are separate
+// statements, so without it two concurrent sends of one key could each find
+// nothing, each create a conversation, and each claim the key there. The
+// returned func releases the lock; a connection whose unlock fails is
+// discarded rather than returned to the pool still holding it.
+func (s *Store) LockInputKey(ctx context.Context, userEmail, key string) (func(), error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Length-prefixed, so no (user, key) pair can spell another's name.
+	name := fmt.Sprintf("fleet-input-key:%d:%s:%s", len(userEmail), userEmail, key)
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended($1, 0))`, name); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return func() {
+		uctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(uctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, name); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+		_ = conn.Close()
+	}, nil
 }
 
 // LookupInputForUser returns the most recent row holding a caller idempotency

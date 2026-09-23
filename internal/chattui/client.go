@@ -486,16 +486,30 @@ func (c *Client) ResolveApprovalWithOptions(ctx context.Context, convID, approva
 // cannot kill work mid-flight. The caller's ctx may already be cancelled, so
 // Cancel uses its own short deadline rather than inheriting it.
 func (c *Client) Cancel(convID, turnID string) error {
+	payload := []byte(`{"scope":"turn"}`)
+	if id := strings.TrimSpace(turnID); id != "" {
+		payload, _ = json.Marshal(map[string]string{"scope": "turn", "turn_id": id})
+	}
+	return c.postCancel(convID, payload)
+}
+
+// CancelInput stops one input by its idempotency key (the input_id it was
+// submitted with), wherever it is: withdrawn if still queued, cancelled if its
+// turn runs, and refused if its turn has not registered yet. The server does
+// this atomically with turn registration, so a caller whose answer was lost
+// can stop its own input without knowing which state it reached.
+func (c *Client) CancelInput(convID, inputID string) error {
+	payload, _ := json.Marshal(map[string]string{"scope": "turn", "input_id": strings.TrimSpace(inputID)})
+	return c.postCancel(convID, payload)
+}
+
+func (c *Client) postCancel(convID string, payload []byte) error {
 	if strings.TrimSpace(convID) == "" {
 		return nil // no conversation yet → nothing is running server-side
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	u := c.cfg.ServerURL + "/conversations/" + url.PathEscape(convID) + "/cancel"
-	payload := []byte(`{"scope":"turn"}`)
-	if id := strings.TrimSpace(turnID); id != "" {
-		payload, _ = json.Marshal(map[string]string{"scope": "turn", "turn_id": id})
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -512,56 +526,6 @@ func (c *Client) Cancel(convID, turnID string) error {
 		return fmt.Errorf("cancel returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
 	}
 	return nil
-}
-
-// InflightTurn is GET /conversations/{id}/inflight: the conversation's
-// running turn, if any, and the submission it was started for.
-type InflightTurn struct {
-	Running      bool   `json:"inflight"`
-	TurnID       string `json:"turn_id"`
-	SubmissionID string `json:"submission_id"`
-}
-
-// Inflight reads the conversation's running turn — read-only, never starts one.
-func (c *Client) Inflight(convID string) (InflightTurn, error) {
-	var out InflightTurn
-	err := c.getJSON("/conversations/"+url.PathEscape(convID)+"/inflight", &out)
-	return out, err
-}
-
-// QueueItem is one row of GET /conversations/{id}/queue.
-type QueueItem struct {
-	ID            string `json:"id"`
-	ClientInputID string `json:"client_input_id"`
-	State         string `json:"state"`
-}
-
-// QueueItems reads the conversation's pending queue — read-only.
-func (c *Client) QueueItems(convID string) ([]QueueItem, error) {
-	var out struct {
-		Items []QueueItem `json:"items"`
-	}
-	err := c.getJSON("/conversations/"+url.PathEscape(convID)+"/queue", &out)
-	return out.Items, err
-}
-
-func (c *Client) getJSON(path string, into any) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+path, nil)
-	if err != nil {
-		return err
-	}
-	c.setAuthHeaders(req)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned %d", path, resp.StatusCode)
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(into)
 }
 
 // RemoveQueued withdraws a message fleet queued (DELETE
