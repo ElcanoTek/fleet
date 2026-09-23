@@ -24,6 +24,18 @@ func toolStep(usage fantasy.Usage, id string, n int32) fantasy.StreamResponse {
 	}
 }
 
+// smallPrefixUsage is the usage the fixed-size fixtures below report for call
+// n: the run's first step is its floor point (only the task prompt, no
+// history), and at 400 tokens it is well under half the 1000-token budget —
+// a small prefix, so the plain budget applies (#1600). Every later step
+// resends 1500, over the budget.
+func smallPrefixUsage(n int32) fantasy.Usage {
+	if n == 1 {
+		return fantasy.Usage{InputTokens: 400, OutputTokens: 1}
+	}
+	return fantasy.Usage{InputTokens: 1500, OutputTokens: 1}
+}
+
 func TestStepAtResendBudget(t *testing.T) {
 	step := func(reason fantasy.FinishReason, in, cached int64) fantasy.StepResult {
 		return fantasy.StepResult{Response: fantasy.Response{FinishReason: reason, Usage: fantasy.Usage{InputTokens: in, CacheReadTokens: cached}}}
@@ -41,12 +53,23 @@ func TestStepAtResendBudget(t *testing.T) {
 		{"only the last step matters", []fantasy.StepResult{step(fantasy.FinishReasonToolCalls, 5000, 0), step(fantasy.FinishReasonToolCalls, 100, 0)}, false},
 	}
 	for _, tc := range cases {
-		if got := stepAtResendBudget(tc.steps, 1000); got != tc.want {
+		if got := stepAtResendBudget(tc.steps, 1000, minResendCheckpointHistory); got != tc.want {
 			t.Errorf("%s: stepAtResendBudget = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	if stepAtResendBudget([]fantasy.StepResult{step(fantasy.FinishReasonToolCalls, 5000, 0)}, 0) {
+	if stepAtResendBudget([]fantasy.StepResult{step(fantasy.FinishReasonToolCalls, 5000, 0)}, 0, minResendCheckpointHistory) {
 		t.Error("a zero budget must never pause")
+	}
+	// The history guard counts the round's input history plus every step's
+	// own messages: an over-budget step with fewer than
+	// minResendCheckpointHistory of them has nothing worth summarizing.
+	over := step(fantasy.FinishReasonToolCalls, 5000, 0)
+	over.Messages = []fantasy.Message{fantasy.NewUserMessage("call"), fantasy.NewUserMessage("result")}
+	if stepAtResendBudget([]fantasy.StepResult{over}, 1000, minResendCheckpointHistory-3) {
+		t.Errorf("%d history messages must not pause", minResendCheckpointHistory-1)
+	}
+	if !stepAtResendBudget([]fantasy.StepResult{over}, 1000, minResendCheckpointHistory-2) {
+		t.Errorf("%d history messages (input + the step's own) may pause", minResendCheckpointHistory)
 	}
 }
 
@@ -55,23 +78,23 @@ func TestResendBudgetCheckpoint_ScheduledOnlyAndBudgetGated(t *testing.T) {
 	model := &namedMockModel{name: "cp-gate"}
 	interactive := newMockEngine(t, model)
 	interactive.envPrefix = CanonicalEnvPrefix
-	if interactive.resendBudgetCheckpoint() != nil {
+	if interactive.resendBudgetCheckpoint(nil) != nil {
 		t.Error("an interactive engine must not get a resend checkpoint: a chat's history is the user's to keep")
 	}
-	if got := len(interactive.roundStopConditions(0)); got != 0 {
+	if got := len(interactive.roundStopConditions(0, nil)); got != 0 {
 		t.Errorf("interactive round stop conditions = %d, want 0", got)
 	}
 	scheduled := newMockEngine(t, model)
 	scheduled.envPrefix = CanonicalEnvPrefix
 	scheduled.requireCompactionOptIn = true
-	if scheduled.resendBudgetCheckpoint() == nil {
+	if scheduled.resendBudgetCheckpoint(nil) == nil {
 		t.Fatal("a scheduled engine with a resend budget must get the checkpoint")
 	}
-	if got := len(scheduled.roundStopConditions(7)); got != 2 {
+	if got := len(scheduled.roundStopConditions(7, nil)); got != 2 {
 		t.Errorf("scheduled round stop conditions = %d, want step cap + checkpoint", got)
 	}
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
-	if scheduled.resendBudgetCheckpoint() != nil {
+	if scheduled.resendBudgetCheckpoint(nil) != nil {
 		t.Error("budget 0 disables the checkpoint")
 	}
 }
@@ -80,7 +103,9 @@ func TestResendBudgetCheckpoint_ScheduledOnlyAndBudgetGated(t *testing.T) {
 // must pause at the checkpoint, compact, and RESUME the same work — every tool
 // step still executes exactly once and the run still ends with the final
 // answer. Before this, one fantasy round ran the whole loop and the cost-aware
-// compaction fired at most once per verifier round.
+// compaction fired at most once per verifier round. The prefix is small
+// (smallPrefixUsage), so this is the plain-budget rule the #1600 floor rule
+// leaves untouched.
 func TestRun_ResendCheckpoint_ScheduledPausesCompactsAndResumes(t *testing.T) {
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "")
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
@@ -96,8 +121,9 @@ func TestRun_ResendCheckpoint_ScheduledPausesCompactsAndResumes(t *testing.T) {
 	model.streamFunc = func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 		n := calls.Add(1)
 		if int(n) <= toolSteps {
-			// Every tool step's prompt is already over the 1000-token budget.
-			return toolStep(fantasy.Usage{InputTokens: 1500, OutputTokens: 10}, fmt.Sprintf("call-%d", n), n), nil
+			// Every tool step after the floor point resends over the
+			// 1000-token budget.
+			return toolStep(smallPrefixUsage(n), fmt.Sprintf("call-%d", n), n), nil
 		}
 		return streamTextThenFinish("all six steps done"), nil
 	}
@@ -130,14 +156,16 @@ func TestRun_ResendCheckpoint_ScheduledPausesCompactsAndResumes(t *testing.T) {
 			compactions++
 		}
 	}
-	if checkpoints < toolSteps-1 {
-		t.Errorf("checkpoints = %d, want one per over-budget tool step (>= %d); events=%v", checkpoints, toolSteps-1, obs.events)
+	if checkpoints != toolSteps-1 {
+		t.Errorf("checkpoints = %d, want one per over-budget tool step (%d: all but the floor step); events=%v", checkpoints, toolSteps-1, obs.events)
 	}
 	if compactions == 0 {
 		t.Errorf("expected at least one resend_budget compaction after a checkpoint, events=%v", obs.events)
 	}
 	if p := obs.payloadOf(evtContextCheckpoint); p == nil || p[evtFieldTrigger] != "resend_budget" || p[evtFieldResendBudget] != 1000 || p[evtFieldUsedTokens] != 1500 {
 		t.Errorf("checkpoint payload must carry trigger, budget and the resent size, got %v", p)
+	} else if _, ok := p[evtFieldEffectiveBudget]; ok || len(p) != 4 {
+		t.Errorf("under the plain budget the checkpoint payload is unchanged by #1600 (no floor fields), got %v", p)
 	}
 	var crumb bool
 	for _, m := range session.Messages {
@@ -164,7 +192,7 @@ func TestRun_ResendCheckpoint_CapDoesNotStrandTheRun(t *testing.T) {
 	var calls atomic.Int32
 	model.streamFunc = func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 		if n := calls.Add(1); int(n) <= steps {
-			return toolStep(fantasy.Usage{InputTokens: 1500, OutputTokens: 1}, fmt.Sprintf("c-%d", n), n), nil
+			return toolStep(smallPrefixUsage(n), fmt.Sprintf("c-%d", n), n), nil
 		}
 		return streamTextThenFinish("done after the cap"), nil
 	}
@@ -191,8 +219,9 @@ func TestRun_ResendCheckpoint_CapDoesNotStrandTheRun(t *testing.T) {
 }
 
 // The step cap is a run-wide bound on the tool loop, not a per-pause allowance:
-// with MaxIterations=4 and every step over the budget, exactly four steps run
-// and the fourth pause is refused so the cap's own handling takes over.
+// with MaxIterations=4 and every step after the floor point over the budget,
+// exactly four steps run — steps 2 and 3 pause, and the pause at step 4 is
+// refused so the cap's own handling takes over.
 func TestRun_ResendCheckpoint_StepCapHoldsAcrossCheckpoints(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
 	var ticks atomic.Int32
@@ -205,7 +234,7 @@ func TestRun_ResendCheckpoint_StepCapHoldsAcrossCheckpoints(t *testing.T) {
 	model.streamFunc = func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 		n := calls.Add(1)
 		if int(n) <= 20 {
-			return toolStep(fantasy.Usage{InputTokens: 1500, OutputTokens: 1}, fmt.Sprintf("s-%d", n), n), nil
+			return toolStep(smallPrefixUsage(n), fmt.Sprintf("s-%d", n), n), nil
 		}
 		return streamTextThenFinish("never reached"), nil
 	}
@@ -223,8 +252,8 @@ func TestRun_ResendCheckpoint_StepCapHoldsAcrossCheckpoints(t *testing.T) {
 	if got := ticks.Load(); got > 4 {
 		t.Fatalf("tool ran %d times with MaxIterations=4 — checkpoints must not reset the step cap", got)
 	}
-	if checkpoints != 3 {
-		t.Errorf("checkpoints = %d, want 3 (the fourth step is the cap's, not a pause)", checkpoints)
+	if checkpoints != 2 {
+		t.Errorf("checkpoints = %d, want 2 (the first step is the floor point, the fourth is the cap's)", checkpoints)
 	}
 }
 
@@ -241,17 +270,18 @@ func TestConsumeResendCheckpoint_CapTieRefusesAndAccountingResets(t *testing.T) 
 		}
 		return r
 	}
-	if !e.consumeResendCheckpoint(over(1), 1) {
+	input := fillerMessages(1+minResendCheckpointHistory, 10)
+	if !e.consumeResendCheckpoint(over(1), 1, input) {
 		t.Fatal("first single-step pause fits under a cap of 3")
 	}
-	if !e.consumeResendCheckpoint(over(1), 1) {
+	if !e.consumeResendCheckpoint(over(1), 1, input) {
 		t.Fatal("second single-step pause fits under a cap of 3")
 	}
-	if e.consumeResendCheckpoint(over(1), 1) {
+	if e.consumeResendCheckpoint(over(1), 1, input) {
 		t.Fatal("the third step reaches the cap: the pause must be refused so the cap wins the tie")
 	}
 	e.roundEndedOnItsOwn()
-	if !e.consumeResendCheckpoint(over(1), 1) {
+	if !e.consumeResendCheckpoint(over(1), 1, input) {
 		t.Fatal("a round that ended on its own resets the step accounting for the next logical round")
 	}
 	if e.checkpointSteps != 1 {
@@ -269,11 +299,12 @@ func TestConsumeResendCheckpoint_CountsResilienceResumedSteps(t *testing.T) {
 	e.requireCompactionOptIn = true
 	e.maxIterations = 100
 	tail := &fantasy.AgentResult{Steps: []fantasy.StepResult{{Response: fantasy.Response{FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 1500}}}}}
+	input := fillerMessages(1+minResendCheckpointHistory, 10)
 	// 99 steps completed before the recovery + 1 in the resumed attempt = the cap.
-	if e.consumeResendCheckpoint(tail, 99+len(tail.Steps)) {
+	if e.consumeResendCheckpoint(tail, 99+len(tail.Steps), input) {
 		t.Fatal("a recovered round that reached the cap must not be paused")
 	}
-	if !e.consumeResendCheckpoint(tail, 50+len(tail.Steps)) {
+	if !e.consumeResendCheckpoint(tail, 50+len(tail.Steps), input) {
 		t.Fatal("a recovered round under the cap may pause")
 	}
 	if e.checkpointSteps != 51 {
@@ -354,7 +385,7 @@ func TestRun_ResendCheckpoint_ObserverFailureStopsBeforeResuming(t *testing.T) {
 	model.streamFunc = func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 		n := calls.Add(1)
 		if int(n) <= 5 {
-			return toolStep(fantasy.Usage{InputTokens: 1500, OutputTokens: 1}, fmt.Sprintf("o-%d", n), n), nil
+			return toolStep(smallPrefixUsage(n), fmt.Sprintf("o-%d", n), n), nil
 		}
 		return streamTextThenFinish("done"), nil
 	}
@@ -366,7 +397,7 @@ func TestRun_ResendCheckpoint_ObserverFailureStopsBeforeResuming(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the run to fail once the observer failed on the checkpoint frame")
 	}
-	if got := ticks.Load(); got != 1 {
-		t.Fatalf("tool ran %d times, want exactly the 1 step before the failed checkpoint — nothing may execute after the run is doomed", got)
+	if got := ticks.Load(); got != 2 {
+		t.Fatalf("tool ran %d times, want exactly the 2 steps before the failed checkpoint (the floor step, then the first pause) — nothing may execute after the run is doomed", got)
 	}
 }

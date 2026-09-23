@@ -429,6 +429,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	}
 
 	maxTokens := runMaxCompletionTokens(cfg)
+	eng.maxCompletionTokens = int(maxTokens)
 
 	optIn := cfg.Selection.OptInSet()
 	hints := runRemediationHints(cfg)
@@ -633,18 +634,22 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// message, and no enforcement round consumed. A pause is not an
 		// enforcement round. After maxResendCheckpoints pauses the checkpoint
 		// goes inert and the loop runs on under the cost/token ceilings alone.
-		if eng.consumeResendCheckpoint(finalResult, outcome.completedSteps+len(finalResult.Steps)) {
+		// When the prompt floor crowds the budget the pause fires at the floor
+		// rule's threshold instead, and the breadcrumb and event say so (#1600,
+		// see engine.effectiveResendBudget).
+		if eng.consumeResendCheckpoint(finalResult, outcome.completedSteps+len(finalResult.Steps), messages) {
 			messages = append(messages, carryRoundMessages(finalResult)...)
 			resent := lastStepPromptTokens(finalResult)
+			budget := contextResendBudgetTokens(cfg.EnvPrefix)
 			eng.logSession.AddMessage(roleUser, fmt.Sprintf(
-				"[context_checkpoint] resent prompt %d tokens reached %s_CONTEXT_RESEND_BUDGET_TOKENS; the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",
-				resent, cfg.EnvPrefix.normalize(), outcome.completedSteps+len(finalResult.Steps), eng.resendCheckpoints), nil, nil)
-			sink.emit(evtContextCheckpoint, map[string]any{
+				"[context_checkpoint] resent prompt %d tokens reached %s; the tool loop paused after %d step(s) so the history can be compacted before the next call (checkpoint %d)",
+				resent, eng.resendCheckpointReached(budget), outcome.completedSteps+len(finalResult.Steps), eng.resendCheckpoints), nil, nil)
+			sink.emit(evtContextCheckpoint, eng.withResendFloorFields(map[string]any{
 				evtFieldUsedTokens:   resent,
-				evtFieldResendBudget: contextResendBudgetTokens(cfg.EnvPrefix),
+				evtFieldResendBudget: budget,
 				evtFieldTrigger:      "resend_budget",
 				"checkpoint":         eng.resendCheckpoints,
-			})
+			}, budget))
 			// The emit is an observer boundary like every other: an observer
 			// that failed on it has already doomed the run, so stop here rather
 			// than buy a summary and execute another tool step first.
