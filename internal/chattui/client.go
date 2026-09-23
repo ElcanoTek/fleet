@@ -184,11 +184,15 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 				Position int    `json:"position"`
 			} `json:"input"`
 		}
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ack); err == nil && ack.Queued {
+		derr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ack)
+		if derr == nil && ack.Queued {
 			id := orDefault(ack.ConversationID, convID)
 			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position}
 		}
-		return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("server returned %d without a stream", resp.StatusCode)}
+		// An unreadable acknowledgement (the connection closed mid-body) is not
+		// a refusal: fleet may well have queued the message. Report it as a
+		// transport failure — an unknown outcome — never as a definite status.
+		return convID, fmt.Errorf("server accepted the request (%d) but its acknowledgement was unreadable: %v", resp.StatusCode, orDefault(errString(derr), "not a queue acknowledgement"))
 	}
 	if resp.StatusCode != http.StatusOK {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -481,6 +485,37 @@ func (c *Client) Cancel(convID, turnID string) error {
 		return fmt.Errorf("cancel returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
 	}
 	return nil
+}
+
+// RemoveQueued withdraws a message fleet queued (DELETE
+// /conversations/{convID}/queue/{inputID}) — the web queue chip's remove
+// call. A 409 means it already started running, and is returned as an error.
+func (c *Client) RemoveQueued(convID, inputID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	u := c.cfg.ServerURL + "/conversations/" + url.PathEscape(convID) + "/queue/" + url.PathEscape(inputID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return err
+	}
+	c.setAuthHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("remove queued input returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
+	}
+	return nil
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // Ping reports whether the server's /healthz answers quickly — a fast, friendly

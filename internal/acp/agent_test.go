@@ -32,6 +32,7 @@ type fakeFleet struct {
 	mu      sync.Mutex
 	chats   []chatReq
 	cancels []string
+	removed []string
 	headers []http.Header
 }
 
@@ -80,6 +81,11 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sw.emit("text.delta", map[string]any{"text": "there"})
 		sw.emit("text.replace", map[string]any{"text": "Hello there"})
 		sw.emit("turn.completed", map[string]any{"prompt_tokens": 10, "completion_tokens": 4, "cached_tokens": 2})
+	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/queue/"):
+		f.mu.Lock()
+		f.removed = append(f.removed, strings.TrimPrefix(r.URL.Path, "/conversations/"))
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(r.URL.Path, "/conversations/") && strings.HasSuffix(r.URL.Path, "/cancel"):
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
@@ -991,5 +997,42 @@ func TestRetryReusesTheIdempotencyKey(t *testing.T) {
 	}
 	if k(3) != "acp-msg-"+mid {
 		t.Errorf("messageId key = %q", k(3))
+	}
+}
+
+// Cancelled while fleet was queueing the prompt (another surface owns the
+// running turn): the queued item is withdrawn, so it cannot run after the user
+// stopped it.
+func TestCancelWithdrawsAQueuedPrompt(t *testing.T) {
+	requested := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		close(requested)
+		time.Sleep(100 * time.Millisecond) // the ack is slow to arrive
+		w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-5","position":1},"conversation_id":"conv-b"}`)
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "do the risky thing")
+		done <- r
+	}()
+	<-requested
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		if r.StopReason != acpsdk.StopReasonCancelled {
+			t.Fatalf("stopReason = %q", r.StopReason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.removed) != 1 || h.fleet.removed[0] != "conv-b/queue/row-5" {
+		t.Errorf("removed = %q, want the queued row withdrawn", h.fleet.removed)
 	}
 }

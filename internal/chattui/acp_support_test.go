@@ -207,3 +207,20 @@ func TestStreamSurfacesTheHeaderTurnID(t *testing.T) {
 		t.Errorf("turn id = %q", turn)
 	}
 }
+
+// A queue acknowledgement cut off mid-body is an unknown outcome (fleet may
+// have queued the message), never a definite *StatusError.
+func TestTruncatedQueueAckIsNotAStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"queued":tr`)
+	}))
+	defer srv.Close()
+	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "c", "k", func(Event) {})
+	var se *StatusError
+	var qe *QueuedError
+	if err == nil || errors.As(err, &se) || errors.As(err, &qe) {
+		t.Fatalf("err = %#v, want a plain unknown-outcome error", err)
+	}
+}

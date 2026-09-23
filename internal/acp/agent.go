@@ -52,6 +52,7 @@ const revisedMarker = "\n\n— revised answer —\n\n"
 type turnClient interface {
 	StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, error)
 	Cancel(convID, turnID string) error
+	RemoveQueued(convID, inputID string) error
 }
 
 // updater sends session/update notifications (the AgentSideConnection in
@@ -235,6 +236,18 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	}
 
 	meta := map[string]any{"fleet.conversationId": convID}
+	var queued *chattui.QueuedError
+	isQueued := errors.As(streamErr, &queued)
+	if isQueued && (ctx.Err() != nil || stopCtx.Err() != nil) {
+		// Cancelled (or timed out) while fleet was queueing it: withdraw that
+		// exact queue item, or it would run later, after the user stopped it.
+		if err := a.client.RemoveQueued(convID, queued.InputID); err != nil {
+			stopErr = fmt.Errorf("the message was queued and could not be withdrawn: %w", err)
+		} else {
+			stopErr = nil
+		}
+		stop.intervened = true
+	}
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
 	// before any outcome.
@@ -263,8 +276,7 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if tr.policyBlocked {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonRefusal, Meta: meta}, nil
 	}
-	var queued *chattui.QueuedError
-	if errors.As(streamErr, &queued) {
+	if isQueued {
 		// The conversation already had a running turn (started from another
 		// surface, such as the web chat), so fleet durably queued this message
 		// to run after it. That is an accepted prompt, not a failure: say so,
