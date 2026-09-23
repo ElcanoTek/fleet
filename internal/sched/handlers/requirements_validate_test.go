@@ -15,9 +15,9 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// The prod shape of #1601 (raptive-depop 1c002f25): one punctuation error in
+// The prod shape of #1601: one punctuation error in
 // the copied EXECUTION REQUIREMENTS line.
-const malformedRequirementsPrompt = "Refresh the raptive-depop page from today's CSV.\n" +
+const malformedRequirementsPrompt = "Refresh the page from today's CSV.\n" +
 	models.ExecutionRequirementsMarker + "\n" +
 	`{"mcp_servers":["fast_io + fastio_helpers","pages"],"required_tools":["mcp_pages_get_page_data"]}` + "\n" +
 	"Finish with a one-line summary."
@@ -93,7 +93,7 @@ func TestTaskWritesRejectMalformedExecutionRequirements(t *testing.T) {
 	})
 
 	t.Run("import", func(t *testing.T) {
-		env := models.TaskExportEnvelope{Version: models.TaskExportVersion, Tasks: []models.TaskExportRecord{{Name: "depop-refresh", Prompt: malformedRequirementsPrompt}}}
+		env := models.TaskExportEnvelope{Version: models.TaskExportVersion, Tasks: []models.TaskExportRecord{{Name: "page-refresh", Prompt: malformedRequirementsPrompt}}}
 		w := send(http.MethodPost, "/tasks/import", env)
 		var resp models.TaskImportResponse
 		_ = json.Unmarshal(w.Body.Bytes(), &resp)

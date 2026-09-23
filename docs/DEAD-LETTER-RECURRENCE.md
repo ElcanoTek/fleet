@@ -39,9 +39,9 @@ does.
   is still live, editing its pending/scheduled head in place fixes it before
   it fires.
 - **Prevention.** Since the same change, a malformed line is refused when a
-  task is saved. Only tasks saved earlier can still reach this. Prod
-  `f76c1aa0` / `3591c573` dead-lettered on `"fast_io + fastio_helpers"`, and
-  their live successor carried the same line.
+  task is saved. Only tasks saved earlier can still reach this. In
+  production, two recurring refreshes dead-lettered on
+  `"fast_io + fastio_helpers"`, and a live successor carried the same line.
 - **What is excluded.** An execution-requirements failure that is *not*
   malformed (a tool or server missing from the roster, network egress off)
   keeps the two-strike rule. Those can change without editing the prompt.

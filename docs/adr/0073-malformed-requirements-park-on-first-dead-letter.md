@@ -16,10 +16,10 @@ recur.
 
 A malformed `EXECUTION REQUIREMENTS (JSON)` line is not such a cause (#1601).
 It is a property of the prompt text, which every successor copies verbatim,
-and the dispatch preflight refuses it before any model or tool work. Prod
-2026-09-21: `f76c1aa0` (raptive-depop) and `3591c573` (husqvarna)
-dead-lettered at $0 on `"fast_io + fastio_helpers"` in `mcp_servers`. The live
-successor `1c002f25` carried the same line, so it was certain to dead-letter
+and the dispatch preflight refuses it before any model or tool work. In
+production, two recurring page refreshes dead-lettered at $0 on the same day
+on `"fast_io + fastio_helpers"` in `mcp_servers`. A live successor carried the
+same line, so it was certain to dead-letter
 again the next weekday and then park — two notifications, a lost day, and
 nothing that could have gone differently in between.
 
@@ -70,7 +70,7 @@ prompt.
 ## Consequences
 
 - A malformed line can no longer be saved. A task saved before this shipped
-  (like `1c002f25`) dead-letters once, with the offending identifier in its
+  (like that live successor) dead-letters once, with the offending identifier in its
   reason, and parks. It sends one notification instead of two.
 - Recovery changes: replay alone does not continue such a chain, because the
   definition is what is broken. The owner recreates the task with the corrected

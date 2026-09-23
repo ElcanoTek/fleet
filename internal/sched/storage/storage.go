@@ -313,6 +313,13 @@ func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, creat
 	if tc.Prompt == "" {
 		return uuid.Nil, "", time.Time{}, fmt.Errorf("prompt is required")
 	}
+	// Every create path lands here — POST /tasks, an approved schedule_task,
+	// the scheduled-run create_task tool — so the malformed-requirements check
+	// (#1601) lives at this seam too, not only in the HTTP handler: a chat path
+	// must not report "saved" for a declaration that fails every dispatch.
+	if err := models.ValidateExecutionRequirements(tc.Prompt); err != nil {
+		return uuid.Nil, "", time.Time{}, err
+	}
 
 	// Resolve + persist the per-task timezone (defaulting to the org default)
 	// BEFORE evaluating the cron, so the first fire is computed in the task's own
@@ -1018,6 +1025,11 @@ func TaskEditFromTask(t *models.Task) TaskEdit {
 // so an edit can never move a gated task (or a webhook template) off the
 // scheduler path. Returns ErrTaskNotEditable if no longer editable.
 func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit TaskEdit) (*models.Task, error) {
+	// The same malformed-requirements check as create (#1601): an approved
+	// manage_tasks prompt edit reaches this seam without the HTTP handler.
+	if err := models.ValidateExecutionRequirements(edit.Prompt); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
 		return nil, err

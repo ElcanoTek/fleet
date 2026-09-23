@@ -20,10 +20,15 @@ const ExecutionRequirementNamePattern = `^[a-zA-Z0-9_.-]{1,200}$`
 
 var executionRequirementName = regexp.MustCompile(ExecutionRequirementNamePattern)
 
+// ExecutionRequirementsRosterRequiredToolsOnly is the one supported roster
+// value (#1603); any other value, the empty string included, is refused.
+const ExecutionRequirementsRosterRequiredToolsOnly = "required_tools_only"
+
 // ValidateExecutionRequirements reports whether a task prompt's optional
 // EXECUTION REQUIREMENTS declaration is well-formed (#1601): at most one
-// marker, followed by one bounded JSON object whose mcp_servers and
-// required_tools are identifier arrays within their limits. A prompt with no
+// marker, followed by one bounded JSON object whose mcp_servers,
+// required_tools and completion.any_succeeded are identifier arrays within
+// their limits, and whose roster, when present, is "required_tools_only". A prompt with no
 // marker is valid — the declaration is optional.
 //
 // It is the one grammar for the declaration. The scheduled runner calls it
@@ -54,6 +59,14 @@ func ValidateExecutionRequirements(prompt string) error {
 			Servers []string `json:"mcp_servers"`
 			Tools   []string `json:"required_tools"`
 			Network bool     `json:"network"`
+			// completion (#1602) and roster (#1603) are checked here too, with
+			// the dispatch rules, so a clause dispatch would refuse is refused
+			// at save — and parks on its first dead-letter like any other
+			// malformed line — instead of saving fine and dead-lettering at $0.
+			Completion *struct {
+				AnySucceeded []string `json:"any_succeeded"`
+			} `json:"completion"`
+			Roster *string `json:"roster"`
 		}
 		if err := json.Unmarshal([]byte(lines[i+1]), &req); err != nil || req == nil {
 			detail := "not a JSON object"
@@ -65,10 +78,20 @@ func ValidateExecutionRequirements(prompt string) error {
 		if len(req.Servers) > 100 || len(req.Tools) > 200 {
 			return fmt.Errorf("execution requirements: too many servers or tools (at most 100 mcp_servers and 200 required_tools)")
 		}
-		for _, name := range append(append([]string{}, req.Servers...), req.Tools...) {
+		var completion []string
+		if req.Completion != nil {
+			completion = req.Completion.AnySucceeded
+		}
+		if len(completion) > 200 {
+			return fmt.Errorf("execution requirements: too many completion tools (at most 200)")
+		}
+		for _, name := range append(append(append([]string{}, req.Servers...), req.Tools...), completion...) {
 			if !executionRequirementName.MatchString(name) {
 				return fmt.Errorf("execution requirements: invalid server or tool identifier %q; allowed %s", name, ExecutionRequirementNamePattern)
 			}
+		}
+		if req.Roster != nil && *req.Roster != ExecutionRequirementsRosterRequiredToolsOnly {
+			return fmt.Errorf("execution requirements: unknown roster %q (supported: %q)", *req.Roster, ExecutionRequirementsRosterRequiredToolsOnly)
 		}
 		found = true
 	}
