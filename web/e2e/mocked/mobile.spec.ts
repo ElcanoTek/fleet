@@ -1,6 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 import { mockChatBoot } from "./_mocks";
+import { DEFAULT_MODEL, DEFAULT_MODEL_LABEL } from "../../src/app/lib/modelAliases";
+
+// The chip shows the compiled-in default tier, so the mocked catalog serves it.
+const DEFAULT_SHORT_LABEL = DEFAULT_MODEL_LABEL.slice(DEFAULT_MODEL_LABEL.indexOf(": ") + 2);
 
 // Mobile-layout smoke under a phone-sized viewport. Pure presentation/responsive
 // behaviour (no backend), so it runs in the mocked lane: the composer must fit
@@ -54,8 +58,8 @@ test("the composer toolbar keeps every control on one row", async ({ page }) => 
       json: {
         models: [
           {
-            slug: "openai/gpt-5.6-luna-pro",
-            name: "OpenAI: GPT-5.6 Luna Pro",
+            slug: DEFAULT_MODEL,
+            name: DEFAULT_MODEL_LABEL,
             price_prompt: 0.0000004,
             price_completion: 0.0000016,
             context_length: 200000,
@@ -72,9 +76,9 @@ test("the composer toolbar keeps every control on one row", async ({ page }) => 
 
   // Vendor prefix dropped on mobile so the model still reads in the space left
   // after the icon buttons; the full label stays available to assistive tech.
-  await expect(chip.getByTestId("composer-model-label-short")).toHaveText("GPT-5.6 Luna Pro");
+  await expect(chip.getByTestId("composer-model-label-short")).toHaveText(DEFAULT_SHORT_LABEL);
   await expect(chip.getByTestId("composer-model-label-full")).toBeHidden();
-  await expect(chip).toHaveAccessibleName(/OpenAI: GPT-5.6 Luna Pro/);
+  await expect(chip).toHaveAccessibleName(new RegExp(DEFAULT_MODEL_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   // Cost glyphs are picker-only at this width.
   await expect(chip.locator(".model-cost")).toBeHidden();
 

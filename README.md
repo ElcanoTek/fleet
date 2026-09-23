@@ -322,12 +322,33 @@ agent card, `/triggers/*` and `/webhooks/*`) straight to those backends. Single-
 DB leases and the worker cap is a per-process semaphore, so fleet scales by
 moving to a bigger box, not more replicas.
 
+On a fresh Fedora box, one line — it clones `main` into `/opt/fleet/src` and
+runs the interactive bootstrap (service, web UI + TLS domain, OpenRouter key,
+SSO key, admins):
+
 ```sh
-git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
-sudo bash /opt/fleet/src/scripts/bootstrap.sh --postgres=local --enable-service \
-  --client-config https://github.com/ElcanoTek/example-config.git
-# then add your OPENROUTER_API_KEY to the env file and: fleet restart
+curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash
 ```
+
+Unattended, pass bootstrap flags through:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh | sudo bash -s -- \
+  --postgres=local --enable-web --domain fleet.example.com \
+  --client-config https://github.com/ElcanoTek/example-config.git
+```
+
+For automation, download first so a failed fetch is a failed step (a pipe into
+`bash` exits 0 on an empty download), and feed stdin from `/dev/null` so a TTY-allocating
+runner can't leave bootstrap waiting on a prompt:
+
+```sh
+curl -fsSLo /tmp/fleet-install.sh https://raw.githubusercontent.com/ElcanoTek/fleet/main/install.sh \
+  && sudo bash /tmp/fleet-install.sh --postgres=local --enable-service --client-config <bundle> </dev/null
+```
+
+Then `fleet status`, `sudo fleet doctor`, and `sudo fleet update` from there on
+(the checkout and installed binaries are root-owned). Design note: [`docs/INSTALLER.md`](docs/INSTALLER.md).
 
 **→ Full deployment guide** — host sizing, the one-command web + Caddy/TLS stack,
 the env file, and every option: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**.

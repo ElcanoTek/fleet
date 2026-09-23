@@ -51,6 +51,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // StepKind enumerates what a single scripted model turn does.
@@ -148,6 +150,11 @@ func New() *Server {
 		models: []string{
 			"z-ai/glm-5.2",
 			"anthropic/claude-fable-5",
+			// The compiled-in tiers first, so the fake catalog always lists
+			// whatever the defaults currently are.
+			agentcore.DefaultCoreModel,
+			agentcore.DefaultMaxModel,
+			"openai/gpt-6-luna",
 			"openai/gpt-5.6-luna-pro",
 			"openai/gpt-5.6-luna",
 			"anthropic/claude-opus-5",
