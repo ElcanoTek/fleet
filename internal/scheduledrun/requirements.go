@@ -169,9 +169,10 @@ func parseRequirementsRoster(prompt string) (string, error) {
 // names — as the full mcp_<server>_<tool> name or the bare tool name, the forms
 // checkTools resolves — that the base allowlist already permits. It only ever
 // subtracts. Entries are keyed by the REGISTERED server name; a
-// <server>_<account> seat whose tools are not named in its own full form gets
-// no entry and falls back to its base server's entry by the one keying rule, so
-// it narrows the same way. It is always non-nil and is paired with an EXHAUSTIVE
+// <server>_<account> seat whose tools are not named in its own full form
+// narrows the same way as the base server it falls back to by the one keying
+// rule, pinned as an explicit entry filtered against the seat's OWN base
+// allowlist (so inheriting never registers a tool the seat forbids). It is always non-nil and is paired with an EXHAUSTIVE
 // Gate-2 (agent.Options.MCPRosterNarrowing), under which a server with no
 // entry registers nothing. Native tools are not in the MCP roster and are
 // untouched.
@@ -193,8 +194,39 @@ func (r *executionRequirements) narrowedAllowlist(catalog []mcp.ServerTool, base
 			out[item.ServerName] = append(out[item.ServerName], item.Tool.Name)
 		}
 	}
+	// A seat with no entry of its own inherits the entry of the server key that
+	// governs it. That inherited list was filtered against the OTHER server's
+	// base allowlist, so a same-named tool the seat's own allowlist forbids
+	// would register. Pin each inheriting seat to an explicit entry: the
+	// inherited names the seat's own base entry permits, or the never-matching
+	// sentinel when none remain. Narrowing still only subtracts.
+	for _, item := range catalog {
+		if _, own := out[item.ServerName]; own {
+			continue
+		}
+		inherited := agentcore.AllowlistToolsFor(out, item.ServerName)
+		if len(inherited) == 0 {
+			continue
+		}
+		seatBase := agentcore.AllowlistToolsFor(base, item.ServerName)
+		kept := []string{}
+		for _, name := range inherited {
+			if len(seatBase) == 0 || listHas(seatBase, name) {
+				kept = append(kept, name)
+			}
+		}
+		if len(kept) == 0 {
+			kept = []string{rosterNarrowingDeniesAll}
+		}
+		out[item.ServerName] = kept
+	}
 	return out
 }
+
+// rosterNarrowingDeniesAll is the entry of a seat whose inherited narrowed
+// list its own allowlist forbids entirely: an EMPTY entry reads as "allow all"
+// under the allowlist semantics, so denying needs one never-matching name.
+const rosterNarrowingDeniesAll = "__roster_narrowing_denies_all_tools__"
 
 func listHas(list []string, name string) bool {
 	for _, item := range list {

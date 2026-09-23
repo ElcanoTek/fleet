@@ -64,13 +64,28 @@ func TestNarrowedAllowlist(t *testing.T) {
 		"run_python", // native: not in the MCP roster, untouched
 	}}
 	got := req.narrowedAllowlist(pagesCatalog(), nil)
-	if fmt.Sprint(got) != fmt.Sprint(agentcore.MCPAllowlist{"pages": {"get_page_data", "record_refresh_check", "update_page_data_upload"}}) {
+	want := []string{"get_page_data", "record_refresh_check", "update_page_data_upload"}
+	if fmt.Sprint(got) != fmt.Sprint(agentcore.MCPAllowlist{"pages": want, "pages_acct": want}) {
 		t.Fatalf("narrowed = %v, want exactly the required pages tools (fast_io, fastio_helpers and the layout tools gone)", got)
 	}
-	// The seat is not named in its own full form, so it gets no entry of its
-	// own: Gate-2's keying rule falls back to the base server's entry.
+	// The seat is not named in its own full form, so it narrows the same way
+	// as the base server it falls back to — pinned as an explicit entry.
 	if list := agentcore.AllowlistToolsFor(got, "pages_acct"); fmt.Sprint(list) != fmt.Sprint(got["pages"]) {
 		t.Fatalf("seat narrows to %v, want the base server's %v", list, got["pages"])
+	}
+
+	// A seat's inherited entry is filtered against the SEAT's own base
+	// allowlist: a same-named tool the seat's allowlist forbids must not
+	// register through the base server's narrowed entry, and a seat whose
+	// allowlist forbids every inherited name is denied outright rather than
+	// left with an empty ("allow all") entry.
+	seatBase := agentcore.MCPAllowlist{"pages_acct": {"get_page_data", "patch_page"}}
+	if got := req.narrowedAllowlist(pagesCatalog(), seatBase); fmt.Sprint(got["pages_acct"]) != fmt.Sprint([]string{"get_page_data"}) {
+		t.Fatalf("seat narrowing leaked past its own allowlist: %v", got["pages_acct"])
+	}
+	deny := agentcore.MCPAllowlist{"pages_acct": {"patch_page"}}
+	if got := req.narrowedAllowlist(pagesCatalog(), deny); fmt.Sprint(got["pages_acct"]) != fmt.Sprint([]string{rosterNarrowingDeniesAll}) {
+		t.Fatalf("a seat allowed none of the inherited tools must be denied, got %v", got["pages_acct"])
 	}
 
 	// A bare name narrows every server that has it, the seat's own entry included.
@@ -82,7 +97,7 @@ func TestNarrowedAllowlist(t *testing.T) {
 	// Narrowing only subtracts: a required tool the base Gate-2 already
 	// removes stays removed.
 	base := agentcore.MCPAllowlist{"pages": {"get_page_data", "patch_page"}}
-	if got := req.narrowedAllowlist(pagesCatalog(), base); fmt.Sprint(got) != fmt.Sprint(agentcore.MCPAllowlist{"pages": {"get_page_data"}}) {
+	if got := req.narrowedAllowlist(pagesCatalog(), base); fmt.Sprint(got) != fmt.Sprint(agentcore.MCPAllowlist{"pages": {"get_page_data"}, "pages_acct": {"get_page_data"}}) {
 		t.Fatalf("narrowing widened the base allowlist: %v", got)
 	}
 
