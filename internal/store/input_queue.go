@@ -19,6 +19,11 @@ import (
 const (
 	InputModeQueued = "queued"
 	InputModeSteer  = "steer"
+	// InputModeDirect marks the idempotency record of a submission that
+	// started a turn directly (migration 063). It is never a queue item: the
+	// listing, drain, sweeps, remove and promote skip it, and recovery
+	// settles it instead of re-queueing it.
+	InputModeDirect = "direct"
 
 	InputStateQueued    = "queued"
 	InputStateRunning   = "running"
@@ -84,8 +89,50 @@ func (s *Store) seedAcceptedInputSeq(ctx context.Context) error {
 // client_input_id): a replayed POST returns the existing row with
 // created=false instead of duplicating the input.
 func (s *Store) EnqueueInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
+	r.State = InputStateQueued
+	return s.insertInput(ctx, r)
+}
+
+// ClaimDirectInput records a directly started turn's idempotency key: a row of
+// mode 'direct' in state 'running', inserted before the turn launches. It
+// shares the queue's unique (conversation_id, client_input_id) index, so a key
+// is accepted exactly once whichever path took it; created=false returns the
+// row that already holds the key, which the caller answers instead of running
+// the input again.
+func (s *Store) ClaimDirectInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
+	r.Mode, r.State = InputModeDirect, InputStateRunning
+	return s.insertInput(ctx, r)
+}
+
+// ReleaseDirectInput drops a direct claim whose turn never launched (turn_id
+// still unset), so the key is free for the caller to retry: nothing ran under
+// it.
+func (s *Store) ReleaseDirectInput(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM chat_input_queue
+		  WHERE id = $1 AND mode = 'direct' AND state = 'running' AND turn_id IS NULL`, id)
+	return err
+}
+
+// SettleDirectInput resolves a direct claim when its turn ends: completed when
+// the turn's user entry committed (the input ran), otherwise cancelled
+// (nothing ran). Never re-queued — the caller saw this turn's outcome, and a
+// direct input must not run later unattended.
+func (s *Store) SettleDirectInput(ctx context.Context, id, turnID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET
+		    state = CASE WHEN EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)
+		                 THEN 'completed' ELSE 'cancelled' END,
+		    updated_at = $3
+		  WHERE id = $1 AND mode = 'direct' AND state = 'running'`,
+		id, turnID, time.Now().Unix())
+	return err
+}
+
+// insertInput is the shared insert behind EnqueueInput and ClaimDirectInput.
+func (s *Store) insertInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
 	now := time.Now().Unix()
-	r.CreatedAt, r.UpdatedAt, r.State = now, now, InputStateQueued
+	r.CreatedAt, r.UpdatedAt = now, now
 	// Allocated before the insert, so a Stop that reads the counter after this
 	// point counts the row as pre-Stop even if the insert has not committed
 	// yet (the launch gate then refuses what the sweep could not see). A
@@ -174,7 +221,7 @@ func scanInputRow(row rowScanner) (InputQueueRow, error) {
 func (s *Store) ListQueuedInputs(ctx context.Context, userEmail, convID string) ([]InputQueueRow, error) {
 	rows, err := s.db.QueryContext(ctx,
 		inputQueueSelect+` WHERE conversation_id = $1 AND user_email = $2
-		    AND state IN ('queued','running','injected')
+		    AND state IN ('queued','running','injected') AND mode <> 'direct'
 		  ORDER BY position, created_at, id`, convID, userEmail)
 	if err != nil {
 		return nil, err
@@ -375,6 +422,8 @@ func (s *Store) PurgeTerminalInputs(ctx context.Context, retention time.Duration
 //     watermark are CANCELLED (#823) — the model may have acted on the steer
 //     and the side effects survived (#820), so re-running it could duplicate
 //     them (same predicate as SettleTurnInputs);
+//   - direct-turn records (mode 'direct') that did not commit are CANCELLED:
+//     a direct input is never re-queued;
 //   - the rest return to QUEUED (visible + addressable; deliberately NOT
 //     auto-drained at boot — restarting the server must not start unattended
 //     LLM spend).
@@ -414,9 +463,22 @@ func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed, can
 	n, _ = res.RowsAffected()
 	cancelled = int(n)
 
+	// A direct turn's idempotency record whose turn died before its user entry
+	// committed ran nothing: cancel it — a direct input is never re-queued to
+	// run later unattended (the committed ones completed in the first step).
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
+		  WHERE state = 'running' AND mode = 'direct'`,
+		time.Now().Unix())
+	if err != nil {
+		return 0, completed, cancelled, err
+	}
+	n, _ = res.RowsAffected()
+	cancelled += int(n)
+
 	res, err = s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, injected_seq = NULL, updated_at = $1
-		  WHERE state IN ('running','injected')`,
+		  WHERE state IN ('running','injected') AND mode <> 'direct'`,
 		time.Now().Unix())
 	if err != nil {
 		return 0, completed, cancelled, err

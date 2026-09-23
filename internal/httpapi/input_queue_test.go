@@ -565,7 +565,7 @@ func TestQueue_SweptLaunchReleasesSlotBeforeQueueRefresh(t *testing.T) {
 	done := make(chan bool, 1)
 	go func() {
 		done <- s.startTurn(nil, nil, user, conv, chatRequest{ConversationID: conv.ID, Message: row.Message},
-			&queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: gen}, func() { released.Store(true) })
+			&queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: gen}, func() { released.Store(true) }, "")
 	}()
 	select {
 	case ok := <-done:
@@ -923,6 +923,53 @@ func TestQueue_IdempotentSubmission(t *testing.T) {
 	}
 	eng.release <- struct{}{}
 	eng.release <- struct{}{}
+}
+
+// A directly started turn records its input_id (migration 063): a resend of
+// the same key while the turn runs, or after it ends, is answered with the
+// original input instead of starting a second turn.
+func TestDirectTurn_InputIDIsIdempotent(t *testing.T) {
+	s := serverFixture(t)
+	const user = "dora@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	first := make(chan int, 1)
+	go func() {
+		first <- postChatJSON(t, s, user, map[string]any{"message": "send the report", "conversation_id": conv.ID, "input_id": "direct-1"}).Code
+	}()
+	<-eng.started
+
+	// The resend while the turn runs gets the claim back, not a queued copy.
+	w := postChatJSON(t, s, user, map[string]any{"message": "send the report", "conversation_id": conv.ID, "input_id": "direct-1"})
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"mode":"direct"`) || !strings.Contains(w.Body.String(), `"state":"running"`) {
+		t.Fatalf("resend while running: %d %s", w.Code, w.Body.String())
+	}
+	if items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID); len(items) != 0 {
+		t.Fatalf("the direct claim leaked into the queue: %+v", items)
+	}
+
+	eng.release <- struct{}{}
+	if code := <-first; code != http.StatusOK {
+		t.Fatalf("first submission: %d", code)
+	}
+	waitFor(t, "direct claim settled", func() bool {
+		row, _ := s.store.LookupInput(context.Background(), conv.ID, "direct-1")
+		return row != nil && row.State == "completed"
+	})
+
+	// The resend after the turn ended is recognised too.
+	w = postChatJSON(t, s, user, map[string]any{"message": "send the report", "conversation_id": conv.ID, "input_id": "direct-1"})
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"completed"`) {
+		t.Fatalf("resend after completion: %d %s", w.Code, w.Body.String())
+	}
+	if n := eng.turns.Load(); n != 1 {
+		t.Fatalf("turns run = %d, want exactly 1", n)
+	}
 }
 
 func TestQueue_SteerInjectsMidTurnExactlyOnce(t *testing.T) {

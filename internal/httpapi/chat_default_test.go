@@ -824,7 +824,7 @@ func (s *fakeChatStore) ListQueuedInputs(_ context.Context, _, convID string) ([
 	defer s.mu.Unlock()
 	var out []store.InputQueueRow
 	for _, it := range s.queue {
-		if it.ConversationID == convID && it.State != store.InputStateCompleted && it.State != store.InputStateCancelled {
+		if it.ConversationID == convID && it.Mode != store.InputModeDirect && it.State != store.InputStateCompleted && it.State != store.InputStateCancelled {
 			out = append(out, it)
 		}
 	}
@@ -914,6 +914,50 @@ func (s *fakeChatStore) RemoveQueuedInput(_ context.Context, _, convID, id strin
 		}
 	}
 	return false, nil
+}
+
+// Direct-turn idempotency claims (migration 063): same key space as the
+// queue, mode 'direct', never listed or drained.
+func (s *fakeChatStore) ClaimDirectInput(_ context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, it := range s.queue {
+		if it.ConversationID == r.ConversationID && it.ClientInputID == r.ClientInputID {
+			return it, false, nil
+		}
+	}
+	now := time.Now().Unix()
+	r.Mode, r.State = store.InputModeDirect, store.InputStateRunning
+	r.Position = int64(len(s.queue) + 1)
+	r.CreatedAt, r.UpdatedAt, r.AcceptedSeq = now, now, s.acceptedSeq.Add(1)
+	s.queue = append(s.queue, r)
+	return r, true, nil
+}
+
+func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.queue[:0]
+	for _, it := range s.queue {
+		if it.ID != id || it.Mode != store.InputModeDirect || it.State != store.InputStateRunning || it.TurnID != "" {
+			kept = append(kept, it)
+		}
+	}
+	s.queue = kept
+	return nil
+}
+
+// SettleDirectInput mirrors the store: the fake treats any settled turn as
+// committed.
+func (s *fakeChatStore) SettleDirectInput(_ context.Context, id, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].Mode == store.InputModeDirect && s.queue[i].State == store.InputStateRunning {
+			s.queue[i].State = store.InputStateCompleted
+		}
+	}
+	return nil
 }
 
 func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) error {

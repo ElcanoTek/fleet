@@ -91,6 +91,10 @@ type session struct {
 	// retry of the same text reuses its idempotency key, so fleet recognises
 	// the input it already accepted instead of running it a second time.
 	unsettled *unsettledPrompt
+	// rekeyed maps a client messageId to the fresh key it was resubmitted
+	// under after fleet reported its first attempt as never run, so a later
+	// resend of that messageId finds the run instead of starting another.
+	rekeyed map[string]string
 }
 
 type unsettledPrompt struct{ message, key string }
@@ -195,8 +199,34 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if ctx.Err() != nil {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 	}
-	key := idempotencyKey(p.MessageId, sess.unsettled, message)
+	key := idempotencyKey(p.MessageId, sess, message)
 
+	resp, err := a.promptOnce(ctx, p, sess, message, key, true)
+	if errors.Is(err, errRetryFresh) {
+		// fleet answered a replay of this key with "accepted earlier, did not
+		// run" (its turn failed before it began). Nothing ran under that key,
+		// so submitting once more under a fresh one is safe — and is what the
+		// user asked for.
+		fresh := "fleet-acp-" + randomID()
+		if p.MessageId != nil && strings.TrimSpace(*p.MessageId) != "" {
+			if sess.rekeyed == nil {
+				sess.rekeyed = map[string]string{}
+			}
+			sess.rekeyed[strings.TrimSpace(*p.MessageId)] = fresh
+		}
+		resp, err = a.promptOnce(ctx, p, sess, message, fresh, false)
+	}
+	return resp, err
+}
+
+// errRetryFresh is promptOnce's signal that fleet reported the key as accepted
+// earlier but never run, so one fresh submission is safe.
+var errRetryFresh = errors.New("retry under a fresh idempotency key")
+
+// promptOnce submits the prompt under one idempotency key and translates the
+// outcome. With allowRetry it returns errRetryFresh instead of reporting a key
+// fleet accepted earlier but never ran.
+func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *session, message, key string, allowRetry bool) (acpsdk.PromptResponse, error) {
 	// stopCtx ends when the client cancels (session/cancel, or a newer prompt
 	// superseding this one) or the timeout fires. The stream itself runs on a
 	// context that ignores both: a fleet turn is detached from its HTTP request
@@ -238,15 +268,15 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	meta := map[string]any{"fleet.conversationId": convID}
 	var queued *chattui.QueuedError
 	isQueued := errors.As(streamErr, &queued)
+	if isQueued && queued.State == "cancelled" && allowRetry && ctx.Err() == nil && stopCtx.Err() == nil {
+		// A replay of a key whose earlier attempt never ran (its turn failed
+		// before it began). The key is spent; nothing ran under it.
+		sess.unsettled = nil
+		return acpsdk.PromptResponse{}, errRetryFresh
+	}
 	if isQueued && (ctx.Err() != nil || stopCtx.Err() != nil) {
-		// Cancelled (or timed out) while fleet was queueing it: withdraw that
-		// exact queue item, or it would run later, after the user stopped it.
-		if err := a.client.RemoveQueued(convID, queued.InputID); err != nil {
-			stopErr = fmt.Errorf("the message was queued and could not be withdrawn: %w", err)
-		} else {
-			stopErr = nil
-		}
 		stop.intervened = true
+		stopErr = a.stopAccepted(convID, queued)
 	}
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
@@ -277,14 +307,13 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonRefusal, Meta: meta}, nil
 	}
 	if isQueued {
-		// The conversation already had a running turn (started from another
-		// surface, such as the web chat), so fleet durably queued this message
-		// to run after it. That is an accepted prompt, not a failure: say so,
-		// and where to follow it, instead of inviting a retry that would queue
-		// it again.
-		tr.send(acpsdk.UpdateAgentMessageText(fmt.Sprintf(
-			"fleet is already running a turn in this conversation, so your message was queued (position %d) and will run after it. Follow it at %s", queued.Position, a.conversationPointer(convID))))
-		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: meta}, nil
+		// An accepted prompt, not a failure — either fleet queued it behind a
+		// turn already running in this conversation, or this is a resend of a
+		// message fleet accepted earlier under the same key (the original is
+		// not run again). Say which, and where to follow it, instead of
+		// inviting a retry.
+		tr.send(acpsdk.UpdateAgentMessageText(acceptedNote(queued, a.conversationPointer(convID))))
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: meta, UserMessageId: p.MessageId}, nil
 	}
 	if errors.Is(streamErr, context.Canceled) {
 		// Stopped from another fleet surface (the web chat's Stop, where these
@@ -380,12 +409,15 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 // idempotencyKey is the input_id for one prompt. The ACP client's own message
 // id (stable across its retries) wins; otherwise a retry of the prompt whose
 // outcome was lost reuses that prompt's key; otherwise a fresh key.
-func idempotencyKey(messageID *string, unsettled *unsettledPrompt, message string) string {
+func idempotencyKey(messageID *string, sess *session, message string) string {
 	if messageID != nil && strings.TrimSpace(*messageID) != "" {
+		if k, ok := sess.rekeyed[strings.TrimSpace(*messageID)]; ok {
+			return k
+		}
 		return "acp-msg-" + strings.TrimSpace(*messageID)
 	}
-	if unsettled != nil && unsettled.message == message {
-		return unsettled.key
+	if sess.unsettled != nil && sess.unsettled.message == message {
+		return sess.unsettled.key
 	}
 	return "fleet-acp-" + randomID()
 }
@@ -405,6 +437,43 @@ func outcomeUnknown(err error) bool {
 	}
 	msg := err.Error()
 	return !strings.HasPrefix(msg, "turn failed:") && !strings.HasPrefix(msg, "turn requires another model:")
+}
+
+// stopAccepted handles a cancel (or timeout) whose answer was an acceptance
+// rather than a stream. A fresh queue item is withdrawn, or it would run after
+// the user stopped it; a resend of a message whose earlier attempt is still
+// running is reported, since that turn is not this prompt's to address by id;
+// a completed or never-run input needs nothing.
+func (a *Agent) stopAccepted(convID string, q *chattui.QueuedError) error {
+	switch {
+	case q.Mode != "direct" && (q.State == "" || q.State == "queued"):
+		if err := a.client.RemoveQueued(convID, q.InputID); err != nil {
+			return fmt.Errorf("the message was queued and could not be withdrawn: %w", err)
+		}
+		return nil
+	case q.State == "running" || q.State == "injected":
+		return errors.New("this message is already running from an earlier attempt")
+	default:
+		return nil
+	}
+}
+
+// acceptedNote tells the ACP user what became of a prompt fleet accepted
+// without streaming it: queued behind a running turn, or a resend of a message
+// accepted earlier under the same key (never run twice).
+func acceptedNote(q *chattui.QueuedError, where string) string {
+	switch {
+	case q.Replayed() && (q.State == "running" || q.State == "injected"):
+		return "fleet is already running this message from an earlier attempt (it is not run twice). Follow it at " + where
+	case q.Replayed() && q.State == "completed":
+		return "fleet already ran this message from an earlier attempt (it is not run twice). Its reply is in " + where
+	case q.Replayed() && q.State == "cancelled":
+		return "an earlier attempt of this message did not run. Send it again to run it."
+	case q.Replayed():
+		return fmt.Sprintf("this message is already queued from an earlier attempt (position %d). Follow it at %s", q.Position, where)
+	default:
+		return fmt.Sprintf("fleet is already running a turn in this conversation, so your message was queued (position %d) and will run after it. Follow it at %s", q.Position, where)
+	}
 }
 
 // conversationPointer says where a person can see (and stop) a conversation.

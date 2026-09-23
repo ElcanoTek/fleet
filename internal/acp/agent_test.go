@@ -1036,3 +1036,72 @@ func TestCancelWithdrawsAQueuedPrompt(t *testing.T) {
 		t.Errorf("removed = %q, want the queued row withdrawn", h.fleet.removed)
 	}
 }
+
+// A resend of a message fleet already accepted under the same key is answered
+// with that input's state; the original is never run twice.
+func TestReplayOfAnAcceptedInput(t *testing.T) {
+	ack := func(state string) func(w *sseWriter, _ *http.Request) {
+		return func(w *sseWriter, _ *http.Request) {
+			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-1","position":1,"mode":"direct","state":"`+state+`"},"conversation_id":"conv-r"}`)
+		}
+	}
+	for state, want := range map[string]string{
+		"running":   "already running this message from an earlier attempt",
+		"completed": "already ran this message from an earlier attempt",
+	} {
+		t.Run(state, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{turn: ack(state)})
+			resp, err := h.prompt(h.newSession(t), "send the report")
+			if err != nil || resp.StopReason != acpsdk.StopReasonEndTurn {
+				t.Fatalf("got %+v, %v", resp, err)
+			}
+			if got := h.client.text(); !strings.Contains(got, want) {
+				t.Errorf("text = %q, want %q", got, want)
+			}
+			h.fleet.mu.Lock()
+			defer h.fleet.mu.Unlock()
+			if len(h.fleet.chats) != 1 {
+				t.Errorf("chats = %d, want 1 (nothing resubmitted)", len(h.fleet.chats))
+			}
+		})
+	}
+}
+
+// "Accepted earlier but did not run" means the key is spent and nothing ran,
+// so the prompt is resubmitted once under a fresh key — and a client that
+// resends the same messageId afterwards is mapped to that fresh key.
+func TestNeverRunReplayIsResubmittedOnce(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-1","mode":"direct","state":"cancelled"},"conversation_id":"conv-c"}`)
+			return
+		}
+		w.emit("conversation", map[string]any{"id": "conv-c"})
+		w.emit("text.delta", map[string]any{"text": "done"})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	mid := "7b1c2d3e-0000-4000-8000-000000000001"
+	resp, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("send it")}})
+	if err != nil || resp.StopReason != acpsdk.StopReasonEndTurn || h.client.text() != "done" {
+		t.Fatalf("got %+v, %v, text %q", resp, err, h.client.text())
+	}
+	if _, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("send it")}}); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 3 {
+		t.Fatalf("chats = %d, want 3", len(h.fleet.chats))
+	}
+	k0, k1, k2 := h.fleet.chats[0].InputID, h.fleet.chats[1].InputID, h.fleet.chats[2].InputID
+	if k0 != "acp-msg-"+mid || k1 == k0 || k2 != k1 {
+		t.Errorf("keys = %q, %q, %q; want the messageId key, then one fresh key reused by the resend", k0, k1, k2)
+	}
+}

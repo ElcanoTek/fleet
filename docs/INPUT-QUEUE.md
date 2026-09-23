@@ -40,7 +40,17 @@ retention guarantee: after a terminal row is purged, reusing its
   has ended, so a client stopping the turn it watched (`fleet acp`) can never
   cancel a successor. A targeted Stop is turn-scoped and never sweeps the
   queue. `POST /chat` names its turn on the `X-Fleet-Turn-Id` response header
-  (beside `X-Fleet-Conversation-Id`), so the id is known before any frame. The
+  (beside `X-Fleet-Conversation-Id`), so the id is known before any frame.
+- `input_id` is honoured on the **direct** path too (migration 063): a
+  submission that starts a turn directly claims its key with a `mode:"direct"`
+  row in the same table and unique index, so a resend of the same key, while
+  the turn runs or after it ends, is answered `200` with that row's
+  acknowledgement (`state` `running` / `completed` / `cancelled`) instead of a
+  second turn. Direct rows are never queue items: the queue listing, drain,
+  Stop sweeps, remove and promote skip them. At turn end (and at boot
+  recovery) they settle `completed` when the turn's user entry committed and
+  `cancelled` otherwise (nothing ran, so a fresh key may be sent). A claim
+  whose turn never launched is released, so the key can be retried. The
   `queue.updated` SSE event carries a full snapshot on every mutation, and
   `user.message` gains `{steered:true, input_id}` when a steer is accepted.
 

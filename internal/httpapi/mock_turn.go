@@ -10,6 +10,27 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
+// persistMockHistory writes the mock transcript. The user entry is committed
+// the way a real turn commits it (#798: CommitUserMessage, provenance turn_seq
+// 1 under this turn), because that record is what says "this input ran" — the
+// input queue's settle and recovery predicates, and a direct turn's input_id
+// replay, read it. Without it a mock turn that ran would read as one that
+// never started. Falls back to a plain append when there is no turn id.
+func persistMockHistory(ctx context.Context, st chatStore, convID, turnID string, entries []agent.HistoryEntry) ([]int64, error) {
+	if turnID == "" {
+		return st.AppendHistory(ctx, convID, entries)
+	}
+	uid, err := st.CommitUserMessage(ctx, convID, turnID, entries[0])
+	if err != nil {
+		return nil, err
+	}
+	rest, err := st.AppendHistory(ctx, convID, entries[1:])
+	if err != nil {
+		return nil, err
+	}
+	return append([]int64{uid}, rest...), nil
+}
+
 // runMockTurn emits a deterministic, LLM-free SSE stream so Playwright and
 // CI can exercise the full frontend state machine (reasoning block → tool
 // chip → python output → assistant text → pin/delete) without burning
@@ -19,7 +40,7 @@ import (
 // tool call whose result is echoed back in the assistant message. Every
 // user prompt gets the same canned response, which is exactly what the
 // e2e tests assert on.
-func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, userMessage string, sink agent.EventSink) error {
+func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, turnID, userMessage string, sink agent.EventSink) error {
 	sink.Emit("turn.started", map[string]any{"persona": conv.Persona})
 
 	// Test-only shortcut: when the user prompt contains "send email" we
@@ -96,7 +117,7 @@ func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, us
 	if !emptyReply {
 		entries = append(entries, mustJSONEntry("assistant", "text", map[string]any{"text": reply}))
 	}
-	ids, err := st.AppendHistory(ctx, conv.ID, entries)
+	ids, err := persistMockHistory(ctx, st, conv.ID, turnID, entries)
 	if err != nil {
 		return err
 	}

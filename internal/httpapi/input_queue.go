@@ -474,7 +474,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// finally runs it from any other.
 		SubmissionID: row.SubmissionID,
 	}
-	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen}, releaseSlot) {
+	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen}, releaseSlot, "") {
 		releaseSlot()
 		return false
 	}

@@ -120,9 +120,29 @@ type QueuedError struct {
 	ConversationID string
 	InputID        string
 	Position       int
+	// Mode and State are the input row's: a replay of an input_id the
+	// server already accepted reports where that input is now — still
+	// queued, running, completed, or cancelled (nothing ran). Mode "direct"
+	// is a submission that started its turn directly (not a queue item).
+	Mode  string
+	State string
+}
+
+// Replayed reports whether this acknowledgement is for an input the server had
+// already accepted under the same key, rather than one it just queued.
+func (e *QueuedError) Replayed() bool {
+	return e.Mode == "direct" || (e.State != "" && e.State != "queued")
 }
 
 func (e *QueuedError) Error() string {
+	switch e.State {
+	case "running", "injected":
+		return "this message is already running (it was accepted earlier)"
+	case "completed":
+		return "this message already ran (it was accepted earlier)"
+	case "cancelled":
+		return "this message was accepted earlier but did not run"
+	}
 	return fmt.Sprintf("a turn is already running in this conversation, so the message was queued (position %d) and will run after it", e.Position)
 }
 
@@ -182,12 +202,14 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 			Input          struct {
 				ID       string `json:"id"`
 				Position int    `json:"position"`
+				Mode     string `json:"mode"`
+				State    string `json:"state"`
 			} `json:"input"`
 		}
 		derr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ack)
 		if derr == nil && ack.Queued {
 			id := orDefault(ack.ConversationID, convID)
-			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position}
+			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position, Mode: ack.Input.Mode, State: ack.Input.State}
 		}
 		// An unreadable acknowledgement (the connection closed mid-body) is not
 		// a refusal: fleet may well have queued the message. Report it as a

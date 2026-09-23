@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -434,12 +436,65 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.startTurn(w, r, user, conv, req, nil, releaseSlot) {
+	// A direct turn claims its input_id before it launches, in the same
+	// table and unique index as queued inputs, so a caller whose stream was
+	// lost can resend the same key and get the input it already started back
+	// instead of a second run (model spend and tool side effects included).
+	// The replay lookup above answers most repeats; the claim is what closes
+	// the race between two concurrent submissions of one key.
+	directInputID := ""
+	if clientID := strings.TrimSpace(req.InputID); clientID != "" {
+		row, created, err := s.store.ClaimDirectInput(r.Context(), store.InputQueueRow{
+			ID: uuid.NewString(), ConversationID: conv.ID, UserEmail: user,
+			ClientInputID: clientID, SubmissionID: strings.TrimSpace(req.SubmissionID),
+			Message: req.Message, Attachments: inputAttachmentsJSON(req),
+		})
+		if err != nil {
+			releaseSlot()
+			http.Error(w, "input claim failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !created {
+			releaseSlot()
+			writeQueueAck(w, http.StatusOK, conv.ID, row)
+			return
+		}
+		directInputID = row.ID
+	}
+
+	if !s.startTurn(w, r, user, conv, req, nil, releaseSlot, directInputID) {
 		// A concurrent submission won the registerTurn race between our busy
-		// check and now; the input must not be lost — queue it instead.
+		// check and now; the input must not be lost — queue it instead. The
+		// direct claim is released first, or the queue insert would find it
+		// and answer with a "running" row that no turn is running.
 		releaseSlot()
+		s.releaseDirectInput(directInputID)
 		s.handleBusySubmit(w, r, user, conv, req)
 	}
+}
+
+// releaseDirectInput frees a direct claim whose turn never launched, so its
+// key can be retried. Best-effort and bounded: a leftover claim is settled as
+// cancelled by boot recovery.
+func (s *Server) releaseDirectInput(id string) {
+	if id == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.ReleaseDirectInput(ctx, id); err != nil {
+		log.Printf("release direct input (input=%s): %v", id, err)
+	}
+}
+
+// inputAttachmentsJSON is the attachments column for an input row.
+func inputAttachmentsJSON(req chatRequest) string {
+	if len(req.Attachments) > 0 {
+		if raw, err := json.Marshal(req.Attachments); err == nil {
+			return string(raw)
+		}
+	}
+	return "[]"
 }
 
 // startTurn runs one accepted input as a full turn: history + context prep,
@@ -449,8 +504,11 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 // set). Returns false ONLY when registerTurn refused because a turn is
 // already running — every other failure is handled (responded/logged)
 // internally. releaseSlot is released by the turn goroutine on completion;
-// on false the caller releases it.
-func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queued *queuedLaunch, releaseSlot func()) bool {
+// on false the caller releases it. directInputID is a direct submission's
+// idempotency claim ("" for none, and always "" for a queue drain): bound to
+// the turn once it registers, released if the turn never launches, and
+// settled when it ends.
+func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queued *queuedLaunch, releaseSlot func(), directInputID string) bool {
 	queueRowID := ""
 	if queued != nil {
 		queueRowID = queued.rowID
@@ -465,6 +523,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// pre-#785 flow errored before admission; the extraction inverted it).
 		releaseSlot()
 		if w != nil {
+			s.releaseDirectInput(directInputID)
 			http.Error(w, err.Error(), status)
 			return
 		}
@@ -539,6 +598,13 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// The run goroutine (the only Poll consumer) has not launched yet, so no
 	// injection can precede the binding.
 	steer.turnID, steer.buf = turnID, buf
+	if directInputID != "" {
+		bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.store.BindInputTurn(bctx, directInputID, turnID); err != nil {
+			log.Printf("bind direct input turn (input=%s turn=%s): %v", directInputID, turnID, err)
+		}
+		bcancel()
+	}
 	if queueRowID != "" {
 		// Stamp the REAL turn id on the drained row (the claim used a
 		// placeholder): the settle/recovery predicates check THIS turn's
@@ -708,6 +774,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// rows cancel instead).
 		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
 		requeued, cancelledSteers, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
+		if directInputID != "" {
+			if derr := s.store.SettleDirectInput(sctx, directInputID, turnID); derr != nil {
+				log.Printf("settle direct input (input=%s turn=%s): %v", directInputID, turnID, derr)
+			}
+		}
 		scancel()
 		if serr != nil {
 			log.Printf("settle turn inputs (turn=%s): %v", turnID, serr)
@@ -835,7 +906,7 @@ func (s *Server) runTurnAsync(
 	// Mock mode: short-circuit the LLM loop with a scripted stream for
 	// Playwright + CI. Skips history replay + provider call entirely.
 	if s.cfg.MockMode {
-		if err := runMockTurn(turnCtx, s.store, conv, userInput, buf); err != nil {
+		if err := runMockTurn(turnCtx, s.store, conv, buf.turnID, userInput, buf); err != nil {
 			log.Printf("runMockTurn error (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
