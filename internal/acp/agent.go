@@ -53,7 +53,6 @@ const revisedMarker = "\n\n— revised answer —\n\n"
 type turnClient interface {
 	StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, error)
 	Cancel(convID, turnID string) error
-	RemoveQueued(convID, inputID string) error
 	CancelInput(convID, inputID string) error
 }
 
@@ -305,7 +304,11 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	// Notifications must still go out while the turn is being cancelled, so
 	// they are sent on a context that ignores the turn's cancellation.
 	sendCtx := context.WithoutCancel(ctx)
-	tr := newTranslator(p.SessionId, sess.convID, func(u acpsdk.SessionUpdate) {
+	// The stop watcher and the submission must name the same conversation:
+	// a retry of an unresolved key goes back to the one it was first sent to
+	// (none, for a session's first prompt), not the session's newer one.
+	target := sess.target(key)
+	tr := newTranslator(p.SessionId, target, func(u acpsdk.SessionUpdate) {
 		if a.conn != nil {
 			_ = a.conn.SessionUpdate(sendCtx, acpsdk.SessionNotification{SessionId: p.SessionId, Update: u})
 		}
@@ -314,7 +317,6 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
 	go a.stopTurn(stopCtx, tr, key, streamDone, stopped, cancelStream)
-	target := sess.target(key)
 	convID, streamErr := a.client.StreamInput(streamCtx, message, target, key, tr.handle)
 	close(streamDone)
 	stop := <-stopped
@@ -350,7 +352,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	}
 	if isQueued && (ctx.Err() != nil || stopCtx.Err() != nil) {
 		stop.intervened = true
-		stopErr = a.stopAccepted(convID, queued)
+		stopErr = a.stopAccepted(convID, key, queued)
 	}
 	if outcomeUnknown(streamErr) && (ctx.Err() != nil || stopCtx.Err() != nil) && !stop.intervened {
 		// Cancelled (or timed out) and the answer was lost before fleet said
@@ -533,22 +535,19 @@ func outcomeUnknown(err error) bool {
 }
 
 // stopAccepted handles a cancel (or timeout) whose answer was an acceptance
-// rather than a stream. A fresh queue item is withdrawn, or it would run after
-// the user stopped it; a resend of a message whose earlier attempt is still
-// running is reported, since that turn is not this prompt's to address by id;
-// a completed or never-run input needs nothing.
-func (a *Agent) stopAccepted(convID string, q *chattui.QueuedError) error {
-	switch {
-	case q.Mode != "direct" && (q.State == "" || q.State == "queued"):
-		if err := a.client.RemoveQueued(convID, q.InputID); err != nil {
-			return fmt.Errorf("the message was queued and could not be withdrawn: %w", err)
-		}
-		return nil
-	case q.State == "running" || q.State == "injected":
-		return errors.New("this message is already running from an earlier attempt")
-	default:
+// rather than a stream: a fresh queue item, or a resend of a message fleet
+// accepted earlier under the same key. Anything not yet over (queued, running,
+// injected into a running turn) is stopped by its key, which fleet resolves to
+// wherever the input is; a completed or never-run input needs nothing.
+func (a *Agent) stopAccepted(convID, key string, q *chattui.QueuedError) error {
+	switch q.State {
+	case "completed", "cancelled":
 		return nil
 	}
+	if err := a.client.CancelInput(convID, key); err != nil {
+		return fmt.Errorf("the message was accepted and could not be stopped: %w", err)
+	}
+	return nil
 }
 
 // reconcileLost stops a prompt whose answer was lost, found by its key

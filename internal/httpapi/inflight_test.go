@@ -239,6 +239,41 @@ func TestCancelEndpoint_InputTargeted(t *testing.T) {
 	}
 }
 
+// A steer already injected into the running turn cannot be taken back out of
+// it: a Stop naming its key cancels the row (so the turn's settlement cannot
+// re-queue it) and stops the turn carrying it.
+func TestCancelEndpoint_InputTargetedInjectedSteer(t *testing.T) {
+	s := serverFixture(t)
+	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, turnID, tok, _ := s.registerTurn(conv.ID, cancel)
+	defer s.finishTurn(conv.ID, tok)
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "row-steer", ConversationID: conv.ID, UserEmail: "alice@x.com",
+		ClientInputID: "steer-key", Message: "also do this", Attachments: "[]", Mode: store.InputModeSteer,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.store.MarkInputInjected(t.Context(), "row-steer", turnID); err != nil || !ok {
+		t.Fatalf("MarkInputInjected: %v %v", ok, err)
+	}
+	rr := do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "input_id": "steer-key"}, "alice@x.com")
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204", rr.Code)
+	}
+	if ctx.Err() == nil {
+		t.Error("the turn carrying the injected steer was not stopped")
+	}
+	row, err := s.store.LookupInput(t.Context(), conv.ID, "steer-key")
+	if err != nil || row == nil || row.State != store.InputStateCancelled {
+		t.Fatalf("row = %+v, %v: want the injected steer cancelled", row, err)
+	}
+}
+
 func TestCancelEndpoint_NoInflightStillReturns204(t *testing.T) {
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)

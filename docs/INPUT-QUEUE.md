@@ -41,15 +41,17 @@ retention guarantee: after a terminal row is purged, reusing its
   cancel a successor. A targeted Stop is turn-scoped and never sweeps the
   queue. An optional `input_id` targets one input by its idempotency key,
   wherever it is: a still-queued row is withdrawn, a running turn for it is
-  cancelled, and a turn not registered yet (a direct claim still being
-  prepared, a row the drain just claimed, or a submission still in transit) is
-  refused when it tries to register. The mark and the registration check share
-  one lock, so a keyed input is either cancelled or never launched; the mark
-  is kept for 10 minutes, and a queued row is withdrawn in the database so it
-  cannot outwait it. A client whose answer was lost (`fleet acp`) stops its
-  own input this way without knowing which state it reached. `POST /chat`
-  names its turn on the `X-Fleet-Turn-Id` response header (beside
-  `X-Fleet-Conversation-Id`), so the id is known before any frame.
+  cancelled, a steer already injected into a running turn is cancelled and so
+  is the turn carrying it (the model cannot un-read it), and a turn not
+  registered yet (a direct claim still being prepared, a row the drain just
+  claimed, or a submission still in transit) is refused when it tries to
+  register. The mark and the registration check share one lock, so a keyed
+  input is either cancelled or never launched; the mark is kept for 10
+  minutes, and a queued row is withdrawn in the database so it cannot outwait
+  it. A client whose answer was lost (`fleet acp`) stops its own input this
+  way without knowing which state it reached. `POST /chat` names its turn on
+  the `X-Fleet-Turn-Id` response header (beside `X-Fleet-Conversation-Id`), so
+  the id is known before any frame.
 - `input_id` is honoured on the **direct** path too (migrations 063 and 064):
   a submission that starts a turn directly claims its key with a
   `mode:"direct"` row in the same table and unique index, so a resend of the

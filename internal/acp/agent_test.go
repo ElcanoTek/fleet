@@ -32,7 +32,6 @@ type fakeFleet struct {
 	mu      sync.Mutex
 	chats   []chatReq
 	cancels []string
-	removed []string
 	headers []http.Header
 }
 
@@ -82,11 +81,6 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sw.emit("text.delta", map[string]any{"text": "there"})
 		sw.emit("text.replace", map[string]any{"text": "Hello there"})
 		sw.emit("turn.completed", map[string]any{"prompt_tokens": 10, "completion_tokens": 4, "cached_tokens": 2})
-	case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/queue/"):
-		f.mu.Lock()
-		f.removed = append(f.removed, strings.TrimPrefix(r.URL.Path, "/conversations/"))
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(r.URL.Path, "/conversations/") && strings.HasSuffix(r.URL.Path, "/cancel"):
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
@@ -1032,8 +1026,9 @@ func TestCancelWithdrawsAQueuedPrompt(t *testing.T) {
 	}
 	h.fleet.mu.Lock()
 	defer h.fleet.mu.Unlock()
-	if len(h.fleet.removed) != 1 || h.fleet.removed[0] != "conv-b/queue/row-5" {
-		t.Errorf("removed = %q, want the queued row withdrawn", h.fleet.removed)
+	key := h.fleet.chats[0].InputID
+	if want := `conv-b {"input_id":"` + key + `","scope":"turn"}`; len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != want {
+		t.Errorf("cancels = %q, want the queued input stopped by its key (%s)", h.fleet.cancels, want)
 	}
 }
 
@@ -1293,5 +1288,101 @@ func TestUnresolvedFirstPromptRetriesWithoutTheNewerConversation(t *testing.T) {
 	}
 	if b.ConversationID != "" || c.ConversationID != "conv-B" {
 		t.Errorf("B conv %q, C conv %q: the session must stay on the conversation B created", b.ConversationID, c.ConversationID)
+	}
+}
+
+// A cancelled resend whose answer is a replay of an input still running (or
+// queued, or injected) stops that input by its key: the user stopped the
+// message they sent, whichever attempt fleet is running it under.
+func TestCancelStopsARunningReplayByKey(t *testing.T) {
+	requested := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		close(requested)
+		time.Sleep(100 * time.Millisecond) // the ack is slow to arrive
+		w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-1","position":1,"mode":"direct","state":"running"},"conversation_id":"conv-r"}`)
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "send it")
+		done <- r
+	}()
+	<-requested
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		if r.StopReason != acpsdk.StopReasonCancelled {
+			t.Fatalf("stopReason = %q", r.StopReason)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	key := h.fleet.chats[0].InputID
+	if want := `conv-r {"input_id":"` + key + `","scope":"turn"}`; len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != want {
+		t.Errorf("cancels = %q, want the running replay stopped by its key (%s)", h.fleet.cancels, want)
+	}
+	if strings.Contains(h.client.text(), "could not confirm") {
+		t.Errorf("an accepted Stop was reported unconfirmed: %q", h.client.text())
+	}
+}
+
+// A retry of an unresolved first prompt is sent with no conversation, so its
+// Stop must not name the session's newer conversation (a no-op there that
+// would read as confirmed while the original runs on): until fleet names the
+// retry's conversation, the stop is reported unconfirmed.
+func TestRetryStopNeverNamesTheNewerConversation(t *testing.T) {
+	calls := 0
+	started := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			if conn, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close() // the whole answer is lost, headers included
+			}
+		case 2:
+			w.emit("conversation", map[string]any{"id": "conv-B"})
+			w.emit("turn.completed", map[string]any{})
+		default:
+			close(started) // the retry is accepted, but no header ever comes
+			<-r.Context().Done()
+		}
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "prompt A"); err == nil {
+		t.Fatal("want the lost-answer error")
+	}
+	if _, err := h.prompt(sid, "prompt B"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = h.prompt(sid, "prompt A")
+		close(done)
+	}()
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	for _, c := range h.fleet.cancels {
+		if strings.HasPrefix(c, "conv-B ") {
+			t.Fatalf("the retry's Stop named the newer conversation: %q", h.fleet.cancels)
+		}
+	}
+	if !strings.Contains(h.client.text(), "could not confirm") {
+		t.Errorf("the retry's stop was not reported unconfirmed: %q", h.client.text())
 	}
 }

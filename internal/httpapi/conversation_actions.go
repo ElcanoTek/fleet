@@ -642,8 +642,11 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 
 // cancelInput stops one input by its idempotency key (see
 // handleConversationCancel). The turn side is atomic with registration
-// (cancelInputTurn); a row still queued is also withdrawn, since a queued
-// row can outwait the in-memory mark. false means the withdrawal failed.
+// (cancelInputTurn). A row still queued is also withdrawn, since a queued
+// row can outwait the in-memory mark. A steer already injected into a running
+// turn cannot be taken back out of it, so its row is cancelled first (or the
+// turn's settlement would return it to the queue) and then the turn carrying
+// it is stopped. false means a store write failed and the input may run on.
 func (s *Server) cancelInput(ctx context.Context, user, convID, key string) bool {
 	s.cancelInputTurn(convID, key)
 	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -653,13 +656,30 @@ func (s *Server) cancelInput(ctx context.Context, user, convID, key string) bool
 		log.Printf("cancel input lookup (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
 		return false
 	}
-	if row == nil || row.Mode == store.InputModeDirect || row.State != store.InputStateQueued {
-		return true
+	if row != nil && row.Mode != store.InputModeDirect && row.State == store.InputStateQueued {
+		removed, err := s.store.RemoveQueuedInput(qctx, user, convID, row.ID)
+		if err != nil {
+			log.Printf("cancel input withdraw (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+			return false
+		}
+		if removed {
+			s.emitQueueUpdate(qctx, user, convID)
+			return true
+		}
+		// It left the queue between the lookup and the withdrawal: a drained
+		// row is covered by the mark, an injected steer is handled below.
+		if row, err = s.store.LookupInput(qctx, convID, key); err != nil {
+			log.Printf("cancel input lookup (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
+			return false
+		}
 	}
-	if _, err := s.store.RemoveQueuedInput(qctx, user, convID, row.ID); err != nil {
-		log.Printf("cancel input withdraw (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
-		return false
+	if row != nil && row.State == store.InputStateInjected {
+		if err := s.store.MarkInputTerminal(qctx, row.ID, store.InputStateCancelled); err != nil {
+			log.Printf("cancel injected input (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+			return false
+		}
+		s.cancelInflightTurn(convID, row.TurnID)
+		s.emitQueueUpdate(qctx, user, convID)
 	}
-	s.emitQueueUpdate(qctx, user, convID)
 	return true
 }

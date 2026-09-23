@@ -528,30 +528,6 @@ func (c *Client) postCancel(convID string, payload []byte) error {
 	return nil
 }
 
-// RemoveQueued withdraws a message fleet queued (DELETE
-// /conversations/{convID}/queue/{inputID}) — the web queue chip's remove
-// call. A 409 means it already started running, and is returned as an error.
-func (c *Client) RemoveQueued(convID, inputID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	u := c.cfg.ServerURL + "/conversations/" + url.PathEscape(convID) + "/queue/" + url.PathEscape(inputID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
-	if err != nil {
-		return err
-	}
-	c.setAuthHeaders(req)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("remove queued input returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))}
-	}
-	return nil
-}
-
 func errString(err error) string {
 	if err == nil {
 		return ""
