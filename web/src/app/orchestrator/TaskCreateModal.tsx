@@ -9,7 +9,7 @@ import { isValidEmail } from "@/app/shared/lib/format";
 import { buildPromptWithRecipients, splitPromptRecipients } from "./taskEmailBlock";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { Icon } from "@/app/shared/ui/Icon";
-import { nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
+import { dateInZone, endOfDayInZone, nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
 import {
   browserTimeZone,
   formatTimeZoneLabel,
@@ -227,7 +227,13 @@ function taskToFormValues(task: Task | null) {
       : typeof task?.recurrence_remaining === "number"
         ? "count"
         : "never") as RepeatEndMode,
-    endDate: task?.recurrence_until ? String(task.recurrence_until).slice(0, 10) : "",
+    // The end date is a calendar day in the task's zone (see buildTaskData),
+    // so read it back there — not off the UTC timestamp, which is already the
+    // next day for any zone west of UTC.
+    endDate: task?.recurrence_until
+      ? (dateInZone(new Date(task.recurrence_until), task.timezone?.trim() || browserTimeZone()) ??
+        String(task.recurrence_until).slice(0, 10))
+      : "",
     endCount:
       typeof task?.recurrence_remaining === "number" ? String(task.recurrence_remaining) : "",
     simpleFrequency: parsed?.frequency ?? ("weekdays" as SimpleFrequency),
@@ -930,9 +936,19 @@ export function TaskCreateModal({
   // Recomputed when the schedule or zone changes, not on every render (a
   // hook, so it sits above the closed-modal early return).
   const cronDescription = describeCronExpression(recurrence);
+  // A minute tick keeps it honest while the modal sits open: without it, a
+  // preview computed at 23:59 would still show a run that has since passed.
+  const [previewTick, setPreviewTick] = useState(0);
+  useEffect(() => {
+    if (!open || scheduleMode !== "repeat") return;
+    const id = window.setInterval(() => setPreviewTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, [open, scheduleMode]);
   const cronNext = useMemo(
     () => (cronDescription ? nextCronOccurrence(recurrence, new Date(), timezone) : null),
-    [cronDescription, recurrence, timezone],
+    // previewTick is the clock input: it re-runs the memo once a minute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cronDescription, recurrence, timezone, previewTick],
   );
 
   if (!open) return null;
@@ -1096,9 +1112,11 @@ export function TaskCreateModal({
       // Always explicit: omitted, the server would evaluate the cron in its
       // default zone (usually UTC), not the one the echo shows the author.
       if (timezone) taskData.timezone = timezone;
-      // End-of-day local time so "ends on July 31" includes July 31's run.
+      // End of that day in the repeat's own zone, so "ends on July 31"
+      // includes July 31's run there, whatever the viewer's zone.
       if (endMode === "date" && endDate) {
-        taskData.recurrence_until = new Date(`${endDate}T23:59:59`).toISOString();
+        const until = endOfDayInZone(endDate, timezone) ?? new Date(`${endDate}T23:59:59`);
+        taskData.recurrence_until = until.toISOString();
       }
       if (endMode === "count" && endCount.trim()) {
         const n = Number.parseInt(endCount, 10);

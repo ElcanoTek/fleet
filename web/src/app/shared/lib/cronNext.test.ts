@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextCronOccurrence, parseCronExpression, formatNextRun } from "./cronNext";
+import { dateInZone, endOfDayInZone, nextCronOccurrence, parseCronExpression, formatNextRun } from "./cronNext";
 
 // Fixed reference: Friday 2026-07-10 15:30 local time.
 const FRIDAY = new Date(2026, 6, 10, 15, 30, 0, 0);
@@ -171,5 +171,30 @@ describe("nextCronOccurrence in a named time zone", () => {
 
   it("returns null for an unknown zone", () => {
     expect(nextCronOccurrence("0 8 * * *", NOON_UTC, "Mars/Olympus_Mons")).toBeNull();
+  });
+});
+
+describe("repeat end dates in a zone", () => {
+  it("ends at 23:59:59 of that day on the zone's clock", () => {
+    expect(endOfDayInZone("2026-07-31", "Asia/Tokyo")!.toISOString()).toBe("2026-07-31T14:59:59.000Z");
+    expect(endOfDayInZone("2026-07-31", "America/Los_Angeles")!.toISOString()).toBe("2026-08-01T06:59:59.000Z");
+    expect(endOfDayInZone("2026-07-31", "UTC")!.toISOString()).toBe("2026-07-31T23:59:59.000Z");
+  });
+
+  it("round-trips through dateInZone, including on a DST-change day", () => {
+    for (const [date, zone] of [
+      ["2026-11-01", "America/New_York"],
+      ["2026-03-08", "America/New_York"],
+      ["2026-04-05", "Pacific/Auckland"],
+      ["2026-07-31", "Asia/Kolkata"],
+    ]) {
+      expect(dateInZone(endOfDayInZone(date, zone)!, zone)).toBe(date);
+    }
+  });
+
+  it("rejects malformed input", () => {
+    expect(endOfDayInZone("July 31", "UTC")).toBeNull();
+    expect(endOfDayInZone("2026-07-31", "Mars/Olympus_Mons")).toBeNull();
+    expect(dateInZone(new Date("nope"), "UTC")).toBeNull();
   });
 });

@@ -298,6 +298,29 @@ describe("TaskCreateModal — schedule modes", () => {
     expect(updateTask.mock.calls[0][1]).toMatchObject({ recurrence: "0 8 * * 1-5", timezone: "UTC" });
   });
 
+  it("a repeat end date is the end of that day in the repeat's zone, and reads back there", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({
+      editTask: {
+        ...baseEdit,
+        recurrence: "0 8 * * *",
+        timezone: "Asia/Tokyo",
+        // 23:59:59 on Jul 31 in Tokyo.
+        recurrence_until: "2026-07-31T14:59:59Z",
+      },
+      onUpdated: vi.fn(),
+    });
+    expect(screen.getByLabelText("Repeat end date")).toHaveValue("2026-07-31");
+    fireEvent.change(screen.getByLabelText("Repeat end date"), { target: { value: "2026-08-15" } });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(await screen.findByTestId("edit-scope-definition"));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    expect(updateTask.mock.calls[0][1]).toMatchObject({
+      timezone: "Asia/Tokyo",
+      recurrence_until: "2026-08-15T14:59:59.000Z",
+    });
+  });
+
   it("hydrates the friendly controls from a supported multi-day cron expression", () => {
     renderModal();
     fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));

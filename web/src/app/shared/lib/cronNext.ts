@@ -266,6 +266,38 @@ function nextLocalOccurrence(expr: string, from: Date): Date | null {
   return null;
 }
 
+// endOfDayInZone is the last second (23:59:59) of a calendar day
+// ("YYYY-MM-DD") as the zone's clock reads it, as an instant — what "ends on
+// July 31" means for a repeat that fires in that zone. Null when the date or
+// zone doesn't parse.
+export function endOfDayInZone(date: string, timeZone: string): Date | null {
+  const m = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59);
+  const before = zoneOffsetMs(new Date(wall - PROBE_MS), timeZone);
+  const later = zoneOffsetMs(new Date(wall + PROBE_MS), timeZone);
+  if (before === null || later === null) return null;
+  // Of the candidate instants, the latest one that still reads as this day.
+  let best: number | null = null;
+  for (const offset of before === later ? [before] : [before, later]) {
+    const instant = wall - offset;
+    const got = wallClockParts(new Date(instant), timeZone);
+    if (!got || got[0] !== Number(m[1]) || got[1] !== Number(m[2]) || got[2] !== Number(m[3])) continue;
+    if (best === null || instant > best) best = instant;
+  }
+  return best === null ? null : new Date(best);
+}
+
+// dateInZone is the calendar day ("YYYY-MM-DD") an instant falls on in a zone,
+// or null when either doesn't parse — the inverse of endOfDayInZone's date.
+export function dateInZone(at: Date, timeZone: string): string | null {
+  if (Number.isNaN(at.getTime())) return null;
+  const f = wallClockParts(at, timeZone);
+  if (!f) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${f[0]}-${pad(f[1])}-${pad(f[2])}`;
+}
+
 // formatNextRun renders an occurrence the way the schedule echo shows it:
 // "Mon, Jul 13" — date only (see the timezone note above), read in `timeZone`
 // when given so the date matches the zone the schedule fires in.

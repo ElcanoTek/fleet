@@ -63,9 +63,15 @@ Eastern. What shipped:
 
 Not changed: existing tasks are not migrated — one saved in UTC stays in UTC
 until someone edits it, because the server cannot know which zone its author
-meant. **End repeat → On a date** still means end of that day in the
-browser's zone, and **Run once** still takes the browser's local date and time
-(it stores an absolute instant, so it was never affected).
+meant. **Run once** still takes the browser's local date and time (it
+stores an absolute instant, so it was never affected).
+
+**End repeat → On a date** now means 23:59:59 of that day in the repeat's
+zone (`endOfDayInZone`), and an edited task reads its end date back in that
+zone (`dateInZone`) instead of off the UTC timestamp, which showed the next
+day for every zone west of UTC. The next-run preview re-evaluates once a
+minute while the form is open, so it never keeps showing a run that has
+passed.
 
 ## Deliberately deferred
 
