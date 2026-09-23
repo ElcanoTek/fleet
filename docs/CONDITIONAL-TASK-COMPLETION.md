@@ -140,8 +140,9 @@ EXECUTION REQUIREMENTS (JSON):
   still carries a malformed line dead-letters once and parks its chain at
   once, not after two occurrences
   ([ADR-0073](adr/0073-malformed-requirements-park-on-first-dead-letter.md)).
-  The park records why, and the failure notification and the Operations
-  Center say the schedule stopped.
+  The park records why, and the Operations Center says the schedule stopped.
+  The failure notification says so too, except when a transient database
+  error defers the park to the reconciliation sweep, which sends none.
   - A plain replay is refused, since it would rerun the same line.
   - `fleet sched dlq replay --prompt-file <file> <task_id>` replays the
     occurrence with a corrected prompt, keeping its schedule and task memory

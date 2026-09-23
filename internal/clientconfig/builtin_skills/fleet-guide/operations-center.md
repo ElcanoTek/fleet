@@ -46,8 +46,8 @@ way. Replay re-runs that occurrence. If the task is recurring and the
 dead-letter already queued the next run, replay does not queue another; if the
 schedule is parked (two consecutive dead-letters), replay is how it continues.
 A parked occurrence's schedule reads **⏹ Schedule stopped**, the task summary
-says why, and the failure email carries the same line when failure emails are
-configured.
+says why, and the failure email usually carries the same line when failure
+emails are configured.
 
 The one exception is a prompt whose **EXECUTION REQUIREMENTS (JSON)** line is
 malformed. That schedule stops on its first dead-letter, and the reason names

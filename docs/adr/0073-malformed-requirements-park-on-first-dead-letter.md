@@ -48,7 +48,12 @@ nothing that could have gone differently in between.
    validation error in words the owner can act on.
    - The dead-letter write returns the reason to the runner. The failure
      notification then carries "Schedule stopped: <reason>" in its message
-     (email, or a webhook template that uses `.Message`).
+     (email, or a webhook template that uses `.Message`). This holds when the
+     park happens in the dead-letter write, the usual path. If a transient
+     database error defers the park to the `ReconcileRecurrences` sweep, the
+     sweep records the same reason and the Operations Center shows it, but no
+     second notification is sent: the failure notification already went out
+     without the stop line.
    - The Operations Center shows the occurrence's schedule as stopped, with the
      reason. The two-strike park records its own reason the same way.
 3. **Recover by replaying with a corrected prompt.** A plain replay would rerun
@@ -124,7 +129,8 @@ prompt.
 - A malformed line can no longer be saved. A task saved before this shipped
   (like that live successor) dead-letters once, with the offending identifier
   in its reason, and parks. It sends one notification instead of two, and that
-  notification says the schedule stopped and why.
+  notification says the schedule stopped and why (unless the park is deferred
+  to the reconciliation sweep, above).
 - **Recovery changes.** Replay alone does not continue such a chain, because
   the definition is what is broken, and it is refused. A replay with the
   corrected prompt continues the same chain with its task memory. Recreating

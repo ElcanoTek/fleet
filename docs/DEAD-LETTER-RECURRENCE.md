@@ -32,7 +32,11 @@ does.
 - **Visibility.** The park reason is stored with the stamp
   (`recurrence_parked_reason`, migration 073). The two-strike park records one
   too.
-  - The dead-letter notification's message reads "Schedule stopped: <reason>".
+  - The dead-letter notification's message reads "Schedule stopped: <reason>"
+    when the park happens in the dead-letter write. A park deferred to the
+    `ReconcileRecurrences` sweep (a transient database error after the
+    dead-letter committed) records the same reason, shown in the Operations
+    Center, but sends no further notification.
     For a malformed line that is the validator's message, naming the field,
     index and identifier. Email shows it. The default webhook template omits
     the message (a custom template can use `.Message`). Web Push never carries
