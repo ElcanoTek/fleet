@@ -618,19 +618,19 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		}
 		switch {
 		case err != nil && p.verifierOutageMayFailOpen(err, records):
-			// Still no verdict, from an OUTAGE (transport, timeout, empty
-			// reply), after this run's own audit passed with no failed critical
-			// call: fail OPEN with a recorded warning instead of dead-lettering
+			// Still no verdict, from an OUTAGE (transport, timeout), after this
+			// run's own audit passed and its critical work landed with no failed
+			// critical call: fail OPEN with a recorded warning instead of dead-lettering
 			// audited work on the verifier's own outage (the phone-a-friend
 			// reviewer already fails open on its errors).
 			log.Printf("verifier unavailable twice; the audit passed with no failed critical call, finishing unverified: %v", err)
 			p.verifierWarning = err.Error()
 			p.verified = true
 		case err != nil:
-			// A malformed verdict (the verifier answered, but not with a
-			// verdict), a run whose audit never actually passed, or a failed
-			// critical call on the record: the pre-#1602 semantics — the
-			// check is spent.
+			// A malformed or empty verdict (the verifier answered, but not with
+			// a verdict), a run whose audit never actually passed, a run with no
+			// critical call that landed, or a failed critical call on the
+			// record: the pre-#1602 semantics — the check is spent.
 			p.verificationAttempts++
 			log.Printf("verifier failed: %v", err)
 			return p.verificationFailed("Completion verification could not produce a valid verdict: "+err.Error(), records)
@@ -712,12 +712,12 @@ func (p *scheduledPolicy) persistVerifierWarning() {
 	}
 	t := agentcore.MessageTypeCompletionUnverifiedVerifierError
 	p.agent.logSession.AddMessageWithMetadata(roleUser, fmt.Sprintf(
-		"[%s] WARNING: the end-of-run verifier could not return a verdict (twice: %s). The run's audit passed with no failed critical call, so it finished WITHOUT model verification — review the result before relying on it.",
+		"[%s] WARNING: the end-of-run verifier could not return a verdict (twice: %s). The run's audit passed and its critical work landed with no failed critical call, so it finished WITHOUT model verification — review the result before relying on it.",
 		agentcore.MessageTypeCompletionUnverifiedVerifierError, agentcore.RedactSecrets(p.verifierWarning)), nil, nil, &t, nil, nil, "")
 }
 
 // verifierOutageMayFailOpen reports whether a verifier that still has no
-// verdict after its retry may let the run finish unverified (#1602). All three
+// verdict after its retry may let the run finish unverified (#1602). All four
 // must hold:
 //   - it was an outage, not a malformed verdict (errVerifierMalformedVerdict);
 //   - this run's OWN audit passed (ScheduledPolicy.AuditConfirmed), not merely
@@ -725,12 +725,30 @@ func (p *scheduledPolicy) persistVerifierWarning() {
 //     a sub-agent that never audited keeps the old spend-a-check path (today
 //     children do not run this gate at all; this keeps the premise true if
 //     they ever do);
-//   - no critical tool's last execution failed (failedCriticalCalls).
+//   - no critical tool's last execution failed (failedCriticalCalls);
+//   - at least one critical tool executed successfully. The audit alone proves
+//     nothing here: finish enforcement already demands it of every run, and
+//     confirm_audit(success=true, critical_actions=[]) is the model grading
+//     itself. A run that never attempted its audited work — a refresh that
+//     wrongly decided there was nothing to do — has no failed critical call
+//     either, so without a landed one it keeps the spend-a-check path.
 func (p *scheduledPolicy) verifierOutageMayFailOpen(err error, records []toolExecRecord) bool {
 	if errors.Is(err, errVerifierMalformedVerdict) || p.inner == nil || !p.inner.AuditConfirmed() {
 		return false
 	}
-	return len(failedCriticalCalls(records)) == 0
+	return len(failedCriticalCalls(records)) == 0 && succeededCriticalCall(records)
+}
+
+// succeededCriticalCall reports whether any critical tool executed
+// successfully in the run (same records and success classification as
+// failedCriticalCalls).
+func succeededCriticalCall(records []toolExecRecord) bool {
+	for _, r := range records {
+		if r.Succeeded && agentcore.IsCriticalTool(r.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 // failedCriticalCalls names the critical tools whose LAST execution in the run

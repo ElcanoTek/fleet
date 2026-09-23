@@ -50,10 +50,11 @@ const maxCompletionVerifications = 3
 
 // errVerifierMalformedVerdict marks a verifier that ANSWERED but whose reply is
 // not a verdict — no JSON object, invalid JSON, or no explicit missing_actions
-// array (#1602 follow-up). It is a content failure, not an outage: a degraded
-// verifier model must not quietly become auto-success, so after one retry it
-// spends a check like before. Transport failures, timeouts and an empty reply
-// are outages, and may fail open after a clean audit.
+// array, or an empty reply (#1602 follow-up). It is a content failure, not an
+// outage: a degraded verifier model must not quietly become auto-success, so
+// after one retry it spends a check like before. Only transport failures and
+// timeouts are outages, and may fail open after a clean audit whose critical
+// work landed.
 var errVerifierMalformedVerdict = errors.New("verifier returned a malformed verdict")
 
 type verifierResult struct {
@@ -288,7 +289,10 @@ func (a *Agent) runEndOfRunVerifier(ctx context.Context, task, finalResponse str
 	logAuxUsage(rec)
 	raw := strings.TrimSpace(out.Response.Content.Text())
 	if raw == "" {
-		return nil, fmt.Errorf("verifier returned empty response")
+		// An empty reply is an answer without a verdict, not an outage: a
+		// reasoning model that spends its whole output budget thinking returns
+		// empty every time, and that must not become auto-success (#1602).
+		return nil, fmt.Errorf("%w: empty response", errVerifierMalformedVerdict)
 	}
 
 	parsed, err := parseVerifierResult(raw)

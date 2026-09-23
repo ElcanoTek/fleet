@@ -17,8 +17,10 @@ import (
 
 const executionRequirementsMarker = "EXECUTION REQUIREMENTS (JSON):"
 
-// Optional, copyable handoff from a prompt producer. Requirements only narrow
-// execution: they never enable network, load credentials, or widen MCP scope.
+// Optional, copyable handoff from a prompt producer. Requirements never enable
+// network, load credentials, or widen MCP scope. The one clause that relaxes
+// anything is completion (#1602): a successful listed tool finishes the run
+// without the end-of-run verifier and phone-a-friend review (ADR-0072).
 type executionRequirements struct {
 	Servers    []string               `json:"mcp_servers"`
 	Tools      []string               `json:"required_tools"`

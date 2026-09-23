@@ -51,19 +51,26 @@ created a version or recorded a check.
      contract.
 2. **A verifier outage does not spend a check.** A verifier call that returns
    no verdict is retried once.
-   - If the retry is an **outage** too (timeout, provider failure, empty
-     reply), this run's **own** audit passed (`ScheduledPolicy.AuditConfirmed`,
-     so a delegated policy that skipped the self-audit does not qualify), and
-     no critical tool's last execution failed, the run **succeeds** with a
+   - If the retry is an **outage** too (timeout, provider failure), this
+     run's **own** audit passed (`ScheduledPolicy.AuditConfirmed`, so a
+     delegated policy that skipped the self-audit does not qualify), at least
+     one critical tool executed successfully, and no critical tool's last
+     execution failed, the run **succeeds** with a
      `completion_unverified_verifier_error` warning. The warning is written to
      the session log, and the runner prefixes it to the task's terminal
      message.
    - A **malformed verdict** (the verifier answered with prose, invalid JSON,
-     or no `missing_actions` array) is a content failure, not an outage. After
+     no `missing_actions` array, or nothing at all) is a content failure, not
+     an outage. An empty reply is here because a reasoning model that spends
+     its output budget thinking returns empty every time. After
      its retry it spends a check, so a degraded verifier model cannot turn
      into auto-success.
-   - With a failed critical call on the record, or no audit in this policy,
-     an outage also spends a check.
+   - With a failed critical call on the record, no critical call that landed,
+     or no audit in this policy, an outage also spends a check. The audit alone
+     is not enough: finish enforcement already demands it of every run, and
+     `confirm_audit(success=true, critical_actions=[])` is the model grading
+     itself, so a run that never attempted its audited work would otherwise
+     pass.
    - A verifier that **answers** with missing actions keeps its repair and
      dead-letter semantics unchanged.
 
@@ -92,12 +99,21 @@ created a version or recorded a check.
 - A producer that declares completion gets deterministic, zero-model-call
   finishes for the branches it names. It also takes responsibility for that
   list being right, so a wrong list finishes runs the verifier would have
-  caught.
+  caught. Concretely:
+  - Any roster tool may be listed, including read-only and native ones, and
+    Fleet does not check what a listed success means. Listing a tool the model
+    may call at will (a Pages `record_refresh_check`, for example) lets the
+    model pick the completing branch itself, with nothing re-checking that
+    choice.
+  - The clause comes from the task prompt, so any task author can set it,
+    including a chat model that schedules a task. A satisfied predicate skips
+    phone-a-friend even when the operator enabled it fleet-wide.
 - A verifier outage can no longer dead-letter an audited run whose critical
-  calls all landed. Such a run is marked, visibly, as unverified rather than
+  calls all landed (and at least one did). Such a run is marked, visibly, as unverified rather than
   failed.
 - A verifier provider that is persistently unreachable makes every audited
-  run whose critical calls landed succeed unverified, and every one of them
+  run whose critical calls landed succeed unverified. A run that executed no
+  critical tool still dead-letters, and every one of them
   says so. A verifier *model* that persistently returns malformed output does
   not: those runs still dead-letter.
 - The three-check cap counts checks, and each check is now up to two calls

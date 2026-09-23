@@ -275,12 +275,13 @@ verification does not count as success: after the third check that still finds
 something missing, Fleet stops with a “completion verification unresolved”
 error. The transcript retains completed actions and partial work; it does not
 mean a successful publish or send was undone. If the verifier itself cannot be
-reached (a timeout, a provider failure, an empty reply), Fleet retries it once.
-When the run's self-audit passed with no failed critical action, the run then
-succeeds, and its message starts with `[completion_unverified_verifier_error]`.
+reached (a timeout, a provider failure), Fleet retries it once. When the run's
+self-audit passed and its critical actions went through, with none failing, the
+run then succeeds, and its message starts with `[completion_unverified_verifier_error]`.
 That flag means nobody double-checked the result, so review it before relying
-on it. A verifier that answers with something that is not a verdict still
-counts as an unsuccessful check.
+on it. A verifier that answers with something that is not a verdict, or with
+nothing at all, still counts as an unsuccessful check, as does an outage on a
+run that performed no critical action.
 
 **4 · Ask about it.** **Discuss in chat** opens a conversation seeded with the
 run's record, so you can ask questions in plain language: why a figure moved, why

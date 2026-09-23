@@ -70,19 +70,21 @@ A verifier call that produced no verdict is retried once after a short pause
 (#1602). What happens if the retry also fails depends on *how* it failed, and
 on the audit:
 
-- **An outage** (a timeout, a provider failure, an empty reply) says nothing
-  about the run. If this run's **own** `confirm_audit` passed and no
-  audit-gated tool's last execution failed, the run succeeds with a
+- **An outage** (a timeout, a provider failure) says nothing about the run.
+  If this run's **own** `confirm_audit` passed, at least one audit-gated tool
+  executed successfully, and no audit-gated tool's last execution failed, the
+  run succeeds with a
   `completion_unverified_verifier_error` warning. The warning is recorded in
   the session log and at the head of the task's terminal message; the run is
   not dead-lettered on the verifier's own outage. The phone-a-friend reviewer
   already failed open on its errors.
 - **A malformed verdict** (the verifier answered, but with prose, invalid
-  JSON, or no explicit `missing_actions` array) is a content failure, not an
+  JSON, no explicit `missing_actions` array, or an empty reply) is a content failure, not an
   outage. A degraded verifier model must not quietly become auto-success, so
   the check is spent as before, and the third ends the run
   `ErrCompletionUnverified`.
-- **The premise does not hold** (a failed critical call is on the record, or
+- **The premise does not hold** (a failed critical call is on the record, no
+  critical call landed — the audit alone is the model grading itself — or
   no audit ran in this run's policy, as for a delegated sub-agent, whose
   policy skips the self-audit ritual). Even an outage spends the check. Today
   sub-agents do not run the verifier at all; the rule keeps it that way if

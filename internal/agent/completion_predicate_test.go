@@ -229,12 +229,17 @@ func TestScheduledCompletionPredicateDoesNotOverrideTheAudit(t *testing.T) {
 	}
 }
 
+// publishAudit authorizes the one critical publish the fail-open tests land.
+const publishAudit = `{"success":true,"critical_actions":[{"tool":"mcp_pages_update_page_data"}],"reasoning":"Ready to publish","artifacts_checked":["payload.json"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+
 // A verifier that cannot answer is retried once; if it still cannot, a run
-// whose audit cleared with no failed critical call succeeds with the
+// whose audit cleared and whose critical publish landed succeeds with the
 // completion_unverified_verifier_error warning instead of dead-lettering. One
 // good answer on the retry is an ordinary verdict and leaves no warning.
 func TestScheduledVerifierOutageAfterCleanAuditFinishesWithWarning(t *testing.T) {
 	withFastVerifierRetry(t)
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_page_data"}})
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	for _, tc := range []struct {
 		name        string
 		replies     []string
@@ -242,12 +247,14 @@ func TestScheduledVerifierOutageAfterCleanAuditFinishesWithWarning(t *testing.T)
 		wantWarning bool
 	}{
 		{"timeout twice", []string{"ERR"}, 2, true},
-		{"empty reply twice", []string{""}, 2, true},
 		{"answers on the retry", []string{"ERR", `{"missing_actions":[]}`}, 2, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			verifier := &scriptedVerifier{replies: tc.replies}
-			a, _, _, err := scriptedRun(t, []struct{ tool, input string }{{"confirm_audit", cleanAudit}}, verifier, nil, &pagesBroker{calls: map[string]int{}}, nil)
+			a, _, _, err := scriptedRun(t, []struct{ tool, input string }{
+				{"confirm_audit", publishAudit},
+				{"mcp_pages_update_page_data", `{"slug":"x","data":{}}`},
+			}, verifier, nil, &pagesBroker{calls: map[string]int{}}, nil)
 			if err != nil {
 				t.Fatalf("a verifier outage after a clean audit must not fail the run, got %v", err)
 			}
@@ -258,6 +265,27 @@ func TestScheduledVerifierOutageAfterCleanAuditFinishesWithWarning(t *testing.T)
 				t.Fatalf("warning recorded = %t, want %t", got, tc.wantWarning)
 			}
 		})
+	}
+}
+
+// The audit alone is the model grading itself: a run that executed no
+// critical tool — a refresh that wrongly decided there was nothing to do —
+// has no failed critical call either, so a verifier outage must keep the
+// spend-a-check path rather than record it as a success.
+func TestScheduledVerifierOutageWithNoCriticalCallStillDeadLetters(t *testing.T) {
+	withFastVerifierRetry(t)
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_page_data"}})
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	verifier := &scriptedVerifier{replies: []string{"ERR"}}
+	a, _, _, err := scriptedRun(t, []struct{ tool, input string }{{"confirm_audit", cleanAudit}}, verifier, nil, &pagesBroker{calls: map[string]int{}}, nil)
+	if !errors.Is(err, agentcore.ErrCompletionUnverified) {
+		t.Fatalf("want ErrCompletionUnverified, got %v", err)
+	}
+	if verifier.calls != 2*maxCompletionVerifications {
+		t.Fatalf("verifier calls = %d, want %d (three checks, each retried once)", verifier.calls, 2*maxCompletionVerifications)
+	}
+	if hasSessionMessageType(a.logSession, agentcore.MessageTypeCompletionUnverifiedVerifierError) {
+		t.Fatal("a run that dead-lettered must not carry the success warning")
 	}
 }
 
@@ -331,13 +359,19 @@ func TestVerifierOutageNeedsThisPolicysAuditToFailOpen(t *testing.T) {
 	}
 }
 
-// Malformed verdicts are content failures: even after a clean audit they
-// never fail open — a degraded verifier model must not become auto-success.
+// Malformed verdicts — an empty reply included — are content failures: even
+// after a clean audit whose critical publish landed they never fail open — a
+// degraded verifier model must not become auto-success.
 func TestScheduledMalformedVerdictStillSpendsChecks(t *testing.T) {
 	withFastVerifierRetry(t)
-	for _, reply := range []string{`{"reasoning":"not published"}`, "the page is incomplete"} {
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_page_data"}})
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	for _, reply := range []string{`{"reasoning":"not published"}`, "the page is incomplete", ""} {
 		verifier := &scriptedVerifier{replies: []string{reply}}
-		a, _, _, err := scriptedRun(t, []struct{ tool, input string }{{"confirm_audit", cleanAudit}}, verifier, nil, &pagesBroker{calls: map[string]int{}}, nil)
+		a, _, _, err := scriptedRun(t, []struct{ tool, input string }{
+			{"confirm_audit", publishAudit},
+			{"mcp_pages_update_page_data", `{"slug":"x","data":{}}`},
+		}, verifier, nil, &pagesBroker{calls: map[string]int{}}, nil)
 		if !errors.Is(err, agentcore.ErrCompletionUnverified) {
 			t.Fatalf("%q: want ErrCompletionUnverified, got %v", reply, err)
 		}

@@ -1160,14 +1160,16 @@ returns `ErrCompletionUnverified` through the core without asking the model to
 abort. A verifier call that produced no verdict is retried once after a short
 pause (#1602). If the retry fails too:
 
-- **An outage** (timeout, provider failure, empty reply), after this run's own
-  `confirm_audit` passed, with no critical tool whose last execution failed.
+- **An outage** (timeout, provider failure), after this run's own
+  `confirm_audit` passed, with at least one critical tool that executed
+  successfully and none whose last execution failed.
   The run succeeds with a `completion_unverified_verifier_error` warning,
   recorded in the session log and at the head of the task's terminal message,
   instead of dead-lettering audited work on the verifier's own outage.
 - **Anything else** keeps the old semantics: the check is spent, and the third
-  ends the run `ErrCompletionUnverified`. That covers a malformed verdict (the
-  verifier answered, but not with a verdict), a failed critical call, and a
+  ends the run `ErrCompletionUnverified`. That covers a malformed or empty verdict
+  (the verifier answered, but not with a verdict), a failed critical call, a
+  run in which no critical call landed, and a
   policy in which no audit ran (a delegated sub-agent's). Partial work and completed critical actions remain recorded, and the
 transcript identifies the verification failure without claiming external actions
 were rolled back. Tool evidence is read from complete
