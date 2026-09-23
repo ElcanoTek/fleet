@@ -161,8 +161,11 @@ export function nextCronOccurrence(
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
-// UTC offsets span UTC-12 to UTC+14, so a wall-clock time (encoded as a UTC
-// epoch) is shown by an instant within this window of it.
+// Modern UTC offsets span UTC-12 to UTC+14, so a wall-clock time (encoded as
+// a UTC epoch) is shown by an instant within this window of it. The preview
+// only ever evaluates from now forward, where that holds; historical periods
+// outside it (Guam's pre-1845 UTC-14:21) are the backend's concern, and
+// internal/cronnext handles them without these bounds.
 const MAX_AHEAD_MS = 14 * 3_600_000;
 const MAX_BEHIND_MS = 12 * 3_600_000;
 // Probe offsets this far either side of a day: past any transition that can
@@ -192,7 +195,14 @@ function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date |
   // Start a day early: a transition at midnight can put the next instant on
   // an earlier wall-clock date than `from` reads.
   let day = Date.UTC(f[0], f[1] - 1, f[2]) - DAY_MS;
-  for (let i = 0; i <= 367; i++, day += DAY_MS) {
+  // Wall order and instant order disagree inside a repeated hour — and, when
+  // a backward jump crosses midnight, across two adjacent wall dates
+  // (Antarctica/Casey, +11 → +8 on 2010-03-05). So the earliest instant is
+  // tracked across days, and the scan runs one day past the first day that
+  // produced one before settling.
+  let best: number | null = null;
+  let lastDay = Number.POSITIVE_INFINITY;
+  for (let i = 0; i <= 368 && day <= lastDay; i++, day += DAY_MS) {
     const d = new Date(day);
     if (!s.months.has(d.getUTCMonth() + 1) || !dayMatches(s, d.getUTCDate(), d.getUTCDay())) continue;
     if (day + DAY_MS + MAX_BEHIND_MS < after) continue; // every instant of this day is past
@@ -200,9 +210,7 @@ function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date |
     const later = zoneOffsetMs(new Date(day + DAY_MS + PROBE_MS), timeZone);
     if (before === null || later === null) return null;
     const offsets = before === later ? [before] : [before, later];
-    // Wall order and instant order disagree inside a repeated hour, so take
-    // the earliest qualifying instant of the whole day.
-    let best: number | null = null;
+    const bestBefore = best;
     for (const h of hours) {
       for (const m of minutes) {
         const wall = day + h * 3_600_000 + m * MINUTE_MS;
@@ -212,19 +220,30 @@ function nextZonedOccurrence(expr: string, from: Date, timeZone: string): Date |
           const instant = wall - offset;
           if (instant < after || (best !== null && instant >= best)) continue;
           if (offsets.length > 1) {
-            // Around a transition, only an instant that reads back as the
-            // requested time is real: this drops the wrong-offset candidate
-            // and a spring-forward gap time the zone never shows.
+            // Around a transition, only an instant that reads back as exactly
+            // this wall time — date included — is real: this drops the
+            // wrong-offset candidate, a spring-forward gap time, and a date
+            // the zone skipped outright (Pacific/Apia had no 2011-12-30).
             const got = wallClockParts(new Date(instant), timeZone);
-            if (!got || got[3] !== h || got[4] !== m) continue;
+            if (
+              !got ||
+              got[0] !== d.getUTCFullYear() ||
+              got[1] !== d.getUTCMonth() + 1 ||
+              got[2] !== d.getUTCDate() ||
+              got[3] !== h ||
+              got[4] !== m ||
+              got[5] !== 0
+            ) {
+              continue;
+            }
           }
           best = instant;
         }
       }
     }
-    if (best !== null) return new Date(best);
+    if (best !== null && bestBefore === null) lastDay = day + DAY_MS;
   }
-  return null;
+  return best === null ? null : new Date(best);
 }
 
 function nextLocalOccurrence(expr: string, from: Date): Date | null {

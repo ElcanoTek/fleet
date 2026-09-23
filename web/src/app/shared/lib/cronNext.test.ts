@@ -169,6 +169,22 @@ describe("nextCronOccurrence in a named time zone", () => {
     expect(performance.now() - started).toBeLessThan(500);
   });
 
+  it("a calendar day the zone skipped is not a match (Pacific/Apia, 2011-12-30)", () => {
+    const from = new Date(Date.UTC(2011, 11, 29, 23, 0, 0)); // Dec 29 13:00 in Apia (UTC-10)
+    // Dec 30 2011 never happened there, so "noon on the 30th" next falls on
+    // Jan 30 2012 (UTC+14) — not on Dec 31, whose noon reads back as 12:00.
+    const next = nextCronOccurrence("0 12 30 * *", from, "Pacific/Apia");
+    expect(next!.toISOString()).toBe("2012-01-29T22:00:00.000Z");
+  });
+
+  it("a backward jump across midnight is ordered by instant (Antarctica/Casey, 2010)", () => {
+    // +11 → +8 at 2010-03-05 00:00 local: from 13:00Z (00:00 +11), the next
+    // minute is 13:01Z (00:01 +11), not the post-jump 23:00 +8 on Mar 4.
+    const from = new Date(Date.UTC(2010, 2, 4, 13, 0, 0));
+    const next = nextCronOccurrence("* * * * *", from, "Antarctica/Casey");
+    expect(next!.toISOString()).toBe("2010-03-04T13:01:00.000Z");
+  });
+
   it("returns null for an unknown zone", () => {
     expect(nextCronOccurrence("0 8 * * *", NOON_UTC, "Mars/Olympus_Mons")).toBeNull();
   });

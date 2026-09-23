@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/cronnext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/robfig/cron/v3"
@@ -151,7 +152,7 @@ func validateBatchTaskCreate(tc *models.TaskCreate) error {
 		// Resolve the first cron fire before constructing the task or a daily
 		// recipe will run immediately when submitted through the CLI.
 		if tc.ScheduledFor == nil {
-			next := schedule.Next(time.Now().In(loc)).UTC()
+			next := cronnext.Next(schedule, time.Now().In(loc)).UTC()
 			if next.IsZero() {
 				return fmt.Errorf("recurrence %q has no next run", tc.Recurrence)
 			}

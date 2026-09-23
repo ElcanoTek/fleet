@@ -21,6 +21,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ElcanoTek/fleet/internal/cronnext"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -337,7 +338,7 @@ func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, creat
 		// in the task's timezone) rather than running immediately. Always stored
 		// as an absolute UTC instant, matching the handler's create path.
 		if tc.ScheduledFor == nil {
-			next := schedule.Next(time.Now().In(loc)).UTC()
+			next := cronnext.Next(schedule, time.Now().In(loc)).UTC()
 			tc.ScheduledFor = &next
 		}
 	}
@@ -1864,7 +1865,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		}
 	}
 	now := time.Now().In(loc)
-	nextTime := schedule.Next(now).UTC()
+	nextTime := cronnext.Next(schedule, now).UTC()
 
 	// Recurrence end conditions: an end date means no occurrence may fire past
 	// it, and a remaining-runs counter of 1 means the completing occurrence was
@@ -2064,7 +2065,7 @@ func (s *Storage) ComputeNextRun(task *models.Task) (time.Time, error) {
 			loc = l
 		}
 	}
-	return schedule.Next(time.Now().In(loc)).UTC(), nil
+	return cronnext.Next(schedule, time.Now().In(loc)).UTC(), nil
 }
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it

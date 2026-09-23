@@ -12,6 +12,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/ElcanoTek/fleet/internal/cronnext"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -137,7 +138,7 @@ func projectRuns(t *models.Task, now time.Time, horizon time.Time) []UpcomingRun
 		out := make([]UpcomingRun, 0, min(maxOcc, upcomingPerTaskMax))
 		for i := 0; i < maxOcc; i++ {
 			if i > 0 || !seedFromRow {
-				next = schedule.Next(next)
+				next = cronnext.Next(schedule, next)
 			}
 			if next.IsZero() {
 				break
