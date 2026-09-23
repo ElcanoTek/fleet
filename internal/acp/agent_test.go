@@ -26,6 +26,8 @@ type fakeFleet struct {
 	t *testing.T
 	// turn writes one turn's frames; nil means the default tool-using turn.
 	turn func(w *sseWriter, r *http.Request)
+	// cancelStatus is what the Stop endpoint answers (0 = 204).
+	cancelStatus int
 
 	mu      sync.Mutex
 	chats   []chatReq
@@ -82,6 +84,10 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.cancels = append(f.cancels, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/conversations/"), "/cancel")+" "+string(b))
 		f.mu.Unlock()
+		if f.cancelStatus != 0 {
+			w.WriteHeader(f.cancelStatus)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.NotFound(w, r)
@@ -145,18 +151,19 @@ type harness struct {
 }
 
 type harnessOpts struct {
-	turn      func(w *sseWriter, r *http.Request)
-	cfgErr    error
-	publicURL string
-	timeout   time.Duration
-	serverURL string // override (e.g. a closed port)
+	turn         func(w *sseWriter, r *http.Request)
+	cancelStatus int
+	cfgErr       error
+	publicURL    string
+	timeout      time.Duration
+	serverURL    string // override (e.g. a closed port)
 }
 
 // newHarness wires a real SDK client to the real Agent over in-memory pipes,
 // the way an ACP client wires to `fleet acp`'s stdio.
 func newHarness(t *testing.T, o harnessOpts) *harness {
 	t.Helper()
-	ff := &fakeFleet{t: t, turn: o.turn}
+	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus}
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
 	serverURL := srv.URL
@@ -550,5 +557,89 @@ func TestPromptTextFlattensAttachments(t *testing.T) {
 	}
 	if _, err := promptText([]acpsdk.ContentBlock{acpsdk.TextBlock("  ")}); err == nil {
 		t.Error("an empty prompt must be refused")
+	}
+}
+
+// A Stop fleet did not accept must not be reported as a clean stop: the turn
+// outlives its stream, so the client is told it may still be running.
+func TestUnconfirmedStopIsNotReportedAsStopped(t *testing.T) {
+	t.Run("session/cancel", func(t *testing.T) {
+		started := make(chan struct{})
+		h := newHarness(t, harnessOpts{turn: blockingTurn(started), cancelStatus: http.StatusInternalServerError, publicURL: "https://fleet.example.com"})
+		sid := h.newSession(t)
+		done := make(chan acpsdk.PromptResponse, 1)
+		go func() {
+			r, _ := h.prompt(sid, "long job")
+			done <- r
+		}()
+		<-started
+		if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+			t.Fatal(err)
+		}
+		var r acpsdk.PromptResponse
+		select {
+		case r = <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("prompt did not return")
+		}
+		if r.StopReason != acpsdk.StopReasonCancelled {
+			t.Fatalf("stopReason = %q (ACP still requires cancelled)", r.StopReason)
+		}
+		if got := h.client.text(); !strings.Contains(got, "could not confirm this turn stopped") || !strings.Contains(got, "https://fleet.example.com/chat?c=conv-slow") {
+			t.Errorf("no warning that the turn may still run: %q", got)
+		}
+	})
+	t.Run("timeout", func(t *testing.T) {
+		started := make(chan struct{})
+		h := newHarness(t, harnessOpts{turn: blockingTurn(started), timeout: 200 * time.Millisecond, cancelStatus: http.StatusBadGateway})
+		_, err := h.prompt(h.newSession(t), "long job")
+		if err == nil || !strings.Contains(err.Error(), "stopping it failed") || strings.Contains(err.Error(), "was stopped") {
+			t.Fatalf("err = %v, want a timeout error saying the stop failed", err)
+		}
+	})
+}
+
+// Stopped from the web chat (fleet's own Stop): the server ends the stream with
+// turn.cancelled, which is a cancellation, not an internal error.
+func TestServerSideStopIsACancellation(t *testing.T) {
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "c"})
+		w.emit("text.delta", map[string]any{"text": "partial"})
+		w.emit("turn.cancelled", map[string]any{})
+	}})
+	resp, err := h.prompt(h.newSession(t), "x")
+	if err != nil || resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Fatalf("got %+v, %v; want stopReason cancelled", resp, err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 0 {
+		t.Errorf("an already-stopped turn must not be stopped again: %q", h.fleet.cancels)
+	}
+}
+
+// A staged critical tool is paused for a person, not failed — even though its
+// placeholder result carries is_err.
+func TestStagedToolIsPendingNotFailed(t *testing.T) {
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-a"})
+		w.emit("tool.call", map[string]any{"id": "call-s", "name": "mcp_sendgrid_send_email"})
+		w.emit("tool.approval_required", map[string]any{"approval_id": "ap-1", "tool": "mcp_sendgrid_send_email"})
+		w.emit("tool.result", map[string]any{"id": "call-s", "name": "mcp_sendgrid_send_email", "text": "APPROVAL_REQUIRED: staged for review", "is_err": true})
+		w.emit("tool.call", map[string]any{"id": "call-f", "name": "run_python"})
+		w.emit("tool.result", map[string]any{"id": "call-f", "name": "run_python", "text": "boom", "is_err": true})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	if _, err := h.prompt(h.newSession(t), "email bob"); err != nil {
+		t.Fatal(err)
+	}
+	status := map[acpsdk.ToolCallId]acpsdk.ToolCallStatus{}
+	for _, u := range h.client.updates {
+		if u.ToolCallUpdate != nil && u.ToolCallUpdate.Status != nil {
+			status[u.ToolCallUpdate.ToolCallId] = *u.ToolCallUpdate.Status
+		}
+	}
+	if status["call-s"] != acpsdk.ToolCallStatusPending || status["call-f"] != acpsdk.ToolCallStatusFailed {
+		t.Errorf("statuses = %v, want call-s pending and call-f failed", status)
 	}
 }

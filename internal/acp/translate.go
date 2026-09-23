@@ -16,7 +16,8 @@ import (
 //	text.replace       → the missing suffix, or revisedMarker + the final text
 //	reasoning.delta    → agent_thought_chunk
 //	tool.call          → tool_call (title = tool name, status in_progress)
-//	tool.result        → tool_call_update (completed / failed)
+//	tool.result        → tool_call_update (completed / failed; pending while
+//	                     a staged call awaits approval)
 //	tool.approval_required → a text pointer to the fleet approval card, sent
 //	                     once the turn ends
 //	turn.policy_blocked → stop reason "refusal"
@@ -43,6 +44,10 @@ type translator struct {
 }
 
 type stagedApproval struct{ id, tool string }
+
+// approvalSentinel prefixes the placeholder result of a tool call that was
+// staged for approval rather than run.
+const approvalSentinel = "APPROVAL_REQUIRED:"
 
 func newTranslator(sessionID acpsdk.SessionId, convID string, send func(acpsdk.SessionUpdate)) *translator {
 	t := &translator{sessionID: sessionID, send: send, convKnown: make(chan struct{})}
@@ -91,7 +96,13 @@ func (t *translator) handle(ev chattui.Event) {
 	case "tool.result":
 		if id := ev.Str("id"); id != "" {
 			status := acpsdk.ToolCallStatusCompleted
-			if isErr, _ := ev.Data["is_err"].(bool); isErr {
+			switch isErr, _ := ev.Data["is_err"].(bool); {
+			case strings.HasPrefix(ev.Str("text"), approvalSentinel):
+				// A staged critical tool resolves its call with an is_err
+				// APPROVAL_REQUIRED placeholder. That is a pause for a person
+				// (the same reading `fleet chat` gives it), not a failure.
+				status = acpsdk.ToolCallStatusPending
+			case isErr:
 				status = acpsdk.ToolCallStatusFailed
 			}
 			t.send(acpsdk.UpdateToolCall(acpsdk.ToolCallId(id), acpsdk.WithUpdateStatus(status)))

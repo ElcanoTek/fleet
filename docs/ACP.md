@@ -77,7 +77,7 @@ diagnostic goes to stderr.
 | `initialize` | Protocol 1; `agentInfo` `fleet` + the build version; capabilities: text prompts, embedded text resources (`promptCapabilities.embeddedContext`), and `loadSession: false`. No auth methods, no image or audio. |
 | `session/new` | Records a session. The fleet conversation is created by the first prompt, like a new web chat. Client-supplied `mcpServers` are **refused** (invalid params), not ignored: fleet's connectors come from the operator's bundle and run host-side with brokered credentials. |
 | `session/prompt` | One `POST /chat` turn. Later prompts in the session continue the same fleet conversation. The response carries `_meta["fleet.conversationId"]` and token `usage`. |
-| `session/cancel` | Stops the turn **server-side** (`POST /conversations/{id}/cancel`, scope `turn`) and answers the prompt with stop reason `cancelled`. Closing the HTTP stream alone would not stop the turn, because fleet detaches a turn from its request by design. |
+| `session/cancel` | Stops the turn **server-side** (`POST /conversations/{id}/cancel`, scope `turn`) and answers the prompt with stop reason `cancelled`. Closing the HTTP stream alone would not stop the turn, because fleet detaches a turn from its request by design. If fleet does not accept the Stop, the prompt still answers `cancelled` (ACP requires it), but the transcript says the turn may still be running and where to stop it. A turn stopped from another fleet surface, such as the web chat's Stop, also ends as `cancelled`. |
 | `session/close` | Forgets the session. The conversation stays in fleet like any chat. |
 | `authenticate`, `logout`, `session/load`, `session/list`, `session/resume`, `session/set_mode`, `session/set_config_option` | Not advertised. They answer method-not-found. |
 
@@ -87,7 +87,7 @@ Stream events map onto `session/update`:
 | --- | --- |
 | `text.delta` | `agent_message_chunk` |
 | `reasoning.delta` | `agent_thought_chunk` |
-| `tool.call` / `tool.result` | `tool_call` (title = tool name, `in_progress`) / `tool_call_update` (`completed` or `failed`) |
+| `tool.call` / `tool.result` | `tool_call` (title = tool name, `in_progress`) / `tool_call_update` (`completed` or `failed`; `pending` for a call staged for approval, whose placeholder result is not a failure) |
 | `text.replace` | Nothing when it matches what was streamed; the missing suffix when it extends it; otherwise the final text after a `— revised answer —` line (see below) |
 | `tool.approval_required` | After the turn, a text pointer to the approval in fleet |
 | `turn.policy_blocked` | Stop reason `refusal` |
@@ -105,7 +105,7 @@ advertises.
 | Wrong token (403) / user not authorized (401) | `auth_required`: the 403 text names `FLEET_SERVER_TOKEN`, and the 401 text names the user. The token value is never included. |
 | Daemon down | Internal error (-32603) naming the unreachable server URL |
 | `turn.error` / `turn.model_required` | Internal error carrying the server's message |
-| `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag |
+| `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says so and that the turn may still be running. |
 | Unknown session id | -32002 resource not found |
 
 ## Honest scope
@@ -134,8 +134,11 @@ Deviations and limits:
 - **Approvals stay in fleet.** A turn that stages an approval card ends with a
   pointer: `FLEET_PUBLIC_BASE_URL` (or `FLEET_PUBLIC_URL`) + `/chat?c=<id>`,
   or, when neither is set, the `fleet chat --conversation … --approve …`
-  command. ACP's `session/request_permission` is deliberately not used to
-  re-implement the default-deny card.
+  command. The public URL is read from the environment or from the same env
+  file that supplied the server token or address, never from a different
+  one, so the link points at the deployment the turn ran on. ACP's
+  `session/request_permission` is deliberately not used to re-implement the
+  default-deny card.
 - **Streamed text is append-only.** ACP cannot retract a chunk. When an
   enforcement round replaces a draft that was already streamed, the client
   gets the final answer again after a `— revised answer —` line, so it ends

@@ -205,11 +205,11 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	})
 
 	streamDone := make(chan struct{})
-	stopped := make(chan struct{})
+	stopped := make(chan error, 1)
 	go a.stopTurn(stopCtx, tr, streamDone, stopped, cancelStream)
 	convID, streamErr := a.client.Stream(streamCtx, message, sess.convID, tr.handle)
 	close(streamDone)
-	<-stopped
+	stopErr := <-stopped
 	if convID == "" {
 		convID = tr.conversationID()
 	}
@@ -219,15 +219,32 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	switch {
 	case ctx.Err() != nil:
 		// ACP requires a cancelled prompt to answer with the cancelled stop
-		// reason, not an error.
+		// reason, not an error — so when fleet did not accept the Stop, the
+		// client is told in the transcript that the turn may still be running,
+		// rather than left believing it stopped.
+		if stopErr != nil {
+			tr.send(acpsdk.UpdateAgentMessageText(fmt.Sprintf(
+				"\n\nfleet could not confirm this turn stopped (%v). It may still be running: stop it at %s", stopErr, a.conversationPointer(convID))))
+		}
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled, Meta: meta}, nil
 	case stopCtx.Err() != nil:
+		if stopErr != nil {
+			return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
+				"error": fmt.Sprintf("the fleet turn did not finish within %s, and stopping it failed (%v): it may still be running — stop it at %s", a.timeout, stopErr, a.conversationPointer(convID)),
+			})
+		}
 		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
 			"error": fmt.Sprintf("the fleet turn did not finish within %s and was stopped (raise it with fleet acp --timeout)", a.timeout),
 		})
 	}
 	if tr.policyBlocked {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonRefusal, Meta: meta}, nil
+	}
+	if errors.Is(streamErr, context.Canceled) {
+		// Stopped from another fleet surface (the web chat's Stop, where these
+		// conversations are visible): the server's turn.cancelled is a normal
+		// cancellation, not a failure.
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled, Meta: meta}, nil
 	}
 	if streamErr != nil {
 		return acpsdk.PromptResponse{}, requestError(streamErr)
@@ -248,11 +265,13 @@ const conversationWait = 5 * time.Second
 
 // stopTurn watches one prompt. If stop fires before the stream finishes, it
 // waits (bounded) for the conversation id, stops the fleet turn server-side,
-// then ends the stream. It closes stopped when done.
-func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan struct{}, stopped chan<- struct{}, cancelStream context.CancelFunc) {
-	defer close(stopped)
+// then ends the stream. It sends the Stop's outcome on stopped — nil when
+// nothing needed stopping or fleet accepted the Stop — so Prompt never reports
+// a stop the server did not confirm.
+func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan struct{}, stopped chan<- error, cancelStream context.CancelFunc) {
 	select {
 	case <-streamDone:
+		stopped <- nil
 		return
 	case <-stop.Done():
 	}
@@ -261,8 +280,30 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 	case <-streamDone:
 	case <-time.After(conversationWait):
 	}
-	_ = a.client.Cancel(tr.conversationID())
+	var err error
+	if id := tr.conversationID(); id != "" {
+		err = a.client.Cancel(id)
+	} else {
+		select {
+		case <-streamDone: // the request ended before fleet started a turn
+		default:
+			err = errors.New("fleet never reported the conversation id, so there was nothing to address the Stop to")
+		}
+	}
 	cancelStream()
+	stopped <- err
+}
+
+// conversationPointer says where a person can see (and stop) a conversation.
+func (a *Agent) conversationPointer(convID string) string {
+	switch {
+	case convID == "":
+		return "the fleet web chat"
+	case a.publicURL != "":
+		return a.publicURL + "/chat?c=" + url.QueryEscape(convID)
+	default:
+		return "the fleet web chat (conversation " + convID + ")"
+	}
 }
 
 // approvalPointer tells the ACP user where to settle a staged approval.

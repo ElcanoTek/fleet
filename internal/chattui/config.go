@@ -112,8 +112,12 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	// On-box auto-discovery: fill any still-missing token/addr from the server
 	// env file. Skipped entirely once both are already resolved.
 	candidates := envFileCandidates(f.EnvFile, env)
+	// serverFile is the env file that supplied the token or address, if any —
+	// the deployment this client is talking to.
+	serverFile := ""
 	if cfg.Token == "" || cfg.ServerURL == "" {
-		if vals := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
+		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
+			serverFile = path
 			if cfg.Token == "" {
 				cfg.Token = strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"]))
 			}
@@ -128,12 +132,18 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 		cfg.ServerURL = "http://127.0.0.1:8080"
 	}
 
-	// Public web URL: non-secret, best-effort, so it is read on its own rather
-	// than folded into the token discovery above (which is skipped once the
-	// token and address are known).
+	// Public web URL (non-secret, best-effort) must describe the SAME
+	// deployment the token and address came from, or a deep link would send
+	// the user to another fleet. So it is read from the env, else from the
+	// file that supplied the server config, else from an explicitly pinned
+	// env file — never probed across the default candidates on its own.
 	cfg.PublicURL = strings.TrimSpace(firstNonEmpty(env("FLEET_PUBLIC_BASE_URL"), env("FLEET_PUBLIC_URL")))
-	if cfg.PublicURL == "" {
-		if vals := discoverEnvValues(evf, candidates, "FLEET_PUBLIC_BASE_URL", "FLEET_PUBLIC_URL"); vals != nil {
+	publicFile := serverFile
+	if publicFile == "" && (strings.TrimSpace(f.EnvFile) != "" || strings.TrimSpace(env("FLEET_ENV_FILE")) != "") {
+		publicFile = candidates[0]
+	}
+	if cfg.PublicURL == "" && publicFile != "" && evf != nil {
+		if vals, err := evf(publicFile, "FLEET_PUBLIC_BASE_URL", "FLEET_PUBLIC_URL"); err == nil {
 			cfg.PublicURL = strings.TrimSpace(firstNonEmpty(vals["FLEET_PUBLIC_BASE_URL"], vals["FLEET_PUBLIC_URL"]))
 		}
 	}
@@ -177,22 +187,22 @@ func envFileCandidates(explicit string, env getenv) []string {
 }
 
 // discoverEnvValues reads the requested keys from the first readable candidate
-// that yields any of them, returning the values. An unreadable
+// that yields any of them, returning the values and the path used. An unreadable
 // candidate (missing file, or a 0600 file the caller can't read) is skipped, not
 // fatal — so a non-admin who can't read the credential file simply gets the
 // normal "no server token" error rather than a crash.
-func discoverEnvValues(evf envValuesReader, candidates []string, keys ...string) map[string]string {
+func discoverEnvValues(evf envValuesReader, candidates []string, keys ...string) (map[string]string, string) {
 	if evf == nil {
-		return nil
+		return nil, ""
 	}
 	for _, p := range candidates {
 		vals, err := evf(p, keys...)
 		if err != nil || len(vals) == 0 {
 			continue
 		}
-		return vals
+		return vals, p
 	}
-	return nil
+	return nil, ""
 }
 
 // osEnv / osReadFile / osReadEnvValues are the production accessors.

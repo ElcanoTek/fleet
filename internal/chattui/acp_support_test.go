@@ -38,6 +38,36 @@ func TestResolvePublicURL(t *testing.T) {
 			t.Errorf("PublicURL = %q", cfg.PublicURL)
 		}
 	})
+	t.Run("never from a different deployment's env file", func(t *testing.T) {
+		// The token and address come from .env.local; /etc/fleet/fleet.env
+		// belongs to another deployment and must not supply the deep link.
+		cfg, err := Resolve(Flags{Email: "a@b.c"}, envMap(map[string]string{}), noFile, envFileFrom(map[string]map[string]string{
+			".env.local":           {"FLEET_SERVER_TOKEN": "tok", "FLEET_SERVER_ADDR": "127.0.0.1:9000"},
+			"/etc/fleet/fleet.env": {"FLEET_SERVER_TOKEN": "other", "FLEET_PUBLIC_URL": "https://other.example.com"},
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Token != "tok" || cfg.PublicURL != "" {
+			t.Errorf("token=%q PublicURL=%q, want tok and no public URL", cfg.Token, cfg.PublicURL)
+		}
+	})
+	t.Run("from the file that supplied the server config", func(t *testing.T) {
+		cfg, err := Resolve(Flags{Email: "a@b.c"}, envMap(map[string]string{}), noFile, envFileFrom(map[string]map[string]string{
+			"/etc/fleet/fleet.env": {"FLEET_SERVER_TOKEN": "tok", "FLEET_PUBLIC_BASE_URL": "https://box.example.com"},
+		}))
+		if err != nil || cfg.PublicURL != "https://box.example.com" {
+			t.Errorf("PublicURL = %q, err %v", cfg.PublicURL, err)
+		}
+	})
+	t.Run("token from env and no pinned file: not probed", func(t *testing.T) {
+		cfg, err := Resolve(Flags{}, envMap(base), noFile, envFileFrom(map[string]map[string]string{
+			"/etc/fleet/fleet.env": {"FLEET_PUBLIC_URL": "https://maybe-other.example.com"},
+		}))
+		if err != nil || cfg.PublicURL != "" {
+			t.Errorf("PublicURL = %q, err %v", cfg.PublicURL, err)
+		}
+	})
 	t.Run("unset is empty", func(t *testing.T) {
 		cfg, err := Resolve(Flags{}, envMap(base), noFile, noEnvFile)
 		if err != nil || cfg.PublicURL != "" {
