@@ -58,12 +58,41 @@ The verifier remains a model-based check, not deterministic proof of a business
 workflow. It runs at most three times: the initial check and two repair
 reviews — the cap counts every verification, including the re-check of a
 reviewer-forced phone-a-friend repair, which cannot buy a fourth call. Missing
-actions or a malformed/failed verifier response keep completion blocked; the
-third unsuccessful check returns `ErrCompletionUnverified` directly through
-the governed core, preserving partial work, usage and the completed-action count.
-It does not ask the model to abort or run more tools: an audit abort may be
-refused after all committed writes succeeded. A verifier failure remains a
-terminal failure under the existing retry policy, never a successful completion.
+actions keep completion blocked. The third check that still reports missing
+actions returns `ErrCompletionUnverified` directly through the governed core,
+preserving partial work, usage and the completed-action count. It does not ask
+the model to abort or run more tools, because an audit abort may be refused
+after all committed writes succeeded. A verifier that *answered* with missing
+actions remains a terminal failure under the existing retry policy, never a
+successful completion.
+
+A verifier call that produced no verdict is retried once after a short pause
+(#1602). What happens if the retry also fails depends on *how* it failed, and
+on the audit:
+
+- **An outage** (a timeout, a provider failure) says nothing about the run.
+  If both attempts ran and both were outages while the run's own context was
+  still live (a run deadline that expired mid-check does not count, nor does a
+  malformed first verdict), this run's **own** `confirm_audit` passed, at least one audit-gated tool
+  executed successfully, and no audit-gated tool's last execution failed, the
+  run succeeds with a
+  `completion_unverified_verifier_error` warning. The warning is recorded in
+  the session log and at the head of the task's terminal message; the run is
+  not dead-lettered on the verifier's own outage. The phone-a-friend reviewer
+  already failed open on its errors.
+- **A malformed verdict** (the verifier answered, but with prose, invalid
+  JSON, no explicit `missing_actions` array, or an empty reply) is a content failure, not an
+  outage. A degraded verifier model must not quietly become auto-success, so
+  the check is spent as before, and the third ends the run
+  `ErrCompletionUnverified`.
+- **The premise does not hold** (a failed critical call is on the record, no
+  critical call landed — the audit alone is the model grading itself — or
+  no audit ran in this run's policy, as for a delegated sub-agent, whose
+  policy skips the self-audit ritual). Even an outage spends the check. Today
+  sub-agents do not run the verifier at all; the rule keeps it that way if
+  they ever do.
+
+Each check is therefore at most two metered verifier calls.
 Its transcript records `completion_unverified` and explains that completed
 external actions have not been rolled back; the dead-letter reason also names
 the connector calls that succeeded this run (or says none did), so an operator
@@ -112,6 +141,45 @@ produce an actionable roster error. Tools may be native names, server tool names
 or Fleet's full `mcp_<server>_<tool>` names; full names avoid ambiguity. Model
 resolution already happens before the run and remains mandatory.
 
+`"roster":"required_tools_only"` (#1603) additionally narrows the run's MCP
+roster to the tools `required_tools` names:
+
+```text
+EXECUTION REQUIREMENTS (JSON):
+{"mcp_servers":["pages"],"required_tools":["mcp_pages_get_page_data","mcp_pages_record_refresh_check","mcp_pages_update_page_data_upload"],"roster":"required_tools_only"}
+```
+
+- **What registers.** Each selected server's Gate-2 allowlist is intersected
+  with the required tools, which are resolved the same way as the check above.
+  A server none of whose tools is required registers nothing: here `fast_io`,
+  `fastio_helpers`, and every Pages layout, template or delete tool.
+- **What does not change.** Native tools stay (`confirm_audit`,
+  `task_tracker`, bash, Python, the file tools). The live-registry section of
+  the system prompt follows the roster.
+- **No lost tools.** A required tool can never be narrowed away, because the
+  check above has already proved it is in the roster. A
+  `completion.any_succeeded` tool is kept the same way even when
+  `required_tools` does not list it, so a declared predicate stays reachable. Narrowing only removes;
+  it never grants a tool the allowlist denies.
+- **Removed tools.** A call to a removed tool is answered `tool not found`.
+  The run log carries one `[roster] required_tools_only: N mcp tools
+  registered` breadcrumb.
+- **Unknown values.** Any other `roster` value, the empty string included, is
+  a dispatch error. Without the key (or with `null`), the roster is exactly as
+  before.
+- **Where it is enforced.** The narrowing is applied in the run's own tool
+  registration (Gate-2). The credential-owning MCP broker still authorizes
+  against the manifest's allowlist (ADR-0042) and does not know about the
+  narrowing, so a parent-side bug could at worst give a run the normal manifest
+  roster back, never a tool outside it.
+
+The point is cost and safety. A Pages data refresh resent about 34K tokens of
+tool schemas it never used on every step. Prod run `89afe409` declared a
+layout-mutating `deploy_page_upload` in its audit, which a data refresh must
+never reach; on a narrowed roster that declaration is unrepresentable. Fleet
+still interprets nothing about the tools: the list and the narrowing are the
+producer's contract.
+
 This declaration only restricts a run. It cannot enable network, bypass the
 broker, select credentials or override an administrator's allowlist. It does not
 prove endpoint reachability, per-account authorization or source completeness;
@@ -119,6 +187,75 @@ the executing workflow must still check those. Unknown companion metadata is
 ignored for forward compatibility, including producer labels such as `mode`.
 Malformed/duplicate declarations fail closed. Ordinary prompts with no marker
 keep their existing behavior.
+
+## Deterministic completion predicate (#1602)
+
+For many workflows, the producer of the prompt knows exactly which tool
+executions mean "done", and that knowledge is not a matter of judgement. A
+Pages refresh either created a new version (`update_page_data`,
+`update_page_data_upload`) or recorded why it did not (`record_refresh_check`,
+the no-update branch the prompt itself calls "a complete run, not a failure").
+The model verifier still read the numbered publish steps as unconditional.
+On the 2026.09.22.4 build it was the largest single cause of dead-lettered
+page refreshes, and every one of those runs had the right outcome already
+recorded on the Pages side:
+
+| run | verifier demanded | what actually happened |
+|---|---|---|
+| page A | "publish_managed_data_update … update_page_data_upload" | run recorded `blocked`; page correctly untouched |
+| page B | "update_page_data publish … expected_version=N" | no new coverage; `record_refresh_check(source_not_updated)` written |
+| page A (next day) | "build complete payload … update_page_data_upload" | blocked branch, recorded |
+| page C | — (the verifier call itself timed out) | dead-lettered after three checks |
+| page D | a wording nit in the report | data published |
+
+The producer can declare that knowledge in the same requirements object:
+
+```text
+EXECUTION REQUIREMENTS (JSON):
+{"mcp_servers":["pages"],"required_tools":["mcp_pages_get_page_data","mcp_pages_record_refresh_check","mcp_pages_update_page_data_upload"],"completion":{"any_succeeded":["mcp_pages_update_page_data","mcp_pages_update_page_data_upload","mcp_pages_record_refresh_check"]}}
+```
+
+**At dispatch**, `completion.any_succeeded` names are validated and resolved
+the way `required_tools` names are:
+
+- They may be native names, bare server tool names, or full
+  `mcp_<server>_<tool>` names. The same identifier rule applies, and at most
+  200 names are allowed. **Use full names.** A bare name resolves on every
+  server that exposes it, so `record_refresh_check` would be satisfied by a
+  success on any Pages server or client-variant seat in the roster, not just
+  the one the task is about.
+- A name that is not in the run's tool roster is the same actionable dispatch
+  error as an unavailable required tool (`completion tool <name>`).
+- A malformed clause fails closed, like any malformed declaration. That covers
+  a bad identifier, a clause that is not an object, and `any_succeeded` that is
+  not an array of strings.
+- An absent, `null`, or empty clause declares nothing. So does a clause holding
+  only keys this Fleet does not know.
+
+**At finish**, once the audit/finish enforcement has cleared, the scheduled
+policy reads the same tool-execution records the verifier reads, with the same
+success classification. Bridged `tool_call` connector calls count under their
+own name.
+
+- **A listed tool has a successful execution.** The run is complete:
+  - the end-of-run verifier and the phone-a-friend review are skipped (zero
+    model calls, and no verifier entry in `aux_usage`);
+  - the session log gains a
+    `[completion_predicate] satisfied by <tool>` breadcrumb;
+  - the run emits a `fleet.completion_predicate` event, which the scheduler
+    stream forwards as a `completion_predicate` frame.
+- **The predicate replaces only the model gates, never the audit.** An
+  outstanding declared commitment still blocks finishing, because the
+  predicate is consulted only after audit/finish enforcement has cleared.
+- **No listed tool succeeded** (failed, blocked, or never called). The
+  verifier runs exactly as before.
+- **No clause.** Nothing changes.
+
+Fleet still interprets nothing about these tools. The list is opaque names
+chosen by the producer, like `required_tools`. Fleet does not know what
+`record_refresh_check` means, and the bundle and the producer own the
+contract that its success is completion. Regenerate producer prompts to gain
+the clause; existing prompts keep the verifier.
 
 ## Scope
 

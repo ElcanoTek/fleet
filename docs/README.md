@@ -214,10 +214,11 @@ above fails otherwise.
 - [`CONNECTOR-ONBOARDING.md`](CONNECTOR-ONBOARDING.md) — Connector-directory onboarding — guided setup, API keys, BYO OAuth clients
 - [`CONNECTOR-PREFS.md`](CONNECTOR-PREFS.md) — Unified connector enablement — availability, selection, binding
 - [`CONTEXT-HANDLES.md`](CONTEXT-HANDLES.md) — Composer context handles (#517)
+- [`CRITICAL-TOOL-ALIASES.md`](CRITICAL-TOOL-ALIASES.md) — Critical tool aliases: one audited action under two tool names (ADR-0071)
 - [`CUTOVER.md`](CUTOVER.md) — v1 → fleet cutover runbook (a box already running the legacy chat + moc stack)
 - [`DATASETS.md`](DATASETS.md) — Dataset / table agent
 - [`DEAD-LETTER-RECURRENCE.md`](DEAD-LETTER-RECURRENCE.md) — A dead-lettered recurring occurrence spawns its successor (ADR-0070)
-- [`SCHEDULED-COMPACTION-CHECKPOINTS.md`](SCHEDULED-COMPACTION-CHECKPOINTS.md) — Scheduled runs pause their tool loop at the resend budget so compaction recurs, and summarize for real
+- [`SCHEDULED-COMPACTION-CHECKPOINTS.md`](SCHEDULED-COMPACTION-CHECKPOINTS.md) — Scheduled runs pause their tool loop at the resend budget so compaction recurs, and summarize for real; when the prompt floor crowds the budget, the budget applies to the history alone (#1600)
 - [`DEPLOYMENT-KUBERNETES.md`](DEPLOYMENT-KUBERNETES.md) — Deploying fleet on Kubernetes
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Deploying fleet
 - [`DISCUSS-RUN.md`](DISCUSS-RUN.md) — Discuss this run
@@ -233,6 +234,7 @@ above fails otherwise.
 - [`HOSTED-CONNECTORS-RUNBOOK.md`](HOSTED-CONNECTORS-RUNBOOK.md) — Hosted MCP connectors — operator runbook
 - [`implementation-plans-enhancements.md`](implementation-plans-enhancements.md) — Implementation plan: #984 — Fleet ↔ Buzz bridge
 - [`INPUT-QUEUE.md`](INPUT-QUEUE.md) — Input queue & mid-turn steering (#785)
+- [`INSTALLER.md`](INSTALLER.md) — The public one-line installer (`install.sh`)
 - [`keyboard-shortcuts.md`](keyboard-shortcuts.md) — Keyboard shortcuts
 - [`KUBERNETES-LIVE-TEST.md`](KUBERNETES-LIVE-TEST.md) — Real-cluster sandbox integration test
 - [`LEGACY-IMPORT.md`](LEGACY-IMPORT.md) — Legacy import — migrating chat + moc data into fleet

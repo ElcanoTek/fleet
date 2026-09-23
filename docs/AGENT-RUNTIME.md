@@ -373,6 +373,110 @@ cards explicitly through the approval API. The flag
 no human present and a mocked backend — never enable it in production. fleet logs
 a loud warning at startup when it is on.
 
+### Critical tool aliases: one action under two names (#1604)
+
+A typed `confirm_audit` declaration binds to the exact server-qualified tool
+name ([ADR-0034](adr/0034-audit-gate-commitment-binding.md)). Some servers expose
+**one** write under two names. Pages has `update_page_data` (inline `data`) and
+`update_page_data_upload` (a staged file), and `deploy_page` /
+`deploy_page_upload` are the same kind of pair. The agent chooses the transport
+from the payload size, which it only knows after building the payload. So a run
+could declare one name, publish correctly through the other, and still end as a
+failure, because the declared name stayed owed. Production runs did exactly
+that, in two shapes:
+
+- A Pages data refresh for page A declared `mcp_pages_update_page_data`, then
+  published the audited payload through `mcp_pages_update_page_data_upload`.
+  The write went live, the inline declaration stayed owed, and the run's own
+  self-audit aborted "the stale mcp_pages_update_page_data commitment" → status
+  `error`, with the data live. A second page failed the same way.
+- A Pages deploy for page B left a stale `deploy_page_upload` declaration owed
+  after the publish → status `error`.
+
+`agent_policy.critical_tool_aliases` tells the gate those names are one action:
+
+```yaml
+agent_policy:
+  critical_tools: [update_page_data, update_page_data_upload, deploy_page, deploy_page_upload]
+  critical_tool_modes:
+    update_page_data: notify
+    update_page_data_upload: notify
+  critical_tool_aliases:
+    update_page_data: [update_page_data_upload]
+    deploy_page: [deploy_page_upload]
+```
+
+Each key and the suffixes under it form one equivalence class, and entries that
+share a member merge. A declaration on any member works for a call of any other
+member **on the same server/variant prefix**, in both directions: declaring
+`mcp_pages_update_page_data` and publishing through
+`mcp_pages_update_page_data_upload` discharges the commitment, and so does the
+reverse. Concretely, a call through an alias:
+
+- rides the declared commitment, instead of being blocked;
+- discharges it;
+- lets a re-audit that switches variant supersede the stale declaration instead
+  of stacking on it;
+- clears an audited call that was blocked before the audit, when it wrote
+  the same record (the same `deal_id`, or the same `deal_ids` set);
+- stays under a `deal_ids` / `values_digest` batch approval made on the other
+  member. The batch ledgers are keyed by alias class.
+
+What does **not** change:
+
+- `deal_id` / `deal_ids` / `values_digest` binding carries over to the alias as
+  is. One audit may approve several batches under one key — two batches of the
+  same tool, or one per twin, each with its own `values_digest` or with a
+  digest on only one of them — and each batch rides only under its own
+  declaration's records and digest. The digest requirement is kept per
+  record, so an undigested batch is not refused over a twin's digest for
+  other records.
+- A batch result discharges only the records **that call** named in its
+  `deal_ids`, and a digest-bound batch commitment only under its own digest. A
+  response to one batch that reports a success for a record of the other
+  batch discharges nothing: the other critical action still has to run. The
+  discharge ledger dedups a record per server/variant, so the same record id
+  written on two servers counts as two writes.
+- For a **typed** declaration, an aliased or same-suffix call on a
+  **different** server or client variant is still blocked and discharges
+  nothing. (Legacy free-text declarations carry no server identity and stay
+  suffix-level and server-agnostic, exactly as before: see below.)
+- Approval modes stay per suffix, which is why the example gives both Pages
+  write variants `notify`.
+- A manifest without the key behaves as before, except for batch-ledger
+  corrections that apply to every bundle (see the design note).
+
+A few rules and caveats:
+
+- **Every member must be in `critical_tools`.** A member that is not is logged
+  and ignored when the policy is installed, and an entry left with fewer than
+  two members is dropped. An alias of a tool the gate never sees would be a way
+  around it. `fleet validate-config` reports both as an `agent_policy=fail`
+  check, from the same validation the boot path runs — at boot they are only a
+  log line, and a typo'd member silently leaves the wedge the alias was meant
+  to end. Run it after adding the key.
+- **Legacy free-text audits** honour aliases at suffix level, the way they
+  already honour `critical_tool_substitutes`. They were never bound to a
+  server: a legacy `update_page_data` declaration already let another server's
+  `…_update_page_data` ride, and with the alias another server's
+  `…_update_page_data_upload` rides too. The cross-server refusal above is a
+  property of typed declarations.
+- **Sub-agents** run in-process under the same installed policy, so they
+  inherit the aliases.
+- **Alias vs substitute.** Use an alias only for names that are the same action
+  with the same blast radius. A lower-level fallback that reaches the same
+  result another way is a one-way `critical_tool_substitutes` entry.
+- **Declare one variant per write.** Declaring both members in one audit
+  registers two commitments: unbound declarations cannot tell one write
+  declared twice from two writes.
+- **Adoption.** The manifest is decoded strictly, so a bundle can adopt the key
+  only once a fleet release that understands it is deployed. After that, the
+  bundle's "Wrong tool variant declared?" abort/re-audit recovery step is no
+  longer needed for aliased pairs.
+
+See [ADR-0071](adr/0071-critical-tool-aliases.md) and the design note
+[`CRITICAL-TOOL-ALIASES.md`](CRITICAL-TOOL-ALIASES.md).
+
 ---
 
 ## Context-window pressure (proactive compaction)
@@ -387,7 +491,7 @@ after a `context_length_exceeded` error:
 |---|---|---|
 | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | `0.75` | Emit a `fleet.context_pressure` SSE event (the chat UI shows a non-blocking "conversation is N% full" banner). |
 | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | `0.90` | Proactively summarize the **oldest half** of the history (pinned head + recent half kept verbatim) and emit `fleet.context_compacted`. |
-| `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | `80000` | **Scheduled runs only** (#1534). Compact the same way once the prompt resent on every call exceeds this many tokens, whatever the model's window; `0` disables. |
+| `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | `80000` | **Scheduled runs only** (#1534). Compact the same way once the prompt resent on every call exceeds this many tokens, whatever the model's window; `0` disables. When the prompt floor (system prompt + tool schemas + task prompt) takes more than half of it, it applies to the history on top of the floor instead (#1600). |
 
 Both honor the usual `CHAT_`/`CUTLASS_` prefix aliases, and a value outside
 `(0,1]` falls back to its default. The size signal is the **per-call** input
@@ -443,6 +547,29 @@ condition goes inert and the run is governed by the ceilings alone. The step
 cap (`FLEET_MAX_ITERATIONS`) is counted across a logical round's checkpoints
 and wins a tie, so a pause never becomes a per-pause step allowance. See
 [SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md).
+
+**The prompt floor (#1600).** Part of every request is not history: the system
+prompt, the tool schemas and the pinned task prompt, which no compaction can
+shed. A Pages refresh resends ~140K of that before any history exists, against
+the 80K default. With the budget compared against the whole request, those runs
+paused on every tool step until the 40-pause cap. That meant 280–345K
+completion tokens per run where the pre-checkpoint build used 18–67K, about 7K
+per pause, each pause a summarizer call and a cold cache. The run now records
+the resent size at each **floor point**: the run's first step, and the first
+step after every compaction. The smallest such size is the **prefix**. While
+the prefix is at most half the budget the rule is unchanged. Past that, the
+checkpoint (and the between-round trigger above) fires once a call resends the
+latest floor **plus** a full budget, so every pause waits for a budget of new
+history since the last compaction. The first time this happens the run writes
+one `[context_checkpoint_floor] floor=… budget=… effective_budget=…` session-log
+breadcrumb. From then on the resend-budget events carry `resend_floor_tokens`
+and `effective_budget_tokens`. No pause fires with fewer than four messages
+after the pinned head. The trade is stated plainly: under the floor rule the
+per-call prompt is not held under prefix + budget. Each floor carries the kept
+recent half, so across many compactions the pause point settles near
+prefix + 2 × budget. What the rule buys is a handful of pauses per run instead
+of 40. The measurements and the reasoning behind the half-budget switch are in
+[SCHEDULED-COMPACTION-CHECKPOINTS.md](SCHEDULED-COMPACTION-CHECKPOINTS.md#the-prompt-floor-1600).
 
 **Scheduled runs summarize for real.** The scheduled driver now wires a
 `CompactionSummarizer` (the same governed LLM summary the chat path uses,
@@ -522,6 +649,23 @@ Consequences worth stating plainly:
 - Gate-2's per-server tool allowlist (`mcpAllowlist.toolsFor`) resolves through
   the same helper, so a variant seat is filtered by its manifest server's
   allowlist exactly like the default seat.
+- **A narrowed roster keys the same way (#1603).** A scheduled task whose
+  `EXECUTION REQUIREMENTS` sets `"roster":"required_tools_only"` runs with an
+  allowlist built from its `required_tools` (entries keyed by registered server
+  name), and with Gate-2 **exhaustive** (`RunConfig.MCPRosterNarrowing`). A
+  server with no required tool gets an explicit deny entry, so it registers
+  nothing and never inherits another server's narrowed entry through the keying
+  rule. The catalog cannot tell an account seat from an independent server that
+  shares a prefix, so no server inherits: a `<server>_<account>` seat keeps only
+  the tools `required_tools` names in the seat's own full form or by bare name.
+  - A sub-agent of a narrowed run inherits the exhaustive flag, and it gets an
+    explicit entry for every catalog server before the explore role's filter
+    runs, so no child sees a tool its parent cannot call.
+  - The run log carries one `[roster] required_tools_only: N mcp tools
+    registered` breadcrumb. A call to a tool the narrowing removed is answered
+    `tool not found`.
+  - Roster order is unchanged (catalog order, as the prompt-cache contract
+    requires).
 
 The whole-name (`N == K`) branch applies only to **registered server names** — a
 registered name can legitimately *be* a declared server. It is deliberately off
@@ -1154,17 +1298,38 @@ page write, file upload, ...) still require their tool call — a prose report
 never substitutes for one. Repairs are checked again, up to three verifier calls in
 total — the cap counts every verification, including the re-check a
 reviewer-forced repair triggers, and a repair that cannot be re-verified
-within the cap ends the run unverified rather than extending it. A verifier
-error keeps completion blocked; the third unsuccessful check
+within the cap ends the run unverified rather than extending it. Missing
+actions keep completion blocked; the third check that still reports them
 returns `ErrCompletionUnverified` through the core without asking the model to
-abort. Partial work and completed critical actions remain recorded, and the
+abort. A verifier call that produced no verdict is retried once after a short
+pause (#1602). If the retry fails too:
+
+- **An outage** (timeout, provider failure), after this run's own
+  `confirm_audit` passed, with at least one critical tool that executed
+  successfully and none whose last execution failed.
+  The run succeeds with a `completion_unverified_verifier_error` warning,
+  recorded in the session log and at the head of the task's terminal message,
+  instead of dead-lettering audited work on the verifier's own outage.
+- **Anything else** keeps the old semantics: the check is spent, and the third
+  ends the run `ErrCompletionUnverified`. That covers a malformed or empty verdict
+  (the verifier answered, but not with a verdict), a failed critical call, a
+  run in which no critical call landed, and a
+  policy in which no audit ran (a delegated sub-agent's). Partial work and completed critical actions remain recorded, and the
 transcript identifies the verification failure without claiming external actions
 were rolled back. Tool evidence is read from complete
 redacted records, before UI preview truncation. So core
 governance — per-tool policy, audit, finish enforcement, MCP credential
 brokering, note staging, usage/cost, **and the end-of-run verifier** — applies to
-every scheduled run. An explicit terminal audit abort skips the extra model
-reviewers and remains a failed result. Conditional task branches are
+every scheduled run, with one declared exception. A task whose
+`EXECUTION REQUIREMENTS` carries a `completion.any_succeeded` clause is complete
+once the audit/finish enforcement clears and a successful execution of a listed
+tool is on the record. The verifier and phone-a-friend are then skipped, with a
+`[completion_predicate] satisfied by <tool>` breadcrumb and a
+`fleet.completion_predicate` event, and no verifier call is metered. The audit
+gate is never skipped, and a task without the clause is verified as before
+([ADR-0072](adr/0072-deterministic-completion-predicate.md)). An explicit
+terminal audit abort skips the extra model reviewers and remains a failed
+result. Conditional task branches are
 verified using bounded structured result evidence, not tool names alone; see
 [Conditional scheduled tasks](CONDITIONAL-TASK-COMPLETION.md).
 

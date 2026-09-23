@@ -337,6 +337,14 @@ remote_mcp_catalog: []
 #                               automatically — list only client-specific ones).
 #   critical_tool_substitutes:  committed-suffix -> allowed executed substitute
 #                               suffixes that may discharge the commitment.
+#   critical_tool_aliases:      OPTIONAL (#1604) equivalence classes of critical
+#                               suffixes that are the SAME action under two
+#                               names (e.g. an inline and a staged-upload write):
+#                               an audit declaring one is discharged by the
+#                               other on the same server, both ways. Every member
+#                               must also be in critical_tools. Example:
+#                                 critical_tool_aliases:
+#                                   update_page_data: [update_page_data_upload]
 #   critical_tool_timeouts:     OPTIONAL per-tool approval default-deny window
 #                               (#225), keyed by the same bare tool-name suffix
 #                               as critical_tools, in seconds. Highest-priority

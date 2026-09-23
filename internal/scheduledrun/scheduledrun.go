@@ -689,7 +689,7 @@ func configureRunWorkspace(ctx context.Context, sb *sandbox.Sandbox, wtPath, sha
 // true / unused when lc == nil), the exit-condition result label, and any run
 // error.
 func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt string, lc *models.LoopConfig, wtPath string) (*models.LogSession, bool, string, error) {
-	requirements, err := r.checkTaskRequirements(task)
+	requirements, rosterNarrowing, err := r.checkTaskRequirementsAndRoster(task)
 	if err != nil {
 		return nil, false, "", err
 	}
@@ -865,6 +865,9 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	}
 	defer remoteOverlay.Close()
 
+	// Roster narrowing (#1603): see taskRosterAllowlist.
+	mcpToolAllowlist := r.taskRosterAllowlist(requirements, rosterNarrowing, mcpBinding, remoteOverlay)
+
 	// The task owner's builder skills + propose_skill staging (docs/SKILLS.md):
 	// resolve the owner once, mirror the remote-overlay best-effort posture —
 	// an unresolvable owner just runs without the capability, never fails the
@@ -963,7 +966,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		MCPClient:        mcpBinding.client,
 		MCPBroker:        mcpBinding.broker,
 		MCPCatalog:       mcpBinding.catalog,
-		MCPToolAllowlist: r.taskMCPToolAllowlist(),
+		MCPToolAllowlist: mcpToolAllowlist,
 		NativeTools:      nativeTools,
 		SystemPrompt:     taskSystemPrompt,
 		Persona:          taskPersona,
@@ -980,12 +983,17 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		TaskMemoryConfig:    r.taskMemoryConfig,
 		LearnedInstruction:  learnedInstruction,
 		CredentialAllowlist: taskCredentialAllowlist(task),
+		MCPRosterNarrowing:  rosterNarrowing,
 		ThinkingBudget:      task.ThinkingBudgetTokens,
 		PersonaPolicy:       r.personaPolicy(taskPersona),
 		OutputSchema:        task.OutputSchema,
 		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: phoneAFriend,
 		ReviewerModel:       reviewer,
+		// Deterministic completion predicate (#1602): the producer-declared
+		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this
+		// run's roster at dispatch. nil = none declared, verifier as before.
+		CompletionAnySucceeded: requirements.completionTools(),
 		// Governed sub-agents / delegation (#175, #264, #1043): ON by default —
 		// registered whenever the fleet-wide flag AND this task's allow_delegation
 		// are both true (each defaults true; each is an independent kill switch,

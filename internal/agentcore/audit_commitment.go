@@ -113,12 +113,30 @@ func (c *typedCommitment) correctsRefusal(fresh *typedCommitment) bool {
 	}
 }
 
+// coversOutstanding reports whether this (fresh) commitment's record binding
+// re-declares every record a stale BATCH commitment still owes, so retiring
+// the stale one drops no obligation. A non-batch stale commitment names at
+// most one record, which the #1535 correction replaces by design, so it is
+// always covered.
+func (c *typedCommitment) coversOutstanding(old *typedCommitment) bool {
+	for id := range old.dealIDs {
+		if old.discharged[id] {
+			continue
+		}
+		if !c.dealIDs[id] && c.dealID != id {
+			return false
+		}
+	}
+	return true
+}
+
 // nameMatches reports whether an executed toolName satisfies this
-// commitment's tool binding: the exact declared full name, or a
-// policy-approved substitute (criticalToolSubstitutes) on the SAME
-// server/variant. Cross-server matching is refused: an approval for one
-// server never matches another server's call even though both names end in
-// the same critical suffix, and a base-server approval never matches a
+// commitment's tool binding: the exact declared full name, or — on the SAME
+// server/variant — a policy-approved substitute (criticalToolSubstitutes) or
+// a declared alias (critical_tool_aliases, #1604, either direction).
+// Cross-server matching is refused: an approval for one server never matches
+// another server's call even though both names end in the same critical
+// suffix (or in aliased ones), and a base-server approval never matches a
 // client-variant call.
 func (c *typedCommitment) nameMatches(toolName string) bool {
 	execSuffix := criticalSuffixFor(toolName)
@@ -128,7 +146,7 @@ func (c *typedCommitment) nameMatches(toolName string) bool {
 	if toolName == c.tool {
 		return true
 	}
-	return substituteSatisfies(c.suffix, execSuffix) && sameToolServer(c.tool, toolName)
+	return criticalSuffixCovers(c.suffix, execSuffix) && sameToolServer(c.tool, toolName)
 }
 
 // allowsDeal reports whether this commitment's record binding covers a
@@ -237,6 +255,18 @@ func sameToolServer(a, b string) bool {
 	return pa != "" && pa == pb
 }
 
+// sameAliasedTool reports whether two full tool names are the same critical
+// action: identical, or declared aliases (critical_tool_aliases, #1604) on the
+// same server/variant — mcp_pages_update_page_data and
+// mcp_pages_update_page_data_upload when the bundle aliases the two suffixes,
+// never the same pair across two servers.
+func sameAliasedTool(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return criticalAliasesEquivalent(criticalSuffixFor(a), criticalSuffixFor(b)) && sameToolServer(a, b)
+}
+
 // unmarshalArgs decodes a tool call's JSON arguments with UseNumber so numeric
 // record ids keep their exact digits. Plain json.Unmarshal decodes every
 // number to float64, which silently rounds integers above 2^53 — a large
@@ -294,6 +324,22 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 		ids = append(ids, normalizeDealID(v))
 	}
 	return ids, true
+}
+
+// pendingRecordKey renders a call's record binding for matching a pending
+// (blocked pre-audit) entry against a later success: "ids:" plus the sorted
+// deal_ids of a batch, "id:" plus the single-record id, "" when the call names
+// no record. Only an equal key is the same record set.
+func pendingRecordKey(rawInput string) string {
+	if ids, ok := batchDealIDs(rawInput); ok {
+		sorted := append([]string(nil), ids...)
+		sort.Strings(sorted)
+		return "ids:" + strings.Join(sorted, "\x00")
+	}
+	if id := callDealID(rawInput); id != "" {
+		return "id:" + id
+	}
+	return ""
 }
 
 // recordIDPlaceholders are the strings a model writes when an action names no
@@ -483,7 +529,7 @@ func parseDealOutcomes(resultText string) ([]dealOutcome, bool) {
 // comments in registerCommittedActionsTyped). Callers must hold o.mu.
 func (o *orchestrationState) resetBatchApprovals() {
 	o.approvedDealIDs = make(map[string]map[string]bool)
-	o.approvedDigest = make(map[string]string)
+	o.approvedDigest = make(map[string]map[string]map[string]bool)
 }
 
 // registerCommittedActionsTyped records commitments from the typed
@@ -554,7 +600,11 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		}
 		// Fresh audit envelope for this suffix → clear any per-record
 		// discharge ledger left over from a prior batch on the same suffix.
-		delete(o.dischargedDeals, suffix)
+		// The batch ledgers are keyed by alias class (criticalAliasClassOf,
+		// the suffix itself when the bundle aliases it to nothing), so a
+		// record set approved here binds a batch sent through an alias.
+		batchKey := criticalAliasClassOf(suffix)
+		delete(o.dischargedDeals, batchKey)
 		// Placeholder record ids ("n/a", "none", …) name no record: the entry
 		// registers unbound rather than bound to an id no call can carry.
 		dealIDs := declaredDealIDs(a.DealIDs)
@@ -570,14 +620,23 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		o.committedCriticalActions[suffix] += n
 		registered += n
 		if len(dealIDs) > 0 {
-			if o.approvedDealIDs[suffix] == nil {
-				o.approvedDealIDs[suffix] = make(map[string]bool)
+			if o.approvedDealIDs[batchKey] == nil {
+				o.approvedDealIDs[batchKey] = make(map[string]bool)
 			}
+			// The digest requirement is recorded PER RECORD, from this
+			// declaration: "" when it declared no values_digest. A class-wide
+			// digest set would make an undigested batch fail against a twin's
+			// digest for a different record set (#1604).
+			if o.approvedDigest[batchKey] == nil {
+				o.approvedDigest[batchKey] = make(map[string]map[string]bool)
+			}
+			digest := strings.ToLower(strings.TrimSpace(a.ValuesDigest))
 			for _, id := range dealIDs {
-				o.approvedDealIDs[suffix][id] = true
-			}
-			if a.ValuesDigest != "" {
-				o.approvedDigest[suffix] = strings.ToLower(strings.TrimSpace(a.ValuesDigest))
+				o.approvedDealIDs[batchKey][id] = true
+				if o.approvedDigest[batchKey][id] == nil {
+					o.approvedDigest[batchKey][id] = make(map[string]bool)
+				}
+				o.approvedDigest[batchKey][id][digest] = true
 			}
 		}
 		tc := &typedCommitment{
@@ -639,13 +698,28 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// Anything else keeps the strict same-shape rule: a differently-bound
 		// commitment no call ever collided with is a legitimately pending
 		// obligation, and retiring it would let the run finish without it.
+		//
+		// The refusal correction retires a stale BATCH commitment only when the
+		// re-declaration covers every record it still owes (coversOutstanding).
+		// A refused batch can straddle two declarations — inline A/B plus
+		// upload C, a blocked upload for A/C — and a re-audit for A/C corrects
+		// the A and C halves; retiring the whole A/B entry on the overlap would
+		// drop B, whose mutation nothing has run or re-declared, and let finish
+		// pass without it. Keeping the entry fails closed: B stays owed.
+		//
+		// "Same tool" includes a declared alias on the same server (#1604): a
+		// re-audit that switches a write from inline to its upload twin is
+		// correcting the transport of ONE action, and stacking the two would
+		// leave the one the run did not use owed forever — the exact shape the
+		// aliases exist to end.
 		for i := 0; i < preExisting; i++ {
 			old := o.typedCommitments[i]
-			if old.remaining <= 0 || old.tool != tc.tool {
+			if old.remaining <= 0 || !sameAliasedTool(old.tool, tc.tool) {
 				continue
 			}
 			sameShape := old.hasDealBinding() == tc.hasDealBinding() && (!tc.hasDealBinding() || old.sameDealSet(tc))
-			if !sameShape && !old.correctsRefusal(tc) {
+			corrects := old.correctsRefusal(tc) && tc.coversOutstanding(old)
+			if !sameShape && !corrects {
 				continue
 			}
 			if o.committedCriticalActions[old.suffix] >= old.remaining {
@@ -655,6 +729,8 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 			}
 			shape := "same tool+record-set"
 			switch {
+			case old.tool != tc.tool:
+				shape = "aliased tool on the same server (critical_tool_aliases)"
 			case !sameShape:
 				shape = "same tool, re-declared with the binding the earlier declaration refused; nothing executed under it"
 			case !tc.hasDealBinding():
@@ -695,6 +771,16 @@ func (o *orchestrationState) markTypedExecuted(toolName, dealID, callDigest stri
 	chosenDigestMatch := false
 	for i, c := range o.typedCommitments {
 		if c.remaining <= 0 || !c.nameMatches(toolName) || !c.allowsDeal(dealID) {
+			continue
+		}
+		// A values_digest-bound batch commitment is discharged only by a call
+		// carrying ITS digest — the only call commitmentAuthorizes let ride it.
+		// Without this, a record approved under two declarations (one per
+		// alias twin, #1604, or two batches of one tool) could be credited to
+		// the exact-name declaration by rank while the call actually rode the
+		// other one's digest, leaving the action that ran still owed and
+		// retiring the one that did not.
+		if len(c.dealIDs) > 0 && c.digest != "" && c.digest != callDigest {
 			continue
 		}
 		exact := c.tool == toolName
@@ -769,7 +855,7 @@ func (o *orchestrationState) legacySuffixAuthorized(execSuffix string) bool {
 		return true
 	}
 	for suffix := range o.committedCriticalActions {
-		if substituteSatisfies(suffix, execSuffix) && o.legacyHeadroomFor(suffix) > 0 {
+		if criticalSuffixCovers(suffix, execSuffix) && o.legacyHeadroomFor(suffix) > 0 {
 			return true
 		}
 	}
@@ -807,7 +893,7 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 	if !isBatch {
 		return false, ""
 	}
-	suffix := criticalSuffixFor(toolName)
+	suffix := criticalAliasClassOf(criticalSuffixFor(toolName))
 	approved := o.approvedDealIDs[suffix]
 	for _, id := range dealIDs {
 		if !approved[id] {
@@ -818,9 +904,15 @@ func (o *orchestrationState) checkBatchBinding(toolName, rawInput string) (bool,
 				toolName, id)
 		}
 	}
-	if want := o.approvedDigest[suffix]; want != "" {
-		if got := valuesDigestArg(rawInput); got != want {
-			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q != approved %q", toolName, got, want)
+	// Each record carries the digest(s) its own declaration(s) required, ""
+	// meaning one declared it with no values_digest. A record is satisfied by
+	// an undigested declaration or by the call's exact digest; the
+	// per-commitment check in commitmentAuthorizes then binds the whole call
+	// to ONE declaration's records and digest.
+	got := valuesDigestArg(rawInput)
+	for _, id := range dealIDs {
+		if wants := o.approvedDigest[suffix][id]; len(wants) > 0 && !wants[""] && !wants[got] {
+			log.Printf("Enforcement: Blocking batch %s — values_sha256 %q is not an approved digest for record %q", toolName, got, id)
 			return true, fmt.Sprintf("BLOCKED: batch '%s' values_sha256 does not match the "+
 				"audit-approved digest. The approved value list differs from the one being applied — "+
 				"re-audit with the correct values_digest.", toolName)

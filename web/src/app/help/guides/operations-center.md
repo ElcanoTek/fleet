@@ -160,11 +160,16 @@ review the model in **Advanced** if a run reports that no provider serves it.
 Some generated prompts include an **EXECUTION REQUIREMENTS (JSON)** block.
 Keep it when copying the prompt. Fleet checks it when the run starts, before
 model execution, and reports missing tools or sandbox network access. It does
-not enable connections or permissions for you. For file uploads, select
+not enable connections or permissions for you. A block that marks its tool list
+as the run's whole roster limits the task to exactly those connector tools, and
+a call to any other connector tool is refused. For file uploads, select
 **Allow network egress** in Advanced; the administrator's network policy still
 applies. Working mailbox or connector calls do not prove that shell uploads can
 reach the destination. A required source must still be fetched and checked by
-the running task.
+the running task. The block may also name the tools whose success means the
+run is done. When one of them succeeds, the run finishes without the completion
+verifier, and its log says which tool satisfied it. The self-audit still
+applies.
 
 **Estimate Cost**, beneath the form, produces a **cost forecast** on demand: the
 token breakdown for the run you are describing and, where the model's pricing is
@@ -274,11 +279,18 @@ A failed run may already have completed an external action. Check the tool
 results before rerunning it. Provider recovery can continue after a completed
 tool step while retaining its results; it stops if a tool began in the failed
 step and its outcome cannot safely be replayed. The completion verifier, when a
-fallback model is configured, checks repairs up to three times. Unresolved or
-unavailable verification does not count as success. After the third unsuccessful
-check, Fleet stops with a “completion verification unresolved” error. The
-transcript retains completed actions and partial work; it does not mean a
-successful publish or send was undone.
+fallback model is configured, checks repairs up to three times. Unresolved
+verification does not count as success: after the third check that still finds
+something missing, Fleet stops with a “completion verification unresolved”
+error. The transcript retains completed actions and partial work; it does not
+mean a successful publish or send was undone. If the verifier itself cannot be
+reached (a timeout, a provider failure), Fleet retries it once. When the run's
+self-audit passed and its critical actions went through, with none failing, the
+run then succeeds, and its message starts with `[completion_unverified_verifier_error]`.
+That flag means nobody double-checked the result, so review it before relying
+on it. A verifier that answers with something that is not a verdict, or with
+nothing at all, still counts as an unsuccessful check, as does an outage on a
+run that performed no critical action.
 
 **4 · Ask about it.** **Discuss in chat** opens a conversation seeded with the
 run's record, so you can ask questions in plain language: why a figure moved, why

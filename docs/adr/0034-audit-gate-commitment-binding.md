@@ -1,6 +1,6 @@
 # ADR-0034: Audit-gate commitment binding, payload-level failure, and create reconciliation
 
-Status: accepted
+Status: accepted; amended by [ADR-0071](0071-critical-tool-aliases.md) (bundle-declared critical tool aliases)
 
 ## Context
 

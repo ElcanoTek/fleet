@@ -276,6 +276,8 @@ type Bundle struct {
 //     only the client-specific ones).
 //   - CriticalToolSubstitutes: committed-suffix -> allowed executed substitute
 //     suffixes that may discharge the commitment.
+//   - CriticalToolAliases: symmetric equivalence classes of critical suffixes
+//     that are the SAME action on the same server (#1604).
 type AgentPolicy struct {
 	ParallelSafeTools       []string            `yaml:"parallel_safe_tools"`
 	CriticalToolSuffixes    []string            `yaml:"critical_tools"`
@@ -320,6 +322,26 @@ type AgentPolicy struct {
 	// does not know any client's undo verb and must not guess one: "we can always
 	// roll back" is only true in practice if the card says how.
 	CriticalToolUndoHints map[string]string `yaml:"critical_tool_undo_hints"`
+	// CriticalToolAliases is an OPTIONAL set of equivalence classes (#1604):
+	// each key and the suffixes listed under it are one critical action exposed
+	// under several names — the same write with a different transport. A typed
+	// confirm_audit commitment declared on any member is authorized and
+	// discharged by a successful call of any other member ON THE SAME
+	// server/variant, in either direction; the record binding (deal_id,
+	// deal_ids, values_digest) carries over unchanged and cross-server discharge
+	// stays refused. Every member must also be listed in critical_tools — agentcore
+	// logs and ignores one that is not.
+	//
+	// It exists because the audit binds a declaration to the exact tool name
+	// (#715) while the transport is chosen after the payload is built: a Pages
+	// write declared inline that went out as a staged upload left the inline
+	// declaration outstanding, and runs whose data was live ended as failures.
+	//
+	//	agent_policy:
+	//	  critical_tool_aliases:
+	//	    update_page_data: [update_page_data_upload]
+	//	    deploy_page: [deploy_page_upload]
+	CriticalToolAliases map[string][]string `yaml:"critical_tool_aliases"`
 }
 
 // PersonaToolPermissions is the per-persona tool policy declared in the
@@ -2551,6 +2573,12 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		p.CriticalToolUndoHints = make(map[string]string, len(b.AgentPolicyConfig.CriticalToolUndoHints))
 		for k, v := range b.AgentPolicyConfig.CriticalToolUndoHints {
 			p.CriticalToolUndoHints[k] = v
+		}
+	}
+	if len(b.AgentPolicyConfig.CriticalToolAliases) > 0 {
+		p.CriticalToolAliases = make(map[string][]string, len(b.AgentPolicyConfig.CriticalToolAliases))
+		for k, v := range b.AgentPolicyConfig.CriticalToolAliases {
+			p.CriticalToolAliases[k] = append([]string(nil), v...)
 		}
 	}
 	return p

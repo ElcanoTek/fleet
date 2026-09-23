@@ -1625,3 +1625,40 @@ func TestCheckBundleSkills(t *testing.T) {
 		})
 	}
 }
+
+// A critical_tool_aliases member the audit gate would ignore is reported, not
+// just logged at boot (#1604): a typo there silently leaves the wrong-variant
+// wedge the alias exists to end.
+func TestCheckAgentPolicy(t *testing.T) {
+	policy := func(aliases map[string][]string) *clientconfig.Bundle {
+		return &clientconfig.Bundle{Dir: t.TempDir(), AgentPolicyConfig: clientconfig.AgentPolicy{
+			CriticalToolSuffixes: []string{"update_page_data", "update_page_data_upload"},
+			CriticalToolAliases:  aliases,
+		}}
+	}
+	cases := []struct {
+		name       string
+		bundle     *clientconfig.Bundle
+		bundleErr  error
+		wantStatus checkStatus
+		wantDetail string
+	}{
+		{"valid aliases are ok", policy(map[string][]string{"update_page_data": {"update_page_data_upload"}}), nil, statusOK, "1 entry"},
+		{"no aliases are ok", policy(nil), nil, statusOK, "no critical_tool_aliases"},
+		{"typo'd member fails", policy(map[string][]string{"update_page_data": {"update_page_data_uplaod"}}), nil, statusFail, `"update_page_data_uplaod"`},
+		{"entry left with one member fails", policy(map[string][]string{"update_page_data": {"update_page_data"}}), nil, statusFail, "fewer than two"},
+		{"nil bundle degrades to a skip", nil, nil, statusWarn, "skipped (bundle not loaded)"},
+		{"load error degrades to a skip", policy(nil), errors.New("nope"), statusWarn, "skipped (bundle not loaded)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := checkAgentPolicy(tc.bundle, tc.bundleErr)
+			if res.Name != "agent_policy" || res.Blocking {
+				t.Fatalf("got %q blocking=%t, want the non-blocking agent_policy floor check", res.Name, res.Blocking)
+			}
+			if res.Status != tc.wantStatus || !strings.Contains(res.Detail, tc.wantDetail) {
+				t.Fatalf("status=%q detail=%q, want %q containing %q", res.Status, res.Detail, tc.wantStatus, tc.wantDetail)
+			}
+		})
+	}
+}
