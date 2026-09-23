@@ -134,6 +134,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/auth/session-epoch", auth(http.HandlerFunc(s.handleSessionEpoch)))
 	mux.Handle("/auth/external-session-epoch", auth(http.HandlerFunc(s.handleExternalSessionEpoch)))
 	mux.Handle("/auth/external-session-revoke", auth(http.HandlerFunc(s.handleExternalSessionRevoke)))
+	mux.Handle("/auth/external-access", auth(http.HandlerFunc(s.handleExternalAccess)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
 	mux.Handle("/admin/server-stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleServerStats)))))

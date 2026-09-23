@@ -216,6 +216,8 @@ export function Segmented<T extends string>({
   label,
   disabled,
   dividers,
+  emphasized,
+  onDeselect,
 }: {
   value: T;
   options: readonly { value: T; label: string; description?: string }[];
@@ -225,6 +227,10 @@ export function Segmented<T extends string>({
   /** Hairline separators between segments — for controls with 3+ textual
    *  options where the boundaries otherwise blur together. */
   dividers?: boolean;
+  /** Draw the control's border with the branded action gradient. */
+  emphasized?: boolean;
+  /** Optional checkbox-like behavior for a selected one-option control. */
+  onDeselect?: () => void;
 }) {
   const tooltipBaseId = useId();
   return (
@@ -232,7 +238,10 @@ export function Segmented<T extends string>({
       role="group"
       aria-label={label}
       className={[
-        "inline-flex shrink-0 rounded-[var(--radius-pill)] border border-[var(--color-border)]",
+        "inline-flex shrink-0 rounded-[var(--radius-pill)] border",
+        emphasized
+          ? "border-transparent bg-[linear-gradient(var(--color-surface-1),var(--color-surface-1))_padding-box,var(--gradient-action-primary)_border-box]"
+          : "border-[var(--color-border)]",
         dividers ? "divide-x divide-[var(--color-border-subtle)]" : "",
       ].join(" ")}
     >
@@ -247,7 +256,7 @@ export function Segmented<T extends string>({
               aria-pressed={value === o.value}
               aria-describedby={tooltipId}
               disabled={disabled}
-              onClick={() => onChange(o.value)}
+              onClick={() => value === o.value && onDeselect ? onDeselect() : onChange(o.value)}
               className={[
                 "px-[0.6rem] py-[0.18rem] text-[0.72rem] font-medium transition focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
                 index === 0 ? "rounded-l-full" : "",

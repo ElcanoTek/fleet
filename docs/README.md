@@ -301,6 +301,7 @@ above fails otherwise.
 - [`TURN-JOURNAL.md`](TURN-JOURNAL.md) — Durable turn journal & commit-gated terminal success (#798)
 - [`TURN-OUTCOME.md`](TURN-OUTCOME.md) — Turn outcome — a server-side answer the client reads instead of inferring (#1593)
 - [`UNIFIED-ADMIN-PERMISSION-UI.md`](UNIFIED-ADMIN-PERMISSION-UI.md) — Unified admin permission in the Users UI
+- [`CENTRAL-AUTH-PROVISIONING.md`](CENTRAL-AUTH-PROVISIONING.md) — Signed Auth membership and Fleet role provisioning
 - [`UPLOADS-AND-STORAGE.md`](UPLOADS-AND-STORAGE.md) — Uploads & storage management
 - [`UPSTREAM-ROUTING-FLOOR.md`](UPSTREAM-ROUTING-FLOOR.md) — Upstream routing: precision floor + served-upstream attribution
 - [`USAGE-ANALYTICS.md`](USAGE-ANALYTICS.md) — Usage analytics & budgets (#601)

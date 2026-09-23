@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyBackchannelLogoutToken } from "@/app/lib/backchannelLogout";
-import { revokeExternalSessions } from "@/app/lib/chatServer";
+import { verifyApplicationAccessToken, verifyBackchannelLogoutToken } from "@/app/lib/backchannelLogout";
+import { provisionExternalAccess, revokeExternalSessions } from "@/app/lib/chatServer";
 import { getOidcConfig } from "@/app/lib/oidc";
 
 export const runtime = "nodejs";
@@ -15,16 +15,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (Number(contentLengthHeader) > maxBackchannelBodyBytes) {
     return new NextResponse(null, { status: 413 });
   }
-  let raw: FormDataEntryValue | null;
+  let logoutRaw: FormDataEntryValue | null;
+  let accessRaw: FormDataEntryValue | null;
   try {
-    raw = (await request.formData()).get("logout_token");
+    const form = await request.formData();
+    logoutRaw = form.get("logout_token");
+    accessRaw = form.get("access_token");
   } catch {
     return new NextResponse(null, { status: 400 });
   }
-  if (typeof raw !== "string") return new NextResponse(null, { status: 400 });
+  if ((typeof logoutRaw === "string") === (typeof accessRaw === "string")) {
+    return new NextResponse(null, { status: 400 });
+  }
+  if (typeof accessRaw === "string") {
+    try {
+      const event = await verifyApplicationAccessToken(accessRaw, config.issuer, config.clientId);
+      const provisioned = await provisionExternalAccess(event);
+      return new NextResponse(null, { status: provisioned ? 204 : 503 });
+    } catch {
+      return new NextResponse(null, { status: 400 });
+    }
+  }
+  if (typeof logoutRaw !== "string") return new NextResponse(null, { status: 400 });
   let event;
   try {
-    event = await verifyBackchannelLogoutToken(raw, config.issuer, config.clientId);
+    event = await verifyBackchannelLogoutToken(logoutRaw, config.issuer, config.clientId);
   } catch {
     return new NextResponse(null, { status: 400 });
   }

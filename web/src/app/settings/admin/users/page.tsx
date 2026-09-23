@@ -102,7 +102,7 @@ const OPS_ROLE_OPTIONS = [
 const ADMIN_OPTIONS = [
   {
     value: "admin",
-    label: "Admin",
+    label: "Fleet Admin",
     description: "Full permissions in both Chat and the Ops Center.",
   },
 ] as const;
@@ -132,13 +132,15 @@ function PermissionFields({
           className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
           title="Admin grants full permissions in both Chat and the Ops Center."
         >
-          Admin
+          Fleet Admin
         </span>
         <Segmented
           value={role === "admin" ? "admin" : ""}
           options={ADMIN_OPTIONS}
           onChange={() => onChange({ role: "admin", opsRole: "admin" })}
-          label={`${ariaPrefix}Admin permissions`}
+          onDeselect={() => onChange({ role: "member", opsRole: "none" })}
+          emphasized={role === "admin"}
+          label={`${ariaPrefix}Fleet Admin permissions`}
         />
       </div>
       <div className="grid justify-items-start gap-[0.3rem]">
@@ -149,7 +151,7 @@ function PermissionFields({
           Chat
         </span>
         <Segmented
-          value={role}
+          value={role === "admin" ? "member" : role}
           options={CHAT_ROLE_OPTIONS}
           onChange={(nextRole) =>
             onChange({
@@ -160,6 +162,7 @@ function PermissionFields({
           }
           label={`${ariaPrefix}Chat permissions`}
           dividers
+          emphasized={role === "admin"}
         />
       </div>
       <div className="grid justify-items-start gap-[0.3rem]">
@@ -170,7 +173,7 @@ function PermissionFields({
           Ops Center
         </span>
         <Segmented
-          value={opsRole}
+          value={opsRole === "admin" ? "client" : opsRole}
           options={OPS_ROLE_OPTIONS}
           onChange={(nextOpsRole) =>
             onChange({
@@ -182,6 +185,7 @@ function PermissionFields({
           }
           label={`${ariaPrefix}Ops Center permissions`}
           dividers
+          emphasized={role === "admin"}
         />
       </div>
     </>
