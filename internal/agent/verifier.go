@@ -182,9 +182,18 @@ func toolResultLooksFailed(content string) bool {
 			Success *bool  `json:"success"`
 			OK      *bool  `json:"ok"`
 			IsError bool   `json:"isError"`
+			// RawMessage: "error" may be a string or an object.
+			Error json.RawMessage `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(trimmed), &probe); err == nil {
-			return strings.EqualFold(probe.Status, "error") || strings.EqualFold(probe.Status, "failed") || probe.IsError || (probe.Success != nil && !*probe.Success) || (probe.OK != nil && !*probe.OK)
+			// A top-level non-empty "error" with no explicit success field is a
+			// failed call — the same convention agentcore's mcpReportedFailure
+			// applies to commitments. It matters beyond the verifier summary:
+			// a completion.any_succeeded predicate (#1602) reads these records,
+			// and must not complete a run on {"error":"upstream 400"}.
+			e := strings.TrimSpace(string(probe.Error))
+			payloadError := probe.Success == nil && e != "" && e != "null" && e != `""`
+			return strings.EqualFold(probe.Status, "error") || strings.EqualFold(probe.Status, "failed") || probe.IsError || (probe.Success != nil && !*probe.Success) || (probe.OK != nil && !*probe.OK) || payloadError
 		}
 		return strings.HasPrefix(trimmed, `{"status":"error"`) || strings.HasPrefix(trimmed, `{"status": "error"`)
 	}

@@ -63,13 +63,19 @@ func (m *scriptedVerifier) Generate(context.Context, fantasy.Call) (*fantasy.Res
 // pagesBroker answers the Pages tools; failing names return an MCP tool error.
 type pagesBroker struct {
 	failing map[string]bool
-	calls   map[string]int
+	// payloadError names tools that answer a transport-successful payload
+	// carrying a top-level "error" (no isError flag).
+	payloadError map[string]bool
+	calls        map[string]int
 }
 
 func (b *pagesBroker) CallMCP(_ context.Context, _, tool string, _ map[string]any) (string, bool, error) {
 	b.calls[tool]++
 	if b.failing[tool] {
 		return "upstream 500", true, nil
+	}
+	if b.payloadError[tool] {
+		return `{"error":"upstream 400"}`, false, nil
 	}
 	return `{"ok":true,"checked_at":"2026-09-22T06:00:00Z","reason":"source_not_updated"}`, false, nil
 }
@@ -187,11 +193,13 @@ func TestScheduledCompletionPredicateUnsatisfiedStillVerifies(t *testing.T) {
 	}{
 		{"listed tool failed", []struct{ tool, input string }{{"confirm_audit", cleanAudit}, {"mcp_pages_record_refresh_check", `{"slug":"x"}`}}, pagesPredicate},
 		{"listed tool never called", []struct{ tool, input string }{{"confirm_audit", cleanAudit}}, pagesPredicate},
+		{"listed tool returned an error payload", []struct{ tool, input string }{{"confirm_audit", cleanAudit}, {"mcp_pages_record_refresh_check", `{"slug":"x"}`}}, pagesPredicate},
 		{"no clause", []struct{ tool, input string }{{"confirm_audit", cleanAudit}, {"mcp_pages_record_refresh_check", `{"slug":"x"}`}}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			verifier := &scriptedVerifier{replies: []string{`{"missing_actions":[]}`}}
-			broker := &pagesBroker{calls: map[string]int{}, failing: map[string]bool{"record_refresh_check": tc.name == "listed tool failed"}}
+			broker := &pagesBroker{calls: map[string]int{}, failing: map[string]bool{"record_refresh_check": tc.name == "listed tool failed"},
+				payloadError: map[string]bool{"record_refresh_check": tc.name == "listed tool returned an error payload"}}
 			a, _, _, err := scriptedRun(t, tc.steps, verifier, nil, broker, tc.predicate)
 			if err != nil {
 				t.Fatalf("run: %v", err)

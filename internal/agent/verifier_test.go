@@ -16,6 +16,10 @@ func TestToolResultLooksFailed(t *testing.T) {
 		failed  bool
 	}{
 		{"fantasy error result", "[tool error] connection refused", true},
+		{"top-level error string", `{"error":"upstream 400"}`, true},
+		{"top-level error object", `{"error":{"message":"HTTP 400"}}`, true},
+		{"null error is not a failure", `{"error":null,"id":"v42"}`, false},
+		{"explicit success wins over an error field", `{"success":true,"error":""}`, false},
 		{"fantasy error result no message", "[tool error] (no message)", true},
 		{"legacy compact status error", `{"status":"error","message":"boom"}`, true},
 		{"status error with spaces", `{"status": "error", "message": "boom"}`, true},
