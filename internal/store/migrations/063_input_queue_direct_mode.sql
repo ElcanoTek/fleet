@@ -22,3 +22,11 @@ ALTER TABLE chat_input_queue DROP CONSTRAINT IF EXISTS chat_input_queue_mode_che
 ALTER TABLE chat_input_queue
   ADD CONSTRAINT chat_input_queue_mode_check CHECK (mode IN ('queued', 'steer', 'direct')) NOT VALID;
 ALTER TABLE chat_input_queue VALIDATE CONSTRAINT chat_input_queue_mode_check;
+
+-- A first submission carries no conversation id: the server creates the
+-- conversation, and a response lost before any header leaves the caller
+-- without one. Its resend must still find the input it already accepted, so
+-- the key is also looked up per user (LookupInputForUser) before a new
+-- conversation is created.
+CREATE INDEX IF NOT EXISTS chat_input_queue_user_key
+  ON chat_input_queue (user_email, client_input_id);

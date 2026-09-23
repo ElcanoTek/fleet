@@ -109,6 +109,10 @@ type turnRequest struct {
 	// InputID is the server's idempotency key (#785): a re-POST of the same
 	// id is answered with the input already accepted instead of a new one.
 	InputID string `json:"input_id,omitempty"`
+	// SubmissionID names this submission (#1592). It is set to the input_id,
+	// so /inflight echoes it on the turn it started and a caller that lost
+	// the answer can find that turn without resubmitting.
+	SubmissionID string `json:"submission_id,omitempty"`
 }
 
 // QueuedError is POST /chat's queue acknowledgement: the conversation already
@@ -174,6 +178,7 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		Model:          c.turnModel(convID),
 		Persona:        c.cfg.Persona,
 		InputID:        inputID,
+		SubmissionID:   inputID,
 	})
 	if err != nil {
 		return convID, err
@@ -507,6 +512,56 @@ func (c *Client) Cancel(convID, turnID string) error {
 		return fmt.Errorf("cancel returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
 	}
 	return nil
+}
+
+// InflightTurn is GET /conversations/{id}/inflight: the conversation's
+// running turn, if any, and the submission it was started for.
+type InflightTurn struct {
+	Running      bool   `json:"inflight"`
+	TurnID       string `json:"turn_id"`
+	SubmissionID string `json:"submission_id"`
+}
+
+// Inflight reads the conversation's running turn — read-only, never starts one.
+func (c *Client) Inflight(convID string) (InflightTurn, error) {
+	var out InflightTurn
+	err := c.getJSON("/conversations/"+url.PathEscape(convID)+"/inflight", &out)
+	return out, err
+}
+
+// QueueItem is one row of GET /conversations/{id}/queue.
+type QueueItem struct {
+	ID            string `json:"id"`
+	ClientInputID string `json:"client_input_id"`
+	State         string `json:"state"`
+}
+
+// QueueItems reads the conversation's pending queue — read-only.
+func (c *Client) QueueItems(convID string) ([]QueueItem, error) {
+	var out struct {
+		Items []QueueItem `json:"items"`
+	}
+	err := c.getJSON("/conversations/"+url.PathEscape(convID)+"/queue", &out)
+	return out.Items, err
+}
+
+func (c *Client) getJSON(path string, into any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ServerURL+path, nil)
+	if err != nil {
+		return err
+	}
+	c.setAuthHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s returned %d", path, resp.StatusCode)
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(into)
 }
 
 // RemoveQueued withdraws a message fleet queued (DELETE

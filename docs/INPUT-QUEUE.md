@@ -50,7 +50,12 @@ retention guarantee: after a terminal row is purged, reusing its
   Stop sweeps, remove and promote skip them. At turn end (and at boot
   recovery) they settle `completed` when the turn's user entry committed and
   `cancelled` otherwise (nothing ran, so a fresh key may be sent). A claim
-  whose turn never launched is released, so the key can be retried. The
+  whose turn never launched is released, so the key can be retried. A first
+  submission names no conversation, so its key is also looked up per user
+  before a conversation is created: a resend after a response lost before any
+  header finds the original conversation instead of starting a second one.
+  (Two concurrent first submissions of one key can still race; clients that
+  resend only after an answer, such as `fleet acp`, never do.) The
   `queue.updated` SSE event carries a full snapshot on every mutation, and
   `user.message` gains `{steered:true, input_id}` when a steer is accepted.
 

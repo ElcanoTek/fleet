@@ -972,6 +972,53 @@ func TestDirectTurn_InputIDIsIdempotent(t *testing.T) {
 	}
 }
 
+// A first submission names no conversation. If its whole response is lost,
+// the resend (same input_id, still no conversation) must find the input it
+// already accepted instead of creating a second conversation and running the
+// prompt again there.
+func TestFirstSubmission_ResendFindsTheOriginal(t *testing.T) {
+	s := serverFixture(t)
+	const user = "erin@x.com"
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		first <- postChatJSON(t, s, user, map[string]any{"message": "book the room", "input_id": "first-1"})
+	}()
+	<-eng.started
+	resend := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		resend <- postChatJSON(t, s, user, map[string]any{"message": "book the room", "input_id": "first-1"})
+	}()
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-resend:
+	case <-time.After(5 * time.Second):
+		// A resend that started a second turn streams it and never returns
+		// while the engine is gated: release both so the test ends, and fail.
+		eng.release <- struct{}{}
+		eng.release <- struct{}{}
+		t.Fatal("the resend started a second turn instead of finding the original")
+	}
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"mode":"direct"`) {
+		t.Fatalf("resend: %d %s", w.Code, w.Body.String())
+	}
+	eng.release <- struct{}{}
+	orig := <-first
+	convID := orig.Header().Get("X-Fleet-Conversation-Id")
+	if convID == "" || !strings.Contains(w.Body.String(), `"conversation_id":"`+convID+`"`) {
+		t.Fatalf("resend answered for another conversation: %s (original %q)", w.Body.String(), convID)
+	}
+	if n := eng.turns.Load(); n != 1 {
+		t.Fatalf("turns run = %d, want 1", n)
+	}
+	convs, err := s.store.List(context.Background(), user, false)
+	if err != nil || len(convs) != 1 {
+		t.Fatalf("conversations = %d, want 1 (no second conversation)", len(convs))
+	}
+}
+
 func TestQueue_SteerInjectsMidTurnExactlyOnce(t *testing.T) {
 	s := serverFixture(t)
 	const user = "bob@x.com"

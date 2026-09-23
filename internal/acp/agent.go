@@ -53,6 +53,8 @@ type turnClient interface {
 	StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(chattui.Event)) (string, error)
 	Cancel(convID, turnID string) error
 	RemoveQueued(convID, inputID string) error
+	Inflight(convID string) (chattui.InflightTurn, error)
+	QueueItems(convID string) ([]chattui.QueueItem, error)
 }
 
 // updater sends session/update notifications (the AgentSideConnection in
@@ -86,18 +88,34 @@ type session struct {
 	mu     sync.Mutex // serializes prompts on this session
 	convID string
 	cwd    string
-	// unsettled is the last prompt whose outcome is unknown: the request may
+	// unsettled holds, per prompt text, the key of every prompt whose outcome
+	// is unknown (bounded by maxUnsettled): the request may
 	// have been accepted but the answer was lost (a transport failure). A
 	// retry of the same text reuses its idempotency key, so fleet recognises
 	// the input it already accepted instead of running it a second time.
-	unsettled *unsettledPrompt
+	unsettled map[string]string
 	// rekeyed maps a client messageId to the fresh key it was resubmitted
 	// under after fleet reported its first attempt as never run, so a later
 	// resend of that messageId finds the run instead of starting another.
 	rekeyed map[string]string
 }
 
-type unsettledPrompt struct{ message, key string }
+// maxUnsettled bounds the unresolved-key memory per session. Past it the
+// oldest entry is dropped — a retry of that text then gets a fresh key.
+const maxUnsettled = 64
+
+func (s *session) setUnsettled(message, key string) {
+	if s.unsettled == nil {
+		s.unsettled = map[string]string{}
+	}
+	if _, ok := s.unsettled[message]; !ok && len(s.unsettled) >= maxUnsettled {
+		for m := range s.unsettled { // any entry; the map is small
+			delete(s.unsettled, m)
+			break
+		}
+	}
+	s.unsettled[message] = key
+}
 
 var _ acpsdk.Agent = (*Agent)(nil)
 
@@ -214,6 +232,11 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 			}
 			sess.rekeyed[strings.TrimSpace(*p.MessageId)] = fresh
 		}
+		if ctx.Err() != nil {
+			// Cancelled between the replay answer and the resubmission:
+			// nothing was sent under the fresh key, and nothing may be.
+			return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+		}
 		resp, err = a.promptOnce(ctx, p, sess, message, fresh, false)
 	}
 	return resp, err
@@ -251,7 +274,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)
-	go a.stopTurn(stopCtx, tr, streamDone, stopped, cancelStream)
+	go a.stopTurn(stopCtx, tr, key, streamDone, stopped, cancelStream)
 	convID, streamErr := a.client.StreamInput(streamCtx, message, sess.convID, key, tr.handle)
 	close(streamDone)
 	stop := <-stopped
@@ -260,9 +283,11 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		convID = tr.conversationID()
 	}
 	sess.convID = convID
-	sess.unsettled = nil
+	// Only THIS prompt's entry is reconciled here; other unresolved prompts
+	// keep their keys until they are retried and answered.
+	delete(sess.unsettled, message)
 	if outcomeUnknown(streamErr) {
-		sess.unsettled = &unsettledPrompt{message: message, key: key}
+		sess.setUnsettled(message, key)
 	}
 
 	meta := map[string]any{"fleet.conversationId": convID}
@@ -271,12 +296,19 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	if isQueued && queued.State == "cancelled" && allowRetry && ctx.Err() == nil && stopCtx.Err() == nil {
 		// A replay of a key whose earlier attempt never ran (its turn failed
 		// before it began). The key is spent; nothing ran under it.
-		sess.unsettled = nil
+		delete(sess.unsettled, message)
 		return acpsdk.PromptResponse{}, errRetryFresh
 	}
 	if isQueued && (ctx.Err() != nil || stopCtx.Err() != nil) {
 		stop.intervened = true
 		stopErr = a.stopAccepted(convID, queued)
+	}
+	if outcomeUnknown(streamErr) && (ctx.Err() != nil || stopCtx.Err() != nil) && !stop.intervened {
+		// Cancelled (or timed out) and the answer was lost before fleet said
+		// what it did with this prompt: find it by key and stop it, so it
+		// cannot run on after ACP reports it cancelled.
+		stop.intervened = true
+		stopErr = a.reconcileLost(convID, key)
 	}
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
@@ -355,7 +387,7 @@ type stopOutcome struct {
 // A turn the server already reported as over is never stopped: the Stop is
 // conversation-scoped, so sending it after the watched turn ended could
 // cancel a follow-up queued from another surface instead.
-func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan struct{}, stopped chan<- stopOutcome, cancelStream context.CancelFunc) {
+func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, streamDone <-chan struct{}, stopped chan<- stopOutcome, cancelStream context.CancelFunc) {
 	select {
 	case <-streamDone:
 		stopped <- stopOutcome{}
@@ -393,8 +425,13 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 		err = a.client.Cancel(id, turn)
 	} else if id != "" {
 		// Never an untargeted Stop: "whichever turn is running" could be a
-		// successor by the time it lands. Report the stop as unconfirmed.
-		err = errors.New("fleet did not report which turn to stop")
+		// successor by the time it lands. The answer has not named a turn
+		// (it may be slow, lost, or a queue acknowledgement), so stop reading
+		// and find this prompt by its key instead: a turn started for this
+		// submission gets a targeted Stop, a queue row with this key is
+		// withdrawn.
+		cancelStream()
+		err = a.reconcileLost(id, key)
 	} else {
 		select {
 		case <-streamDone: // the request ended before fleet started a turn
@@ -416,8 +453,8 @@ func idempotencyKey(messageID *string, sess *session, message string) string {
 		}
 		return "acp-msg-" + strings.TrimSpace(*messageID)
 	}
-	if sess.unsettled != nil && sess.unsettled.message == message {
-		return sess.unsettled.key
+	if k, ok := sess.unsettled[message]; ok {
+		return k
 	}
 	return "fleet-acp-" + randomID()
 }
@@ -456,6 +493,37 @@ func (a *Agent) stopAccepted(convID string, q *chattui.QueuedError) error {
 	default:
 		return nil
 	}
+}
+
+// reconcileLost stops a prompt whose answer was lost, found by its key without
+// resubmitting it: a turn running for this submission (/inflight echoes the
+// submission id, which is the key) gets a targeted Stop, and a queue row with
+// this key is withdrawn. With no conversation known there is nothing to look
+// in, and the stop is reported as unconfirmed.
+func (a *Agent) reconcileLost(convID, key string) error {
+	if convID == "" {
+		return errors.New("fleet never reported the conversation, so the lost prompt cannot be found to stop")
+	}
+	var errs []error
+	if in, err := a.client.Inflight(convID); err != nil {
+		errs = append(errs, err)
+	} else if in.Running && in.SubmissionID == key && in.TurnID != "" {
+		if err := a.client.Cancel(convID, in.TurnID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if items, err := a.client.QueueItems(convID); err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, it := range items {
+			if it.ClientInputID == key && it.State == "queued" {
+				if err := a.client.RemoveQueued(convID, it.ID); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // acceptedNote tells the ACP user what became of a prompt fleet accepted

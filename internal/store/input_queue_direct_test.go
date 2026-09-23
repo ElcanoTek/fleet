@@ -152,3 +152,18 @@ func TestRecoverInputQueue_SettlesDirectClaims(t *testing.T) {
 		t.Fatalf("uncommitted direct claim = %+v, want cancelled", got)
 	}
 }
+
+func TestLookupInputForUser_FindsTheKeyAcrossConversations(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	claimed, _ := claimDirect(t, s, convID, "first-key")
+
+	got, err := s.LookupInputForUser(ctx, "u@example.com", "first-key")
+	if err != nil || got == nil || got.ID != claimed.ID || got.ConversationID != convID {
+		t.Fatalf("got %+v err=%v, want the claim in %s", got, err, convID)
+	}
+	if other, _ := s.LookupInputForUser(ctx, "someone@else.com", "first-key"); other != nil {
+		t.Fatal("another user's key must not be found")
+	}
+}

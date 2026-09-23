@@ -971,6 +971,18 @@ func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) erro
 	return nil
 }
 
+func (s *fakeChatStore) LookupInputForUser(_ context.Context, userEmail, clientID string) (*store.InputQueueRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.queue) - 1; i >= 0; i-- {
+		if s.queue[i].UserEmail == userEmail && s.queue[i].ClientInputID == clientID {
+			row := s.queue[i]
+			return &row, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *fakeChatStore) LookupInput(_ context.Context, convID, clientID string) (*store.InputQueueRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

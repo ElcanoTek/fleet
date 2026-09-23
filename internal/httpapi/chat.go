@@ -356,6 +356,21 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			conv.ArchivedAt = nil
 		}
 	} else {
+		// A first submission's resend (same input_id, still no conversation id
+		// because the original response was lost before any header) must find
+		// the input it already accepted — before this would create a second
+		// conversation and run the prompt again there.
+		if clientID := strings.TrimSpace(req.InputID); clientID != "" {
+			existing, lerr := s.store.LookupInputForUser(r.Context(), user, clientID)
+			if lerr != nil {
+				http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
+				return
+			}
+			if existing != nil {
+				writeQueueAck(w, http.StatusOK, existing.ConversationID, *existing)
+				return
+			}
+		}
 		persona := strings.TrimSpace(req.Persona)
 		if persona == "" {
 			persona = s.cfg.PersonaDefault

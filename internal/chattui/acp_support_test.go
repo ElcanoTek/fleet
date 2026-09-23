@@ -79,6 +79,20 @@ func TestResolvePublicURL(t *testing.T) {
 			t.Errorf("PublicURL = %q, err %v", cfg.PublicURL, err)
 		}
 	})
+	t.Run("an explicit --server ignores ambient public URLs", func(t *testing.T) {
+		env := map[string]string{"FLEET_PUBLIC_URL": "https://deployment-a.example.com"}
+		for k, v := range base {
+			env[k] = v
+		}
+		cfg, err := Resolve(Flags{Server: "https://deployment-b.example.com"}, envMap(env), noFile, noEnvFile)
+		if err != nil || cfg.PublicURL != "" {
+			t.Errorf("PublicURL = %q err=%v, want none (it belongs to another deployment)", cfg.PublicURL, err)
+		}
+		cfg, err = Resolve(Flags{Server: "https://deployment-b.example.com", PublicURL: "https://b.example.com/"}, envMap(env), noFile, noEnvFile)
+		if err != nil || cfg.PublicURL != "https://b.example.com" {
+			t.Errorf("explicit --public-url = %q err=%v", cfg.PublicURL, err)
+		}
+	})
 	t.Run("unset is empty", func(t *testing.T) {
 		cfg, err := Resolve(Flags{}, envMap(base), noFile, noEnvFile)
 		if err != nil || cfg.PublicURL != "" {

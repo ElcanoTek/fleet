@@ -43,6 +43,11 @@ type Flags struct {
 	EnvFile   string // server env file to auto-discover the token/addr from
 	Model     string
 	Persona   string
+	// PublicURL is an explicit web UI base URL for deep links. It always
+	// wins, and is the only source used when the server was chosen
+	// explicitly (--server / $FLEET_CHAT_URL), since an ambient public URL
+	// may belong to a different deployment.
+	PublicURL string
 }
 
 // getenv is the environment accessor (injectable for tests).
@@ -100,6 +105,7 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	}
 
 	// Server URL from flags/env (default applied after the env-file step below).
+	serverExplicit := strings.TrimSpace(f.Server) != "" || strings.TrimSpace(env("FLEET_CHAT_URL")) != ""
 	switch {
 	case strings.TrimSpace(f.Server) != "":
 		cfg.ServerURL = strings.TrimSpace(f.Server)
@@ -141,10 +147,19 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	// the user to another fleet. So it is read from the env, else from the
 	// file that supplied the server config, else from an explicitly pinned
 	// env file — never probed across the default candidates on its own.
-	cfg.PublicURL = strings.TrimSpace(firstNonEmpty(env("FLEET_PUBLIC_BASE_URL"), env("FLEET_PUBLIC_URL")))
-	publicFile := serverFile
-	if publicFile == "" && (strings.TrimSpace(f.EnvFile) != "" || strings.TrimSpace(env("FLEET_ENV_FILE")) != "") {
-		publicFile = candidates[0]
+	//
+	// An explicit --public-url always wins. When the server itself was chosen
+	// explicitly (--server / $FLEET_CHAT_URL), nothing ambient is trusted: an
+	// env or file public URL describes whatever deployment that environment
+	// belongs to, which need not be the one this client was pointed at.
+	cfg.PublicURL = strings.TrimSpace(f.PublicURL)
+	publicFile := ""
+	if cfg.PublicURL == "" && !serverExplicit {
+		cfg.PublicURL = strings.TrimSpace(firstNonEmpty(env("FLEET_PUBLIC_BASE_URL"), env("FLEET_PUBLIC_URL")))
+		publicFile = serverFile
+		if publicFile == "" && (strings.TrimSpace(f.EnvFile) != "" || strings.TrimSpace(env("FLEET_ENV_FILE")) != "") {
+			publicFile = candidates[0]
+		}
 	}
 	if cfg.PublicURL == "" && publicFile != "" && evf != nil {
 		if vals, err := evf(publicFile, "FLEET_PUBLIC_BASE_URL", "FLEET_PUBLIC_URL"); err == nil {

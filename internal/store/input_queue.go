@@ -513,6 +513,24 @@ func (s *Store) LookupInput(ctx context.Context, convID, clientID string) (*Inpu
 	return &row, nil
 }
 
+// LookupInputForUser returns the most recent row holding a caller idempotency
+// key for this user across all of their conversations, or nil. A first
+// submission names no conversation — the server creates it — so its resend
+// after a response lost before any header must find the original here, before
+// a second conversation would be created.
+func (s *Store) LookupInputForUser(ctx context.Context, userEmail, clientID string) (*InputQueueRow, error) {
+	row, err := scanInputRow(s.db.QueryRowContext(ctx,
+		inputQueueSelect+` WHERE user_email = $1 AND client_input_id = $2
+		  ORDER BY created_at DESC, id DESC LIMIT 1`, userEmail, clientID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
 // SettleTurnInputs reconciles a finished turn's queue rows against the #798
 // durable record — the same predicates boot recovery uses, applied at turn
 // end so no row waits for a restart:

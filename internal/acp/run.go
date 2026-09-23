@@ -36,6 +36,7 @@ func run(argv []string, in io.Reader, out, errOut io.Writer) int {
 	fs.StringVar(&f.EnvFile, "env-file", "", "server env file to auto-read the token/addr from (default $FLEET_ENV_FILE, else .env.local, else /etc/fleet/fleet.env)")
 	fs.StringVar(&f.Model, "model", "", "model slug for new sessions (default: the workspace default)")
 	fs.StringVar(&f.Persona, "persona", "", "persona for new sessions")
+	fs.StringVar(&f.PublicURL, "public-url", "", "web UI base URL for approval and conversation links (default $FLEET_PUBLIC_BASE_URL / $FLEET_PUBLIC_URL, ignored when --server is set)")
 	timeout := fs.Duration("timeout", DefaultTimeout, "stop a turn that runs longer than this (0 = no bound)")
 	fs.SetOutput(errOut)
 	fs.Usage = func() {
