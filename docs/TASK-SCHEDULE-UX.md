@@ -50,10 +50,12 @@ Eastern. What shipped:
   brute-force search over ~174k samples every 5 minutes within ±30h of every
   2026 transition in 11 zones: it matched the brute force everywhere, and
   matched robfig everywhere except Australia/Lord_Howe (30-minute DST) and
-  Pacific/Chatham, where robfig itself skips a day around the transition
-  (e.g. Lord Howe `0 3 * * *` from 2026-04-04 03:00 returns Apr 6, not Apr 5).
-  There the preview shows the correct day and the scheduler fires a day late —
-  a pre-existing backend edge case, not changed here. Days with no offset
+  Pacific/Chatham, where robfig itself skipped a day around the transition
+  (e.g. Lord Howe `0 3 * * *` from 2026-04-04 03:00 returned Apr 6, not Apr 5).
+  The scheduler now computes every zone-aware next run through
+  `internal/cronnext.Next`, the same algorithm in Go, so the preview and the
+  scheduler agree there too (pinned by `TestNext_LordHoweDoesNotSkipADay` and a
+  brute-force differential test around every 2026 transition). Days with no offset
   change are computed by arithmetic, and the form memoizes the preview and
   the zone list, so neither re-runs on unrelated keystrokes. The zone label's
   abbreviation is the one in effect at that next run, and the "not your own
