@@ -1897,12 +1897,13 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// successor copies verbatim, so the next occurrence is certain to
 	// dead-letter the same way at dispatch: the two-strike rule exists for
 	// causes that might not recur, and this one always does. Replay cannot fix
-	// it either — it reruns the same prompt — so the log says to correct the
-	// prompt (the terminal-task editor saves a corrected copy).
+	// it either — it reruns the same prompt — and editing the terminal row saves
+	// a one-off rerun without the recurrence, so the log says to recreate (or
+	// clone) the task with the corrected prompt and its schedule.
 	if current.Status == models.TaskStatusDeadLettered {
 		parkReason := ""
 		if rerr := models.ValidateExecutionRequirements(current.Prompt); rerr != nil {
-			parkReason = fmt.Sprintf("on its first dead-letter: %v — every occurrence would dead-letter the same way; correct the task prompt (the task editor saves a corrected copy), replaying the same prompt cannot help", rerr)
+			parkReason = fmt.Sprintf("on its first dead-letter: %v — every occurrence would dead-letter the same way; recreate the task (or clone it, which keeps the schedule) with a corrected prompt; replaying the same prompt cannot help, and editing this dead-lettered row starts a one-off run without the schedule", rerr)
 		} else {
 			parked, perr := predecessorIsDeadLettered(ctx, tx, current)
 			if perr != nil {

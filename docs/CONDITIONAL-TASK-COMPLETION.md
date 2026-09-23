@@ -126,8 +126,11 @@ EXECUTION REQUIREMENTS (JSON):
   e.g. `invalid server or tool identifier "fast_io + fastio_helpers"; allowed
   ^[a-zA-Z0-9_.-]{1,200}$`.
 - **Dispatch and save share one grammar** (`models.ValidateExecutionRequirements`),
-  so a prompt that saved cleanly never fails this check at dispatch. Whether
-  the named servers and tools exist is still decided at dispatch.
+  so a prompt that saved cleanly never fails this check at dispatch. The one
+  exception is a webhook or email trigger run: its prompt is rendered from the
+  event at run time and is not re-validated on insert, so a rendered
+  declaration can still fail here (loudly, before any model or tool work).
+  Whether the named servers and tools exist is still decided at dispatch.
 - **Tasks saved before the check.** A recurring task saved before it that
   still carries a malformed line dead-letters once and parks its chain at
   once, not after two occurrences
