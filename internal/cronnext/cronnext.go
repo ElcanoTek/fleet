@@ -54,7 +54,9 @@ func Next(s cron.Schedule, t time.Time) time.Time {
 	utc.Location = time.UTC
 
 	at := t.In(loc)
-	lastYear := at.Year() + yearHorizon
+	// robfig rounds up to the next whole second before taking the year, so a
+	// start in the last second of a year counts from the new one.
+	lastYear := at.Add(time.Second-time.Duration(at.Nanosecond())).Year() + yearHorizon
 	strictlyAfter := true // the first period excludes t itself; later ones start inclusive
 	for i := 0; i < maxPeriods && at.Year() <= lastYear; i++ {
 		_, offsetSecs := at.Zone()

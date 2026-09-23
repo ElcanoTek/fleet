@@ -1,6 +1,7 @@
 package cronnext
 
 import (
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -246,12 +247,41 @@ func TestNext_HorizonMatchesRobfig(t *testing.T) {
 	}{
 		{"0 0 29 2 *", time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)},
 		{"0 0 29 2 *", time.Date(2098, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{"0 0 29 2 *", time.Date(2098, 12, 31, 23, 59, 59, 0, time.UTC)},
+		{"0 0 29 2 *", time.Date(2098, 12, 31, 23, 59, 59, 999_999_999, time.UTC)},
+		{"0 0 29 2 *", time.Date(2098, 12, 31, 23, 59, 58, 500_000_000, time.UTC)},
 		{"0 0 29 2 *", time.Date(2026, 9, 23, 12, 0, 0, 0, mustLoad(t, "America/New_York"))},
 		{"0 0 30 2 *", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 	} {
 		s := mustParse(t, c.expr)
 		if got, want := Next(s, c.from), s.Next(c.from); !got.Equal(want) {
 			t.Errorf("%q from %s: Next = %s, robfig = %s", c.expr, c.from, got, want)
+		}
+	}
+}
+
+// Where a zone never changes offset, robfig's Next is correct, so Next must
+// equal it exactly — horizon, year boundaries, sub-second starts and all.
+// Randomized over schedules and start instants, with a fixed seed.
+func TestNext_EqualsRobfigWithoutTransitions(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1624, 2026))
+	exprs := []string{
+		"* * * * *", "0 0 * * *", "30 2 * * *", "0 0 29 2 *", "0 0 30 2 *", "59 23 31 12 *",
+		"0 0 1 1 *", "*/7 */5 * * *", "15 10 * * 1-5", "0 12 13 * 5", "0 0 31 * *", "45 23 * 2 0",
+	}
+	zones := []*time.Location{time.UTC, time.FixedZone("plus-1345", 13*3600+45*60), time.FixedZone("minus-0930", -(9*3600 + 30*60))}
+	lo := time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+	hi := time.Date(2110, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+	for i := 0; i < 20000; i++ {
+		e := exprs[rng.IntN(len(exprs))]
+		loc := zones[rng.IntN(len(zones))]
+		from := time.Unix(lo+rng.Int64N(hi-lo), rng.Int64N(1e9)).In(loc)
+		if rng.IntN(4) == 0 { // bias toward year boundaries
+			from = time.Date(from.Year(), 12, 31, 23, 59, 59, rng.IntN(1e9), loc)
+		}
+		s := mustParse(t, e)
+		if got, want := Next(s, from), s.Next(from); !got.Equal(want) {
+			t.Fatalf("%q from %s: Next = %s, robfig = %s", e, from.Format(time.RFC3339Nano), got, want)
 		}
 	}
 }
