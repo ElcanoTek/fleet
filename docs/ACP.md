@@ -76,8 +76,8 @@ diagnostic goes to stderr.
 | --- | --- |
 | `initialize` | Protocol 1; `agentInfo` `fleet` + the build version; capabilities: text prompts, embedded text resources (`promptCapabilities.embeddedContext`), and `loadSession: false`. No auth methods, no image or audio. |
 | `session/new` | Records a session. The fleet conversation is created by the first prompt, like a new web chat. Client-supplied `mcpServers` are **refused** (invalid params), not ignored: fleet's connectors come from the operator's bundle and run host-side with brokered credentials. |
-| `session/prompt` | One `POST /chat` turn. Later prompts in the session continue the same fleet conversation. The response carries `_meta["fleet.conversationId"]` and token `usage`. |
-| `session/cancel` | Stops the turn **server-side** (`POST /conversations/{id}/cancel`, scope `turn`) and answers the prompt with stop reason `cancelled`. Closing the HTTP stream alone would not stop the turn, because fleet detaches a turn from its request by design. If fleet does not accept the Stop, the prompt still answers `cancelled` (ACP requires it), but the transcript says the turn may still be running and where to stop it. A turn stopped from another fleet surface, such as the web chat's Stop, also ends as `cancelled`. |
+| `session/prompt` | One `POST /chat` turn. Later prompts in the session continue the same fleet conversation. The conversation id is taken from the `X-Fleet-Conversation-Id` response header as well as the first frame, so a stream that dies early does not start a second conversation on retry. The response carries `_meta["fleet.conversationId"]` and token `usage`. |
+| `session/cancel` | Stops the turn **server-side** (`POST /conversations/{id}/cancel`, scope `turn`) and answers the prompt with stop reason `cancelled`. Closing the HTTP stream alone would not stop the turn, because fleet detaches a turn from its request by design. If fleet does not accept the Stop, the prompt still answers `cancelled` (ACP requires it), but the transcript says the turn may still be running and where to stop it. A turn stopped from another fleet surface, such as the web chat's Stop, also ends as `cancelled`. A turn the server already reported as over is never sent a Stop: the Stop is conversation-scoped and could otherwise cancel a follow-up queued from another surface. |
 | `session/close` | Forgets the session. The conversation stays in fleet like any chat. |
 | `authenticate`, `logout`, `session/load`, `session/list`, `session/resume`, `session/set_mode`, `session/set_config_option` | Not advertised. They answer method-not-found. |
 
@@ -87,9 +87,9 @@ Stream events map onto `session/update`:
 | --- | --- |
 | `text.delta` | `agent_message_chunk` |
 | `reasoning.delta` | `agent_thought_chunk` |
-| `tool.call` / `tool.result` | `tool_call` (title = tool name, `in_progress`) / `tool_call_update` (`completed` or `failed`; `pending` for a call staged for approval, whose placeholder result is not a failure) |
+| `tool.call` / `tool.result` | `tool_call` (title = tool name, `in_progress`) / `tool_call_update` (`completed` or `failed`; `pending` for a call that fleet staged as an approval card, whose placeholder result is not a failure; a call whose staging itself failed stays `failed`) |
 | `text.replace` | Nothing when it matches what was streamed; the missing suffix when it extends it; otherwise the final text after a `— revised answer —` line (see below) |
-| `tool.approval_required` | After the turn, a text pointer to the approval in fleet |
+| `tool.approval_required` | When the turn ends, however it ends (completed, cancelled, timed out or errored), a text pointer to the approval in fleet |
 | `turn.policy_blocked` | Stop reason `refusal` |
 
 Prompt content: text blocks are joined. A `resource_link` becomes a Markdown

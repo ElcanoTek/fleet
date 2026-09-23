@@ -41,6 +41,18 @@ type translator struct {
 	approvals     []stagedApproval
 	policyBlocked bool
 	usage         *acpsdk.Usage
+
+	// awaiting counts, per tool name, approval cards created (a
+	// tool.approval_required event) whose placeholder result has not been seen
+	// yet. The card event carries no call id, so a result is matched to a card
+	// by tool name; the placeholder alone is not proof a card exists — a
+	// staging failure returns the same prefix with no card.
+	awaiting map[string]int
+
+	// terminal is set once the server reported the turn's end (completed,
+	// cancelled, errored, model-required). Read by the stop watcher.
+	terminalMu sync.Mutex
+	terminal   bool
 }
 
 type stagedApproval struct{ id, tool string }
@@ -50,7 +62,7 @@ type stagedApproval struct{ id, tool string }
 const approvalSentinel = "APPROVAL_REQUIRED:"
 
 func newTranslator(sessionID acpsdk.SessionId, convID string, send func(acpsdk.SessionUpdate)) *translator {
-	t := &translator{sessionID: sessionID, send: send, convKnown: make(chan struct{})}
+	t := &translator{sessionID: sessionID, send: send, convKnown: make(chan struct{}), awaiting: map[string]int{}}
 	t.setConversation(convID)
 	return t
 }
@@ -65,6 +77,13 @@ func (t *translator) setConversation(id string) {
 		close(t.convKnown)
 	}
 	t.convID = id
+}
+
+// ended reports whether the server said the watched turn is over.
+func (t *translator) ended() bool {
+	t.terminalMu.Lock()
+	defer t.terminalMu.Unlock()
+	return t.terminal
 }
 
 func (t *translator) conversationID() string {
@@ -96,11 +115,16 @@ func (t *translator) handle(ev chattui.Event) {
 	case "tool.result":
 		if id := ev.Str("id"); id != "" {
 			status := acpsdk.ToolCallStatusCompleted
+			name := ev.Str("name")
 			switch isErr, _ := ev.Data["is_err"].(bool); {
-			case strings.HasPrefix(ev.Str("text"), approvalSentinel):
+			case strings.HasPrefix(ev.Str("text"), approvalSentinel) && t.awaiting[name] > 0:
 				// A staged critical tool resolves its call with an is_err
-				// APPROVAL_REQUIRED placeholder. That is a pause for a person
-				// (the same reading `fleet chat` gives it), not a failure.
+				// APPROVAL_REQUIRED placeholder. When a card was actually
+				// created for it, that is a pause for a person (the reading
+				// `fleet chat` gives it), not a failure. Without a card (the
+				// staging itself failed) nothing can be approved, so it stays
+				// failed.
+				t.awaiting[name]--
 				status = acpsdk.ToolCallStatusPending
 			case isErr:
 				status = acpsdk.ToolCallStatusFailed
@@ -110,6 +134,7 @@ func (t *translator) handle(ev chattui.Event) {
 	case "tool.approval_required":
 		if id := ev.Str("approval_id"); id != "" {
 			t.approvals = append(t.approvals, stagedApproval{id: id, tool: ev.Str("tool")})
+			t.awaiting[ev.Str("tool")]++
 		}
 	case "tool.approval_superseded":
 		kept := t.approvals[:0]
@@ -123,6 +148,12 @@ func (t *translator) handle(ev chattui.Event) {
 		t.policyBlocked = true
 	case "turn.completed":
 		t.usage = usageFrom(ev.Data)
+	}
+	switch ev.Name {
+	case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
+		t.terminalMu.Lock()
+		t.terminal = true
+		t.terminalMu.Unlock()
 	}
 }
 

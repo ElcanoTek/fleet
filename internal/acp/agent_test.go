@@ -643,3 +643,148 @@ func TestStagedToolIsPendingNotFailed(t *testing.T) {
 		t.Errorf("statuses = %v, want call-s pending and call-f failed", status)
 	}
 }
+
+// The APPROVAL_REQUIRED prefix without a created card (staging itself failed)
+// is not something anyone can approve, so it stays failed.
+func TestStagingFailureIsNotPending(t *testing.T) {
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "c"})
+		w.emit("tool.call", map[string]any{"id": "call-b", "name": "bash"})
+		w.emit("tool.result", map[string]any{"id": "call-b", "name": "bash", "text": "APPROVAL_REQUIRED: risky. Could not stage for user approval (db down).", "is_err": true})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	if _, err := h.prompt(h.newSession(t), "x"); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range h.client.updates {
+		if u.ToolCallUpdate != nil && u.ToolCallUpdate.Status != nil && *u.ToolCallUpdate.Status != acpsdk.ToolCallStatusFailed {
+			t.Errorf("status = %q, want failed", *u.ToolCallUpdate.Status)
+		}
+	}
+	if strings.Contains(h.client.text(), "Approval needed") {
+		t.Error("no card was created, so no approval pointer may be sent")
+	}
+}
+
+// A cancel that races the turn's own end must not send a Stop: it is
+// conversation-scoped and would hit a follow-up queued from another surface.
+func TestNoStopAfterTheTurnEnded(t *testing.T) {
+	ended := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-done"})
+		w.emit("text.delta", map[string]any{"text": "done"})
+		w.emit("turn.completed", map[string]any{})
+		close(ended)
+		<-r.Context().Done() // the socket lingers after the terminal frame
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "x")
+		done <- r
+	}()
+	<-ended
+	time.Sleep(50 * time.Millisecond) // let the terminal frame be read
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 0 {
+		t.Errorf("a Stop was sent after the turn ended: %q", h.fleet.cancels)
+	}
+}
+
+// A timeout that fires as the turn completes is not a timeout.
+func TestTimeoutAfterTheTurnEndedIsAnEndTurn(t *testing.T) {
+	h := newHarness(t, harnessOpts{timeout: 100 * time.Millisecond, turn: func(w *sseWriter, r *http.Request) {
+		w.emit("conversation", map[string]any{"id": "c"})
+		w.emit("turn.completed", map[string]any{})
+		<-r.Context().Done() // lingers past the timeout
+	}})
+	resp, err := h.prompt(h.newSession(t), "x")
+	if err != nil || resp.StopReason != acpsdk.StopReasonEndTurn {
+		t.Fatalf("got %+v, %v; want end_turn", resp, err)
+	}
+}
+
+// A pending approval is still pointed to when the turn later errors.
+func TestApprovalPointerSurvivesATurnError(t *testing.T) {
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-e"})
+		w.emit("tool.approval_required", map[string]any{"approval_id": "ap-9", "tool": "mcp_sendgrid_send_email"})
+		w.emit("turn.error", map[string]any{"message": "provider failed"})
+	}})
+	_, err := h.prompt(h.newSession(t), "email bob")
+	if err == nil {
+		t.Fatal("want the turn error")
+	}
+	if got := h.client.text(); !strings.Contains(got, "--approve ap-9") {
+		t.Errorf("approval pointer missing on an errored turn: %q", got)
+	}
+}
+
+// The server names a new conversation on the response headers before any
+// frame (#1591). A stream that dies before the conversation frame must not
+// lose it: the session keeps the conversation, and a cancel can address it.
+func TestConversationIDFromTheResponseHeader(t *testing.T) {
+	t.Run("stream dies before the first frame", func(t *testing.T) {
+		calls := 0
+		h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+			calls++
+			if calls == 1 {
+				w.w.Header().Set("X-Fleet-Conversation-Id", "conv-hdr")
+				w.w.(http.Flusher).Flush() // headers only, then the socket closes
+				return
+			}
+			w.emit("conversation", map[string]any{"id": "conv-hdr"})
+			w.emit("turn.completed", map[string]any{})
+		}})
+		sid := h.newSession(t)
+		if _, err := h.prompt(sid, "first"); err == nil {
+			t.Fatal("want the interrupted-stream error")
+		}
+		if _, err := h.prompt(sid, "retry"); err != nil {
+			t.Fatal(err)
+		}
+		h.fleet.mu.Lock()
+		defer h.fleet.mu.Unlock()
+		if got := h.fleet.chats[1].ConversationID; got != "conv-hdr" {
+			t.Errorf("retry conversation = %q, want conv-hdr (not a second conversation)", got)
+		}
+	})
+	t.Run("cancel before the first frame", func(t *testing.T) {
+		started := make(chan struct{})
+		h := newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+			w.w.Header().Set("X-Fleet-Conversation-Id", "conv-hdr2")
+			w.w.(http.Flusher).Flush()
+			close(started)
+			<-r.Context().Done()
+		}})
+		sid := h.newSession(t)
+		done := make(chan struct{})
+		go func() {
+			_, _ = h.prompt(sid, "x")
+			close(done)
+		}()
+		<-started
+		if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("prompt did not return")
+		}
+		h.fleet.mu.Lock()
+		defer h.fleet.mu.Unlock()
+		if len(h.fleet.cancels) != 1 || !strings.HasPrefix(h.fleet.cancels[0], "conv-hdr2 ") {
+			t.Errorf("cancels = %q, want the header's conversation stopped", h.fleet.cancels)
+		}
+	})
+}

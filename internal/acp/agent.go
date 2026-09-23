@@ -205,17 +205,22 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	})
 
 	streamDone := make(chan struct{})
-	stopped := make(chan error, 1)
+	stopped := make(chan stopOutcome, 1)
 	go a.stopTurn(stopCtx, tr, streamDone, stopped, cancelStream)
 	convID, streamErr := a.client.Stream(streamCtx, message, sess.convID, tr.handle)
 	close(streamDone)
-	stopErr := <-stopped
+	stop := <-stopped
+	stopErr := stop.err
 	if convID == "" {
 		convID = tr.conversationID()
 	}
 	sess.convID = convID
 
 	meta := map[string]any{"fleet.conversationId": convID}
+	// A staged approval stays pending in fleet whatever ended the turn —
+	// cancelled, timed out or errored included — so its pointer goes out
+	// before any outcome.
+	tr.flushApprovals(a.approvalPointer)
 	switch {
 	case ctx.Err() != nil:
 		// ACP requires a cancelled prompt to answer with the cancelled stop
@@ -227,7 +232,7 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 				"\n\nfleet could not confirm this turn stopped (%v). It may still be running: stop it at %s", stopErr, a.conversationPointer(convID))))
 		}
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled, Meta: meta}, nil
-	case stopCtx.Err() != nil:
+	case stop.intervened && stopCtx.Err() != nil:
 		if stopErr != nil {
 			return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
 				"error": fmt.Sprintf("the fleet turn did not finish within %s, and stopping it failed (%v): it may still be running — stop it at %s", a.timeout, stopErr, a.conversationPointer(convID)),
@@ -249,7 +254,6 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 	if streamErr != nil {
 		return acpsdk.PromptResponse{}, requestError(streamErr)
 	}
-	tr.flushApprovals(a.approvalPointer)
 	resp := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: meta}
 	if tr.usage != nil {
 		resp.Usage = tr.usage
@@ -263,15 +267,25 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 // stop, and the turn would run on server-side with no client.
 const conversationWait = 5 * time.Second
 
+// stopOutcome is what the stop watcher did: intervened is true when it sent
+// (or tried to send) a Stop, and err is that Stop's failure, if any.
+type stopOutcome struct {
+	intervened bool
+	err        error
+}
+
 // stopTurn watches one prompt. If stop fires before the stream finishes, it
 // waits (bounded) for the conversation id, stops the fleet turn server-side,
-// then ends the stream. It sends the Stop's outcome on stopped — nil when
-// nothing needed stopping or fleet accepted the Stop — so Prompt never reports
-// a stop the server did not confirm.
-func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan struct{}, stopped chan<- error, cancelStream context.CancelFunc) {
+// then ends the stream. It reports what it did on stopped, so Prompt never
+// reports a stop the server did not confirm.
+//
+// A turn the server already reported as over is never stopped: the Stop is
+// conversation-scoped, so sending it after the watched turn ended could
+// cancel a follow-up queued from another surface instead.
+func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan struct{}, stopped chan<- stopOutcome, cancelStream context.CancelFunc) {
 	select {
 	case <-streamDone:
-		stopped <- nil
+		stopped <- stopOutcome{}
 		return
 	case <-stop.Done():
 	}
@@ -279,6 +293,11 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 	case <-tr.convKnown:
 	case <-streamDone:
 	case <-time.After(conversationWait):
+	}
+	if tr.ended() {
+		cancelStream() // nothing left to stop; just stop reading
+		stopped <- stopOutcome{}
+		return
 	}
 	var err error
 	if id := tr.conversationID(); id != "" {
@@ -291,7 +310,7 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, streamDone <-chan
 		}
 	}
 	cancelStream()
-	stopped <- err
+	stopped <- stopOutcome{intervened: true, err: err}
 }
 
 // conversationPointer says where a person can see (and stop) a conversation.

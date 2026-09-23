@@ -117,3 +117,29 @@ func TestStreamReturnsTypedStatusError(t *testing.T) {
 		t.Errorf("message changed: %q", se.Error())
 	}
 }
+
+// A stream that dies before its first frame still reports the conversation
+// the server named on the response headers (#1591).
+func TestStreamReportsTheHeaderConversationID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Fleet-Conversation-Id", "conv-h")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	var seen []string
+	id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "", func(ev Event) {
+		seen = append(seen, ev.Name+":"+ev.Str("id"))
+	})
+	if err == nil {
+		t.Fatal("want the interrupted-stream error")
+	}
+	if id != "conv-h" || len(seen) != 1 || seen[0] != "conversation:conv-h" {
+		t.Errorf("id=%q events=%v", id, seen)
+	}
+	// Resuming an existing conversation never lets the header override it.
+	id, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "conv-mine", func(Event) {})
+	if id != "conv-mine" {
+		t.Errorf("resumed id = %q", id)
+	}
+}

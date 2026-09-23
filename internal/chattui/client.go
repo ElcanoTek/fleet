@@ -161,6 +161,15 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 	}
 
 	newConvID := convID
+	// The server names a new conversation on the response headers before any
+	// frame (#1591), so a stream that dies before the `conversation` frame
+	// still leaves the caller holding the id of the turn it started. Surface it
+	// as a `conversation` event too, so callers that track the id from events
+	// (the TUI, `fleet acp`) learn it at the same moment.
+	if hdr := strings.TrimSpace(resp.Header.Get("X-Fleet-Conversation-Id")); hdr != "" && convID == "" {
+		newConvID = hdr
+		onEvent(Event{Name: "conversation", Data: map[string]any{"id": hdr}})
+	}
 	terminalSeen := false
 	var terminalErr error
 	perr := parseSSE(resp.Body, func(ev Event) {
