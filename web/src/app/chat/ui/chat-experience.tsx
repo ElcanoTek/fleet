@@ -2901,8 +2901,10 @@ export function ChatExperience({
   const branchFromMessage = async (message: Message) => {
     const parentId = activeConversationId;
     if (!parentId || !message.dbId) return;
+    const branchUrl = conversationApiUrl(parentId, "/branch");
+    if (!branchUrl) return;
     try {
-      const response = await fetch(`/api/conversations/${parentId}/branch`, {
+      const response = await fetch(branchUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ branch_point_message_id: message.dbId }),
@@ -3701,6 +3703,8 @@ export function ChatExperience({
     const before = conversations.find((c) => c.id === conversationId);
     if (!before) return false;
     if (before.title === trimmed) return true;
+    const renameUrl = conversationApiUrl(conversationId, "/rename");
+    if (!renameUrl) return false;
     // Optimistic; rollback puts the old title back on that one row rather
     // than restoring a whole-list snapshot, so a conversation that landed in
     // the rail while the request was out is not lost with it.
@@ -3710,14 +3714,11 @@ export function ChatExperience({
       );
     setTitle(trimmed);
     try {
-      const response = await fetch(
-        `/api/conversations/${conversationId}/rename`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: trimmed }),
-        },
-      );
+      const response = await fetch(renameUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
       if (!response.ok) {
         console.error("rename conversation failed:", response.status);
         showRailError(`Couldn't rename the chat (HTTP ${response.status}).`);

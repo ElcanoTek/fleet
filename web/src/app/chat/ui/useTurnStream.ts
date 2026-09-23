@@ -3632,14 +3632,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setConvMessages(targetKey, trimmed);
 
     const convId = activeConversationIdRef.current;
-    if (convId) {
+    const truncateUrl = convId
+      ? conversationApiUrl(convId, "/truncate?mode=edit_last")
+      : null;
+    if (truncateUrl) {
       try {
         // mode=edit_last drops the previous user turn AND its assistant
         // tail, so submitPrompt below can start fresh with the edit as the
         // current-last user message.
-        await fetch(`/api/conversations/${convId}/truncate?mode=edit_last`, {
-          method: "POST",
-        });
+        await fetch(truncateUrl, { method: "POST" });
       } catch {
         /* non-fatal */
       }
@@ -3672,13 +3673,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     setConvMessages(targetKey, trimmed);
 
     const convId = activeConversationIdRef.current;
-    if (convId) {
+    const truncateUrl = convId
+      ? conversationApiUrl(convId, "/truncate?mode=edit_last")
+      : null;
+    if (truncateUrl) {
       try {
         // mode=edit_last drops the last user turn AND its assistant tail
         // server-side, so the re-submit below starts from a clean point.
-        await fetch(`/api/conversations/${convId}/truncate?mode=edit_last`, {
-          method: "POST",
-        });
+        await fetch(truncateUrl, { method: "POST" });
       } catch {
         // Non-fatal — the turn still works, history just contains the
         // cancelled tail (the model can handle it).
