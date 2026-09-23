@@ -85,6 +85,7 @@ type chatStore interface {
 	EnqueueInput(ctx context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error)
 	ClaimDirectInput(ctx context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error)
 	ReleaseDirectInput(ctx context.Context, id string) error
+	CancelUnboundDirectInput(ctx context.Context, id string) (bool, error)
 	SettleDirectInput(ctx context.Context, id, turnID string) error
 	CountPendingInputs(ctx context.Context, convID string) (int, error)
 	ListQueuedInputs(ctx context.Context, userEmail, convID string) ([]store.InputQueueRow, error)

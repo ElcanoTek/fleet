@@ -145,6 +145,9 @@ func (s *session) rekey(messageID, fresh, conv string) {
 			break
 		}
 	}
+	if prev, ok := s.rekeyed[messageID]; ok {
+		delete(s.pinned, prev) // replaced: its pin must not linger
+	}
 	s.rekeyed[messageID] = fresh
 	s.pinned[fresh] = conv
 }
@@ -177,6 +180,15 @@ func (s *session) forgetKey(key string) {
 		if k == key {
 			delete(s.unsettled, m)
 		}
+	}
+}
+
+// clearUnsettled forgets message's retained key only if it is key: a later,
+// different prompt with the same text (say, one carrying a messageId, so a
+// different key) must not wipe an earlier prompt's pending retry key.
+func (s *session) clearUnsettled(message, key string) {
+	if s.unsettled[message] == key {
+		delete(s.unsettled, message)
 	}
 }
 
@@ -376,7 +388,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	}
 	// Only THIS prompt's entry is reconciled here; other unresolved prompts
 	// keep their keys until they are retried and answered.
-	delete(sess.unsettled, message)
+	sess.clearUnsettled(message, key)
 	if outcomeUnknown(streamErr) {
 		sess.setUnsettled(message, key)
 	}
@@ -387,7 +399,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	if isQueued && queued.State == "cancelled" && allowRetry && ctx.Err() == nil && stopCtx.Err() == nil {
 		// A replay of a key whose earlier attempt never ran (its turn failed
 		// before it began). The key is spent; nothing ran under it.
-		delete(sess.unsettled, message)
+		sess.clearUnsettled(message, key)
 		delete(sess.keyConv, key)
 		return acpsdk.PromptResponse{}, retryFreshError{conv: convID}
 	}
@@ -737,8 +749,8 @@ func promptText(blocks []acpsdk.ContentBlock) (string, error) {
 			return "", errors.New("fleet acp accepts text, resource_link and embedded text resources only")
 		}
 	}
-	msg := strings.TrimSpace(strings.Join(parts, "\n\n"))
-	if msg == "" {
+	msg := strings.Join(parts, "\n\n")
+	if strings.TrimSpace(msg) == "" { // trimmed only to test for emptiness: the text is sent exactly
 		return "", errors.New("empty prompt")
 	}
 	return msg, nil

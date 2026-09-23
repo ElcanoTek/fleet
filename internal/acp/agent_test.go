@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1616,5 +1617,57 @@ func TestRekeyedMessageIdStaysPinned(t *testing.T) {
 	fresh, resend := h.fleet.chats[3], h.fleet.chats[4]
 	if resend.InputID != fresh.InputID || resend.ConversationID != "conv-A" {
 		t.Fatalf("resend = key %q conv %q, want the fresh key %q in conv-A", resend.InputID, resend.ConversationID, fresh.InputID)
+	}
+}
+
+// A prompt with a messageId that shares its text with an earlier, unresolved
+// text-only prompt must not wipe that prompt's retained key: the earlier
+// prompt's retry still reuses its own key, so fleet does not run it twice.
+func TestSameTextUnderAMessageIdKeepsTheOtherPromptsKey(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.w.WriteHeader(http.StatusOK) // accepted, then the stream is lost
+			return
+		}
+		w.emit("conversation", map[string]any{"id": "c"})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	_, _ = h.prompt(sid, "same text")
+	mid := "msg-B"
+	if _, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("same text")}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.prompt(sid, "same text"); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if a, retry := h.fleet.chats[0].InputID, h.fleet.chats[2].InputID; a != retry {
+		t.Fatalf("retry key = %q, want the lost prompt's own key %q", retry, a)
+	}
+}
+
+// Rekeying the same messageId again replaces its pin rather than leaving the
+// old fresh key pinned: the pins stay bounded by the rekeyings remembered.
+func TestRekeyReplacesTheOldPin(t *testing.T) {
+	s := &session{}
+	for i := 0; i < 3; i++ {
+		s.rekey("msg-A", "fresh-"+strconv.Itoa(i), "conv-A")
+	}
+	if len(s.pinned) != 1 || s.pinned["fresh-2"] != "conv-A" {
+		t.Fatalf("pinned = %v, want only the latest fresh key", s.pinned)
+	}
+}
+
+// Whitespace inside the prompt is the user's (an indented code block, a
+// trailing newline a tool relies on): it is sent exactly, not trimmed.
+func TestPromptWhitespaceIsPreserved(t *testing.T) {
+	in := "  indented\n\tcode\n"
+	got, err := promptText([]acpsdk.ContentBlock{acpsdk.TextBlock(in)})
+	if err != nil || got != in {
+		t.Fatalf("promptText = %q, %v; want %q unchanged", got, err, in)
 	}
 }

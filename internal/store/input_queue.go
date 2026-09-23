@@ -123,6 +123,23 @@ func (s *Store) ReleaseDirectInput(ctx context.Context, id string) error {
 	return err
 }
 
+// CancelUnboundDirectInput cancels a direct claim whose turn has not been
+// bound yet — a Stop naming its key while the turn is still being prepared.
+// The later bind then finds it no longer running and the launch is refused,
+// even if the in-memory Stop mark is gone by then. A bound claim is left
+// alone: its turn may have run, and "cancelled" would tell a resend of the
+// key that nothing ran. It reports whether it cancelled the claim.
+func (s *Store) CancelUnboundDirectInput(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+		  WHERE id = $1 AND mode = 'direct' AND state = 'running' AND turn_id IS NULL`, id, time.Now().Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // SettleDirectInput resolves a direct claim when its turn ends: completed when
 // the turn's user entry committed (the input ran), otherwise cancelled
 // (nothing ran). Never re-queued — the caller saw this turn's outcome, and a

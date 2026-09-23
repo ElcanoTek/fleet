@@ -193,3 +193,30 @@ func TestReleaseDirectInput_SettlesABoundClaim(t *testing.T) {
 		t.Fatalf("row = %+v, %v: an unbound claim is dropped", got, err)
 	}
 }
+
+// CancelUnboundDirectInput cancels only a claim not yet bound to a turn; the
+// bind that follows then finds it no longer running.
+func TestCancelUnboundDirectInput_OnlyBeforeTheBind(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t-cub")
+
+	unbound, _ := claimDirect(t, s, convID, "cub-1")
+	if ok, err := s.CancelUnboundDirectInput(ctx, unbound.ID); err != nil || !ok {
+		t.Fatalf("cancel unbound = %v, %v; want cancelled", ok, err)
+	}
+	if bound, err := s.BindInputTurn(ctx, unbound.ID, "t-cub"); err != nil || bound {
+		t.Fatalf("bind after cancel = %v, %v; want refused", bound, err)
+	}
+
+	bound, _ := claimDirect(t, s, convID, "cub-2")
+	if _, err := s.BindInputTurn(ctx, bound.ID, "t-cub"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.CancelUnboundDirectInput(ctx, bound.ID); err != nil || ok {
+		t.Fatalf("cancel bound = %v, %v; want left alone", ok, err)
+	}
+	if got, _ := s.LookupInput(ctx, convID, "cub-2"); got == nil || got.State != InputStateRunning {
+		t.Fatalf("bound claim = %+v, want still running", got)
+	}
+}

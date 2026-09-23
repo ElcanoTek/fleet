@@ -623,9 +623,19 @@ const (
 
 var directReleasePause = 100 * time.Millisecond // a var so tests can shorten it
 
+// bindDirectInputIf binds id when there is a direct claim; with none it
+// reports bound (nothing to bind).
+func (s *Server) bindDirectInputIf(id, turnID string) (bound, stopped bool) {
+	if id == "" {
+		return true, false
+	}
+	return s.bindDirectInput(id, turnID)
+}
+
 // bindDirectInput stamps a direct claim with its turn id, retrying a few
-// times; false means the claim is still unbound.
-func (s *Server) bindDirectInput(id, turnID string) bool {
+// times. bound false with stopped true means the claim is no longer running
+// (a Stop cancelled it durably); bound false alone means the bind failed.
+func (s *Server) bindDirectInput(id, turnID string) (bound, stopped bool) {
 	for attempt := range directBindAttempts {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * directReleasePause)
@@ -634,11 +644,11 @@ func (s *Server) bindDirectInput(id, turnID string) bool {
 		bound, err := s.store.BindInputTurn(ctx, id, turnID)
 		cancel()
 		if err == nil {
-			return bound // not bound: the claim is no longer running, so do not launch
+			return bound, !bound // not bound: the claim is no longer running, so do not launch
 		}
 		log.Printf("bind direct input turn (input=%s turn=%s): %v", id, turnID, err)
 	}
-	return false
+	return false, false
 }
 
 func (s *Server) tryReleaseDirectInput(id string) bool {
@@ -823,7 +833,15 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// The run goroutine (the only Poll consumer) has not launched yet, so no
 	// injection can precede the binding.
 	steer.turnID, steer.buf = turnID, buf
-	if directInputID != "" && !s.bindDirectInput(directInputID, turnID) {
+	if bound, stopped := s.bindDirectInputIf(directInputID, turnID); !bound && stopped {
+		// A Stop cancelled the claim durably before its turn could start:
+		// nothing ran, and the caller is told so (409), not invited to retry.
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		releaseSlot()
+		http.Error(w, "a Stop in this conversation cancelled this message before it started", http.StatusConflict)
+		return true
+	} else if !bound {
 		// Fail closed: an unbound claim cannot be matched to this turn's
 		// durable record, so a crash would settle it "never ran" and let a
 		// resend run the input again. The turn is dropped before it runs.

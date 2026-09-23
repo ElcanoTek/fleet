@@ -232,7 +232,8 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	// set its mark before looking the row up, so either that lookup saw the
 	// row or this check sees the mark.
 	if created && s.inputKeyStopped(conv.ID, clientID) {
-		wctx := context.WithoutCancel(r.Context())
+		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer wcancel()
 		ok, rerr := s.store.RemoveQueuedInput(wctx, user, conv.ID, row.ID)
 		if rerr == nil && !ok {
 			// A drain claimed it between the insert and here. Cancel it

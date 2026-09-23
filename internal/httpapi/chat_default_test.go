@@ -1001,6 +1001,18 @@ func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
 	return nil
 }
 
+func (s *fakeChatStore) CancelUnboundDirectInput(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].Mode == store.InputModeDirect && s.queue[i].State == store.InputStateRunning && s.queue[i].TurnID == "" {
+			s.queue[i].State = store.InputStateCancelled
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // SettleDirectInput mirrors the store: the fake treats any settled turn as
 // committed, and a claim settled with no turn as never run.
 func (s *fakeChatStore) SettleDirectInput(_ context.Context, id, turnID string) error {
@@ -1561,5 +1573,53 @@ func TestCancelByInputKey_MarksAreBounded(t *testing.T) {
 	srv.Routes().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("oversized cancel key: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A Stop by key that lands while a direct claim is being prepared cancels the
+// claim durably, so the launch is refused (409) even if the in-memory mark is
+// gone by the time the turn registers — evicted by many other Stops, or past
+// its TTL.
+func TestCancelByInputKey_UnboundClaimIsCancelledDurably(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	var convID string
+	st.onClaim = func(r store.InputQueueRow) { convID = r.ConversationID }
+	st.onMemories = func() {
+		srv.cancelInput(context.Background(), "u@x.com", convID, "key-e")
+		srv.inflightMu.Lock()
+		srv.cancelledInputs = nil // the mark is evicted before the turn registers
+		srv.inflightMu.Unlock()
+	}
+	w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "key-e"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	eng.mu.Lock()
+	turns := eng.turns
+	eng.mu.Unlock()
+	if turns != 0 {
+		t.Fatalf("a stopped claim ran (%d turns)", turns)
+	}
+	if rows := st.directRows(); len(rows) != 1 || rows[0].State != store.InputStateCancelled {
+		t.Fatalf("claim = %+v, want one cancelled row", rows)
+	}
+}
+
+// A Stop by key never marks a bound claim cancelled: its turn may have run,
+// and a resend of the key reading "cancelled" would run it a second time.
+func TestCancelByInputKey_BoundClaimIsNotMarkedCancelled(t *testing.T) {
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	st.mu.Lock()
+	st.queue = append(st.queue, store.InputQueueRow{ID: "d-b", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-b", Mode: store.InputModeDirect, State: store.InputStateRunning, TurnID: "turn-ran"})
+	st.mu.Unlock()
+	if !srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-b") {
+		t.Fatal("cancelInput reported a store failure")
+	}
+	if row, _ := st.LookupInput(context.Background(), conv.ID, "key-b"); row == nil || row.State != store.InputStateRunning {
+		t.Fatalf("row = %+v, want the bound claim left to its turn's settlement", row)
 	}
 }
