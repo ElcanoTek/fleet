@@ -92,6 +92,16 @@ func TestNarrowedAllowlist(t *testing.T) {
 		t.Fatalf("prefix-named server inherited %v, want an explicit deny", list)
 	}
 
+	// A completion.any_succeeded tool (#1602) survives the narrowing even when
+	// required_tools does not list it: otherwise the predicate could never fire.
+	withCompletion := &executionRequirements{
+		Tools:      []string{"mcp_pages_get_page_data"},
+		Completion: &completionRequirement{AnySucceeded: []string{"mcp_pages_record_refresh_check"}},
+	}
+	if got := withCompletion.narrowedAllowlist(pagesCatalog(), nil); fmt.Sprint(got["pages"]) != fmt.Sprint([]string{"get_page_data", "record_refresh_check"}) {
+		t.Fatalf("completion tool narrowed away: pages=%v", got["pages"])
+	}
+
 	// A bare name narrows every server that has it, the seat's own entry included.
 	bare := (&executionRequirements{Tools: []string{"get_page_data"}}).narrowedAllowlist(pagesCatalog(), nil)
 	if fmt.Sprint(bare) != fmt.Sprint(agentcore.MCPAllowlist{"pages": {"get_page_data"}, "pages_acct": {"get_page_data"}, "fast_io": {rosterNarrowingDeniesAll}, "fastio_helpers": {rosterNarrowingDeniesAll}}) {

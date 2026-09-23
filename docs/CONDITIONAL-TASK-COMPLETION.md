@@ -141,7 +141,9 @@ EXECUTION REQUIREMENTS (JSON):
   `task_tracker`, bash, Python, the file tools). The live-registry section of
   the system prompt follows the roster.
 - **No lost tools.** A required tool can never be narrowed away, because the
-  check above has already proved it is in the roster. Narrowing only removes;
+  check above has already proved it is in the roster. A
+  `completion.any_succeeded` tool is kept the same way even when
+  `required_tools` does not list it, so a declared predicate stays reachable. Narrowing only removes;
   it never grants a tool the allowlist denies.
 - **Removed tools.** A call to a removed tool is answered `tool not found`.
   The run log carries one `[roster] required_tools_only: N mcp tools

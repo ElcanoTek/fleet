@@ -261,6 +261,15 @@ func (r *executionRequirements) narrowedAllowlist(catalog []mcp.ServerTool, base
 	for _, name := range r.Tools {
 		required[name] = true
 	}
+	// A completion tool (#1602) the narrowing removed could never execute, so
+	// the declared predicate would be unsatisfiable while looking declared:
+	// keep every completion.any_succeeded name as if required_tools listed it.
+	// Still intersected with the base allowlist below, so it never widens.
+	if r.Completion != nil {
+		for _, name := range r.Completion.AnySucceeded {
+			required[name] = true
+		}
+	}
 	out := agentcore.MCPAllowlist{}
 	for _, item := range catalog {
 		full := "mcp_" + item.ServerName + "_" + item.Tool.Name
