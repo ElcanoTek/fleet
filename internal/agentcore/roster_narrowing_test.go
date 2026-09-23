@@ -416,3 +416,27 @@ func TestLegacyAuditRosterCheckAcceptsASubstitute(t *testing.T) {
 		t.Fatalf("accepted legacy audit: committed=%d confirmed=%v, want 1 and true", got, o.auditConfirmed)
 	}
 }
+
+// A batch declaration (deal_ids) takes an alias stand-in only: its record set
+// is ledgered under the declared suffix's alias class, which a substitute call
+// (another class) reads under its own and could never consume. And an accepted
+// stand-in is named in the confirmation, so the model calls a tool it has.
+func TestNarrowedStandInForBatchesAndTheConfirmation(t *testing.T) {
+	sub := newOrchStateForTest()
+	sub.setNarrowedMCPRoster([]string{"mcp_dsp_create_deal"})
+	resp := confirmAudit(t, sub, []criticalActionStruct{{Tool: "mcp_dsp_execute_deal_from_prompt_inputs", DealIDs: []string{"d1", "d2"}}}, nil)
+	if !resp.IsError || !strings.Contains(resp.Content, "mcp_dsp_execute_deal_from_prompt_inputs") {
+		t.Fatalf("a batch declaration whose only stand-in is a substitute must be refused; got %q", resp.Content)
+	}
+
+	withPagesPolicy(t, pagesAliases)
+	twin := newOrchStateForTest()
+	twin.setNarrowedMCPRoster([]string{aliasUploadTool})
+	resp = confirmAudit(t, twin, []criticalActionStruct{{Tool: aliasInlineTool, DealIDs: []string{"p1"}}}, nil)
+	if resp.IsError {
+		t.Fatalf("a batch declaration with a registered alias twin must be accepted; got %q", resp.Content)
+	}
+	if want := aliasInlineTool + " → " + aliasUploadTool; !strings.Contains(resp.Content, want) || !strings.Contains(resp.Content, "registered stand-in") {
+		t.Fatalf("the confirmation must name the stand-in to call (%s); got %q", want, resp.Content)
+	}
+}

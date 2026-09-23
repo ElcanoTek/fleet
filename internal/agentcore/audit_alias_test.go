@@ -574,3 +574,16 @@ func TestCriticalToolAliases_PlaceholderBatchTwinStaysPending(t *testing.T) {
 		t.Fatalf("a real batch keyed %q, want ids:a\\x00b", got)
 	}
 }
+
+// A null, boolean, object or array batch member names no record; it must not
+// render to a non-empty id ("<nil>", "map[]") that two calls could share.
+func TestNonScalarBatchMembersBindNothing(t *testing.T) {
+	for _, raw := range []string{`{"deal_ids":[null]}`, `{"deal_ids":[{}]}`, `{"deal_ids":[true]}`, `{"deal_ids":["a",[]]}`} {
+		if got := pendingRecordKey(raw); got != unbindableRecordKey {
+			t.Errorf("pendingRecordKey(%s) = %q, want unbindableRecordKey", raw, got)
+		}
+		if got := CallRecordBinding(raw); got != "" {
+			t.Errorf("CallRecordBinding(%s) = %q, want \"\"", raw, got)
+		}
+	}
+}

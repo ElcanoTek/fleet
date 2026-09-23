@@ -619,3 +619,27 @@ func TestScheduledVerifierOutageAfterUploadTwinForAnotherPageStaysFailed(t *test
 		t.Fatalf("a verifier outage must not fail open while the failed inline write's page never landed: got %v, want ErrCompletionUnverified", err)
 	}
 }
+
+// A later success whose records cover the failed call's supersedes it: a batch
+// retry over a superset of the failed records, for the same tool or a
+// same-server twin. A retry over a subset missed a record, so the failure
+// stands.
+func TestFailedCriticalCallsBatchSupersetCoversTheFailure(t *testing.T) {
+	pagesTwinPolicy(t, true)
+	for _, tc := range []struct {
+		name     string
+		failed   map[string]any
+		then     toolExecRecord
+		wantFail bool
+	}{
+		{"same-tool superset supersedes", map[string]any{"/deal_ids": []any{"a"}}, toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"a", "b"}}}, false},
+		{"same-tool subset stays failed", map[string]any{"/deal_ids": []any{"a", "b"}}, toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"a"}}}, true},
+		{"twin superset of a single record supersedes", map[string]any{"/deal_id": "a"}, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"a", "b"}}}, false},
+		{"twin subset stays failed", map[string]any{"/deal_ids": []any{"a", "b"}}, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"b"}}}, true},
+	} {
+		records := []toolExecRecord{{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: tc.failed}, tc.then}
+		if got := failedCriticalCalls(records); (len(got) > 0) != tc.wantFail {
+			t.Errorf("%s: failedCriticalCalls = %v", tc.name, got)
+		}
+	}
+}

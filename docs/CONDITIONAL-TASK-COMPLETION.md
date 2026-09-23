@@ -81,11 +81,12 @@ on the audit:
   the session log and at the head of the task's terminal message; the run is
   not dead-lettered on the verifier's own outage. The phone-a-friend reviewer
   already failed open on its errors. Only a later success supersedes a
-  failure. A success of the same tool does, unless the two calls name
-  different records (`deal_id` / `deal_ids`). A success of a same-server alias
-  twin (`critical_tool_aliases`) does only when it wrote the same record: both
-  calls' recorded arguments are complete and name the same `deal_id` /
-  `deal_ids` binding. A failed retry supersedes nothing, and neither does a
+  failure. A success of the same tool does, unless its records (`deal_id` /
+  `deal_ids`) provably miss one the failed call targeted. A success of a
+  same-server alias twin (`critical_tool_aliases`) does only when it wrote
+  every record the failed call targeted: both calls' recorded arguments are
+  complete and name a `deal_id` / `deal_ids` binding, and the success's
+  records cover the failure's (the same record, or a batch including them). A failed retry supersedes nothing, and neither does a
   twin that wrote another record, names no record, has incomplete evidence, is
   a bare-suffix name, or sits on another server or client variant. Page twins
   addressed only by slug therefore never supersede each other, by decision:
@@ -202,7 +203,9 @@ EXECUTION REQUIREMENTS (JSON):
   for, and that audit registers nothing. A typed `critical_actions` entry is
   accepted when the run registered that exact tool, or a same-server alias twin
   (`critical_tool_aliases`) or approved substitute (`critical_tool_substitutes`)
-  of it: the tools that would discharge it. Legacy
+  of it: the tools that would discharge it. A batch entry (`deal_ids`) takes an
+  alias twin only, since a substitute cannot consume a batch approval. The
+  confirmation names the registered stand-in to call. Legacy
   `critical_actions_being_unblocked` text is accepted when its critical suffix
   shares an alias class with, or is substituted by, a registered tool's suffix.
   The model re-audits with tools from its list. Accepting any other declaration

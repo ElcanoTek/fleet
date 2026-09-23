@@ -830,10 +830,12 @@ func failedCriticalCalls(records []toolExecRecord) []string {
 	return failed
 }
 
-// sameCallTarget reports whether two alias-twin calls provably wrote the same
-// record: both argument projections are complete (the verifier's evidence
-// dropped nothing), and both name the same non-empty record binding
-// (agentcore.CallRecordBinding — deal_id, or a deal_ids set). Agreeing on
+// sameCallTarget reports whether a later alias-twin success b provably wrote
+// every record the failed call a targeted: both argument projections are
+// complete (the verifier's evidence dropped nothing), both name a non-empty
+// record binding (agentcore.CallRecordBinding — deal_id, or a deal_ids set),
+// and b's records cover a's (bindingCovers: the same record, or a batch that
+// includes all of them). Agreeing on
 // other arguments proves nothing: a shared flag such as dry_run identifies no
 // target. A call that names no record under that contract (a page addressed
 // by slug, for one) cannot be proved the same target, so its failure stands
@@ -842,18 +844,48 @@ func sameCallTarget(a, b toolExecRecord) bool {
 	if a.ArgumentsOmitted || b.ArgumentsOmitted {
 		return false
 	}
-	ra, rb := recordBinding(a), recordBinding(b)
-	return ra != "" && ra == rb
+	return bindingCovers(recordBinding(b), recordBinding(a))
 }
 
-// provablyOtherRecord reports whether two calls of the same tool name different
-// records: both carry a non-empty record binding and the bindings differ. A
-// retry that names no record (a page by slug), or whose evidence is incomplete,
-// still supersedes as a retry always has — only a proof of another target
-// withholds it.
+// provablyOtherRecord reports whether a later same-tool success b provably
+// missed a record the failed call a targeted: both carry a non-empty record
+// binding and b's does not cover a's (a batch retry over a superset of the
+// failed records covers them). A retry that names no record (a page by slug),
+// or whose evidence is incomplete, still supersedes as a retry always has —
+// only a proof of another target withholds it.
 func provablyOtherRecord(a, b toolExecRecord) bool {
 	ra, rb := recordBinding(a), recordBinding(b)
-	return ra != "" && rb != "" && ra != rb
+	return ra != "" && rb != "" && !bindingCovers(rb, ra)
+}
+
+// bindingCovers reports whether record binding covering names every record
+// that binding covered names ("id:x" or "ids:" plus a NUL-joined set, from
+// agentcore.CallRecordBinding). Both must be non-empty.
+func bindingCovers(covering, covered string) bool {
+	if covering == "" || covered == "" {
+		return false
+	}
+	have := make(map[string]bool)
+	for _, id := range bindingRecords(covering) {
+		have[id] = true
+	}
+	for _, id := range bindingRecords(covered) {
+		if !have[id] {
+			return false
+		}
+	}
+	return true
+}
+
+// bindingRecords splits a CallRecordBinding into its record ids.
+func bindingRecords(binding string) []string {
+	if id, ok := strings.CutPrefix(binding, "id:"); ok {
+		return []string{id}
+	}
+	if ids, ok := strings.CutPrefix(binding, "ids:"); ok {
+		return strings.Split(ids, "\x00")
+	}
+	return nil
 }
 
 // recordBinding rebuilds a record's top-level projected arguments (JSON
