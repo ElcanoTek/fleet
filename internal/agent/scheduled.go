@@ -608,16 +608,23 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		}
 		records := buildToolExecSummary(p.agent.logSession)
 		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
+		// twoOutages records that BOTH attempts ran and both were outages: the
+		// fail-open is for a verifier that is down, not for a run whose own
+		// deadline expired mid-check (the retry never ran), nor for a malformed
+		// first verdict followed by a transport error.
+		twoOutages := false
 		if err != nil {
 			// A verifier call that produced no verdict is retried once before
 			// anything else is decided (#1602).
 			log.Printf("verifier failed, retrying once in %s: %v", verifierRetryDelay, err)
+			firstOutage := !errors.Is(err, errVerifierMalformedVerdict) && ctx.Err() == nil
 			if sleepCtx(ctx, verifierRetryDelay) {
 				missing, err = p.agent.runEndOfRunVerifier(ctx, p.task, p.latestRunText(), records)
+				twoOutages = firstOutage && err != nil && ctx.Err() == nil
 			}
 		}
 		switch {
-		case err != nil && p.verifierOutageMayFailOpen(err, records):
+		case err != nil && twoOutages && p.verifierOutageMayFailOpen(err, records):
 			// Still no verdict, from an OUTAGE (transport, timeout), after this
 			// run's own audit passed and its critical work landed with no failed
 			// critical call: fail OPEN with a recorded warning instead of dead-lettering

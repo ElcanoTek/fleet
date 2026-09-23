@@ -16,13 +16,13 @@ attempted. On 2026.09.22.4 it was the largest single cause of dead-lettered
 page refreshes, and every such run had the correct outcome already recorded by
 Pages:
 
-- `07e43224`: no new coverage, `record_refresh_check(source_not_updated)`
-  written, v853 still live. The verifier demanded a publish.
-- `11b2880d` and `4207d823`: the blocked branch was recorded. The verifier
+- One run: no new coverage, `record_refresh_check(source_not_updated)`
+  written, the live version unchanged. The verifier demanded a publish.
+- Two runs: the blocked branch was recorded. The verifier
   demanded an upload.
-- `00d8224c`: data published. A wording nit in the report dead-lettered the
+- One run: data published. A wording nit in the report dead-lettered the
   run.
-- `19c59abc`: the verifier call itself failed with `context deadline exceeded`,
+- One run: the verifier call itself failed with `context deadline exceeded`,
   and the run dead-lettered after three checks.
 
 Each failure cost three verifier calls plus up to two full-context repair rounds,
@@ -51,8 +51,10 @@ created a version or recorded a check.
      contract.
 2. **A verifier outage does not spend a check.** A verifier call that returns
    no verdict is retried once.
-   - If the retry is an **outage** too (timeout, provider failure), this
-     run's **own** audit passed (`ScheduledPolicy.AuditConfirmed`, so a
+   - If **both** attempts ran and both were outages (timeout, provider
+     failure) while the run's own context was still live — a run deadline
+     that expires mid-check, or a malformed first verdict, never qualifies —
+     and this run's **own** audit passed (`ScheduledPolicy.AuditConfirmed`, so a
      delegated policy that skipped the self-audit does not qualify), at least
      one critical tool executed successfully, and no critical tool's last
      execution failed, the run **succeeds** with a

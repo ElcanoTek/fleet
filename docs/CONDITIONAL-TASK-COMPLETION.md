@@ -71,7 +71,9 @@ A verifier call that produced no verdict is retried once after a short pause
 on the audit:
 
 - **An outage** (a timeout, a provider failure) says nothing about the run.
-  If this run's **own** `confirm_audit` passed, at least one audit-gated tool
+  If both attempts ran and both were outages while the run's own context was
+  still live (a run deadline that expired mid-check does not count, nor does a
+  malformed first verdict), this run's **own** `confirm_audit` passed, at least one audit-gated tool
   executed successfully, and no audit-gated tool's last execution failed, the
   run succeeds with a
   `completion_unverified_verifier_error` warning. The warning is recorded in
@@ -143,13 +145,13 @@ On the 2026.09.22.4 build it was the largest single cause of dead-lettered
 page refreshes, and every one of those runs had the right outcome already
 recorded on the Pages side:
 
-| task | verifier demanded | what actually happened |
+| run | verifier demanded | what actually happened |
 |---|---|---|
-| `11b2880d` diageo-raptive-campaign | "publish_managed_data_update … update_page_data_upload" | run recorded `blocked`; page correctly untouched |
-| `07e43224` sunbum-elc00176 | "update_page_data publish … expected_version=853" | no new coverage; `record_refresh_check(source_not_updated)` written |
-| `4207d823` diageo-raptive-campaign | "build complete payload … update_page_data_upload" | blocked branch, recorded |
-| `19c59abc` raptive-seller-view | — (the verifier call itself timed out) | dead-lettered after three checks |
-| `00d8224c` central-garden | a wording nit in the report | data published |
+| page A | "publish_managed_data_update … update_page_data_upload" | run recorded `blocked`; page correctly untouched |
+| page B | "update_page_data publish … expected_version=N" | no new coverage; `record_refresh_check(source_not_updated)` written |
+| page A (next day) | "build complete payload … update_page_data_upload" | blocked branch, recorded |
+| page C | — (the verifier call itself timed out) | dead-lettered after three checks |
+| page D | a wording nit in the report | data published |
 
 The producer can declare that knowledge in the same requirements object:
 

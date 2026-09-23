@@ -145,7 +145,7 @@ func TestScheduledCompletionPredicateSkipsTheModelGates(t *testing.T) {
 	broker := &pagesBroker{calls: map[string]int{}}
 	a, rec, calls, err := scriptedRun(t, []struct{ tool, input string }{
 		{"confirm_audit", cleanAudit},
-		{"mcp_pages_record_refresh_check", `{"slug":"sunbum","reason":"source_not_updated"}`},
+		{"mcp_pages_record_refresh_check", `{"slug":"page-a","reason":"source_not_updated"}`},
 	}, verifier, reviewer, broker, pagesPredicate)
 	if err != nil {
 		t.Fatalf("a run whose declared completion tool succeeded must finish, got %v", err)
@@ -265,6 +265,26 @@ func TestScheduledVerifierOutageAfterCleanAuditFinishesWithWarning(t *testing.T)
 				t.Fatalf("warning recorded = %t, want %t", got, tc.wantWarning)
 			}
 		})
+	}
+}
+
+// The fail-open needs BOTH attempts to have run and both to be outages: a
+// malformed first verdict (a content failure) followed by a transport error
+// must keep the spend-a-check path, however clean the rest of the run is.
+func TestScheduledVerifierMalformedThenOutageStillSpendsChecks(t *testing.T) {
+	withFastVerifierRetry(t)
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_page_data"}})
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	verifier := &scriptedVerifier{replies: []string{"the page is incomplete", "ERR", "the page is incomplete", "ERR", "the page is incomplete", "ERR"}}
+	a, _, _, err := scriptedRun(t, []struct{ tool, input string }{
+		{"confirm_audit", publishAudit},
+		{"mcp_pages_update_page_data", `{"slug":"x","data":{}}`},
+	}, verifier, nil, &pagesBroker{calls: map[string]int{}}, nil)
+	if !errors.Is(err, agentcore.ErrCompletionUnverified) {
+		t.Fatalf("want ErrCompletionUnverified, got %v", err)
+	}
+	if hasSessionMessageType(a.logSession, agentcore.MessageTypeCompletionUnverifiedVerifierError) {
+		t.Fatal("a malformed-then-outage check must not fail open")
 	}
 }
 
