@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  conversationApiPath,
   conversationApiUrl,
   conversationApprovalApiUrl,
+  conversationWorkspaceUrl,
   isApiId,
   isConversationId,
 } from "./conversationApiUrl";
@@ -94,5 +96,72 @@ describe("conversationApprovalApiUrl", () => {
 
   it.each(hostileIds)("returns null when the conversation id is %j", (id) => {
     expect(conversationApprovalApiUrl(id, approvalUuid)).toBeNull();
+  });
+});
+
+describe("conversationApiPath", () => {
+  it("encodes each literal and id segment on its own", () => {
+    expect(conversationApiPath(uuid)).toBe(`/api/conversations/${uuid}`);
+    expect(conversationApiPath(uuid, "queue", approvalUuid)).toBe(
+      `/api/conversations/${uuid}/queue/${approvalUuid}`,
+    );
+    expect(conversationApiPath(uuid, "queue", approvalUuid, "send-now")).toBe(
+      `/api/conversations/${uuid}/queue/${approvalUuid}/send-now`,
+    );
+    expect(conversationApiPath(uuid, "turns", approvalUuid)).toBe(
+      `/api/conversations/${uuid}/turns/${approvalUuid}`,
+    );
+    expect(conversationApiPath(uuid, "subagents", "child_1")).toBe(
+      `/api/conversations/${uuid}/subagents/child_1`,
+    );
+  });
+
+  it.each(hostileIds)("returns null when a nested segment is %j", (id) => {
+    expect(conversationApiPath(uuid, "queue", id)).toBeNull();
+    expect(conversationApiPath(uuid, "queue", id, "send-now")).toBeNull();
+    expect(conversationApiPath(uuid, "turns", id)).toBeNull();
+  });
+
+  it.each(hostileIds)("returns null when the conversation id is %j", (id) => {
+    expect(conversationApiPath(id, "turns", approvalUuid)).toBeNull();
+  });
+});
+
+describe("conversationWorkspaceUrl", () => {
+  it("returns the workspace base for an empty path", () => {
+    expect(conversationWorkspaceUrl(uuid)).toBe(
+      `/api/conversations/${uuid}/workspace/`,
+    );
+  });
+
+  it("allows dotted file names and nested dirs, encoding each segment", () => {
+    expect(conversationWorkspaceUrl(uuid, "report.pptx")).toBe(
+      `/api/conversations/${uuid}/workspace/report.pptx`,
+    );
+    expect(conversationWorkspaceUrl(uuid, "out/chart 1.png")).toBe(
+      `/api/conversations/${uuid}/workspace/out/chart%201.png`,
+    );
+    // Encoded, not decoded: a literal `%2e%2e` or `?q` stays inside its segment.
+    expect(conversationWorkspaceUrl(uuid, "%2e%2e/x")).toBe(
+      `/api/conversations/${uuid}/workspace/%252e%252e/x`,
+    );
+    expect(conversationWorkspaceUrl(uuid, "a?q#h")).toBe(
+      `/api/conversations/${uuid}/workspace/a%3Fq%23h`,
+    );
+    expect(conversationWorkspaceUrl(uuid, "http:")).toBe(
+      `/api/conversations/${uuid}/workspace/http%3A`,
+    );
+  });
+
+  it.each(["../x", "a/../b", "./x", "a//b", "/abs", "x/", "..", "."])(
+    "refuses the workspace path %j",
+    (path) => {
+      expect(conversationWorkspaceUrl(uuid, path)).toBeNull();
+    },
+  );
+
+  it.each(hostileIds)("returns null when the conversation id is %j", (id) => {
+    expect(conversationWorkspaceUrl(id)).toBeNull();
+    expect(conversationWorkspaceUrl(id, "report.pptx")).toBeNull();
   });
 });

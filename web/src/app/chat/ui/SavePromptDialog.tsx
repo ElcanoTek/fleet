@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "@/app/shared/ui/Icon";
 import {
@@ -73,10 +74,12 @@ export function SavePromptDialog({
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(
-          `/api/conversations/${conversationId}/suggest-prompt`,
-          { method: "POST", signal: controller.signal },
-        );
+        const url = conversationApiUrl(conversationId, "/suggest-prompt");
+        if (!url) throw new Error("This chat has an invalid id.");
+        const response = await fetch(url, {
+          method: "POST",
+          signal: controller.signal,
+        });
         if (!response.ok) {
           throw new Error(
             (await response.text()) || `distill failed (${response.status})`,

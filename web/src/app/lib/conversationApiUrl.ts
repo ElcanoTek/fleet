@@ -33,6 +33,22 @@ export function conversationApiUrl(id: string, suffix = ""): string | null {
   return `/api/conversations/${encodeURIComponent(id)}${suffix}`;
 }
 
+// conversationApiPath returns `/api/conversations/<id>/<seg>/<seg>…` for a
+// path with further ids in it (an approval, a queued input, a turn, a
+// subagent child). Every segment — literal or id — must pass the same
+// single-token gate and is encoded on its own, so no value can add a
+// segment, climb with `..`, or start a query. Returns null when any segment
+// fails. Callers append a query built with URLSearchParams/encodeURIComponent.
+export function conversationApiPath(
+  conversationId: string,
+  ...segments: string[]
+): string | null {
+  if (!isConversationId(conversationId)) return null;
+  if (!segments.every(isApiId)) return null;
+  const tail = segments.map((segment) => `/${encodeURIComponent(segment)}`).join("");
+  return `/api/conversations/${encodeURIComponent(conversationId)}${tail}`;
+}
+
 // conversationApprovalApiUrl returns
 // `/api/conversations/<id>/approvals/<approvalId>`, or null when either id
 // fails the gate.
@@ -40,9 +56,24 @@ export function conversationApprovalApiUrl(
   conversationId: string,
   approvalId: string,
 ): string | null {
-  if (!isApiId(approvalId)) return null;
-  return conversationApiUrl(
-    conversationId,
-    `/approvals/${encodeURIComponent(approvalId)}`,
-  );
+  return conversationApiPath(conversationId, "approvals", approvalId);
+}
+
+// conversationWorkspaceUrl returns the workspace file proxy URL
+// `/api/conversations/<id>/workspace/<path>` (just the `…/workspace/` base
+// when `filePath` is empty). Workspace paths are file names, so `.` inside a
+// segment is allowed (`report.pptx`), but an empty, `.` or `..` segment is
+// refused and every segment is encoded on its own — a path can nest
+// (`out/chart.png`) but never climb out of the workspace or leave the origin.
+// Returns null when the conversation id or any path segment fails.
+export function conversationWorkspaceUrl(
+  conversationId: string,
+  filePath = "",
+): string | null {
+  const base = conversationApiUrl(conversationId, "/workspace/");
+  if (base === null) return null;
+  if (filePath === "") return base;
+  const segments = filePath.split("/");
+  if (segments.some((s) => s === "" || s === "." || s === "..")) return null;
+  return base + segments.map((segment) => encodeURIComponent(segment)).join("/");
 }

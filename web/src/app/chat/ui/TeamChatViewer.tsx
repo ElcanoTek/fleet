@@ -19,6 +19,7 @@
 // the public snapshot applies, for the same reason.
 
 import { lazy, Suspense, useEffect, useState } from "react";
+import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { Icon } from "./Icon";
 import { TeamGlyph } from "./ShareGlyphs";
 import { CopyButton } from "./ChatChips";
@@ -78,10 +79,12 @@ export function TeamChatViewer({
     queueMicrotask(() => {
       void (async () => {
         try {
-          const res = await fetch(
-            `/api/conversations/${encodeURIComponent(conversationId)}/team-view`,
-            { cache: "no-store" },
-          );
+          const url = conversationApiUrl(conversationId, "/team-view");
+          if (!url) {
+            if (!cancelled) setError("This chat link has an invalid id.");
+            return;
+          }
+          const res = await fetch(url, { cache: "no-store" });
           if (!res.ok) {
             if (!cancelled)
               setError(
@@ -110,20 +113,19 @@ export function TeamChatViewer({
 
   const branch = async () => {
     if (!snapshot || branching || !branchPoint) return;
+    const branchUrl = conversationApiUrl(conversationId, "/branch");
+    if (!branchUrl) return;
     setBranching(true);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/conversations/${encodeURIComponent(conversationId)}/branch`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            branch_point_message_id: branchPoint,
-            title: `${snapshot.title || "Shared chat"} (from ${shortName(snapshot.owner_email)})`,
-          }),
-        },
-      );
+      const res = await fetch(branchUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branch_point_message_id: branchPoint,
+          title: `${snapshot.title || "Shared chat"} (from ${shortName(snapshot.owner_email)})`,
+        }),
+      });
       if (!res.ok) {
         setError(`Couldn’t branch this chat (HTTP ${res.status}).`);
         return;
