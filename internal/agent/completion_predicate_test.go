@@ -643,3 +643,19 @@ func TestFailedCriticalCallsBatchSupersetCoversTheFailure(t *testing.T) {
 		}
 	}
 }
+
+// A batch failure retried piecewise resolves once every record has landed:
+// [a,b] failed, then [a] and [b] succeeded (the audit ledger allows piecewise
+// batch execution). Until the last record lands the failure stands.
+func TestFailedCriticalCallsPiecewiseRetryResolvesTheBatch(t *testing.T) {
+	pagesTwinPolicy(t, true)
+	failed := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: map[string]any{"/deal_ids": []any{"a", "b"}}}
+	onlyA := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"a"}}}
+	twinB := toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_id": "b"}}
+	if got := failedCriticalCalls([]toolExecRecord{failed, onlyA}); len(got) != 1 {
+		t.Fatalf("record b has not landed, the failure must stand: %v", got)
+	}
+	if got := failedCriticalCalls([]toolExecRecord{failed, onlyA, twinB}); len(got) != 0 {
+		t.Fatalf("a and b both landed (same tool, then its twin), the failure is resolved: %v", got)
+	}
+}

@@ -1332,8 +1332,9 @@ pause (#1602). If the retry fails too:
   `deal_ids`) provably miss one the failed call targeted, or of a declared
   alias twin on the same server (`critical_tool_aliases`), so a failed inline
   create of a deal followed by a successful upload of that same deal counts as
-  landed. A twin supersedes only an attempt whose records it wrote (the same
-  record, or a batch that includes all of them): both calls' recorded
+  landed. Later successes resolve a failure once they have written every
+  record it targeted, in one call or several (a batch retried piecewise). A
+  twin counts only when it proves its records: both calls' recorded
   arguments must be complete (nothing dropped from the verifier's evidence),
   and both must name their records through the record-binding keys the audit
   gate uses (`deal_id` and its siblings, or a `deal_ids` set).

@@ -635,7 +635,10 @@ func (o *orchestrationState) unregisteredTypedActions(actions []criticalActionSt
 		if suffix == "" || tool == suffix {
 			continue
 		}
-		if o.narrowedStandIn(tool, suffix, len(a.DealIDs) > 0) != "" || slices.Contains(out, tool) {
+		// A deal_ids list of placeholders only ("n/a") registers an unbound
+		// commitment (declaredDealIDs), so it is a batch only when a real id
+		// survives normalization.
+		if o.narrowedStandIn(tool, suffix, len(declaredDealIDs(a.DealIDs)) > 0) != "" || slices.Contains(out, tool) {
 			continue
 		}
 		out = append(out, tool)
@@ -670,9 +673,33 @@ func (o *orchestrationState) narrowedStandIn(tool, suffix string, batch bool) st
 	return best
 }
 
+// legacyStandInNote is narrowedStandInNotes' entry for an outstanding legacy
+// commitment to suffix: "" when a registered tool carries suffix itself (the
+// declared name is callable), else "suffix → <registered tool>" for the lowest
+// registered tool of its alias class or an approved substitute, the tools
+// markCommittedExecuted discharges it with. Callers must hold o.mu.
+func (o *orchestrationState) legacyStandInNote(suffix string) string {
+	best := ""
+	for registered := range o.narrowedMCPRoster {
+		regSuffix := criticalSuffixFor(registered)
+		if regSuffix == suffix {
+			return ""
+		}
+		covers := regSuffix != "" && (criticalAliasClassOf(regSuffix) == criticalAliasClassOf(suffix) || substituteSatisfies(suffix, regSuffix))
+		if covers && (best == "" || registered < best) {
+			best = registered
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return suffix + " → " + best
+}
+
 // narrowedStandInNotes names, for each outstanding typed commitment whose
-// declared tool a narrowed run did not register, the registered stand-in to
-// call instead ("declared → stand-in"). confirm_audit appends them to its
+// declared tool a narrowed run did not register (and each legacy commitment
+// whose suffix no registered tool carries), the registered stand-in to call
+// instead ("declared → stand-in"). confirm_audit appends them to its
 // "execute exactly those calls" instruction, which would otherwise send the
 // model to a tool that answers "tool not found". nil when not narrowed.
 // Callers must hold o.mu.
@@ -681,6 +708,16 @@ func (o *orchestrationState) narrowedStandInNotes() []string {
 		return nil
 	}
 	var notes []string
+	// Legacy commitments are suffix-scoped: name a registered tool whose
+	// suffix discharges one when none carries the declared suffix itself.
+	for suffix := range o.committedCriticalActions {
+		if o.legacyHeadroomFor(suffix) <= 0 {
+			continue
+		}
+		if note := o.legacyStandInNote(suffix); note != "" && !slices.Contains(notes, note) {
+			notes = append(notes, note)
+		}
+	}
 	for _, c := range o.typedCommitments {
 		if c.remaining <= 0 || o.narrowedMCPRoster[c.tool] {
 			continue

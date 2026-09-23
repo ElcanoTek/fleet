@@ -85,8 +85,9 @@ on the audit:
   `deal_ids`) provably miss one the failed call targeted. A success of a
   same-server alias twin (`critical_tool_aliases`) does only when it wrote
   every record the failed call targeted: both calls' recorded arguments are
-  complete and name a `deal_id` / `deal_ids` binding, and the success's
-  records cover the failure's (the same record, or a batch including them). A failed retry supersedes nothing, and neither does a
+  complete and name a `deal_id` / `deal_ids` binding. Later successes resolve
+  a failure once they have written every record it targeted, in one call or
+  several. A failed retry supersedes nothing, and neither does a
   twin that wrote another record, names no record, has incomplete evidence, is
   a bare-suffix name, or sits on another server or client variant. Page twins
   addressed only by slug therefore never supersede each other, by decision:

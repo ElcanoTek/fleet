@@ -440,3 +440,22 @@ func TestNarrowedStandInForBatchesAndTheConfirmation(t *testing.T) {
 		t.Fatalf("the confirmation must name the stand-in to call (%s); got %q", want, resp.Content)
 	}
 }
+
+// The legacy path names its stand-in too, and a deal_ids list of placeholders
+// only is not a batch (it registers an unbound commitment), so a substitute
+// may stand in for it.
+func TestNarrowedStandInLegacyNoteAndPlaceholderBatch(t *testing.T) {
+	legacy := newOrchStateForTest()
+	legacy.setNarrowedMCPRoster([]string{"mcp_dsp_create_deal"})
+	resp := confirmAudit(t, legacy, nil, []string{"mcp_dsp_execute_deal_from_prompt_inputs: the spring campaign"})
+	if want := "execute_deal_from_prompt_inputs → mcp_dsp_create_deal"; resp.IsError || !strings.Contains(resp.Content, want) {
+		t.Fatalf("the legacy confirmation must name the stand-in (%s); got %q", want, resp.Content)
+	}
+
+	placeholder := newOrchStateForTest()
+	placeholder.setNarrowedMCPRoster([]string{"mcp_dsp_create_deal"})
+	resp = confirmAudit(t, placeholder, []criticalActionStruct{{Tool: "mcp_dsp_execute_deal_from_prompt_inputs", DealIDs: []string{"n/a"}}}, nil)
+	if want := "mcp_dsp_execute_deal_from_prompt_inputs → mcp_dsp_create_deal"; resp.IsError || !strings.Contains(resp.Content, want) {
+		t.Fatalf("a placeholder-only deal_ids list is not a batch, so its substitute stands in (%s); got %q", want, resp.Content)
+	}
+}
