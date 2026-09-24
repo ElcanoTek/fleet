@@ -334,6 +334,14 @@ func (b *turnBuffer) markNeedsBackfill() {
 // entry), so "sealed" is the earliest reliable this-turn-is-over signal — the
 // #785 busy check uses it to avoid queueing a submission that raced the last
 // microseconds of the previous turn's bookkeeping.
+// endedCompleted reports whether the turn ended by completing, read from its
+// terminal frame (as the journal reads it).
+func (b *turnBuffer) endedCompleted() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return inferTerminalStatus(b.events) == store.TurnStatusCompleted
+}
+
 func (b *turnBuffer) Sealed() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -829,9 +829,33 @@ func (s *Server) cancelInflightTurn(convID, turnID string) (cancelled bool) {
 	s.inflightMu.Unlock()
 	if ok && entry.turnID == turnID && entry.IsRunning() {
 		entry.cancel()
-		return true
+		return entry.confirmStopped()
 	}
 	return false
+}
+
+// stopConfirmWait bounds how long a Stop waits for the turn it cancelled to
+// seal, to learn whether the cancel stopped it. A var so tests can shorten it.
+var stopConfirmWait = 3 * time.Second
+
+// confirmStopped reports whether a turn just cancelled was actually stopped.
+// "Running" is checked before the cancel, and the turn can finish in between,
+// which makes the cancel a no-op. So the turn's own terminal frame decides:
+// a turn that seals with turn.completed ran to its end; anything else
+// (turn.cancelled, an error, or still unwinding at the deadline, the cancel
+// having reached it mid-run) was stopped.
+func (e inflightEntry) confirmStopped() bool {
+	if e.buf == nil {
+		return true
+	}
+	deadline := time.Now().Add(stopConfirmWait)
+	for !e.buf.Sealed() {
+		if time.Now().After(deadline) {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return !e.buf.endedCompleted()
 }
 
 // cancelledInputTTL bounds how long a Stop by input key is remembered for a
@@ -878,8 +902,9 @@ func (s *Server) cancelInputTurn(convID, key string) (stoppedTurn bool) {
 	s.inflightMu.Unlock()
 	if running {
 		entry.cancel()
+		return entry.confirmStopped()
 	}
-	return running
+	return false
 }
 
 // inputKeyStopped reports whether a Stop naming key is still in force.
