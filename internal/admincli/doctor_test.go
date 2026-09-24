@@ -5,9 +5,12 @@ package admincli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // TestDoctorDryRunSmoke — `doctor.sh --dry-run` must succeed on any host (no
@@ -154,5 +157,50 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		if strings.Contains(script, forbid) {
 			t.Errorf("doctor.sh must not source the env file (%q present)", forbid)
 		}
+	}
+}
+
+// TestCmdDoctorCancelsWithSIGTERM — `fleet doctor` must hand an interrupt to
+// the script as a trappable SIGTERM, not exec's default SIGKILL: while doctor
+// has fleet stopped for a podman store reset (migrate_live_service), the
+// script's trap is what starts fleet again, and bash cannot trap SIGKILL.
+// The fixture script traps TERM and exits 7; the test signals its own process
+// the way an operator's Ctrl-C / SIGTERM reaches `fleet doctor`.
+func TestCmdDoctorCancelsWithSIGTERM(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := `trap 'kill "$sleeper" 2>/dev/null; echo trapped >"$DOCTOR_OUT"; exit 7' TERM
+sleep 30 & sleeper=$!
+: >"$DOCTOR_READY"
+wait
+`
+	if err := os.WriteFile(filepath.Join(root, "scripts", "doctor.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, ready := filepath.Join(root, "out"), filepath.Join(root, "ready")
+	t.Setenv("FLEET_ROOT", root)
+	t.Setenv("DOCTOR_OUT", out)
+	t.Setenv("DOCTOR_READY", ready)
+	go func() {
+		for i := 0; i < 200; i++ {
+			if _, err := os.Stat(ready); err == nil {
+				// cmdDoctor's signal.NotifyContext is registered before the
+				// script starts, so this cancels the run rather than the test.
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+	if code := cmdDoctor(nil); code != 7 {
+		t.Fatalf("cmdDoctor exit = %d, want 7 (the script's TERM trap); a SIGKILL cancel gives -1", code)
+	}
+	if b, err := os.ReadFile(out); err != nil || strings.TrimSpace(string(b)) != "trapped" {
+		t.Fatalf("the script's TERM trap did not run: %q, %v", b, err)
 	}
 }

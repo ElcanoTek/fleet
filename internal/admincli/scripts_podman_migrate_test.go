@@ -1,6 +1,7 @@
 package admincli
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,6 +150,68 @@ if fleet_is_live; then echo live; else echo idle; fi`
 	}
 }
 
+// TestUnitRestartable — whether doctor may stop and start the unit to rebuild
+// the pool. "activating" (the Restart=always delay — a unit stuck restarting
+// on a stale store) must qualify, or that box can never be repaired. An
+// installed but inactive unit must not, even with a live fleet process: that
+// process is another supervisor's, and starting the unit runs a second fleet.
+func TestUnitRestartable(t *testing.T) {
+	const stubs = `SERVICE_NAME=fleet
+systemctl() { case "$3" in LoadState) echo "$LOAD" ;; ActiveState) echo "$STATE" ;; esac; }
+if unit_restartable; then echo yes; else echo no; fi`
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "podman-migrate.sh")
+	for _, tc := range []struct{ load, state, want string }{
+		{"loaded", "active", "yes"},
+		{"loaded", "activating", "yes"},
+		{"loaded", "deactivating", "yes"},
+		{"loaded", "inactive", "no"},
+		{"loaded", "failed", "no"},
+		{"not-found", "inactive", "no"},
+		{"", "", "no"}, // no systemd
+	} {
+		cmd := exec.Command("bash", "-c", `. "$0"; set -u; `+stubs, lib)
+		cmd.Env = append(os.Environ(), "LOAD="+tc.load, "STATE="+tc.state)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("bash: %v\n%s", err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != tc.want {
+			t.Errorf("unit_restartable with LoadState=%q ActiveState=%q => %s, want %s", tc.load, tc.state, got, tc.want)
+		}
+	}
+}
+
+// TestMigrateLiveServiceInterrupted — a SIGTERM (what `fleet doctor` now sends
+// on Ctrl-C / cancellation instead of SIGKILL) while fleet is stopped for the
+// migrate must still start fleet and fleet-web again before the script exits.
+func TestMigrateLiveServiceInterrupted(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; skipping podman-migrate.sh unit test")
+	}
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "podman-migrate.sh")
+	// run_as_fleet signals the shell mid-"migrate", as an interrupt would.
+	stubs := strings.Replace(migrateLiveServiceStubs,
+		`run_as_fleet() { echo "run_as_fleet $*" >>"$LOG";`,
+		`run_as_fleet() { echo "run_as_fleet $*" >>"$LOG"; kill -TERM $$;`, 1)
+	stubs = strings.Replace(stubs, `migrate_live_service; echo "rc=$?" >>"$LOG"`,
+		`trap 'cat "$LOG"' EXIT; migrate_live_service; echo "UNREACHED" >>"$LOG"`, 1)
+	cmd := exec.Command("bash", "-c", `. "$0"; `+stubs, lib)
+	cmd.Env = append(os.Environ(), "TERM=dumb", "STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=active")
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 130 {
+		t.Fatalf("want exit 130 from the interrupt trap, got %v\n%s", err, out)
+	}
+	for _, w := range []string{"run_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n"} {
+		if !strings.Contains(string(out), w) {
+			t.Errorf("want %q (fleet restored after the interrupt) in:\n%s", w, out)
+		}
+	}
+	if strings.Contains(string(out), "UNREACHED") {
+		t.Errorf("the interrupt must end the script, got:\n%s", out)
+	}
+}
+
 // TestResolveSandboxBackend — doctor must see the backend the daemon runs
 // (sandbox.ResolveBackend: env, else the bundle's sandbox.backend, else
 // podman). Reading only the env file made a manifest-selected kubernetes box
@@ -162,6 +225,10 @@ func TestResolveSandboxBackend(t *testing.T) {
 		{"", " KUBERNETES", "kubernetes"},
 		{"podman", "kubernetes", "podman"},
 		{"kubernetes", "podman", "kubernetes"},
+		// Only the ENDS are trimmed (strings.TrimSpace): a drifted "pod man"
+		// is invalid to the daemon and must stay unknown here, not podman.
+		{"pod man", "", "pod man"},
+		{"", "\tPodman\n", "podman"},
 	} {
 		if got := podmanMigrateLib(t, "resolve_sandbox_backend", tc.env, tc.manifest); got != tc.want {
 			t.Errorf("resolve_sandbox_backend(%q, %q) = %q, want %q", tc.env, tc.manifest, got, tc.want)
@@ -224,7 +291,7 @@ func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 		{"manifest ${VAR:?msg}", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", []string{"RUNNER_BACKEND=kubernetes"}, "kubernetes"},
 		// Unset: the daemon would refuse the manifest. Doctor keeps the raw
 		// expression — unknown, so it restricts — never an empty "podman".
-		{"manifest ${VAR:?msg} unset", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", nil, "${runner_backend:?setrunner_backend}"},
+		{"manifest ${VAR:?msg} unset", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", nil, "${runner_backend:?set runner_backend}"},
 		// The shipped default bundle: its only backend line is a commented
 		// example. It must resolve podman, or the step-8 repair never runs.
 		{"shipped default bundle", "FLEET_CLIENT_CONFIG_DIR=" + filepath.Join(repoRootFromTest(t), "config", "default") + "\n", nil, "podman"},

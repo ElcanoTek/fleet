@@ -30,7 +30,7 @@ is_stale_pause_error() {
 
 # resolve_sandbox_backend ENV_VALUE MANIFEST_VALUE
 #   The sandbox backend the daemon will run, with sandbox.ResolveBackend's
-#   precedence and normalization: FLEET_SANDBOX_BACKEND (trimmed, lowercased),
+#   precedence and normalization: FLEET_SANDBOX_BACKEND (ends trimmed, lowercased),
 #   else the bundle's sandbox.backend, else podman. An unrecognized value
 #   echoes as-is (the daemon refuses to boot on it, so no pool is live).
 #   The backend only ever RESTRICTS what doctor does (step 8 never restarts a
@@ -39,9 +39,19 @@ is_stale_pause_error() {
 #   unneeded restart, but never a deleted pool.
 resolve_sandbox_backend() {
   local raw
-  raw="$(tr -d '[:space:]' <<<"$1" | tr '[:upper:]' '[:lower:]')"
-  [[ -z "$raw" ]] && raw="$(tr -d '[:space:]' <<<"$2" | tr '[:upper:]' '[:lower:]')"
+  raw="$(_trim_lower "$1")"
+  [[ -z "$raw" ]] && raw="$(_trim_lower "$2")"
   echo "${raw:-podman}"
+}
+
+# _trim_lower TEXT — strings.ToLower(strings.TrimSpace(TEXT)): the ENDS only.
+# Internal whitespace is kept, so a drifted "pod man" stays an unknown value
+# (which restricts) instead of becoming a valid podman.
+_trim_lower() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "${v,,}"
 }
 
 # unit_proven_stopped ACTIVE_STATE — true only for a unit systemd reports as
@@ -70,6 +80,20 @@ fleet_is_live() {
     unit_proven_stopped "${state:-inactive}" || return 0
   fi
   pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
+}
+
+# unit_restartable — true when doctor may stop and start the fleet UNIT to
+# rebuild the pool: the unit is loaded AND is the live one (not proven
+# stopped — so "activating", the Restart=always delay, counts; a unit stuck
+# restarting on a stale store is exactly the one to repair). An installed but
+# inactive unit is excluded even when a fleet process is live: that process
+# belongs to another supervisor, and starting the unit would run a second
+# fleet. Callers add their own --no-restart check.
+unit_restartable() {
+  local load state
+  load="$(systemctl show -p LoadState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  [[ "$load" == "loaded" ]] && ! unit_proven_stopped "$state"
 }
 
 # podman_migrate_plan BACKEND INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART
@@ -149,6 +173,11 @@ smoke_retry_plan() {
 migrate_live_service() {
   local web_was_active=0 rc=0 state migrate_err
   systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
+  # From the stop on, an interruption (Ctrl-C, SIGTERM from `fleet doctor`,
+  # a dropped SSH session) must still bring fleet back: nothing else would.
+  # bash runs the trap once the current foreground command returns.
+  # shellcheck disable=SC2064 # expand web_was_active now, not at signal time
+  trap "_migrate_live_restore $web_was_active; trap - INT TERM HUP; exit 130" INT TERM HUP
   systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
   state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
   if ! unit_proven_stopped "$state" \
@@ -167,11 +196,21 @@ migrate_live_service() {
   # already issued and may still complete, and nothing after doctor's step 6
   # would start fleet again. start waits out a pending stop, and is a no-op on
   # a unit that never went down.
+  _migrate_live_restore "$web_was_active" || rc=1
+  trap - INT TERM HUP
+  return "$rc"
+}
+
+# _migrate_live_restore WEB_WAS_ACTIVE — start fleet, and fleet-web when it
+# was running (BindsTo: stopping fleet took it down; starting fleet does not
+# bring it back). Shared by the normal path and the interruption trap.
+_migrate_live_restore() {
+  local rc=0
   if ! systemctl start "${SERVICE_NAME}.service" 2>/dev/null; then
     fail "${SERVICE_NAME}.service did not start again — journalctl -u ${SERVICE_NAME} -n 50"
     rc=1
   fi
-  if [[ "$web_was_active" == "1" ]] && ! systemctl is-active --quiet fleet-web.service 2>/dev/null; then
+  if [[ "$1" == "1" ]] && ! systemctl is-active --quiet fleet-web.service 2>/dev/null; then
     if systemctl start fleet-web.service 2>/dev/null && systemctl is-active --quiet fleet-web.service 2>/dev/null; then
       fixed "fleet-web.service started again after the ${SERVICE_NAME} restart"
     else

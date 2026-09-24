@@ -753,7 +753,7 @@ CONF
       fi
     fi
     fleet_is_live && live=1
-    [[ "$NO_RESTART" == "0" ]] && systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null && can_restart=1
+    [[ "$NO_RESTART" == "0" ]] && unit_restartable && can_restart=1
     case "$(podman_migrate_plan "$sandbox_backend" "$info_ok" "$podman_info_err" "$live_containers" "$live" "$can_restart")" in
       migrate)
         run_as_fleet podman system migrate >/dev/null 2>&1 || true
@@ -1362,7 +1362,7 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   # The definitive check: launch the image in the exact rootless environment
   # the daemon uses. --network=none mirrors the runtime's default isolation.
   smoke_can_restart=0
-  [[ "$NO_RESTART" == "0" ]] && systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null && smoke_can_restart=1
+  [[ "$NO_RESTART" == "0" ]] && unit_restartable && smoke_can_restart=1
   if smoke_err="$(run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true 2>&1 >/dev/null)"; then
     pass "sandbox smoke passed ($sandbox_img runs as $SERVICE_USER)"
   elif [[ "$(smoke_retry_plan "$migrate_deferred" "$smoke_can_restart" "$sandbox_backend" "$smoke_err")" == "retry" ]]; then
