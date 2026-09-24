@@ -5,7 +5,7 @@
 # Sourced by scripts/doctor.sh. The decisions are pure functions of what the
 # caller probed, so internal/admincli/scripts_podman_migrate_test.go can pin
 # every branch without root, podman or a broken rootless store. The one
-# action, migrate_live_service, uses the caller's SERVICE_NAME, SERVICE_USER,
+# actions (migrate_live_service, migrate_quiesced) use the caller's SERVICE_NAME, SERVICE_USER,
 # run_as_fleet and fixed/fail reporters (and systemctl, pgrep), which the test
 # stubs.
 #
@@ -28,30 +28,15 @@ is_stale_pause_error() {
   grep -qiE 'podman system migrate|pause process' <<<"$1"
 }
 
-# resolve_sandbox_backend ENV_VALUE MANIFEST_VALUE
-#   The sandbox backend the daemon will run, with sandbox.ResolveBackend's
-#   precedence and normalization: FLEET_SANDBOX_BACKEND (ends trimmed, lowercased),
-#   else the bundle's sandbox.backend, else podman. An unrecognized value
-#   echoes as-is (the daemon refuses to boot on it, so no pool is live).
-#   The backend only ever RESTRICTS what doctor does (step 8 never restarts a
-#   kubernetes control plane over a local podman fault); it never licenses a
-#   migrate. So a backend doctor misreads can cost a skipped repair or an
-#   unneeded restart, but never a deleted pool.
-resolve_sandbox_backend() {
-  local raw
-  raw="$(_trim_lower "$1")"
-  [[ -z "$raw" ]] && raw="$(_trim_lower "$2")"
-  echo "${raw:-podman}"
-}
-
-# _trim_lower TEXT — strings.ToLower(strings.TrimSpace(TEXT)): the ENDS only.
-# Internal whitespace is kept, so a drifted "pod man" stays an unknown value
-# (which restricts) instead of becoming a valid podman.
-_trim_lower() {
-  local v="$1"
-  v="${v#"${v%%[![:space:]]*}"}"
-  v="${v%"${v##*[![:space:]]}"}"
-  printf '%s' "${v,,}"
+# fleet_process_absent — true ONLY when pgrep ran and reported no match (exit
+# 1) for a `fleet` process owned by the service user. A missing pgrep, or any
+# pgrep error, is not proof of absence: it counts as present, so it can never
+# license a migrate. (pgrep: 0 match, 1 no match, 2+ error.)
+fleet_process_absent() {
+  command -v pgrep >/dev/null 2>&1 || return 1
+  local rc=0
+  pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1 || rc=$?
+  [[ "$rc" == 1 ]]
 }
 
 # unit_proven_stopped ACTIVE_STATE — true only for a unit systemd reports as
@@ -79,7 +64,7 @@ fleet_is_live() {
     state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
     unit_proven_stopped "${state:-inactive}" || return 0
   fi
-  pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
+  ! fleet_process_absent
 }
 
 # unit_restartable — true when doctor may stop and start the fleet UNIT to
@@ -106,15 +91,11 @@ unit_quiesced() {
   local load state
   load="$(systemctl show -p LoadState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
   state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-  [[ "$load" == "loaded" ]] && unit_proven_stopped "$state" \
-    && ! pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
+  [[ "$load" == "loaded" ]] && unit_proven_stopped "$state" && fleet_process_absent
 }
 
-# podman_migrate_plan BACKEND INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART QUIESCED
-#   Step 3's decision. BACKEND is accepted for symmetry with smoke_retry_plan
-#   but deliberately NOT consulted: control of the unit is the gate on every
-#   backend, so a misread backend can never turn into a migrate under a live
-#   pool. INFO_OK is 1 when `podman info` succeeded as the service user,
+# podman_migrate_plan INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART QUIESCED
+#   Step 3's decision. INFO_OK is 1 when `podman info` succeeded as the service user,
 #   INFO_ERR its stderr; LIVE_CONTAINERS / FLEET_LIVE are informational
 #   (the running-container count, "unknown" when listing failed, and
 #   fleet_is_live); CAN_RESTART is 1 when this run may and can restart the
@@ -131,7 +112,7 @@ unit_quiesced() {
 #                      or has proven stopped (--no-restart, another supervisor)
 #     none             podman failing some other way; migrate is not the fix
 podman_migrate_plan() {
-  local info_ok="$2" info_err="$3" can_restart="$6" quiesced="$7"
+  local info_ok="$1" info_err="$2" can_restart="$5" quiesced="$6"
   if [[ "$info_ok" == "1" ]]; then
     echo defer
   elif is_stale_pause_error "$info_err"; then
@@ -144,21 +125,24 @@ podman_migrate_plan() {
   fi
 }
 
-# smoke_retry_plan DEFERRED CAN_RESTART BACKEND SMOKE_ERR QUIESCED
+# smoke_retry_plan DEFERRED CAN_RESTART LOCAL_POOL SMOKE_ERR QUIESCED
 #   Step 8's decision after the sandbox smoke failed. DEFERRED is 1 when step 3
-#   skipped migrate; CAN_RESTART / QUIESCED as above; SMOKE_ERR the failed
-#   run's stderr. Only podman's stale-pause error is a reason to reset. Then:
-#   "retry" (stop → migrate → start, re-smoke) for a live unit on a backend
-#   resolved as EXACTLY "podman"; "migrate" (reset, re-smoke — no restart)
-#   when doctor's unit is quiesced, whatever the backend, since nothing live
-#   holds a pool; else "report" (fail the smoke, touch nothing). Fail-closed
-#   on the backend: kubernetes, an unknown value, or an expression doctor could
-#   not interpolate never restart a live control plane.
+#   skipped migrate; CAN_RESTART / QUIESCED as above; LOCAL_POOL the number of
+#   running fleet sandbox containers (chat-sandbox-*) step 3 saw in this
+#   store; SMOKE_ERR the failed run's stderr. Only podman's stale-pause error
+#   is a reason to reset. Then: "retry" (stop → migrate → start, re-smoke)
+#   for a live unit with direct evidence that its pool lives in this store
+#   (LOCAL_POOL > 0); "migrate" (reset, re-smoke — no restart) when doctor's
+#   unit is quiesced, since nothing live holds a pool; else "report" (fail
+#   the smoke, touch nothing). The evidence, not a re-derivation of the
+#   daemon's config, is what licenses a restart: a kubernetes-backed fleet
+#   keeps no sandbox containers here, so a local podman fault can never
+#   restart its control plane — and no config form doctor misreads can.
 smoke_retry_plan() {
-  local deferred="$1" can_restart="$2" backend="$3" smoke_err="$4" quiesced="${5:-0}"
+  local deferred="$1" can_restart="$2" local_pool="$3" smoke_err="$4" quiesced="${5:-0}"
   if [[ "$deferred" != "1" ]] || ! is_stale_pause_error "$smoke_err"; then
     echo report
-  elif [[ "$can_restart" == "1" && "$backend" == "podman" ]]; then
+  elif [[ "$can_restart" == "1" && "$local_pool" =~ ^[1-9][0-9]*$ ]]; then
     echo retry
   elif [[ "$quiesced" == "1" ]]; then
     echo migrate
@@ -216,8 +200,7 @@ migrate_live_service() {
   trap "_migrate_live_restore $web_was_active; trap - INT TERM HUP; exit 130" INT TERM HUP
   systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
   state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-  if ! unit_proven_stopped "$state" \
-     || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1; then
+  if ! unit_proven_stopped "$state" || ! fleet_process_absent; then
     fail "${SERVICE_NAME}.service did not stop (ActiveState=${state:-unknown}) — podman system migrate NOT run (it would delete the live sandbox pool); journalctl -u ${SERVICE_NAME} -n 50"
     rc=1
   elif ! install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "/run/${SERVICE_USER}" 2>/dev/null; then

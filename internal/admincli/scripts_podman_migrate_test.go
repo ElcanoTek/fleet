@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -42,29 +41,26 @@ func podmanMigrateLib(t *testing.T, fn string, args ...string) string {
 // box, never for a supervisor doctor cannot stop, never for another failure.
 func TestPodmanMigratePlan(t *testing.T) {
 	for _, tc := range []struct {
-		name                                    string
-		backend, infoOK, infoErr, live, fleetUp string
-		canRestart, quiesced                    string
-		want                                    string
+		name                           string
+		infoOK, infoErr, live, fleetUp string
+		canRestart, quiesced           string
+		want                           string
 	}{
-		{"healthy, warm pool running", "podman", "1", "", "8", "1", "1", "0", "defer"},
-		{"healthy, nothing live, unit quiesced", "podman", "1", "", "0", "0", "0", "1", "defer"},
-		{"healthy, other supervisor between restarts", "podman", "1", "", "0", "0", "0", "0", "defer"},
-		{"healthy, listing failed", "podman", "1", "", "unknown", "0", "1", "0", "defer"},
-		{"stale pause, live, restartable", "podman", "0", stalePauseErr, "0", "1", "1", "0", "migrate-restart"},
-		{"stale pause, unit quiesced", "podman", "0", stalePauseErr, "0", "0", "0", "1", "migrate"},
-		{"stale pause, live, --no-restart", "podman", "0", stalePauseErr, "0", "1", "0", "0", "refuse"},
+		{"healthy, warm pool running", "1", "", "8", "1", "1", "0", "defer"},
+		{"healthy, nothing live, unit quiesced", "1", "", "0", "0", "0", "1", "defer"},
+		{"healthy, other supervisor between restarts", "1", "", "0", "0", "0", "0", "defer"},
+		{"healthy, listing failed", "1", "", "unknown", "0", "1", "0", "defer"},
+		{"stale pause, live, restartable", "0", stalePauseErr, "0", "1", "1", "0", "migrate-restart"},
+		{"stale pause, unit quiesced", "0", stalePauseErr, "0", "0", "0", "1", "migrate"},
+		{"stale pause, live, --no-restart", "0", stalePauseErr, "0", "1", "0", "0", "refuse"},
 		// No loaded unit: an external supervisor may relaunch fleet between a
 		// check and the migrate, so an instantaneous "no process" licenses nothing.
-		{"stale pause, no unit, no process seen", "podman", "0", stalePauseErr, "0", "0", "0", "0", "refuse"},
-		{"other podman failure, live", "podman", "0", "Error: cannot chdir to /root: Permission denied", "0", "1", "1", "0", "none"},
-		{"other podman failure, quiesced", "podman", "0", "Error: no space left on device", "0", "0", "0", "1", "none"},
-		// The backend never licenses a migrate.
-		{"kubernetes backend, healthy, live", "kubernetes", "1", "", "0", "1", "1", "0", "defer"},
-		{"kubernetes backend, stale pause, --no-restart", "kubernetes", "0", stalePauseErr, "0", "1", "0", "0", "refuse"},
+		{"stale pause, no unit, no process seen", "0", stalePauseErr, "0", "0", "0", "0", "refuse"},
+		{"other podman failure, live", "0", "Error: cannot chdir to /root: Permission denied", "0", "1", "1", "0", "none"},
+		{"other podman failure, quiesced", "0", "Error: no space left on device", "0", "0", "0", "1", "none"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := podmanMigrateLib(t, "podman_migrate_plan", tc.backend, tc.infoOK, tc.infoErr, tc.live, tc.fleetUp, tc.canRestart, tc.quiesced)
+			got := podmanMigrateLib(t, "podman_migrate_plan", tc.infoOK, tc.infoErr, tc.live, tc.fleetUp, tc.canRestart, tc.quiesced)
 			if got != tc.want {
 				t.Errorf("podman_migrate_plan = %q, want %q", got, tc.want)
 			}
@@ -78,31 +74,27 @@ func TestPodmanMigratePlan(t *testing.T) {
 // a kubernetes box's pool is pods that a local podman fault never touches.
 func TestSmokeRetryPlan(t *testing.T) {
 	for _, tc := range []struct {
-		name                                 string
-		deferred, canRestart, backend, smoke string
-		quiesced                             string
-		want                                 string
+		name                                   string
+		deferred, canRestart, localPool, smoke string
+		quiesced                               string
+		want                                   string
 	}{
-		{"stale pause after a skip", "1", "1", "podman", stalePauseErr, "0", "retry"},
-		{"pids exhausted", "1", "1", "podman", "Error: crun: pids limit reached", "0", "report"},
-		{"disk full", "1", "1", "podman", "Error: no space left on device", "0", "report"},
-		{"no-restart", "1", "0", "podman", stalePauseErr, "0", "report"},
-		{"step 3 already migrated", "0", "1", "podman", stalePauseErr, "0", "report"},
-		{"kubernetes backend", "1", "1", "kubernetes", stalePauseErr, "0", "report"},
-		// Fail-closed: only a backend resolved as exactly podman may restart.
-		// An expression doctor could not interpolate (nested braces) or an
-		// unknown value restricts rather than being taken for podman.
-		{"uninterpolated manifest expression", "1", "1", "${RUNNER_BACKEND:-pre {inner}}", stalePauseErr, "0", "report"},
-		// Fleet stopped with doctor's unit quiesced: reset without a restart,
-		// whatever the backend (nothing live holds a pool).
-		{"stale pause, unit quiesced", "1", "0", "podman", stalePauseErr, "1", "migrate"},
-		{"stale pause, quiesced, kubernetes", "1", "0", "kubernetes", stalePauseErr, "1", "migrate"},
-		{"pids exhausted, quiesced", "1", "0", "podman", "Error: crun: pids limit reached", "1", "report"},
-		{"unrecognized backend", "1", "1", "docker", stalePauseErr, "0", "report"},
-		{"manifest backend doctor could not parse", "1", "1", "unparsed", stalePauseErr, "0", "report"},
+		{"stale pause, live unit, pool in this store", "1", "1", "8", stalePauseErr, "0", "retry"},
+		{"pids exhausted", "1", "1", "8", "Error: crun: pids limit reached", "0", "report"},
+		{"disk full", "1", "1", "8", "Error: no space left on device", "0", "report"},
+		{"no-restart", "1", "0", "8", stalePauseErr, "0", "report"},
+		{"step 3 already migrated", "0", "1", "8", stalePauseErr, "0", "report"},
+		// No fleet sandbox containers in this store (a kubernetes-backed
+		// fleet, or no evidence at all): a local podman fault never restarts
+		// the live control plane — whatever its config says.
+		{"live unit, no local pool evidence", "1", "1", "0", stalePauseErr, "0", "report"},
+		{"live unit, pool count unknown", "1", "1", "", stalePauseErr, "0", "report"},
+		// Fleet stopped with doctor's unit quiesced: reset without a restart.
+		{"stale pause, unit quiesced", "1", "0", "0", stalePauseErr, "1", "migrate"},
+		{"pids exhausted, quiesced", "1", "0", "0", "Error: crun: pids limit reached", "1", "report"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := podmanMigrateLib(t, "smoke_retry_plan", tc.deferred, tc.canRestart, tc.backend, tc.smoke, tc.quiesced)
+			got := podmanMigrateLib(t, "smoke_retry_plan", tc.deferred, tc.canRestart, tc.localPool, tc.smoke, tc.quiesced)
 			if got != tc.want {
 				t.Errorf("smoke_retry_plan = %q, want %q", got, tc.want)
 			}
@@ -220,6 +212,32 @@ func TestMigrateLiveServiceInterrupted(t *testing.T) {
 	}
 }
 
+// TestFleetProcessAbsent — only pgrep's explicit no-match (exit 1) proves no
+// fleet process. A host without pgrep, or a pgrep error, must count as
+// present: treating "command not found" as absence would license a migrate
+// under a live, externally supervised fleet.
+func TestFleetProcessAbsent(t *testing.T) {
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "podman-migrate.sh")
+	for _, tc := range []struct{ name, stub, want string }{
+		{"no match", `pgrep() { return 1; }`, "absent"},
+		{"match", `pgrep() { return 0; }`, "present"},
+		{"pgrep error", `pgrep() { return 2; }`, "present"},
+		// No pgrep at all: an empty PATH, and no function to stand in.
+		{"no pgrep on the host", `PATH=/nonexistent`, "present"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `. "$0"; SERVICE_USER=fleet; ` + tc.stub + `; if fleet_process_absent; then echo absent; else echo present; fi`
+			out, err := exec.Command("bash", "-c", script, lib).CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != tc.want {
+				t.Errorf("fleet_process_absent => %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestUnitQuiesced — "nothing live" that licenses an unattended migrate:
 // doctor's own unit loaded and proven stopped (systemd will not restart an
 // inactive/failed unit on its own) and no fleet process. Without a loaded
@@ -249,126 +267,6 @@ if unit_quiesced; then echo yes; else echo no; fi`
 		if got := strings.TrimSpace(string(out)); got != tc.want {
 			t.Errorf("unit_quiesced LoadState=%q ActiveState=%q process=%s => %s, want %s", tc.load, tc.state, tc.proc, got, tc.want)
 		}
-	}
-}
-
-// TestResolveSandboxBackend — doctor must see the backend the daemon runs
-// (sandbox.ResolveBackend: env, else the bundle's sandbox.backend, else
-// podman). Reading only the env file made a manifest-selected kubernetes box
-// look like podman, so a local podman fault could restart its control plane.
-func TestResolveSandboxBackend(t *testing.T) {
-	for _, tc := range []struct{ env, manifest, want string }{
-		{"", "", "podman"},
-		{"kubernetes", "", "kubernetes"},
-		{"", "kubernetes", "kubernetes"},
-		{"  Kubernetes ", "", "kubernetes"},
-		{"", " KUBERNETES", "kubernetes"},
-		{"podman", "kubernetes", "podman"},
-		{"kubernetes", "podman", "kubernetes"},
-		// Only the ENDS are trimmed (strings.TrimSpace): a drifted "pod man"
-		// is invalid to the daemon and must stay unknown here, not podman.
-		{"pod man", "", "pod man"},
-		{"", "\tPodman\n", "podman"},
-	} {
-		if got := podmanMigrateLib(t, "resolve_sandbox_backend", tc.env, tc.manifest); got != tc.want {
-			t.Errorf("resolve_sandbox_backend(%q, %q) = %q, want %q", tc.env, tc.manifest, got, tc.want)
-		}
-	}
-}
-
-// TestDoctorResolvesBackendLikeTheDaemon — the real doctor.sh, not the
-// library. The backend (and the bundle, and any ${VAR} the manifest selects
-// it through) must resolve the way the running daemon's does: its live
-// process env first (clientconfig's "process env wins", where a key present
-// but empty still wins — a unit Environment= line or an external supervisor
-// can set values no file holds), then the deployment env file it folds in
-// (#1123), then the manifest default. Each case runs a real process with a
-// controlled env and points doctor at it, so the /proc read is exercised.
-func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
-	dir := t.TempDir()
-	// Two bundles: "kube" selects kubernetes outright; "var" selects via ${...}.
-	writeBundle := func(name, backend string) string {
-		b := filepath.Join(dir, name)
-		if err := os.MkdirAll(b, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		m := "app_name: Test\nsandbox:\n  tag: localhost/test:latest\n  backend: " + backend + "\n"
-		if err := os.WriteFile(filepath.Join(b, "manifest.yaml"), []byte(m), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
-	varBundle := writeBundle("var", "${RUNNER_BACKEND:-podman}")
-	reqBundle := writeBundle("req", "${RUNNER_BACKEND:?set RUNNER_BACKEND}")
-	kubeBundle := writeBundle("kube", "kubernetes")
-	// Valid YAML the block reader must not misread as "no backend" (= podman).
-	commented := filepath.Join(dir, "commented")
-	inline := filepath.Join(dir, "inline")
-	for b, m := range map[string]string{
-		commented: "app_name: Test\nsandbox: # runner settings\n  backend: kubernetes\n",
-		inline:    "app_name: Test\nsandbox: {tag: localhost/test:latest, backend: kubernetes}\n",
-	} {
-		if err := os.MkdirAll(b, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(b, "manifest.yaml"), []byte(m), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	envFile := filepath.Join(dir, "fleet.env")
-	for _, tc := range []struct {
-		name, envBody string
-		daemonEnv     []string
-		want          string
-	}{
-		{"env file ${VAR}", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nRUNNER_BACKEND=kubernetes\n", nil, "kubernetes"},
-		{"manifest default", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\n", nil, "podman"},
-		{"env file backend beats manifest", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nRUNNER_BACKEND=kubernetes\nFLEET_SANDBOX_BACKEND=podman\n", nil, "podman"},
-		{"daemon env backend beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nFLEET_SANDBOX_BACKEND=podman\n", []string{"FLEET_SANDBOX_BACKEND=kubernetes"}, "kubernetes"},
-		{"daemon env ${VAR}", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\n", []string{"RUNNER_BACKEND=kubernetes"}, "kubernetes"},
-		// Present-but-empty in the daemon's env still beats the env file.
-		{"daemon env empty backend beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nFLEET_SANDBOX_BACKEND=kubernetes\n", []string{"FLEET_SANDBOX_BACKEND="}, "podman"},
-		{"manifest ${VAR:?msg}", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", []string{"RUNNER_BACKEND=kubernetes"}, "kubernetes"},
-		// Unset: the daemon would refuse the manifest. Doctor keeps the raw
-		// expression — unknown, so it restricts — never an empty "podman".
-		{"manifest ${VAR:?msg} unset", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", nil, "${runner_backend:?set runner_backend}"},
-		// The shipped default bundle: its only backend line is a commented
-		// example. It must resolve podman, or the step-8 repair never runs.
-		{"shipped default bundle", "FLEET_CLIENT_CONFIG_DIR=" + filepath.Join(repoRootFromTest(t), "config", "default") + "\n", nil, "podman"},
-		{"sandbox block line with a comment", "FLEET_CLIENT_CONFIG_DIR=" + commented + "\n", nil, "kubernetes"},
-		// Unreadable to the block parser: "unparsed", which is not podman, so
-		// step 8 restricts (TestSmokeRetryPlan pins that any non-podman does).
-		{"inline sandbox mapping", "FLEET_CLIENT_CONFIG_DIR=" + inline + "\n", nil, "unparsed"},
-		// A relative bundle path resolves against the daemon's cwd (the
-		// stand-in runs in the fixture dir), not doctor's (the repo root).
-		{"relative bundle dir, daemon cwd", "FLEET_CLIENT_CONFIG_DIR=kube\n", nil, "kubernetes"},
-		// The daemon loads the bundle ITS env names, not the env file's.
-		{"daemon bundle dir beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\n", []string{"FLEET_CLIENT_CONFIG_DIR=" + kubeBundle}, "kubernetes"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := os.WriteFile(envFile, []byte(tc.envBody), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			daemon := exec.Command("sleep", "60")
-			daemon.Dir = dir
-			daemon.Env = append([]string{"PATH=" + os.Getenv("PATH")}, tc.daemonEnv...)
-			if err := daemon.Start(); err != nil {
-				t.Skipf("cannot start a stand-in daemon process: %v", err)
-			}
-			t.Cleanup(func() { _ = daemon.Process.Kill(); _ = daemon.Wait() })
-			// Empty shell vars: the daemon's env and the env file must win.
-			out, err := runScript(t, []string{
-				"FLEET_ENV_FILE=" + envFile,
-				"FLEET_DOCTOR_DAEMON_PID=" + strconv.Itoa(daemon.Process.Pid),
-				"RUNNER_BACKEND=", "FLEET_SANDBOX_BACKEND=",
-			}, "doctor.sh", "--dry-run")
-			if err != nil {
-				t.Fatalf("doctor --dry-run: %v\n%s", err, out)
-			}
-			if want := "sandbox backend: " + tc.want + " "; !strings.Contains(out, want) {
-				t.Errorf("want %q in the dry-run, got:\n%s", want, out)
-			}
-		})
 	}
 }
 

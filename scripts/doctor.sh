@@ -156,6 +156,7 @@ n_ok=0 n_fixed=0 n_warn=0 n_fail=0
 restart_needed=0
 podman_recheck=0
 migrate_deferred=0 # step 3 skipped migrate on a live box; step 8 may retry it
+local_pool=0       # step 3 saw N running fleet sandbox containers in this store
 
 pass()  { printf '  %s✓%s %s\n' "$c_green" "$c_reset" "$*"; n_ok=$((n_ok+1)); }
 fixed() { printf '  %s↻%s %s\n' "$c_cyan" "$c_reset" "$*"; n_fixed=$((n_fixed+1)); }
@@ -228,114 +229,6 @@ run_as_fleet() {
 }
 
 
-# deploy_env KEY — KEY as the fleet daemon sees it. The daemon's own process
-# env wins (clientconfig applies the env file with "process env wins"
-# precedence, manifest_env.go), and that env can carry values no file holds:
-# a unit Environment= line, or whatever an external supervisor exported. So
-# read the RUNNING daemon's env first (/proc/<pid>/environ — doctor runs as
-# root), then the deployment env file, then doctor's own shell env. The pid is
-# the unit's MainPID, else the service user's `fleet` process;
-# FLEET_DOCTOR_DAEMON_PID names it explicitly (a supervisor-run process the
-# lookup would not find, and the test seam).
-fleet_daemon_pid() {
-  local pid="${FLEET_DOCTOR_DAEMON_PID:-}"
-  if [[ -z "$pid" ]]; then
-    pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-    [[ "$pid" == "0" ]] && pid=""
-    [[ -z "$pid" ]] && pid="$(pgrep -u "$SERVICE_USER" -x fleet 2>/dev/null | head -n1 || true)"
-  fi
-  printf '%s' "$pid"
-}
-# A key PRESENT in the daemon's env wins even when empty — config's
-# precedence keeps an explicitly empty process value (internal/config
-# config_test.go) — so presence is tracked apart from emptiness there.
-deploy_env() {
-  local key="$1" pid line
-  pid="$(fleet_daemon_pid)"
-  if [[ -n "$pid" && -r "/proc/$pid/environ" ]]; then
-    if line="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -E "^${key}=" | tail -n1)" && [[ -n "$line" ]]; then
-      printf '%s' "${line#*=}"
-      return 0
-    fi
-  fi
-  local val
-  val="$(env_get "$key")"
-  [[ -z "$val" ]] && val="${!key:-}"
-  printf '%s' "$val"
-}
-
-# The client bundle the daemon loads, and scalars from its manifest's sandbox:
-# block (the backend here; the image/tag in step 8).
-bundle_dir="$(deploy_env FLEET_CLIENT_CONFIG_DIR)"
-# A relative path resolves against the DAEMON's working directory
-# (clientconfig.Load: filepath.Abs), not the operator's: the live process's
-# cwd, else the unit's WorkingDirectory. If neither is known the bundle is
-# unknown — never a guess from doctor's own cwd.
-if [[ -n "$bundle_dir" && "$bundle_dir" != /* ]]; then
-  daemon_cwd=""
-  daemon_pid="$(fleet_daemon_pid)"
-  [[ -n "$daemon_pid" ]] && daemon_cwd="$(readlink "/proc/${daemon_pid}/cwd" 2>/dev/null || true)"
-  [[ -z "$daemon_cwd" ]] && daemon_cwd="$(systemctl show -p WorkingDirectory --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-  if [[ "$daemon_cwd" == /* ]]; then
-    bundle_dir="${daemon_cwd%/}/${bundle_dir}"
-  else
-    bundle_dir_unknown=1
-  fi
-fi
-[[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
-[[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
-# manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
-# whole-value ${VAR} / ${VAR:-default} / ${VAR:?message} interpolated (the
-# forms clientconfig supports). bootstrap's resolve_sandbox_image and
-# update.sh's copy still take only the bare/default forms, against their own
-# env — they run before or around the daemon, not against a live one.
-# A reference resolves the way the daemon's does (deploy_env): its live
-# process env, then the deployment env file it folds in before interpolating
-# (clientconfig.Load, #1123), then doctor's own shell env as a last resort.
-manifest_sandbox_scalar() {
-  local key="$1" raw
-  raw="$(awk -v key="$key" '
-    /^sandbox:[[:space:]]*(#.*)?$/ { b=1; next }
-    /^[^[:space:]]/          { b=0 }
-    b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
-  ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
-  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:([-?])([^}]*))?\}$ ]]; then
-    local var="${BASH_REMATCH[1]}" op="${BASH_REMATCH[3]}" def="${BASH_REMATCH[4]}" val
-    val="$(deploy_env "$var")"
-    # :? has no default — its body is the error the daemon raises when unset.
-    # Unset there means the daemon would refuse this manifest: keep the raw
-    # expression (an unknown value, which restricts) rather than an empty one
-    # that would read as "not configured".
-    if [[ "$op" == "?" && -z "$val" ]]; then
-      printf '%s' "$raw"
-      return 0
-    fi
-    printf '%s' "${val:-$def}"
-  else
-    printf '%s' "$raw"
-  fi
-}
-
-# The configured sandbox backend (ADR-0049), with the daemon's precedence and
-# normalization (sandbox.ResolveBackend): FLEET_SANDBOX_BACKEND, else the
-# bundle's sandbox.backend, else podman. Only the podman backend keeps its
-# pool in the service user's rootless store — the store migrate resets.
-# A parse miss must not read as "no backend configured" (which is podman):
-# when this block-style reader finds nothing but the manifest mentions a
-# backend key anywhere (an inline {backend: ...} mapping, say), the backend is
-# "unparsed" — not podman — so step 8 restricts rather than restarts. YAML
-# comments are stripped first: the shipped default bundle carries a commented
-# `# backend: kubernetes` example, and matching it would disable the step-8
-# repair on every default install.
-manifest_backend="$(manifest_sandbox_scalar backend)"
-if [[ "${bundle_dir_unknown:-0}" == "1" ]]; then
-  manifest_backend="unparsed" # the daemon's bundle cannot be located from here
-elif [[ -z "$manifest_backend" ]] \
-   && sed 's/#.*//' "$bundle_dir/manifest.yaml" 2>/dev/null | grep -Eq '(^|[[:space:],{])backend[[:space:]]*:'; then
-  manifest_backend="unparsed"
-fi
-sandbox_backend="$(resolve_sandbox_backend "$(deploy_env FLEET_SANDBOX_BACKEND)" "$manifest_backend")"
-
 # ── dry-run: print the checklist and exit ────────────────────────────────────
 # Doctor's real run is condition-driven (it probes, then fixes what the probe
 # found), so --dry-run enumerates the plan instead of half-executing it. This
@@ -356,13 +249,12 @@ if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
   info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
-  info "[dry-run] sandbox backend: ${sandbox_backend} (FLEET_SANDBOX_BACKEND, else the bundle's sandbox.backend, else podman)"
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate (never while podman is healthy — it stops every live sandbox; on a stale-pause error: stop ${SERVICE_NAME} → migrate → start when doctor may restart it, a plain migrate when its unit is quiesced, else manual steps), podman info as ${SERVICE_USER}"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
-  info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}; if it fails with a stale-pause error, stop ${SERVICE_NAME} → migrate → start + re-smoke (podman backend, unless --no-restart), or migrate + re-smoke when its unit is quiesced"
+  info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}; if it fails with a stale-pause error, stop ${SERVICE_NAME} → migrate → start + re-smoke (only when step 3 saw fleet's sandbox containers in this store, unless --no-restart), or migrate + re-smoke when its unit is quiesced"
   info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
   info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
   exit 0
@@ -768,11 +660,19 @@ CONF
       else
         live_containers="unknown"
       fi
+      # Direct evidence that the live daemon keeps its sandbox pool in THIS
+      # store: running containers named like fleet's sandboxes
+      # (internal/sandbox containerNamePrefix). A kubernetes-backed fleet has
+      # none here. Step 8 may restart a live fleet over a local podman fault
+      # only with this evidence — no re-derivation of the daemon's config.
+      if pool_ids="$(run_as_fleet podman ps -q --filter name=chat-sandbox- 2>/dev/null)"; then
+        local_pool="$(grep -c . <<<"$pool_ids" || true)"
+      fi
     fi
     fleet_is_live && live=1
     [[ "$NO_RESTART" == "0" ]] && unit_restartable && can_restart=1
     unit_quiesced && quiesced=1
-    case "$(podman_migrate_plan "$sandbox_backend" "$info_ok" "$podman_info_err" "$live_containers" "$live" "$can_restart" "$quiesced")" in
+    case "$(podman_migrate_plan "$info_ok" "$podman_info_err" "$live_containers" "$live" "$can_restart" "$quiesced")" in
       migrate)
         if migrate_quiesced; then
           fixed "podman system migrate run (podman reported a stale pause process; ${SERVICE_NAME} is stopped, nothing live to disturb)"
@@ -1370,6 +1270,27 @@ sandbox_img="$(env_get FLEET_SANDBOX_IMAGE)"
 [[ -z "$sandbox_img" ]] && sandbox_img="$(env_get CHAT_SANDBOX_IMAGE)"
 sandbox_img_prebuilt=0
 if [[ -z "$sandbox_img" ]]; then
+  bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
+  [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
+  [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
+  # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
+  # bare ${VAR} / ${VAR:-default} interpolated against the process env (the
+  # only shapes the default bundle uses; mirrors bootstrap's
+  # resolve_sandbox_image — keep them in sync).
+  manifest_sandbox_scalar() {
+    local key="$1" raw
+    raw="$(awk -v key="$key" '
+      /^sandbox:[[:space:]]*$/ { b=1; next }
+      /^[^[:space:]]/          { b=0 }
+      b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
+    ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
+    if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
+      local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
+      printf '%s' "${!var:-$def}"
+    else
+      printf '%s' "$raw"
+    fi
+  }
   sandbox_img="$(manifest_sandbox_scalar image)"
   if [[ -n "$sandbox_img" ]]; then
     sandbox_img_prebuilt=1
@@ -1389,7 +1310,7 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   unit_quiesced && smoke_quiesced=1
   if smoke_err="$(run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true 2>&1 >/dev/null)"; then
     pass "sandbox smoke passed ($sandbox_img runs as $SERVICE_USER)"
-  elif smoke_plan="$(smoke_retry_plan "$migrate_deferred" "$smoke_can_restart" "$sandbox_backend" "$smoke_err" "$smoke_quiesced")" \
+  elif smoke_plan="$(smoke_retry_plan "$migrate_deferred" "$smoke_can_restart" "${local_pool:-0}" "$smoke_err" "$smoke_quiesced")" \
        && [[ "$smoke_plan" == "migrate" ]]; then
     # Stale pause with fleet stopped (its unit quiesced): reset, re-smoke.
     if migrate_quiesced; then

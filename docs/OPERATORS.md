@@ -439,13 +439,11 @@ production-only bug. The pass covers, in order:
      migrate) — the store is left alone and doctor prints the manual
      sequence (stop, recreate `/run/fleet`, migrate, start).
    A launch failing any other way — disk or PID exhaustion, say — never
-   triggers migrate. The step-8 restart path also requires a backend
-   resolved as exactly `podman` (`FLEET_SANDBOX_BACKEND`, else the bundle's
-   `sandbox.backend`, each read the way the daemon reads it: its live
-   process env, then the deployment env file, with a relative bundle path
-   resolved against the daemon's working directory), so a kubernetes box, an
-   unknown value, or a manifest doctor cannot parse never restarts `fleet`
-   over a local podman fault.
+   triggers migrate. The step-8 restart path also requires direct evidence
+   that the live fleet keeps its sandbox pool in this store — step 3 saw
+   running `chat-sandbox-*` containers of the service user — so a
+   kubernetes-backed fleet (no local sandbox containers) is never restarted
+   over a local podman fault, whatever its config says.
    The decisions are `scripts/lib/podman-migrate.sh`.
 4. **Installed artifacts** — functional drift of `fleet.service` /
    `fleet-web.service` / the `fleet-backup` and `fleet-maintenance` service +
