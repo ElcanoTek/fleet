@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -110,13 +111,16 @@ func TestResolveSandboxBackend(t *testing.T) {
 	}
 }
 
-// TestDoctorResolvesManifestBackendFromEnvFile — the real doctor.sh, not the
-// library: a bundle that selects its backend through a ${VAR} reference whose
-// value lives only in the deployment env file must resolve to that value. The
-// daemon folds the env file into its env before interpolating the manifest
-// (#1123); resolving against doctor's own shell env saw podman on a
-// kubernetes box, so a local podman fault could restart its control plane.
-func TestDoctorResolvesManifestBackendFromEnvFile(t *testing.T) {
+// TestDoctorResolvesBackendLikeTheDaemon — the real doctor.sh, not the
+// library. The backend (and any ${VAR} the manifest selects it through) must
+// resolve the way the running daemon's does: its live process env first
+// (clientconfig's "process env wins" — a unit Environment= line or an
+// external supervisor can set a value no file holds), then the deployment env
+// file it folds in (#1123), then the manifest default. Resolving against
+// doctor's own shell env saw podman on a kubernetes box, so a local podman
+// fault could restart its control plane. Each case runs a real process with a
+// controlled env and points doctor at it, so the /proc read is exercised.
+func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "bundle")
 	if err := os.MkdirAll(bundle, 0o755); err != nil {
@@ -127,21 +131,142 @@ func TestDoctorResolvesManifestBackendFromEnvFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	envFile := filepath.Join(dir, "fleet.env")
-	for _, tc := range []struct{ envBody, want string }{
-		{"FLEET_CLIENT_CONFIG_DIR=" + bundle + "\nRUNNER_BACKEND=kubernetes\n", "sandbox backend: kubernetes"},
-		{"FLEET_CLIENT_CONFIG_DIR=" + bundle + "\n", "sandbox backend: podman"},
-		{"FLEET_CLIENT_CONFIG_DIR=" + bundle + "\nRUNNER_BACKEND=kubernetes\nFLEET_SANDBOX_BACKEND=podman\n", "sandbox backend: podman"},
+	base := "FLEET_CLIENT_CONFIG_DIR=" + bundle + "\n"
+	for _, tc := range []struct {
+		name, envBody string
+		daemonEnv     []string
+		want          string
+	}{
+		{"env file ${VAR}", base + "RUNNER_BACKEND=kubernetes\n", nil, "sandbox backend: kubernetes"},
+		{"manifest default", base, nil, "sandbox backend: podman"},
+		{"env file backend beats manifest", base + "RUNNER_BACKEND=kubernetes\nFLEET_SANDBOX_BACKEND=podman\n", nil, "sandbox backend: podman"},
+		{"daemon env backend beats env file", base + "FLEET_SANDBOX_BACKEND=podman\n", []string{"FLEET_SANDBOX_BACKEND=kubernetes"}, "sandbox backend: kubernetes"},
+		{"daemon env ${VAR}", base, []string{"RUNNER_BACKEND=kubernetes"}, "sandbox backend: kubernetes"},
 	} {
-		if err := os.WriteFile(envFile, []byte(tc.envBody), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		// RUNNER_BACKEND= in the shell env: the env file must win over it.
-		out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile, "RUNNER_BACKEND=", "FLEET_SANDBOX_BACKEND="}, "doctor.sh", "--dry-run")
-		if err != nil {
-			t.Fatalf("doctor --dry-run: %v\n%s", err, out)
-		}
-		if !strings.Contains(out, tc.want) {
-			t.Errorf("env file %q: want %q in the dry-run, got:\n%s", tc.envBody, tc.want, out)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(envFile, []byte(tc.envBody), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			daemon := exec.Command("sleep", "60")
+			daemon.Env = append([]string{"PATH=" + os.Getenv("PATH")}, tc.daemonEnv...)
+			if err := daemon.Start(); err != nil {
+				t.Skipf("cannot start a stand-in daemon process: %v", err)
+			}
+			t.Cleanup(func() { _ = daemon.Process.Kill(); _ = daemon.Wait() })
+			// Empty shell vars: the daemon's env and the env file must win.
+			out, err := runScript(t, []string{
+				"FLEET_ENV_FILE=" + envFile,
+				"FLEET_DOCTOR_DAEMON_PID=" + strconv.Itoa(daemon.Process.Pid),
+				"RUNNER_BACKEND=", "FLEET_SANDBOX_BACKEND=",
+			}, "doctor.sh", "--dry-run")
+			if err != nil {
+				t.Fatalf("doctor --dry-run: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("want %q in the dry-run, got:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+// migrateLiveServiceStubs replaces systemctl, run_as_fleet and the reporters
+// with shell functions that log every call (to a file: the helper silences
+// run_as_fleet's output), so migrate_live_service's ordering
+// can be asserted without systemd, podman or root. Unit state lives in shell
+// variables the stub mutates: STOP_RC / STOP_STICKS (the unit stays active
+// after a "successful" stop) / START_RC / WEB (fleet-web's state before).
+const migrateLiveServiceStubs = `
+SERVICE_NAME=fleet
+fleet=active; web="$WEB"
+LOG="$(mktemp)"
+# The helper sends run_as_fleet's output to /dev/null, so log to a file.
+run_as_fleet() { echo "run_as_fleet $*" >>"$LOG"; }
+fixed() { echo "fixed: $*" >>"$LOG"; }
+fail() { echo "fail: $*" >>"$LOG"; }
+systemctl() {
+  local unit="${*: -1}"
+  case "$1" in
+    is-active)
+      if [[ "$unit" == fleet-web.service ]]; then [[ "$web" == active ]]; else [[ "$fleet" == active ]]; fi
+      return ;;
+    stop)
+      echo "stop $unit" >>"$LOG"
+      [[ "$STOP_RC" == 0 ]] || return 1
+      [[ "$STOP_STICKS" == 1 ]] || fleet=inactive
+      web=inactive # BindsTo: stopping fleet takes fleet-web down
+      return 0 ;;
+    start)
+      echo "start $unit" >>"$LOG"
+      if [[ "$unit" == fleet.service ]]; then [[ "$START_RC" == 0 ]] || return 1; fleet=active; else web=active; fi
+      return 0 ;;
+  esac
+}
+migrate_live_service; echo "rc=$?" >>"$LOG"
+cat "$LOG"; rm -f "$LOG"
+`
+
+// TestMigrateLiveService — the one action that may migrate a live box's store.
+// It must be a single stop → migrate → start, and the stop must be PROVEN (a
+// successful job and the unit inactive) before the store is touched:
+// migrating under a unit that is still running deletes the live pool, which is
+// the outage this whole change exists to prevent. fleet-web (BindsTo) must be
+// started again when it was running, since starting fleet does not return it.
+func TestMigrateLiveService(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available; skipping podman-migrate.sh unit test")
+	}
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "podman-migrate.sh")
+	for _, tc := range []struct {
+		name            string
+		env             []string
+		want, forbidden []string
+	}{
+		{
+			name: "stop, migrate, start, fleet-web back",
+			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "START_RC=0", "WEB=active"},
+			want: []string{"stop fleet.service\nrun_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n", "fixed: fleet-web.service started again", "rc=0"},
+		},
+		{
+			name:      "fleet-web was not running",
+			env:       []string{"STOP_RC=0", "STOP_STICKS=0", "START_RC=0", "WEB=inactive"},
+			want:      []string{"run_as_fleet podman system migrate\nstart fleet.service\n", "rc=0"},
+			forbidden: []string{"start fleet-web.service"},
+		},
+		{
+			name:      "stop job fails",
+			env:       []string{"STOP_RC=1", "STOP_STICKS=0", "START_RC=0", "WEB=active"},
+			want:      []string{"fail: fleet.service did not stop — podman system migrate NOT run", "rc=1"},
+			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+		},
+		{
+			name:      "stop returns but the unit stays active",
+			env:       []string{"STOP_RC=0", "STOP_STICKS=1", "START_RC=0", "WEB=active"},
+			want:      []string{"fail: fleet.service did not stop — podman system migrate NOT run", "rc=1"},
+			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+		},
+		{
+			name: "fleet does not start again",
+			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "START_RC=1", "WEB=inactive"},
+			want: []string{"run_as_fleet podman system migrate", "fail: podman system migrate run, but fleet.service did not start again", "rc=1"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", `. "$0"; set -u; `+migrateLiveServiceStubs, lib)
+			cmd.Env = append(append(os.Environ(), "TERM=dumb"), tc.env...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash: %v\n%s", err, out)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(string(out), w) {
+					t.Errorf("want %q in:\n%s", w, out)
+				}
+			}
+			for _, f := range tc.forbidden {
+				if strings.Contains(string(out), f) {
+					t.Errorf("must not contain %q:\n%s", f, out)
+				}
+			}
+		})
 	}
 }

@@ -236,29 +236,33 @@ fleet_is_live() {
     || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
 }
 
-# migrate_live_service — `podman system migrate` under a live, systemd-managed
-# fleet, as ONE stop → migrate → start. Stopping first means no process ever
-# holds handles to containers migrate deleted: not for the steps between a
-# migrate and a later restart, and not after a run interrupted there (a
-# stopped unit is visible to every health check; a live one with a dead pool
-# answers /healthz while failing every tool call). fleet-web has
-# BindsTo=fleet.service, so the stop takes it down and starting fleet does not
-# bring it back — it is started again here when it was running before.
-# Returns non-zero when fleet did not come back.
-migrate_live_service() {
-  local web_was_active=0 rc=0
-  systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
-  systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
-  run_as_fleet podman system migrate >/dev/null 2>&1 || true
-  systemctl start "${SERVICE_NAME}.service" 2>/dev/null || rc=1
-  if [[ "$web_was_active" == "1" ]] && ! systemctl is-active --quiet fleet-web.service 2>/dev/null; then
-    if systemctl start fleet-web.service 2>/dev/null && systemctl is-active --quiet fleet-web.service 2>/dev/null; then
-      fixed "fleet-web.service started again after the ${SERVICE_NAME} restart"
-    else
-      fail "fleet-web.service is down after the ${SERVICE_NAME} restart — journalctl -u fleet-web -n 50"
-    fi
+# deploy_env KEY — KEY as the fleet daemon sees it. The daemon's own process
+# env wins (clientconfig applies the env file with "process env wins"
+# precedence, manifest_env.go), and that env can carry values no file holds:
+# a unit Environment= line, or whatever an external supervisor exported. So
+# read the RUNNING daemon's env first (/proc/<pid>/environ — doctor runs as
+# root), then the deployment env file, then doctor's own shell env. The pid is
+# the unit's MainPID, else the service user's `fleet` process;
+# FLEET_DOCTOR_DAEMON_PID names it explicitly (a supervisor-run process the
+# lookup would not find, and the test seam).
+fleet_daemon_pid() {
+  local pid="${FLEET_DOCTOR_DAEMON_PID:-}"
+  if [[ -z "$pid" ]]; then
+    pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+    [[ "$pid" == "0" ]] && pid=""
+    [[ -z "$pid" ]] && pid="$(pgrep -u "$SERVICE_USER" -x fleet 2>/dev/null | head -n1 || true)"
   fi
-  return "$rc"
+  printf '%s' "$pid"
+}
+deploy_env() {
+  local key="$1" pid val=""
+  pid="$(fleet_daemon_pid)"
+  if [[ -n "$pid" && -r "/proc/$pid/environ" ]]; then
+    val="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -E "^${key}=" | tail -n1 | cut -d= -f2- || true)"
+  fi
+  [[ -z "$val" ]] && val="$(env_get "$key")"
+  [[ -z "$val" ]] && val="${!key:-}"
+  printf '%s' "$val"
 }
 
 # The client bundle the daemon loads, and scalars from its manifest's sandbox:
@@ -269,10 +273,9 @@ bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
 # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
 # bare ${VAR} / ${VAR:-default} interpolated (the only shapes the default
 # bundle uses; mirrors bootstrap's resolve_sandbox_image — keep them in sync).
-# A reference resolves against the deployment env file first: the daemon
-# folds that file into its env before interpolating the manifest
-# (clientconfig.Load, #1123), and doctor's own shell env is not the daemon's.
-# The shell env is only a fallback, for a variable the file does not set.
+# A reference resolves the way the daemon's does (deploy_env): its live
+# process env, then the deployment env file it folds in before interpolating
+# (clientconfig.Load, #1123), then doctor's own shell env as a last resort.
 manifest_sandbox_scalar() {
   local key="$1" raw
   raw="$(awk -v key="$key" '
@@ -282,8 +285,7 @@ manifest_sandbox_scalar() {
   ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
   if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
     local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}" val
-    val="$(env_get "$var")"
-    [[ -z "$val" ]] && val="${!var:-}"
+    val="$(deploy_env "$var")"
     printf '%s' "${val:-$def}"
   else
     printf '%s' "$raw"
@@ -294,7 +296,7 @@ manifest_sandbox_scalar() {
 # normalization (sandbox.ResolveBackend): FLEET_SANDBOX_BACKEND, else the
 # bundle's sandbox.backend, else podman. Only the podman backend keeps its
 # pool in the service user's rootless store — the store migrate resets.
-sandbox_backend="$(resolve_sandbox_backend "$(env_get FLEET_SANDBOX_BACKEND)" "$(manifest_sandbox_scalar backend)")"
+sandbox_backend="$(resolve_sandbox_backend "$(deploy_env FLEET_SANDBOX_BACKEND)" "$(manifest_sandbox_scalar backend)")"
 
 # ── dry-run: print the checklist and exit ────────────────────────────────────
 # Doctor's real run is condition-driven (it probes, then fixes what the probe
@@ -741,8 +743,6 @@ CONF
       migrate-restart)
         if migrate_live_service; then
           fixed "podman system migrate run (podman reported a stale pause process) — ${SERVICE_NAME} stopped for it and started again, rebuilding its sandbox pool"
-        else
-          fail "podman system migrate run (stale pause process), but ${SERVICE_NAME} did not start again — journalctl -u ${SERVICE_NAME} -n 50"
         fi ;;
       refuse)
         advise "podman reports a stale pause process, but ${SERVICE_NAME} is live and this run cannot restart it (--no-restart, or not a systemd-managed unit) — left alone, since migrate would delete its sandboxes; stop fleet, run podman system migrate as $SERVICE_USER, start fleet (or rerun: sudo fleet doctor)" ;;
@@ -1351,11 +1351,12 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
     # the service never holds dead handles. Only a systemd-managed service
     # can be restarted here; under another supervisor the else branch
     # reports the failure.
-    if migrate_live_service \
-       && run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
-      fixed "sandbox smoke passed after podman system migrate + a ${SERVICE_NAME} restart ($sandbox_img runs as $SERVICE_USER)"
-    else
-      fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER even after podman system migrate + a ${SERVICE_NAME} restart — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
+    if migrate_live_service; then
+      if run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
+        fixed "sandbox smoke passed after podman system migrate + a ${SERVICE_NAME} restart ($sandbox_img runs as $SERVICE_USER)"
+      else
+        fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER even after podman system migrate + a ${SERVICE_NAME} restart — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
+      fi
     fi
   else
     fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"

@@ -424,7 +424,8 @@ production-only bug. The pass covers, in order:
    container of the user and no `fleet` process). While fleet is live it
    runs it only when podman itself reports a stale pause process **and**
    doctor can restart `fleet`, as one stop → migrate → start (fleet-web
-   brought back), so no process ever holds the deleted pool. Under
+   brought back), so no process ever holds the deleted pool; a stop that
+   fails, or leaves the unit active, aborts before migrate. Under
    `--no-restart`, or with fleet under another supervisor, it leaves the
    store alone and prints the stop → migrate → start sequence instead. A
    step-8 sandbox smoke that fails with that same error after a skip gets
@@ -432,7 +433,8 @@ production-only bug. The pass covers, in order:
    smoke, on the same conditions. A launch failing any other way — disk or
    PID exhaustion, say — never triggers migrate. On the
    kubernetes backend (`FLEET_SANDBOX_BACKEND`, else the bundle's
-   `sandbox.backend` — with `${VAR}` resolved from the deployment env file)
+   `sandbox.backend`; each read — and each `${VAR}` resolved — the way the
+   daemon does: its live process env, then the deployment env file)
    the sandboxes are pods, so migrate
    runs unconditionally and a local podman fault never restarts `fleet`.
    The decisions are `scripts/lib/podman-migrate.sh`.

@@ -4,7 +4,9 @@
 #
 # Sourced by scripts/doctor.sh. The decisions are pure functions of what the
 # caller probed, so internal/admincli/scripts_podman_migrate_test.go can pin
-# every branch without root, podman or a broken rootless store.
+# every branch without root, podman or a broken rootless store. The one
+# action, migrate_live_service, uses the caller's SERVICE_NAME, run_as_fleet
+# and fixed/fail reporters (and systemctl), which the test stubs.
 #
 # Why this needs a gate at all: migrate is the documented reset for a stale
 # rootless pause process (one forked in an old mount namespace pins it and
@@ -85,4 +87,40 @@ smoke_retry_plan() {
   else
     echo report
   fi
+}
+
+# migrate_live_service — `podman system migrate` under a live, systemd-managed
+# fleet, as ONE stop → migrate → start. Stopping first means no process ever
+# holds handles to containers migrate deleted: not for the steps between a
+# migrate and a later restart, and not after a run interrupted there (a
+# stopped unit is visible to every health check; a live one with a dead pool
+# answers /healthz while failing every tool call). fleet-web has
+# BindsTo=fleet.service, so the stop takes it down and starting fleet does not
+# bring it back — it is started again here when it was running before.
+# The stop must be proven — a successful job AND the unit no longer active —
+# before the store is touched: migrating under a unit that is still running is
+# the exact deletion this helper exists to prevent. Reports its own failures
+# (callers report only success) and returns non-zero when migrate did not run
+# or fleet did not come back.
+migrate_live_service() {
+  local web_was_active=0 rc=0
+  systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
+  if ! systemctl stop "${SERVICE_NAME}.service" 2>/dev/null \
+     || systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+    fail "${SERVICE_NAME}.service did not stop — podman system migrate NOT run (it would delete the live sandbox pool); journalctl -u ${SERVICE_NAME} -n 50"
+    return 1
+  fi
+  run_as_fleet podman system migrate >/dev/null 2>&1 || true
+  if ! systemctl start "${SERVICE_NAME}.service" 2>/dev/null; then
+    fail "podman system migrate run, but ${SERVICE_NAME}.service did not start again — journalctl -u ${SERVICE_NAME} -n 50"
+    rc=1
+  fi
+  if [[ "$web_was_active" == "1" ]] && ! systemctl is-active --quiet fleet-web.service 2>/dev/null; then
+    if systemctl start fleet-web.service 2>/dev/null && systemctl is-active --quiet fleet-web.service 2>/dev/null; then
+      fixed "fleet-web.service started again after the ${SERVICE_NAME} restart"
+    else
+      fail "fleet-web.service is down after the ${SERVICE_NAME} restart — journalctl -u fleet-web -n 50"
+    fi
+  fi
+  return "$rc"
 }
