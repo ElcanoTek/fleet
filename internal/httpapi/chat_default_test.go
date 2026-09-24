@@ -1974,3 +1974,29 @@ func TestDirectClaim_RefusedRaceLoserSettlementIsRetried(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A Stop by key that finds the input already finished leaves no mark behind:
+// once the finished row is purged, a later submission reusing the key is new
+// and must run, not be cancelled by a stale mark.
+func TestCancelByInputKey_FinishedInputLeavesNoMark(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	st.mu.Lock()
+	st.queue = append(st.queue, store.InputQueueRow{ID: "r-done", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-old", Mode: store.InputModeDirect, State: store.InputStateCompleted, TurnID: "t-1"})
+	st.mu.Unlock()
+	if finished, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-old"); !finished || !ok {
+		t.Fatalf("stopInput = finished %v ok %v, want the finished input reported", finished, ok)
+	}
+	st.mu.Lock()
+	st.queue = nil // retention purges the finished row
+	st.mu.Unlock()
+	w := postChatRequest(t, srv, map[string]any{"message": "again", "conversation_id": conv.ID, "input_id": "key-old"})
+	eng.mu.Lock()
+	turns := eng.turns
+	eng.mu.Unlock()
+	if w.Code != http.StatusOK || turns != 1 {
+		t.Fatalf("status %d, turns %d: a reuse of the key after its row was purged must run", w.Code, turns)
+	}
+}

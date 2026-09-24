@@ -890,6 +890,16 @@ func (s *Server) inputKeyStopped(convID, key string) bool {
 	return ok && time.Since(at) <= cancelledInputTTL
 }
 
+// clearInputKeyMark drops a Stop-by-key mark once the database shows the
+// input had already finished: nothing is left for it to refuse, and left in
+// place it would cancel a later, legitimate reuse of the key (after the
+// finished row is purged) for the rest of its TTL.
+func (s *Server) clearInputKeyMark(convID, key string) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	delete(s.cancelledInputs, inputKeyMark(convID, key))
+}
+
 // getInflight returns a snapshot of the current entry for convID.
 func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 	s.inflightMu.Lock()

@@ -677,6 +677,11 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 // cancellation.
 func (s *Server) stopInput(ctx context.Context, user, convID, key string) (finished, ok bool) {
 	stoppedTurn := s.cancelInputTurn(convID, key)
+	defer func() {
+		if finished && ok {
+			s.clearInputKeyMark(convID, key) // it already ran: no launch left to refuse
+		}
+	}()
 	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	row, err := s.store.LookupInput(qctx, convID, key)
