@@ -254,25 +254,34 @@ fleet_daemon_pid() {
   fi
   printf '%s' "$pid"
 }
+# A key PRESENT in the daemon's env wins even when empty — config's
+# precedence keeps an explicitly empty process value (internal/config
+# config_test.go) — so presence is tracked apart from emptiness there.
 deploy_env() {
-  local key="$1" pid val=""
+  local key="$1" pid line
   pid="$(fleet_daemon_pid)"
   if [[ -n "$pid" && -r "/proc/$pid/environ" ]]; then
-    val="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -E "^${key}=" | tail -n1 | cut -d= -f2- || true)"
+    if line="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -E "^${key}=" | tail -n1)" && [[ -n "$line" ]]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
   fi
-  [[ -z "$val" ]] && val="$(env_get "$key")"
+  local val
+  val="$(env_get "$key")"
   [[ -z "$val" ]] && val="${!key:-}"
   printf '%s' "$val"
 }
 
 # The client bundle the daemon loads, and scalars from its manifest's sandbox:
 # block (the backend here; the image/tag in step 8).
-bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
+bundle_dir="$(deploy_env FLEET_CLIENT_CONFIG_DIR)"
 [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
 [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
 # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
-# bare ${VAR} / ${VAR:-default} interpolated (the only shapes the default
-# bundle uses; mirrors bootstrap's resolve_sandbox_image — keep them in sync).
+# whole-value ${VAR} / ${VAR:-default} / ${VAR:?message} interpolated (the
+# forms clientconfig supports). bootstrap's resolve_sandbox_image and
+# update.sh's copy still take only the bare/default forms, against their own
+# env — they run before or around the daemon, not against a live one.
 # A reference resolves the way the daemon's does (deploy_env): its live
 # process env, then the deployment env file it folds in before interpolating
 # (clientconfig.Load, #1123), then doctor's own shell env as a last resort.
@@ -283,9 +292,11 @@ manifest_sandbox_scalar() {
     /^[^[:space:]]/          { b=0 }
     b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
   ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
-  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}" val
+  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:([-?])([^}]*))?\}$ ]]; then
+    local var="${BASH_REMATCH[1]}" op="${BASH_REMATCH[3]}" def="${BASH_REMATCH[4]}" val
     val="$(deploy_env "$var")"
+    # :? has no default — its body is the error the daemon raises when unset.
+    [[ "$op" == "?" ]] && def=""
     printf '%s' "${val:-$def}"
   else
     printf '%s' "$raw"

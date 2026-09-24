@@ -31,8 +31,11 @@ is_stale_pause_error() {
 #   The sandbox backend the daemon will run, with sandbox.ResolveBackend's
 #   precedence and normalization: FLEET_SANDBOX_BACKEND (trimmed, lowercased),
 #   else the bundle's sandbox.backend, else podman. An unrecognized value
-#   echoes as-is (the daemon refuses to boot on it, so no pool is live);
-#   callers treat everything but "kubernetes" as the podman store.
+#   echoes as-is (the daemon refuses to boot on it, so no pool is live).
+#   The backend only ever RESTRICTS what doctor does (step 8 never restarts a
+#   kubernetes control plane over a local podman fault); it never licenses a
+#   migrate. So a backend doctor misreads can cost a skipped repair or an
+#   unneeded restart, but never a deleted pool.
 resolve_sandbox_backend() {
   local raw
   raw="$(tr -d '[:space:]' <<<"$1" | tr '[:upper:]' '[:lower:]')"
@@ -41,14 +44,15 @@ resolve_sandbox_backend() {
 }
 
 # podman_migrate_plan BACKEND INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART
-#   Step 3's decision. INFO_OK is 1 when `podman info` succeeded as the service
+#   Step 3's decision. BACKEND is accepted for symmetry with smoke_retry_plan
+#   but deliberately NOT consulted: liveness is the gate on every backend, so
+#   a misread backend can never turn into a migrate under a live pool. INFO_OK is 1 when `podman info` succeeded as the service
 #   user, INFO_ERR its stderr; LIVE_CONTAINERS the count of the user's running
 #   containers ("unknown" when the listing failed); FLEET_LIVE 1 when a fleet
 #   process may hold a pool; CAN_RESTART 1 when this run may AND can restart
 #   the service right after (not --no-restart, a systemd-managed unit).
 #   Echoes one of:
-#     migrate          nothing live to stop (or the kubernetes backend, whose
-#                      sandboxes are pods, not this store's containers)
+#     migrate          nothing live to stop
 #     defer            podman healthy but something is live — skip; the
 #                      step-8 smoke decides whether a reset is needed
 #     migrate-restart  stale pause while live: the pool is broken already, so
@@ -57,10 +61,8 @@ resolve_sandbox_backend() {
 #                      migrating would leave the process holding dead handles
 #     none             podman failing some other way; migrate is not the fix
 podman_migrate_plan() {
-  local backend="$1" info_ok="$2" info_err="$3" live="$4" fleet_live="$5" can_restart="$6"
-  if [[ "$backend" == "kubernetes" ]]; then
-    echo migrate
-  elif [[ "$info_ok" == "1" ]]; then
+  local info_ok="$2" info_err="$3" live="$4" fleet_live="$5" can_restart="$6"
+  if [[ "$info_ok" == "1" ]]; then
     # A listing that failed proves nothing is safe to stop: count it as live.
     if [[ "$live" != "0" || "$fleet_live" == "1" ]]; then echo defer; else echo migrate; fi
   elif is_stale_pause_error "$info_err"; then
@@ -97,16 +99,18 @@ smoke_retry_plan() {
 # answers /healthz while failing every tool call). fleet-web has
 # BindsTo=fleet.service, so the stop takes it down and starting fleet does not
 # bring it back — it is started again here when it was running before.
-# The stop must be proven — a successful job AND the unit no longer active —
-# before the store is touched: migrating under a unit that is still running is
-# the exact deletion this helper exists to prevent. Reports its own failures
+# The gate is the unit's STATE after the stop, not the stop job's exit code:
+# migrating under a unit that is still active is the exact deletion this
+# helper exists to prevent, so that aborts; a stop that "failed" (a timeout
+# after systemd killed it) but left the unit inactive proceeds, so fleet is
+# migrated AND started again rather than left down. Reports its own failures
 # (callers report only success) and returns non-zero when migrate did not run
 # or fleet did not come back.
 migrate_live_service() {
   local web_was_active=0 rc=0
   systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
-  if ! systemctl stop "${SERVICE_NAME}.service" 2>/dev/null \
-     || systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+  systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
+  if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
     fail "${SERVICE_NAME}.service did not stop — podman system migrate NOT run (it would delete the live sandbox pool); journalctl -u ${SERVICE_NAME} -n 50"
     return 1
   fi

@@ -54,7 +54,11 @@ func TestPodmanMigratePlan(t *testing.T) {
 		{"stale pause, live, --no-restart", "podman", "0", stalePauseErr, "0", "1", "0", "refuse"},
 		{"other podman failure, live", "podman", "0", "Error: cannot chdir to /root: Permission denied", "0", "1", "1", "none"},
 		{"other podman failure, fleet down", "podman", "0", "Error: no space left on device", "0", "0", "1", "none"},
-		{"kubernetes backend, pool of pods", "kubernetes", "1", "", "0", "1", "1", "migrate"},
+		// The backend never licenses a migrate: a live kubernetes box is gated
+		// like any other, so a misread backend cannot delete a podman pool.
+		{"kubernetes backend, fleet live", "kubernetes", "1", "", "0", "1", "1", "defer"},
+		{"kubernetes backend, stale pause, --no-restart", "kubernetes", "0", stalePauseErr, "0", "1", "0", "refuse"},
+		{"kubernetes backend, nothing live", "kubernetes", "1", "", "0", "0", "1", "migrate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := podmanMigrateLib(t, "podman_migrate_plan", tc.backend, tc.infoOK, tc.infoErr, tc.live, tc.fleetUp, tc.canRestart)
@@ -112,36 +116,46 @@ func TestResolveSandboxBackend(t *testing.T) {
 }
 
 // TestDoctorResolvesBackendLikeTheDaemon — the real doctor.sh, not the
-// library. The backend (and any ${VAR} the manifest selects it through) must
-// resolve the way the running daemon's does: its live process env first
-// (clientconfig's "process env wins" — a unit Environment= line or an
-// external supervisor can set a value no file holds), then the deployment env
-// file it folds in (#1123), then the manifest default. Resolving against
-// doctor's own shell env saw podman on a kubernetes box, so a local podman
-// fault could restart its control plane. Each case runs a real process with a
+// library. The backend (and the bundle, and any ${VAR} the manifest selects
+// it through) must resolve the way the running daemon's does: its live
+// process env first (clientconfig's "process env wins", where a key present
+// but empty still wins — a unit Environment= line or an external supervisor
+// can set values no file holds), then the deployment env file it folds in
+// (#1123), then the manifest default. Each case runs a real process with a
 // controlled env and points doctor at it, so the /proc read is exercised.
 func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 	dir := t.TempDir()
-	bundle := filepath.Join(dir, "bundle")
-	if err := os.MkdirAll(bundle, 0o755); err != nil {
-		t.Fatal(err)
+	// Two bundles: "kube" selects kubernetes outright; "var" selects via ${...}.
+	writeBundle := func(name, backend string) string {
+		b := filepath.Join(dir, name)
+		if err := os.MkdirAll(b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		m := "app_name: Test\nsandbox:\n  tag: localhost/test:latest\n  backend: " + backend + "\n"
+		if err := os.WriteFile(filepath.Join(b, "manifest.yaml"), []byte(m), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return b
 	}
-	manifest := "app_name: Test\nsandbox:\n  tag: localhost/test:latest\n  backend: ${RUNNER_BACKEND:-podman}\n"
-	if err := os.WriteFile(filepath.Join(bundle, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	varBundle := writeBundle("var", "${RUNNER_BACKEND:-podman}")
+	reqBundle := writeBundle("req", "${RUNNER_BACKEND:?set RUNNER_BACKEND}")
+	kubeBundle := writeBundle("kube", "kubernetes")
 	envFile := filepath.Join(dir, "fleet.env")
-	base := "FLEET_CLIENT_CONFIG_DIR=" + bundle + "\n"
 	for _, tc := range []struct {
 		name, envBody string
 		daemonEnv     []string
 		want          string
 	}{
-		{"env file ${VAR}", base + "RUNNER_BACKEND=kubernetes\n", nil, "sandbox backend: kubernetes"},
-		{"manifest default", base, nil, "sandbox backend: podman"},
-		{"env file backend beats manifest", base + "RUNNER_BACKEND=kubernetes\nFLEET_SANDBOX_BACKEND=podman\n", nil, "sandbox backend: podman"},
-		{"daemon env backend beats env file", base + "FLEET_SANDBOX_BACKEND=podman\n", []string{"FLEET_SANDBOX_BACKEND=kubernetes"}, "sandbox backend: kubernetes"},
-		{"daemon env ${VAR}", base, []string{"RUNNER_BACKEND=kubernetes"}, "sandbox backend: kubernetes"},
+		{"env file ${VAR}", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nRUNNER_BACKEND=kubernetes\n", nil, "kubernetes"},
+		{"manifest default", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\n", nil, "podman"},
+		{"env file backend beats manifest", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nRUNNER_BACKEND=kubernetes\nFLEET_SANDBOX_BACKEND=podman\n", nil, "podman"},
+		{"daemon env backend beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nFLEET_SANDBOX_BACKEND=podman\n", []string{"FLEET_SANDBOX_BACKEND=kubernetes"}, "kubernetes"},
+		{"daemon env ${VAR}", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\n", []string{"RUNNER_BACKEND=kubernetes"}, "kubernetes"},
+		// Present-but-empty in the daemon's env still beats the env file.
+		{"daemon env empty backend beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nFLEET_SANDBOX_BACKEND=kubernetes\n", []string{"FLEET_SANDBOX_BACKEND="}, "podman"},
+		{"manifest ${VAR:?msg}", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", []string{"RUNNER_BACKEND=kubernetes"}, "kubernetes"},
+		// The daemon loads the bundle ITS env names, not the env file's.
+		{"daemon bundle dir beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\n", []string{"FLEET_CLIENT_CONFIG_DIR=" + kubeBundle}, "kubernetes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := os.WriteFile(envFile, []byte(tc.envBody), 0o600); err != nil {
@@ -162,8 +176,8 @@ func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 			if err != nil {
 				t.Fatalf("doctor --dry-run: %v\n%s", err, out)
 			}
-			if !strings.Contains(out, tc.want) {
-				t.Errorf("want %q in the dry-run, got:\n%s", tc.want, out)
+			if want := "sandbox backend: " + tc.want + " "; !strings.Contains(out, want) {
+				t.Errorf("want %q in the dry-run, got:\n%s", want, out)
 			}
 		})
 	}
@@ -173,8 +187,9 @@ func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 // with shell functions that log every call (to a file: the helper silences
 // run_as_fleet's output), so migrate_live_service's ordering
 // can be asserted without systemd, podman or root. Unit state lives in shell
-// variables the stub mutates: STOP_RC / STOP_STICKS (the unit stays active
-// after a "successful" stop) / START_RC / WEB (fleet-web's state before).
+// variables the stub mutates: STOP_RC (the stop job's exit code) and
+// STOP_STICKS (the unit stays active) independently, START_RC, and WEB
+// (fleet-web's state before).
 const migrateLiveServiceStubs = `
 SERVICE_NAME=fleet
 fleet=active; web="$WEB"
@@ -191,10 +206,8 @@ systemctl() {
       return ;;
     stop)
       echo "stop $unit" >>"$LOG"
-      [[ "$STOP_RC" == 0 ]] || return 1
-      [[ "$STOP_STICKS" == 1 ]] || fleet=inactive
-      web=inactive # BindsTo: stopping fleet takes fleet-web down
-      return 0 ;;
+      [[ "$STOP_STICKS" == 1 ]] || { fleet=inactive; web=inactive; } # BindsTo: fleet-web goes down with it
+      return "$STOP_RC" ;;
     start)
       echo "start $unit" >>"$LOG"
       if [[ "$unit" == fleet.service ]]; then [[ "$START_RC" == 0 ]] || return 1; fleet=active; else web=active; fi
@@ -233,8 +246,8 @@ func TestMigrateLiveService(t *testing.T) {
 			forbidden: []string{"start fleet-web.service"},
 		},
 		{
-			name:      "stop job fails",
-			env:       []string{"STOP_RC=1", "STOP_STICKS=0", "START_RC=0", "WEB=active"},
+			name:      "stop job fails, unit still active",
+			env:       []string{"STOP_RC=1", "STOP_STICKS=1", "START_RC=0", "WEB=active"},
 			want:      []string{"fail: fleet.service did not stop — podman system migrate NOT run", "rc=1"},
 			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
 		},
@@ -243,6 +256,14 @@ func TestMigrateLiveService(t *testing.T) {
 			env:       []string{"STOP_RC=0", "STOP_STICKS=1", "START_RC=0", "WEB=active"},
 			want:      []string{"fail: fleet.service did not stop — podman system migrate NOT run", "rc=1"},
 			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+		},
+		{
+			// A stop that "failed" (timed out, then systemd killed it) but left
+			// the unit inactive: the store is safe to touch, and fleet must be
+			// started again rather than left down with nothing after it.
+			name: "stop job fails but the unit went inactive",
+			env:  []string{"STOP_RC=1", "STOP_STICKS=0", "START_RC=0", "WEB=active"},
+			want: []string{"stop fleet.service\nrun_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n", "rc=0"},
 		},
 		{
 			name: "fleet does not start again",

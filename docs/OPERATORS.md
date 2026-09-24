@@ -431,12 +431,13 @@ production-only bug. The pass covers, in order:
    step-8 sandbox smoke that fails with that same error after a skip gets
    migrate, a `fleet` restart (fleet-web checked back up) and a second
    smoke, on the same conditions. A launch failing any other way — disk or
-   PID exhaustion, say — never triggers migrate. On the
-   kubernetes backend (`FLEET_SANDBOX_BACKEND`, else the bundle's
-   `sandbox.backend`; each read — and each `${VAR}` resolved — the way the
-   daemon does: its live process env, then the deployment env file)
-   the sandboxes are pods, so migrate
-   runs unconditionally and a local podman fault never restarts `fleet`.
+   PID exhaustion, say — never triggers migrate. On the kubernetes backend
+   (`FLEET_SANDBOX_BACKEND`, else the bundle's `sandbox.backend`; each value,
+   the bundle path and each `${VAR}` read the way the daemon reads them: its
+   live process env, then the deployment env file) the step-8 recovery never
+   restarts `fleet` over a local podman fault. The backend only ever
+   restricts doctor: step 3 gates on liveness for every backend, so a
+   misread backend can cost a skipped repair, never a deleted pool.
    The decisions are `scripts/lib/podman-migrate.sh`.
 4. **Installed artifacts** — functional drift of `fleet.service` /
    `fleet-web.service` / the `fleet-backup` and `fleet-maintenance` service +
