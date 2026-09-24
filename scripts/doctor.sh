@@ -237,10 +237,35 @@ fleet_is_live() {
     || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
 }
 
-# The configured sandbox backend (ADR-0049). Only the podman backend keeps its
+# The client bundle the daemon loads, and scalars from its manifest's sandbox:
+# block (the backend here; the image/tag in step 8).
+bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
+[[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
+[[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
+# manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
+# bare ${VAR} / ${VAR:-default} interpolated against the process env (the
+# only shapes the default bundle uses; mirrors bootstrap's
+# resolve_sandbox_image — keep them in sync).
+manifest_sandbox_scalar() {
+  local key="$1" raw
+  raw="$(awk -v key="$key" '
+    /^sandbox:[[:space:]]*$/ { b=1; next }
+    /^[^[:space:]]/          { b=0 }
+    b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
+  ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
+  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
+    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
+    printf '%s' "${!var:-$def}"
+  else
+    printf '%s' "$raw"
+  fi
+}
+
+# The configured sandbox backend (ADR-0049), with the daemon's precedence and
+# normalization (sandbox.ResolveBackend): FLEET_SANDBOX_BACKEND, else the
+# bundle's sandbox.backend, else podman. Only the podman backend keeps its
 # pool in the service user's rootless store — the store migrate resets.
-sandbox_backend="$(env_get FLEET_SANDBOX_BACKEND)"
-sandbox_backend="${sandbox_backend:-podman}"
+sandbox_backend="$(resolve_sandbox_backend "$(env_get FLEET_SANDBOX_BACKEND)" "$(manifest_sandbox_scalar backend)")"
 
 # ── dry-run: print the checklist and exit ────────────────────────────────────
 # Doctor's real run is condition-driven (it probes, then fixes what the probe
@@ -1272,27 +1297,6 @@ sandbox_img="$(env_get FLEET_SANDBOX_IMAGE)"
 [[ -z "$sandbox_img" ]] && sandbox_img="$(env_get CHAT_SANDBOX_IMAGE)"
 sandbox_img_prebuilt=0
 if [[ -z "$sandbox_img" ]]; then
-  bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
-  [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
-  [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
-  # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
-  # bare ${VAR} / ${VAR:-default} interpolated against the process env (the
-  # only shapes the default bundle uses; mirrors bootstrap's
-  # resolve_sandbox_image — keep them in sync).
-  manifest_sandbox_scalar() {
-    local key="$1" raw
-    raw="$(awk -v key="$key" '
-      /^sandbox:[[:space:]]*$/ { b=1; next }
-      /^[^[:space:]]/          { b=0 }
-      b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
-    ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
-    if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-      local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-      printf '%s' "${!var:-$def}"
-    else
-      printf '%s' "$raw"
-    fi
-  }
   sandbox_img="$(manifest_sandbox_scalar image)"
   if [[ -n "$sandbox_img" ]]; then
     sandbox_img_prebuilt=1

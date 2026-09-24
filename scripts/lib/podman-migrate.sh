@@ -25,6 +25,19 @@ is_stale_pause_error() {
   grep -qiE 'podman system migrate|pause process' <<<"$1"
 }
 
+# resolve_sandbox_backend ENV_VALUE MANIFEST_VALUE
+#   The sandbox backend the daemon will run, with sandbox.ResolveBackend's
+#   precedence and normalization: FLEET_SANDBOX_BACKEND (trimmed, lowercased),
+#   else the bundle's sandbox.backend, else podman. An unrecognized value
+#   echoes as-is (the daemon refuses to boot on it, so no pool is live);
+#   callers treat everything but "kubernetes" as the podman store.
+resolve_sandbox_backend() {
+  local raw
+  raw="$(tr -d '[:space:]' <<<"$1" | tr '[:upper:]' '[:lower:]')"
+  [[ -z "$raw" ]] && raw="$(tr -d '[:space:]' <<<"$2" | tr '[:upper:]' '[:lower:]')"
+  echo "${raw:-podman}"
+}
+
 # podman_migrate_plan BACKEND INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART
 #   Step 3's decision. INFO_OK is 1 when `podman info` succeeded as the service
 #   user, INFO_ERR its stderr; LIVE_CONTAINERS the count of the user's running

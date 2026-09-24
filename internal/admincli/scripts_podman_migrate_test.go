@@ -89,3 +89,23 @@ func TestSmokeRetryPlan(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveSandboxBackend — doctor must see the backend the daemon runs
+// (sandbox.ResolveBackend: env, else the bundle's sandbox.backend, else
+// podman). Reading only the env file made a manifest-selected kubernetes box
+// look like podman, so a local podman fault could restart its control plane.
+func TestResolveSandboxBackend(t *testing.T) {
+	for _, tc := range []struct{ env, manifest, want string }{
+		{"", "", "podman"},
+		{"kubernetes", "", "kubernetes"},
+		{"", "kubernetes", "kubernetes"},
+		{"  Kubernetes ", "", "kubernetes"},
+		{"", " KUBERNETES", "kubernetes"},
+		{"podman", "kubernetes", "podman"},
+		{"kubernetes", "podman", "kubernetes"},
+	} {
+		if got := podmanMigrateLib(t, "resolve_sandbox_backend", tc.env, tc.manifest); got != tc.want {
+			t.Errorf("resolve_sandbox_backend(%q, %q) = %q, want %q", tc.env, tc.manifest, got, tc.want)
+		}
+	}
+}
