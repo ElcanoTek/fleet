@@ -420,36 +420,32 @@ production-only bug. The pass covers, in order:
    `/run/fleet`, a `podman system migrate` (clears stale pause namespaces),
    and a `podman info` probe **as the service user**. migrate stops every
    running container of that user — the running service's sandbox pool
-   included — so doctor runs it only when nothing is live: no running
-   container of the user, no `fleet` process, and the unit proven stopped
-   (`ActiveState` inactive or failed — the `Restart=always` auto-restart
-   delay counts as live). While fleet is live it
-   runs it only when podman itself reports a stale pause process **and**
-   doctor can restart `fleet`, as one stop → migrate → start (fleet-web
-   brought back), so no process ever holds the deleted pool. migrate runs
-   only once the unit is proven stopped — `ActiveState` inactive or failed
-   and no `fleet` process left — else it aborts. Every path ends by starting
-   fleet again, including an interrupt: `fleet doctor` passes Ctrl-C /
-   SIGTERM to the script as SIGTERM (never SIGKILL, and with no deadline
-   that would cut the restore short) and the reset traps it; a second Ctrl-C
-   exits `fleet doctor` while the script finishes restoring fleet.
-   A unit in its `Restart=always` auto-restart delay can be repaired this
-   way; a fleet under another supervisor cannot. Under
-   `--no-restart`, or with fleet under another supervisor, it leaves the
-   store alone and prints the manual sequence instead (stop fleet, recreate
-   `/run/fleet`, which the stop removes, migrate, start fleet). A
-   step-8 sandbox smoke that fails with that same error after a skip gets
-   migrate, a `fleet` restart (fleet-web checked back up) and a second
-   smoke, on the same conditions. A launch failing any other way — disk or
-   PID exhaustion, say — never triggers migrate. On the kubernetes backend
-   (`FLEET_SANDBOX_BACKEND`, else the bundle's `sandbox.backend`; each value,
-   the bundle path and each `${VAR}` read the way the daemon reads them: its
-   live process env, then the deployment env file) the step-8 recovery never
-   restarts `fleet` over a local podman fault — it requires a backend
-   resolved as exactly `podman`, so an unknown value or an expression doctor
-   cannot interpolate restricts too. The backend only ever
-   restricts doctor: step 3 gates on liveness for every backend, so a
-   misread backend can cost a skipped repair, never a deleted pool.
+   included — so doctor gates it tightly:
+   - **podman healthy:** never migrated here, live or not; there is nothing
+     to reset. The step-8 sandbox smoke catches a stale pause.
+   - **stale pause (podman's own "try resetting the pause process" error),
+     fleet live:** one stop → migrate → start of the `fleet` unit (fleet-web
+     brought back, `/run/fleet` — removed by the stop — recreated first),
+     only when doctor may restart it (not `--no-restart`) and the unit is
+     loaded and not proven stopped (a `Restart=always` auto-restart delay
+     qualifies). The store is touched only once the unit is proven stopped
+     (`ActiveState` inactive or failed, no `fleet` process left), and every
+     path — an interrupt included: `fleet doctor` passes Ctrl-C / SIGTERM on
+     as SIGTERM, never SIGKILL — ends by starting fleet again.
+   - **stale pause, fleet stopped:** migrated only when doctor's own unit is
+     quiesced (loaded, proven stopped, no `fleet` process).
+   - **otherwise** — `--no-restart` on a live box, or a fleet under another
+     supervisor (which doctor cannot hold off between a check and a
+     migrate) — the store is left alone and doctor prints the manual
+     sequence (stop, recreate `/run/fleet`, migrate, start).
+   A launch failing any other way — disk or PID exhaustion, say — never
+   triggers migrate. The step-8 restart path also requires a backend
+   resolved as exactly `podman` (`FLEET_SANDBOX_BACKEND`, else the bundle's
+   `sandbox.backend`, each read the way the daemon reads it: its live
+   process env, then the deployment env file, with a relative bundle path
+   resolved against the daemon's working directory), so a kubernetes box, an
+   unknown value, or a manifest doctor cannot parse never restarts `fleet`
+   over a local podman fault.
    The decisions are `scripts/lib/podman-migrate.sh`.
 4. **Installed artifacts** — functional drift of `fleet.service` /
    `fleet-web.service` / the `fleet-backup` and `fleet-maintenance` service +

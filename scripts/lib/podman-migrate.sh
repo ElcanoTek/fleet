@@ -96,31 +96,47 @@ unit_restartable() {
   [[ "$load" == "loaded" ]] && ! unit_proven_stopped "$state"
 }
 
-# podman_migrate_plan BACKEND INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART
+# unit_quiesced — true when doctor's own unit is known to be down and nothing
+# will bring fleet up behind doctor's back: the unit is loaded, proven
+# stopped (inactive/failed — systemd will not auto-restart either), and no
+# `fleet` process runs as the service user. A box with no loaded unit is
+# never quiesced: whatever supervises fleet there cannot be reserved from
+# here, so it could relaunch fleet between this check and a migrate.
+unit_quiesced() {
+  local load state
+  load="$(systemctl show -p LoadState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  [[ "$load" == "loaded" ]] && unit_proven_stopped "$state" \
+    && ! pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
+}
+
+# podman_migrate_plan BACKEND INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART QUIESCED
 #   Step 3's decision. BACKEND is accepted for symmetry with smoke_retry_plan
-#   but deliberately NOT consulted: liveness is the gate on every backend, so
-#   a misread backend can never turn into a migrate under a live pool. INFO_OK is 1 when `podman info` succeeded as the service
-#   user, INFO_ERR its stderr; LIVE_CONTAINERS the count of the user's running
-#   containers ("unknown" when the listing failed); FLEET_LIVE 1 when a fleet
-#   process may hold a pool; CAN_RESTART 1 when this run may AND can restart
-#   the service right after (not --no-restart, a systemd-managed unit).
+#   but deliberately NOT consulted: control of the unit is the gate on every
+#   backend, so a misread backend can never turn into a migrate under a live
+#   pool. INFO_OK is 1 when `podman info` succeeded as the service user,
+#   INFO_ERR its stderr; LIVE_CONTAINERS / FLEET_LIVE are informational
+#   (the running-container count, "unknown" when listing failed, and
+#   fleet_is_live); CAN_RESTART is 1 when this run may and can restart the
+#   unit (not --no-restart, unit_restartable); QUIESCED is unit_quiesced.
 #   Echoes one of:
-#     migrate          nothing live to stop
-#     defer            podman healthy but something is live — skip; the
-#                      step-8 smoke decides whether a reset is needed
-#     migrate-restart  stale pause while live: the pool is broken already, so
-#                      migrate and restart the service to rebuild it
-#     refuse           stale pause while live, but no restart is possible —
-#                      migrating would leave the process holding dead handles
+#     defer            podman is healthy — there is nothing to reset, so never
+#                      migrate here (on any box, live or not: that removes the
+#                      check-then-act race with a supervisor doctor cannot
+#                      reserve). The step-8 smoke catches a stale pause.
+#     migrate          stale pause, and doctor's own unit is quiesced
+#     migrate-restart  stale pause while the unit is live: the pool is broken
+#                      already, so stop → migrate → start it
+#     refuse           stale pause, but doctor controls no unit it could stop
+#                      or has proven stopped (--no-restart, another supervisor)
 #     none             podman failing some other way; migrate is not the fix
 podman_migrate_plan() {
-  local info_ok="$2" info_err="$3" live="$4" fleet_live="$5" can_restart="$6"
+  local info_ok="$2" info_err="$3" can_restart="$6" quiesced="$7"
   if [[ "$info_ok" == "1" ]]; then
-    # A listing that failed proves nothing is safe to stop: count it as live.
-    if [[ "$live" != "0" || "$fleet_live" == "1" ]]; then echo defer; else echo migrate; fi
+    echo defer
   elif is_stale_pause_error "$info_err"; then
-    if [[ "$fleet_live" != "1" ]]; then echo migrate
-    elif [[ "$can_restart" == "1" ]]; then echo migrate-restart
+    if [[ "$can_restart" == "1" ]]; then echo migrate-restart
+    elif [[ "$quiesced" == "1" ]]; then echo migrate
     else echo refuse
     fi
   else
@@ -128,22 +144,42 @@ podman_migrate_plan() {
   fi
 }
 
-# smoke_retry_plan DEFERRED CAN_RESTART BACKEND SMOKE_ERR
+# smoke_retry_plan DEFERRED CAN_RESTART BACKEND SMOKE_ERR QUIESCED
 #   Step 8's decision after the sandbox smoke failed. DEFERRED is 1 when step 3
-#   skipped migrate; CAN_RESTART as above; SMOKE_ERR the failed run's stderr.
-#   Echoes "retry" (migrate, restart the service, re-smoke) only for podman's
-#   stale-pause error on a backend resolved as EXACTLY "podman", with a
-#   restart available; else "report" (fail the smoke, leave the live pool
-#   alone). Fail-closed on the backend: kubernetes, an unrecognized value, or
-#   a manifest expression doctor could not interpolate all restrict — doctor
-#   need not mirror every interpolation form to stay safe.
+#   skipped migrate; CAN_RESTART / QUIESCED as above; SMOKE_ERR the failed
+#   run's stderr. Only podman's stale-pause error is a reason to reset. Then:
+#   "retry" (stop → migrate → start, re-smoke) for a live unit on a backend
+#   resolved as EXACTLY "podman"; "migrate" (reset, re-smoke — no restart)
+#   when doctor's unit is quiesced, whatever the backend, since nothing live
+#   holds a pool; else "report" (fail the smoke, touch nothing). Fail-closed
+#   on the backend: kubernetes, an unknown value, or an expression doctor could
+#   not interpolate never restart a live control plane.
 smoke_retry_plan() {
-  local deferred="$1" can_restart="$2" backend="$3" smoke_err="$4"
-  if [[ "$deferred" == "1" && "$can_restart" == "1" && "$backend" == "podman" ]] \
-     && is_stale_pause_error "$smoke_err"; then
+  local deferred="$1" can_restart="$2" backend="$3" smoke_err="$4" quiesced="${5:-0}"
+  if [[ "$deferred" != "1" ]] || ! is_stale_pause_error "$smoke_err"; then
+    echo report
+  elif [[ "$can_restart" == "1" && "$backend" == "podman" ]]; then
     echo retry
+  elif [[ "$quiesced" == "1" ]]; then
+    echo migrate
   else
     echo report
+  fi
+}
+
+# migrate_quiesced — `podman system migrate` for a box whose unit is
+# quiesced (nothing live to disturb). /run/<service user> is the unit's
+# RuntimeDirectory=, gone while it is stopped, and podman needs it as
+# XDG_RUNTIME_DIR, so it is recreated first. Reports its own failure.
+migrate_quiesced() {
+  local migrate_err
+  if ! install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "/run/${SERVICE_USER}" 2>/dev/null; then
+    fail "could not recreate /run/${SERVICE_USER} — podman system migrate NOT run"
+    return 1
+  fi
+  if ! migrate_err="$(run_as_fleet podman system migrate 2>&1 >/dev/null)"; then
+    fail "podman system migrate failed as $SERVICE_USER: ${migrate_err##*$'\n'}"
+    return 1
   fi
 }
 
