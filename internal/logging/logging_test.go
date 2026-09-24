@@ -120,6 +120,24 @@ func TestLogBridge(t *testing.T) {
 	}
 }
 
+// TestLogBridgeFlattensNewlines guards the log-injection fix: a CR/LF smuggled
+// into a legacy log.Printf argument must not survive into the bridged message,
+// so it cannot forge a second log record for a downstream line-based consumer.
+func TestLogBridgeFlattensNewlines(t *testing.T) {
+	prev := bridgeLogger
+	defer func() { bridgeLogger = prev }()
+	var buf bytes.Buffer
+	bridgeLogger = slog.New(newJSONHandler(&buf, slog.LevelInfo))
+
+	if _, err := (logBridge{}).Write([]byte("upload \"a.txt\r\nlevel=ERROR forged\"\r\n")); err != nil {
+		t.Fatalf("bridge write: %v", err)
+	}
+	m := decodeLast(t, &buf)
+	if got, want := m["msg"], "upload \"a.txt  level=ERROR forged\""; got != want {
+		t.Errorf("bridged msg = %q, want %q", got, want)
+	}
+}
+
 // TestBridgeNotGatedByLevel is the regression guard for the adversarial-review
 // finding: legacy bridged lines must ALWAYS emit, even when FLEET_LOG_LEVEL is
 // raised to error — otherwise raising the level would silently erase the entire

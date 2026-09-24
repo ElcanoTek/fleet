@@ -154,10 +154,18 @@ func newJSONHandler(dest io.Writer, level slog.Leveler) slog.Handler {
 // logBridge routes standard-library log output into slog as Info records, so
 // legacy log.Printf/Println call sites emit structured JSON without being
 // rewritten. One Write == one log line == one slog record.
+//
+// Interior CR/LF in the message are flattened to spaces before it reaches the
+// handler (log-injection guard). The JSON handler already escapes them, so this
+// is defense-in-depth for the many legacy call sites that interpolate request
+// data; strings.ReplaceAll is the spelling CodeQL's go/log-injection query
+// models as a sanitizer.
 type logBridge struct{}
 
 func (logBridge) Write(p []byte) (int, error) {
-	bridgeLogger.LogAttrs(context.Background(), slog.LevelInfo, strings.TrimRight(string(p), "\n"))
+	msg := strings.TrimRight(string(p), "\r\n")
+	msg = strings.ReplaceAll(strings.ReplaceAll(msg, "\r", " "), "\n", " ")
+	bridgeLogger.LogAttrs(context.Background(), slog.LevelInfo, msg)
 	return len(p), nil
 }
 
