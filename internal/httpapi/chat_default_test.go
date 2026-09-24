@@ -155,6 +155,9 @@ type fakeChatStore struct {
 	beforeClaim func()
 	// cancelKeyFailures makes that many CancelInputKey calls fail.
 	cancelKeyFailures int
+	// releaseLostAcks makes that many ReleaseDirectInput calls commit and
+	// then report an error (the acknowledgement lost).
+	releaseLostAcks int
 	// onCreate runs on each CreateConversation call, before it creates.
 	onCreate func()
 	// claimAfterEnqueue marks each enqueued row claimed (running) at once.
@@ -1002,12 +1005,17 @@ func (s *fakeChatStore) ClaimDirectInput(_ context.Context, r store.InputQueueRo
 	return r, true, nil
 }
 
-func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
+func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.releaseFailures > 0 {
 		s.releaseFailures--
 		return errors.New("fake: release failed")
+	}
+	lost := s.releaseLostAcks > 0
+	if lost {
+		s.releaseLostAcks--
+		defer func() { err = errors.New("fake: release acknowledgement lost") }()
 	}
 	kept := s.queue[:0]
 	for _, it := range s.queue {
@@ -1148,40 +1156,48 @@ func (s *fakeChatStore) PromoteQueuedInput(_ context.Context, _, convID, id stri
 	return false, nil
 }
 
-// A direct claim whose turn never launched must not outlive a failed release:
-// left behind with no turn, it would answer every resend of its key "already
-// running" until the next boot. The release is retried until it lands.
-func TestReleaseDirectInput_RetriesAFailedRelease(t *testing.T) {
-	prev := directReleaseBackoff
-	directReleaseBackoff = 5 * time.Millisecond
-	t.Cleanup(func() { directReleaseBackoff = prev })
+// A claim whose release cannot be confirmed is settled "cancelled" (nothing
+// ran), never deleted in the background: the delete may already have
+// committed with its acknowledgement lost, and a concurrent resend may have
+// been told the claim is running, so the key must keep a record. Both cases —
+// the release really failed (the claim is still there), and it committed
+// unacknowledged (the claim is gone) — leave the key held by a cancelled row.
+func TestReleaseDirectInput_UnconfirmedReleaseSettlesCancelled(t *testing.T) {
+	for _, lostAck := range []bool{false, true} {
+		t.Run(map[bool]string{false: "release failed", true: "release committed, ack lost"}[lostAck], func(t *testing.T) {
+			shortDirectPauses(t)
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, &fakeEngine{}, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			row, claimed, err := st.ClaimDirectInput(t.Context(), store.InputQueueRow{
+				ID: "claim-1", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-1",
+			})
+			if err != nil || !claimed {
+				t.Fatalf("claim: %+v %v %v", row, claimed, err)
+			}
+			st.mu.Lock()
+			if lostAck {
+				st.releaseLostAcks = 1000
+			} else {
+				st.releaseFailures = 1000
+			}
+			st.mu.Unlock()
 
-	st := newFakeChatStore()
-	srv := newDefaultChatServer(t, &fakeEngine{}, st)
-	row, claimed, err := st.ClaimDirectInput(t.Context(), store.InputQueueRow{
-		ID: "claim-1", ConversationID: "conv-1", UserEmail: "u@x.com", ClientInputID: "key-1",
-	})
-	if err != nil || !claimed {
-		t.Fatalf("claim: %+v %v %v", row, claimed, err)
-	}
-	st.mu.Lock()
-	st.releaseFailures = 3
-	st.mu.Unlock()
-
-	srv.releaseDirectInput("claim-1")
-
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		st.mu.Lock()
-		left := len(st.queue)
-		st.mu.Unlock()
-		if left == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the direct claim was never released after a failed release")
-		}
-		time.Sleep(5 * time.Millisecond)
+			if srv.releaseDirectInput("u@x.com", conv.ID, &directClaim{id: "claim-1", key: "key-1"}) {
+				t.Fatal("an unconfirmed release was reported as released")
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				got, _ := st.LookupInput(context.Background(), conv.ID, "key-1")
+				if got != nil && got.State == store.InputStateCancelled {
+					return
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("key row = %+v, want it held by a cancelled row", got)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		})
 	}
 }
 

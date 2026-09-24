@@ -1812,3 +1812,30 @@ func TestMessageIdKeyIsNotReusedForTheSameText(t *testing.T) {
 		t.Fatalf("the text-only prompt reused the messageId prompt's key %q", k0)
 	}
 }
+
+// A timeout whose Stop fleet accepts just as the turn completes is not a
+// timeout: the turn finished, so the prompt ends end_turn with its answer
+// (and a text-only prompt's key is not left looking like a failure to retry).
+func TestTimeoutThatLosesTheRaceReportsTheCompletedTurn(t *testing.T) {
+	var h *harness
+	h = newHarness(t, harnessOpts{timeout: 50 * time.Millisecond, turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-t"})
+		w.emit("turn.started", map[string]any{"turn_id": "turn-t"})
+		for { // the timeout's Stop is accepted, but the turn completes anyway
+			h.fleet.mu.Lock()
+			n := len(h.fleet.cancels)
+			h.fleet.mu.Unlock()
+			if n > 0 {
+				break
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		w.emit("text.delta", map[string]any{"text": "all done"})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	r, err := h.prompt(sid, "long job")
+	if err != nil || r.StopReason != acpsdk.StopReasonEndTurn || !strings.Contains(h.client.text(), "all done") {
+		t.Fatalf("got %+v, %v, text %q; want the completed turn's end_turn", r, err, h.client.text())
+	}
+}

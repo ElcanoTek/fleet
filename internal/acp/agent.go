@@ -382,7 +382,9 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 				"\n\nThe turn had already finished before the Stop reached fleet, so nothing was stopped: what it did (tool calls included) stands. See %s", a.conversationPointer(convID))))
 		}
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled, Meta: meta}, nil
-	case stop.intervened && stopCtx.Err() != nil:
+	case stop.intervened && stopCtx.Err() != nil && !stop.alreadyEnded:
+		// A timeout whose Stop found the turn already complete falls through:
+		// the turn finished, so its outcome is reported, not a timeout.
 		if stopErr != nil {
 			return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{
 				"error": fmt.Sprintf("the fleet turn did not finish within %s, and stopping it failed (%v): it may still be running — stop it at %s", a.timeout, stopErr, a.conversationPointer(convID)),
@@ -509,7 +511,14 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 			case <-time.After(stopSettleWait):
 			}
 			if tr.completedTurn() {
-				cancelStream()
+				// The terminal frame is in; let the stream finish on its own
+				// (briefly), so the prompt reports the turn's own outcome
+				// rather than a stream it cut short.
+				select {
+				case <-streamDone:
+				case <-time.After(stopSettleWait):
+					cancelStream()
+				}
 				stopped <- stopOutcome{intervened: true, alreadyEnded: true}
 				return
 			}

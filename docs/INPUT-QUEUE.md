@@ -80,8 +80,10 @@ retention guarantee: after a terminal row is purged, reusing its
   `cancelled` (a resend is told it did not run, so a fresh key may be sent),
   never deleted: a concurrent resend may already have been told it is running.
   A claim that loses the race to another surface's turn is released, so its
-  input can be queued instead (a failed release is retried in the background
-  for about a minute, then left to boot recovery). A claim is bound to its
+  input can be queued instead; a release that cannot be confirmed (it may have
+  committed with its acknowledgement lost) is never retried as a delete but
+  settles the key `cancelled`, retried in the background, so a resend already
+  told "running" always finds a record. A claim is bound to its
   turn before the turn runs; if that fails, the turn is dropped and the
   submission fails (`500`) rather than running with a claim a crash could not
   match to it. A submission that loses the race to a turn started from another

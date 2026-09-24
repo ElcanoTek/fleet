@@ -477,7 +477,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		// gap between the two.
 		relock := s.lockUserScopedKey(user, req)
 		defer relock()
-		if direct != nil && !s.releaseDirectInput(direct.id) {
+		if direct != nil && !s.releaseDirectInput(user, conv.ID, direct) {
 			http.Error(w, "the message could not be queued behind the running turn; send it again", http.StatusServiceUnavailable)
 			return
 		}
@@ -644,20 +644,48 @@ var directReleaseBackoff = time.Second // a var so tests can shorten it
 // because a claim left behind with no turn reads as "already running" to
 // every resend of its key, and nothing would settle it before the next boot
 // recovery.
-func (s *Server) releaseDirectInput(id string) bool {
-	if id == "" {
+func (s *Server) releaseDirectInput(user, convID string, c *directClaim) bool {
+	if c == nil || c.id == "" {
 		return true
 	}
 	for attempt := range directReleaseAttempts {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * directReleasePause)
 		}
-		if s.tryReleaseDirectInput(id) {
+		if s.tryReleaseDirectInput(c.id) {
 			return true
 		}
 	}
-	s.retryReleaseDirectInput(id, 1, directReleaseBackoff)
+	// Unconfirmed: the delete may have committed with its acknowledgement
+	// lost, and a concurrent resend may already have been told the claim is
+	// running. Deleting again in the background could leave that key with no
+	// record at all, so the key is settled "cancelled" (nothing ran) instead:
+	// the claim if it is still there, a cancelled row if it is gone.
+	s.settleUnreleasedInput(user, convID, c)
 	return false
+}
+
+// settleUnreleasedInput gives a claim whose release could not be confirmed a
+// durable outcome — cancelled, nothing ran — retried in the background.
+func (s *Server) settleUnreleasedInput(user, convID string, c *directClaim) {
+	try := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.store.SettleDirectInput(ctx, c.id, ""); err != nil {
+			log.Printf("settle unreleased input (input=%s): %v", c.id, err)
+			return false
+		}
+		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
+			ID: uuid.NewString(), ConversationID: convID, UserEmail: user, ClientInputID: c.key,
+		}); err != nil {
+			log.Printf("settle unreleased input (input=%s): %v", c.id, err)
+			return false
+		}
+		return true
+	}
+	if !try() {
+		s.retryDirectInput("settle_unreleased", c.id, 1, directReleaseBackoff, try)
+	}
 }
 
 // directReleaseAttempts and directReleasePause bound releaseDirectInput's
@@ -705,10 +733,6 @@ func (s *Server) tryReleaseDirectInput(id string) bool {
 		return false
 	}
 	return true
-}
-
-func (s *Server) retryReleaseDirectInput(id string, attempt int, delay time.Duration) {
-	s.retryDirectInput("release", id, attempt, delay, func() bool { return s.tryReleaseDirectInput(id) })
 }
 
 // retryDirectInput retries one write to a direct claim in the background,
