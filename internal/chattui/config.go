@@ -25,6 +25,25 @@ type Config struct {
 	Token     string // X-Chat-Server-Token shared secret
 	Model     string // optional per-turn model slug ("" = server/conversation default)
 	Persona   string // optional persona for a new conversation
+
+	// ModelNewConversationsOnly sends Model only on a turn that starts a new
+	// conversation, leaving an existing conversation's stored model alone
+	// (`fleet acp --model` picks the model for new sessions; a later switch
+	// made in the web UI must not be silently reverted by the next prompt).
+	// Off for `fleet chat`, where --model is an override for every turn.
+	ModelNewConversationsOnly bool
+	// InputIDsUserUnique declares that the input_ids this client sends are
+	// unique per user (`fleet acp`'s are random or session-scoped), so the
+	// server may look a first submission's key up across conversations.
+	InputIDsUserUnique bool
+
+	// ClientName is the X-Fleet-Client attribution label ("" = "fleet-chat").
+	// `fleet acp` sets "fleet-acp" so a server log can tell the two apart.
+	ClientName string
+	// PublicURL is the web UI's base URL (FLEET_PUBLIC_BASE_URL, else
+	// FLEET_PUBLIC_URL, from the env or the server env file), used to build
+	// deep links such as an approval card's conversation. "" when unset.
+	PublicURL string
 }
 
 // Flags are the command-line overrides; empty fields fall back to env.
@@ -35,6 +54,11 @@ type Flags struct {
 	EnvFile   string // server env file to auto-discover the token/addr from
 	Model     string
 	Persona   string
+	// PublicURL is an explicit web UI base URL for deep links. It always
+	// wins, and is the only source used when the server was chosen
+	// explicitly (--server / $FLEET_CHAT_URL), since an ambient public URL
+	// may belong to a different deployment.
+	PublicURL string
 }
 
 // getenv is the environment accessor (injectable for tests).
@@ -92,6 +116,7 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	}
 
 	// Server URL from flags/env (default applied after the env-file step below).
+	serverExplicit := strings.TrimSpace(f.Server) != "" || strings.TrimSpace(env("FLEET_CHAT_URL")) != ""
 	switch {
 	case strings.TrimSpace(f.Server) != "":
 		cfg.ServerURL = strings.TrimSpace(f.Server)
@@ -104,14 +129,22 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	// On-box auto-discovery: fill any still-missing token/addr from the server
 	// env file. Skipped entirely once both are already resolved.
 	candidates := envFileCandidates(f.EnvFile, env)
+	// serverFile is the env file that supplied the token or address, if any —
+	// the deployment this client is talking to.
+	serverFile := ""
 	if cfg.Token == "" || cfg.ServerURL == "" {
-		if vals, _ := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
+		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
+			// serverFile is recorded only when the file actually fills a
+			// missing value: a file that merely matched on a key we already
+			// had says nothing about which deployment we are talking to.
 			if cfg.Token == "" {
-				cfg.Token = strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"]))
+				if tok := strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"])); tok != "" {
+					cfg.Token, serverFile = tok, path
+				}
 			}
 			if cfg.ServerURL == "" {
 				if addr := strings.TrimSpace(vals["FLEET_SERVER_ADDR"]); addr != "" {
-					cfg.ServerURL = "http://" + addr
+					cfg.ServerURL, serverFile = "http://"+addr, path
 				}
 			}
 		}
@@ -119,6 +152,39 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	if cfg.ServerURL == "" {
 		cfg.ServerURL = "http://127.0.0.1:8080"
 	}
+
+	// Public web URL (non-secret, best-effort) must describe the SAME
+	// deployment the token and address came from, or a deep link would send
+	// the user to another fleet. In order:
+	//
+	//   - an explicit --public-url always wins;
+	//   - when the server was chosen explicitly (--server / $FLEET_CHAT_URL),
+	//     nothing ambient is trusted: an env or file public URL describes
+	//     whatever deployment that environment belongs to;
+	//   - when an env file supplied the token or address, only THAT file's
+	//     public URL is used — the process env may belong to another one;
+	//   - otherwise the env, then an explicitly pinned env file.
+	//
+	// It is never probed across the default candidates on its own.
+	cfg.PublicURL = strings.TrimSpace(f.PublicURL)
+	pinned := strings.TrimSpace(f.EnvFile) != "" || strings.TrimSpace(env("FLEET_ENV_FILE")) != ""
+	publicFile := ""
+	switch {
+	case cfg.PublicURL != "" || serverExplicit:
+	case serverFile != "":
+		publicFile = serverFile
+	default:
+		cfg.PublicURL = strings.TrimSpace(firstNonEmpty(env("FLEET_PUBLIC_BASE_URL"), env("FLEET_PUBLIC_URL")))
+		if pinned {
+			publicFile = candidates[0]
+		}
+	}
+	if cfg.PublicURL == "" && publicFile != "" && evf != nil {
+		if vals, err := evf(publicFile, "FLEET_PUBLIC_BASE_URL", "FLEET_PUBLIC_URL"); err == nil {
+			cfg.PublicURL = strings.TrimSpace(firstNonEmpty(vals["FLEET_PUBLIC_BASE_URL"], vals["FLEET_PUBLIC_URL"]))
+		}
+	}
+	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
 
 	// Email (required) — never inferred. Not from $USER, and deliberately NOT
@@ -134,6 +200,13 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 			strings.Join(candidates, ", "))
 	}
 	return cfg, nil
+}
+
+// ResolveFromEnvironment is Resolve against the real process environment,
+// filesystem and server env file — the entry point other CLI front-ends
+// (`fleet acp`) use so they resolve identity exactly as `fleet chat` does.
+func ResolveFromEnvironment(f Flags) (Config, error) {
+	return Resolve(f, osEnv, osReadFile, osReadEnvValues)
 }
 
 // envFileCandidates returns the env files `fleet chat` will probe, in order. An

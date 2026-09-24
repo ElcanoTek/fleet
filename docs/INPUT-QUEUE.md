@@ -27,14 +27,114 @@ retention guarantee: after a terminal row is purged, reusing its
 - `POST /chat` gains `input_id` and `mode` (`queue` default, `steer`). While a
   turn runs it returns **202** `{queued:true, input:{...}}` (200 on idempotent
   replay) instead of an SSE stream. A steer submission with attachments
-  downgrades to `queue` (steering is text-only).
+  downgrades to `queue` (steering is text-only). `input_id` and
+  `submission_id` are limited to 256 bytes (400 beyond); the key is indexed.
 - `GET /conversations/{id}/queue` — authoritative pending snapshot.
 - `DELETE /conversations/{id}/queue/{inputID}` — remove while still queued
   (409 once it ran).
 - `POST /conversations/{id}/queue/{inputID}/send-now` — promote to the head;
   a running turn is also offered it at the next boundary.
 - `POST /conversations/{id}/cancel` gains `{"scope":"turn"|"all"}` — default
-  **all**: Stop cancels the active turn AND every still-queued input. The
+  **all**: Stop cancels the active turn AND every still-queued input. An
+  optional `turn_id` (from `turn.started`) targets one turn: it is cancelled
+  only while it is the running turn (`204`); once it has ended the request
+  stops nothing and answers `409`. Either Stop, by `turn_id` or by `input_id`,
+  confirms a cancel against the turn's own terminal frame, read as soon as it
+  is emitted (a turn does post-turn work, such as auto-titling, before its
+  buffer seals). `turn.completed` (the turn finished in the instant between
+  the running check and the cancel) counts as finished (`409`), as does a turn that had already emitted a
+  terminal frame of its own before the Stop (it failed, and post-turn work
+  still holds its buffer open, so the cancel would stop nothing) or that
+  fails on its own between the check and the cancel; only `turn.cancelled`
+  after the cancel is a confirmed stop (`204`) — an engine that fails with
+  the Stop's own cancellation (in preflight, say) is advertised
+  `turn.cancelled`, not `turn.error`; no terminal frame within a few
+  seconds answers `202`, sent but not yet confirmed, never assumed stopped, so a client stopping the turn it watched
+  (`fleet acp`) can never cancel a successor, and learns that the turn
+  finished on its own rather than taking the Stop for a cancellation. A targeted Stop is turn-scoped and never sweeps the
+  queue. An optional `input_id` targets one input by its idempotency key,
+  wherever it is (an input that had already finished — it ran, or its turn
+  ended with only its settlement pending — stops nothing and answers `409`,
+  like a `turn_id` Stop of an ended turn): a still-queued row is withdrawn, a running turn for it is
+  cancelled (a drained row is cancelled too, unless its user entry had
+  committed — by the Stop when the turn confirms it, and by the turn's own
+  settlement when the confirmation comes too late for the `202`, or when
+  the turn had already failed before the Stop but not yet settled — so it
+  is never returned to the queue for a later drain to run; if that cancel
+  write fails, the turn's rows are left unsettled for a background retry
+  rather than settled without it. The Stop also stamps the key's pending row
+  `stop_requested_at` before it cancels anything, so settlement and boot
+  recovery cancel an uncommitted row it named even if this process dies
+  before its in-memory record is used (a stamped queued row is never
+  injected as a steer, and a drain or boot recovery cancels one rather than
+  launch it); a Stop whose stamp fails still stops
+  the turn but is not reported as landed), a steer already injected into a running turn is cancelled and so
+  is the turn carrying it (the model cannot un-read it; if that turn had
+  already ended, nothing is stopped, the Stop answers `409`, and the turn's
+  own settlement records whether the steer ran; a stop the turn confirms too
+  late for the `202` still has its settlement cancel an uncommitted steer
+  rather than re-queue it), and a turn not
+  registered yet (a direct claim still being prepared, a row the drain just
+  claimed, or a submission still in transit) is refused when it tries to
+  register. The mark and the registration check share one lock, so a keyed
+  input is either cancelled or never launched; the mark is kept for 10 minutes
+  (at most 4096 marks at once; `input_id` is limited to 256 bytes here too),
+  a queued row is withdrawn in the database (at the Stop, or when it is
+  inserted after the Stop) so it cannot outwait it, and a claimed input not yet
+  bound to its turn (a direct claim, or a drained row still holding its
+  `claim-` placeholder turn id) is cancelled in the database too, so its launch
+  is refused (a direct submission answers `409`) even if the mark is gone by
+  then. A row already bound to its turn is left to that turn's settlement,
+  since the turn may have run. A Stop that finds no row for the key (its
+  submission still in transit) takes the key with a `cancelled` row, so the
+  late submission is answered "cancelled" and never runs, even once the mark is
+  gone; that row is purged with the other terminal rows. A client whose answer was lost (`fleet acp`) stops its own input this way without knowing which state
+  it reached. `POST /chat` names its turn on the `X-Fleet-Turn-Id` response
+  header (beside `X-Fleet-Conversation-Id`), so the id is known before any
+  frame.
+- `input_id` is honoured on the **direct** path too (migrations 064 and 065):
+  a submission that starts a turn directly claims its key with a
+  `mode:"direct"` row in the same table and unique index, so a resend of the
+  same key, while the turn runs or after it ends, is answered `200` with that
+  row's acknowledgement (`state` `running` / `completed` / `cancelled`)
+  instead of a second turn. Direct rows are never queue items: the queue
+  listing, drain, Stop sweeps, remove and promote skip them. At turn end (and
+  at boot recovery) they settle `completed` when the turn's user entry
+  committed and `cancelled` otherwise (nothing ran, so a fresh key may be
+  sent). Settlement at turn end runs on its own bounded context and is retried
+  in the background if it fails, so a finished claim does not keep answering
+  "running". A claim whose turn fails before it launches is settled
+  `cancelled` (a resend is told it did not run, so a fresh key may be sent),
+  never deleted: a concurrent resend may already have been told it is running.
+  A claim that loses the race to another surface's turn is released, so its
+  input can be queued instead; a release that cannot be confirmed (it may have
+  committed with its acknowledgement lost) is never retried as a delete but
+  settles the key `cancelled`, retried in the background, so a resend already
+  told "running" always finds a record. A claim is bound to its
+  turn before the turn runs; if that fails, the turn is dropped and the
+  submission fails (`500`) rather than running with a claim a crash could not
+  match to it. A submission that loses the race to a turn started from another
+  surface is queued only after its claim is released, and fails (`503`, send
+  again) if the release cannot be confirmed; if the queue then refuses it (full,
+  or a store error), the key is settled `cancelled` so a resend already told
+  "running" finds an outcome. A claim is an accepted input, so
+  a Stop scope=all that begins after it was accepted covers it: the claim
+  settles `cancelled` and the submission answers `409` without running. A
+  resend is answered before the request touches the conversation, so a replay
+  never re-applies the original request's model or un-archives it. A client
+  that declares its keys unique per user (`"input_id_scope": "user"`, as
+  `fleet acp` does) has every key looked up per user, under the per-(user,
+  key) lock below from that lookup until the key is claimed or queued: a
+  resend finds its input whichever conversation accepted it, a concurrent send
+  of the key into another conversation finds the first one's row, and a first submission's resend after a
+  response lost before any header finds the original conversation instead of
+  starting a second one. Without that declaration the key stays
+  conversation-scoped, so a client that numbers keys per conversation is never
+  answered with another conversation's replay. Concurrent submissions of one
+  user-unique key, first ones included, are serialized by that lock, so the
+  second finds the first one's claim. The lock is
+  in-process, like the inflight registry the Stop gate relies on: the control
+  plane is single-replica by design (the Helm chart pins one replica). The
   `queue.updated` SSE event carries a full snapshot on every mutation, and
   `user.message` gains `{steered:true, input_id}` when a steer is accepted.
 

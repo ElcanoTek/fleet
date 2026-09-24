@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // TestInflightRegistry covers the cancel-on-replace + token-scoped
@@ -171,6 +173,113 @@ func TestCancelEndpoint_OwnerScoped(t *testing.T) {
 	}
 	if ctx.Err() == nil {
 		t.Error("owner cancel did not cancel the turn")
+	}
+}
+
+// TestCancelEndpoint_TurnTargeted pins the turn_id form of Stop: it cancels
+// the named turn while it runs (204), and stops nothing for any other turn,
+// saying so (409) — so a client stopping the turn it watched can never cancel
+// a successor, and learns its own turn had already finished.
+func TestCancelEndpoint_TurnTargeted(t *testing.T) {
+	s := serverFixture(t)
+	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var buf *turnBuffer
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, func() {
+		cancel()
+		buf.Emit("turn.cancelled", map[string]any{}) // a real turn reports its stop
+	})
+	defer s.finishTurn(conv.ID, tok)
+	h := s.Routes()
+
+	rr := do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "turn_id": "some-earlier-turn"}, "alice@x.com")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("mismatched turn_id: status %d, want 409", rr.Code)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("a Stop naming another turn cancelled the running one")
+	}
+
+	rr = do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "turn_id": turnID}, "alice@x.com")
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("matching turn_id: status %d, want 204", rr.Code)
+	}
+	if ctx.Err() == nil {
+		t.Error("a Stop naming the running turn did not cancel it")
+	}
+}
+
+// A Stop naming an input by its key withdraws that input from the queue, and
+// leaves a running turn that is not the input's alone.
+func TestCancelEndpoint_InputTargeted(t *testing.T) {
+	s := serverFixture(t)
+	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, _, tok, _ := s.registerTurn(conv.ID, cancel) // someone else's running turn
+	defer s.finishTurn(conv.ID, tok)
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "row-key", ConversationID: conv.ID, UserEmail: "alice@x.com",
+		ClientInputID: "the-key", Message: "later", Attachments: "[]", Mode: store.InputModeQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rr := do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "input_id": "the-key"}, "alice@x.com")
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204", rr.Code)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("a Stop naming a queued input cancelled the running turn")
+	}
+	row, err := s.store.LookupInput(t.Context(), conv.ID, "the-key")
+	if err != nil || row == nil || row.State != store.InputStateCancelled {
+		t.Fatalf("row = %+v, %v: want the keyed input withdrawn", row, err)
+	}
+}
+
+// A steer already injected into the running turn cannot be taken back out of
+// it: a Stop naming its key cancels the row (so the turn's settlement cannot
+// re-queue it) and stops the turn carrying it.
+func TestCancelEndpoint_InputTargetedInjectedSteer(t *testing.T) {
+	s := serverFixture(t)
+	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var buf *turnBuffer
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, func() {
+		cancel()
+		buf.Emit("turn.cancelled", map[string]any{}) // a real turn reports its stop
+	})
+	defer s.finishTurn(conv.ID, tok)
+	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "row-steer", ConversationID: conv.ID, UserEmail: "alice@x.com",
+		ClientInputID: "steer-key", Message: "also do this", Attachments: "[]", Mode: store.InputModeSteer,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.store.MarkInputInjected(t.Context(), "row-steer", turnID); err != nil || !ok {
+		t.Fatalf("MarkInputInjected: %v %v", ok, err)
+	}
+	rr := do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "input_id": "steer-key"}, "alice@x.com")
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204", rr.Code)
+	}
+	if ctx.Err() == nil {
+		t.Error("the turn carrying the injected steer was not stopped")
+	}
+	row, err := s.store.LookupInput(t.Context(), conv.ID, "steer-key")
+	if err != nil || row == nil || row.State != store.InputStateCancelled {
+		t.Fatalf("row = %+v, %v: want the injected steer cancelled", row, err)
 	}
 }
 

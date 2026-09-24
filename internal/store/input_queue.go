@@ -19,6 +19,11 @@ import (
 const (
 	InputModeQueued = "queued"
 	InputModeSteer  = "steer"
+	// InputModeDirect marks the idempotency record of a submission that
+	// started a turn directly (migration 064). It is never a queue item: the
+	// listing, drain, sweeps, remove and promote skip it, and recovery
+	// settles it instead of re-queueing it.
+	InputModeDirect = "direct"
 
 	InputStateQueued    = "queued"
 	InputStateRunning   = "running"
@@ -84,8 +89,99 @@ func (s *Store) seedAcceptedInputSeq(ctx context.Context) error {
 // client_input_id): a replayed POST returns the existing row with
 // created=false instead of duplicating the input.
 func (s *Store) EnqueueInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
+	r.State = InputStateQueued
+	return s.insertInput(ctx, r)
+}
+
+// ClaimDirectInput records a directly started turn's idempotency key: a row of
+// mode 'direct' in state 'running', inserted before the turn launches. It
+// shares the queue's unique (conversation_id, client_input_id) index, so a key
+// is accepted exactly once whichever path took it; created=false returns the
+// row that already holds the key, which the caller answers instead of running
+// the input again.
+func (s *Store) ClaimDirectInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
+	r.Mode, r.State = InputModeDirect, InputStateRunning
+	return s.insertInput(ctx, r)
+}
+
+// CancelInputKey records a Stop naming key before any input holds it: a
+// cancelled direct row in the key space, so a submission that arrives later
+// (still in transit when the Stop landed) finds the key taken and is answered
+// "cancelled" instead of running. Unlike the in-memory Stop mark it cannot be
+// evicted or expire before the submission lands; it is purged with the other
+// terminal rows. If a row already holds the key, that row is returned and
+// created is false.
+func (s *Store) CancelInputKey(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
+	r.Mode, r.State = InputModeDirect, InputStateCancelled
+	if r.Attachments == "" {
+		r.Attachments = "[]"
+	}
+	return s.insertInput(ctx, r)
+}
+
+// ReleaseDirectInput resolves a direct claim whose turn never launched —
+// callers use it only on paths that abort before the turn runs. An unbound
+// claim is dropped, so the key is free for the caller to retry. A claim that
+// was bound to its turn before the launch was aborted (the bind committed but
+// its acknowledgement was lost) cannot be dropped as unbound; it is settled
+// cancelled instead (nothing ran), rather than left 'running' to answer every
+// resend "already running".
+func (s *Store) ReleaseDirectInput(ctx context.Context, id string) error {
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM chat_input_queue
+		  WHERE id = $1 AND mode = 'direct' AND state = 'running' AND turn_id IS NULL`, id); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+		  WHERE id = $1 AND mode = 'direct' AND state = 'running'`, id, time.Now().Unix())
+	return err
+}
+
+// ClaimTurnPrefix marks the placeholder turn id a drain stamps on a row it
+// claims, until BindInputTurn replaces it with the real turn id. It is what
+// tells a claimed row whose turn has not launched from one bound to a turn.
+const ClaimTurnPrefix = "claim-"
+
+// CancelUnlaunchedInput cancels a claimed input whose turn has not been bound
+// yet — a direct claim with no turn id, or a drained row still holding its
+// drain placeholder — for a Stop naming its key while the turn is prepared.
+// The later bind then finds it no longer running and the launch is refused,
+// even if the in-memory Stop mark is gone by then. A row bound to its turn is
+// left alone: the turn may have run, and "cancelled" would tell a resend of
+// the key that nothing ran. It reports whether it cancelled the row.
+func (s *Store) CancelUnlaunchedInput(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+		  WHERE id = $1 AND state = 'running'
+		    AND ((mode = 'direct' AND turn_id IS NULL) OR turn_id LIKE $3)`,
+		id, time.Now().Unix(), ClaimTurnPrefix+"%")
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// SettleDirectInput resolves a direct claim when its turn ends: completed when
+// the turn's user entry committed (the input ran), otherwise cancelled
+// (nothing ran). Never re-queued — the caller saw this turn's outcome, and a
+// direct input must not run later unattended.
+func (s *Store) SettleDirectInput(ctx context.Context, id, turnID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET
+		    state = CASE WHEN EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)
+		                 THEN 'completed' ELSE 'cancelled' END,
+		    updated_at = $3
+		  WHERE id = $1 AND mode = 'direct' AND state = 'running'`,
+		id, turnID, time.Now().Unix())
+	return err
+}
+
+// insertInput is the shared insert behind EnqueueInput and ClaimDirectInput.
+func (s *Store) insertInput(ctx context.Context, r InputQueueRow) (InputQueueRow, bool, error) {
 	now := time.Now().Unix()
-	r.CreatedAt, r.UpdatedAt, r.State = now, now, InputStateQueued
+	r.CreatedAt, r.UpdatedAt = now, now
 	// Allocated before the insert, so a Stop that reads the counter after this
 	// point counts the row as pre-Stop even if the insert has not committed
 	// yet (the launch gate then refuses what the sweep could not see). A
@@ -174,7 +270,7 @@ func scanInputRow(row rowScanner) (InputQueueRow, error) {
 func (s *Store) ListQueuedInputs(ctx context.Context, userEmail, convID string) ([]InputQueueRow, error) {
 	rows, err := s.db.QueryContext(ctx,
 		inputQueueSelect+` WHERE conversation_id = $1 AND user_email = $2
-		    AND state IN ('queued','running','injected')
+		    AND state IN ('queued','running','injected') AND mode <> 'direct'
 		  ORDER BY position, created_at, id`, convID, userEmail)
 	if err != nil {
 		return nil, err
@@ -205,12 +301,22 @@ func (s *Store) CountPendingInputs(ctx context.Context, convID string) (int, err
 // ClaimNextQueuedInput atomically claims the head of the conversation's
 // pending queue for turnID (queued -> running). SKIP LOCKED makes concurrent
 // drainers safe without process-level coordination; nil means the queue is
-// empty.
+// empty. A row a Stop by key stamped (stop_requested_at) is never claimed:
+// it is cancelled instead, as the Stop that stamped it would have withdrawn it.
 func (s *Store) ClaimNextQueuedInput(ctx context.Context, convID, turnID string) (*InputQueueRow, error) {
+	// A stamped row left queued (its Stop could not withdraw it and was not
+	// retried) is cancelled here rather than skipped for good: nothing would
+	// ever launch it, and it would otherwise read as queued on every replay.
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+		  WHERE conversation_id = $1 AND state = 'queued' AND stop_requested_at IS NOT NULL`,
+		convID, time.Now().Unix()); err != nil {
+		return nil, err
+	}
 	row := s.db.QueryRowContext(ctx,
 		`UPDATE chat_input_queue SET state = 'running', turn_id = $2, updated_at = $3
 		  WHERE id = (SELECT id FROM chat_input_queue
-		               WHERE conversation_id = $1 AND state = 'queued'
+		               WHERE conversation_id = $1 AND state = 'queued' AND stop_requested_at IS NULL
 		               ORDER BY position, created_at, id LIMIT 1
 		                 FOR UPDATE SKIP LOCKED)
 		 RETURNING `+inputQueueColumns,
@@ -227,7 +333,8 @@ func (s *Store) ClaimNextQueuedInput(ctx context.Context, convID, turnID string)
 
 // MarkInputInjected flips a steer row queued -> injected for turnID. Guarded
 // on state='queued': zero rows means a remove/cancel won the race and the
-// caller must refuse injection (the message is gone, not queued).
+// caller must refuse injection (the message is gone, not queued, or a Stop
+// by key stamped it).
 //
 // The flip also stamps injected_seq — the turn journal's max seq at injection
 // time (#823). The read is race-free against the journal writer: Acknowledge
@@ -238,12 +345,66 @@ func (s *Store) MarkInputInjected(ctx context.Context, id, turnID string) (bool,
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'injected', turn_id = $2, updated_at = $3,
 		        injected_seq = COALESCE((SELECT MAX(seq) FROM turn_journal WHERE turn_id = $2), 0)
-		  WHERE id = $1 AND state = 'queued'`, id, turnID, time.Now().Unix())
+		  WHERE id = $1 AND state = 'queued' AND stop_requested_at IS NULL`, id, turnID, time.Now().Unix())
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err
+}
+
+// CancelStoppedSteer cancels a steer row whose turn a Stop just cancelled —
+// still injected, or already returned to the queue by that turn's settlement
+// — and never a row the settlement recorded as completed (the steered text
+// committed: it ran). It reports whether it cancelled the row.
+func (s *Store) CancelStoppedSteer(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+		  WHERE id = $1 AND state IN ('injected','queued')`, id, time.Now().Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// CancelStoppedDrain cancels a drained row whose turn a Stop just confirmed
+// stopped, unless that turn committed the row's user entry — the input ran,
+// and its settlement records it completed. Left bound to the stopped turn,
+// the row would be returned to the queue by that settlement (nothing
+// committed) and a later drain could run the input the Stop was answered
+// "stopped" for. A row the settlement already returned to the queue, or a
+// drain already re-claimed (its bind is then refused), is cancelled all the
+// same. It reports whether it cancelled the row.
+func (s *Store) CancelStoppedDrain(ctx context.Context, id, turnID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $3
+		  WHERE id = $1 AND mode <> 'direct'
+		    AND (state = 'queued'
+		      OR (state = 'running' AND turn_id LIKE $4)
+		      OR (state = 'running' AND turn_id = $2
+		          AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)))`,
+		id, turnID, time.Now().Unix(), ClaimTurnPrefix+"%")
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// MarkInputStopRequested records a Stop by key on the key's pending row
+// (queued, running or injected), before the Stop cancels the turn running
+// it: turn-end settlement and boot recovery then cancel the row, unless its
+// input committed, instead of returning it to the queue — the Stop's
+// in-memory record does not survive a restart. A key with no pending row is
+// left alone (the Stop takes a free key with a cancelled row instead).
+func (s *Store) MarkInputStopRequested(ctx context.Context, convID, clientID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET stop_requested_at = $3
+		  WHERE conversation_id = $1 AND client_input_id = $2
+		    AND state IN ('queued','running','injected')`,
+		convID, clientID, time.Now().Unix())
+	return err
 }
 
 // MarkInputTerminal flips one row to completed/cancelled.
@@ -375,6 +536,11 @@ func (s *Store) PurgeTerminalInputs(ctx context.Context, retention time.Duration
 //     watermark are CANCELLED (#823) — the model may have acted on the steer
 //     and the side effects survived (#820), so re-running it could duplicate
 //     them (same predicate as SettleTurnInputs);
+//   - direct-turn records (mode 'direct') that did not commit are CANCELLED:
+//     a direct input is never re-queued;
+//   - rows a Stop by key named (stop_requested_at) that did not commit —
+//     queued ones included — are CANCELLED: the Stop was answered, and its
+//     in-memory record is gone;
 //   - the rest return to QUEUED (visible + addressable; deliberately NOT
 //     auto-drained at boot — restarting the server must not start unattended
 //     LLM spend).
@@ -414,9 +580,38 @@ func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed, can
 	n, _ = res.RowsAffected()
 	cancelled = int(n)
 
+	// A direct turn's idempotency record whose turn died before its user entry
+	// committed ran nothing: cancel it — a direct input is never re-queued to
+	// run later unattended (the committed ones completed in the first step).
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
+		  WHERE state = 'running' AND mode = 'direct'`,
+		time.Now().Unix())
+	if err != nil {
+		return 0, completed, cancelled, err
+	}
+	n, _ = res.RowsAffected()
+	cancelled += int(n)
+
+	// A row a Stop by key named (stop_requested_at) whose input never
+	// committed (the committed ones completed above) is cancelled, not
+	// re-queued: its Stop was answered, and the in-memory record of it died
+	// with the process. A stamped row still queued is cancelled too — the
+	// process died before the Stop withdrew it, and a drain never claims a
+	// stamped row, so it would otherwise sit queued for good.
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
+		  WHERE state IN ('queued','running','injected') AND mode <> 'direct' AND stop_requested_at IS NOT NULL`,
+		time.Now().Unix())
+	if err != nil {
+		return 0, completed, cancelled, err
+	}
+	n, _ = res.RowsAffected()
+	cancelled += int(n)
+
 	res, err = s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, injected_seq = NULL, updated_at = $1
-		  WHERE state IN ('running','injected')`,
+		  WHERE state IN ('running','injected') AND mode <> 'direct'`,
 		time.Now().Unix())
 	if err != nil {
 		return 0, completed, cancelled, err
@@ -429,12 +624,18 @@ func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed, can
 // mints it (the claim used a placeholder). Without this the settle/recovery
 // predicates — which check the turn's durable #798 record — can never match,
 // and a crash would re-queue (double-run) an already-committed input.
-func (s *Store) BindInputTurn(ctx context.Context, id, turnID string) error {
-	_, err := s.db.ExecContext(ctx,
+// bound is false when the row is no longer running (a Stop cancelled it after
+// the claim): the caller must not launch its turn.
+func (s *Store) BindInputTurn(ctx context.Context, id, turnID string) (bound bool, err error) {
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET turn_id = $2, updated_at = $3
 		  WHERE id = $1 AND state IN ('running','injected')`,
 		id, turnID, time.Now().Unix())
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // LookupInput returns the row for a caller idempotency key in any state, or
@@ -442,6 +643,24 @@ func (s *Store) BindInputTurn(ctx context.Context, id, turnID string) error {
 // that lands while the conversation is idle cannot run a duplicate turn.
 func (s *Store) LookupInput(ctx context.Context, convID, clientID string) (*InputQueueRow, error) {
 	row, err := s.getInputByClientID(ctx, convID, clientID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// LookupInputForUser returns the most recent row holding a caller idempotency
+// key for this user across all of their conversations, or nil. A first
+// submission names no conversation — the server creates it — so its resend
+// after a response lost before any header must find the original here, before
+// a second conversation would be created.
+func (s *Store) LookupInputForUser(ctx context.Context, userEmail, clientID string) (*InputQueueRow, error) {
+	row, err := scanInputRow(s.db.QueryRowContext(ctx,
+		inputQueueSelect+` WHERE user_email = $1 AND client_input_id = $2
+		  ORDER BY created_at DESC, id DESC LIMIT 1`, userEmail, clientID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -467,6 +686,8 @@ func (s *Store) LookupInput(ctx context.Context, convID, clientID string) (*Inpu
 //     journal refuses dispatch outright, so an unjournaled post-injection
 //     side effect cannot exist. A NULL watermark (row injected before
 //     migration 044) degrades to the coarse gate: any intent blocks requeue.
+//   - either kind that a Stop by key named (stop_requested_at) and that did
+//     not commit is CANCELLED rather than re-queued: the Stop was answered.
 //
 // Returns how many rows went back to queued (so the caller can re-kick) and
 // how many injected rows were cancelled (so the caller can surface the drop).
@@ -476,8 +697,11 @@ func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) 
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE chat_input_queue SET
 			    state = CASE WHEN EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)
-			                 THEN 'completed' ELSE 'queued' END,
+			                 THEN 'completed'
+			                 WHEN stop_requested_at IS NOT NULL THEN 'cancelled'
+			                 ELSE 'queued' END,
 			    turn_id = CASE WHEN EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)
+			                     OR stop_requested_at IS NOT NULL
 			                   THEN turn_id ELSE NULL END,
 			    updated_at = $3
 			  WHERE id = $1 AND state = 'running'`,
@@ -493,30 +717,49 @@ func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) 
 			}
 		}
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+	// One statement decides each uncommitted steer, cancel or re-queue, so a
+	// Stop's stamp that lands during settlement cannot fall between a cancel
+	// pass and a re-queue pass: the row is decided on the version it has when
+	// this statement locks it (READ COMMITTED re-reads a row a concurrent
+	// write changed), and a stamp that lands after it finds a queued row,
+	// which a drain never claims (ClaimNextQueuedInput skips stamped rows) and
+	// the Stop withdraws.
+	rows, err := s.db.QueryContext(ctx,
+		`UPDATE chat_input_queue SET
+		    state = CASE WHEN stop_requested_at IS NOT NULL OR EXISTS (
+		                      SELECT 1 FROM turn_journal j
+		                       WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                         AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))
+		                 THEN 'cancelled' ELSE 'queued' END,
+		    turn_id = CASE WHEN stop_requested_at IS NOT NULL OR EXISTS (
+		                        SELECT 1 FROM turn_journal j
+		                         WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                           AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))
+		                   THEN turn_id ELSE NULL END,
+		    injected_seq = CASE WHEN stop_requested_at IS NOT NULL OR EXISTS (
+		                             SELECT 1 FROM turn_journal j
+		                              WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                                AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))
+		                        THEN injected_seq ELSE NULL END,
+		    updated_at = $2
 		  WHERE turn_id = $1 AND state = 'injected'
 		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)
-		    AND EXISTS (SELECT 1 FROM turn_journal j
-		                 WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
-		                   AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))`,
+		 RETURNING state`,
 		turnID, now)
 	if err != nil {
 		return requeued, 0, err
 	}
-	n, _ := res.RowsAffected()
-	cancelled = int(n)
-	res, err = s.db.ExecContext(ctx,
-		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, injected_seq = NULL, updated_at = $2
-		  WHERE turn_id = $1 AND state = 'injected'
-		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)
-		    AND NOT EXISTS (SELECT 1 FROM turn_journal j
-		                     WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
-		                       AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))`,
-		turnID, now)
-	if err != nil {
-		return requeued, cancelled, err
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var state string
+		if err := rows.Scan(&state); err != nil {
+			return requeued, cancelled, err
+		}
+		if state == InputStateCancelled {
+			cancelled++
+		} else {
+			requeued++
+		}
 	}
-	n, _ = res.RowsAffected()
-	return requeued + int(n), cancelled, nil
+	return requeued, cancelled, rows.Err()
 }

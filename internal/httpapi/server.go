@@ -123,6 +123,17 @@ type Server struct {
 	// conversation ever stopped in this process is cheap.
 	stopSweepGens   map[string]uint64
 	inflightCounter uint64
+	// cancelledInputs records a Stop that named an input by its key
+	// (POST /conversations/{id}/cancel with input_id), keyed by
+	// inputKeyMark, with the time it was recorded. registerTurnGated refuses
+	// to launch a turn for a marked key, under the same inflightMu section
+	// that records the mark and cancels an already-registered turn for it —
+	// so a key's turn is either cancelled or never launched, whichever side
+	// of registration the Stop lands on. Pruned after cancelledInputTTL.
+	cancelledInputs map[string]time.Time
+	// inputKeyLocks serializes the first submissions of one (user, key)
+	// (recoverFirstSubmission).
+	inputKeyLocks keyedLocks
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
 	// (branding + empty-state). nil in tests / mock mode that don't supply one;
@@ -545,6 +556,9 @@ type inflightEntry struct {
 	// submission named (webhooks, scheduled runs, pre-#1592 clients), which
 	// reads as "no evidence" rather than "not yours".
 	submissionID string
+	// inputKey is the idempotency key (client_input_id) of the input this
+	// turn runs, "" when none: a Stop that names the key cancels this turn.
+	inputKey string
 }
 
 // IsRunning reports whether the turn is still generating (buffer open).
@@ -557,6 +571,24 @@ func (e inflightEntry) IsRunning() bool {
 	}
 	if e.buf != nil && e.buf.Sealed() {
 		return false
+	}
+	return true
+}
+
+// stoppable reports whether a Stop can still change how the turn ends: it
+// is running and has not emitted a terminal frame. A turn that already
+// ended — turn.error or turn.model_required included — while post-turn work
+// keeps its buffer unsealed ended on its own, so a cancel is a no-op there
+// and a Stop must report it finished rather than take its terminal frame
+// for the stop's.
+func (e inflightEntry) stoppable() bool {
+	if !e.IsRunning() {
+		return false
+	}
+	if e.buf != nil {
+		if e.buf.terminalOutcome() != "" {
+			return false
+		}
 	}
 	return true
 }
@@ -696,6 +728,19 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true
 	}
+	inputKey := ""
+	if queued != nil {
+		inputKey = queued.inputKey
+	}
+	if inputKey != "" {
+		if at, marked := s.cancelledInputs[inputKeyMark(convID, inputKey)]; marked {
+			delete(s.cancelledInputs, inputKeyMark(convID, inputKey))
+			if time.Since(at) <= cancelledInputTTL {
+				s.inflightMu.Unlock()
+				return nil, "", 0, false, true
+			}
+		}
+	}
 	prev, hadPrev := s.inflight[convID]
 	if hadPrev && prev.IsRunning() {
 		s.inflightMu.Unlock()
@@ -715,6 +760,7 @@ func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, ste
 		turnID:       turnID,
 		steer:        steer,
 		submissionID: submissionID,
+		inputKey:     inputKey,
 	}
 	s.inflightMu.Unlock()
 
@@ -790,6 +836,166 @@ func (s *Server) cancelInflight(convID string) bool {
 	}
 	entry.cancel()
 	return true
+}
+
+// cancelInflightTurn cancels convID's running turn only if it is turnID. The
+// check and the cancel read one snapshot taken under inflightMu, and a turn id
+// is never reused, so a successor registered after turnID ended is never hit.
+func (s *Server) cancelInflightTurn(convID, turnID string) turnStop {
+	return s.cancelSteerTurn(convID, turnID, "")
+}
+
+// cancelSteerTurn is cancelInflightTurn for a Stop by key of the injected
+// steer steerRowID ("" for none) that turnID carries. When it cancels the
+// turn it first records the steer on the turn's buffer, so the settlement
+// (which runs after the turn ends) cancels an uncommitted steer instead of
+// returning it to the queue, even when the Stop is answered before the turn
+// confirms it — or after the turn already ended on its own but has not
+// settled, since a Stop of the steer must not leave it to be re-queued. A
+// turn whose buffer sealed is not flagged: its settlement is its own.
+func (s *Server) cancelSteerTurn(convID, turnID, steerRowID string) turnStop {
+	s.inflightMu.Lock()
+	entry, ok := s.inflight[convID]
+	s.inflightMu.Unlock()
+	if !ok || entry.turnID != turnID || !entry.IsRunning() {
+		return turnNotStopped
+	}
+	if steerRowID != "" && entry.buf != nil && !entry.buf.addStoppedSteer(steerRowID) {
+		return turnNotStopped // sealed since the running check: it ended
+	}
+	if !entry.stoppable() {
+		return turnNotStopped // it already ended: the cancel would stop nothing
+	}
+	entry.cancel()
+	return entry.confirmStopped()
+}
+
+// turnStop is what a Stop did to a turn, as its own terminal frame shows.
+type turnStop int
+
+const (
+	// turnNotStopped: the turn was not running, or it ended on its own —
+	// completed, or failed — in the instant between the running check and
+	// the cancel.
+	turnNotStopped turnStop = iota
+	// turnStopped: the turn's terminal frame after the cancel is
+	// turn.cancelled.
+	turnStopped
+	// turnStopUnconfirmed: the cancel was sent but no terminal frame
+	// arrived within stopConfirmWait. It is not claimed either way.
+	turnStopUnconfirmed
+)
+
+// stopConfirmWait bounds how long a Stop waits for the turn it cancelled to
+// emit its terminal frame. A var so tests can shorten it.
+var stopConfirmWait = 3 * time.Second
+
+// confirmStopped reads what a cancel did. "Running" is checked before the
+// cancel and the turn can finish in between, which makes the cancel a no-op,
+// so only the turn's terminal frame decides — read as soon as it is emitted,
+// not when the buffer seals (post-turn work such as auto-titling runs before
+// the seal). No frame by the deadline is unconfirmed, never assumed stopped.
+func (e inflightEntry) confirmStopped() turnStop {
+	if e.buf == nil {
+		return turnStopUnconfirmed
+	}
+	deadline := time.Now().Add(stopConfirmWait)
+	for {
+		switch e.buf.terminalOutcome() {
+		case "turn.cancelled":
+			return turnStopped
+		case "turn.completed", "turn.error", "turn.model_required":
+			// Completed, or failed on its own in the instant between the
+			// stoppable check and the cancel: the cancel stopped nothing. A
+			// failure the cancel itself caused is advertised turn.cancelled
+			// (runTurnAsync), so only a failure of the turn's own is here.
+			return turnNotStopped
+		}
+		if time.Now().After(deadline) {
+			return turnStopUnconfirmed
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// cancelledInputTTL bounds how long a Stop by input key is remembered for a
+// turn that has not registered yet.
+const cancelledInputTTL = 10 * time.Minute
+
+// maxCancelledInputs bounds the Stop-by-key marks held at once.
+const maxCancelledInputs = 4096
+
+func inputKeyMark(convID, key string) string { return convID + "\x00" + key }
+
+// cancelInputTurn stops the turn for the input with idempotency key key, on
+// whichever side of registration it is: a registered turn for the key is
+// cancelled, and the key is marked so a turn not registered yet is refused
+// by registerTurnGated. Both happen in one inflightMu section, the one
+// registration takes, so no launch can slip between them.
+func (s *Server) cancelInputTurn(convID, key string) turnStop {
+	now := time.Now()
+	s.inflightMu.Lock()
+	if s.cancelledInputs == nil {
+		s.cancelledInputs = make(map[string]time.Time)
+	}
+	for k, at := range s.cancelledInputs {
+		if now.Sub(at) > cancelledInputTTL {
+			delete(s.cancelledInputs, k)
+		}
+	}
+	if len(s.cancelledInputs) >= maxCancelledInputs {
+		// Full of live marks: drop the oldest, so the set stays bounded
+		// however many distinct keys are stopped.
+		oldest, oldestAt := "", now
+		for k, at := range s.cancelledInputs {
+			if at.Before(oldestAt) {
+				oldest, oldestAt = k, at
+			}
+		}
+		delete(s.cancelledInputs, oldest)
+	}
+	entry, ok := s.inflight[convID]
+	running := ok && entry.IsRunning() && entry.inputKey == key
+	if running && entry.buf != nil {
+		// Recorded before the cancel, and atomically with the buffer's seal
+		// (the settlement reads it after the turn's Finish), so the
+		// settlement never misses it. Recorded even for a turn that already
+		// ended on its own (a failure before its user entry committed), so
+		// its settlement does not re-queue the input the Stop named for an
+		// unattended re-run. A buffer sealed since the running check means
+		// the turn ended: the Stop is then a mark, like any ended turn.
+		running = entry.buf.markStoppedByKey()
+	}
+	if !running {
+		s.cancelledInputs[inputKeyMark(convID, key)] = now
+	}
+	s.inflightMu.Unlock()
+	if !running {
+		return turnNotStopped
+	}
+	if !entry.stoppable() {
+		return turnNotStopped // it already ended: the cancel would stop nothing
+	}
+	entry.cancel()
+	return entry.confirmStopped()
+}
+
+// inputKeyStopped reports whether a Stop naming key is still in force.
+func (s *Server) inputKeyStopped(convID, key string) bool {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	at, ok := s.cancelledInputs[inputKeyMark(convID, key)]
+	return ok && time.Since(at) <= cancelledInputTTL
+}
+
+// clearInputKeyMark drops a Stop-by-key mark once the database shows the
+// input had already finished: nothing is left for it to refuse, and left in
+// place it would cancel a later, legitimate reuse of the key (after the
+// finished row is purged) for the rest of its TTL.
+func (s *Server) clearInputKeyMark(convID, key string) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	delete(s.cancelledInputs, inputKeyMark(convID, key))
 }
 
 // getInflight returns a snapshot of the current entry for convID.
@@ -889,5 +1095,41 @@ func writeJSON(w http.ResponseWriter, v any) {
 	setJSONContentType(w)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("write json: %v", err)
+	}
+}
+
+// keyedLocks is a set of mutexes by key, each dropped once nobody holds or
+// waits on it.
+type keyedLocks struct {
+	mu sync.Mutex
+	m  map[string]*keyedLock
+}
+
+type keyedLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lock blocks until key is free, then holds it; the returned func releases it.
+func (k *keyedLocks) lock(key string) func() {
+	k.mu.Lock()
+	if k.m == nil {
+		k.m = make(map[string]*keyedLock)
+	}
+	l := k.m[key]
+	if l == nil {
+		l = &keyedLock{}
+		k.m[key] = l
+	}
+	l.refs++
+	k.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		k.mu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(k.m, key)
+		}
+		k.mu.Unlock()
 	}
 }

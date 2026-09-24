@@ -83,6 +83,14 @@ type chatStore interface {
 	InsertTurnJournal(ctx context.Context, r store.TurnJournalRow) error
 	// Conversation input queue + mid-turn steering (#785).
 	EnqueueInput(ctx context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error)
+	ClaimDirectInput(ctx context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error)
+	ReleaseDirectInput(ctx context.Context, id string) error
+	CancelInputKey(ctx context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error)
+	CancelStoppedSteer(ctx context.Context, id string) (bool, error)
+	CancelStoppedDrain(ctx context.Context, id, turnID string) (bool, error)
+	MarkInputStopRequested(ctx context.Context, convID, clientID string) error
+	CancelUnlaunchedInput(ctx context.Context, id string) (bool, error)
+	SettleDirectInput(ctx context.Context, id, turnID string) error
 	CountPendingInputs(ctx context.Context, convID string) (int, error)
 	ListQueuedInputs(ctx context.Context, userEmail, convID string) ([]store.InputQueueRow, error)
 	ClaimNextQueuedInput(ctx context.Context, convID, turnID string) (*store.InputQueueRow, error)
@@ -94,8 +102,9 @@ type chatStore interface {
 	AcceptedInputSeq() int64
 	RemoveQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
 	PromoteQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
-	BindInputTurn(ctx context.Context, id, turnID string) error
+	BindInputTurn(ctx context.Context, id, turnID string) (bool, error)
 	LookupInput(ctx context.Context, convID, clientID string) (*store.InputQueueRow, error)
+	LookupInputForUser(ctx context.Context, userEmail, clientID string) (*store.InputQueueRow, error)
 	SettleTurnInputs(ctx context.Context, turnID, drainedID string) (requeued, cancelled int, err error)
 	ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry) error
 	TruncateAfter(ctx context.Context, userEmail, convID string, afterMessageID int64) error

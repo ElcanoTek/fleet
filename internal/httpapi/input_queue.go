@@ -154,8 +154,10 @@ func writeQueueAck(w http.ResponseWriter, status int, convID string, row store.I
 // handleBusySubmit is postChat's queue branch: the conversation has a running
 // turn, so the submission becomes a durable queue row and the client gets a
 // 202 JSON acknowledgement instead of an SSE stream (200 on an idempotent
-// replay of an already-accepted input).
-func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest) {
+// replay of an already-accepted input). held reports that a row now holds the
+// key (a fresh row or the one a replay found); false means the submission was
+// refused and the response says why.
+func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest) (held bool) {
 	attachments := "[]"
 	if len(req.Attachments) > 0 {
 		if raw, err := json.Marshal(req.Attachments); err == nil {
@@ -198,7 +200,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 		// Fail closed: the depth cap is the unattended-spend guard, so a count
 		// error must not silently waive it.
 		http.Error(w, "input queue check failed: "+cerr.Error(), http.StatusInternalServerError)
-		return
+		return false
 	}
 	if pending >= maxPendingInputs {
 		existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID)
@@ -207,14 +209,14 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 			// error says nothing about whether this input_id was already
 			// accepted, and a false "queue full" would misdirect the client.
 			http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
-			return
+			return false
 		}
 		if existing != nil {
 			writeQueueAck(w, http.StatusOK, conv.ID, *existing)
-			return
+			return true
 		}
 		http.Error(w, fmt.Sprintf("input queue is full (%d pending); wait for the queue to drain or remove queued inputs", maxPendingInputs), http.StatusTooManyRequests)
-		return
+		return false
 	}
 	row, created, err := s.store.EnqueueInput(r.Context(), store.InputQueueRow{
 		ID: uuid.NewString(), ConversationID: conv.ID, UserEmail: user,
@@ -223,10 +225,34 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return false
+	}
+	// A Stop naming this key may have landed before the row existed (it
+	// found nothing to withdraw and left only the in-memory mark). A queued
+	// row can wait longer than the mark lives, so it is withdrawn here, at
+	// insert, rather than left for the mark to refuse at launch. The Stop
+	// set its mark before looking the row up, so either that lookup saw the
+	// row or this check sees the mark.
+	if created && s.inputKeyStopped(conv.ID, clientID) {
+		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer wcancel()
+		ok, rerr := s.store.RemoveQueuedInput(wctx, user, conv.ID, row.ID)
+		if rerr == nil && !ok {
+			// A drain claimed it between the insert and here. Cancel it
+			// durably anyway: the drain's bind then finds it no longer
+			// running and does not launch it, however long its turn
+			// preparation takes (the in-memory mark alone expires).
+			rerr = s.store.MarkInputTerminal(wctx, row.ID, store.InputStateCancelled)
+		}
+		if rerr != nil {
+			// The mark still refuses the launch while it lives.
+			log.Printf("withdraw stopped input (conv=%s): %v", conv.ID, rerr)
+		} else {
+			row.State = store.InputStateCancelled
+		}
 	}
 
-	if created && row.Mode == store.InputModeSteer {
+	if created && row.Mode == store.InputModeSteer && row.State != store.InputStateCancelled {
 		if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() && entry.steer != nil {
 			entry.steer.offer(row.ID, req.Message)
 		}
@@ -242,6 +268,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 		status = http.StatusOK
 	}
 	writeQueueAck(w, status, conv.ID, row)
+	return true
 }
 
 // rekickDrainAfter schedules a bounded retry kick for rows that went back to
@@ -378,7 +405,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	}
 	dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	claimTurnID := uuid.NewString()
+	claimTurnID := store.ClaimTurnPrefix + uuid.NewString()
 	row, err := s.store.ClaimNextQueuedInput(dctx, convID, claimTurnID)
 	if err != nil {
 		log.Printf("input queue claim (conv=%s): %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF; convID is a server-generated UUID.
@@ -408,6 +435,9 @@ func (s *Server) maybeDrainQueue(convID string) {
 type queuedLaunch struct {
 	rowID, claimTurnID string
 	sweepGen           uint64
+	// inputKey is the input's idempotency key: a Stop naming it refuses
+	// the launch (cancelInputTurn).
+	inputKey string
 }
 
 // launchQueuedTurn runs one claimed queue row as an ordinary turn — the same
@@ -474,7 +504,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// finally runs it from any other.
 		SubmissionID: row.SubmissionID,
 	}
-	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen}, releaseSlot) {
+	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen, inputKey: row.ClientInputID}, releaseSlot, nil) {
 		releaseSlot()
 		return false
 	}
@@ -601,4 +631,28 @@ func steerSourceOrNil(m *steerMailbox) agentcore.SteerSource {
 		return nil
 	}
 	return m
+}
+
+// settleUnqueuedInput gives a key whose direct claim was released for the
+// queue, and then refused by it, an outcome: a cancelled row (nothing ran),
+// which a resend that was already told "running" finds instead of nothing.
+// The refusal itself was already answered; a failed write is retried.
+func (s *Server) settleUnqueuedInput(user, convID, key string) {
+	id := uuid.NewString()
+	try := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
+			ID: id, ConversationID: convID, UserEmail: user, ClientInputID: key,
+		}); err != nil {
+			log.Printf("settle unqueued input (conv=%s): %v", convID, err)
+			return false
+		}
+		return true
+	}
+	if !try() {
+		// Retried in the background like the other claim settlements: an
+		// acknowledged key must not be left with no row.
+		s.retryDirectInput("settle_unqueued", id, 1, directReleaseBackoff, try)
+	}
 }

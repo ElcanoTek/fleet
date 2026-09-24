@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,7 +73,7 @@ func (c *Client) EffectiveModel() string {
 // Accepting a suggestion hands this conversation back to its stored pin until
 // /model explicitly overrides it again. Workspace defaults apply to new threads.
 func (c *Client) turnModel(convID string) string {
-	if convID != "" && c.serverModelConversations[convID] {
+	if convID != "" && (c.serverModelConversations[convID] || c.cfg.ModelNewConversationsOnly) {
 		return ""
 	}
 	if strings.TrimSpace(c.cfg.Model) != "" {
@@ -91,13 +92,22 @@ func (c *Client) displayModel(convID string) string {
 	return c.turnModel(convID)
 }
 
+// inputIDScope declares user-unique keys when the caller says its keys are
+// (Config.InputIDsUserUnique) and this turn carries one.
+func (c *Client) inputIDScope(inputID string) string {
+	if c.cfg.InputIDsUserUnique && strings.TrimSpace(inputID) != "" {
+		return "user"
+	}
+	return ""
+}
+
 // setAuthHeaders applies the shared-secret + identity headers every chattui
 // request carries. The token is a header, never a URL/query value, so it cannot
 // land in access logs.
 func (c *Client) setAuthHeaders(req *http.Request) {
 	req.Header.Set("X-Chat-Server-Token", c.cfg.Token)
 	req.Header.Set("X-User-Email", c.cfg.Email)
-	req.Header.Set("X-Fleet-Client", "fleet-chat")
+	req.Header.Set("X-Fleet-Client", orDefault(c.cfg.ClientName, "fleet-chat"))
 }
 
 // turnRequest is the subset of the server's chatRequest the TUI sends.
@@ -106,7 +116,67 @@ type turnRequest struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 	Model          string `json:"model,omitempty"`
 	Persona        string `json:"persona,omitempty"`
+	// InputID is the server's idempotency key (#785): a re-POST of the same
+	// id is answered with the input already accepted instead of a new one.
+	InputID string `json:"input_id,omitempty"`
+	// SubmissionID names this submission (#1592). It is set to the input_id,
+	// so /inflight echoes it on the turn it started and a caller that lost
+	// the answer can find that turn without resubmitting.
+	// InputIDScope "user" tells the server these input_ids are unique per
+	// user, so a first submission's resend is looked up across conversations.
+	InputIDScope string `json:"input_id_scope,omitempty"`
+	SubmissionID string `json:"submission_id,omitempty"`
 }
+
+// QueuedError is POST /chat's queue acknowledgement: the conversation already
+// had a running turn (typically started from another surface), so the server
+// durably QUEUED this message to run after it (#785) instead of streaming a
+// turn. It is not a failure — the message will run — but this call has no
+// stream to follow.
+type QueuedError struct {
+	ConversationID string
+	InputID        string
+	Position       int
+	// Mode and State are the input row's: a replay of an input_id the
+	// server already accepted reports where that input is now — still
+	// queued, running, completed, or cancelled (nothing ran). Mode "direct"
+	// is a submission that started its turn directly (not a queue item).
+	Mode  string
+	State string
+	// Replay is true when the server answered 200 (an idempotent replay of
+	// an input it had already accepted) rather than 202 (queued just now).
+	Replay bool
+}
+
+// Replayed reports whether this acknowledgement is for an input the server had
+// already accepted under the same key, rather than one it just queued: the
+// server's 200 says so, including for an input still queued; mode and state
+// cover a server that does not distinguish the two.
+func (e *QueuedError) Replayed() bool {
+	return e.Replay || e.Mode == "direct" || (e.State != "" && e.State != "queued")
+}
+
+func (e *QueuedError) Error() string {
+	switch e.State {
+	case "running", "injected":
+		return "this message is already running (it was accepted earlier)"
+	case "completed":
+		return "this message already ran (it was accepted earlier)"
+	case "cancelled":
+		return "this message was accepted earlier but did not run"
+	}
+	return fmt.Sprintf("a turn is already running in this conversation, so the message was queued (position %d) and will run after it", e.Position)
+}
+
+// StatusError is a non-2xx answer to POST /chat. Code lets a caller tell an
+// auth failure (401/403) from any other refusal without matching on text; the
+// message never carries the token.
+type StatusError struct {
+	Code int
+	msg  string
+}
+
+func (e *StatusError) Error() string { return e.msg }
 
 // Stream POSTs a turn and invokes onEvent for every SSE frame until the stream
 // ends, the turn completes, or ctx is cancelled. It returns the (possibly new)
@@ -114,11 +184,20 @@ type turnRequest struct {
 // the thread going. A non-2xx response is returned as an error carrying the
 // status + a short body excerpt (never the token).
 func (c *Client) Stream(ctx context.Context, message, convID string, onEvent func(Event)) (string, error) {
+	return c.StreamInput(ctx, message, convID, "", onEvent)
+}
+
+// StreamInput is Stream with an idempotency key (inputID, "" = none): a
+// retried POST carrying the same id cannot start or queue the message twice.
+func (c *Client) StreamInput(ctx context.Context, message, convID, inputID string, onEvent func(Event)) (string, error) {
 	body, err := json.Marshal(turnRequest{
 		Message:        message,
 		ConversationID: convID,
 		Model:          c.turnModel(convID),
 		Persona:        c.cfg.Persona,
+		InputID:        inputID,
+		SubmissionID:   inputID,
+		InputIDScope:   c.inputIDScope(inputID),
 	})
 	if err != nil {
 		return convID, err
@@ -137,20 +216,59 @@ func (c *Client) Stream(ctx context.Context, message, convID string, onEvent fun
 	}
 	defer resp.Body.Close()
 
+	// A queue acknowledgement is JSON, not a stream: 202 for a newly queued
+	// message, 200 for an idempotent replay of one already accepted.
+	if resp.StatusCode == http.StatusAccepted ||
+		(resp.StatusCode == http.StatusOK && strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json")) {
+		var ack struct {
+			Queued         bool   `json:"queued"`
+			ConversationID string `json:"conversation_id"`
+			Input          struct {
+				ID       string `json:"id"`
+				Position int    `json:"position"`
+				Mode     string `json:"mode"`
+				State    string `json:"state"`
+			} `json:"input"`
+		}
+		derr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ack)
+		if derr == nil && ack.Queued {
+			id := orDefault(ack.ConversationID, convID)
+			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position, Mode: ack.Input.Mode, State: ack.Input.State, Replay: resp.StatusCode == http.StatusOK}
+		}
+		// An unreadable acknowledgement (the connection closed mid-body) is not
+		// a refusal: fleet may well have queued the message. Report it as a
+		// transport failure — an unknown outcome — never as a definite status.
+		return convID, fmt.Errorf("server accepted the request (%d) but its acknowledgement was unreadable: %v", resp.StatusCode, orDefault(errString(derr), "not a queue acknowledgement"))
+	}
 	if resp.StatusCode != http.StatusOK {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		msg := strings.TrimSpace(string(excerpt))
 		switch resp.StatusCode {
 		case http.StatusForbidden:
-			return convID, fmt.Errorf("server rejected the request (403): check FLEET_SERVER_TOKEN matches the server")
+			return convID, &StatusError{Code: resp.StatusCode, msg: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server"}
 		case http.StatusUnauthorized, http.StatusBadRequest:
-			return convID, fmt.Errorf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)
+			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
 		default:
-			return convID, fmt.Errorf("server returned %d: %s", resp.StatusCode, msg)
+			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("server returned %d: %s", resp.StatusCode, msg)}
 		}
 	}
 
 	newConvID := convID
+	// The server names a new conversation on the response headers before any
+	// frame (#1591), so a stream that dies before the `conversation` frame
+	// still leaves the caller holding the id of the turn it started. Surface it
+	// as a `conversation` event too, so callers that track the id from events
+	// (the TUI, `fleet acp`) learn it at the same moment.
+	if hdr := strings.TrimSpace(resp.Header.Get("X-Fleet-Conversation-Id")); hdr != "" && convID == "" {
+		newConvID = hdr
+		onEvent(Event{Name: "conversation", Data: map[string]any{"id": hdr}})
+	}
+	// The turn is named on the headers too; surfaced as a synthetic
+	// `turn.identified` event (renderers ignore it) for callers that must
+	// address this exact turn later, such as a targeted Stop.
+	if hdr := strings.TrimSpace(resp.Header.Get("X-Fleet-Turn-Id")); hdr != "" {
+		onEvent(Event{Name: "turn.identified", Data: map[string]any{"turn_id": hdr}})
+	}
 	terminalSeen := false
 	var terminalErr error
 	perr := parseSSE(resp.Body, func(ev Event) {
@@ -374,6 +492,93 @@ func (c *Client) ResolveApprovalWithOptions(ctx context.Context, convID, approva
 		return out.Status, out.ResultText, out.Model, fmt.Errorf("approval resolved as %q: %s", out.Status, out.ResultText)
 	}
 	return out.Status, out.ResultText, out.Model, nil
+}
+
+// Cancel stops the conversation's in-flight turn server-side: POST
+// /conversations/{convID}/cancel with scope "turn" — the web Stop button's
+// call, narrowed so follow-ups already queued on the conversation still run.
+// turnID ("" = whichever turn is running) targets one turn: the server cancels
+// it only while it is the running turn, so a Stop for a turn that already
+// ended can never hit a successor. A targeted Stop that found its turn no
+// longer running returns ErrTurnNotRunning: nothing was stopped, and the
+// turn's own outcome is what happened.
+// Aborting the Stream context alone does not stop the turn: the server
+// deliberately detaches a turn from its HTTP request so a dropped connection
+// cannot kill work mid-flight. The caller's ctx may already be cancelled, so
+// Cancel uses its own short deadline rather than inheriting it.
+func (c *Client) Cancel(convID, turnID string) error {
+	payload := []byte(`{"scope":"turn"}`)
+	id := strings.TrimSpace(turnID)
+	if id != "" {
+		payload, _ = json.Marshal(map[string]string{"scope": "turn", "turn_id": id})
+	}
+	err := c.postCancel(convID, payload)
+	var se *StatusError
+	if id != "" && errors.As(err, &se) && se.Code == http.StatusConflict {
+		return ErrTurnNotRunning
+	}
+	return err
+}
+
+// ErrStopUnconfirmed is a targeted Stop's answer when fleet sent the cancel
+// but the turn had not confirmed it (by its terminal frame) in time: it may
+// have been stopped, or may have completed anyway.
+var ErrStopUnconfirmed = errors.New("fleet sent the Stop, but the turn has not confirmed it yet")
+
+// ErrTurnNotRunning is Cancel's answer when the named turn had already ended,
+// and CancelInput's when the input had already finished: the Stop cancelled
+// nothing.
+var ErrTurnNotRunning = errors.New("the turn had already ended; nothing was stopped")
+
+// CancelInput stops one input by its idempotency key (the input_id it was
+// submitted with), wherever it is: withdrawn if still queued, cancelled if its
+// turn runs, and refused if its turn has not registered yet. The server does
+// this atomically with turn registration, so a caller whose answer was lost
+// can stop its own input without knowing which state it reached. An input
+// that had already finished returns ErrTurnNotRunning.
+func (c *Client) CancelInput(convID, inputID string) error {
+	payload, _ := json.Marshal(map[string]string{"scope": "turn", "input_id": strings.TrimSpace(inputID)})
+	err := c.postCancel(convID, payload)
+	var se *StatusError
+	if errors.As(err, &se) && se.Code == http.StatusConflict {
+		return ErrTurnNotRunning // the input had already finished: nothing was stopped
+	}
+	return err
+}
+
+func (c *Client) postCancel(convID string, payload []byte) error {
+	if strings.TrimSpace(convID) == "" {
+		return nil // no conversation yet → nothing is running server-side
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	u := c.cfg.ServerURL + "/conversations/" + url.PathEscape(convID) + "/cancel"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeaders(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusAccepted {
+		return ErrStopUnconfirmed // sent, but the turn has not confirmed it yet
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("cancel returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))}
+	}
+	return nil
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // Ping reports whether the server's /healthz answers quickly — a fast, friendly

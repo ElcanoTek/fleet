@@ -34,6 +34,13 @@ success. One-shot mode prints the conversation id to stderr (`conversation:
 <id>`) so scripts can resume the thread — stdout carries only the agent's
 prose.
 
+`fleet acp` is the same client with a protocol in front of it: an Agent Client
+Protocol agent on stdin/stdout, for ACP clients such as `buzz-acp`, Zed or
+JetBrains to launch (`BUZZ_ACP_AGENT_COMMAND=fleet BUZZ_ACP_AGENT_ARGS=acp`).
+It resolves the token and `--email` exactly like `fleet chat`, and each prompt
+is one turn on the running server. Give it a dedicated bot user, because every
+ACP turn runs as that identity. Details: [`docs/ACP.md`](ACP.md).
+
 Critical tools (send an email, schedule a task, a bundle-declared deploy) stage
 an approval card, and the TUI is a full participant in that flow: the card's
 summary renders in the transcript with the pending count in the status bar,

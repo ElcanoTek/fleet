@@ -10,12 +10,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/metrics"
@@ -58,6 +61,14 @@ type chatRequest struct {
 	// (conversation, input_id) while queued returns the existing item instead
 	// of duplicating the input. Empty = server-generated.
 	InputID string `json:"input_id,omitempty"`
+	// InputIDScope "user" declares that the caller's input_ids are unique
+	// per user, not just per conversation. Only then is a first submission
+	// (no conversation yet) looked up by (user, input_id), so a resend whose
+	// answer was lost before any header finds the conversation it already
+	// started. Without it the key stays conversation-scoped, as documented,
+	// so a client that numbers keys per conversation is never answered with
+	// another conversation's replay.
+	InputIDScope string `json:"input_id_scope,omitempty"`
 	// Mode selects what a submission does when a turn is already running
 	// (#785): "queue" (default) runs it as the next turn; "steer" offers it
 	// to the running turn's next step boundary, falling back to queue if the
@@ -89,6 +100,12 @@ type chatRequest struct {
 // the turn registers, which is before any frame is written, so saying it here
 // costs nothing and closes the window.
 const conversationIDHeaderName = "X-Fleet-Conversation-Id"
+
+// turnIDHeaderName names the turn a POST /chat response is streaming, beside
+// the conversation header and for the same reason: it is known the moment the
+// turn registers, so a client that must address THIS turn later (a targeted
+// Stop, `fleet acp`) never has to wait for the turn.started frame.
+const turnIDHeaderName = "X-Fleet-Turn-Id"
 
 // memoryContents renders the injectable memory bullets (#515): retired and
 // still-proposed rows are EXCLUDED (retirement is the mechanism that stops
@@ -306,12 +323,23 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "message is required", http.StatusBadRequest)
 		return
 	}
+	// The key is indexed (btree entries have a size limit), so it is bounded
+	// here rather than left to fail as a database error: a UUID, or fleet
+	// acp's hashed keys, fit many times over.
+	if len(req.InputID) > maxInputIDLen || len(req.SubmissionID) > maxInputIDLen {
+		http.Error(w, fmt.Sprintf("input_id and submission_id are limited to %d bytes", maxInputIDLen), http.StatusBadRequest)
+		return
+	}
 
 	// Resolve conversation: find existing, or create new.
 	var (
 		conv *store.Conversation
 		err  error
 	)
+	// unlockFirst releases a user-scoped key's lock (lockUserScopedKey)
+	// once its key is claimed; deferred too, for every earlier return.
+	unlockFirst := func() {}
+	defer func() { unlockFirst() }()
 	reqModel := strings.TrimSpace(req.Model)
 	if req.ConversationID != "" {
 		conv, err = s.store.Get(r.Context(), user, req.ConversationID)
@@ -321,6 +349,18 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if conv == nil {
 			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
+		// A user-unique key is claimable in any conversation, and the
+		// database's uniqueness is per conversation: its lock is held from
+		// the lookup below until the key is claimed (or queued), so a
+		// concurrent send of the same key into another conversation finds
+		// this one's row instead of claiming the key a second time.
+		unlockFirst = s.lockUserScopedKey(user, req)
+		// A resend of an accepted input is answered before anything below
+		// touches the conversation: a replay must not re-apply the original
+		// request's model or un-archive the conversation.
+		if s.replayAcceptedInput(w, r, user, conv.ID, req) {
 			return
 		}
 		// The web echoes the conversation's stored model on every turn. An echo
@@ -348,6 +388,15 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			conv.ArchivedAt = nil
 		}
 	} else {
+		// A first submission's resend (same input_id, still no conversation id
+		// because the original response was lost before any header) must find
+		// the input it already accepted — before this would create a second
+		// conversation and run the prompt again there.
+		unlock, handled := s.recoverFirstSubmission(w, r, user, req)
+		if handled {
+			return
+		}
+		unlockFirst = unlock
 		persona := strings.TrimSpace(req.Persona)
 		if persona == "" {
 			persona = s.cfg.PersonaDefault
@@ -383,32 +432,6 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Idempotent replay (#785): an input_id that was already ACCEPTED (queued,
-	// running, or terminal) never runs a duplicate turn — even when the retry
-	// lands after the conversation went idle.
-	if clientID := strings.TrimSpace(req.InputID); clientID != "" {
-		existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID)
-		if lerr != nil {
-			// Fail closed: proceeding without the lookup could run (and bill) a
-			// duplicate turn for an input_id that was already accepted. A 500
-			// lets the client retry the same input_id safely.
-			http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
-			return
-		}
-		if existing != nil {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			writeJSONStatus(w, http.StatusOK, map[string]any{
-				"queued": true,
-				"input": map[string]any{
-					"id": existing.ID, "client_input_id": existing.ClientInputID,
-					"mode": existing.Mode, "state": existing.State, "position": existing.Position,
-				},
-				"conversation_id": conv.ID,
-			})
-			return
-		}
-	}
-
 	// Busy path (#785): a running turn means this submission QUEUES — never an
 	// implicit cancel. The row is durable before the 202 acknowledgement;
 	// steer-mode rows are additionally offered to the running turn's next
@@ -428,12 +451,387 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.startTurn(w, r, user, conv, req, nil, releaseSlot) {
-		// A concurrent submission won the registerTurn race between our busy
-		// check and now; the input must not be lost — queue it instead.
-		releaseSlot()
-		s.handleBusySubmit(w, r, user, conv, req)
+	// A direct turn claims its input_id before it launches, in the same
+	// table and unique index as queued inputs, so a caller whose stream was
+	// lost can resend the same key and get the input it already started back
+	// instead of a second run (model spend and tool side effects included).
+	// The replay lookup above answers most repeats; the claim is what closes
+	// the race between two concurrent submissions of one key.
+	direct, handled := s.claimDirectInput(w, r, user, conv, req, releaseSlot)
+	unlockFirst() // the key is claimed (or answered): later sends find it
+	if handled {
+		return
 	}
+
+	if !s.startTurn(w, r, user, conv, req, nil, releaseSlot, direct) {
+		// A concurrent submission won the registerTurn race between our busy
+		// check and now; the input must not be lost — queue it instead. The
+		// direct claim is released first, or the queue insert would find it
+		// and answer with a "running" row that no turn is running. If the
+		// release cannot be confirmed the submission fails rather than being
+		// acknowledged: an acknowledgement of that row would promise a run
+		// that nothing will ever perform.
+		releaseSlot()
+		// The key's lock again, for the release and the queue insert: a
+		// concurrent user-scoped send must find this input's row, not the
+		// gap between the two.
+		relock := s.lockUserScopedKey(user, req)
+		defer relock()
+		if direct != nil && !s.releaseDirectInput(user, conv.ID, direct) {
+			http.Error(w, "the message could not be queued behind the running turn; send it again", http.StatusServiceUnavailable)
+			return
+		}
+		if !s.handleBusySubmit(w, r, user, conv, req) && direct != nil {
+			// The queue refused it (full, or a store error). A concurrent
+			// resend may already have been told the claim is running, so the
+			// key must not be left without an outcome: it is settled
+			// "cancelled" (nothing ran), which a resend reads as safe to send
+			// again, rather than vanishing.
+			s.settleUnqueuedInput(user, conv.ID, strings.TrimSpace(req.InputID))
+		}
+	}
+}
+
+// replayAcceptedInput answers a resend of an input_id that was already
+// ACCEPTED (queued, running, or terminal) with that input's acknowledgement,
+// so it never runs a duplicate turn — even when the retry lands after the
+// conversation went idle (#785). A caller declaring user-unique keys
+// (input_id_scope "user") is looked up per user, so a resend finds its input
+// whichever conversation accepted it; otherwise keys are conversation-scoped.
+// A first submission (no conversation yet) is recoverFirstSubmission's.
+// handled reports that the response was written.
+func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, user, convID string, req chatRequest) (handled bool) {
+	clientID := strings.TrimSpace(req.InputID)
+	if clientID == "" {
+		return false
+	}
+	var existing *store.InputQueueRow
+	var err error
+	if strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
+		existing, err = s.store.LookupInputForUser(r.Context(), user, clientID)
+	} else {
+		existing, err = s.store.LookupInput(r.Context(), convID, clientID)
+	}
+	if err != nil {
+		// Fail closed: proceeding without the lookup could run (and bill) a
+		// duplicate turn for an input_id that was already accepted. A 500
+		// lets the client retry the same input_id safely.
+		http.Error(w, "input lookup failed: "+err.Error(), http.StatusInternalServerError)
+		return true
+	}
+	if existing == nil {
+		return false
+	}
+	writeQueueAck(w, http.StatusOK, existing.ConversationID, *existing)
+	return true
+}
+
+// lockUserScopedKey takes the per-(user, key) lock for a submission that
+// declares user-unique keys and returns its (idempotent) unlock; for any
+// other submission it locks nothing. The lock is in-process: fleet's control
+// plane is single-replica by design (the inflight registry the Stop gate
+// relies on is too), and it holds no database connection while the
+// protected work asks the pool for one.
+func (s *Server) lockUserScopedKey(user string, req chatRequest) (unlock func()) {
+	clientID := strings.TrimSpace(req.InputID)
+	if clientID == "" || !strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
+		return func() {}
+	}
+	return sync.OnceFunc(s.inputKeyLocks.lock(user + "\x00" + clientID))
+}
+
+// recoverFirstSubmission answers a first submission (no conversation yet)
+// whose user-unique key (input_id_scope "user") was already accepted, with
+// that input's acknowledgement. It takes the key's lock first, held until
+// the key is claimed (the returned unlock; a no-op when nothing was
+// locked), so a concurrent resend waits for the first request's claim
+// instead of both creating a conversation. The lock is in-process: fleet's
+// control plane is single-replica by design (the inflight registry the Stop
+// gate relies on is too), and an in-process lock holds no database
+// connection while the protected work asks the pool for one. handled
+// reports that the response was written.
+func (s *Server) recoverFirstSubmission(w http.ResponseWriter, r *http.Request, user string, req chatRequest) (unlock func(), handled bool) {
+	clientID := strings.TrimSpace(req.InputID)
+	if clientID == "" || !strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
+		return func() {}, false
+	}
+	unlock = s.lockUserScopedKey(user, req)
+	existing, err := s.store.LookupInputForUser(r.Context(), user, clientID)
+	if err != nil {
+		unlock()
+		http.Error(w, "input lookup failed: "+err.Error(), http.StatusInternalServerError)
+		return func() {}, true
+	}
+	if existing != nil {
+		unlock()
+		writeQueueAck(w, http.StatusOK, existing.ConversationID, *existing)
+		return func() {}, true
+	}
+	return unlock, false
+}
+
+// claimDirectInput claims a direct submission's input_id before its turn
+// launches. handled reports that the response was already written (a replay
+// of the key, a claim failure, or a Stop that covered the claim).
+func (s *Server) claimDirectInput(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, releaseSlot func()) (claim *directClaim, handled bool) {
+	clientID := strings.TrimSpace(req.InputID)
+	if clientID == "" {
+		return nil, false
+	}
+	claimID := uuid.NewString()
+	row, created, err := s.store.ClaimDirectInput(r.Context(), store.InputQueueRow{
+		ID: claimID, ConversationID: conv.ID, UserEmail: user,
+		ClientInputID: clientID, SubmissionID: strings.TrimSpace(req.SubmissionID),
+		Message: req.Message, Attachments: inputAttachmentsJSON(req),
+	})
+	if err != nil {
+		// The claim may have committed with its acknowledgement lost. No
+		// turn will run under it, so it is released (by its own id — never
+		// another submission's claim) rather than left 'running' to answer
+		// every resend "already running".
+		releaseSlot()
+		s.settleDirectInput(claimID, "") // settled "did not run", never left running
+		http.Error(w, "input claim failed: "+err.Error(), http.StatusInternalServerError)
+		return nil, true
+	}
+	if !created {
+		releaseSlot()
+		writeQueueAck(w, http.StatusOK, conv.ID, row)
+		return nil, true
+	}
+	// The claim is an accepted input, so a Stop scope=all that begins
+	// from here on covers it the way it covers a queued row — but the
+	// Stop's queue sweep skips it (a claim is already 'running') and no
+	// turn exists yet to cancel. So it carries the same gate a drained
+	// row does: refused here if a Stop already began after acceptance,
+	// and at registration if one begins while the turn is prepared.
+	gen, stopped := s.stopGateForRow(conv.ID, row.AcceptedSeq)
+	if stopped {
+		releaseSlot()
+		s.cancelStoppedDirectInput(w, row.ID)
+		return nil, true
+	}
+	return &directClaim{id: row.ID, key: clientID, sweepGen: gen}, false
+}
+
+// maxInputIDLen bounds a caller's input_id / submission_id.
+const maxInputIDLen = 256
+
+// directClaim is a direct submission's idempotency claim as startTurn needs
+// it: the claim row, and the Stop generation read when it was accepted (the
+// registration gate refuses the launch if a Stop scope=all begins after).
+type directClaim struct {
+	id, key  string
+	sweepGen uint64
+}
+
+// cancelStoppedDirectInput settles a claim that a Stop scope=all covered
+// before its turn launched as cancelled (nothing ran), and tells the caller.
+func (s *Server) cancelStoppedDirectInput(w http.ResponseWriter, id string) {
+	s.settleDirectInput(id, "")
+	http.Error(w, "a Stop in this conversation cancelled this message before it started", http.StatusConflict)
+}
+
+// directReleaseRetries bounds the background retries of a failed release,
+// with delays doubling from directReleaseBackoff (about a minute in total).
+const directReleaseRetries = 6
+
+var directReleaseBackoff = time.Second // a var so tests can shorten it
+
+// releaseDirectInput frees a direct claim whose turn never launched, so its
+// key can be retried, and reports whether the release landed. It is tried a
+// few times in place; one that still fails is retried in the background,
+// because a claim left behind with no turn reads as "already running" to
+// every resend of its key, and nothing would settle it before the next boot
+// recovery.
+func (s *Server) releaseDirectInput(user, convID string, c *directClaim) bool {
+	if c == nil || c.id == "" {
+		return true
+	}
+	for attempt := range directReleaseAttempts {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * directReleasePause)
+		}
+		if s.tryReleaseDirectInput(c.id) {
+			return true
+		}
+	}
+	// Unconfirmed: the delete may have committed with its acknowledgement
+	// lost, and a concurrent resend may already have been told the claim is
+	// running. Deleting again in the background could leave that key with no
+	// record at all, so the key is settled "cancelled" (nothing ran) instead:
+	// the claim if it is still there, a cancelled row if it is gone.
+	s.settleUnreleasedInput(user, convID, c)
+	return false
+}
+
+// settleUnreleasedInput gives a claim whose release could not be confirmed a
+// durable outcome — cancelled, nothing ran — retried in the background.
+func (s *Server) settleUnreleasedInput(user, convID string, c *directClaim) {
+	try := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.store.SettleDirectInput(ctx, c.id, ""); err != nil {
+			log.Printf("settle unreleased input (input=%s): %v", c.id, err)
+			return false
+		}
+		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
+			ID: uuid.NewString(), ConversationID: convID, UserEmail: user, ClientInputID: c.key,
+		}); err != nil {
+			log.Printf("settle unreleased input (input=%s): %v", c.id, err)
+			return false
+		}
+		return true
+	}
+	if !try() {
+		s.retryDirectInput("settle_unreleased", c.id, 1, directReleaseBackoff, try)
+	}
+}
+
+// directReleaseAttempts and directReleasePause bound releaseDirectInput's
+// in-place attempts (and directBindAttempts bindDirectInput's).
+const (
+	directReleaseAttempts = 3
+	directBindAttempts    = 3
+)
+
+var directReleasePause = 100 * time.Millisecond // a var so tests can shorten it
+
+// bindDirectInputIf binds id when there is a direct claim; with none it
+// reports bound (nothing to bind).
+func (s *Server) bindDirectInputIf(id, turnID string) (bound, stopped bool) {
+	if id == "" {
+		return true, false
+	}
+	return s.bindDirectInput(id, turnID)
+}
+
+// bindDirectInput stamps a direct claim with its turn id, retrying a few
+// times. bound false with stopped true means the claim is no longer running
+// (a Stop cancelled it durably); bound false alone means the bind failed.
+func (s *Server) bindDirectInput(id, turnID string) (bound, stopped bool) {
+	for attempt := range directBindAttempts {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * directReleasePause)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		bound, err := s.store.BindInputTurn(ctx, id, turnID)
+		cancel()
+		if err == nil {
+			return bound, !bound // not bound: the claim is no longer running, so do not launch
+		}
+		log.Printf("bind direct input turn (input=%s turn=%s): %v", id, turnID, err)
+	}
+	return false, false
+}
+
+func (s *Server) tryReleaseDirectInput(id string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.ReleaseDirectInput(ctx, id); err != nil {
+		log.Printf("release direct input (input=%s): %v", id, err)
+		return false
+	}
+	return true
+}
+
+// retryDirectInput retries one write to a direct claim in the background,
+// doubling the delay, until it lands or directReleaseRetries run out (boot
+// recovery then settles the claim). A claim left 'running' with no live turn
+// would answer every resend of its key "already running".
+func (s *Server) retryDirectInput(what, id string, attempt int, delay time.Duration, try func() bool) {
+	if attempt > directReleaseRetries {
+		log.Printf("%s direct input (input=%s): giving up after %d retries; boot recovery settles it", what, id, directReleaseRetries)
+		return
+	}
+	s.background.After("httpapi.direct_"+what, delay, func() {
+		if !try() {
+			s.retryDirectInput(what, id, attempt+1, 2*delay, try)
+		}
+	})
+}
+
+// settleDirectInput resolves a direct claim (completed when turnID's user
+// entry committed, otherwise cancelled) on its own bounded context, retrying
+// a failure in the background.
+func (s *Server) settleDirectInput(id, turnID string) {
+	try := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.store.SettleDirectInput(ctx, id, turnID); err != nil {
+			log.Printf("settle direct input (input=%s turn=%s): %v", id, turnID, err)
+			return false
+		}
+		return true
+	}
+	if !try() {
+		s.retryDirectInput("settle", id, 1, directReleaseBackoff, try)
+	}
+}
+
+// settleTurnInputs settles a finished turn's queue rows (SettleTurnInputs),
+// first cancelling what a Stop by key named while the turn ran — an injected
+// steer, or the drained row itself — so an uncommitted one is not returned to
+// the queue for a drain to run after its Stop. The Stop may have been
+// answered before the turn's terminal frame (202, unconfirmed), so the Stop's
+// own row writes cannot be what keeps the input from running again. The
+// cancels are guarded: an input whose user entry (or steered text) committed
+// ran, and the settlement records it completed.
+//
+// A cancel that fails leaves the turn's rows unsettled rather than settle
+// them without it (a re-queue is exactly what it prevents): a background
+// retry runs the cancels and then the settlement, and boot recovery covers a
+// retry that runs out.
+func (s *Server) settleTurnInputs(buf *turnBuffer, turnID, queueRowID string) (requeued, cancelledSteers int, err error) {
+	steers := buf.stoppedSteerIDs()
+	drained := ""
+	if queueRowID != "" && buf.stoppedByKey.Load() {
+		drained = queueRowID
+	}
+	cancelStopped := func(ctx context.Context) bool {
+		for _, id := range steers {
+			if _, err := s.store.CancelStoppedSteer(ctx, id); err != nil {
+				log.Printf("cancel stopped steer (input=%s turn=%s): %v", id, turnID, err)
+				return false
+			}
+		}
+		if drained != "" {
+			if _, err := s.store.CancelStoppedDrain(ctx, drained, turnID); err != nil {
+				log.Printf("cancel stopped drain (input=%s turn=%s): %v", drained, turnID, err)
+				return false
+			}
+		}
+		return true
+	}
+	sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer scancel()
+	if !cancelStopped(sctx) {
+		s.retryDirectInput("cancel_stopped_inputs", turnID, 1, directReleaseBackoff, func() bool {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if !cancelStopped(ctx) {
+				return false
+			}
+			if _, _, err := s.store.SettleTurnInputs(ctx, turnID, queueRowID); err != nil {
+				log.Printf("settle turn inputs (turn=%s): %v", turnID, err)
+				return false
+			}
+			s.maybeDrainQueue(buf.convID)
+			return true
+		})
+		return 0, 0, nil
+	}
+	return s.store.SettleTurnInputs(sctx, turnID, queueRowID)
+}
+
+// inputAttachmentsJSON is the attachments column for an input row.
+func inputAttachmentsJSON(req chatRequest) string {
+	if len(req.Attachments) > 0 {
+		if raw, err := json.Marshal(req.Attachments); err == nil {
+			return string(raw)
+		}
+	}
+	return "[]"
 }
 
 // startTurn runs one accepted input as a full turn: history + context prep,
@@ -443,11 +841,23 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 // set). Returns false ONLY when registerTurn refused because a turn is
 // already running — every other failure is handled (responded/logged)
 // internally. releaseSlot is released by the turn goroutine on completion;
-// on false the caller releases it.
-func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queued *queuedLaunch, releaseSlot func()) bool {
+// on false the caller releases it. direct is a direct submission's
+// idempotency claim (nil for none, and always nil for a queue drain): gated
+// against a Stop like a drained row, bound to the turn once it registers
+// (the turn is dropped if that fails), released if the turn never launches,
+// and settled when it ends.
+func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queued *queuedLaunch, releaseSlot func(), direct *directClaim) bool {
 	queueRowID := ""
+	// gate carries the Stop generation the launch is checked against: a
+	// drained row's, or a direct claim's (both are accepted inputs).
+	gate := queued
 	if queued != nil {
 		queueRowID = queued.rowID
+	}
+	directInputID := ""
+	if direct != nil {
+		directInputID = direct.id
+		gate = &queuedLaunch{sweepGen: direct.sweepGen, inputKey: direct.key}
 	}
 	reqCtx := context.Background()
 	if r != nil {
@@ -459,6 +869,12 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// pre-#785 flow errored before admission; the extraction inverted it).
 		releaseSlot()
 		if w != nil {
+			// Settled cancelled, not deleted: a concurrent resend may
+			// already have been told this claim is running, and it must
+			// then find an outcome ("did not run"), not a missing row.
+			if directInputID != "" {
+				s.settleDirectInput(directInputID, "")
+			}
 			http.Error(w, err.Error(), status)
 			return
 		}
@@ -501,7 +917,16 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// register here.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
-	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, queued, strings.TrimSpace(req.SubmissionID))
+	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, gate, strings.TrimSpace(req.SubmissionID))
+	if swept && queued == nil {
+		// A Stop scope=all began while this direct claim's turn was being
+		// prepared, or a Stop named its key: the claim belongs to the
+		// stopped set, so it is cancelled, never launched.
+		turnCancel()
+		releaseSlot()
+		s.cancelStoppedDirectInput(w, directInputID)
+		return true
+	}
 	if swept {
 		// A Stop scope=all began after this drain decided its row was
 		// post-Stop (it may still be sweeping, or have finished while we
@@ -533,16 +958,48 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// The run goroutine (the only Poll consumer) has not launched yet, so no
 	// injection can precede the binding.
 	steer.turnID, steer.buf = turnID, buf
+	if bound, stopped := s.bindDirectInputIf(directInputID, turnID); !bound && stopped {
+		// A Stop cancelled the claim durably before its turn could start:
+		// nothing ran, and the caller is told so (409), not invited to retry.
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		releaseSlot()
+		s.maybeDrainQueue(conv.ID) // no turn goroutine will run the completion-tail drain
+		http.Error(w, "a Stop in this conversation cancelled this message before it started", http.StatusConflict)
+		return true
+	} else if !bound {
+		// Fail closed: an unbound claim cannot be matched to this turn's
+		// durable record, so a crash would settle it "never ran" and let a
+		// resend run the input again. The turn is dropped before it runs.
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		s.maybeDrainQueue(conv.ID) // no turn goroutine will run the completion-tail drain
+		fail(http.StatusInternalServerError, errors.New("the message could not be recorded against its turn; send it again"))
+		return true
+	}
 	if queueRowID != "" {
 		// Stamp the REAL turn id on the drained row (the claim used a
 		// placeholder): the settle/recovery predicates check THIS turn's
 		// durable #798 record, and a stale placeholder would re-queue —
 		// double-run — an already-committed input after a crash.
 		bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.store.BindInputTurn(bctx, queueRowID, turnID); err != nil {
-			log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err)
-		}
+		bound, err := s.store.BindInputTurn(bctx, queueRowID, turnID)
 		bcancel()
+		if err != nil {
+			log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err)
+		} else if !bound {
+			// The row is no longer running: a Stop cancelled it durably
+			// after the drain claimed it. Its turn must not run.
+			turnCancel()
+			s.finishTurn(conv.ID, turnToken)
+			if releaseSlot != nil {
+				releaseSlot()
+			}
+			// No turn goroutine will run the completion-tail drain, and a
+			// row queued behind this registered turn deferred to it.
+			s.maybeDrainQueue(conv.ID)
+			return true
+		}
 	}
 
 	// Wire incremental persistence so a crash mid-turn leaves a
@@ -700,9 +1157,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// dispatched after their injection (#823: the model may have acted on
 		// the steer; re-running it could duplicate side effects, so those
 		// rows cancel instead).
-		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
-		requeued, cancelledSteers, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
-		scancel()
+		requeued, cancelledSteers, serr := s.settleTurnInputs(buf, turnID, queueRowID)
+		if directInputID != "" {
+			s.settleDirectInput(directInputID, turnID)
+		}
 		if serr != nil {
 			log.Printf("settle turn inputs (turn=%s): %v", turnID, serr)
 		}
@@ -727,6 +1185,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// arrives with the response itself, so a stream that dies immediately
 		// still leaves the browser holding an id the recovery chain can probe.
 		w.Header().Set(conversationIDHeaderName, conv.ID)
+		w.Header().Set(turnIDHeaderName, turnID)
 		// Attach this HTTP response as the initial subscriber. Blocks until
 		// the turn finishes or the client disconnects. The client's declared SSE
 		// capabilities (#194) filter which event types it receives; absent header =
@@ -828,7 +1287,7 @@ func (s *Server) runTurnAsync(
 	// Mock mode: short-circuit the LLM loop with a scripted stream for
 	// Playwright + CI. Skips history replay + provider call entirely.
 	if s.cfg.MockMode {
-		if err := runMockTurn(turnCtx, s.store, conv, userInput, buf); err != nil {
+		if err := runMockTurn(turnCtx, s.store, conv, buf.turnID, userInput, buf); err != nil {
 			log.Printf("runMockTurn error (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -911,7 +1370,14 @@ func (s *Server) runTurnAsync(
 		// Avoid emitting a redundant — and misleading — `turn.error` in
 		// that case; the frontend already has the structured reason and
 		// model slug it needs.
-		if !errors.Is(err, ErrModelSelectionRequired) {
+		switch {
+		case errors.Is(err, context.Canceled) && turnCtx.Err() != nil:
+			// A Stop cancelled the turn before the engine could report it
+			// cancelled itself (preflight, say): advertise the cancellation,
+			// not an error. A Stop is confirmed only by turn.cancelled, so a
+			// turn.error here would read as a failure of the turn's own.
+			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled"})
+		case !errors.Is(err, ErrModelSelectionRequired):
 			buf.Emit("turn.error", map[string]any{"message": err.Error()})
 		}
 		return

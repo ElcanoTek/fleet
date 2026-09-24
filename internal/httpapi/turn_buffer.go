@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -42,6 +43,17 @@ type eventSinkPersister interface {
 type turnBuffer struct {
 	convID string
 	turnID string
+
+	// stoppedByKey records that a Stop naming this turn's input key reached
+	// it, confirmed or not: the turn's settlement then cancels its drained
+	// row, unless its user entry committed, instead of returning it to the
+	// queue — a late terminal frame must not let a drain re-run the input
+	// the Stop was for.
+	stoppedByKey atomic.Bool
+	// stoppedSteers lists the injected steer rows a Stop by key named while
+	// this turn carried them (guarded by mu): the settlement cancels them
+	// rather than return an uncommitted one to the queue.
+	stoppedSteers []string
 
 	mu          sync.Mutex
 	events      []bufferedEvent
@@ -334,6 +346,22 @@ func (b *turnBuffer) markNeedsBackfill() {
 // entry), so "sealed" is the earliest reliable this-turn-is-over signal — the
 // #785 busy check uses it to avoid queueing a submission that raced the last
 // microseconds of the previous turn's bookkeeping.
+// terminalOutcome returns the turn's terminal frame (turn.completed,
+// turn.cancelled, turn.error or turn.model_required), "" before it has
+// emitted one. It reads the frame itself, sealed or not: a turn does
+// post-turn work before sealing.
+func (b *turnBuffer) terminalOutcome() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := len(b.events) - 1; i >= 0; i-- {
+		switch name := b.events[i].Name; name {
+		case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
+			return name
+		}
+	}
+	return ""
+}
+
 func (b *turnBuffer) Sealed() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -695,4 +723,37 @@ func historyPersistedEntries(entries []agent.HistoryEntry, ids []int64) []map[st
 		out = append(out, map[string]any{"id": ids[i], "role": entries[i].Role})
 	}
 	return out
+}
+
+// markStoppedByKey records a Stop by key of this turn's input, and
+// addStoppedSteer one of the injected steer rowID it carries — only while
+// the buffer is open, checked under the same lock Finish seals it with. The
+// settlement reads both after the turn's Finish, so a record that lands is
+// always seen; one that reports false came after the seal, and the Stop
+// must treat the turn as ended.
+func (b *turnBuffer) markStoppedByKey() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
+	}
+	b.stoppedByKey.Store(true)
+	return true
+}
+
+func (b *turnBuffer) addStoppedSteer(rowID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
+	}
+	b.stoppedSteers = append(b.stoppedSteers, rowID)
+	return true
+}
+
+// stoppedSteerIDs returns the steer rows addStoppedSteer recorded.
+func (b *turnBuffer) stoppedSteerIDs() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.stoppedSteers...)
 }

@@ -1,0 +1,288 @@
+package chattui
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+// The pieces `fleet acp` (internal/acp) relies on: the public web URL for
+// approval deep links, the server-side Stop call, the client label, and a
+// typed status error so an auth failure is distinguishable without parsing text.
+
+func TestResolvePublicURL(t *testing.T) {
+	base := map[string]string{"FLEET_SERVER_TOKEN": "tok", "FLEET_USER_EMAIL": "a@b.c"}
+	t.Run("env, base URL preferred, trailing slash trimmed", func(t *testing.T) {
+		env := map[string]string{"FLEET_PUBLIC_BASE_URL": "https://fleet.example.com/", "FLEET_PUBLIC_URL": "https://other"}
+		for k, v := range base {
+			env[k] = v
+		}
+		cfg, err := Resolve(Flags{}, envMap(env), noFile, noEnvFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.PublicURL != "https://fleet.example.com" {
+			t.Errorf("PublicURL = %q", cfg.PublicURL)
+		}
+	})
+	t.Run("from the server env file even when token and addr are already set", func(t *testing.T) {
+		cfg, err := Resolve(Flags{EnvFile: "/etc/fleet/fleet.env"}, envMap(base), noFile,
+			envFileFrom(map[string]map[string]string{"/etc/fleet/fleet.env": {"FLEET_PUBLIC_URL": "https://box.example.com"}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.PublicURL != "https://box.example.com" {
+			t.Errorf("PublicURL = %q", cfg.PublicURL)
+		}
+	})
+	t.Run("never from a different deployment's env file", func(t *testing.T) {
+		// The token and address come from .env.local; /etc/fleet/fleet.env
+		// belongs to another deployment and must not supply the deep link.
+		cfg, err := Resolve(Flags{Email: "a@b.c"}, envMap(map[string]string{}), noFile, envFileFrom(map[string]map[string]string{
+			".env.local":           {"FLEET_SERVER_TOKEN": "tok", "FLEET_SERVER_ADDR": "127.0.0.1:9000"},
+			"/etc/fleet/fleet.env": {"FLEET_SERVER_TOKEN": "other", "FLEET_PUBLIC_URL": "https://other.example.com"},
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Token != "tok" || cfg.PublicURL != "" {
+			t.Errorf("token=%q PublicURL=%q, want tok and no public URL", cfg.Token, cfg.PublicURL)
+		}
+	})
+	t.Run("from the file that supplied the server config", func(t *testing.T) {
+		cfg, err := Resolve(Flags{Email: "a@b.c"}, envMap(map[string]string{}), noFile, envFileFrom(map[string]map[string]string{
+			"/etc/fleet/fleet.env": {"FLEET_SERVER_TOKEN": "tok", "FLEET_PUBLIC_BASE_URL": "https://box.example.com"},
+		}))
+		if err != nil || cfg.PublicURL != "https://box.example.com" {
+			t.Errorf("PublicURL = %q, err %v", cfg.PublicURL, err)
+		}
+	})
+	t.Run("a file that supplied nothing is not the deployment", func(t *testing.T) {
+		// The token came from the env; .env.local matched only on a token key
+		// and has no address, so the client talks to the loopback default —
+		// its (possibly stale) public URL must not be used.
+		cfg, err := Resolve(Flags{}, envMap(base), noFile, envFileFrom(map[string]map[string]string{
+			".env.local": {"FLEET_SERVER_TOKEN": "other", "FLEET_PUBLIC_URL": "https://stale.example.com"},
+		}))
+		if err != nil || cfg.PublicURL != "" || cfg.Token != "tok" {
+			t.Errorf("token=%q PublicURL=%q err=%v", cfg.Token, cfg.PublicURL, err)
+		}
+	})
+	t.Run("token from env and no pinned file: not probed", func(t *testing.T) {
+		cfg, err := Resolve(Flags{}, envMap(base), noFile, envFileFrom(map[string]map[string]string{
+			"/etc/fleet/fleet.env": {"FLEET_PUBLIC_URL": "https://maybe-other.example.com"},
+		}))
+		if err != nil || cfg.PublicURL != "" {
+			t.Errorf("PublicURL = %q, err %v", cfg.PublicURL, err)
+		}
+	})
+	t.Run("an explicit --server ignores ambient public URLs", func(t *testing.T) {
+		env := map[string]string{"FLEET_PUBLIC_URL": "https://deployment-a.example.com"}
+		for k, v := range base {
+			env[k] = v
+		}
+		cfg, err := Resolve(Flags{Server: "https://deployment-b.example.com"}, envMap(env), noFile, noEnvFile)
+		if err != nil || cfg.PublicURL != "" {
+			t.Errorf("PublicURL = %q err=%v, want none (it belongs to another deployment)", cfg.PublicURL, err)
+		}
+		cfg, err = Resolve(Flags{Server: "https://deployment-b.example.com", PublicURL: "https://b.example.com/"}, envMap(env), noFile, noEnvFile)
+		if err != nil || cfg.PublicURL != "https://b.example.com" {
+			t.Errorf("explicit --public-url = %q err=%v", cfg.PublicURL, err)
+		}
+	})
+	t.Run("an env file that picked the server outranks an ambient public URL", func(t *testing.T) {
+		// --env-file supplies deployment B's token and address; the process
+		// env still carries deployment A's public URL.
+		env := map[string]string{"FLEET_USER_EMAIL": "a@b.c", "FLEET_PUBLIC_URL": "https://deployment-a.example.com"}
+		files := map[string]map[string]string{"/srv/b.env": {"FLEET_SERVER_TOKEN": "tok-b", "FLEET_SERVER_ADDR": "b:8080"}}
+		cfg, err := Resolve(Flags{EnvFile: "/srv/b.env"}, envMap(env), noFile, envFileFrom(files))
+		if err != nil || cfg.PublicURL != "" {
+			t.Errorf("PublicURL = %q err=%v, want none (the ambient one is deployment A's)", cfg.PublicURL, err)
+		}
+		files["/srv/b.env"]["FLEET_PUBLIC_URL"] = "https://deployment-b.example.com"
+		cfg, err = Resolve(Flags{EnvFile: "/srv/b.env"}, envMap(env), noFile, envFileFrom(files))
+		if err != nil || cfg.PublicURL != "https://deployment-b.example.com" {
+			t.Errorf("PublicURL = %q err=%v, want the env file's own", cfg.PublicURL, err)
+		}
+	})
+	t.Run("unset is empty", func(t *testing.T) {
+		cfg, err := Resolve(Flags{}, envMap(base), noFile, noEnvFile)
+		if err != nil || cfg.PublicURL != "" {
+			t.Errorf("PublicURL = %q, err %v", cfg.PublicURL, err)
+		}
+	})
+}
+
+func TestCancelStopsTheTurnServerSide(t *testing.T) {
+	var gotPath, gotBody, gotClient, gotToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotPath, gotBody = r.Method+" "+r.URL.Path, string(b)
+		gotClient, gotToken = r.Header.Get("X-Fleet-Client"), r.Header.Get("X-Chat-Server-Token")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok", ClientName: "fleet-acp"})
+	if err := c.Cancel("conv 1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "POST /conversations/conv 1/cancel" || gotBody != `{"scope":"turn"}` {
+		t.Errorf("request = %s %s", gotPath, gotBody)
+	}
+	if gotClient != "fleet-acp" || gotToken != "tok" {
+		t.Errorf("headers: client=%q token=%q", gotClient, gotToken)
+	}
+	if err := c.Cancel("", ""); err != nil {
+		t.Errorf("no conversation yet must be a no-op, got %v", err)
+	}
+}
+
+func TestStreamReturnsTypedStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Fleet-Client"); got != "fleet-chat" {
+			t.Errorf("default client label = %q", got)
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "", func(Event) {})
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusForbidden {
+		t.Fatalf("err = %#v, want *StatusError 403", err)
+	}
+	if se.Error() != "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server" {
+		t.Errorf("message changed: %q", se.Error())
+	}
+}
+
+// A stream that dies before its first frame still reports the conversation
+// the server named on the response headers (#1591).
+func TestStreamReportsTheHeaderConversationID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Fleet-Conversation-Id", "conv-h")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	var seen []string
+	id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "", func(ev Event) {
+		seen = append(seen, ev.Name+":"+ev.Str("id"))
+	})
+	if err == nil {
+		t.Fatal("want the interrupted-stream error")
+	}
+	if id != "conv-h" || len(seen) != 1 || seen[0] != "conversation:conv-h" {
+		t.Errorf("id=%q events=%v", id, seen)
+	}
+	// Resuming an existing conversation never lets the header override it.
+	id, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "conv-mine", func(Event) {})
+	if id != "conv-mine" {
+		t.Errorf("resumed id = %q", id)
+	}
+}
+
+// A queue acknowledgement (202, or a 200 JSON replay of an accepted input) is
+// reported as *QueuedError, not a stream failure.
+func TestStreamReportsAQueuedSubmission(t *testing.T) {
+	for _, status := range []int{http.StatusAccepted, http.StatusOK} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, `{"queued":true,"input":{"id":"in-1","position":3},"conversation_id":"conv-q"}`)
+		}))
+		id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "conv-q", "key-1", func(Event) {})
+		srv.Close()
+		var q *QueuedError
+		if !errors.As(err, &q) || q.Position != 3 || q.InputID != "in-1" || id != "conv-q" {
+			t.Errorf("status %d: id=%q err=%#v, want *QueuedError position 3", status, id, err)
+		}
+	}
+}
+
+func TestCancelNamesTheTurn(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	if err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Cancel("c", "turn-9"); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody != `{"scope":"turn","turn_id":"turn-9"}` {
+		t.Errorf("body = %s", gotBody)
+	}
+}
+
+func TestStreamSurfacesTheHeaderTurnID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Fleet-Conversation-Id", "c")
+		w.Header().Set("X-Fleet-Turn-Id", "t-1")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	var turn string
+	_, _ = NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).Stream(context.Background(), "hi", "", func(ev Event) {
+		if ev.Name == "turn.identified" {
+			turn = ev.Str("turn_id")
+		}
+	})
+	if turn != "t-1" {
+		t.Errorf("turn id = %q", turn)
+	}
+}
+
+// A queue acknowledgement cut off mid-body is an unknown outcome (fleet may
+// have queued the message), never a definite *StatusError.
+func TestTruncatedQueueAckIsNotAStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"queued":tr`)
+	}))
+	defer srv.Close()
+	_, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "c", "k", func(Event) {})
+	var se *StatusError
+	var qe *QueuedError
+	if err == nil || errors.As(err, &se) || errors.As(err, &qe) {
+		t.Fatalf("err = %#v, want a plain unknown-outcome error", err)
+	}
+}
+
+// With ModelNewConversationsOnly, the configured model is sent only on a turn
+// that starts a conversation, never as an override on an existing one.
+func TestModelNewConversationsOnly(t *testing.T) {
+	var models []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		models = append(models, body.Model)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: conversation\ndata: {\"id\":\"c1\"}\n\nevent: turn.completed\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+	for _, newOnly := range []bool{true, false} {
+		models = nil
+		c := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "t", Model: "x/model", ModelNewConversationsOnly: newOnly})
+		for _, conv := range []string{"", "c1"} {
+			if _, err := c.StreamInput(context.Background(), "hi", conv, "", func(Event) {}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want := []string{"x/model", ""}
+		if !newOnly {
+			want = []string{"x/model", "x/model"}
+		}
+		if len(models) != 2 || models[0] != want[0] || models[1] != want[1] {
+			t.Errorf("newOnly=%v: models sent = %q, want %q", newOnly, models, want)
+		}
+	}
+}
