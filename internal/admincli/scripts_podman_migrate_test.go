@@ -222,6 +222,12 @@ func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 		// Present-but-empty in the daemon's env still beats the env file.
 		{"daemon env empty backend beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nFLEET_SANDBOX_BACKEND=kubernetes\n", []string{"FLEET_SANDBOX_BACKEND="}, "podman"},
 		{"manifest ${VAR:?msg}", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", []string{"RUNNER_BACKEND=kubernetes"}, "kubernetes"},
+		// Unset: the daemon would refuse the manifest. Doctor keeps the raw
+		// expression — unknown, so it restricts — never an empty "podman".
+		{"manifest ${VAR:?msg} unset", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", nil, "${runner_backend:?setrunner_backend}"},
+		// The shipped default bundle: its only backend line is a commented
+		// example. It must resolve podman, or the step-8 repair never runs.
+		{"shipped default bundle", "FLEET_CLIENT_CONFIG_DIR=" + filepath.Join(repoRootFromTest(t), "config", "default") + "\n", nil, "podman"},
 		{"sandbox block line with a comment", "FLEET_CLIENT_CONFIG_DIR=" + commented + "\n", nil, "kubernetes"},
 		// Unreadable to the block parser: "unparsed", which is not podman, so
 		// step 8 restricts (TestSmokeRetryPlan pins that any non-podman does).

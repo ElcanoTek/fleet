@@ -288,7 +288,13 @@ manifest_sandbox_scalar() {
     local var="${BASH_REMATCH[1]}" op="${BASH_REMATCH[3]}" def="${BASH_REMATCH[4]}" val
     val="$(deploy_env "$var")"
     # :? has no default — its body is the error the daemon raises when unset.
-    [[ "$op" == "?" ]] && def=""
+    # Unset there means the daemon would refuse this manifest: keep the raw
+    # expression (an unknown value, which restricts) rather than an empty one
+    # that would read as "not configured".
+    if [[ "$op" == "?" && -z "$val" ]]; then
+      printf '%s' "$raw"
+      return 0
+    fi
     printf '%s' "${val:-$def}"
   else
     printf '%s' "$raw"
@@ -302,10 +308,13 @@ manifest_sandbox_scalar() {
 # A parse miss must not read as "no backend configured" (which is podman):
 # when this block-style reader finds nothing but the manifest mentions a
 # backend key anywhere (an inline {backend: ...} mapping, say), the backend is
-# "unparsed" — not podman — so step 8 restricts rather than restarts.
+# "unparsed" — not podman — so step 8 restricts rather than restarts. YAML
+# comments are stripped first: the shipped default bundle carries a commented
+# `# backend: kubernetes` example, and matching it would disable the step-8
+# repair on every default install.
 manifest_backend="$(manifest_sandbox_scalar backend)"
 if [[ -z "$manifest_backend" ]] \
-   && grep -Eq '(^|[[:space:],{])backend[[:space:]]*:' "$bundle_dir/manifest.yaml" 2>/dev/null; then
+   && sed 's/#.*//' "$bundle_dir/manifest.yaml" 2>/dev/null | grep -Eq '(^|[[:space:],{])backend[[:space:]]*:'; then
   manifest_backend="unparsed"
 fi
 sandbox_backend="$(resolve_sandbox_backend "$(deploy_env FLEET_SANDBOX_BACKEND)" "$manifest_backend")"
@@ -757,7 +766,7 @@ CONF
           fixed "podman system migrate run (podman reported a stale pause process) — ${SERVICE_NAME} stopped for it and started again, rebuilding its sandbox pool"
         fi ;;
       refuse)
-        advise "podman reports a stale pause process, but ${SERVICE_NAME} is live and this run cannot restart it (--no-restart, or not a systemd-managed unit) — left alone, since migrate would delete its sandboxes; rerun without --no-restart (sudo fleet doctor) to have it done safely, or by hand: stop fleet, recreate /run/${SERVICE_USER} (install -d -m 0700 -o $SERVICE_USER -g $SERVICE_USER /run/${SERVICE_USER} — stopping the unit removes it), run podman system migrate as $SERVICE_USER, start fleet" ;;
+        advise "podman reports a stale pause process, but ${SERVICE_NAME} is live and this run cannot restart it (--no-restart, or not a systemd-managed unit) — left alone, since migrate would delete its sandboxes; rerun without --no-restart (sudo fleet doctor) to have it done safely, or by hand: stop ${SERVICE_NAME}, recreate /run/${SERVICE_USER} (install -d -m 0700 -o $SERVICE_USER -g $SERVICE_USER /run/${SERVICE_USER} — stopping the unit removes it), run podman system migrate as $SERVICE_USER, start ${SERVICE_NAME}" ;;
     esac
   fi
 

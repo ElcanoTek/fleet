@@ -96,6 +96,10 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// The decisions themselves live in scripts/lib/podman-migrate.sh
 		// (TestPodmanMigratePlan pins every branch); doctor must source it.
 		"lib/podman-migrate.sh",
+		// The manual recovery names the CONFIGURED unit: a literal "fleet"
+		// under FLEET_SERVICE_NAME would leave the real service running while
+		// migrate deletes its sandboxes.
+		"or by hand: stop ${SERVICE_NAME},",
 		"600 root",
 		"Report-only in every mode",
 		// Post-upgrade podman-info deferral: step 2's own stack upgrade must
