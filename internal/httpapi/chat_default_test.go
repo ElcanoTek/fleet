@@ -152,6 +152,10 @@ type fakeChatStore struct {
 	committedTurns map[string]bool
 	// stoppedDrainFailures makes that many CancelStoppedDrain calls fail.
 	stoppedDrainFailures int
+	// stopRequested lists MarkInputStopRequested calls (conv/key);
+	// stopRequestFailures makes that many fail first.
+	stopRequested       []string
+	stopRequestFailures int
 	// beforeCancelUnlaunched runs (under mu) as CancelUnlaunchedInput starts.
 	beforeCancelUnlaunched func()
 	// onClaim runs after a direct claim is stored; onMemories when turn
@@ -1065,6 +1069,19 @@ func (s *fakeChatStore) CancelStoppedSteer(_ context.Context, id string) (bool, 
 		}
 	}
 	return false, nil
+}
+
+// MarkInputStopRequested records the durable Stop intent; the fake's
+// settlement never re-queues, so only the call itself is observable.
+func (s *fakeChatStore) MarkInputStopRequested(_ context.Context, convID, clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopRequestFailures > 0 {
+		s.stopRequestFailures--
+		return errors.New("fake: mark stop requested failed")
+	}
+	s.stopRequested = append(s.stopRequested, convID+"/"+clientID)
+	return nil
 }
 
 func (s *fakeChatStore) CancelStoppedDrain(_ context.Context, id, turnID string) (bool, error) {
@@ -2435,6 +2452,69 @@ func TestStopCausedEngineErrorIsAdvertisedCancelled(t *testing.T) {
 				t.Fatalf("terminal frame %q, want %q", got, tc.frame)
 			}
 		})
+	}
+}
+
+// A Stop by key writes its intent on the key's row durably BEFORE it cancels
+// the turn, so the turn's settlement (and boot recovery, if the process dies
+// first) cancels an uncommitted row rather than re-queue it. A failed write
+// still stops the turn — the in-memory record covers this process — but the
+// Stop is not reported as landed.
+func TestStopByKey_RecordsItsIntentBeforeTheCancel(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "recorded", true: "record fails"}[fails], func(t *testing.T) {
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, &fakeEngine{}, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			if fails {
+				st.stopRequestFailures = 1
+			}
+			var recordedFirst, cancelled atomic.Bool
+			var buf *turnBuffer
+			buf, _, tok, _ := srv.registerTurn(conv.ID, func() {
+				st.mu.Lock()
+				recordedFirst.Store(len(st.stopRequested) == 1 && st.stopRequested[0] == conv.ID+"/k-i")
+				st.mu.Unlock()
+				cancelled.Store(true)
+				buf.Emit("turn.cancelled", map[string]any{})
+			})
+			defer srv.finishTurn(conv.ID, tok)
+			srv.inflightMu.Lock()
+			e := srv.inflight[conv.ID]
+			e.inputKey = "k-i"
+			srv.inflight[conv.ID] = e
+			srv.inflightMu.Unlock()
+			st.mu.Lock()
+			st.queue = append(st.queue, store.InputQueueRow{ID: "r-i", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "k-i", Mode: store.InputModeQueued, State: store.InputStateRunning, TurnID: e.turnID})
+			st.mu.Unlock()
+			_, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "k-i")
+			if !cancelled.Load() {
+				t.Fatal("the turn was not stopped")
+			}
+			if ok == fails {
+				t.Fatalf("ok = %v, want %v", ok, !fails)
+			}
+			if !fails && !recordedFirst.Load() {
+				t.Fatal("the turn was cancelled before the Stop's intent was recorded")
+			}
+		})
+	}
+}
+
+// The in-memory Stop records refuse a sealed buffer: the settlement reads
+// them after the turn's Finish, so one landing after the seal would never be
+// seen, and the Stop must treat the turn as ended instead.
+func TestStopRecords_RefuseASealedBuffer(t *testing.T) {
+	buf := newTurnBuffer("c", "t")
+	if !buf.markStoppedByKey() || !buf.addStoppedSteer("s-1") {
+		t.Fatal("an open buffer refused a Stop record")
+	}
+	buf.Finish()
+	if buf.markStoppedByKey() || buf.addStoppedSteer("s-2") {
+		t.Fatal("a sealed buffer accepted a Stop record its settlement may already have read")
+	}
+	if got := buf.stoppedSteerIDs(); len(got) != 1 || got[0] != "s-1" {
+		t.Fatalf("stopped steers = %v", got)
 	}
 }
 

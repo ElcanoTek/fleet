@@ -381,6 +381,21 @@ func (s *Store) CancelStoppedDrain(ctx context.Context, id, turnID string) (bool
 	return n > 0, err
 }
 
+// MarkInputStopRequested records a Stop by key on the key's pending row
+// (queued, running or injected), before the Stop cancels the turn running
+// it: turn-end settlement and boot recovery then cancel the row, unless its
+// input committed, instead of returning it to the queue — the Stop's
+// in-memory record does not survive a restart. A key with no pending row is
+// left alone (the Stop takes a free key with a cancelled row instead).
+func (s *Store) MarkInputStopRequested(ctx context.Context, convID, clientID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET stop_requested_at = $3
+		  WHERE conversation_id = $1 AND client_input_id = $2
+		    AND state IN ('queued','running','injected')`,
+		convID, clientID, time.Now().Unix())
+	return err
+}
+
 // MarkInputTerminal flips one row to completed/cancelled.
 func (s *Store) MarkInputTerminal(ctx context.Context, id, state string) error {
 	_, err := s.db.ExecContext(ctx,
@@ -512,6 +527,8 @@ func (s *Store) PurgeTerminalInputs(ctx context.Context, retention time.Duration
 //     them (same predicate as SettleTurnInputs);
 //   - direct-turn records (mode 'direct') that did not commit are CANCELLED:
 //     a direct input is never re-queued;
+//   - rows a Stop by key named (stop_requested_at) that did not commit are
+//     CANCELLED: the Stop was answered, and its in-memory record is gone;
 //   - the rest return to QUEUED (visible + addressable; deliberately NOT
 //     auto-drained at boot — restarting the server must not start unattended
 //     LLM spend).
@@ -557,6 +574,20 @@ func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed, can
 	res, err = s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
 		  WHERE state = 'running' AND mode = 'direct'`,
+		time.Now().Unix())
+	if err != nil {
+		return 0, completed, cancelled, err
+	}
+	n, _ = res.RowsAffected()
+	cancelled += int(n)
+
+	// A row a Stop by key named (stop_requested_at) whose input never
+	// committed (the committed ones completed above) is cancelled, not
+	// re-queued: its Stop was answered, and the in-memory record of it died
+	// with the process.
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
+		  WHERE state IN ('running','injected') AND mode <> 'direct' AND stop_requested_at IS NOT NULL`,
 		time.Now().Unix())
 	if err != nil {
 		return 0, completed, cancelled, err
@@ -641,6 +672,8 @@ func (s *Store) LookupInputForUser(ctx context.Context, userEmail, clientID stri
 //     journal refuses dispatch outright, so an unjournaled post-injection
 //     side effect cannot exist. A NULL watermark (row injected before
 //     migration 044) degrades to the coarse gate: any intent blocks requeue.
+//   - either kind that a Stop by key named (stop_requested_at) and that did
+//     not commit is CANCELLED rather than re-queued: the Stop was answered.
 //
 // Returns how many rows went back to queued (so the caller can re-kick) and
 // how many injected rows were cancelled (so the caller can surface the drop).
@@ -650,8 +683,11 @@ func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) 
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE chat_input_queue SET
 			    state = CASE WHEN EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)
-			                 THEN 'completed' ELSE 'queued' END,
+			                 THEN 'completed'
+			                 WHEN stop_requested_at IS NOT NULL THEN 'cancelled'
+			                 ELSE 'queued' END,
 			    turn_id = CASE WHEN EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)
+			                     OR stop_requested_at IS NOT NULL
 			                   THEN turn_id ELSE NULL END,
 			    updated_at = $3
 			  WHERE id = $1 AND state = 'running'`,
@@ -671,9 +707,10 @@ func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) 
 		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
 		  WHERE turn_id = $1 AND state = 'injected'
 		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)
-		    AND EXISTS (SELECT 1 FROM turn_journal j
-		                 WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
-		                   AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))`,
+		    AND (stop_requested_at IS NOT NULL
+		      OR EXISTS (SELECT 1 FROM turn_journal j
+		                  WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                    AND j.seq > COALESCE(chat_input_queue.injected_seq, 0)))`,
 		turnID, now)
 	if err != nil {
 		return requeued, 0, err

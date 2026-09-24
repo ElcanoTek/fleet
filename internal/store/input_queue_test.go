@@ -512,3 +512,85 @@ func TestRecoverInputQueue_SteerWatermarkSplit(t *testing.T) {
 		t.Fatalf("recovery split wrong: %+v", items)
 	}
 }
+
+// A Stop by key records its intent durably (MarkInputStopRequested), so an
+// uncommitted row it named is cancelled — not re-queued for a later drain to
+// run — both by turn-end settlement and by boot recovery after the process
+// died with the Stop's in-memory record. A row the Stop did not name keeps
+// the old behaviour (re-queued), a row whose input committed completes, and
+// a finished row is not marked at all.
+func TestStopRequested_CancelsInsteadOfRequeuing(t *testing.T) {
+	for _, recover := range []bool{false, true} {
+		t.Run(map[bool]string{false: "settlement", true: "boot recovery"}[recover], func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			convID := seedConvAndTurn(t, s, "t1")
+			drained := enqueue(t, s, convID, "cli-drained", "stopped drain", InputModeQueued)
+			if _, err := s.ClaimNextQueuedInput(ctx, convID, "t1"); err != nil {
+				t.Fatal(err)
+			}
+			steer := enqueue(t, s, convID, "cli-steer", "stopped steer", InputModeSteer)
+			if ok, err := s.MarkInputInjected(ctx, steer.ID, "t1"); err != nil || !ok {
+				t.Fatalf("inject: ok=%v err=%v", ok, err)
+			}
+			other := enqueue(t, s, convID, "cli-other", "not stopped", InputModeSteer)
+			if ok, err := s.MarkInputInjected(ctx, other.ID, "t1"); err != nil || !ok {
+				t.Fatalf("inject: ok=%v err=%v", ok, err)
+			}
+			for _, key := range []string{"cli-drained", "cli-steer"} {
+				if err := s.MarkInputStopRequested(ctx, convID, key); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if recover {
+				if _, _, _, err := s.RecoverInputQueue(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, _, err := s.SettleTurnInputs(ctx, "t1", drained.ID); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range map[string]string{
+				"cli-drained": InputStateCancelled,
+				"cli-steer":   InputStateCancelled,
+				"cli-other":   InputStateQueued,
+			} {
+				if got, _ := s.LookupInput(ctx, convID, key); got == nil || got.State != want {
+					t.Fatalf("%s = %+v, want %s", key, got, want)
+				}
+			}
+		})
+	}
+
+	t.Run("committed input completes; finished rows are not marked", func(t *testing.T) {
+		s := newTestStore(t)
+		ctx := context.Background()
+		convID := seedConvAndTurn(t, s, "t1")
+		ran := enqueue(t, s, convID, "cli-ran", "landed", InputModeQueued)
+		if _, err := s.ClaimNextQueuedInput(ctx, convID, "t1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "landed")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkInputStopRequested(ctx, convID, "cli-ran"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.SettleTurnInputs(ctx, "t1", ran.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := s.LookupInput(ctx, convID, "cli-ran"); got == nil || got.State != InputStateCompleted {
+			t.Fatalf("committed row = %+v, want completed", got)
+		}
+		done := enqueue(t, s, convID, "cli-done", "finished", InputModeQueued)
+		if err := s.MarkInputTerminal(ctx, done.ID, InputStateCompleted); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MarkInputStopRequested(ctx, convID, "cli-done"); err != nil {
+			t.Fatal(err)
+		}
+		var marked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT stop_requested_at IS NOT NULL FROM chat_input_queue WHERE id = $1`, done.ID).Scan(&marked); err != nil || marked {
+			t.Fatalf("a finished row was marked (%v, %v)", marked, err)
+		}
+	})
+}

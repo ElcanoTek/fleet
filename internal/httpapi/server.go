@@ -860,8 +860,8 @@ func (s *Server) cancelSteerTurn(convID, turnID, steerRowID string) turnStop {
 	if !ok || entry.turnID != turnID || !entry.IsRunning() {
 		return turnNotStopped
 	}
-	if steerRowID != "" && entry.buf != nil {
-		entry.buf.addStoppedSteer(steerRowID)
+	if steerRowID != "" && entry.buf != nil && !entry.buf.addStoppedSteer(steerRowID) {
+		return turnNotStopped // sealed since the running check: it ended
 	}
 	if !entry.stoppable() {
 		return turnNotStopped // it already ended: the cancel would stop nothing
@@ -956,19 +956,22 @@ func (s *Server) cancelInputTurn(convID, key string) turnStop {
 	}
 	entry, ok := s.inflight[convID]
 	running := ok && entry.IsRunning() && entry.inputKey == key
+	if running && entry.buf != nil {
+		// Recorded before the cancel, and atomically with the buffer's seal
+		// (the settlement reads it after the turn's Finish), so the
+		// settlement never misses it. Recorded even for a turn that already
+		// ended on its own (a failure before its user entry committed), so
+		// its settlement does not re-queue the input the Stop named for an
+		// unattended re-run. A buffer sealed since the running check means
+		// the turn ended: the Stop is then a mark, like any ended turn.
+		running = entry.buf.markStoppedByKey()
+	}
 	if !running {
 		s.cancelledInputs[inputKeyMark(convID, key)] = now
 	}
 	s.inflightMu.Unlock()
 	if !running {
 		return turnNotStopped
-	}
-	if entry.buf != nil {
-		// Before the cancel: the settlement reads it after the turn ends.
-		// Set even for a turn that already ended on its own (a failure
-		// before its user entry committed), so its settlement does not
-		// re-queue the input the Stop named for an unattended re-run.
-		entry.buf.stoppedByKey.Store(true)
 	}
 	if !entry.stoppable() {
 		return turnNotStopped // it already ended: the cancel would stop nothing

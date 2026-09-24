@@ -725,11 +725,30 @@ func historyPersistedEntries(entries []agent.HistoryEntry, ids []int64) []map[st
 	return out
 }
 
-// addStoppedSteer records that a Stop by key named the injected steer rowID.
-func (b *turnBuffer) addStoppedSteer(rowID string) {
+// markStoppedByKey records a Stop by key of this turn's input, and
+// addStoppedSteer one of the injected steer rowID it carries — only while
+// the buffer is open, checked under the same lock Finish seals it with. The
+// settlement reads both after the turn's Finish, so a record that lands is
+// always seen; one that reports false came after the seal, and the Stop
+// must treat the turn as ended.
+func (b *turnBuffer) markStoppedByKey() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.closed {
+		return false
+	}
+	b.stoppedByKey.Store(true)
+	return true
+}
+
+func (b *turnBuffer) addStoppedSteer(rowID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
+	}
 	b.stoppedSteers = append(b.stoppedSteers, rowID)
+	return true
 }
 
 // stoppedSteerIDs returns the steer rows addStoppedSteer recorded.

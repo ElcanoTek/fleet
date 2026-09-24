@@ -62,7 +62,11 @@ retention guarantee: after a terminal row is purged, reusing its
   the turn had already failed before the Stop but not yet settled — so it
   is never returned to the queue for a later drain to run; if that cancel
   write fails, the turn's rows are left unsettled for a background retry
-  rather than settled without it), a steer already injected into a running turn is cancelled and so
+  rather than settled without it. The Stop also stamps the key's pending row
+  `stop_requested_at` before it cancels anything, so settlement and boot
+  recovery cancel an uncommitted row it named even if this process dies
+  before its in-memory record is used; a Stop whose stamp fails still stops
+  the turn but is not reported as landed), a steer already injected into a running turn is cancelled and so
   is the turn carrying it (the model cannot un-read it; if that turn had
   already ended, nothing is stopped, the Stop answers `409`, and the turn's
   own settlement records whether the steer ran; a stop the turn confirms too

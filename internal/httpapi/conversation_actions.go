@@ -705,15 +705,27 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 // Stop stopped nothing and the caller can say so rather than report a
 // cancellation.
 func (s *Server) stopInput(ctx context.Context, user, convID, key string) (res inputStop, ok bool) {
+	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	// The intent goes on the key's row durably BEFORE the turn is cancelled,
+	// so the turn's settlement — and boot recovery, if this process dies
+	// first — cancels an uncommitted row rather than re-queue it. A failed
+	// write does not hold the Stop back (the in-memory record still covers
+	// this process), but the Stop cannot be reported as landed.
+	intentErr := s.store.MarkInputStopRequested(qctx, convID, key)
+	if intentErr != nil {
+		log.Printf("cancel input intent (conv=%s): %v", convID, intentErr) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
+	}
 	turn := s.cancelInputTurn(convID, key)
 	settled := false // the key's row is already terminal: the mark has nothing left to refuse
 	defer func() {
+		if intentErr != nil {
+			ok = false
+		}
 		if ok && (res == inputFinished || settled) {
 			s.clearInputKeyMark(convID, key) // left in place it would cancel a later reuse of the key
 		}
 	}()
-	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
 	for attempt := 1; ; attempt++ {
 		var retry bool
 		res, ok, settled, retry = s.stopInputRow(qctx, user, convID, key, turn)
