@@ -484,41 +484,33 @@ then fails with `no such container` until fleet restarts. (Doctor used to run
 it on every pass; that is how fleetdev lost its pool.) Deciding when fleet can
 be stopped is a judgment call, so it is left to an operator or agent:
 
-1. Make sure nothing is mid-flight: `sudo fleet sched task list --status
-   running` (and `--status leased`) returns nothing, and no one is mid-chat.
-   (`sudo`: the scheduler DSN lives in the root-only `/etc/fleet/fleet.env`.)
-2. Stop fleet, prove it is gone, reset podman as the service user, and start
-   fleet — as **one** line. The reset runs only after a successful stop and
-   only with no `fleet` process left; once the stop succeeded, fleet is
-   started again whatever the reset did, and the line's status is the
-   reset's:
+Run each step and check its result before the next — these are steps for a
+person or agent with eyes on the output, not a script to paste:
+
+1. **Nothing in flight:** `sudo fleet sched task list --status running` and
+   `--status leased` are both empty, and no one is mid-chat. (`sudo`: the
+   scheduler DSN lives in the root-only `/etc/fleet/fleet.env`.)
+2. **Note the web tier:** `systemctl is-active fleet-web`. Stopping fleet
+   takes it down (`BindsTo=`), and starting fleet does not bring it back.
+3. **Stop fleet:** `sudo systemctl stop fleet` (under another supervisor,
+   stop it there instead).
+4. **Confirm it is gone:** `systemctl is-active fleet` says `inactive` or
+   `failed` (not `active` or `deactivating`), and `sudo pgrep -u fleet -x
+   fleet` prints nothing and exits 1. If either check fails, **do not run
+   step 6** — go to step 7.
+5. **Recreate the runtime dir** (the stop removes it — it is the unit's
+   `RuntimeDirectory=`): `sudo install -d -m 0700 -o fleet -g fleet /run/fleet`
+6. **Reset podman as the service user** — the `cd` happens *inside*, after
+   becoming `fleet`, since `/var/lib/fleet` is `0700`:
 
    ```
-   sudo systemctl stop fleet && { { sudo pgrep -u fleet -x fleet >/dev/null; [ $? -eq 1 ]; } \
-     && sudo install -d -m 0700 -o fleet -g fleet /run/fleet \
-     && (cd /var/lib/fleet && sudo -u fleet HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet podman system migrate); \
-     rc=$?; sudo systemctl start fleet; [ $rc -eq 0 ]; }
+   sudo -u fleet env HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet sh -c 'cd "$HOME" && podman system migrate'
    ```
 
-   The stop also stops `fleet-web` (`BindsTo=`) and removes `/run/fleet` (the
-   unit's `RuntimeDirectory=`), hence the `install -d`. The `pgrep` check runs
-   with `sudo` (a `hidepid` `/proc` would hide the service user's processes
-   from a login user) and continues only on pgrep's explicit "no match"
-   (exit 1), so a live `fleet` process — or a missing `pgrep` — skips the
-   reset.
-
-   **Under a supervisor other than systemd**, `systemctl` can neither stop
-   nor start fleet: stop it through that supervisor, run the same chain
-   without its first and last steps, then start fleet there again:
-
-   ```
-   { sudo pgrep -u fleet -x fleet >/dev/null; [ $? -eq 1 ]; } \
-     && sudo install -d -m 0700 -o fleet -g fleet /run/fleet \
-     && (cd /var/lib/fleet && sudo -u fleet HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet podman system migrate)
-   ```
-3. Start the web tier again — starting `fleet` does not bring it back:
-   `sudo systemctl start fleet-web`.
-4. Re-check: `sudo fleet doctor --check` (the sandbox smoke must pass).
+7. **Always start fleet again**, even if a step above failed or was
+   interrupted: `sudo systemctl start fleet` (or through its supervisor) —
+   and, only if step 2 said `active`, `sudo systemctl start fleet-web`.
+8. **Re-check:** `sudo fleet doctor --check` (the sandbox smoke must pass).
 
 Doctor's message fills in the configured unit name, user and home
 (`FLEET_SERVICE_NAME`, `FLEET_SERVICE_USER`), so copy the commands from it on a
