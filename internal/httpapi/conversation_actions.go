@@ -690,7 +690,9 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 // handleConversationCancel). The turn side is atomic with registration
 // (cancelInputTurn). A row still queued is also withdrawn, since a queued
 // row can outwait the in-memory mark, and a claimed row whose turn is still
-// being prepared is cancelled durably (its bind is then refused). A steer
+// being prepared is cancelled durably (its bind is then refused), as is a
+// drained row whose bound turn confirms the stop before its user entry
+// committed (its settlement would re-queue it). A steer
 // already injected into a running turn cannot be taken back out of it, so its
 // row is cancelled first (or the turn's settlement would return it to the
 // queue) and then the turn carrying it is stopped. ok false means a store
@@ -768,6 +770,21 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (res i
 		// turn binds only after it registered, so the Stop above found it
 		// running — its terminal frame says what the cancel did — unless
 		// it had already ended (settlement pending: finished).
+		if turn == turnStopped && row.Mode != store.InputModeDirect {
+			// Stopped: a drained row's settlement would return it to the
+			// queue if the stop landed before its user entry committed, so
+			// cancel it durably — guarded, so an input that ran is left
+			// for the settlement to record completed. (A direct claim's
+			// settlement never re-queues.)
+			cancelled, err := s.store.CancelStoppedDrain(qctx, row.ID, row.TurnID)
+			if err != nil {
+				log.Printf("cancel stopped drain (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
+				return inputStopped, false
+			}
+			if cancelled {
+				s.emitQueueUpdate(qctx, user, convID)
+			}
+		}
 		return stopFromTurn(turn), true
 	}
 	if row != nil && row.State == store.InputStateCompleted {

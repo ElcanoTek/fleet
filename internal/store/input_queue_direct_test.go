@@ -305,3 +305,73 @@ func TestCancelStoppedSteer_NeverOverwritesACompletedSteer(t *testing.T) {
 		}
 	}
 }
+
+// CancelStoppedDrain cancels a drained row whose stopped turn never committed
+// its user entry — still bound, returned to the queue, or re-claimed by a
+// drain — and never one whose input ran, a direct claim, or a row bound to
+// another turn.
+func TestCancelStoppedDrain_OnlyAnInputThatNeverRan(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t-csd")
+	drained := func(key, turnID string) *InputQueueRow {
+		t.Helper()
+		if _, _, err := s.EnqueueInput(ctx, InputQueueRow{
+			ID: "q-" + key, ConversationID: convID, UserEmail: "u@example.com",
+			ClientInputID: key, Message: "later", Attachments: "[]", Mode: InputModeQueued,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		row, err := s.ClaimNextQueuedInput(ctx, convID, ClaimTurnPrefix+key)
+		if err != nil || row == nil {
+			t.Fatalf("drain claim = %+v, %v", row, err)
+		}
+		if turnID != "" {
+			if _, err := s.BindInputTurn(ctx, row.ID, turnID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return row
+	}
+	check := func(name, key string, row *InputQueueRow, turnID string, want bool) {
+		t.Helper()
+		ok, err := s.CancelStoppedDrain(ctx, row.ID, turnID)
+		got, _ := s.LookupInput(ctx, convID, key)
+		if err != nil || ok != want || (want && got.State != InputStateCancelled) || (!want && got.State == InputStateCancelled) {
+			t.Fatalf("%s: cancelled=%v err=%v state=%s; want cancelled=%v", name, ok, err, got.State, want)
+		}
+	}
+
+	// Bound to the stopped turn, which never committed a user entry.
+	check("bound, nothing committed", "csd-1", drained("csd-1", "t-csd-stopped"), "t-csd-stopped", true)
+
+	// Bound to a turn whose user entry committed: it ran.
+	ran := drained("csd-2", "t-csd")
+	if _, err := s.CommitUserMessage(ctx, convID, "t-csd", userEntry(t, "later")); err != nil {
+		t.Fatal(err)
+	}
+	check("bound, input ran", "csd-2", ran, "t-csd", false)
+
+	// Bound to a different turn than the one stopped.
+	check("bound to another turn", "csd-3", drained("csd-3", "t-csd-other"), "t-csd-stopped", false)
+
+	// Already returned to the queue by the stopped turn's settlement.
+	requeued := drained("csd-4", "t-csd-stopped")
+	if _, _, err := s.SettleTurnInputs(ctx, "t-csd-stopped", requeued.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.LookupInput(ctx, convID, "csd-4"); got.State != InputStateQueued {
+		t.Fatalf("settled row = %s, want queued", got.State)
+	}
+	check("requeued", "csd-4", requeued, "t-csd-stopped", true)
+
+	// Re-claimed by a drain, not yet bound.
+	check("re-claimed", "csd-5", drained("csd-5", ""), "t-csd-stopped", true)
+
+	// A direct claim is settled by its own path, never re-queued.
+	direct, _ := claimDirect(t, s, convID, "csd-6")
+	if _, err := s.BindInputTurn(ctx, direct.ID, "t-csd-stopped"); err != nil {
+		t.Fatal(err)
+	}
+	check("direct", "csd-6", &direct, "t-csd-stopped", false)
+}

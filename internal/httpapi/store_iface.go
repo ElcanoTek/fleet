@@ -87,6 +87,7 @@ type chatStore interface {
 	ReleaseDirectInput(ctx context.Context, id string) error
 	CancelInputKey(ctx context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error)
 	CancelStoppedSteer(ctx context.Context, id string) (bool, error)
+	CancelStoppedDrain(ctx context.Context, id, turnID string) (bool, error)
 	CancelUnlaunchedInput(ctx context.Context, id string) (bool, error)
 	SettleDirectInput(ctx context.Context, id, turnID string) error
 	CountPendingInputs(ctx context.Context, convID string) (int, error)

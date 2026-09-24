@@ -357,6 +357,30 @@ func (s *Store) CancelStoppedSteer(ctx context.Context, id string) (bool, error)
 	return n > 0, err
 }
 
+// CancelStoppedDrain cancels a drained row whose turn a Stop just confirmed
+// stopped, unless that turn committed the row's user entry — the input ran,
+// and its settlement records it completed. Left bound to the stopped turn,
+// the row would be returned to the queue by that settlement (nothing
+// committed) and a later drain could run the input the Stop was answered
+// "stopped" for. A row the settlement already returned to the queue, or a
+// drain already re-claimed (its bind is then refused), is cancelled all the
+// same. It reports whether it cancelled the row.
+func (s *Store) CancelStoppedDrain(ctx context.Context, id, turnID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $3
+		  WHERE id = $1 AND mode <> 'direct'
+		    AND (state = 'queued'
+		      OR (state = 'running' AND turn_id LIKE $4)
+		      OR (state = 'running' AND turn_id = $2
+		          AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)))`,
+		id, turnID, time.Now().Unix(), ClaimTurnPrefix+"%")
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // MarkInputTerminal flips one row to completed/cancelled.
 func (s *Store) MarkInputTerminal(ctx context.Context, id, state string) error {
 	_, err := s.db.ExecContext(ctx,

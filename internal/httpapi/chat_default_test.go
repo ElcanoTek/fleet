@@ -147,6 +147,11 @@ type fakeChatStore struct {
 	// bindLostAcks / claimLostAcks make that many binds / direct claims
 	// commit and then report an error (the acknowledgement was lost).
 	bindLostAcks, claimLostAcks int
+	// committedTurns names the turns whose user entry committed (the input
+	// ran), for CancelStoppedDrain's guard.
+	committedTurns map[string]bool
+	// stoppedDrainFailures makes that many CancelStoppedDrain calls fail.
+	stoppedDrainFailures int
 	// onClaim runs after a direct claim is stored; onMemories when turn
 	// preparation reads memories (both outside the fake's lock).
 	onClaim    func(store.InputQueueRow)
@@ -1053,6 +1058,28 @@ func (s *fakeChatStore) CancelStoppedSteer(_ context.Context, id string) (bool, 
 	defer s.mu.Unlock()
 	for i := range s.queue {
 		if s.queue[i].ID == id && (s.queue[i].State == store.InputStateInjected || s.queue[i].State == store.InputStateQueued) {
+			s.queue[i].State = store.InputStateCancelled
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *fakeChatStore) CancelStoppedDrain(_ context.Context, id, turnID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stoppedDrainFailures > 0 {
+		s.stoppedDrainFailures--
+		return false, errors.New("fake: cancel stopped drain failed")
+	}
+	for i := range s.queue {
+		it := s.queue[i]
+		if it.ID != id || it.Mode == store.InputModeDirect {
+			continue
+		}
+		running := it.State == store.InputStateRunning
+		if it.State == store.InputStateQueued || (running && strings.HasPrefix(it.TurnID, store.ClaimTurnPrefix)) ||
+			(running && it.TurnID == turnID && !s.committedTurns[turnID]) {
 			s.queue[i].State = store.InputStateCancelled
 			return true, nil
 		}
@@ -2056,6 +2083,76 @@ func TestCancelByInputKey_InjectedSteer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A Stop by key of a drained row already bound to its running turn cancels
+// the row durably once the turn confirms the stop — or the turn's settlement,
+// finding no committed user entry, would return it to the queue and a later
+// drain would run the stopped input. The row is left to the settlement when
+// the input ran (its user entry committed), when the turn completed anyway,
+// and when the stop is unconfirmed.
+func TestCancelByInputKey_StoppedDrainIsNeverRequeued(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		frame     string // "" = no terminal frame in time
+		committed bool
+		want      string
+		res       inputStop
+	}{
+		{"stopped before the user entry", "turn.cancelled", false, store.InputStateCancelled, inputStopped},
+		{"stopped after the input ran", "turn.cancelled", true, store.InputStateRunning, inputStopped},
+		{"completed anyway", "turn.completed", false, store.InputStateRunning, inputFinished},
+		{"unconfirmed", "", false, store.InputStateRunning, inputStopUnconfirmed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, &fakeEngine{}, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			var buf *turnBuffer
+			buf, turnID, tok, _ := srv.registerTurn(conv.ID, func() {
+				if tc.frame != "" {
+					buf.Emit(tc.frame, map[string]any{})
+				}
+			})
+			defer srv.finishTurn(conv.ID, tok)
+			srv.inflightMu.Lock()
+			e := srv.inflight[conv.ID]
+			e.inputKey = "key-dr"
+			srv.inflight[conv.ID] = e
+			srv.inflightMu.Unlock()
+			st.mu.Lock()
+			st.committedTurns = map[string]bool{turnID: tc.committed}
+			st.queue = append(st.queue, store.InputQueueRow{ID: "r-dr", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-dr", Mode: store.InputModeQueued, State: store.InputStateRunning, TurnID: turnID})
+			st.mu.Unlock()
+			res, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-dr")
+			if !ok || res != tc.res {
+				t.Fatalf("stopInput = %v, %v; want %v", res, ok, tc.res)
+			}
+			if row, _ := st.LookupInput(context.Background(), conv.ID, "key-dr"); row == nil || row.State != tc.want {
+				t.Fatalf("row = %+v, want state %s", row, tc.want)
+			}
+		})
+	}
+	t.Run("store failure", func(t *testing.T) {
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, &fakeEngine{}, st)
+		conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+		var buf *turnBuffer
+		buf, turnID, tok, _ := srv.registerTurn(conv.ID, func() { buf.Emit("turn.cancelled", map[string]any{}) })
+		defer srv.finishTurn(conv.ID, tok)
+		srv.inflightMu.Lock()
+		e := srv.inflight[conv.ID]
+		e.inputKey = "key-df"
+		srv.inflight[conv.ID] = e
+		srv.inflightMu.Unlock()
+		st.mu.Lock()
+		st.stoppedDrainFailures = 1
+		st.queue = append(st.queue, store.InputQueueRow{ID: "r-df", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-df", Mode: store.InputModeQueued, State: store.InputStateRunning, TurnID: turnID})
+		st.mu.Unlock()
+		if _, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-df"); ok {
+			t.Fatal("a failed cancel of the stopped drain was reported ok")
+		}
+	})
 }
 
 // A Stop confirms the cancel against the turn's own terminal frame, read as
