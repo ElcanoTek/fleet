@@ -1805,3 +1805,75 @@ func TestKeyedStopOfAFinishedInputSaysSo(t *testing.T) {
 		t.Fatalf("cancels = %q, want one Stop by key", h.fleet.cancels)
 	}
 }
+
+// A replay that reports the input still running in another conversation
+// (one the session is not in) keeps the key routed there: a later resend, or
+// a Stop by key, goes to the conversation that holds the input, not to the
+// session's newer one where fleet would not find it.
+func TestLiveReplayKeepsItsConversation(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			if conn, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close() // A accepted in conv-A, its answer lost
+			}
+		case 2:
+			w.emit("conversation", map[string]any{"id": "conv-B"})
+			w.emit("turn.completed", map[string]any{})
+		default: // A's resends: still running in conv-A
+			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-a","mode":"direct","state":"running"},"conversation_id":"conv-A"}`)
+		}
+	}})
+	sid := h.newSession(t)
+	mid := "msg-A"
+	send := func(text string, id *string) {
+		_, _ = h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: id, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock(text)}})
+	}
+	send("prompt A", &mid)
+	send("prompt B", nil)
+	send("prompt A", &mid) // answered: running in conv-A
+	send("prompt A", &mid) // a later resend
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 4 {
+		t.Fatalf("chats = %d, want 4", len(h.fleet.chats))
+	}
+	if got := h.fleet.chats[3].ConversationID; got != "conv-A" {
+		t.Fatalf("later resend went to %q, want conv-A where the input runs", got)
+	}
+}
+
+// A retry of an unresolved key that fleet refuses before looking the key up
+// (429 from the rate limiter) keeps the key: the refusal is definite for that
+// attempt only, and the earlier one may have run, so the next retry must
+// still reuse the key rather than mint a fresh one.
+func TestRateLimitedRetryKeepsTheUnresolvedKey(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			w.w.WriteHeader(http.StatusOK) // accepted, then the stream is lost
+		case 2:
+			http.Error(w.w, "rate limited", http.StatusTooManyRequests)
+		default:
+			w.emit("conversation", map[string]any{"id": "c"})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	sid := h.newSession(t)
+	_, _ = h.prompt(sid, "book the room")
+	_, _ = h.prompt(sid, "book the room")
+	if _, err := h.prompt(sid, "book the room"); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if k0, k2 := h.fleet.chats[0].InputID, h.fleet.chats[2].InputID; k0 != k2 {
+		t.Fatalf("keys %q then %q: the retry after a 429 must reuse the unresolved key", k0, k2)
+	}
+}

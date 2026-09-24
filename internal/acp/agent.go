@@ -331,6 +331,9 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	// a retry of an unresolved key goes back to the one it was first sent to
 	// (none, for a session's first prompt), not the session's newer one.
 	target := sess.target(key)
+	// Whether key was already unresolved (an earlier attempt's answer was
+	// lost): a refusal of THIS attempt says nothing about that one.
+	_, wasUnresolved := sess.keyConv[key]
 	tr := newTranslator(p.SessionId, target, func(u acpsdk.SessionUpdate) {
 		if a.conn != nil {
 			_ = a.conn.SessionUpdate(sendCtx, acpsdk.SessionNotification{SessionId: p.SessionId, Update: u})
@@ -358,8 +361,14 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	}
 	// Only THIS prompt's entry is reconciled here; other unresolved prompts
 	// keep their keys until they are retried and answered.
+	// keep: the key must survive for a retry. An unknown outcome keeps it;
+	// so does a retry of an already-unresolved key refused before fleet
+	// looked it up (a 429 from the rate limiter, an auth hiccup), since that
+	// refusal is definite only for this attempt, not the earlier one. A 409
+	// is the exception: it is fleet's answer about this very input.
+	keep := keepKey(streamErr, wasUnresolved)
 	sess.clearUnsettled(message, key)
-	if outcomeUnknown(streamErr) {
+	if keep {
 		sess.setUnsettled(message, key)
 	}
 
@@ -389,13 +398,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		// stopped, and it is not an unconfirmed stop either.
 		stopErr, stop.alreadyEnded = nil, true
 	}
-	if stopErr != nil {
-		// The stop is unconfirmed, so the original may still run: a retry of
-		// the same text must reuse its key and be answered with that run,
-		// never started a second time.
-		sess.setUnsettled(message, key)
-	}
-	sess.settle(key, target, outcomeUnknown(streamErr) || stopErr != nil)
+	sess.retainKey(message, key, target, convID, keep, stopErr, queued)
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
 	// before any outcome.
@@ -605,6 +608,39 @@ func outcomeUnknown(err error) bool {
 	}
 	msg := err.Error()
 	return !strings.HasPrefix(msg, "turn failed:") && !strings.HasPrefix(msg, "turn requires another model:")
+}
+
+// retainKey records, after a prompt, what a later retry of key needs. An
+// unconfirmed stop keeps the key for the text (the original may still run,
+// so a retry must reuse the key and be answered with that run, never start
+// a second one); keep or an unconfirmed stop keeps its conversation; and an
+// input accepted and still live (queued may be nil) stays routed to the
+// conversation that holds it — a replay may name one other than the
+// session's — so a later resend or a Stop by key goes where fleet can find
+// the input.
+func (s *session) retainKey(message, key, target, convID string, keep bool, stopErr error, queued *chattui.QueuedError) {
+	if stopErr != nil {
+		s.setUnsettled(message, key)
+	}
+	s.settle(key, target, keep || stopErr != nil)
+	if queued != nil && convID != "" && (queued.State == "running" || queued.State == "queued" || queued.State == "injected") {
+		s.settle(key, convID, true)
+	}
+}
+
+// keepKey reports whether key must survive for a retry: an unknown outcome
+// keeps it, and so does a retry of an already-unresolved key refused before
+// fleet looked it up (refusedAttempt).
+func keepKey(streamErr error, wasUnresolved bool) bool {
+	return outcomeUnknown(streamErr) || (wasUnresolved && refusedAttempt(streamErr))
+}
+
+// refusedAttempt reports a 4xx other than 409: this attempt was refused,
+// which proves nothing about an earlier attempt of the same key. A 409 is
+// fleet's answer about the input itself (a Stop cancelled it).
+func refusedAttempt(err error) bool {
+	var se *chattui.StatusError
+	return errors.As(err, &se) && se.Code >= http.StatusBadRequest && se.Code < http.StatusInternalServerError && se.Code != http.StatusConflict
 }
 
 // stopAccepted handles a cancel (or timeout) whose answer was an acceptance
