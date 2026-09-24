@@ -92,7 +92,7 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// being down (or podman already broken, with a restart after).
 		// Learned in production on fleetdev.
 		"migrate would stop its live sandbox containers",
-		"will restart to rebuild its sandbox pool",
+		"stopped for it and started again, rebuilding its sandbox pool",
 		// The decisions themselves live in scripts/lib/podman-migrate.sh
 		// (TestPodmanMigratePlan pins every branch); doctor must source it.
 		"lib/podman-migrate.sh",

@@ -156,7 +156,6 @@ n_ok=0 n_fixed=0 n_warn=0 n_fail=0
 restart_needed=0
 podman_recheck=0
 migrate_deferred=0 # step 3 skipped migrate on a live box; step 8 may retry it
-migrate_ran_live=0 # step 3 migrated under a running service; it needs a restart
 
 pass()  { printf '  %s✓%s %s\n' "$c_green" "$c_reset" "$*"; n_ok=$((n_ok+1)); }
 fixed() { printf '  %s↻%s %s\n' "$c_cyan" "$c_reset" "$*"; n_fixed=$((n_fixed+1)); }
@@ -237,15 +236,43 @@ fleet_is_live() {
     || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
 }
 
+# migrate_live_service — `podman system migrate` under a live, systemd-managed
+# fleet, as ONE stop → migrate → start. Stopping first means no process ever
+# holds handles to containers migrate deleted: not for the steps between a
+# migrate and a later restart, and not after a run interrupted there (a
+# stopped unit is visible to every health check; a live one with a dead pool
+# answers /healthz while failing every tool call). fleet-web has
+# BindsTo=fleet.service, so the stop takes it down and starting fleet does not
+# bring it back — it is started again here when it was running before.
+# Returns non-zero when fleet did not come back.
+migrate_live_service() {
+  local web_was_active=0 rc=0
+  systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
+  systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
+  run_as_fleet podman system migrate >/dev/null 2>&1 || true
+  systemctl start "${SERVICE_NAME}.service" 2>/dev/null || rc=1
+  if [[ "$web_was_active" == "1" ]] && ! systemctl is-active --quiet fleet-web.service 2>/dev/null; then
+    if systemctl start fleet-web.service 2>/dev/null && systemctl is-active --quiet fleet-web.service 2>/dev/null; then
+      fixed "fleet-web.service started again after the ${SERVICE_NAME} restart"
+    else
+      fail "fleet-web.service is down after the ${SERVICE_NAME} restart — journalctl -u fleet-web -n 50"
+    fi
+  fi
+  return "$rc"
+}
+
 # The client bundle the daemon loads, and scalars from its manifest's sandbox:
 # block (the backend here; the image/tag in step 8).
 bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR)"
 [[ -z "$bundle_dir" && -d "$INSTALL_DIR/client" ]] && bundle_dir="$INSTALL_DIR/client"
 [[ -z "$bundle_dir" ]] && bundle_dir="$SRC_DIR/config/default"
 # manifest_sandbox_scalar KEY — the scalar under the sandbox: block, with a
-# bare ${VAR} / ${VAR:-default} interpolated against the process env (the
-# only shapes the default bundle uses; mirrors bootstrap's
-# resolve_sandbox_image — keep them in sync).
+# bare ${VAR} / ${VAR:-default} interpolated (the only shapes the default
+# bundle uses; mirrors bootstrap's resolve_sandbox_image — keep them in sync).
+# A reference resolves against the deployment env file first: the daemon
+# folds that file into its env before interpolating the manifest
+# (clientconfig.Load, #1123), and doctor's own shell env is not the daemon's.
+# The shell env is only a fallback, for a variable the file does not set.
 manifest_sandbox_scalar() {
   local key="$1" raw
   raw="$(awk -v key="$key" '
@@ -254,8 +281,10 @@ manifest_sandbox_scalar() {
     b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
   ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
   if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
-    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
-    printf '%s' "${!var:-$def}"
+    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}" val
+    val="$(env_get "$var")"
+    [[ -z "$val" ]] && val="${!var:-}"
+    printf '%s' "${val:-$def}"
   else
     printf '%s' "$raw"
   fi
@@ -287,7 +316,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
   info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
-  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate (skipped while ${SERVICE_NAME} or any ${SERVICE_USER} container is live — it stops every live sandbox; run on a stale-pause error, then ${SERVICE_NAME} restarts), podman info as ${SERVICE_USER}"
+  info "[dry-run] sandbox backend: ${sandbox_backend} (FLEET_SANDBOX_BACKEND, else the bundle's sandbox.backend, else podman)"
+  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate (skipped while ${SERVICE_NAME} or any ${SERVICE_USER} container is live — it stops every live sandbox; on a stale-pause error: stop ${SERVICE_NAME} → migrate → start), podman info as ${SERVICE_USER}"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active"
@@ -709,9 +739,11 @@ CONF
         migrate_deferred=1
         pass "podman system migrate skipped — ${SERVICE_NAME} is live (${live_containers} running container(s) as $SERVICE_USER) and podman is healthy (migrate would stop its live sandbox containers)" ;;
       migrate-restart)
-        run_as_fleet podman system migrate >/dev/null 2>&1 || true
-        migrate_ran_live=1
-        fixed "podman system migrate run (podman reported a stale pause process) — ${SERVICE_NAME} will restart to rebuild its sandbox pool" ;;
+        if migrate_live_service; then
+          fixed "podman system migrate run (podman reported a stale pause process) — ${SERVICE_NAME} stopped for it and started again, rebuilding its sandbox pool"
+        else
+          fail "podman system migrate run (stale pause process), but ${SERVICE_NAME} did not start again — journalctl -u ${SERVICE_NAME} -n 50"
+        fi ;;
       refuse)
         advise "podman reports a stale pause process, but ${SERVICE_NAME} is live and this run cannot restart it (--no-restart, or not a systemd-managed unit) — left alone, since migrate would delete its sandboxes; stop fleet, run podman system migrate as $SERVICE_USER, start fleet (or rerun: sudo fleet doctor)" ;;
     esac
@@ -734,9 +766,6 @@ CONF
       fail "rootless 'podman info' fails as $SERVICE_USER: ${podman_err:-no error output} — run: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman info"
     fi
   fi
-  # Set only after the probe above, so a failure it reports is not mistaken
-  # for the post-upgrade transient that restart_needed defers.
-  [[ "$migrate_ran_live" == "1" ]] && restart_needed=1
 fi
 
 # ── 4. installed artifacts vs repo ───────────────────────────────────────────
@@ -1318,28 +1347,15 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   elif [[ "$(smoke_retry_plan "$migrate_deferred" "$smoke_can_restart" "$sandbox_backend" "$smoke_err")" == "retry" ]]; then
     # Step 3 skipped `podman system migrate` to spare the live pool; podman
     # now names the stale pause process, which poisons the pool's launches
-    # too, so the reset is worth its cost. migrate stops the service's
-    # containers, so restart the service straight after — never leave it
-    # holding dead handles. Only a systemd-managed service can be restarted
-    # here; under another supervisor the else branch reports the failure.
-    web_was_active=0
-    systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
-    run_as_fleet podman system migrate >/dev/null 2>&1 || true
-    if systemctl restart "${SERVICE_NAME}.service" 2>/dev/null \
+    # too, so the reset is worth its cost — as one stop → migrate → start, so
+    # the service never holds dead handles. Only a systemd-managed service
+    # can be restarted here; under another supervisor the else branch
+    # reports the failure.
+    if migrate_live_service \
        && run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
       fixed "sandbox smoke passed after podman system migrate + a ${SERVICE_NAME} restart ($sandbox_img runs as $SERVICE_USER)"
     else
       fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER even after podman system migrate + a ${SERVICE_NAME} restart — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
-    fi
-    # fleet-web has BindsTo=fleet.service. systemd propagates an explicit
-    # restart to it, but assert it rather than assume it (update.sh restarts
-    # it explicitly for the same reason, #654).
-    if [[ "$web_was_active" == "1" ]] && ! systemctl is-active --quiet fleet-web.service 2>/dev/null; then
-      if systemctl start fleet-web.service 2>/dev/null && systemctl is-active --quiet fleet-web.service 2>/dev/null; then
-        fixed "fleet-web.service started again after the ${SERVICE_NAME} restart"
-      else
-        fail "fleet-web.service is down after the ${SERVICE_NAME} restart — journalctl -u fleet-web -n 50"
-      fi
     fi
   else
     fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"

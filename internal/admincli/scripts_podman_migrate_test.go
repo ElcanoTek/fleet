@@ -109,3 +109,39 @@ func TestResolveSandboxBackend(t *testing.T) {
 		}
 	}
 }
+
+// TestDoctorResolvesManifestBackendFromEnvFile — the real doctor.sh, not the
+// library: a bundle that selects its backend through a ${VAR} reference whose
+// value lives only in the deployment env file must resolve to that value. The
+// daemon folds the env file into its env before interpolating the manifest
+// (#1123); resolving against doctor's own shell env saw podman on a
+// kubernetes box, so a local podman fault could restart its control plane.
+func TestDoctorResolvesManifestBackendFromEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "bundle")
+	if err := os.MkdirAll(bundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "app_name: Test\nsandbox:\n  tag: localhost/test:latest\n  backend: ${RUNNER_BACKEND:-podman}\n"
+	if err := os.WriteFile(filepath.Join(bundle, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(dir, "fleet.env")
+	for _, tc := range []struct{ envBody, want string }{
+		{"FLEET_CLIENT_CONFIG_DIR=" + bundle + "\nRUNNER_BACKEND=kubernetes\n", "sandbox backend: kubernetes"},
+		{"FLEET_CLIENT_CONFIG_DIR=" + bundle + "\n", "sandbox backend: podman"},
+		{"FLEET_CLIENT_CONFIG_DIR=" + bundle + "\nRUNNER_BACKEND=kubernetes\nFLEET_SANDBOX_BACKEND=podman\n", "sandbox backend: podman"},
+	} {
+		if err := os.WriteFile(envFile, []byte(tc.envBody), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// RUNNER_BACKEND= in the shell env: the env file must win over it.
+		out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile, "RUNNER_BACKEND=", "FLEET_SANDBOX_BACKEND="}, "doctor.sh", "--dry-run")
+		if err != nil {
+			t.Fatalf("doctor --dry-run: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, tc.want) {
+			t.Errorf("env file %q: want %q in the dry-run, got:\n%s", tc.envBody, tc.want, out)
+		}
+	}
+}
