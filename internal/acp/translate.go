@@ -58,7 +58,7 @@ type translator struct {
 	// cancelled, errored, model-required). Read by the stop watcher.
 	terminalMu sync.Mutex
 	terminal   bool
-	completed  bool          // the terminal frame was turn.completed: the turn ran to its end
+	endedBy    string        // the terminal frame's name (turn.completed, turn.cancelled, …)
 	endedCh    chan struct{} // closed when terminal is set
 }
 
@@ -94,12 +94,22 @@ func (t *translator) setConversation(id string) {
 	t.convID = id
 }
 
-// completedTurn reports whether the watched turn ended by completing (as
-// opposed to being cancelled or failing).
-func (t *translator) completedTurn() bool {
+// endedOnItsOwn reports whether the watched turn ended other than by being
+// cancelled — it completed, failed (turn.error), or needed a model choice
+// (turn.model_required) — so a Stop sent to it stopped nothing and what it
+// did stands. Only turn.cancelled is a stop.
+func (t *translator) endedOnItsOwn() bool {
 	t.terminalMu.Lock()
 	defer t.terminalMu.Unlock()
-	return t.completed
+	return t.terminal && t.endedBy != "turn.cancelled"
+}
+
+// cancelledTurn reports whether the watched turn's terminal frame is
+// turn.cancelled: the one frame that confirms a Stop.
+func (t *translator) cancelledTurn() bool {
+	t.terminalMu.Lock()
+	defer t.terminalMu.Unlock()
+	return t.endedBy == "turn.cancelled"
 }
 
 // ended reports whether the server said the watched turn is over.
@@ -203,7 +213,7 @@ func (t *translator) handle(ev chattui.Event) {
 		t.terminalMu.Lock()
 		if !t.terminal {
 			t.terminal = true
-			t.completed = ev.Name == "turn.completed"
+			t.endedBy = ev.Name
 			close(t.endedCh)
 		}
 		t.terminalMu.Unlock()

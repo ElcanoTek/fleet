@@ -503,17 +503,18 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 			// Accepted — but the turn may have finished in the instant
 			// between fleet's check and its cancel, which then stops
 			// nothing. Read on to the terminal frame (bounded) and trust it:
-			// turn.completed means the turn ran to its end and what it did
-			// stands; turn.cancelled is a real stop.
+			// turn.cancelled is a real stop; any other end (completed,
+			// failed, model-required) is the turn's own, so what it did
+			// stands.
 			select {
 			case <-tr.endedCh:
 			case <-streamDone:
 			case <-time.After(stopSettleWait):
 			}
-			if errors.Is(err, chattui.ErrStopUnconfirmed) && tr.ended() && !tr.completedTurn() {
+			if errors.Is(err, chattui.ErrStopUnconfirmed) && tr.cancelledTurn() {
 				err = nil // the turn's own terminal frame confirms the stop
 			}
-			if tr.completedTurn() {
+			if tr.endedOnItsOwn() {
 				// The terminal frame is in; let the stream finish on its own
 				// (briefly), so the prompt reports the turn's own outcome
 				// rather than a stream it cut short.

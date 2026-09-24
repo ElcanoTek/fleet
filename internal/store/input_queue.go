@@ -301,12 +301,13 @@ func (s *Store) CountPendingInputs(ctx context.Context, convID string) (int, err
 // ClaimNextQueuedInput atomically claims the head of the conversation's
 // pending queue for turnID (queued -> running). SKIP LOCKED makes concurrent
 // drainers safe without process-level coordination; nil means the queue is
-// empty.
+// empty. A row a Stop by key stamped (stop_requested_at) is never claimed:
+// the Stop is withdrawing it.
 func (s *Store) ClaimNextQueuedInput(ctx context.Context, convID, turnID string) (*InputQueueRow, error) {
 	row := s.db.QueryRowContext(ctx,
 		`UPDATE chat_input_queue SET state = 'running', turn_id = $2, updated_at = $3
 		  WHERE id = (SELECT id FROM chat_input_queue
-		               WHERE conversation_id = $1 AND state = 'queued'
+		               WHERE conversation_id = $1 AND state = 'queued' AND stop_requested_at IS NULL
 		               ORDER BY position, created_at, id LIMIT 1
 		                 FOR UPDATE SKIP LOCKED)
 		 RETURNING `+inputQueueColumns,
@@ -323,7 +324,8 @@ func (s *Store) ClaimNextQueuedInput(ctx context.Context, convID, turnID string)
 
 // MarkInputInjected flips a steer row queued -> injected for turnID. Guarded
 // on state='queued': zero rows means a remove/cancel won the race and the
-// caller must refuse injection (the message is gone, not queued).
+// caller must refuse injection (the message is gone, not queued, or a Stop
+// by key stamped it).
 //
 // The flip also stamps injected_seq — the turn journal's max seq at injection
 // time (#823). The read is race-free against the journal writer: Acknowledge
@@ -334,7 +336,7 @@ func (s *Store) MarkInputInjected(ctx context.Context, id, turnID string) (bool,
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'injected', turn_id = $2, updated_at = $3,
 		        injected_seq = COALESCE((SELECT MAX(seq) FROM turn_journal WHERE turn_id = $2), 0)
-		  WHERE id = $1 AND state = 'queued'`, id, turnID, time.Now().Unix())
+		  WHERE id = $1 AND state = 'queued' AND stop_requested_at IS NULL`, id, turnID, time.Now().Unix())
 	if err != nil {
 		return false, err
 	}
@@ -703,31 +705,49 @@ func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) 
 			}
 		}
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+	// One statement decides each uncommitted steer, cancel or re-queue, so a
+	// Stop's stamp that lands during settlement cannot fall between a cancel
+	// pass and a re-queue pass: the row is decided on the version it has when
+	// this statement locks it (READ COMMITTED re-reads a row a concurrent
+	// write changed), and a stamp that lands after it finds a queued row,
+	// which a drain never claims (ClaimNextQueuedInput skips stamped rows) and
+	// the Stop withdraws.
+	rows, err := s.db.QueryContext(ctx,
+		`UPDATE chat_input_queue SET
+		    state = CASE WHEN stop_requested_at IS NOT NULL OR EXISTS (
+		                      SELECT 1 FROM turn_journal j
+		                       WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                         AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))
+		                 THEN 'cancelled' ELSE 'queued' END,
+		    turn_id = CASE WHEN stop_requested_at IS NOT NULL OR EXISTS (
+		                        SELECT 1 FROM turn_journal j
+		                         WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                           AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))
+		                   THEN turn_id ELSE NULL END,
+		    injected_seq = CASE WHEN stop_requested_at IS NOT NULL OR EXISTS (
+		                             SELECT 1 FROM turn_journal j
+		                              WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                                AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))
+		                        THEN injected_seq ELSE NULL END,
+		    updated_at = $2
 		  WHERE turn_id = $1 AND state = 'injected'
 		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)
-		    AND (stop_requested_at IS NOT NULL
-		      OR EXISTS (SELECT 1 FROM turn_journal j
-		                  WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
-		                    AND j.seq > COALESCE(chat_input_queue.injected_seq, 0)))`,
+		 RETURNING state`,
 		turnID, now)
 	if err != nil {
 		return requeued, 0, err
 	}
-	n, _ := res.RowsAffected()
-	cancelled = int(n)
-	res, err = s.db.ExecContext(ctx,
-		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, injected_seq = NULL, updated_at = $2
-		  WHERE turn_id = $1 AND state = 'injected'
-		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)
-		    AND NOT EXISTS (SELECT 1 FROM turn_journal j
-		                     WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
-		                       AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))`,
-		turnID, now)
-	if err != nil {
-		return requeued, cancelled, err
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var state string
+		if err := rows.Scan(&state); err != nil {
+			return requeued, cancelled, err
+		}
+		if state == InputStateCancelled {
+			cancelled++
+		} else {
+			requeued++
+		}
 	}
-	n, _ = res.RowsAffected()
-	return requeued + int(n), cancelled, nil
+	return requeued, cancelled, rows.Err()
 }

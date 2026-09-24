@@ -1861,8 +1861,50 @@ func TestTimeoutThatLosesTheRaceReportsTheCompletedTurn(t *testing.T) {
 // A Stop fleet sent but could not yet confirm (202) is settled by the turn's
 // own stream: a turn.cancelled that follows confirms it as a clean stop; no
 // terminal frame at all leaves it unconfirmed, and the prompt says the turn
-// may still be running rather than claiming it stopped.
+// may still be running rather than claiming it stopped. A turn that instead
+// fails on its own (turn.error, turn.model_required) was not stopped: the
+// prompt says it had already finished, neither a clean stop nor unconfirmed.
 func TestUnconfirmedStopIsSettledByTheStream(t *testing.T) {
+	for _, frame := range []string{"turn.error", "turn.model_required"} {
+		t.Run("ends on its own: "+frame, func(t *testing.T) {
+			started := make(chan struct{})
+			var h *harness
+			h = newHarness(t, harnessOpts{cancelStatus: http.StatusAccepted, turn: func(w *sseWriter, _ *http.Request) {
+				w.emit("conversation", map[string]any{"id": "conv-u"})
+				w.emit("turn.started", map[string]any{"turn_id": "turn-u"})
+				close(started)
+				for {
+					h.fleet.mu.Lock()
+					n := len(h.fleet.cancels)
+					h.fleet.mu.Unlock()
+					if n > 0 {
+						break
+					}
+					time.Sleep(2 * time.Millisecond)
+				}
+				w.emit(frame, map[string]any{"message": "the provider failed"})
+			}})
+			sid := h.newSession(t)
+			done := make(chan acpsdk.PromptResponse, 1)
+			go func() {
+				r, _ := h.prompt(sid, "long job")
+				done <- r
+			}()
+			<-started
+			if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case r := <-done:
+				text := h.client.text()
+				if r.StopReason != acpsdk.StopReasonCancelled || !strings.Contains(text, "already finished") || strings.Contains(text, "could not confirm") {
+					t.Fatalf("got %+v, text %q; want the already-finished note", r, text)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("prompt did not return")
+			}
+		})
+	}
 	for _, confirms := range []bool{true, false} {
 		t.Run(map[bool]string{true: "stream confirms", false: "never confirmed"}[confirms], func(t *testing.T) {
 			started := make(chan struct{})

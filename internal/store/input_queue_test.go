@@ -594,3 +594,27 @@ func TestStopRequested_CancelsInsteadOfRequeuing(t *testing.T) {
 		}
 	})
 }
+
+// A queued row a Stop by key stamped is never claimed by a drain nor injected
+// into a running turn as a steer: the Stop is withdrawing it, and either
+// would run it. The unstamped row behind it is claimed as usual.
+func TestStopRequested_QueuedRowIsNeverLaunched(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	stamped := enqueue(t, s, convID, "cli-stamped", "stopped", InputModeSteer)
+	next := enqueue(t, s, convID, "cli-next", "next", InputModeQueued)
+	if err := s.MarkInputStopRequested(ctx, convID, "cli-stamped"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.MarkInputInjected(ctx, stamped.ID, "t1"); err != nil || ok {
+		t.Fatalf("a stamped steer was injected (ok=%v err=%v)", ok, err)
+	}
+	row, err := s.ClaimNextQueuedInput(ctx, convID, ClaimTurnPrefix+"x")
+	if err != nil || row == nil || row.ID != next.ID {
+		t.Fatalf("claim = %+v, %v; want the unstamped row behind the stamped one", row, err)
+	}
+	if got, _ := s.LookupInput(ctx, convID, "cli-stamped"); got == nil || got.State != InputStateQueued {
+		t.Fatalf("stamped row = %+v, want left queued for the Stop to withdraw", got)
+	}
+}
