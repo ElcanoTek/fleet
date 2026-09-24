@@ -93,6 +93,10 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// Learned in production on fleetdev.
 		"migrate would stop its live sandbox containers",
 		"will restart to rebuild its sandbox pool",
+		// ...and the destructive reset keys on podman's own stale-pause
+		// signature, never on any failure: a disk- or PID-exhausted launch
+		// leaves the live pool serving, and migrating would kill it.
+		"podman system migrate|pause process",
 		"600 root",
 		"Report-only in every mode",
 		// Post-upgrade podman-info deferral: step 2's own stack upgrade must
