@@ -58,6 +58,7 @@ type translator struct {
 	// cancelled, errored, model-required). Read by the stop watcher.
 	terminalMu sync.Mutex
 	terminal   bool
+	completed  bool          // the terminal frame was turn.completed: the turn ran to its end
 	endedCh    chan struct{} // closed when terminal is set
 }
 
@@ -91,6 +92,14 @@ func (t *translator) setConversation(id string) {
 		close(t.convKnown)
 	}
 	t.convID = id
+}
+
+// completedTurn reports whether the watched turn ended by completing (as
+// opposed to being cancelled or failing).
+func (t *translator) completedTurn() bool {
+	t.terminalMu.Lock()
+	defer t.terminalMu.Unlock()
+	return t.completed
 }
 
 // ended reports whether the server said the watched turn is over.
@@ -194,6 +203,7 @@ func (t *translator) handle(ev chattui.Event) {
 		t.terminalMu.Lock()
 		if !t.terminal {
 			t.terminal = true
+			t.completed = ev.Name == "turn.completed"
 			close(t.endedCh)
 		}
 		t.terminalMu.Unlock()

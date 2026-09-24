@@ -167,6 +167,11 @@ type harnessOpts struct {
 // the way an ACP client wires to `fleet acp`'s stdio.
 func newHarness(t *testing.T, o harnessOpts) *harness {
 	t.Helper()
+	// Most fake turns never send a terminal frame after a Stop; do not wait
+	// long for one (the real server sends turn.cancelled).
+	prevSettle := stopSettleWait
+	stopSettleWait = 50 * time.Millisecond
+	t.Cleanup(func() { stopSettleWait = prevSettle })
 	ff := &fakeFleet{t: t, turn: o.turn, cancelStatus: o.cancelStatus}
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
@@ -1734,5 +1739,76 @@ func TestCancelDuringACompletedReplayIsAlreadyEnded(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("prompt did not return")
+	}
+}
+
+// A Stop fleet accepts can still stop nothing: the turn may complete in the
+// instant between fleet's running check and its cancel. The prompt reads on
+// to the terminal frame and trusts it — turn.completed means the turn ran to
+// its end, so it says so instead of reporting a confirmed stop.
+func TestAcceptedStopOfATurnThatCompletedAnywaySaysSo(t *testing.T) {
+	started := make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-r"})
+		w.emit("turn.started", map[string]any{"turn_id": "turn-r"})
+		close(started)
+		for { // the Stop is accepted (204), but the turn completes regardless
+			h.fleet.mu.Lock()
+			n := len(h.fleet.cancels)
+			h.fleet.mu.Unlock()
+			if n > 0 {
+				break
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		w.emit("text.delta", map[string]any{"text": "all done"})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "long job")
+		done <- r
+	}()
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		text := h.client.text()
+		if r.StopReason != acpsdk.StopReasonCancelled || !strings.Contains(text, "already finished") {
+			t.Fatalf("got %+v, text %q; want the already-finished note, not a confirmed stop", r, text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+}
+
+// A prompt with a messageId whose outcome is unknown is not filed under its
+// text: a later, different text-only prompt with the same words gets its own
+// key and runs, rather than being answered with the messageId prompt's replay.
+func TestMessageIdKeyIsNotReusedForTheSameText(t *testing.T) {
+	calls := 0
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.w.WriteHeader(http.StatusOK) // accepted, then the stream is lost
+			return
+		}
+		w.emit("conversation", map[string]any{"id": "c"})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	mid := "msg-1"
+	_, _ = h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("same words")}})
+	if _, err := h.prompt(sid, "same words"); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if k0, k1 := h.fleet.chats[0].InputID, h.fleet.chats[1].InputID; k0 == k1 {
+		t.Fatalf("the text-only prompt reused the messageId prompt's key %q", k0)
 	}
 }

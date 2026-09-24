@@ -149,6 +149,9 @@ func (s *session) clearUnsettled(message, key string) {
 }
 
 func (s *session) setUnsettled(message, key string) {
+	if message == "" {
+		return // not a text-keyed prompt (see promptOnce); prompt text is never empty
+	}
 	if s.unsettled == nil {
 		s.unsettled = map[string]string{}
 	}
@@ -322,9 +325,17 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	// refusal is definite only for this attempt, not the earlier one. A 409
 	// is the exception: it is fleet's answer about this very input.
 	keep := keepKey(streamErr, wasUnresolved)
-	sess.clearUnsettled(message, key)
+	// Only a prompt whose key came from its text is remembered by its text:
+	// a messageId prompt recovers through its own deterministic key, and
+	// filing it under the text would hand that key to a later, different
+	// text-only prompt with the same words (answering it as a replay).
+	textMsg := message
+	if p.MessageId != nil && strings.TrimSpace(*p.MessageId) != "" {
+		textMsg = ""
+	}
+	sess.clearUnsettled(textMsg, key)
 	if keep {
-		sess.setUnsettled(message, key)
+		sess.setUnsettled(textMsg, key)
 	}
 
 	meta := map[string]any{"fleet.conversationId": convID}
@@ -350,7 +361,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		// stopped, and it is not an unconfirmed stop either.
 		stopErr, stop.alreadyEnded = nil, true
 	}
-	sess.retainKey(message, key, target, convID, keep, stopErr, queued)
+	sess.retainKey(textMsg, key, target, convID, keep, stopErr, queued)
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
 	// before any outcome.
@@ -422,6 +433,11 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 // stop, and the turn would run on server-side with no client.
 const conversationWait = 5 * time.Second
 
+// stopSettleWait bounds how long an accepted Stop waits for the turn's
+// terminal frame, which says whether the Stop stopped it (turn.cancelled) or
+// the turn had just completed. A var so tests can shorten it.
+var stopSettleWait = 3 * time.Second
+
 // turnGrace bounds the wait for turn.started once the conversation is known.
 const turnGrace = time.Second
 
@@ -481,6 +497,23 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 		// any other turn, so the Stop cannot hit a successor that started
 		// after the watched turn ended.
 		err = a.client.Cancel(id, turn)
+		if err == nil {
+			// Accepted — but the turn may have finished in the instant
+			// between fleet's check and its cancel, which then stops
+			// nothing. Read on to the terminal frame (bounded) and trust it:
+			// turn.completed means the turn ran to its end and what it did
+			// stands; turn.cancelled is a real stop.
+			select {
+			case <-tr.endedCh:
+			case <-streamDone:
+			case <-time.After(stopSettleWait):
+			}
+			if tr.completedTurn() {
+				cancelStream()
+				stopped <- stopOutcome{intervened: true, alreadyEnded: true}
+				return
+			}
+		}
 		if errors.Is(err, chattui.ErrTurnNotRunning) {
 			// The turn ended between the check above and the Stop landing:
 			// nothing was stopped. Keep reading, so the prompt reports how

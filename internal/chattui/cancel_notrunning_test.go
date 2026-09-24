@@ -1,6 +1,7 @@
 package chattui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -33,5 +34,24 @@ func TestCancelInputReportsAFinishedInput(t *testing.T) {
 	defer srv.Close()
 	if err := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", Token: "t"}).CancelInput("conv", "key"); !errors.Is(err, ErrTurnNotRunning) {
 		t.Fatalf("err = %v, want ErrTurnNotRunning", err)
+	}
+}
+
+// A 200 acknowledgement is a replay of an input accepted earlier, even when
+// that input is still queued; a 202 is one queued just now.
+func TestQueuedReplayIsTheServersStatus(t *testing.T) {
+	for status, want := range map[int]bool{http.StatusOK: true, http.StatusAccepted: false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"queued":true,"input":{"id":"r","mode":"queued","state":"queued","position":2},"conversation_id":"c"}`))
+		}))
+		c := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", Token: "t"})
+		_, err := c.StreamInput(context.Background(), "hi", "c", "k", func(Event) {})
+		var q *QueuedError
+		if !errors.As(err, &q) || q.Replayed() != want {
+			t.Errorf("status %d: err %v, replayed %v; want %v", status, err, q != nil && q.Replayed(), want)
+		}
+		srv.Close()
 	}
 }

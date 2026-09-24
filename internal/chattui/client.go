@@ -143,12 +143,17 @@ type QueuedError struct {
 	// is a submission that started its turn directly (not a queue item).
 	Mode  string
 	State string
+	// Replay is true when the server answered 200 (an idempotent replay of
+	// an input it had already accepted) rather than 202 (queued just now).
+	Replay bool
 }
 
 // Replayed reports whether this acknowledgement is for an input the server had
-// already accepted under the same key, rather than one it just queued.
+// already accepted under the same key, rather than one it just queued: the
+// server's 200 says so, including for an input still queued; mode and state
+// cover a server that does not distinguish the two.
 func (e *QueuedError) Replayed() bool {
-	return e.Mode == "direct" || (e.State != "" && e.State != "queued")
+	return e.Replay || e.Mode == "direct" || (e.State != "" && e.State != "queued")
 }
 
 func (e *QueuedError) Error() string {
@@ -228,7 +233,7 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		derr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ack)
 		if derr == nil && ack.Queued {
 			id := orDefault(ack.ConversationID, convID)
-			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position, Mode: ack.Input.Mode, State: ack.Input.State}
+			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position, Mode: ack.Input.Mode, State: ack.Input.State, Replay: resp.StatusCode == http.StatusOK}
 		}
 		// An unreadable acknowledgement (the connection closed mid-body) is not
 		// a refusal: fleet may well have queued the message. Report it as a
