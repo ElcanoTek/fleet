@@ -152,6 +152,8 @@ die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 n_ok=0 n_fixed=0 n_warn=0 n_fail=0
 restart_needed=0
 podman_recheck=0
+migrate_deferred=0 # step 3 skipped migrate on a live box; step 8 may retry it
+migrate_ran_live=0 # step 3 migrated under a running service; it needs a restart
 
 pass()  { printf '  %s✓%s %s\n' "$c_green" "$c_reset" "$*"; n_ok=$((n_ok+1)); }
 fixed() { printf '  %s↻%s %s\n' "$c_cyan" "$c_reset" "$*"; n_fixed=$((n_fixed+1)); }
@@ -243,12 +245,12 @@ if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
   info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
-  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate, podman info as ${SERVICE_USER}"
+  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman system migrate (skipped while ${SERVICE_NAME} is running with healthy podman — it stops every live sandbox; migrate under a running service restarts it), podman info as ${SERVICE_USER}"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
-  info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
+  info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}; if it fails after step 3 skipped migrate, migrate + restart ${SERVICE_NAME} + re-smoke (unless --no-restart)"
   info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
   info "[dry-run] would restart ${SERVICE_NAME} + fleet-web after a toolchain/package upgrade or an app-unit reinstall above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
   exit 0
@@ -644,10 +646,29 @@ CONF
 
   # Stale pause process: a rootless pause container forked inside an old mount
   # namespace pins that namespace and poisons later pulls/runs. migrate is the
-  # documented reset and a no-op when everything is fine.
+  # documented reset — but it is NOT a no-op on a live box: it stops every
+  # running container of the user, and the sandboxes run --rm, so it deletes
+  # the running service's whole warm pool while the process keeps handing out
+  # the dead handles ("no such container" on every chat turn and task until a
+  # restart). Learned in production on fleetdev. So with the service up and
+  # podman healthy there is nothing to reset: skip it, and let step 8 retry it
+  # (with the restart it needs) only if the smoke proves the store is broken.
+  # When the service is up but podman is already failing, the sandboxes are
+  # broken anyway: migrate, and restart the service so it rebuilds its pool.
   if [[ "$CHECK_ONLY" == "0" ]]; then
-    run_as_fleet podman system migrate >/dev/null 2>&1 || true
-    pass "podman system migrate run (clears stale pause namespaces)"
+    if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+      if run_as_fleet podman info >/dev/null 2>&1; then
+        migrate_deferred=1
+        pass "podman system migrate skipped — ${SERVICE_NAME} is running and podman is healthy (migrate would stop its live sandbox containers)"
+      else
+        run_as_fleet podman system migrate >/dev/null 2>&1 || true
+        migrate_ran_live=1
+        fixed "podman system migrate run while podman was failing — ${SERVICE_NAME} will restart to rebuild its sandbox pool"
+      fi
+    else
+      run_as_fleet podman system migrate >/dev/null 2>&1 || true
+      pass "podman system migrate run (clears stale pause namespaces)"
+    fi
   fi
 
   if run_as_fleet podman info >/dev/null 2>&1; then
@@ -667,6 +688,9 @@ CONF
       fail "rootless 'podman info' fails as $SERVICE_USER: ${podman_err:-no error output} — run: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman info"
     fi
   fi
+  # Set only after the probe above, so a failure it reports is not mistaken
+  # for the post-upgrade transient that restart_needed defers.
+  [[ "$migrate_ran_live" == "1" ]] && restart_needed=1
 fi
 
 # ── 4. installed artifacts vs repo ───────────────────────────────────────────
@@ -1261,6 +1285,18 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   # the daemon uses. --network=none mirrors the runtime's default isolation.
   if run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
     pass "sandbox smoke passed ($sandbox_img runs as $SERVICE_USER)"
+  elif [[ "$migrate_deferred" == "1" && "$NO_RESTART" == "0" ]]; then
+    # Step 3 skipped `podman system migrate` to spare the live pool; the smoke
+    # failing means the store is broken and the pool with it, so the reset is
+    # now worth its cost. migrate stops the service's containers, so restart
+    # the service straight after — never leave it holding dead handles.
+    run_as_fleet podman system migrate >/dev/null 2>&1 || true
+    if systemctl restart "${SERVICE_NAME}.service" 2>/dev/null \
+       && run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
+      fixed "sandbox smoke passed after podman system migrate + a ${SERVICE_NAME} restart ($sandbox_img runs as $SERVICE_USER)"
+    else
+      fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER even after podman system migrate + a ${SERVICE_NAME} restart — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
+    fi
   else
     fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
   fi

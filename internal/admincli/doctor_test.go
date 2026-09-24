@@ -86,6 +86,13 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		":100000:65536",
 		`cgroup_manager = "cgroupfs"`,
 		"podman system migrate",
+		// migrate stops every running container of the user; on a live box
+		// that deleted the service's whole --rm warm pool while the process
+		// kept handing out dead handles. It must stay gated on the service
+		// being down (or podman already broken, with a restart after).
+		// Learned in production on fleetdev.
+		"migrate would stop its live sandbox containers",
+		"will restart to rebuild its sandbox pool",
 		"600 root",
 		"Report-only in every mode",
 		// Post-upgrade podman-info deferral: step 2's own stack upgrade must
