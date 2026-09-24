@@ -85,6 +85,9 @@ MAINT_TIMER="fleet-maintenance.timer"
 # bootstrap.sh (which writes it) and update.sh (which offers to adopt it).
 # shellcheck source=lib/caddyfile.sh
 . "$SCRIPT_DIR/lib/caddyfile.sh"
+# When `podman system migrate` is safe (it deletes a live box's sandbox pool).
+# shellcheck source=lib/podman-migrate.sh
+. "$SCRIPT_DIR/lib/podman-migrate.sh"
 NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
 if [[ -z "$NODE_FLOOR" ]]; then
   # No silent default. A hardcoded fallback would point at whatever major was
@@ -225,16 +228,19 @@ run_as_fleet() {
     sudo -u "$SERVICE_USER" HOME="$SERVICE_HOME" XDG_RUNTIME_DIR="/run/${SERVICE_USER}" "$@" )
 }
 
-# is_stale_pause_error TEXT — true when podman's own error names the condition
-# `podman system migrate` resets: a rootless pause process that is gone or was
-# forked in an old namespace. podman says so itself ('invalid internal status,
-# try resetting the pause process with "podman system migrate"'). Doctor keys
-# the destructive reset on that signature and nothing broader: a launch that
-# fails for disk or PID exhaustion leaves the live pool serving, and migrating
-# then would turn a degraded box into a full tool outage.
-is_stale_pause_error() {
-  grep -qiE 'podman system migrate|pause process' <<<"$1"
+# fleet_is_live — true when a fleet process may hold a warm sandbox pool: the
+# unit is active, or a `fleet` process runs as the service user (the unit's
+# ExecStart, or the same binary under another supervisor). Errs toward live:
+# a false "live" only skips a reset, a false "not live" deletes a pool.
+fleet_is_live() {
+  systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null \
+    || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
 }
+
+# The configured sandbox backend (ADR-0049). Only the podman backend keeps its
+# pool in the service user's rootless store — the store migrate resets.
+sandbox_backend="$(env_get FLEET_SANDBOX_BACKEND)"
+sandbox_backend="${sandbox_backend:-podman}"
 
 # ── dry-run: print the checklist and exit ────────────────────────────────────
 # Doctor's real run is condition-driven (it probes, then fixes what the probe
@@ -655,43 +661,35 @@ CONF
     fixed "containers.conf written (cgroupfs + file events)"
   fi
 
-  # Stale pause process: a rootless pause container forked inside an old mount
-  # namespace pins that namespace and poisons later pulls/runs. migrate is the
-  # documented reset — but it is NOT a no-op on a live box: it stops every
-  # running container of the user, and the sandboxes run --rm, so it deletes
-  # the running service's whole warm pool while the process keeps handing out
-  # the dead handles ("no such container" on every chat turn and task until a
-  # restart). Learned in production on fleetdev. So:
-  #   - podman healthy, nothing live (no running container of the user, the
-  #     unit not active): migrate, as before — there is nothing to stop.
-  #   - podman healthy, something live: skip. The containers are the signal,
-  #     not the unit, so a fleet under another supervisor is spared too.
-  #     Step 8 retries only if the smoke shows the stale-pause failure.
-  #   - podman failing WITH the stale-pause signature: every podman call the
-  #     pool makes fails the same way, so it is broken already — migrate, and
-  #     restart the service so it rebuilds its pool.
-  #   - podman failing any other way: migrate is not the fix; the probe
-  #     below reports the error.
+  # Stale pause process: migrate resets it, but on a live box it deletes the
+  # service's warm pool (scripts/lib/podman-migrate.sh has the why and every
+  # branch). Probe, then act on podman_migrate_plan's verdict.
   if [[ "$CHECK_ONLY" == "0" ]]; then
-    if podman_info_err="$(run_as_fleet podman info 2>&1 >/dev/null)"; then
-      # A listing that fails proves nothing is safe to stop: count it as live.
+    info_ok=0 podman_info_err="" live_containers=0 live=0 can_restart=0
+    podman_info_err="$(run_as_fleet podman info 2>&1 >/dev/null)" && info_ok=1
+    if [[ "$info_ok" == "1" ]]; then
       if live_ids="$(run_as_fleet podman ps -q 2>/dev/null)"; then
         live_containers="$(grep -c . <<<"$live_ids" || true)"
       else
         live_containers="unknown"
       fi
-      if [[ "$live_containers" != "0" ]] || systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
-        migrate_deferred=1
-        pass "podman system migrate skipped — ${SERVICE_NAME} is live (${live_containers} running container(s) as $SERVICE_USER) and podman is healthy (migrate would stop its live sandbox containers)"
-      else
-        run_as_fleet podman system migrate >/dev/null 2>&1 || true
-        pass "podman system migrate run (clears stale pause namespaces)"
-      fi
-    elif is_stale_pause_error "$podman_info_err"; then
-      run_as_fleet podman system migrate >/dev/null 2>&1 || true
-      migrate_ran_live=1
-      fixed "podman system migrate run (podman reported a stale pause process) — ${SERVICE_NAME} will restart to rebuild its sandbox pool"
     fi
+    fleet_is_live && live=1
+    [[ "$NO_RESTART" == "0" ]] && systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null && can_restart=1
+    case "$(podman_migrate_plan "$sandbox_backend" "$info_ok" "$podman_info_err" "$live_containers" "$live" "$can_restart")" in
+      migrate)
+        run_as_fleet podman system migrate >/dev/null 2>&1 || true
+        pass "podman system migrate run (clears stale pause namespaces; nothing live to disturb)" ;;
+      defer)
+        migrate_deferred=1
+        pass "podman system migrate skipped — ${SERVICE_NAME} is live (${live_containers} running container(s) as $SERVICE_USER) and podman is healthy (migrate would stop its live sandbox containers)" ;;
+      migrate-restart)
+        run_as_fleet podman system migrate >/dev/null 2>&1 || true
+        migrate_ran_live=1
+        fixed "podman system migrate run (podman reported a stale pause process) — ${SERVICE_NAME} will restart to rebuild its sandbox pool" ;;
+      refuse)
+        advise "podman reports a stale pause process, but ${SERVICE_NAME} is live and this run cannot restart it (--no-restart, or not a systemd-managed unit) — left alone, since migrate would delete its sandboxes; stop fleet, run podman system migrate as $SERVICE_USER, start fleet (or rerun: sudo fleet doctor)" ;;
+    esac
   fi
 
   if run_as_fleet podman info >/dev/null 2>&1; then
@@ -1309,10 +1307,11 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1 || ! command -v podman >/dev/null 2>&1; 
 elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   # The definitive check: launch the image in the exact rootless environment
   # the daemon uses. --network=none mirrors the runtime's default isolation.
+  smoke_can_restart=0
+  [[ "$NO_RESTART" == "0" ]] && systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null && smoke_can_restart=1
   if smoke_err="$(run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true 2>&1 >/dev/null)"; then
     pass "sandbox smoke passed ($sandbox_img runs as $SERVICE_USER)"
-  elif [[ "$migrate_deferred" == "1" && "$NO_RESTART" == "0" ]] && is_stale_pause_error "$smoke_err" \
-       && systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+  elif [[ "$(smoke_retry_plan "$migrate_deferred" "$smoke_can_restart" "$sandbox_backend" "$smoke_err")" == "retry" ]]; then
     # Step 3 skipped `podman system migrate` to spare the live pool; podman
     # now names the stale pause process, which poisons the pool's launches
     # too, so the reset is worth its cost. migrate stops the service's
