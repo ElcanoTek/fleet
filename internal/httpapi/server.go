@@ -824,10 +824,24 @@ func (s *Server) cancelInflight(convID string) bool {
 // check and the cancel read one snapshot taken under inflightMu, and a turn id
 // is never reused, so a successor registered after turnID ended is never hit.
 func (s *Server) cancelInflightTurn(convID, turnID string) turnStop {
+	return s.cancelSteerTurn(convID, turnID, "")
+}
+
+// cancelSteerTurn is cancelInflightTurn for a Stop by key of the injected
+// steer steerRowID ("" for none) that turnID carries. When it cancels the
+// turn it first records the steer on the turn's buffer, so the settlement
+// (which runs after the turn ends) cancels an uncommitted steer instead of
+// returning it to the queue, even when the Stop is answered before the turn
+// confirms it. A turn that is not running is not flagged: the Stop stopped
+// nothing, and its settlement records whether the steer ran.
+func (s *Server) cancelSteerTurn(convID, turnID, steerRowID string) turnStop {
 	s.inflightMu.Lock()
 	entry, ok := s.inflight[convID]
 	s.inflightMu.Unlock()
 	if ok && entry.turnID == turnID && entry.IsRunning() {
+		if steerRowID != "" && entry.buf != nil {
+			entry.buf.addStoppedSteer(steerRowID)
+		}
 		entry.cancel()
 		return entry.confirmStopped()
 	}
@@ -920,6 +934,9 @@ func (s *Server) cancelInputTurn(convID, key string) turnStop {
 	}
 	s.inflightMu.Unlock()
 	if running {
+		if entry.buf != nil {
+			entry.buf.stoppedByKey.Store(true) // before the cancel: its settlement reads it after the turn ends
+		}
 		entry.cancel()
 		return entry.confirmStopped()
 	}

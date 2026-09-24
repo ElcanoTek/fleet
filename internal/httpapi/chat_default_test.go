@@ -152,6 +152,8 @@ type fakeChatStore struct {
 	committedTurns map[string]bool
 	// stoppedDrainFailures makes that many CancelStoppedDrain calls fail.
 	stoppedDrainFailures int
+	// beforeCancelUnlaunched runs (under mu) as CancelUnlaunchedInput starts.
+	beforeCancelUnlaunched func()
 	// onClaim runs after a direct claim is stored; onMemories when turn
 	// preparation reads memories (both outside the fake's lock).
 	onClaim    func(store.InputQueueRow)
@@ -1090,6 +1092,9 @@ func (s *fakeChatStore) CancelStoppedDrain(_ context.Context, id, turnID string)
 func (s *fakeChatStore) CancelUnlaunchedInput(_ context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.beforeCancelUnlaunched != nil {
+		s.beforeCancelUnlaunched()
+	}
 	for i := range s.queue {
 		it := s.queue[i]
 		unbound := (it.Mode == store.InputModeDirect && it.TurnID == "") || strings.HasPrefix(it.TurnID, store.ClaimTurnPrefix)
@@ -2022,25 +2027,97 @@ func TestDirectClaim_RefusedRaceLoserSettlementIsRetried(t *testing.T) {
 // once the finished row is purged, a later submission reusing the key is new
 // and must run, not be cancelled by a stale mark.
 func TestCancelByInputKey_FinishedInputLeavesNoMark(t *testing.T) {
-	eng := &fakeEngine{}
-	st := newFakeChatStore()
-	srv := newDefaultChatServer(t, eng, st)
-	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
-	st.mu.Lock()
-	st.queue = append(st.queue, store.InputQueueRow{ID: "r-done", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-old", Mode: store.InputModeDirect, State: store.InputStateCompleted, TurnID: "t-1"})
-	st.mu.Unlock()
-	if res, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-old"); res != inputFinished || !ok {
-		t.Fatalf("stopInput = %v ok %v, want the finished input reported", res, ok)
+	for _, tc := range []struct {
+		state string
+		want  inputStop
+	}{
+		{store.InputStateCompleted, inputFinished},
+		{store.InputStateCancelled, inputStopped}, // already cancelled: the row refuses it
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			eng := &fakeEngine{}
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, eng, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			st.mu.Lock()
+			st.queue = append(st.queue, store.InputQueueRow{ID: "r-done", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-old", Mode: store.InputModeDirect, State: tc.state, TurnID: "t-1"})
+			st.mu.Unlock()
+			if res, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-old"); res != tc.want || !ok {
+				t.Fatalf("stopInput = %v ok %v, want %v", res, ok, tc.want)
+			}
+			st.mu.Lock()
+			st.queue = nil // retention purges the terminal row
+			st.mu.Unlock()
+			w := postChatRequest(t, srv, map[string]any{"message": "again", "conversation_id": conv.ID, "input_id": "key-old"})
+			eng.mu.Lock()
+			turns := eng.turns
+			eng.mu.Unlock()
+			if w.Code != http.StatusOK || turns != 1 {
+				t.Fatalf("status %d, turns %d: a reuse of the key after its row was purged must run", w.Code, turns)
+			}
+		})
 	}
-	st.mu.Lock()
-	st.queue = nil // retention purges the finished row
-	st.mu.Unlock()
-	w := postChatRequest(t, srv, map[string]any{"message": "again", "conversation_id": conv.ID, "input_id": "key-old"})
-	eng.mu.Lock()
-	turns := eng.turns
-	eng.mu.Unlock()
-	if w.Code != http.StatusOK || turns != 1 {
-		t.Fatalf("status %d, turns %d: a reuse of the key after its row was purged must run", w.Code, turns)
+}
+
+// A Stop by key that reads an unbound direct claim which is then released
+// (the registration loser re-queueing it) before the guarded cancel lands
+// reads the key again rather than infer the claim was bound to an ended turn:
+// it takes the freed key with a cancelled row and keeps the mark, so the
+// loser's re-queued copy is refused. A key whose row keeps changing is
+// reported unconfirmed, the mark still in force.
+func TestCancelByInputKey_ReleasedClaimIsReadAgain(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		drained, churn bool
+	}{
+		{"direct claim released", false, false},
+		{"drained claim un-claimed", true, false},
+		{"keeps changing", false, true},
+	} {
+		churn := tc.churn
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, &fakeEngine{}, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			claim := func(id string) store.InputQueueRow {
+				r := store.InputQueueRow{ID: id, ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-r", Mode: store.InputModeDirect, State: store.InputStateRunning}
+				if tc.drained {
+					r.Mode, r.TurnID = store.InputModeQueued, store.ClaimTurnPrefix+id
+				}
+				return r
+			}
+			n := 0
+			st.mu.Lock()
+			st.queue = append(st.queue, claim("c-0"))
+			st.beforeCancelUnlaunched = func() { // runs under st.mu
+				n++
+				if tc.drained {
+					st.queue[0].State, st.queue[0].TurnID = store.InputStateQueued, "" // the lost race un-claims it
+					return
+				}
+				st.queue = nil // released
+				if churn {
+					st.queue = append(st.queue, claim(fmt.Sprintf("c-%d", n))) // and claimed afresh
+				}
+			}
+			st.mu.Unlock()
+			res, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-r")
+			want := inputStopped
+			if churn {
+				want = inputStopUnconfirmed
+			}
+			if !ok || res != want {
+				t.Fatalf("stopInput = %v ok %v, want %v", res, ok, want)
+			}
+			if !srv.inputKeyStopped(conv.ID, "key-r") {
+				t.Fatal("the mark was cleared: the loser's re-queued copy would run")
+			}
+			if !churn {
+				if row, _ := st.LookupInput(context.Background(), conv.ID, "key-r"); row == nil || row.State != store.InputStateCancelled {
+					t.Fatalf("row = %+v, want the key's row cancelled (a freed key taken, a re-queued row withdrawn)", row)
+				}
+			}
+		})
 	}
 }
 
@@ -2153,6 +2230,32 @@ func TestCancelByInputKey_StoppedDrainIsNeverRequeued(t *testing.T) {
 			t.Fatal("a failed cancel of the stopped drain was reported ok")
 		}
 	})
+}
+
+// A Stop by key of an injected steer records the steer on the turn it
+// cancels — so the settlement cancels it rather than re-queue it even when
+// the stop is unconfirmed — and never on a turn that already ended: that Stop
+// stopped nothing, and the settlement alone records whether the steer ran.
+func TestCancelSteerTurn_FlagsOnlyATurnItCancels(t *testing.T) {
+	for _, running := range []bool{true, false} {
+		t.Run(map[bool]string{true: "running", false: "already ended"}[running], func(t *testing.T) {
+			srv := newDefaultChatServer(t, &fakeEngine{}, newFakeChatStore())
+			var buf *turnBuffer
+			buf, turnID, tok, _ := srv.registerTurn("conv-s", func() {}) // no terminal frame: unconfirmed
+			defer srv.finishTurn("conv-s", tok)
+			want := turnStopUnconfirmed
+			if !running {
+				buf.Finish()
+				want = turnNotStopped
+			}
+			if got := srv.cancelSteerTurn("conv-s", turnID, "steer-row"); got != want {
+				t.Fatalf("cancelSteerTurn = %v, want %v", got, want)
+			}
+			if got := buf.stoppedSteerIDs(); running != (len(got) == 1 && got[0] == "steer-row") || (!running && len(got) != 0) {
+				t.Fatalf("stopped steers = %v, want flagged=%v", got, running)
+			}
+		})
+	}
 }
 
 // A Stop confirms the cancel against the turn's own terminal frame, read as

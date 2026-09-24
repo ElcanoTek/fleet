@@ -769,6 +769,58 @@ func (s *Server) settleDirectInput(id, turnID string) {
 	}
 }
 
+// settleTurnInputs settles a finished turn's queue rows (SettleTurnInputs),
+// first cancelling what a Stop by key named while the turn ran — an injected
+// steer, or the drained row itself — so an uncommitted one is not returned to
+// the queue for a drain to run after its Stop.
+func (s *Server) settleTurnInputs(buf *turnBuffer, turnID, queueRowID string) (requeued, cancelledSteers int, err error) {
+	sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer scancel()
+	for _, id := range buf.stoppedSteerIDs() {
+		// Guarded: a steer whose text committed is completed already.
+		if _, err := s.store.CancelStoppedSteer(sctx, id); err != nil {
+			log.Printf("cancel stopped steer (input=%s turn=%s): %v", id, turnID, err)
+		}
+	}
+	drainedID := queueRowID
+	if drainedID != "" && buf.stoppedByKey.Load() && !s.cancelStoppedDrain(queueRowID, turnID) {
+		drainedID = "" // left to the background retry: never re-queued here
+	}
+	return s.store.SettleTurnInputs(sctx, turnID, drainedID)
+}
+
+// cancelStoppedDrain cancels the drained row of a turn a Stop named by its
+// input key, before the turn's settlement could return it to the queue. The
+// Stop may have been answered before the turn's terminal frame (202,
+// unconfirmed), so the Stop's own row write cannot be what keeps the input
+// from running again. Guarded: an input whose user entry committed ran, and
+// the settlement records it completed. It reports whether the write landed;
+// on false the row must not be settled now (a re-queue is exactly what it
+// prevents) — a background retry cancels and then settles it, and boot
+// recovery covers a retry that runs out.
+func (s *Server) cancelStoppedDrain(rowID, turnID string) bool {
+	try := func(settle bool) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := s.store.CancelStoppedDrain(ctx, rowID, turnID); err != nil {
+			log.Printf("cancel stopped drain (input=%s turn=%s): %v", rowID, turnID, err)
+			return false
+		}
+		if settle {
+			if _, _, err := s.store.SettleTurnInputs(ctx, turnID, rowID); err != nil {
+				log.Printf("settle stopped drain (input=%s turn=%s): %v", rowID, turnID, err)
+				return false
+			}
+		}
+		return true
+	}
+	if try(false) {
+		return true
+	}
+	s.retryDirectInput("cancel_stopped_drain", rowID, 1, directReleaseBackoff, func() bool { return try(true) })
+	return false
+}
+
 // inputAttachmentsJSON is the attachments column for an input row.
 func inputAttachmentsJSON(req chatRequest) string {
 	if len(req.Attachments) > 0 {
@@ -1097,9 +1149,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// dispatched after their injection (#823: the model may have acted on
 		// the steer; re-running it could duplicate side effects, so those
 		// rows cancel instead).
-		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
-		requeued, cancelledSteers, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
-		scancel()
+		requeued, cancelledSteers, serr := s.settleTurnInputs(buf, turnID, queueRowID)
 		if directInputID != "" {
 			s.settleDirectInput(directInputID, turnID)
 		}

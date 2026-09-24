@@ -1248,3 +1248,168 @@ func TestQueue_DrainedTurnStreamCarriesQueueSnapshot(t *testing.T) {
 		return len(items) == 0
 	})
 }
+
+// slowStopEngine runs turns like gatedEngine (with the steer seam), except
+// that a turn the cancel reaches ends only after a pause longer than
+// stopConfirmWait — the Stop is answered 202, unconfirmed — and commits
+// nothing more. The first turn for preCommit waits for the cancel before
+// CommitUser.
+type slowStopEngine struct {
+	gatedEngine
+	preCommit string
+
+	mu   sync.Mutex
+	runs map[string]int // RunTurn calls per user message
+}
+
+func (f *slowStopEngine) ran(msg string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.runs[msg]
+}
+
+func (f *slowStopEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
+	f.mu.Lock()
+	f.runs[in.UserMessage]++
+	first := f.runs[in.UserMessage] == 1
+	f.mu.Unlock()
+	select {
+	case f.started <- struct{}{}:
+	default:
+	}
+	slowEnd := func() (*TurnResult, error) {
+		time.Sleep(10 * stopConfirmWait) // the cancel lands long after the Stop answered
+		return nil, ctx.Err()
+	}
+	if in.UserMessage == f.preCommit && first {
+		<-ctx.Done()
+		return slowEnd()
+	}
+	user := agent.HistoryEntry{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)}
+	if in.CommitUser != nil {
+		if err := in.CommitUser(ctx, user); err != nil {
+			return nil, err
+		}
+	}
+	sink.Emit("turn.started", map[string]any{"persona": in.Persona})
+	for in.SteerSource != nil && ctx.Err() == nil {
+		if msg, ok := in.SteerSource.Poll(); ok {
+			_ = in.SteerSource.Acknowledge(ctx, msg.ID)
+			break
+		}
+		select {
+		case <-f.release:
+			goto done
+		case <-ctx.Done():
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+	}
+done:
+	if ctx.Err() != nil {
+		return slowEnd() // the steer's text never commits
+	}
+	reply := []agent.HistoryEntry{{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"reply"}`)}}
+	if in.CommitTerminal != nil {
+		if err := in.CommitTerminal(reply, false); err != nil {
+			return nil, err
+		}
+	}
+	sink.Emit("turn.completed", map[string]any{"model": in.Model})
+	return &TurnResult{FinalText: "done", NewHistory: append([]agent.HistoryEntry{user}, reply...)}, nil
+}
+
+// stoppedDrainFailStore fails the first CancelStoppedDrain calls.
+type stoppedDrainFailStore struct {
+	chatStore
+	failures atomic.Int32
+}
+
+func (w *stoppedDrainFailStore) CancelStoppedDrain(ctx context.Context, id, turnID string) (bool, error) {
+	if w.failures.Add(-1) >= 0 {
+		return false, errors.New("injected: cancel stopped drain failed")
+	}
+	return w.chatStore.CancelStoppedDrain(ctx, id, turnID)
+}
+
+// A Stop by key that the turn does not confirm in time (202) still keeps
+// the stopped input from running again: the turn's own settlement, reached
+// after its late terminal frame, cancels an uncommitted drained row or
+// injected steer instead of returning it to the queue for a drain to re-run.
+// A cancel write that fails leaves the row unsettled for its retry, never
+// re-queued in the meantime.
+func TestQueue_UnconfirmedKeyedStopNeverRequeues(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		steer        bool
+		cancelFailed bool // the settlement's first cancel write fails
+	}{
+		{"drained row", false, false},
+		{"drained row, cancel write retried", false, true},
+		{"injected steer", true, false},
+	} {
+		steer := tc.steer
+		t.Run(tc.name, func(t *testing.T) {
+			shortDirectPauses(t)
+			s := serverFixture(t)
+			if tc.cancelFailed {
+				// The retry lands well after a (wrongly) re-queued row would
+				// have been drained and run again.
+				directReleaseBackoff = 300 * time.Millisecond
+				fail := &stoppedDrainFailStore{chatStore: s.store}
+				fail.failures.Store(1)
+				s.store = fail
+			}
+			const user = "alice@x.com"
+			conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			eng := &slowStopEngine{gatedEngine: gatedEngine{started: make(chan struct{}, 8), release: make(chan struct{}, 8)}, preCommit: map[bool]string{false: "stop me"}[steer], runs: map[string]int{}}
+			s.agent = eng
+
+			go postChatJSON(t, s, user, map[string]any{"message": "first", "conversation_id": conv.ID})
+			<-eng.started
+			mode := "queue"
+			if steer {
+				mode = "steer"
+			}
+			if w := postChatJSON(t, s, user, map[string]any{"message": "stop me", "conversation_id": conv.ID, "mode": mode, "input_id": "stop-key"}); w.Code != http.StatusAccepted {
+				t.Fatalf("submit: %d %s", w.Code, w.Body.String())
+			}
+			if steer {
+				waitFor(t, "steer injected", func() bool {
+					row, _ := s.store.LookupInput(context.Background(), conv.ID, "stop-key")
+					return row != nil && row.State == store.InputStateInjected
+				})
+			} else {
+				eng.release <- struct{}{} // finish turn 1: the drain launches "stop me"
+				<-eng.started
+			}
+			rr := do(t, s.Routes(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "input_id": "stop-key"}, user)
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("status %d, want 202 (unconfirmed)", rr.Code)
+			}
+			s.inflightMu.Lock()
+			s.cancelledInputs = nil // the in-memory mark is evicted: only the durable settlement is left
+			s.inflightMu.Unlock()
+			eng.release <- struct{}{} // a (wrong) re-run would complete, not hang
+			waitFor(t, "the stopped input settled", func() bool {
+				row, _ := s.store.LookupInput(context.Background(), conv.ID, "stop-key")
+				return row != nil && row.State != store.InputStateRunning && row.State != store.InputStateInjected
+			})
+			time.Sleep(200 * time.Millisecond) // room for a drain to (wrongly) re-run it
+			row, _ := s.store.LookupInput(context.Background(), conv.ID, "stop-key")
+			want := 1
+			if steer {
+				want = 0 // a steer never ran as a turn of its own
+			}
+			if row.State != store.InputStateCancelled || eng.ran("stop me") != want {
+				t.Fatalf("row %s, %d runs of the stopped input; want cancelled, %d", row.State, eng.ran("stop me"), want)
+			}
+		})
+	}
+}

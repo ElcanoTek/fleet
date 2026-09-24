@@ -51,12 +51,15 @@ retention guarantee: after a terminal row is purged, reusing its
   wherever it is (an input that had already finished — it ran, or its turn
   ended with only its settlement pending — stops nothing and answers `409`,
   like a `turn_id` Stop of an ended turn): a still-queued row is withdrawn, a running turn for it is
-  cancelled (a drained row whose turn confirms the stop is cancelled too,
-  unless its user entry had committed, so the turn's settlement cannot
-  return it to the queue for a later drain to run), a steer already injected into a running turn is cancelled and so
+  cancelled (a drained row is cancelled too, unless its user entry had
+  committed — by the Stop when the turn confirms it, and by the turn's own
+  settlement when the confirmation comes too late for the `202` — so it is
+  never returned to the queue for a later drain to run), a steer already injected into a running turn is cancelled and so
   is the turn carrying it (the model cannot un-read it; if that turn had
   already ended, nothing is stopped, the Stop answers `409`, and the turn's
-  own settlement records whether the steer ran), and a turn not
+  own settlement records whether the steer ran; a stop the turn confirms too
+  late for the `202` still has its settlement cancel an uncommitted steer
+  rather than re-queue it), and a turn not
   registered yet (a direct claim still being prepared, a row the drain just
   claimed, or a submission still in transit) is refused when it tries to
   register. The mark and the registration check share one lock, so a keyed

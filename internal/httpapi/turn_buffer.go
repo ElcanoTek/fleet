@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -42,6 +43,17 @@ type eventSinkPersister interface {
 type turnBuffer struct {
 	convID string
 	turnID string
+
+	// stoppedByKey records that a Stop naming this turn's input key reached
+	// it, confirmed or not: the turn's settlement then cancels its drained
+	// row, unless its user entry committed, instead of returning it to the
+	// queue — a late terminal frame must not let a drain re-run the input
+	// the Stop was for.
+	stoppedByKey atomic.Bool
+	// stoppedSteers lists the injected steer rows a Stop by key named while
+	// this turn carried them (guarded by mu): the settlement cancels them
+	// rather than return an uncommitted one to the queue.
+	stoppedSteers []string
 
 	mu          sync.Mutex
 	events      []bufferedEvent
@@ -712,4 +724,18 @@ func historyPersistedEntries(entries []agent.HistoryEntry, ids []int64) []map[st
 		out = append(out, map[string]any{"id": ids[i], "role": entries[i].Role})
 	}
 	return out
+}
+
+// addStoppedSteer records that a Stop by key named the injected steer rowID.
+func (b *turnBuffer) addStoppedSteer(rowID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stoppedSteers = append(b.stoppedSteers, rowID)
+}
+
+// stoppedSteerIDs returns the steer rows addStoppedSteer recorded.
+func (b *turnBuffer) stoppedSteerIDs() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.stoppedSteers...)
 }
