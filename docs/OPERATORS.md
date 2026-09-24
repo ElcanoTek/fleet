@@ -421,30 +421,31 @@ production-only bug. The pass covers, in order:
    and a `podman info` probe **as the service user**. migrate stops every
    running container of that user — the running service's sandbox pool
    included — so doctor gates it tightly:
-   - **podman healthy:** never migrated here, live or not; there is nothing
-     to reset. The step-8 sandbox smoke catches a stale pause.
+   - **podman healthy:** never migrated in step 3, live or not; there is
+     nothing to reset.
    - **stale pause (podman's own "try resetting the pause process" error),
-     fleet live:** one stop → migrate → start of the `fleet` unit (fleet-web
-     brought back, `/run/fleet` — removed by the stop — recreated first),
-     only when doctor may restart it (not `--no-restart`) and the unit is
-     loaded and not proven stopped (a `Restart=always` auto-restart delay
-     qualifies). The store is touched only once the unit is proven stopped
-     (`ActiveState` inactive or failed, no `fleet` process left), and every
-     path — an interrupt included: `fleet doctor` passes Ctrl-C / SIGTERM on
-     as SIGTERM, never SIGKILL — ends by starting fleet again.
-   - **stale pause, fleet stopped:** migrated only when doctor's own unit is
-     quiesced (loaded, proven stopped, no `fleet` process).
-   - **otherwise** — `--no-restart` on a live box, or a fleet under another
-     supervisor (which doctor cannot hold off between a check and a
-     migrate) — the store is left alone and doctor prints the manual
-     sequence (stop, recreate `/run/fleet`, migrate, start).
+     fleet stopped:** migrated only when doctor's own unit is quiesced
+     (loaded, `ActiveState` inactive or failed, no `fleet` process),
+     re-checked immediately before the migrate.
+   - **stale pause, fleet live:** left alone in step 3 (nothing can prove
+     the live pool is in this store while podman is failing); doctor prints
+     the manual sequence (stop, recreate `/run/fleet`, which the stop
+     removes, migrate, start).
+   - **step 8, the sandbox smoke fails with that error:** a live `fleet`
+     unit gets one stop → migrate → start, but only with direct evidence,
+     read at that moment, that its pool is in this store: running
+     `chat-sandbox-*` containers whose `fleet.instance` label names the
+     unit's current MainPID *and* start time (orphans of an earlier run,
+     even one whose pid was reused, don't count). So a kubernetes-backed
+     fleet is never restarted over a local podman fault. The store is
+     touched only once the unit is proven stopped; fleet-web (running or in
+     its auto-restart delay) is brought back; and every path — an interrupt
+     included: `fleet doctor` passes Ctrl-C / SIGTERM on as SIGTERM, never
+     SIGKILL — ends by starting fleet again. Not under `--no-restart`. A
+     quiesced unit gets a plain migrate instead, and an enabled unit that
+     had failed is started once the store is repaired.
    A launch failing any other way — disk or PID exhaustion, say — never
-   triggers migrate. The step-8 restart path also requires direct evidence
-   that the live fleet keeps its sandbox pool in this store — step 3 saw
-   running `chat-sandbox-*` containers whose `fleet.instance` label names
-   the unit's current MainPID (orphans of an earlier run don't count) — so a
-   kubernetes-backed fleet (no local sandbox containers) is never restarted
-   over a local podman fault, whatever its config says.
+   triggers migrate.
    The decisions are `scripts/lib/podman-migrate.sh`.
 4. **Installed artifacts** — functional drift of `fleet.service` /
    `fleet-web.service` / the `fleet-backup` and `fleet-maintenance` service +

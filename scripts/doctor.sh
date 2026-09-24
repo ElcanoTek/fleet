@@ -156,7 +156,6 @@ n_ok=0 n_fixed=0 n_warn=0 n_fail=0
 restart_needed=0
 podman_recheck=0
 migrate_deferred=0 # step 3 skipped migrate on a live box; step 8 may retry it
-local_pool=0       # step 3 saw N running fleet sandbox containers in this store
 
 pass()  { printf '  %s✓%s %s\n' "$c_green" "$c_reset" "$*"; n_ok=$((n_ok+1)); }
 fixed() { printf '  %s↻%s %s\n' "$c_cyan" "$c_reset" "$*"; n_fixed=$((n_fixed+1)); }
@@ -652,7 +651,7 @@ CONF
   # service's warm pool (scripts/lib/podman-migrate.sh has the why and every
   # branch). Probe, then act on podman_migrate_plan's verdict.
   if [[ "$CHECK_ONLY" == "0" ]]; then
-    info_ok=0 podman_info_err="" live_containers=0 live=0 can_restart=0 quiesced=0
+    info_ok=0 podman_info_err="" live_containers=0 live=0 quiesced=0
     podman_info_err="$(run_as_fleet podman info 2>&1 >/dev/null)" && info_ok=1
     if [[ "$info_ok" == "1" ]]; then
       if live_ids="$(run_as_fleet podman ps -q 2>/dev/null)"; then
@@ -660,22 +659,10 @@ CONF
       else
         live_containers="unknown"
       fi
-      # Direct evidence that the live daemon keeps its sandbox pool in THIS
-      # store: running fleet sandbox containers (internal/sandbox
-      # containerNamePrefix) whose fleet.instance ownership label names the
-      # unit's CURRENT MainPID — not merely the name, since a crashed earlier
-      # podman-backed run can leave orphans behind (a kubernetes boot does
-      # not prune them). Step 8 may restart a live fleet over a local podman
-      # fault only with this evidence — no re-derivation of its config.
-      main_pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-      if pool_labels="$(run_as_fleet podman ps --filter name=chat-sandbox- --format '{{index .Labels "fleet.instance"}}' 2>/dev/null)"; then
-        local_pool="$(count_owned_sandboxes "$main_pid" "$pool_labels")"
-      fi
     fi
     fleet_is_live && live=1
-    [[ "$NO_RESTART" == "0" ]] && unit_restartable && can_restart=1
     unit_quiesced && quiesced=1
-    case "$(podman_migrate_plan "$info_ok" "$podman_info_err" "$live_containers" "$live" "$can_restart" "$quiesced")" in
+    case "$(podman_migrate_plan "$info_ok" "$podman_info_err" "$quiesced")" in
       migrate)
         if migrate_quiesced; then
           fixed "podman system migrate run (podman reported a stale pause process; ${SERVICE_NAME} is stopped, nothing live to disturb)"
@@ -687,12 +674,8 @@ CONF
         else
           pass "podman system migrate skipped — podman is healthy, so there is nothing to reset (the sandbox smoke below catches a stale pause process)"
         fi ;;
-      migrate-restart)
-        if migrate_live_service; then
-          fixed "podman system migrate run (podman reported a stale pause process) — ${SERVICE_NAME} stopped for it and started again, rebuilding its sandbox pool"
-        fi ;;
       refuse)
-        advise "podman reports a stale pause process, but ${SERVICE_NAME} is live and this run cannot restart it (--no-restart, or not a systemd-managed unit) — left alone, since migrate would delete its sandboxes; rerun without --no-restart (sudo fleet doctor) to have it done safely, or by hand: stop ${SERVICE_NAME}, recreate /run/${SERVICE_USER} (install -d -m 0700 -o $SERVICE_USER -g $SERVICE_USER /run/${SERVICE_USER} — stopping the unit removes it), run podman system migrate as $SERVICE_USER, start ${SERVICE_NAME}" ;;
+        advise "podman reports a stale pause process while ${SERVICE_NAME} is live (or under a supervisor doctor cannot stop) — left alone, since migrate would delete its live sandboxes; to repair: sudo fleet stop, then rerun sudo fleet doctor, or by hand: stop ${SERVICE_NAME}, recreate /run/${SERVICE_USER} (install -d -m 0700 -o $SERVICE_USER -g $SERVICE_USER /run/${SERVICE_USER} — stopping the unit removes it), run podman system migrate as $SERVICE_USER, start ${SERVICE_NAME}" ;;
     esac
   fi
 
@@ -1308,37 +1291,57 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1 || ! command -v podman >/dev/null 2>&1; 
 elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   # The definitive check: launch the image in the exact rootless environment
   # the daemon uses. --network=none mirrors the runtime's default isolation.
-  smoke_can_restart=0 smoke_quiesced=0
-  [[ "$NO_RESTART" == "0" ]] && unit_restartable && smoke_can_restart=1
-  unit_quiesced && smoke_quiesced=1
   if smoke_err="$(run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true 2>&1 >/dev/null)"; then
     pass "sandbox smoke passed ($sandbox_img runs as $SERVICE_USER)"
-  elif smoke_plan="$(smoke_retry_plan "$migrate_deferred" "$smoke_can_restart" "${local_pool:-0}" "$smoke_err" "$smoke_quiesced")" \
-       && [[ "$smoke_plan" == "migrate" ]]; then
-    # Stale pause with fleet stopped (its unit quiesced): reset, re-smoke.
-    if migrate_quiesced; then
-      if run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
-        fixed "sandbox smoke passed after podman system migrate ($sandbox_img runs as $SERVICE_USER; ${SERVICE_NAME} was stopped)"
-      else
-        fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER even after podman system migrate — rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
-      fi
-    fi
-  elif [[ "$smoke_plan" == "retry" ]]; then
-    # Step 3 skipped `podman system migrate` to spare the live pool; podman
-    # now names the stale pause process, which poisons the pool's launches
-    # too, so the reset is worth its cost — as one stop → migrate → start, so
-    # the service never holds dead handles. Only a systemd-managed service
-    # can be restarted here; under another supervisor the else branch
-    # reports the failure.
-    if migrate_live_service; then
-      if run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
-        fixed "sandbox smoke passed after podman system migrate + a ${SERVICE_NAME} restart ($sandbox_img runs as $SERVICE_USER)"
-      else
-        fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER even after podman system migrate + a ${SERVICE_NAME} restart — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
-      fi
-    fi
   else
-    fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
+    # Decide on state read NOW, not at step 3: step 6 may have restarted the
+    # service (a new MainPID, perhaps a new backend) and the smoke itself
+    # took time. Pool evidence is the live unit's own sandboxes in this
+    # store: chat-sandbox-* containers (internal/sandbox containerNamePrefix)
+    # whose fleet.instance label names the CURRENT MainPID and its start
+    # time (count_owned_sandboxes) — never a re-derivation of its config.
+    smoke_can_restart=0 smoke_quiesced=0 local_pool=0
+    [[ "$NO_RESTART" == "0" ]] && unit_restartable && smoke_can_restart=1
+    unit_quiesced && smoke_quiesced=1
+    main_pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+    if pool_labels="$(run_as_fleet podman ps --filter name=chat-sandbox- --format '{{index .Labels "fleet.instance"}}' 2>/dev/null)"; then
+      local_pool="$(count_owned_sandboxes "$main_pid" "$(pid_started_unix "$main_pid")" "$pool_labels")"
+    fi
+    case "$(smoke_retry_plan "$migrate_deferred" "$smoke_can_restart" "$local_pool" "$smoke_err" "$smoke_quiesced")" in
+      migrate)
+        # Stale pause with fleet stopped (its unit quiesced): reset, re-smoke.
+        if migrate_quiesced; then
+          if run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
+            fixed "sandbox smoke passed after podman system migrate ($sandbox_img runs as $SERVICE_USER; ${SERVICE_NAME} was stopped)"
+            # A unit the operator enabled but that is down FAILED — e.g. its
+            # step-6 start died on this very stale store — is started now the
+            # store is repaired; nothing after step 8 would start it.
+            if systemctl is-enabled --quiet "${SERVICE_NAME}.service" 2>/dev/null \
+               && [[ "$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null)" == "failed" ]]; then
+              if systemctl start "${SERVICE_NAME}.service" 2>/dev/null; then
+                fixed "${SERVICE_NAME}.service started after the store repair (it had failed)"
+              else
+                fail "${SERVICE_NAME}.service still fails to start after the store repair — journalctl -u ${SERVICE_NAME} -n 50"
+              fi
+            fi
+          else
+            fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER even after podman system migrate — rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
+          fi
+        fi ;;
+      retry)
+        # podman names the stale pause process, which poisons the live pool's
+        # launches too, so the reset is worth its cost — as one
+        # stop → migrate → start, so the service never holds dead handles.
+        if migrate_live_service; then
+          if run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
+            fixed "sandbox smoke passed after podman system migrate + a ${SERVICE_NAME} restart ($sandbox_img runs as $SERVICE_USER)"
+          else
+            fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER even after podman system migrate + a ${SERVICE_NAME} restart — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
+          fi
+        fi ;;
+      *)
+        fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true" ;;
+    esac
   fi
 elif [[ "$sandbox_img_prebuilt" == "1" ]]; then
   fail "sandbox image $sandbox_img (the bundle's sandbox.image) is not in fleet's rootless store — pull it as $SERVICE_USER: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman pull $sandbox_img"

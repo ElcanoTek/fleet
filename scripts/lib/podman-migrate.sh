@@ -94,48 +94,61 @@ unit_quiesced() {
   [[ "$load" == "loaded" ]] && unit_proven_stopped "$state" && fleet_process_absent
 }
 
-# podman_migrate_plan INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART QUIESCED
-#   Step 3's decision. INFO_OK is 1 when `podman info` succeeded as the service user,
-#   INFO_ERR its stderr; LIVE_CONTAINERS / FLEET_LIVE are informational
-#   (the running-container count, "unknown" when listing failed, and
-#   fleet_is_live); CAN_RESTART is 1 when this run may and can restart the
-#   unit (not --no-restart, unit_restartable); QUIESCED is unit_quiesced.
-#   Echoes one of:
-#     defer            podman is healthy — there is nothing to reset, so never
-#                      migrate here (on any box, live or not: that removes the
-#                      check-then-act race with a supervisor doctor cannot
-#                      reserve). The step-8 smoke catches a stale pause.
-#     migrate          stale pause, and doctor's own unit is quiesced
-#     migrate-restart  stale pause while the unit is live: the pool is broken
-#                      already, so stop → migrate → start it
-#     refuse           stale pause, but doctor controls no unit it could stop
-#                      or has proven stopped (--no-restart, another supervisor)
-#     none             podman failing some other way; migrate is not the fix
+# podman_migrate_plan INFO_OK INFO_ERR QUIESCED
+#   Step 3's decision. INFO_OK is 1 when `podman info` succeeded as the service
+#   user, INFO_ERR its stderr; QUIESCED is unit_quiesced. Echoes one of:
+#     defer    podman is healthy — there is nothing to reset, so never migrate
+#              here (live or not: no check-then-act race with a supervisor
+#              doctor cannot reserve). The step-8 smoke catches a stale pause.
+#     migrate  stale pause, and doctor's own unit is quiesced
+#     refuse   stale pause while fleet is (or may be) live. A live restart is
+#              step 8's alone: it needs evidence that the live pool is in this
+#              store, and with podman failing here nothing can be listed.
+#     none     podman failing some other way; migrate is not the fix
 podman_migrate_plan() {
-  local info_ok="$1" info_err="$2" can_restart="$5" quiesced="$6"
+  local info_ok="$1" info_err="$2" quiesced="$3"
   if [[ "$info_ok" == "1" ]]; then
     echo defer
   elif is_stale_pause_error "$info_err"; then
-    if [[ "$can_restart" == "1" ]]; then echo migrate-restart
-    elif [[ "$quiesced" == "1" ]]; then echo migrate
-    else echo refuse
-    fi
+    if [[ "$quiesced" == "1" ]]; then echo migrate; else echo refuse; fi
   else
     echo none
   fi
 }
 
-# count_owned_sandboxes MAINPID LABELS — how many of LABELS (one fleet.instance
-# label per line, "<pid>@<unix start>", internal/sandbox prune.go) belong to
-# the process MAINPID. Only those are evidence that the live daemon's pool is
-# in this store; orphans from an earlier run, unlabeled containers, and a
-# missing or zero MAINPID (no live unit) count for nothing.
+# pid_started_unix PID — the wall-clock second PID started (its /proc stat
+# starttime over CLK_TCK, plus /proc/stat btime), as internal/sandbox prune.go
+# computes it. Prints nothing when it cannot be read.
+pid_started_unix() {
+  local pid="$1" stat rest ticks btime hz
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 0
+  stat="$(cat "/proc/${pid}/stat" 2>/dev/null)" || return 0
+  rest="${stat##*) }" # past "(comm) ", which may itself hold spaces
+  read -r _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ ticks _ <<<"$rest" # field 22 overall
+  btime="$(awk '/^btime /{print $2; exit}' /proc/stat 2>/dev/null)"
+  hz="$(getconf CLK_TCK 2>/dev/null || echo 100)"
+  [[ "$ticks" =~ ^[0-9]+$ && "$btime" =~ ^[0-9]+$ && "$hz" =~ ^[1-9][0-9]*$ ]] || return 0
+  echo $((btime + ticks / hz))
+}
+
+# count_owned_sandboxes MAINPID MAINPID_START LABELS — how many of LABELS (one
+# fleet.instance label per line, "<pid>@<unix start>", internal/sandbox
+# prune.go) belong to the process MAINPID started at MAINPID_START. The rule
+# is prune.go's: the pid matches AND the process started no later than the
+# labeled start plus pidReuseTolerance (120 s) — the label is stamped at the
+# owner's init, so an orphan whose pid was REUSED by a later process fails
+# the start check. Only owned sandboxes are evidence that the live daemon's
+# pool is in this store; orphans, unlabeled or start-less labels, and an
+# unknown MAINPID or start time (unverifiable) count for nothing.
 count_owned_sandboxes() {
-  local pid="$1" n=0 label
-  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || { echo 0; return 0; }
+  local pid="$1" start="$2" n=0 label lstart
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$start" =~ ^[0-9]+$ ]] || { echo 0; return 0; }
   while IFS= read -r label; do
-    [[ "$label" == "${pid}@"* ]] && n=$((n + 1))
-  done <<<"$2"
+    [[ "$label" == "${pid}@"* ]] || continue
+    lstart="${label#*@}"
+    [[ "$lstart" =~ ^[1-9][0-9]*$ ]] || continue
+    ((start <= lstart + 120)) && n=$((n + 1))
+  done <<<"$3"
   echo "$n"
 }
 
@@ -166,11 +179,20 @@ smoke_retry_plan() {
 }
 
 # migrate_quiesced — `podman system migrate` for a box whose unit is
-# quiesced (nothing live to disturb). /run/<service user> is the unit's
+# quiesced (nothing live to disturb), re-checked immediately before the
+# migrate. (The unit is not reserved against a concurrent `systemctl start`
+# in the milliseconds between that check and the migrate; an operator
+# starting fleet during `fleet doctor` is the residual case.) /run/<service user> is the unit's
 # RuntimeDirectory=, gone while it is stopped, and podman needs it as
 # XDG_RUNTIME_DIR, so it is recreated first. Reports its own failure.
 migrate_quiesced() {
   local migrate_err
+  # Re-check at the last moment: the caller's observation may be minutes old
+  # (step 8 runs after a 120 s smoke), and fleet could have been started since.
+  if ! unit_quiesced; then
+    fail "${SERVICE_NAME} is no longer stopped — podman system migrate NOT run (it would delete a live sandbox pool); rerun sudo fleet doctor"
+    return 1
+  fi
   if ! install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "/run/${SERVICE_USER}" 2>/dev/null; then
     fail "could not recreate /run/${SERVICE_USER} — podman system migrate NOT run"
     return 1
@@ -206,7 +228,10 @@ migrate_quiesced() {
 # when migrate did not run, migrate itself failed, or fleet did not come back.
 migrate_live_service() {
   local web_was_active=0 rc=0 state migrate_err
-  systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
+  # "Running" for fleet-web is anything not proven stopped: an activating
+  # unit (its Restart=always delay) is cancelled through BindsTo by the stop
+  # below just the same, and starting fleet does not bring it back.
+  unit_proven_stopped "$(systemctl show -p ActiveState --value fleet-web.service 2>/dev/null || true)" || web_was_active=1
   # From the stop on, an interruption (Ctrl-C, SIGTERM from `fleet doctor`,
   # a dropped SSH session) must still bring fleet back: nothing else would.
   # bash runs the trap once the current foreground command returns.

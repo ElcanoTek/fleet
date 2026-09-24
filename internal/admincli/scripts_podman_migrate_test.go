@@ -5,8 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The stale-pause error podman prints, verbatim: the ONE signature that may
@@ -34,34 +36,20 @@ func podmanMigrateLib(t *testing.T, fn string, args ...string) string {
 // TestPodmanMigratePlan — step 3 of doctor. migrate stops every running
 // container of the service user, and fleet's --rm sandboxes are then gone
 // while the live process keeps handing out their handles (the fleetdev
-// outage). So healthy podman never migrates here (nothing to reset, and no
-// check-then-act race with a supervisor doctor cannot reserve), and a stale
-// pause migrates only a unit doctor controls: live and restartable
-// (stop → migrate → start), or quiesced. Never under --no-restart on a live
-// box, never for a supervisor doctor cannot stop, never for another failure.
+// outage). So healthy podman never migrates here, and a stale pause migrates
+// only when doctor's own unit is quiesced. A live restart is never step 3's:
+// with podman failing, nothing proves the live pool is in this store.
 func TestPodmanMigratePlan(t *testing.T) {
-	for _, tc := range []struct {
-		name                           string
-		infoOK, infoErr, live, fleetUp string
-		canRestart, quiesced           string
-		want                           string
-	}{
-		{"healthy, warm pool running", "1", "", "8", "1", "1", "0", "defer"},
-		{"healthy, nothing live, unit quiesced", "1", "", "0", "0", "0", "1", "defer"},
-		{"healthy, other supervisor between restarts", "1", "", "0", "0", "0", "0", "defer"},
-		{"healthy, listing failed", "1", "", "unknown", "0", "1", "0", "defer"},
-		{"stale pause, live, restartable", "0", stalePauseErr, "0", "1", "1", "0", "migrate-restart"},
-		{"stale pause, unit quiesced", "0", stalePauseErr, "0", "0", "0", "1", "migrate"},
-		{"stale pause, live, --no-restart", "0", stalePauseErr, "0", "1", "0", "0", "refuse"},
-		// No loaded unit: an external supervisor may relaunch fleet between a
-		// check and the migrate, so an instantaneous "no process" licenses nothing.
-		{"stale pause, no unit, no process seen", "0", stalePauseErr, "0", "0", "0", "0", "refuse"},
-		{"other podman failure, live", "0", "Error: cannot chdir to /root: Permission denied", "0", "1", "1", "0", "none"},
-		{"other podman failure, quiesced", "0", "Error: no space left on device", "0", "0", "0", "1", "none"},
+	for _, tc := range []struct{ name, infoOK, infoErr, quiesced, want string }{
+		{"healthy, unit live", "1", "", "0", "defer"},
+		{"healthy, unit quiesced", "1", "", "1", "defer"},
+		{"stale pause, unit quiesced", "0", stalePauseErr, "1", "migrate"},
+		{"stale pause, fleet live", "0", stalePauseErr, "0", "refuse"},
+		{"other podman failure, live", "0", "Error: cannot chdir to /root: Permission denied", "0", "none"},
+		{"other podman failure, quiesced", "0", "Error: no space left on device", "1", "none"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := podmanMigrateLib(t, "podman_migrate_plan", tc.infoOK, tc.infoErr, tc.live, tc.fleetUp, tc.canRestart, tc.quiesced)
-			if got != tc.want {
+			if got := podmanMigrateLib(t, "podman_migrate_plan", tc.infoOK, tc.infoErr, tc.quiesced); got != tc.want {
 				t.Errorf("podman_migrate_plan = %q, want %q", got, tc.want)
 			}
 		})
@@ -213,22 +201,49 @@ func TestMigrateLiveServiceInterrupted(t *testing.T) {
 }
 
 // TestCountOwnedSandboxes — pool evidence counts only sandboxes owned by the
-// live unit's current MainPID. Orphans from a crashed earlier podman-backed
-// run (a later kubernetes boot does not prune them) must not make a
-// kubernetes-backed fleet look like it owns a local pool.
+// live unit's current process: the label's pid AND its start time must match
+// (prune.go's rule — the process started no later than the labeled start +
+// 120 s). Orphans from a crashed earlier run, including one whose pid a later
+// process REUSED, must not make a kubernetes-backed fleet look like it owns a
+// local pool.
 func TestCountOwnedSandboxes(t *testing.T) {
-	labels := "636304@1790274734\n636304@1790274734\n4242@1790000000\n\n636304x@1\n"
-	for _, tc := range []struct{ pid, labels, want string }{
-		{"636304", labels, "2"},
-		{"4242", labels, "1"},
-		{"999", labels, "0"}, // only orphans in the store
-		{"0", labels, "0"},   // no live unit
-		{"", labels, "0"},
-		{"636304", "", "0"},
+	labels := "636304@1790274734\n636304@1790274734\n4242@1790000000\n\n636304x@1\n636304\n"
+	for _, tc := range []struct{ name, pid, start, labels, want string }{
+		{"live owner", "636304", "1790274733", labels, "2"},
+		{"within tolerance", "636304", "1790274854", labels, "2"},
+		{"pid reused by a later process", "636304", "1790280000", labels, "0"},
+		{"only orphans in the store", "999", "1790274733", labels, "0"},
+		{"no live unit", "0", "1790274733", labels, "0"},
+		{"start time unknown", "636304", "", labels, "0"},
+		{"no sandboxes", "636304", "1790274733", "", "0"},
 	} {
-		if got := podmanMigrateLib(t, "count_owned_sandboxes", tc.pid, tc.labels); got != tc.want {
-			t.Errorf("count_owned_sandboxes(%q) = %s, want %s", tc.pid, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := podmanMigrateLib(t, "count_owned_sandboxes", tc.pid, tc.start, tc.labels); got != tc.want {
+				t.Errorf("count_owned_sandboxes = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPidStartedUnix — the start-time half of the ownership check, read the
+// way prune.go reads it. A process started now reads as now (±2 s); an
+// unreadable pid reads as nothing.
+func TestPidStartedUnix(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc")
+	}
+	proc := exec.Command("sleep", "30")
+	if err := proc.Start(); err != nil {
+		t.Skipf("cannot start a process: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Process.Kill(); _ = proc.Wait() })
+	got := podmanMigrateLib(t, "pid_started_unix", strconv.Itoa(proc.Process.Pid))
+	sec, err := strconv.ParseInt(got, 10, 64)
+	if now := time.Now().Unix(); err != nil || sec < now-2 || sec > now+2 {
+		t.Errorf("pid_started_unix = %q, want ~%d", got, now)
+	}
+	if got := podmanMigrateLib(t, "pid_started_unix", "0"); got != "" {
+		t.Errorf("pid_started_unix(0) = %q, want empty", got)
 	}
 }
 
@@ -255,6 +270,35 @@ func TestFleetProcessAbsent(t *testing.T) {
 				t.Errorf("fleet_process_absent => %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestMigrateQuiescedRechecks — the quiesced reset re-checks, immediately
+// before migrating, that fleet is still down: step 8's observation is from
+// before a 120 s smoke, and a fleet started since would lose its new pool.
+func TestMigrateQuiescedRechecks(t *testing.T) {
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "podman-migrate.sh")
+	const stubs = `SERVICE_NAME=fleet SERVICE_USER=fleet
+systemctl() { case "$3" in LoadState) echo loaded ;; ActiveState) echo "$STATE" ;; esac; }
+pgrep() { return 1; }
+install() { echo "install $*"; }
+exec 3>&1 # the helper silences run_as_fleet's stdout; log on fd 3
+run_as_fleet() { echo "run_as_fleet $*" >&3; }
+fail() { echo "fail: $*"; }
+migrate_quiesced; echo "rc=$?"`
+	for _, tc := range []struct{ state, want, forbidden string }{
+		{"inactive", "run_as_fleet podman system migrate", "fail:"},
+		{"active", "fail: fleet is no longer stopped — podman system migrate NOT run", "run_as_fleet"},
+	} {
+		cmd := exec.Command("bash", "-c", `. "$0"; `+stubs, lib)
+		cmd.Env = append(os.Environ(), "STATE="+tc.state)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("bash: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), tc.want) || strings.Contains(string(out), tc.forbidden) {
+			t.Errorf("ActiveState=%s: want %q and no %q in:\n%s", tc.state, tc.want, tc.forbidden, out)
+		}
 	}
 }
 
@@ -316,7 +360,7 @@ systemctl() {
     is-active)
       if [[ "$unit" == fleet-web.service ]]; then [[ "$web" == active ]]; else [[ "$fleet" == active ]]; fi
       return ;;
-    show) echo "$fleet"; return 0 ;; # show -p ActiveState --value fleet.service
+    show) if [[ "$unit" == fleet-web.service ]]; then echo "$web"; else echo "$fleet"; fi; return 0 ;;
     stop)
       echo "stop $unit" >>"$LOG"
       # STOP_STICKS=1: stays active; =deactivating: mid-stop, still running.
@@ -407,6 +451,13 @@ func TestMigrateLiveService(t *testing.T) {
 			env:       []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=active", "MIGRATE_RC=1"},
 			want:      []string{"fail: podman system migrate failed as fleet: Error: migrate broke", "start fleet.service\nstart fleet-web.service\n", "rc=1"},
 			forbidden: []string{"fixed: podman"},
+		},
+		{
+			// fleet-web in its Restart=always delay still counts as running: the
+			// stop cancels it through BindsTo, so it must be started again.
+			name: "fleet-web was activating",
+			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=activating"},
+			want: []string{"start fleet.service\nstart fleet-web.service\n", "rc=0"},
 		},
 		{
 			name: "fleet does not start again",
