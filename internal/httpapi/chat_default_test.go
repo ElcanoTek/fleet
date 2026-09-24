@@ -1048,6 +1048,18 @@ func (s *fakeChatStore) CancelInputKey(_ context.Context, r store.InputQueueRow)
 	return r, true, nil
 }
 
+func (s *fakeChatStore) CancelStoppedSteer(_ context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && (s.queue[i].State == store.InputStateInjected || s.queue[i].State == store.InputStateQueued) {
+			s.queue[i].State = store.InputStateCancelled
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *fakeChatStore) CancelUnlaunchedInput(_ context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1998,5 +2010,41 @@ func TestCancelByInputKey_FinishedInputLeavesNoMark(t *testing.T) {
 	eng.mu.Unlock()
 	if w.Code != http.StatusOK || turns != 1 {
 		t.Fatalf("status %d, turns %d: a reuse of the key after its row was purged must run", w.Code, turns)
+	}
+}
+
+// A Stop by key of a steer already injected into a turn stops that turn if it
+// is still running (204, the row cancelled so settlement cannot re-queue it);
+// if the turn had already ended, nothing was stopped (409) and the row is
+// left to the turn's own settlement to record whether the steer ran.
+func TestCancelByInputKey_InjectedSteer(t *testing.T) {
+	for _, running := range []bool{true, false} {
+		t.Run(map[bool]string{true: "turn running", false: "turn already ended"}[running], func(t *testing.T) {
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, &fakeEngine{}, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			turnID := "turn-gone"
+			var stopped atomic.Bool
+			if running {
+				var tok uint64
+				_, turnID, tok, _ = srv.registerTurn(conv.ID, func() { stopped.Store(true) })
+				defer srv.finishTurn(conv.ID, tok)
+			}
+			st.mu.Lock()
+			st.queue = append(st.queue, store.InputQueueRow{ID: "s-1", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "steer-k", Mode: store.InputModeSteer, State: store.InputStateInjected, TurnID: turnID})
+			st.mu.Unlock()
+			finished, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "steer-k")
+			row, _ := st.LookupInput(context.Background(), conv.ID, "steer-k")
+			if !ok || finished == running || stopped.Load() != running {
+				t.Fatalf("finished %v ok %v stopped %v; want finished=%v", finished, ok, stopped.Load(), !running)
+			}
+			want := store.InputStateCancelled
+			if !running {
+				want = store.InputStateInjected // untouched: the settlement records the outcome
+			}
+			if row == nil || row.State != want {
+				t.Fatalf("row = %+v, want state %s", row, want)
+			}
+		})
 	}
 }

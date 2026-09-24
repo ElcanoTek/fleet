@@ -342,6 +342,21 @@ func (s *Store) MarkInputInjected(ctx context.Context, id, turnID string) (bool,
 	return n == 1, err
 }
 
+// CancelStoppedSteer cancels a steer row whose turn a Stop just cancelled —
+// still injected, or already returned to the queue by that turn's settlement
+// — and never a row the settlement recorded as completed (the steered text
+// committed: it ran). It reports whether it cancelled the row.
+func (s *Store) CancelStoppedSteer(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+		  WHERE id = $1 AND state IN ('injected','queued')`, id, time.Now().Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // MarkInputTerminal flips one row to completed/cancelled.
 func (s *Store) MarkInputTerminal(ctx context.Context, id, state string) error {
 	_, err := s.db.ExecContext(ctx,

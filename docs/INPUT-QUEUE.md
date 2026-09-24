@@ -46,7 +46,9 @@ retention guarantee: after a terminal row is purged, reusing its
   ended with only its settlement pending — stops nothing and answers `409`,
   like a `turn_id` Stop of an ended turn): a still-queued row is withdrawn, a running turn for it is
   cancelled, a steer already injected into a running turn is cancelled and so
-  is the turn carrying it (the model cannot un-read it), and a turn not
+  is the turn carrying it (the model cannot un-read it; if that turn had
+  already ended, nothing is stopped, the Stop answers `409`, and the turn's
+  own settlement records whether the steer ran), and a turn not
   registered yet (a direct claim still being prepared, a row the drain just
   claimed, or a submission still in transit) is refused when it tries to
   register. The mark and the registration check share one lock, so a keyed

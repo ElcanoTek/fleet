@@ -745,11 +745,21 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (finis
 		return true, true // it ran; there was nothing left to stop
 	}
 	if row != nil && row.State == store.InputStateInjected {
-		if err := s.store.MarkInputTerminal(qctx, row.ID, store.InputStateCancelled); err != nil {
+		// The model cannot un-read an injected steer, so the turn carrying it
+		// is what is stopped. If that turn had already ended, nothing was
+		// stopped: say so (finished) and leave the row to the turn's own
+		// settlement, which records whether the steer ran.
+		if !s.cancelInflightTurn(convID, row.TurnID) {
+			return true, true
+		}
+		// Stopped. Cancel the row too, or the cancelled turn's settlement
+		// could return it to the queue — guarded, so a settlement that
+		// already recorded it completed (it ran) is never overwritten. A
+		// re-queued copy a drain claims first is refused by the key's mark.
+		if _, err := s.store.CancelStoppedSteer(qctx, row.ID); err != nil {
 			log.Printf("cancel injected input (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
 			return false, false
 		}
-		s.cancelInflightTurn(convID, row.TurnID)
 		s.emitQueueUpdate(qctx, user, convID)
 	}
 	return false, true

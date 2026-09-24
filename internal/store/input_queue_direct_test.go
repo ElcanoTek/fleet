@@ -6,6 +6,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -276,5 +277,31 @@ func TestCancelInputKey_TakesOnlyAFreeKey(t *testing.T) {
 	row, created, err := s.CancelInputKey(ctx, InputQueueRow{ID: "tomb-2", ConversationID: convID, UserEmail: "u@example.com", ClientInputID: "cik-2"})
 	if err != nil || created || row.ID != held.ID || row.State != InputStateRunning {
 		t.Fatalf("held key = %+v created=%v err=%v, want the claim returned unchanged", row, created, err)
+	}
+}
+
+// CancelStoppedSteer cancels an injected or re-queued steer and never one
+// its turn's settlement recorded completed.
+func TestCancelStoppedSteer_NeverOverwritesACompletedSteer(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t-css")
+	for i, state := range []string{InputStateInjected, InputStateQueued, InputStateCompleted} {
+		key := fmt.Sprintf("css-%d", i)
+		row, _, err := s.EnqueueInput(ctx, InputQueueRow{ID: "q-" + key, ConversationID: convID, UserEmail: "u@example.com", ClientInputID: key, Message: "steer", Attachments: "[]", Mode: InputModeSteer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state != InputStateQueued {
+			if err := s.MarkInputTerminal(ctx, row.ID, state); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ok, err := s.CancelStoppedSteer(ctx, row.ID)
+		got, _ := s.LookupInput(ctx, convID, key)
+		wantOK := state != InputStateCompleted
+		if err != nil || ok != wantOK || (wantOK && got.State != InputStateCancelled) || (!wantOK && got.State != InputStateCompleted) {
+			t.Fatalf("%s: cancelled=%v err=%v state=%s", state, ok, err, got.State)
+		}
 	}
 }
