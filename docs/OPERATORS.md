@@ -417,8 +417,9 @@ production-only bug. The pass covers, in order:
 3. **Rootless podman for the `fleet` service user** — subuid/subgid ranges,
    `/var/lib/fleet` + `~/.config/containers` ownership (root-owned leftovers
    from debugging break every podman call), the cgroupfs `containers.conf`,
-   `/run/fleet`, a `podman system migrate` (clears stale pause namespaces),
-   and a `podman info` probe **as the service user**.
+   `/run/fleet`, and a `podman info` probe **as the service user**. A stale
+   pause process is reported with the exact repair (see below); doctor never
+   runs `podman system migrate` itself.
 4. **Installed artifacts** — functional drift of `fleet.service` /
    `fleet-web.service` / the `fleet-backup` and `fleet-maintenance` service +
    timer pairs vs `deploy/`
@@ -459,6 +460,45 @@ production-only bug. The pass covers, in order:
    rebuilding stays `fleet update`'s job; doctor never deploys.
 
 Exit codes: `0` healthy (or everything fixed) · `1` problems remain.
+
+### Stale podman pause process
+
+Rootless podman keeps a small "pause process" per user, found through
+`/run/fleet`. When that process is gone or belongs to an old session — most
+often after a podman/crun upgrade, a `pkill -u fleet`, or root-side debugging
+in the fleet user's podman dirs; a reboot clears it — every podman call as
+`fleet` fails with podman's own hint:
+
+```
+Error: invalid internal status, try resetting the pause process with "podman system migrate"
+```
+
+Doctor (step 3's `podman info`, or the step-8 sandbox smoke) reports this as a
+failure — and holds any service restart that run wanted, since fleet could not
+start its sandboxes on that store — but **never resets it itself**. The reset
+is `podman system migrate` as the `fleet` user, and it stops every running
+container of that user; the sandboxes run `--rm`, so under a live fleet it
+deletes the whole warm sandbox pool while the process keeps handing out the
+dead handles, and every chat turn and task fails with `no such container`
+until fleet restarts. (Doctor used to run it on every pass; that is how
+fleetdev lost its pool.)
+
+So the fix is: **when nothing is running, stop fleet, run `podman system
+migrate` as the `fleet` user, and start fleet again**, then re-run `sudo fleet
+doctor --check`. When is "safe" is a judgment call for whoever is on the box —
+check `sudo fleet sched task list --status running` (and `leased`) first.
+Things that bite:
+
+- Stopping the unit removes `/run/fleet` (its `RuntimeDirectory=`), which
+  podman needs as `XDG_RUNTIME_DIR` — recreate it (`0700`, owned by `fleet`)
+  before migrating.
+- `/var/lib/fleet` is `0700`: change into it as `fleet` (inside the `sudo -u
+  fleet` shell), not before `sudo`.
+- Stopping `fleet` also stops `fleet-web` (`BindsTo=`), and starting `fleet`
+  does not bring it back — start it too if it was running.
+- Make sure fleet has really stopped (no `fleet` process left, including one
+  under another supervisor) before migrating, and start it again even if the
+  migrate fails.
 
 Admins also get a **read-only** version of this report in the web UI —
 **Settings → Admin → Doctor** — run from inside the fleet process (DBs, disk

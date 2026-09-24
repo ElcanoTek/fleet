@@ -17,7 +17,9 @@ import (
 // It forwards every flag verbatim (--check / --no-restart / --node / --dry-run)
 // to the shell script, which owns the repairs: toolchain floors + fleet-critical
 // package currency, the service user's rootless-podman prerequisites
-// (subuid/subgid, dir ownership, containers.conf, stale pause namespaces),
+// (subuid/subgid, dir ownership, containers.conf; a stale pause process is
+// reported with its manual repair, never reset — podman system migrate
+// deletes a live fleet's sandbox pool),
 // systemd unit drift vs deploy/, env-file shape/permissions, service health +
 // the /healthz + /readyz probes, and a sandbox smoke run as the fleet user.
 //

@@ -5,6 +5,7 @@ package admincli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,6 +94,12 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// restart clears it; step 7 re-verifies). Learned in production on
 		// chat's doctor.
 		"re-verifying after the service restart",
+		// A stale pause is matched BEFORE that post-upgrade deferral, and it
+		// holds step 6's automatic restart: restarting fleet onto a stale
+		// store swaps a process still serving from its pool for a unit that
+		// cannot start its sandboxes.
+		"stale_pause=1",
+		"fixes applied that want a restart — held: the rootless store has a stale pause process",
 		"without sourcing it",
 		"--network=none",
 	} {
@@ -139,6 +146,84 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 	for _, forbid := range []string{"source \"$ENV_FILE\"", ". \"$ENV_FILE\""} {
 		if strings.Contains(script, forbid) {
 			t.Errorf("doctor.sh must not source the env file (%q present)", forbid)
+		}
+	}
+}
+
+// TestDoctorNeverRunsPodmanMigrate — `podman system migrate` stops every
+// running container of the service user, and fleet's sandboxes run --rm, so
+// running it under a live fleet deletes the whole warm pool while the process
+// keeps handing out the dead handles: "no such container" on every chat turn
+// and task until a restart (learned in production on fleetdev, where a
+// repair-mode doctor did exactly that). Doctor must never run it; it detects a
+// stale pause process and prints the repair for an operator or agent to judge.
+func TestDoctorNeverRunsPodmanMigrate(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "doctor.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(body), "\n") {
+		code := strings.TrimSpace(line)
+		if strings.HasPrefix(code, "#") {
+			continue
+		}
+		// Printed guidance lives inside double-quoted strings; an executed
+		// call would be a bare command such as `run_as_fleet podman system migrate`.
+		if strings.Contains(code, "podman system migrate") && !strings.Contains(code, `"`) && !strings.Contains(code, `'`) {
+			t.Errorf("doctor.sh:%d executes podman system migrate: %s", i+1, code)
+		}
+		if strings.Contains(code, "run_as_fleet podman system migrate") {
+			t.Errorf("doctor.sh:%d executes podman system migrate: %s", i+1, code)
+		}
+	}
+}
+
+// TestDoctorStalePauseHelpers — the detection and the hint, run straight out
+// of doctor.sh. Only podman's own stale-pause error is matched (a disk or PID
+// failure is not migrate's to fix), and the hint names the CONFIGURED unit and
+// user and points at the runbook rather than prescribing a script: when fleet
+// can be stopped is a judgment call for an operator or agent.
+func TestDoctorStalePauseHelpers(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "doctor.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fns := make([]string, 0, 2)
+	for _, name := range []string{"is_stale_pause_error", "stale_pause_hint"} {
+		start := strings.Index(string(body), "\n"+name+"() {")
+		if start < 0 {
+			t.Fatalf("doctor.sh has no %s()", name)
+		}
+		end := strings.Index(string(body)[start:], "\n}\n")
+		fns = append(fns, string(body)[start:start+end+3])
+	}
+	const stale = `Error: invalid internal status, try resetting the pause process with "podman system migrate": could not find any running process: no such process`
+	script := strings.Join(fns, "\n") + `
+SERVICE_NAME=fleet-prod SERVICE_USER=svc
+for e in "$STALE" "Error: crun: pids limit reached" "Error: no space left on device"; do
+  if is_stale_pause_error "$e"; then echo "match: $e"; else echo "no: $e"; fi
+done
+stale_pause_hint`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "STALE="+stale)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"match: " + stale,
+		"no: Error: crun: pids limit reached",
+		"no: Error: no space left on device",
+		"stop fleet-prod, run podman system migrate as svc, and start fleet-prod again",
+		`docs/OPERATORS.md, "Stale podman pause process"`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("want %q in:\n%s", want, out)
 		}
 	}
 }

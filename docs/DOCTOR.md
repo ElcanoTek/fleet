@@ -8,8 +8,10 @@ Two halves of one feature, split by privilege:
    `chat doctor`) — the root-privileged pass that diagnoses **and repairs**
    box-level drift in place: toolchain floors, fleet-critical package currency
    (with broken-dnf-repo quarantine), the service user's rootless-podman
-   prerequisites (subuid/subgid, dir ownership, `containers.conf`, stale pause
-   namespaces), systemd unit drift vs `deploy/`, the `/usr/local/bin/fleet`
+   prerequisites (subuid/subgid, dir ownership, `containers.conf`; a stale
+   pause process is **detected and reported with the manual repair, never
+   fixed** — `podman system migrate` would delete a live fleet's sandbox pool,
+   see OPERATORS.md "Stale podman pause process"), systemd unit drift vs `deploy/`, the `/usr/local/bin/fleet`
    symlink, env-file shape/permissions, the fleet-managed
    `/etc/caddy/Caddyfile`'s layout (the `/v1` API + inbound webhooks must
    route to the Go backends, not 404 at the web tier — a drifted
@@ -46,7 +48,7 @@ Division of labor across the three health verbs:
 | Verb | Privilege | Mutates? | Scope |
 |---|---|---|---|
 | `fleet status` | none | never | quick in-process checks (bundle, env, DBs, sandbox, unit) |
-| `fleet doctor` | root — `--dry-run` needs none, but **`--check` still does** (it probes the service user's rootless podman and reads 0600 env files) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them |
+| `fleet doctor` | root — `--dry-run` needs none, but **`--check` still does** (it probes the service user's rootless podman and reads 0600 env files) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them (except a stale podman pause process: reported with the manual repair, never run) |
 | `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc`, stamp `FLEET_NODE_BIN`, assert the resolved interpreter **and that an npm belongs to it**, exit |
 | `/admin/doctor` (UI) | admin session | never | doctor's *diagnosable-from-the-process* subset, with fix hints |
 
