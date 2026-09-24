@@ -1070,45 +1070,6 @@ func TestReplayOfAnAcceptedInput(t *testing.T) {
 	}
 }
 
-// "Accepted earlier but did not run" means the key is spent and nothing ran,
-// so the prompt is resubmitted under the messageId's next key (key-r1). A
-// client that resends the same messageId afterwards starts from its key again
-// and walks the same chain, so nothing needs remembering (the chain itself is
-// covered end to end by TestResentMessageIdFindsItsRetryRun).
-func TestNeverRunReplayIsResubmittedOnce(t *testing.T) {
-	calls := 0
-	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
-		calls++
-		if calls == 1 {
-			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-1","mode":"direct","state":"cancelled"},"conversation_id":"conv-c"}`)
-			return
-		}
-		w.emit("conversation", map[string]any{"id": "conv-c"})
-		w.emit("text.delta", map[string]any{"text": "done"})
-		w.emit("turn.completed", map[string]any{})
-	}})
-	sid := h.newSession(t)
-	mid := "7b1c2d3e-0000-4000-8000-000000000001"
-	resp, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("send it")}})
-	if err != nil || resp.StopReason != acpsdk.StopReasonEndTurn || h.client.text() != "done" {
-		t.Fatalf("got %+v, %v, text %q", resp, err, h.client.text())
-	}
-	if _, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("send it")}}); err != nil {
-		t.Fatal(err)
-	}
-	h.fleet.mu.Lock()
-	defer h.fleet.mu.Unlock()
-	if len(h.fleet.chats) != 3 {
-		t.Fatalf("chats = %d, want 3", len(h.fleet.chats))
-	}
-	k0, k1, k2 := h.fleet.chats[0].InputID, h.fleet.chats[1].InputID, h.fleet.chats[2].InputID
-	if !strings.HasPrefix(k0, "acp-msg-") || !strings.HasSuffix(k0, "-"+msgHash(mid)) || k1 != k0+"-r1" || k2 != k0 {
-		t.Errorf("keys = %q, %q, %q; want the messageId key, its -r1 retry, then the resend from the messageId key", k0, k1, k2)
-	}
-}
-
 // A cancel whose answer was lost (no turn id, no acknowledgement) stops the
 // prompt by its key: fleet withdraws it, cancels its turn or refuses to launch
 // it, atomically with registration. A Stop fleet refuses is reported as
@@ -1513,50 +1474,6 @@ func TestMessageIdsAreOpaque(t *testing.T) {
 	}
 }
 
-// A first prompt whose replay reports "accepted but never ran" is resubmitted
-// under a fresh key in the conversation that accepted it, not in a
-// conversation the session started since.
-func TestFreshRetryStaysInTheOriginalConversation(t *testing.T) {
-	calls := 0
-	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
-		calls++
-		switch calls {
-		case 1:
-			if conn, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
-				_ = conn.Close() // A's whole answer is lost
-			}
-		case 2:
-			w.emit("conversation", map[string]any{"id": "conv-B"})
-			w.emit("turn.completed", map[string]any{})
-		case 3: // A's retry: fleet had accepted it in conv-A, but it never ran
-			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-a","mode":"direct","state":"cancelled"},"conversation_id":"conv-A"}`)
-		default:
-			w.emit("conversation", map[string]any{"id": "conv-A"})
-			w.emit("turn.completed", map[string]any{})
-		}
-	}})
-	sid := h.newSession(t)
-	if _, err := h.prompt(sid, "prompt A"); err == nil {
-		t.Fatal("want the lost-answer error")
-	}
-	if _, err := h.prompt(sid, "prompt B"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.prompt(sid, "prompt A"); err != nil {
-		t.Fatal(err)
-	}
-	h.fleet.mu.Lock()
-	defer h.fleet.mu.Unlock()
-	if len(h.fleet.chats) != 4 {
-		t.Fatalf("chats = %d, want 4", len(h.fleet.chats))
-	}
-	if fresh := h.fleet.chats[3]; fresh.ConversationID != "conv-A" || fresh.InputID == h.fleet.chats[0].InputID {
-		t.Fatalf("fresh retry = conv %q key %q, want conv-A under a new key", fresh.ConversationID, fresh.InputID)
-	}
-}
-
 // A Stop from another surface that cancels this prompt's input before its turn
 // starts is answered 409 by POST /chat; nothing ran and the Stop succeeded, so
 // the prompt ends cancelled, not with an internal error.
@@ -1611,102 +1528,6 @@ func TestPromptWhitespaceIsPreserved(t *testing.T) {
 	}
 }
 
-// keyedFleet is a fake /chat that remembers every input_id it accepted, the
-// way fleet's queue does (per user, as input_id_scope "user" declares): a
-// resend of a known key is answered with that input's replay, whatever
-// conversation it is posted to. firstRun decides a new key's fate: it
-// returns the state the input ends in ("completed" streams a turn;
-// "cancelled" records an accepted input that never ran, and answers with its
-// replay; "lost" records it as completed but drops the answer).
-type keyedFleet struct {
-	mu       sync.Mutex
-	state    map[string]string // input_id -> completed | cancelled
-	conv     map[string]string // input_id -> conversation that accepted it
-	runs     int               // turns actually streamed
-	firstRun func(key, conv string) string
-}
-
-func newKeyedHarness(t *testing.T, k *keyedFleet) *harness {
-	k.state, k.conv = map[string]string{}, map[string]string{}
-	var h *harness
-	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
-		h.fleet.mu.Lock()
-		req := h.fleet.chats[len(h.fleet.chats)-1]
-		h.fleet.mu.Unlock()
-		k.mu.Lock()
-		defer k.mu.Unlock()
-		replay := func(key string) {
-			w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w.w, `{"queued":true,"input":{"id":"row-%s","mode":"direct","state":%q},"conversation_id":%q}`, key, k.state[key], k.conv[key])
-		}
-		if _, seen := k.state[req.InputID]; seen {
-			replay(req.InputID)
-			return
-		}
-		conv := req.ConversationID
-		if conv == "" {
-			conv = "conv-" + req.InputID[len(req.InputID)-4:]
-		}
-		k.conv[req.InputID] = conv
-		switch k.firstRun(req.InputID, conv) {
-		case "cancelled":
-			k.state[req.InputID] = "cancelled"
-			replay(req.InputID)
-		case "lost":
-			k.state[req.InputID] = "completed"
-			k.runs++
-			if c, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
-				_ = c.Close()
-			}
-		default:
-			k.state[req.InputID] = "completed"
-			k.runs++
-			w.emit("conversation", map[string]any{"id": conv})
-			w.emit("turn.completed", map[string]any{})
-		}
-	}})
-	return h
-}
-
-// A messageId whose first attempt never ran is retried under a key derived
-// from it, so a later resend of the messageId — however many other
-// messageIds were retried in between — walks to the attempt that ran and is
-// answered "already ran" instead of running a second time.
-func TestResentMessageIdFindsItsRetryRun(t *testing.T) {
-	k := &keyedFleet{firstRun: func(key, _ string) string {
-		if strings.HasPrefix(key, "acp-msg-") && !strings.Contains(key, "-r") {
-			return "cancelled" // every messageId's first attempt: accepted, never ran
-		}
-		return "completed"
-	}}
-	h := newKeyedHarness(t, k)
-	sid := h.newSession(t)
-	send := func(mid string) error {
-		_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("do " + mid)}})
-		return err
-	}
-	for i := range 74 {
-		if err := send(fmt.Sprintf("msg-%d", i)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	k.mu.Lock()
-	before := k.runs
-	k.mu.Unlock()
-	if before != 74 {
-		t.Fatalf("runs = %d, want one per messageId", before)
-	}
-	if err := send("msg-0"); err != nil {
-		t.Fatal(err)
-	}
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.runs != before {
-		t.Fatalf("resending the oldest messageId ran it again (%d runs, want %d)", k.runs, before)
-	}
-}
-
 // A Stop that lands just after the watched turn ended stops nothing (fleet
 // answers 409): the prompt keeps reading the turn to its end and, still
 // answering "cancelled" as ACP requires, says the turn had finished and what
@@ -1748,25 +1569,6 @@ func TestStopOfAnEndedTurnReportsItsOutcome(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("prompt did not return")
-	}
-}
-
-// A messageId whose whole chain of retry keys was accepted and never ran
-// fails asking for a new message: a resend of the same messageId would walk
-// the same chain, so "send it again" would never run it.
-func TestExhaustedRetryChainAsksForANewMessage(t *testing.T) {
-	k := &keyedFleet{firstRun: func(string, string) string { return "cancelled" }}
-	h := newKeyedHarness(t, k)
-	sid := h.newSession(t)
-	mid := "msg-x"
-	_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("do it")}})
-	if err == nil || !strings.Contains(err.Error(), "new message") {
-		t.Fatalf("err = %v, want a request for a new message", err)
-	}
-	h.fleet.mu.Lock()
-	defer h.fleet.mu.Unlock()
-	if len(h.fleet.chats) != maxRetryKeys+1 {
-		t.Fatalf("chats = %d, want the key and its %d retries", len(h.fleet.chats), maxRetryKeys)
 	}
 }
 
@@ -1875,5 +1677,62 @@ func TestRateLimitedRetryKeepsTheUnresolvedKey(t *testing.T) {
 	defer h.fleet.mu.Unlock()
 	if k0, k2 := h.fleet.chats[0].InputID, h.fleet.chats[2].InputID; k0 != k2 {
 		t.Fatalf("keys %q then %q: the retry after a 429 must reuse the unresolved key", k0, k2)
+	}
+}
+
+// A replay that reports the key's input cancelled is not resubmitted: fleet
+// does not record why it was cancelled, and it may have been a Stop (from any
+// surface), so running it under a fresh key could run a stopped message. The
+// user is told to send it again as a new message.
+func TestCancelledReplayIsNotResubmitted(t *testing.T) {
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-1","mode":"direct","state":"cancelled"},"conversation_id":"conv-c"}`)
+	}})
+	sid := h.newSession(t)
+	mid := "msg-c"
+	r, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("send it")}})
+	if err != nil || r.StopReason != acpsdk.StopReasonEndTurn || !strings.Contains(h.client.text(), "send it again as a new message") {
+		t.Fatalf("got %+v, %v, text %q; want the not-run note", r, err, h.client.text())
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 1 {
+		t.Fatalf("chats = %d: a cancelled input must not be resubmitted", len(h.fleet.chats))
+	}
+}
+
+// A cancel that races a replay reporting the input already completed stops
+// nothing: the prompt says the turn had finished and what it did stands.
+func TestCancelDuringACompletedReplayIsAlreadyEnded(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"row-1","mode":"direct","state":"completed"},"conversation_id":"conv-d"}`)
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "job")
+		done <- r
+	}()
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // the stop watcher is waiting on the answer
+	close(release)
+	select {
+	case r := <-done:
+		text := h.client.text()
+		if r.StopReason != acpsdk.StopReasonCancelled || !strings.Contains(text, "already finished") || strings.Contains(text, "could not confirm") {
+			t.Fatalf("got %+v, text %q; want cancelled with the already-finished note", r, text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
 	}
 }

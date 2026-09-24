@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -257,60 +256,16 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 	}
 	key := idempotencyKey(p.MessageId, sess, message)
-
-	// A messageId's retry keys are derived from it (key-r1, key-r2, ...), so
-	// a later resend of the messageId walks the same chain to the attempt
-	// that ran, with nothing to remember or evict; a text-only prompt gets
-	// one random retry key.
-	hasMessageID := p.MessageId != nil && strings.TrimSpace(*p.MessageId) != ""
-	resp, err := a.promptOnce(ctx, p, sess, message, key, true)
-	for gen := 1; ; gen++ {
-		var retry retryFreshError
-		if !errors.As(err, &retry) {
-			return resp, err
-		}
-		if gen > maxRetryKeys {
-			// Every key in this messageId's chain was accepted and never ran,
-			// and a resend walks the same chain: only a new message can run.
-			return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{"error": fmt.Sprintf(
-				"fleet accepted this message %d times but never ran it; send it as a new message (a new messageId) to try again", maxRetryKeys+1)})
-		}
-		// fleet answered a replay of this key with "accepted earlier, did not
-		// run" (its turn failed before it began). Nothing ran under that key,
-		// so submitting under the next one is safe — and is what the user
-		// asked for.
-		fresh := "fleet-acp-" + randomID()
-		if hasMessageID {
-			fresh = key + "-r" + strconv.Itoa(gen)
-		}
-		// The fresh key runs where the original was accepted, not in a
-		// conversation the session started since.
-		sess.settle(fresh, retry.conv, true)
-		if ctx.Err() != nil {
-			// Cancelled between the replay answer and the resubmission:
-			// nothing was sent under the fresh key, and nothing may be.
-			return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
-		}
-		resp, err = a.promptOnce(ctx, p, sess, message, fresh, hasMessageID)
-	}
+	return a.promptOnce(ctx, p, sess, message, key)
 }
 
-// maxRetryKeys bounds the chain of retry keys a messageId walks: each link is
-// an attempt fleet reported as never run, so a longer chain means repeated
-// failures before any turn began. Past it the prompt fails asking for a new
-// message, since a resend of the same messageId would walk the same chain.
-const maxRetryKeys = 8
-
-// retryFreshError is promptOnce's signal that fleet reported the key as accepted
-// earlier but never run, so one fresh submission is safe.
-type retryFreshError struct{ conv string } // the conversation that accepted the original
-
-func (retryFreshError) Error() string { return "retry under a fresh idempotency key" }
-
 // promptOnce submits the prompt under one idempotency key and translates the
-// outcome. With allowRetry it returns a retryFreshError instead of reporting a key
-// fleet accepted earlier but never ran.
-func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *session, message, key string, allowRetry bool) (acpsdk.PromptResponse, error) {
+// outcome. A key fleet reports accepted and cancelled is never resubmitted on
+// its own: fleet does not record why an input was cancelled, so a Stop (from
+// any surface) and a launch that failed look the same, and resubmitting could
+// run a message after its Stop succeeded. The user is told to send it again
+// as a new message instead.
+func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *session, message, key string) (acpsdk.PromptResponse, error) {
 	// stopCtx ends when the client cancels (session/cancel, or a newer prompt
 	// superseding this one) or the timeout fires. The stream itself runs on a
 	// context that ignores both: a fleet turn is detached from its HTTP request
@@ -375,16 +330,13 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 	meta := map[string]any{"fleet.conversationId": convID}
 	var queued *chattui.QueuedError
 	isQueued := errors.As(streamErr, &queued)
-	if isQueued && queued.State == "cancelled" && allowRetry && ctx.Err() == nil && stopCtx.Err() == nil {
-		// A replay of a key whose earlier attempt never ran (its turn failed
-		// before it began). The key is spent; nothing ran under it.
-		sess.clearUnsettled(message, key)
-		delete(sess.keyConv, key)
-		return acpsdk.PromptResponse{}, retryFreshError{conv: convID}
-	}
 	if isQueued && (ctx.Err() != nil || stopCtx.Err() != nil) {
 		stop.intervened = true
-		stopErr = a.stopAccepted(convID, key, queued)
+		// The watcher may already know the turn had ended; an acceptance that
+		// needed no stop (queued.State cancelled) must not erase that.
+		if accErr := a.stopAccepted(convID, key, queued); accErr != nil || !errors.Is(stopErr, chattui.ErrTurnNotRunning) {
+			stopErr = accErr
+		}
 	}
 	if outcomeUnknown(streamErr) && (ctx.Err() != nil || stopCtx.Err() != nil) && !stop.intervened {
 		// Cancelled (or timed out) and the answer was lost before fleet said
@@ -650,8 +602,10 @@ func refusedAttempt(err error) bool {
 // wherever the input is; a completed or never-run input needs nothing.
 func (a *Agent) stopAccepted(convID, key string, q *chattui.QueuedError) error {
 	switch q.State {
-	case "completed", "cancelled":
-		return nil
+	case "completed":
+		return chattui.ErrTurnNotRunning // it had already run: nothing to stop
+	case "cancelled":
+		return nil // it never ran, and will not
 	}
 	if err := a.client.CancelInput(convID, key); err != nil {
 		if errors.Is(err, chattui.ErrTurnNotRunning) {
@@ -687,7 +641,7 @@ func acceptedNote(q *chattui.QueuedError, where string) string {
 	case q.Replayed() && q.State == "completed":
 		return "fleet already ran this message from an earlier attempt (it is not run twice). Its reply is in " + where
 	case q.Replayed() && q.State == "cancelled":
-		return "an earlier attempt of this message did not run. Send it again to run it."
+		return "an earlier attempt of this message was cancelled (stopped, or it failed before it started), so it did not run. To run it, send it again as a new message."
 	case q.Replayed():
 		return fmt.Sprintf("this message is already queued from an earlier attempt (position %d). Follow it at %s", q.Position, where)
 	default:
