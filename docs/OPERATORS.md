@@ -474,7 +474,9 @@ Error: invalid internal status, try resetting the pause process with "podman sys
 ```
 
 Doctor (step 3's `podman info`, or the step-8 sandbox smoke) reports this as a
-failure with the repair spelled out, but **never runs it**: `podman system
+failure with the repair spelled out — and holds any service restart that
+run wanted, since fleet could not start its sandboxes on that store — but
+**never runs it**: `podman system
 migrate` stops every running container of the `fleet` user, and the sandboxes
 run `--rm`, so under a live fleet it deletes the whole warm sandbox pool while
 the process keeps handing out the dead handles — every chat turn and task
@@ -486,27 +488,31 @@ be stopped is a judgment call, so it is left to an operator or agent:
    running` (and `--status leased`) returns nothing, and no one is mid-chat.
    (`sudo`: the scheduler DSN lives in the root-only `/etc/fleet/fleet.env`.)
 2. Stop fleet, prove it is gone, reset podman as the service user, and start
-   fleet — as **one** `&&` chain, so nothing after a failed step runs (above
-   all, migrate never runs while a fleet process is still alive):
+   fleet — as **one** line. The reset runs only after a successful stop and
+   only with no `fleet` process left; once the stop succeeded, fleet is
+   started again whatever the reset did, and the line's status is the
+   reset's:
 
    ```
-   sudo systemctl stop fleet && { pgrep -u fleet -x fleet >/dev/null; [ $? -eq 1 ]; } \
+   sudo systemctl stop fleet && { { sudo pgrep -u fleet -x fleet >/dev/null; [ $? -eq 1 ]; } \
      && sudo install -d -m 0700 -o fleet -g fleet /run/fleet \
-     && (cd /var/lib/fleet && sudo -u fleet HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet podman system migrate) \
-     && sudo systemctl start fleet
+     && (cd /var/lib/fleet && sudo -u fleet HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet podman system migrate); \
+     rc=$?; sudo systemctl start fleet; [ $rc -eq 0 ]; }
    ```
 
    The stop also stops `fleet-web` (`BindsTo=`) and removes `/run/fleet` (the
-   unit's `RuntimeDirectory=`), hence the `install -d`. The `pgrep` check
-   continues only on pgrep's explicit "no match" (exit 1), so a live `fleet`
-   process — or a missing `pgrep` — stops the chain.
+   unit's `RuntimeDirectory=`), hence the `install -d`. The `pgrep` check runs
+   with `sudo` (a `hidepid` `/proc` would hide the service user's processes
+   from a login user) and continues only on pgrep's explicit "no match"
+   (exit 1), so a live `fleet` process — or a missing `pgrep` — skips the
+   reset.
 
    **Under a supervisor other than systemd**, `systemctl` can neither stop
    nor start fleet: stop it through that supervisor, run the same chain
    without its first and last steps, then start fleet there again:
 
    ```
-   { pgrep -u fleet -x fleet >/dev/null; [ $? -eq 1 ]; } \
+   { sudo pgrep -u fleet -x fleet >/dev/null; [ $? -eq 1 ]; } \
      && sudo install -d -m 0700 -o fleet -g fleet /run/fleet \
      && (cd /var/lib/fleet && sudo -u fleet HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet podman system migrate)
    ```

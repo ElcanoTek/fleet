@@ -95,6 +95,12 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// restart clears it; step 7 re-verifies). Learned in production on
 		// chat's doctor.
 		"re-verifying after the service restart",
+		// A stale pause is matched BEFORE that post-upgrade deferral, and it
+		// holds step 6's automatic restart: restarting fleet onto a stale
+		// store swaps a process still serving from its pool for a unit that
+		// cannot start its sandboxes.
+		"stale_pause=1",
+		"fixes applied that want a restart — held: the rootless store has a stale pause process",
 		"without sourcing it",
 		"--network=none",
 	} {
@@ -219,11 +225,11 @@ stale_pause_fix`
 		// One &&-chain: migrate runs only after a successful stop AND with
 		// no fleet process left (another supervisor is not stopped by
 		// systemctl), so a pasted repair can never migrate a live pool.
-		"sudo systemctl stop fleet-prod && { pgrep -u svc -x fleet >/dev/null; [ $? -eq 1 ]; } && sudo install -d -m 0700 -o svc -g svc /run/svc && (cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate) && sudo systemctl start fleet-prod",
+		"sudo systemctl stop fleet-prod && { { sudo pgrep -u svc -x fleet >/dev/null; [ $? -eq 1 ]; } && sudo install -d -m 0700 -o svc -g svc /run/svc && (cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate); rc=$?; sudo systemctl start fleet-prod; [ $rc -eq 0 ]; }",
 		"sudo systemctl start fleet-web",
 		// Another supervisor: systemctl can neither stop nor start it, so it
 		// gets its own continuation — the same gate, without systemctl.
-		"Under another supervisor: stop fleet there, run as one line: { pgrep -u svc -x fleet >/dev/null; [ $? -eq 1 ]; } && sudo install -d -m 0700 -o svc -g svc /run/svc && (cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate) — then start fleet there",
+		"Under another supervisor: stop fleet there, run as one line: { sudo pgrep -u svc -x fleet >/dev/null; [ $? -eq 1 ]; } && sudo install -d -m 0700 -o svc -g svc /run/svc && (cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate) — then start fleet there",
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("want %q in:\n%s", want, out)
@@ -259,7 +265,7 @@ fix="$(stale_pause_fix)"; chain="${fix#*run as one line: }"; printf '%s' "${chai
 SERVICE_NAME=fleet SERVICE_USER=fleet SERVICE_HOME=/tmp
 fix="$(stale_pause_fix)"; chain="${fix#*Under another supervisor: stop fleet there, run as one line: }"; printf '%s' "${chain%% — then*}"`)
 	supChain, err := renderSup.Output()
-	if err != nil || !strings.HasPrefix(string(supChain), "{ pgrep ") {
+	if err != nil || !strings.HasPrefix(string(supChain), "{ sudo pgrep ") {
 		t.Fatalf("could not extract the other-supervisor chain (%v): %q", err, supChain)
 	}
 	// The other-supervisor continuation carries the same gate.
@@ -269,31 +275,47 @@ fix="$(stale_pause_fix)"; chain="${fix#*Under another supervisor: stop fleet the
 		wantMigrate bool
 	}{{"supervisor stopped fleet", 1, true}, {"fleet still alive", 0, false}, {"pgrep missing", 127, false}} {
 		t.Run("other supervisor: "+tc.name, func(t *testing.T) {
-			stubs := fmt.Sprintf("sudo() { echo \"RAN: $*\"; }\npgrep() { return %d; }\n", tc.pgrepRC)
+			stubs := fmt.Sprintf("sudo() { if [[ $1 == pgrep ]]; then return %d; fi; echo \"RAN: $*\"; }\n", tc.pgrepRC)
 			out, _ := exec.Command("bash", "-c", stubs+string(supChain)).CombinedOutput()
 			if got := strings.Contains(string(out), "podman system migrate"); got != tc.wantMigrate {
 				t.Errorf("migrate ran = %v, want %v\n%s", got, tc.wantMigrate, out)
 			}
 		})
 	}
+	// The systemd chain: once the stop succeeded, fleet is started again on
+	// EVERY outcome (a failed gate or migrate must not leave chat and the
+	// scheduler down), and the line returns the reset's own status.
 	for _, tc := range []struct {
-		name            string
-		stopRC, pgrepRC int
-		wantMigrate     bool
+		name                  string
+		stopRC, pgrepRC       int
+		migrateRC             int
+		wantMigrate, wantStrt bool
+		wantOK                bool
 	}{
-		{"clean stop, no fleet process", 0, 1, true},
-		{"stop fails", 1, 1, false},
-		{"fleet still alive (another supervisor)", 0, 0, false},
-		{"pgrep missing", 0, 127, false},
-		{"pgrep error", 0, 2, false},
+		{"clean stop, no fleet process", 0, 1, 0, true, true, true},
+		{"migrate itself fails", 0, 1, 1, true, true, false},
+		{"stop fails", 1, 1, 0, false, false, false},
+		{"fleet still alive (another supervisor)", 0, 0, 0, false, true, false},
+		{"pgrep missing", 0, 127, 0, false, true, false},
+		{"pgrep error", 0, 2, 0, false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stubs := fmt.Sprintf(`sudo() { if [[ $1 == systemctl && $2 == stop ]]; then return %d; fi; echo "RAN: $*"; }
-pgrep() { return %d; }
-`, tc.stopRC, tc.pgrepRC)
-			out, _ := exec.Command("bash", "-c", stubs+string(chain)).CombinedOutput()
+			stubs := fmt.Sprintf(`sudo() {
+  if [[ $1 == systemctl && $2 == stop ]]; then return %d; fi
+  if [[ $1 == pgrep ]]; then return %d; fi
+  echo "RAN: $*"
+  if [[ "$*" == *"podman system migrate"* ]]; then return %d; fi
+}
+`, tc.stopRC, tc.pgrepRC, tc.migrateRC)
+			out, runErr := exec.Command("bash", "-c", stubs+string(chain)).CombinedOutput()
 			if got := strings.Contains(string(out), "podman system migrate"); got != tc.wantMigrate {
 				t.Errorf("migrate ran = %v, want %v\n%s", got, tc.wantMigrate, out)
+			}
+			if got := strings.Contains(string(out), "RAN: systemctl start fleet"); got != tc.wantStrt {
+				t.Errorf("fleet started = %v, want %v\n%s", got, tc.wantStrt, out)
+			}
+			if got := runErr == nil; got != tc.wantOK {
+				t.Errorf("line succeeded = %v, want %v\n%s", got, tc.wantOK, out)
 			}
 		})
 	}
