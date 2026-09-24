@@ -1708,3 +1708,66 @@ func TestResentMessageIdFindsItsRetryRun(t *testing.T) {
 		t.Fatalf("resending the oldest messageId ran it again (%d runs, want %d)", k.runs, before)
 	}
 }
+
+// A Stop that lands just after the watched turn ended stops nothing (fleet
+// answers 409): the prompt keeps reading the turn to its end and, still
+// answering "cancelled" as ACP requires, says the turn had finished and what
+// it did stands — not a silent "cancelled" over tools that ran to completion.
+func TestStopOfAnEndedTurnReportsItsOutcome(t *testing.T) {
+	started := make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{cancelStatus: http.StatusConflict, turn: func(w *sseWriter, _ *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-e"})
+		w.emit("turn.started", map[string]any{"turn_id": "turn-e"})
+		close(started)
+		for { // the turn finishes as the Stop arrives
+			h.fleet.mu.Lock()
+			n := len(h.fleet.cancels)
+			h.fleet.mu.Unlock()
+			if n > 0 {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		w.emit("text.delta", map[string]any{"text": "all done"})
+		w.emit("turn.completed", map[string]any{})
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "long job")
+		done <- r
+	}()
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		text := h.client.text()
+		if r.StopReason != acpsdk.StopReasonCancelled || !strings.Contains(text, "all done") || !strings.Contains(text, "already finished") || strings.Contains(text, "could not confirm") {
+			t.Fatalf("got %+v, text %q; want the full answer and a note that the turn had already finished", r, text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+}
+
+// A messageId whose whole chain of retry keys was accepted and never ran
+// fails asking for a new message: a resend of the same messageId would walk
+// the same chain, so "send it again" would never run it.
+func TestExhaustedRetryChainAsksForANewMessage(t *testing.T) {
+	k := &keyedFleet{firstRun: func(string, string) string { return "cancelled" }}
+	h := newKeyedHarness(t, k)
+	sid := h.newSession(t)
+	mid := "msg-x"
+	_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("do it")}})
+	if err == nil || !strings.Contains(err.Error(), "new message") {
+		t.Fatalf("err = %v, want a request for a new message", err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != maxRetryKeys+1 {
+		t.Fatalf("chats = %d, want the key and its %d retries", len(h.fleet.chats), maxRetryKeys)
+	}
+}

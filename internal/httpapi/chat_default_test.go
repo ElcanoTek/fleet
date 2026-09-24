@@ -151,6 +151,8 @@ type fakeChatStore struct {
 	// preparation reads memories (both outside the fake's lock).
 	onClaim    func(store.InputQueueRow)
 	onMemories func()
+	// beforeClaim runs when a direct claim is about to be stored.
+	beforeClaim func()
 	// onCreate runs on each CreateConversation call, before it creates.
 	onCreate func()
 	// claimAfterEnqueue marks each enqueued row claimed (running) at once.
@@ -967,6 +969,11 @@ func (s *fakeChatStore) RemoveQueuedInput(_ context.Context, _, convID, id strin
 // queue, mode 'direct', never listed or drained.
 func (s *fakeChatStore) ClaimDirectInput(_ context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error) {
 	s.mu.Lock()
+	if before := s.beforeClaim; before != nil {
+		s.mu.Unlock()
+		before()
+		s.mu.Lock()
+	}
 	for _, it := range s.queue {
 		if it.ConversationID == r.ConversationID && it.ClientInputID == r.ClientInputID {
 			s.mu.Unlock()
@@ -1808,5 +1815,67 @@ func TestDirectClaim_RaceLoserRefusedByTheQueueIsSettled(t *testing.T) {
 	st.mu.Unlock()
 	if row == nil || row.State != store.InputStateCancelled {
 		t.Fatalf("key row = %+v, want it settled cancelled", row)
+	}
+}
+
+// A targeted Stop reports whether it stopped anything: 204 when the named
+// turn was running and is cancelled, 409 when it had already ended, so a
+// caller that watched the turn reads its real outcome instead of calling it
+// cancelled.
+func TestCancelByTurnID_ReportsANoOp(t *testing.T) {
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	var cancelled atomic.Bool
+	_, turnID, tok, _ := srv.registerTurn(conv.ID, func() { cancelled.Store(true) })
+	defer srv.finishTurn(conv.ID, tok)
+	cancel := func(turn string) int {
+		raw, _ := json.Marshal(map[string]any{"scope": "turn", "turn_id": turn})
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", bytes.NewReader(raw))
+		req.Header.Set("X-Chat-Server-Token", "tok")
+		req.Header.Set("X-User-Email", "u@x.com")
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := cancel("turn-that-ended"); code != http.StatusConflict || cancelled.Load() {
+		t.Fatalf("stop of an ended turn: %d (cancelled=%v), want 409 and nothing stopped", code, cancelled.Load())
+	}
+	if code := cancel(turnID); code != http.StatusNoContent || !cancelled.Load() {
+		t.Fatalf("stop of the running turn: %d (cancelled=%v), want 204", code, cancelled.Load())
+	}
+}
+
+// Two concurrent sends of one user-unique key into different conversations
+// are serialized: the second finds the first one's claim and is answered
+// with it, rather than both claiming the key (the database's uniqueness is
+// per conversation) and running the input twice.
+func TestUserScopedKey_ConcurrentSendsIntoTwoConversationsRunOnce(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	a, _ := st.CreateConversation(context.Background(), "u@x.com", "a", "generic", "", false)
+	b, _ := st.CreateConversation(context.Background(), "u@x.com", "b", "generic", "", false)
+	body := func(conv string) map[string]any {
+		return map[string]any{"message": "send the report", "conversation_id": conv, "input_id": "user-k", "input_id_scope": "user"}
+	}
+	var once atomic.Bool
+	second := make(chan *httptest.ResponseRecorder, 1)
+	st.beforeClaim = func() {
+		if !once.CompareAndSwap(false, true) {
+			return
+		}
+		// The first send has done its lookup and is about to claim: the
+		// second send starts now, into the other conversation.
+		go func() { second <- postChatRequest(t, srv, body(b.ID)) }()
+		time.Sleep(100 * time.Millisecond)
+	}
+	postChatRequest(t, srv, body(a.ID))
+	w := <-second
+	eng.mu.Lock()
+	turns := eng.turns
+	eng.mu.Unlock()
+	if turns != 1 || !strings.Contains(w.Body.String(), `"conversation_id":"`+a.ID+`"`) {
+		t.Fatalf("turns %d, second answer %d %s: want one run, the second answered with the first", turns, w.Code, w.Body.String())
 	}
 }

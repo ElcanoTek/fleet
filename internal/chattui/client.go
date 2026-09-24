@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -493,18 +494,30 @@ func (c *Client) ResolveApprovalWithOptions(ctx context.Context, convID, approva
 // call, narrowed so follow-ups already queued on the conversation still run.
 // turnID ("" = whichever turn is running) targets one turn: the server cancels
 // it only while it is the running turn, so a Stop for a turn that already
-// ended can never hit a successor.
+// ended can never hit a successor. A targeted Stop that found its turn no
+// longer running returns ErrTurnNotRunning: nothing was stopped, and the
+// turn's own outcome is what happened.
 // Aborting the Stream context alone does not stop the turn: the server
 // deliberately detaches a turn from its HTTP request so a dropped connection
 // cannot kill work mid-flight. The caller's ctx may already be cancelled, so
 // Cancel uses its own short deadline rather than inheriting it.
 func (c *Client) Cancel(convID, turnID string) error {
 	payload := []byte(`{"scope":"turn"}`)
-	if id := strings.TrimSpace(turnID); id != "" {
+	id := strings.TrimSpace(turnID)
+	if id != "" {
 		payload, _ = json.Marshal(map[string]string{"scope": "turn", "turn_id": id})
 	}
-	return c.postCancel(convID, payload)
+	err := c.postCancel(convID, payload)
+	var se *StatusError
+	if id != "" && errors.As(err, &se) && se.Code == http.StatusConflict {
+		return ErrTurnNotRunning
+	}
+	return err
 }
+
+// ErrTurnNotRunning is Cancel's answer when the named turn had already ended:
+// the Stop cancelled nothing.
+var ErrTurnNotRunning = errors.New("the turn had already ended; nothing was stopped")
 
 // CancelInput stops one input by its idempotency key (the input_id it was
 // submitted with), wherever it is: withdrawn if still queued, cancelled if its
@@ -536,7 +549,7 @@ func (c *Client) postCancel(convID string, payload []byte) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("cancel returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))
+		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("cancel returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))}
 	}
 	return nil
 }

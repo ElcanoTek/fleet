@@ -336,7 +336,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		conv *store.Conversation
 		err  error
 	)
-	// unlockFirst releases a first submission's key lock (LockInputKey)
+	// unlockFirst releases a user-scoped key's lock (lockUserScopedKey)
 	// once its key is claimed; deferred too, for every earlier return.
 	unlockFirst := func() {}
 	defer func() { unlockFirst() }()
@@ -351,6 +351,12 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
+		// A user-unique key is claimable in any conversation, and the
+		// database's uniqueness is per conversation: its lock is held from
+		// the lookup below until the key is claimed (or queued), so a
+		// concurrent send of the same key into another conversation finds
+		// this one's row instead of claiming the key a second time.
+		unlockFirst = s.lockUserScopedKey(user, req)
 		// A resend of an accepted input is answered before anything below
 		// touches the conversation: a replay must not re-apply the original
 		// request's model or un-archive the conversation.
@@ -466,6 +472,11 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		// acknowledged: an acknowledgement of that row would promise a run
 		// that nothing will ever perform.
 		releaseSlot()
+		// The key's lock again, for the release and the queue insert: a
+		// concurrent user-scoped send must find this input's row, not the
+		// gap between the two.
+		relock := s.lockUserScopedKey(user, req)
+		defer relock()
 		if direct != nil && !s.releaseDirectInput(direct.id) {
 			http.Error(w, "the message could not be queued behind the running turn; send it again", http.StatusServiceUnavailable)
 			return
@@ -515,6 +526,20 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 	return true
 }
 
+// lockUserScopedKey takes the per-(user, key) lock for a submission that
+// declares user-unique keys and returns its (idempotent) unlock; for any
+// other submission it locks nothing. The lock is in-process: fleet's control
+// plane is single-replica by design (the inflight registry the Stop gate
+// relies on is too), and it holds no database connection while the
+// protected work asks the pool for one.
+func (s *Server) lockUserScopedKey(user string, req chatRequest) (unlock func()) {
+	clientID := strings.TrimSpace(req.InputID)
+	if clientID == "" || !strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
+		return func() {}
+	}
+	return sync.OnceFunc(s.inputKeyLocks.lock(user + "\x00" + clientID))
+}
+
 // recoverFirstSubmission answers a first submission (no conversation yet)
 // whose user-unique key (input_id_scope "user") was already accepted, with
 // that input's acknowledgement. It takes the key's lock first, held until
@@ -530,7 +555,7 @@ func (s *Server) recoverFirstSubmission(w http.ResponseWriter, r *http.Request, 
 	if clientID == "" || !strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
 		return func() {}, false
 	}
-	unlock = sync.OnceFunc(s.inputKeyLocks.lock(user + "\x00" + clientID))
+	unlock = s.lockUserScopedKey(user, req)
 	existing, err := s.store.LookupInputForUser(r.Context(), user, clientID)
 	if err != nil {
 		unlock()

@@ -562,11 +562,11 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 	// only the active turn and lets the queue drain.
 	//
 	// turn_id targets ONE turn: it is cancelled only while it is the running
-	// turn, and the request is a no-op (still 204 — the named turn is not
-	// running, which is what the caller asked for) once it has ended. A
-	// client that watched a specific turn (`fleet acp`) therefore cannot
-	// cancel a successor that started between its decision to stop and this
-	// request landing. A targeted Stop is turn-scoped: it never sweeps the
+	// turn (204); once it has ended the request stops nothing and answers
+	// 409, so the caller reads the turn's own outcome rather than taking the
+	// Stop for a cancellation. A client that watched a specific turn
+	// (`fleet acp`) therefore cannot cancel a successor that started between
+	// its decision to stop and this request landing. A targeted Stop is turn-scoped: it never sweeps the
 	// queue.
 	//
 	// input_id targets ONE input by its idempotency key, wherever it is: a
@@ -606,7 +606,13 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if turnID != "" {
-		s.cancelInflightTurn(id, turnID)
+		if !s.cancelInflightTurn(id, turnID) {
+			// Nothing was stopped: the named turn had already ended (or never
+			// ran here). Said so, not a bare 204, so a caller that watched the
+			// turn reads its real outcome instead of reporting it cancelled.
+			http.Error(w, "the named turn is not running", http.StatusConflict)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

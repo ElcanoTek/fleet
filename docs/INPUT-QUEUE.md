@@ -37,9 +37,10 @@ retention guarantee: after a terminal row is purged, reusing its
 - `POST /conversations/{id}/cancel` gains `{"scope":"turn"|"all"}` — default
   **all**: Stop cancels the active turn AND every still-queued input. An
   optional `turn_id` (from `turn.started`) targets one turn: it is cancelled
-  only while it is the running turn, and the request is a 204 no-op once it
-  has ended, so a client stopping the turn it watched (`fleet acp`) can never
-  cancel a successor. A targeted Stop is turn-scoped and never sweeps the
+  only while it is the running turn (`204`); once it has ended the request
+  stops nothing and answers `409`, so a client stopping the turn it watched
+  (`fleet acp`) can never cancel a successor, and learns that the turn
+  finished on its own rather than taking the Stop for a cancellation. A targeted Stop is turn-scoped and never sweeps the
   queue. An optional `input_id` targets one input by its idempotency key,
   wherever it is: a still-queued row is withdrawn, a running turn for it is
   cancelled, a steer already injected into a running turn is cancelled and so
@@ -91,14 +92,16 @@ retention guarantee: after a terminal row is purged, reusing its
   resend is answered before the request touches the conversation, so a replay
   never re-applies the original request's model or un-archives it. A client
   that declares its keys unique per user (`"input_id_scope": "user"`, as
-  `fleet acp` does) has every key looked up per user: a resend finds its input
-  whichever conversation accepted it, and a first submission's resend after a
+  `fleet acp` does) has every key looked up per user, under the per-(user,
+  key) lock below from that lookup until the key is claimed or queued: a
+  resend finds its input whichever conversation accepted it, a concurrent send
+  of the key into another conversation finds the first one's row, and a first submission's resend after a
   response lost before any header finds the original conversation instead of
   starting a second one. Without that declaration the key stays
   conversation-scoped, so a client that numbers keys per conversation is never
-  answered with another conversation's replay. Concurrent first submissions of
-  one key are serialized by a per-(user, key) lock held from that lookup until
-  the key is claimed, so the second finds the first one's claim. The lock is
+  answered with another conversation's replay. Concurrent submissions of one
+  user-unique key, first ones included, are serialized by that lock, so the
+  second finds the first one's claim. The lock is
   in-process, like the inflight registry the Stop gate relies on: the control
   plane is single-replica by design (the Helm chart pins one replica). The
   `queue.updated` SSE event carries a full snapshot on every mutation, and

@@ -823,13 +823,15 @@ func (s *Server) cancelInflight(convID string) bool {
 // cancelInflightTurn cancels convID's running turn only if it is turnID. The
 // check and the cancel read one snapshot taken under inflightMu, and a turn id
 // is never reused, so a successor registered after turnID ended is never hit.
-func (s *Server) cancelInflightTurn(convID, turnID string) {
+func (s *Server) cancelInflightTurn(convID, turnID string) (cancelled bool) {
 	s.inflightMu.Lock()
 	entry, ok := s.inflight[convID]
 	s.inflightMu.Unlock()
 	if ok && entry.turnID == turnID && entry.IsRunning() {
 		entry.cancel()
+		return true
 	}
+	return false
 }
 
 // cancelledInputTTL bounds how long a Stop by input key is remembered for a

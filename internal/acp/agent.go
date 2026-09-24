@@ -287,6 +287,12 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 		if !errors.As(err, &retry) {
 			return resp, err
 		}
+		if gen > maxRetryKeys {
+			// Every key in this messageId's chain was accepted and never ran,
+			// and a resend walks the same chain: only a new message can run.
+			return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{"error": fmt.Sprintf(
+				"fleet accepted this message %d times but never ran it; send it as a new message (a new messageId) to try again", maxRetryKeys+1)})
+		}
 		// fleet answered a replay of this key with "accepted earlier, did not
 		// run" (its turn failed before it began). Nothing ran under that key,
 		// so submitting under the next one is safe — and is what the user
@@ -303,13 +309,14 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 			// nothing was sent under the fresh key, and nothing may be.
 			return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 		}
-		resp, err = a.promptOnce(ctx, p, sess, message, fresh, hasMessageID && gen < maxRetryKeys)
+		resp, err = a.promptOnce(ctx, p, sess, message, fresh, hasMessageID)
 	}
 }
 
 // maxRetryKeys bounds the chain of retry keys a messageId walks: each link is
 // an attempt fleet reported as never run, so a longer chain means repeated
-// failures before any turn began, and the prompt then reports the last one.
+// failures before any turn began. Past it the prompt fails asking for a new
+// message, since a resend of the same messageId would walk the same chain.
 const maxRetryKeys = 8
 
 // retryFreshError is promptOnce's signal that fleet reported the key as accepted
@@ -415,6 +422,11 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		if stopErr != nil {
 			tr.send(acpsdk.UpdateAgentMessageText(fmt.Sprintf(
 				"\n\nfleet could not confirm this turn stopped (%v). It may still be running: stop it at %s", stopErr, a.conversationPointer(convID))))
+		} else if stop.alreadyEnded {
+			// Still "cancelled", as ACP requires of a cancelled prompt, but
+			// not a claim that anything was stopped: the turn had finished.
+			tr.send(acpsdk.UpdateAgentMessageText(fmt.Sprintf(
+				"\n\nThe turn had already finished before the Stop reached fleet, so nothing was stopped: what it did (tool calls included) stands. See %s", a.conversationPointer(convID))))
 		}
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled, Meta: meta}, nil
 	case stop.intervened && stopCtx.Err() != nil:
@@ -473,9 +485,12 @@ const turnGrace = time.Second
 
 // stopOutcome is what the stop watcher did: intervened is true when it sent
 // (or tried to send) a Stop, and err is that Stop's failure, if any.
+// alreadyEnded means the Stop reached fleet after the turn had finished, so
+// it stopped nothing and the stream was read to its real end.
 type stopOutcome struct {
-	intervened bool
-	err        error
+	intervened   bool
+	alreadyEnded bool
+	err          error
 }
 
 // stopTurn watches one prompt. If stop fires before the stream finishes, it
@@ -522,6 +537,18 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 		// any other turn, so the Stop cannot hit a successor that started
 		// after the watched turn ended.
 		err = a.client.Cancel(id, turn)
+		if errors.Is(err, chattui.ErrTurnNotRunning) {
+			// The turn ended between the check above and the Stop landing:
+			// nothing was stopped. Keep reading, so the prompt reports how
+			// the turn actually ended rather than calling it cancelled.
+			select {
+			case <-streamDone:
+				stopped <- stopOutcome{alreadyEnded: true}
+				return
+			case <-time.After(conversationWait):
+				err = errors.New("the turn had already ended, but its final answer did not arrive")
+			}
+		}
 	} else if id != "" {
 		// Never an untargeted Stop: "whichever turn is running" could be a
 		// successor by the time it lands. The answer has not named a turn

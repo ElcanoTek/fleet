@@ -177,8 +177,9 @@ func TestCancelEndpoint_OwnerScoped(t *testing.T) {
 }
 
 // TestCancelEndpoint_TurnTargeted pins the turn_id form of Stop: it cancels
-// the named turn while it runs, and is a 204 no-op for any other turn — so a
-// client stopping the turn it watched can never cancel a successor.
+// the named turn while it runs (204), and stops nothing for any other turn,
+// saying so (409) — so a client stopping the turn it watched can never cancel
+// a successor, and learns its own turn had already finished.
 func TestCancelEndpoint_TurnTargeted(t *testing.T) {
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
@@ -192,8 +193,8 @@ func TestCancelEndpoint_TurnTargeted(t *testing.T) {
 	h := s.Routes()
 
 	rr := do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/cancel", map[string]any{"scope": "turn", "turn_id": "some-earlier-turn"}, "alice@x.com")
-	if rr.Code != http.StatusNoContent {
-		t.Fatalf("mismatched turn_id: status %d, want 204", rr.Code)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("mismatched turn_id: status %d, want 409", rr.Code)
 	}
 	if ctx.Err() != nil {
 		t.Fatal("a Stop naming another turn cancelled the running one")
