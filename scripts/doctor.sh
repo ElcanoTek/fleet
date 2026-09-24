@@ -661,12 +661,15 @@ CONF
         live_containers="unknown"
       fi
       # Direct evidence that the live daemon keeps its sandbox pool in THIS
-      # store: running containers named like fleet's sandboxes
-      # (internal/sandbox containerNamePrefix). A kubernetes-backed fleet has
-      # none here. Step 8 may restart a live fleet over a local podman fault
-      # only with this evidence — no re-derivation of the daemon's config.
-      if pool_ids="$(run_as_fleet podman ps -q --filter name=chat-sandbox- 2>/dev/null)"; then
-        local_pool="$(grep -c . <<<"$pool_ids" || true)"
+      # store: running fleet sandbox containers (internal/sandbox
+      # containerNamePrefix) whose fleet.instance ownership label names the
+      # unit's CURRENT MainPID — not merely the name, since a crashed earlier
+      # podman-backed run can leave orphans behind (a kubernetes boot does
+      # not prune them). Step 8 may restart a live fleet over a local podman
+      # fault only with this evidence — no re-derivation of its config.
+      main_pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+      if pool_labels="$(run_as_fleet podman ps --filter name=chat-sandbox- --format '{{index .Labels "fleet.instance"}}' 2>/dev/null)"; then
+        local_pool="$(count_owned_sandboxes "$main_pid" "$pool_labels")"
       fi
     fi
     fleet_is_live && live=1

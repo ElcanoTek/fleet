@@ -125,11 +125,25 @@ podman_migrate_plan() {
   fi
 }
 
+# count_owned_sandboxes MAINPID LABELS — how many of LABELS (one fleet.instance
+# label per line, "<pid>@<unix start>", internal/sandbox prune.go) belong to
+# the process MAINPID. Only those are evidence that the live daemon's pool is
+# in this store; orphans from an earlier run, unlabeled containers, and a
+# missing or zero MAINPID (no live unit) count for nothing.
+count_owned_sandboxes() {
+  local pid="$1" n=0 label
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || { echo 0; return 0; }
+  while IFS= read -r label; do
+    [[ "$label" == "${pid}@"* ]] && n=$((n + 1))
+  done <<<"$2"
+  echo "$n"
+}
+
 # smoke_retry_plan DEFERRED CAN_RESTART LOCAL_POOL SMOKE_ERR QUIESCED
 #   Step 8's decision after the sandbox smoke failed. DEFERRED is 1 when step 3
 #   skipped migrate; CAN_RESTART / QUIESCED as above; LOCAL_POOL the number of
-#   running fleet sandbox containers (chat-sandbox-*) step 3 saw in this
-#   store; SMOKE_ERR the failed run's stderr. Only podman's stale-pause error
+#   running fleet sandbox containers step 3 saw in this store that the live
+#   unit's own process owns (count_owned_sandboxes); SMOKE_ERR the failed run's stderr. Only podman's stale-pause error
 #   is a reason to reset. Then: "retry" (stop → migrate → start, re-smoke)
 #   for a live unit with direct evidence that its pool lives in this store
 #   (LOCAL_POOL > 0); "migrate" (reset, re-smoke — no restart) when doctor's

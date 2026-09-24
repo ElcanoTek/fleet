@@ -441,7 +441,8 @@ production-only bug. The pass covers, in order:
    A launch failing any other way — disk or PID exhaustion, say — never
    triggers migrate. The step-8 restart path also requires direct evidence
    that the live fleet keeps its sandbox pool in this store — step 3 saw
-   running `chat-sandbox-*` containers of the service user — so a
+   running `chat-sandbox-*` containers whose `fleet.instance` label names
+   the unit's current MainPID (orphans of an earlier run don't count) — so a
    kubernetes-backed fleet (no local sandbox containers) is never restarted
    over a local podman fault, whatever its config says.
    The decisions are `scripts/lib/podman-migrate.sh`.

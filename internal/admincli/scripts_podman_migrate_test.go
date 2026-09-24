@@ -212,6 +212,26 @@ func TestMigrateLiveServiceInterrupted(t *testing.T) {
 	}
 }
 
+// TestCountOwnedSandboxes — pool evidence counts only sandboxes owned by the
+// live unit's current MainPID. Orphans from a crashed earlier podman-backed
+// run (a later kubernetes boot does not prune them) must not make a
+// kubernetes-backed fleet look like it owns a local pool.
+func TestCountOwnedSandboxes(t *testing.T) {
+	labels := "636304@1790274734\n636304@1790274734\n4242@1790000000\n\n636304x@1\n"
+	for _, tc := range []struct{ pid, labels, want string }{
+		{"636304", labels, "2"},
+		{"4242", labels, "1"},
+		{"999", labels, "0"}, // only orphans in the store
+		{"0", labels, "0"},   // no live unit
+		{"", labels, "0"},
+		{"636304", "", "0"},
+	} {
+		if got := podmanMigrateLib(t, "count_owned_sandboxes", tc.pid, tc.labels); got != tc.want {
+			t.Errorf("count_owned_sandboxes(%q) = %s, want %s", tc.pid, got, tc.want)
+		}
+	}
+}
+
 // TestFleetProcessAbsent — only pgrep's explicit no-match (exit 1) proves no
 // fleet process. A host without pgrep, or a pgrep error, must count as
 // present: treating "command not found" as absence would license a migrate
