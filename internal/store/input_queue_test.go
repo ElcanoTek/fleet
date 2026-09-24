@@ -595,26 +595,38 @@ func TestStopRequested_CancelsInsteadOfRequeuing(t *testing.T) {
 	})
 }
 
-// A queued row a Stop by key stamped is never claimed by a drain nor injected
-// into a running turn as a steer: the Stop is withdrawing it, and either
-// would run it. The unstamped row behind it is claimed as usual.
+// A queued row a Stop by key stamped is never launched — not injected into
+// a running turn as a steer, and not claimed by a drain, which cancels it
+// instead (its Stop would have withdrawn it; skipped, it would sit queued for
+// good) and claims the row behind it. Boot recovery cancels one a process
+// died holding, before any drain runs.
 func TestStopRequested_QueuedRowIsNeverLaunched(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	convID := seedConvAndTurn(t, s, "t1")
-	stamped := enqueue(t, s, convID, "cli-stamped", "stopped", InputModeSteer)
-	next := enqueue(t, s, convID, "cli-next", "next", InputModeQueued)
-	if err := s.MarkInputStopRequested(ctx, convID, "cli-stamped"); err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := s.MarkInputInjected(ctx, stamped.ID, "t1"); err != nil || ok {
-		t.Fatalf("a stamped steer was injected (ok=%v err=%v)", ok, err)
-	}
-	row, err := s.ClaimNextQueuedInput(ctx, convID, ClaimTurnPrefix+"x")
-	if err != nil || row == nil || row.ID != next.ID {
-		t.Fatalf("claim = %+v, %v; want the unstamped row behind the stamped one", row, err)
-	}
-	if got, _ := s.LookupInput(ctx, convID, "cli-stamped"); got == nil || got.State != InputStateQueued {
-		t.Fatalf("stamped row = %+v, want left queued for the Stop to withdraw", got)
+	for _, recover := range []bool{false, true} {
+		t.Run(map[bool]string{false: "drain", true: "boot recovery"}[recover], func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			convID := seedConvAndTurn(t, s, "t1")
+			stamped := enqueue(t, s, convID, "cli-stamped", "stopped", InputModeSteer)
+			next := enqueue(t, s, convID, "cli-next", "next", InputModeQueued)
+			if err := s.MarkInputStopRequested(ctx, convID, "cli-stamped"); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := s.MarkInputInjected(ctx, stamped.ID, "t1"); err != nil || ok {
+				t.Fatalf("a stamped steer was injected (ok=%v err=%v)", ok, err)
+			}
+			if recover {
+				if _, _, _, err := s.RecoverInputQueue(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				row, err := s.ClaimNextQueuedInput(ctx, convID, ClaimTurnPrefix+"x")
+				if err != nil || row == nil || row.ID != next.ID {
+					t.Fatalf("claim = %+v, %v; want the unstamped row behind the stamped one", row, err)
+				}
+			}
+			if got, _ := s.LookupInput(ctx, convID, "cli-stamped"); got == nil || got.State != InputStateCancelled {
+				t.Fatalf("stamped row = %+v, want cancelled", got)
+			}
+		})
 	}
 }

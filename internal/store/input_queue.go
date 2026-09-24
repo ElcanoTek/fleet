@@ -302,8 +302,17 @@ func (s *Store) CountPendingInputs(ctx context.Context, convID string) (int, err
 // pending queue for turnID (queued -> running). SKIP LOCKED makes concurrent
 // drainers safe without process-level coordination; nil means the queue is
 // empty. A row a Stop by key stamped (stop_requested_at) is never claimed:
-// the Stop is withdrawing it.
+// it is cancelled instead, as the Stop that stamped it would have withdrawn it.
 func (s *Store) ClaimNextQueuedInput(ctx context.Context, convID, turnID string) (*InputQueueRow, error) {
+	// A stamped row left queued (its Stop could not withdraw it and was not
+	// retried) is cancelled here rather than skipped for good: nothing would
+	// ever launch it, and it would otherwise read as queued on every replay.
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+		  WHERE conversation_id = $1 AND state = 'queued' AND stop_requested_at IS NOT NULL`,
+		convID, time.Now().Unix()); err != nil {
+		return nil, err
+	}
 	row := s.db.QueryRowContext(ctx,
 		`UPDATE chat_input_queue SET state = 'running', turn_id = $2, updated_at = $3
 		  WHERE id = (SELECT id FROM chat_input_queue
@@ -529,8 +538,9 @@ func (s *Store) PurgeTerminalInputs(ctx context.Context, retention time.Duration
 //     them (same predicate as SettleTurnInputs);
 //   - direct-turn records (mode 'direct') that did not commit are CANCELLED:
 //     a direct input is never re-queued;
-//   - rows a Stop by key named (stop_requested_at) that did not commit are
-//     CANCELLED: the Stop was answered, and its in-memory record is gone;
+//   - rows a Stop by key named (stop_requested_at) that did not commit —
+//     queued ones included — are CANCELLED: the Stop was answered, and its
+//     in-memory record is gone;
 //   - the rest return to QUEUED (visible + addressable; deliberately NOT
 //     auto-drained at boot — restarting the server must not start unattended
 //     LLM spend).
@@ -586,10 +596,12 @@ func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed, can
 	// A row a Stop by key named (stop_requested_at) whose input never
 	// committed (the committed ones completed above) is cancelled, not
 	// re-queued: its Stop was answered, and the in-memory record of it died
-	// with the process.
+	// with the process. A stamped row still queued is cancelled too — the
+	// process died before the Stop withdrew it, and a drain never claims a
+	// stamped row, so it would otherwise sit queued for good.
 	res, err = s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
-		  WHERE state IN ('running','injected') AND mode <> 'direct' AND stop_requested_at IS NOT NULL`,
+		  WHERE state IN ('queued','running','injected') AND mode <> 'direct' AND stop_requested_at IS NOT NULL`,
 		time.Now().Unix())
 	if err != nil {
 		return 0, completed, cancelled, err
