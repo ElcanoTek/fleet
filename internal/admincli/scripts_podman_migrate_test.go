@@ -90,6 +90,7 @@ func TestSmokeRetryPlan(t *testing.T) {
 		// unknown value restricts rather than being taken for podman.
 		{"uninterpolated manifest expression", "1", "1", "${RUNNER_BACKEND:-pre {inner}}", stalePauseErr, "report"},
 		{"unrecognized backend", "1", "1", "docker", stalePauseErr, "report"},
+		{"manifest backend doctor could not parse", "1", "1", "unparsed", stalePauseErr, "report"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := podmanMigrateLib(t, "smoke_retry_plan", tc.deferred, tc.canRestart, tc.backend, tc.smoke)
@@ -97,6 +98,54 @@ func TestSmokeRetryPlan(t *testing.T) {
 				t.Errorf("smoke_retry_plan = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestUnitProvenStopped — only systemd's explicit inactive/failed is a stop.
+// "activating" is the Restart=always auto-restart delay (systemd is about to
+// start fleet again) and "deactivating" is still running: migrating during
+// either deletes a pool that is, or is about to be, live.
+func TestUnitProvenStopped(t *testing.T) {
+	// unit_proven_stopped reports through its exit status; this wrapper turns
+	// that into output, since podmanMigrateLib fails on a non-zero exit.
+	const probe = `probe() { if unit_proven_stopped "$1"; then echo stopped; else echo live; fi; }; probe`
+	for state, want := range map[string]string{
+		"inactive": "stopped", "failed": "stopped",
+		"active": "live", "activating": "live", "deactivating": "live", "reloading": "live", "": "live",
+	} {
+		if got := podmanMigrateLib(t, probe, state); got != want {
+			t.Errorf("unit_proven_stopped(%q) => %s, want %s", state, got, want)
+		}
+	}
+}
+
+// TestFleetIsLive — step 3's liveness gate. The unit counts as live unless
+// systemd reports it PROVEN stopped: the Restart=always auto-restart delay
+// ("activating") must not look like "nothing live", or migrate runs just
+// before systemd starts fleet again and deletes its new pool. A fleet process
+// under another supervisor counts on its own.
+func TestFleetIsLive(t *testing.T) {
+	const stubs = `SERVICE_NAME=fleet SERVICE_USER=fleet
+systemctl() { [[ "$1" == show ]] && echo "$UNIT_STATE"; }
+pgrep() { [[ "$PROC" == 1 ]]; }
+if fleet_is_live; then echo live; else echo idle; fi`
+	for _, tc := range []struct{ state, proc, want string }{
+		{"inactive", "0", "idle"},
+		{"failed", "0", "idle"},
+		{"active", "0", "live"},
+		{"activating", "0", "live"}, // the auto-restart delay
+		{"deactivating", "0", "live"},
+		{"inactive", "1", "live"}, // another supervisor's fleet
+	} {
+		cmd := exec.Command("bash", "-c", `. "$0"; set -u; `+stubs, filepath.Join(repoRootFromTest(t), "scripts", "lib", "podman-migrate.sh"))
+		cmd.Env = append(os.Environ(), "UNIT_STATE="+tc.state, "PROC="+tc.proc)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("bash: %v\n%s", err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != tc.want {
+			t.Errorf("fleet_is_live with ActiveState=%q, process=%s => %s, want %s", tc.state, tc.proc, got, tc.want)
+		}
 	}
 }
 
@@ -145,6 +194,20 @@ func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 	varBundle := writeBundle("var", "${RUNNER_BACKEND:-podman}")
 	reqBundle := writeBundle("req", "${RUNNER_BACKEND:?set RUNNER_BACKEND}")
 	kubeBundle := writeBundle("kube", "kubernetes")
+	// Valid YAML the block reader must not misread as "no backend" (= podman).
+	commented := filepath.Join(dir, "commented")
+	inline := filepath.Join(dir, "inline")
+	for b, m := range map[string]string{
+		commented: "app_name: Test\nsandbox: # runner settings\n  backend: kubernetes\n",
+		inline:    "app_name: Test\nsandbox: {tag: localhost/test:latest, backend: kubernetes}\n",
+	} {
+		if err := os.MkdirAll(b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b, "manifest.yaml"), []byte(m), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	envFile := filepath.Join(dir, "fleet.env")
 	for _, tc := range []struct {
 		name, envBody string
@@ -159,6 +222,10 @@ func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 		// Present-but-empty in the daemon's env still beats the env file.
 		{"daemon env empty backend beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\nFLEET_SANDBOX_BACKEND=kubernetes\n", []string{"FLEET_SANDBOX_BACKEND="}, "podman"},
 		{"manifest ${VAR:?msg}", "FLEET_CLIENT_CONFIG_DIR=" + reqBundle + "\n", []string{"RUNNER_BACKEND=kubernetes"}, "kubernetes"},
+		{"sandbox block line with a comment", "FLEET_CLIENT_CONFIG_DIR=" + commented + "\n", nil, "kubernetes"},
+		// Unreadable to the block parser: "unparsed", which is not podman, so
+		// step 8 restricts (TestSmokeRetryPlan pins that any non-podman does).
+		{"inline sandbox mapping", "FLEET_CLIENT_CONFIG_DIR=" + inline + "\n", nil, "unparsed"},
 		// The daemon loads the bundle ITS env names, not the env file's.
 		{"daemon bundle dir beats env file", "FLEET_CLIENT_CONFIG_DIR=" + varBundle + "\n", []string{"FLEET_CLIENT_CONFIG_DIR=" + kubeBundle}, "kubernetes"},
 	} {

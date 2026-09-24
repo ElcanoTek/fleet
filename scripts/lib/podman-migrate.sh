@@ -44,6 +44,34 @@ resolve_sandbox_backend() {
   echo "${raw:-podman}"
 }
 
+# unit_proven_stopped ACTIVE_STATE — true only for a unit systemd reports as
+# exactly inactive or failed. A negative `is-active` is NOT a stop: it also
+# covers "deactivating" (still running) and "activating" — including the
+# Restart=always auto-restart delay, where systemd is about to start fleet
+# again. Both liveness and the helper's stop check use this, so a migrate is
+# never taken on a unit that is merely between runs. An empty state (no
+# systemd, or no such unit) is left to the caller's process check.
+unit_proven_stopped() {
+  [[ "$1" == "inactive" || "$1" == "failed" ]]
+}
+
+# fleet_is_live — true when a fleet process may hold a warm sandbox pool: the
+# unit is not proven stopped (unit_proven_stopped), or a `fleet` process runs
+# as the service user (the unit's
+# ExecStart, or the same binary under another supervisor). Errs toward live:
+# a false "live" only skips a reset, a false "not live" deletes a pool.
+fleet_is_live() {
+  local state
+  if command -v systemctl >/dev/null 2>&1; then
+    # Live unless PROVEN stopped: "activating" (the Restart=always delay)
+    # and "deactivating" count, since systemd is about to run fleet again or
+    # still is. A missing unit reports inactive.
+    state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+    unit_proven_stopped "${state:-inactive}" || return 0
+  fi
+  pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
+}
+
 # podman_migrate_plan BACKEND INFO_OK INFO_ERR LIVE_CONTAINERS FLEET_LIVE CAN_RESTART
 #   Step 3's decision. BACKEND is accepted for symmetry with smoke_retry_plan
 #   but deliberately NOT consulted: liveness is the gate on every backend, so
@@ -123,7 +151,7 @@ migrate_live_service() {
   systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
   systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
   state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-  if [[ "$state" != "inactive" && "$state" != "failed" ]] \
+  if ! unit_proven_stopped "$state" \
      || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1; then
     fail "${SERVICE_NAME}.service did not stop (ActiveState=${state:-unknown}) — podman system migrate NOT run (it would delete the live sandbox pool); journalctl -u ${SERVICE_NAME} -n 50"
     rc=1

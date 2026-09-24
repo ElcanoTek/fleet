@@ -227,14 +227,6 @@ run_as_fleet() {
     sudo -u "$SERVICE_USER" HOME="$SERVICE_HOME" XDG_RUNTIME_DIR="/run/${SERVICE_USER}" "$@" )
 }
 
-# fleet_is_live — true when a fleet process may hold a warm sandbox pool: the
-# unit is active, or a `fleet` process runs as the service user (the unit's
-# ExecStart, or the same binary under another supervisor). Errs toward live:
-# a false "live" only skips a reset, a false "not live" deletes a pool.
-fleet_is_live() {
-  systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null \
-    || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1
-}
 
 # deploy_env KEY — KEY as the fleet daemon sees it. The daemon's own process
 # env wins (clientconfig applies the env file with "process env wins"
@@ -288,7 +280,7 @@ bundle_dir="$(deploy_env FLEET_CLIENT_CONFIG_DIR)"
 manifest_sandbox_scalar() {
   local key="$1" raw
   raw="$(awk -v key="$key" '
-    /^sandbox:[[:space:]]*$/ { b=1; next }
+    /^sandbox:[[:space:]]*(#.*)?$/ { b=1; next }
     /^[^[:space:]]/          { b=0 }
     b && $0 ~ "^[[:space:]]+" key ":" { sub("^[[:space:]]+" key ":[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
   ' "$bundle_dir/manifest.yaml" 2>/dev/null)"
@@ -307,7 +299,16 @@ manifest_sandbox_scalar() {
 # normalization (sandbox.ResolveBackend): FLEET_SANDBOX_BACKEND, else the
 # bundle's sandbox.backend, else podman. Only the podman backend keeps its
 # pool in the service user's rootless store — the store migrate resets.
-sandbox_backend="$(resolve_sandbox_backend "$(deploy_env FLEET_SANDBOX_BACKEND)" "$(manifest_sandbox_scalar backend)")"
+# A parse miss must not read as "no backend configured" (which is podman):
+# when this block-style reader finds nothing but the manifest mentions a
+# backend key anywhere (an inline {backend: ...} mapping, say), the backend is
+# "unparsed" — not podman — so step 8 restricts rather than restarts.
+manifest_backend="$(manifest_sandbox_scalar backend)"
+if [[ -z "$manifest_backend" ]] \
+   && grep -Eq '(^|[[:space:],{])backend[[:space:]]*:' "$bundle_dir/manifest.yaml" 2>/dev/null; then
+  manifest_backend="unparsed"
+fi
+sandbox_backend="$(resolve_sandbox_backend "$(deploy_env FLEET_SANDBOX_BACKEND)" "$manifest_backend")"
 
 # ── dry-run: print the checklist and exit ────────────────────────────────────
 # Doctor's real run is condition-driven (it probes, then fixes what the probe
@@ -756,7 +757,7 @@ CONF
           fixed "podman system migrate run (podman reported a stale pause process) — ${SERVICE_NAME} stopped for it and started again, rebuilding its sandbox pool"
         fi ;;
       refuse)
-        advise "podman reports a stale pause process, but ${SERVICE_NAME} is live and this run cannot restart it (--no-restart, or not a systemd-managed unit) — left alone, since migrate would delete its sandboxes; stop fleet, run podman system migrate as $SERVICE_USER, start fleet (or rerun: sudo fleet doctor)" ;;
+        advise "podman reports a stale pause process, but ${SERVICE_NAME} is live and this run cannot restart it (--no-restart, or not a systemd-managed unit) — left alone, since migrate would delete its sandboxes; rerun without --no-restart (sudo fleet doctor) to have it done safely, or by hand: stop fleet, recreate /run/${SERVICE_USER} (install -d -m 0700 -o $SERVICE_USER -g $SERVICE_USER /run/${SERVICE_USER} — stopping the unit removes it), run podman system migrate as $SERVICE_USER, start fleet" ;;
     esac
   fi
 

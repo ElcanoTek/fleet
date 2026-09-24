@@ -420,15 +420,18 @@ production-only bug. The pass covers, in order:
    `/run/fleet`, a `podman system migrate` (clears stale pause namespaces),
    and a `podman info` probe **as the service user**. migrate stops every
    running container of that user — the running service's sandbox pool
-   included — so doctor runs it only when nothing is live (no running
-   container of the user and no `fleet` process). While fleet is live it
+   included — so doctor runs it only when nothing is live: no running
+   container of the user, no `fleet` process, and the unit proven stopped
+   (`ActiveState` inactive or failed — the `Restart=always` auto-restart
+   delay counts as live). While fleet is live it
    runs it only when podman itself reports a stale pause process **and**
    doctor can restart `fleet`, as one stop → migrate → start (fleet-web
    brought back), so no process ever holds the deleted pool. migrate runs
    only once the unit is proven stopped — `ActiveState` inactive or failed
    and no `fleet` process left — else it aborts. Under
    `--no-restart`, or with fleet under another supervisor, it leaves the
-   store alone and prints the stop → migrate → start sequence instead. A
+   store alone and prints the manual sequence instead (stop fleet, recreate
+   `/run/fleet`, which the stop removes, migrate, start fleet). A
    step-8 sandbox smoke that fails with that same error after a skip gets
    migrate, a `fleet` restart (fleet-web checked back up) and a second
    smoke, on the same conditions. A launch failing any other way — disk or
