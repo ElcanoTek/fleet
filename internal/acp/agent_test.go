@@ -1055,7 +1055,7 @@ func TestReplayOfAnAcceptedInput(t *testing.T) {
 	}
 	for state, want := range map[string]string{
 		"running":   "already running this message from an earlier attempt",
-		"completed": "already ran this message from an earlier attempt",
+		"completed": "already took this message from an earlier attempt (it is not run twice). How that turn ended — its reply, or an error — is in",
 	} {
 		t.Run(state, func(t *testing.T) {
 			h := newHarness(t, harnessOpts{turn: ack(state)})
@@ -1078,20 +1078,39 @@ func TestReplayOfAnAcceptedInput(t *testing.T) {
 // A cancel whose answer was lost (no turn id, no acknowledgement) stops the
 // prompt by its key: fleet withdraws it, cancels its turn or refuses to launch
 // it, atomically with registration. A Stop fleet refuses is reported as
-// unconfirmed, never as stopped.
+// unconfirmed, never as stopped. A confirmed Stop settles the prompt, so the
+// same text sent again runs under a fresh key rather than replaying the
+// cancelled one; an unconfirmed one keeps the key for a safe retry.
 func TestLostAnswerIsReconciledByKey(t *testing.T) {
-	for name, cancelStatus := range map[string]int{"accepted": 0, "refused": http.StatusInternalServerError} {
-		t.Run(name, func(t *testing.T) {
-			seeded := false
+	for _, tc := range []struct {
+		name         string
+		cancelStatus int
+		drop         bool // the connection drops mid-cancel: the outcome is unknown
+	}{
+		{"accepted", 0, false},
+		{"refused", http.StatusInternalServerError, false},
+		{"connection lost, accepted", 0, true},
+		{"connection lost, refused", http.StatusInternalServerError, true},
+	} {
+		cancelStatus := tc.cancelStatus
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
 			started := make(chan struct{})
 			h := newHarness(t, harnessOpts{cancelStatus: cancelStatus, turn: func(w *sseWriter, r *http.Request) {
-				if !seeded { // the first prompt seeds the session's conversation
-					seeded = true
+				calls++
+				if calls != 2 { // the first prompt seeds the session's conversation; the resend completes
 					w.emit("conversation", map[string]any{"id": "conv-L"})
 					w.emit("turn.completed", map[string]any{})
 					return
 				}
 				close(started) // accepted, but the answer never comes
+				if tc.drop {
+					time.Sleep(100 * time.Millisecond) // the cancel is in flight
+					if conn, _, err := w.w.(http.Hijacker).Hijack(); err == nil {
+						_ = conn.Close()
+					}
+					return
+				}
 				<-r.Context().Done()
 			}})
 			sid := h.newSession(t)
@@ -1121,6 +1140,17 @@ func TestLostAnswerIsReconciledByKey(t *testing.T) {
 			unconfirmed := strings.Contains(h.client.text(), "could not confirm this turn stopped")
 			if unconfirmed != (cancelStatus != 0) {
 				t.Errorf("unconfirmed notice = %v with cancel status %d: %q", unconfirmed, cancelStatus, h.client.text())
+			}
+			h.fleet.mu.Unlock()
+			if _, err := h.prompt(sid, "second"); err != nil { // sent again, as the user is told to
+				t.Fatal(err)
+			}
+			h.fleet.mu.Lock()
+			if len(h.fleet.chats) != 3 {
+				t.Fatalf("chats = %d, want 3", len(h.fleet.chats))
+			}
+			if reused := h.fleet.chats[2].InputID == key; reused != (cancelStatus != 0) {
+				t.Errorf("resend reused the cancelled key = %v with cancel status %d; want a fresh key only after a confirmed Stop", reused, cancelStatus)
 			}
 		})
 	}

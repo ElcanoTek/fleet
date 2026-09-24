@@ -361,7 +361,7 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		// stopped, and it is not an unconfirmed stop either.
 		stopErr, stop.alreadyEnded = nil, true
 	}
-	sess.retainKey(textMsg, key, target, convID, keep, stopErr, queued)
+	sess.retainKey(textMsg, key, target, convID, keep && !stoppedForGood(stop, stopErr), stopErr, queued)
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out
 	// before any outcome.
@@ -628,6 +628,13 @@ func outcomeUnknown(err error) bool {
 // session's — so a later resend or a Stop by key goes where fleet can find
 // the input.
 func (s *session) retainKey(message, key, target, convID string, keep bool, stopErr error, queued *chattui.QueuedError) {
+	if !keep {
+		// Settled — including a lost answer whose Stop fleet confirmed:
+		// the text key goes, or a later prompt with the same text (as the
+		// user is told to send it again) would reuse it and be answered
+		// with the cancelled replay instead of running.
+		s.clearUnsettled(message, key)
+	}
 	if stopErr != nil {
 		s.setUnsettled(message, key)
 	}
@@ -635,6 +642,13 @@ func (s *session) retainKey(message, key, target, convID string, keep bool, stop
 	if queued != nil && convID != "" && (queued.State == "running" || queued.State == "queued" || queued.State == "injected") {
 		s.settle(key, convID, true)
 	}
+}
+
+// stoppedForGood reports that this prompt's Stop is confirmed: fleet
+// stopped the input (not "already finished", not unconfirmed or refused), so
+// its outcome is settled even if the answer itself was lost.
+func stoppedForGood(stop stopOutcome, stopErr error) bool {
+	return stop.intervened && stopErr == nil && !stop.alreadyEnded
 }
 
 // keepKey reports whether key must survive for a retry: an unknown outcome
@@ -696,7 +710,9 @@ func acceptedNote(q *chattui.QueuedError, where string) string {
 	case q.Replayed() && (q.State == "running" || q.State == "injected"):
 		return "fleet is already running this message from an earlier attempt (it is not run twice). Follow it at " + where
 	case q.Replayed() && q.State == "completed":
-		return "fleet already ran this message from an earlier attempt (it is not run twice). Its reply is in " + where
+		// "completed" means the input's user entry committed, not that its
+		// turn succeeded: the turn may have failed or been stopped after.
+		return "fleet already took this message from an earlier attempt (it is not run twice). How that turn ended — its reply, or an error — is in " + where
 	case q.Replayed() && q.State == "cancelled":
 		return "an earlier attempt of this message was cancelled (stopped, or it failed before it started), so it did not run. To run it, send it again as a new message."
 	case q.Replayed():
