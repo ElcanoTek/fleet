@@ -241,7 +241,12 @@ is_stale_pause_error() {
 # which podman needs, and takes fleet-web down with it (BindsTo=), which
 # starting fleet does not bring back — hence those steps.
 stale_pause_fix() {
-  printf '%s' "check nothing is running (fleet sched task list --status running; also leased), then: sudo systemctl stop ${SERVICE_NAME}; sudo install -d -m 0700 -o ${SERVICE_USER} -g ${SERVICE_USER} /run/${SERVICE_USER}; cd ${SERVICE_HOME} && sudo -u ${SERVICE_USER} HOME=${SERVICE_HOME} XDG_RUNTIME_DIR=/run/${SERVICE_USER} podman system migrate; sudo systemctl start ${SERVICE_NAME} (and fleet-web, if installed: sudo systemctl start fleet-web) — see docs/OPERATORS.md, \"Stale podman pause process\""
+  # One &&-chain, so a paste stops at the first failure: above all, migrate
+  # never runs unless the stop succeeded AND no fleet process is left (a
+  # fleet under another supervisor is not stopped by systemctl). Only pgrep's
+  # explicit no-match (exit 1) passes: `! pgrep` would also pass when pgrep
+  # is missing (127).
+  printf '%s' "check nothing is running (fleet sched task list --status running; also leased), then run as one line: sudo systemctl stop ${SERVICE_NAME} && { pgrep -u ${SERVICE_USER} -x fleet >/dev/null; [ \$? -eq 1 ]; } && sudo install -d -m 0700 -o ${SERVICE_USER} -g ${SERVICE_USER} /run/${SERVICE_USER} && (cd ${SERVICE_HOME} && sudo -u ${SERVICE_USER} HOME=${SERVICE_HOME} XDG_RUNTIME_DIR=/run/${SERVICE_USER} podman system migrate) && sudo systemctl start ${SERVICE_NAME} — then, if installed, sudo systemctl start fleet-web. If fleet runs under another supervisor, stop it there first (the pgrep check refuses otherwise). See docs/OPERATORS.md, \"Stale podman pause process\""
 }
 
 # ── dry-run: print the checklist and exit ────────────────────────────────────

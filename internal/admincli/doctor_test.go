@@ -4,6 +4,7 @@
 package admincli
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -175,7 +176,8 @@ func TestDoctorNeverRunsPodmanMigrate(t *testing.T) {
 
 // TestDoctorStalePauseHelpers — the detection and the printed repair, run
 // straight out of doctor.sh. Only podman's own stale-pause error is matched
-// (a disk or PID failure is not migrate's to fix), and the repair names the
+// (a disk or PID failure is not migrate's to fix), and the repair — one
+// &&-chain gated on a proven stop — names the
 // CONFIGURED unit, user and home, recreates /run/<user> (the stop removes it)
 // and brings fleet-web back (the stop takes it down through BindsTo=).
 func TestDoctorStalePauseHelpers(t *testing.T) {
@@ -214,14 +216,61 @@ stale_pause_fix`
 		"no: Error: crun: pids limit reached",
 		"no: Error: no space left on device",
 		"fleet sched task list --status running",
-		"sudo systemctl stop fleet-prod;",
-		"sudo install -d -m 0700 -o svc -g svc /run/svc;",
-		"cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate;",
-		"sudo systemctl start fleet-prod",
+		// One &&-chain: migrate runs only after a successful stop AND with
+		// no fleet process left (another supervisor is not stopped by
+		// systemctl), so a pasted repair can never migrate a live pool.
+		"sudo systemctl stop fleet-prod && { pgrep -u svc -x fleet >/dev/null; [ $? -eq 1 ]; } && sudo install -d -m 0700 -o svc -g svc /run/svc && (cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate) && sudo systemctl start fleet-prod",
 		"sudo systemctl start fleet-web",
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("want %q in:\n%s", want, out)
 		}
+	}
+}
+
+// TestDoctorStalePauseRepairChainIsGated — the printed repair, EXECUTED with
+// stubbed sudo/pgrep. Pasted as one line, it must reach `podman system
+// migrate` only after a successful stop AND pgrep's explicit "no fleet
+// process" (exit 1): not when the stop fails, not while fleet is alive (a
+// supervisor systemctl cannot stop), and not when pgrep is missing (127) —
+// any of those would migrate a live pool, the outage this PR fixes.
+func TestDoctorStalePauseRepairChainIsGated(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "doctor.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(body), "\nstale_pause_fix() {")
+	end := strings.Index(string(body)[start:], "\n}\n")
+	fn := string(body)[start : start+end+3]
+	render := exec.Command("bash", "-c", fn+`
+SERVICE_NAME=fleet SERVICE_USER=fleet SERVICE_HOME=/tmp
+fix="$(stale_pause_fix)"; chain="${fix#*run as one line: }"; printf '%s' "${chain%% — then*}"`)
+	chain, err := render.Output()
+	if err != nil || !strings.HasPrefix(string(chain), "sudo systemctl stop fleet && ") {
+		t.Fatalf("could not extract the repair chain (%v): %q", err, chain)
+	}
+	for _, tc := range []struct {
+		name            string
+		stopRC, pgrepRC int
+		wantMigrate     bool
+	}{
+		{"clean stop, no fleet process", 0, 1, true},
+		{"stop fails", 1, 1, false},
+		{"fleet still alive (another supervisor)", 0, 0, false},
+		{"pgrep missing", 0, 127, false},
+		{"pgrep error", 0, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubs := fmt.Sprintf(`sudo() { if [[ $1 == systemctl && $2 == stop ]]; then return %d; fi; echo "RAN: $*"; }
+pgrep() { return %d; }
+`, tc.stopRC, tc.pgrepRC)
+			out, _ := exec.Command("bash", "-c", stubs+string(chain)).CombinedOutput()
+			if got := strings.Contains(string(out), "podman system migrate"); got != tc.wantMigrate {
+				t.Errorf("migrate ran = %v, want %v\n%s", got, tc.wantMigrate, out)
+			}
+		})
 	}
 }
