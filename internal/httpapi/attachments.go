@@ -132,7 +132,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 	for _, fh := range files {
 		att, err := saveUpload(baseDir, fh)
 		if err != nil {
-			log.Printf("saveUpload %q: %v", fh.Filename, err) //nolint:gosec // filename is %q-quoted
+			log.Printf("saveUpload %q: %s", logSafe(fh.Filename), logSafe(err.Error())) //nolint:gosec // G706: both values pass logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
 			http.Error(w, "save upload: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
