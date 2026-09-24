@@ -848,7 +848,7 @@ func inputKeyMark(convID, key string) string { return convID + "\x00" + key }
 // cancelled, and the key is marked so a turn not registered yet is refused
 // by registerTurnGated. Both happen in one inflightMu section, the one
 // registration takes, so no launch can slip between them.
-func (s *Server) cancelInputTurn(convID, key string) {
+func (s *Server) cancelInputTurn(convID, key string) (stoppedTurn bool) {
 	now := time.Now()
 	s.inflightMu.Lock()
 	if s.cancelledInputs == nil {
@@ -879,6 +879,7 @@ func (s *Server) cancelInputTurn(convID, key string) {
 	if running {
 		entry.cancel()
 	}
+	return running
 }
 
 // inputKeyStopped reports whether a Stop naming key is still in force.

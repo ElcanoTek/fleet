@@ -153,6 +153,8 @@ type fakeChatStore struct {
 	onMemories func()
 	// beforeClaim runs when a direct claim is about to be stored.
 	beforeClaim func()
+	// cancelKeyFailures makes that many CancelInputKey calls fail.
+	cancelKeyFailures int
 	// onCreate runs on each CreateConversation call, before it creates.
 	onCreate func()
 	// claimAfterEnqueue marks each enqueued row claimed (running) at once.
@@ -1024,6 +1026,10 @@ func (s *fakeChatStore) ReleaseDirectInput(_ context.Context, id string) error {
 func (s *fakeChatStore) CancelInputKey(_ context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.cancelKeyFailures > 0 {
+		s.cancelKeyFailures--
+		return store.InputQueueRow{}, false, errors.New("fake: cancel key failed")
+	}
 	for _, it := range s.queue {
 		if it.ConversationID == r.ConversationID && it.ClientInputID == r.ClientInputID {
 			return it, false, nil
@@ -1300,7 +1306,7 @@ func TestCancelByInputKey(t *testing.T) {
 		srv := newDefaultChatServer(t, eng, st)
 		var convID string
 		st.onClaim = func(r store.InputQueueRow) { convID = r.ConversationID }
-		st.onMemories = func() { srv.cancelInput(context.Background(), "u@x.com", convID, "key-p") }
+		st.onMemories = func() { srv.stopInput(context.Background(), "u@x.com", convID, "key-p") }
 		w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "key-p"})
 		if w.Code != http.StatusConflict {
 			t.Fatalf("status %d: %s", w.Code, w.Body.String())
@@ -1317,7 +1323,7 @@ func TestCancelByInputKey(t *testing.T) {
 		st := newFakeChatStore()
 		srv := newDefaultChatServer(t, eng, st)
 		conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
-		srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-t")
+		srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-t")
 		w := postChatRequest(t, srv, map[string]any{"message": "send the report", "conversation_id": conv.ID, "input_id": "key-t"})
 		if !strings.Contains(w.Body.String(), `"state":"cancelled"`) || eng.turns != 0 {
 			t.Fatalf("status %d %s, turns %d: a Stop that arrived first must refuse the late submission", w.Code, w.Body.String(), eng.turns)
@@ -1346,7 +1352,7 @@ func TestCancelByInputKey(t *testing.T) {
 			close(done)
 		}()
 		<-eng.started
-		srv.cancelInput(context.Background(), "u@x.com", "conv-1", "key-r")
+		srv.stopInput(context.Background(), "u@x.com", "conv-1", "key-r")
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
@@ -1493,7 +1499,7 @@ func TestCancelByInputKey_LateQueuedRowIsWithdrawn(t *testing.T) {
 	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
 	_, _, tok, _ := srv.registerTurn(conv.ID, func() {}) // another surface's long turn
 	defer srv.finishTurn(conv.ID, tok)
-	srv.cancelInput(context.Background(), "u@x.com", conv.ID, "late-1")
+	srv.stopInput(context.Background(), "u@x.com", conv.ID, "late-1")
 
 	w := postChatRequest(t, srv, map[string]any{"message": "later", "conversation_id": conv.ID, "input_id": "late-1"})
 	if !strings.Contains(w.Body.String(), `"state":"cancelled"`) {
@@ -1515,7 +1521,7 @@ func TestCancelByInputKey_LateRowClaimedByADrainIsCancelled(t *testing.T) {
 	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
 	_, _, tok, _ := srv.registerTurn(conv.ID, func() {})
 	defer srv.finishTurn(conv.ID, tok)
-	srv.cancelInput(context.Background(), "u@x.com", conv.ID, "late-2")
+	srv.stopInput(context.Background(), "u@x.com", conv.ID, "late-2")
 
 	w := postChatRequest(t, srv, map[string]any{"message": "later", "conversation_id": conv.ID, "input_id": "late-2"})
 	if !strings.Contains(w.Body.String(), `"state":"cancelled"`) {
@@ -1622,7 +1628,7 @@ func TestCancelByInputKey_UnboundClaimIsCancelledDurably(t *testing.T) {
 	var convID string
 	st.onClaim = func(r store.InputQueueRow) { convID = r.ConversationID }
 	st.onMemories = func() {
-		srv.cancelInput(context.Background(), "u@x.com", convID, "key-e")
+		srv.stopInput(context.Background(), "u@x.com", convID, "key-e")
 		srv.inflightMu.Lock()
 		srv.cancelledInputs = nil // the mark is evicted before the turn registers
 		srv.inflightMu.Unlock()
@@ -1651,8 +1657,8 @@ func TestCancelByInputKey_BoundClaimIsNotMarkedCancelled(t *testing.T) {
 	st.mu.Lock()
 	st.queue = append(st.queue, store.InputQueueRow{ID: "d-b", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-b", Mode: store.InputModeDirect, State: store.InputStateRunning, TurnID: "turn-ran"})
 	st.mu.Unlock()
-	if !srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-b") {
-		t.Fatal("cancelInput reported a store failure")
+	if _, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-b"); !ok {
+		t.Fatal("stopInput reported a store failure")
 	}
 	if row, _ := st.LookupInput(context.Background(), conv.ID, "key-b"); row == nil || row.State != store.InputStateRunning {
 		t.Fatalf("row = %+v, want the bound claim left to its turn's settlement", row)
@@ -1672,8 +1678,8 @@ func TestCancelByInputKey_DrainedRowIsCancelledDurably(t *testing.T) {
 	st.queue = append(st.queue, store.InputQueueRow{ID: "r-d", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-d", Mode: store.InputModeQueued, State: store.InputStateRunning, TurnID: claim})
 	st.mu.Unlock()
 	gen, _ := srv.stopGateForRow(conv.ID, 0)
-	if !srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-d") {
-		t.Fatal("cancelInput reported a store failure")
+	if _, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-d"); !ok {
+		t.Fatal("stopInput reported a store failure")
 	}
 	srv.inflightMu.Lock()
 	srv.cancelledInputs = nil // the mark is evicted before the turn registers
@@ -1708,8 +1714,8 @@ func TestCancelByInputKey_KeyIsTakenBeforeTheSubmission(t *testing.T) {
 				_, _, tok, _ := srv.registerTurn(conv.ID, func() {})
 				defer srv.finishTurn(conv.ID, tok)
 			}
-			if !srv.cancelInput(context.Background(), "u@x.com", conv.ID, "key-x") {
-				t.Fatal("cancelInput reported a store failure")
+			if _, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-x"); !ok {
+				t.Fatal("stopInput reported a store failure")
 			}
 			srv.inflightMu.Lock()
 			srv.cancelledInputs = nil // evicted before the submission lands
@@ -1877,5 +1883,78 @@ func TestUserScopedKey_ConcurrentSendsIntoTwoConversationsRunOnce(t *testing.T) 
 	eng.mu.Unlock()
 	if turns != 1 || !strings.Contains(w.Body.String(), `"conversation_id":"`+a.ID+`"`) {
 		t.Fatalf("turns %d, second answer %d %s: want one run, the second answered with the first", turns, w.Code, w.Body.String())
+	}
+}
+
+// A Stop by key reports an input that had already finished (409, nothing was
+// stopped): a completed row, or a row bound to a turn that is no longer
+// registered (it ended; settlement pending). One it did stop is a 204.
+func TestCancelByInputKey_ReportsAFinishedInput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  store.InputQueueRow
+		want int
+	}{
+		{"completed", store.InputQueueRow{Mode: store.InputModeDirect, State: store.InputStateCompleted, TurnID: "t-1"}, http.StatusConflict},
+		{"bound, turn ended", store.InputQueueRow{Mode: store.InputModeDirect, State: store.InputStateRunning, TurnID: "t-1"}, http.StatusConflict},
+		{"queued", store.InputQueueRow{Mode: store.InputModeQueued, State: store.InputStateQueued}, http.StatusNoContent},
+		{"never ran", store.InputQueueRow{Mode: store.InputModeDirect, State: store.InputStateCancelled}, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, &fakeEngine{}, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			tc.row.ID, tc.row.ConversationID, tc.row.UserEmail, tc.row.ClientInputID = "r-1", conv.ID, "u@x.com", "key-f"
+			st.mu.Lock()
+			st.queue = append(st.queue, tc.row)
+			st.mu.Unlock()
+			raw, _ := json.Marshal(map[string]any{"scope": "turn", "input_id": "key-f"})
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/conversations/"+conv.ID+"/cancel", bytes.NewReader(raw))
+			req.Header.Set("X-Chat-Server-Token", "tok")
+			req.Header.Set("X-User-Email", "u@x.com")
+			w := httptest.NewRecorder()
+			srv.Routes().ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("status %d (%s), want %d", w.Code, w.Body.String(), tc.want)
+			}
+		})
+	}
+}
+
+// The settlement of a race loser the queue refused is retried: a failed
+// write must not leave the acknowledged key with no row.
+func TestDirectClaim_RefusedRaceLoserSettlementIsRetried(t *testing.T) {
+	shortDirectPauses(t)
+	st := newFakeChatStore()
+	st.cancelKeyFailures = 2
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	st.onClaim = func(r store.InputQueueRow) {
+		srv.registerTurn(r.ConversationID, func() {})
+		st.mu.Lock()
+		for i := range maxPendingInputs {
+			st.queue = append(st.queue, store.InputQueueRow{ID: fmt.Sprintf("q-%d", i), ConversationID: r.ConversationID, UserEmail: "u@x.com", ClientInputID: fmt.Sprintf("k-%d", i), Mode: store.InputModeQueued, State: store.InputStateQueued})
+		}
+		st.mu.Unlock()
+	}
+	if w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "race-r"}); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st.mu.Lock()
+		var state string
+		for _, it := range st.queue {
+			if it.ClientInputID == "race-r" {
+				state = it.State
+			}
+		}
+		st.mu.Unlock()
+		if state == store.InputStateCancelled {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("key state = %q, want it settled cancelled after the retries", state)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

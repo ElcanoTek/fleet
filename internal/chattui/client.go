@@ -515,18 +515,25 @@ func (c *Client) Cancel(convID, turnID string) error {
 	return err
 }
 
-// ErrTurnNotRunning is Cancel's answer when the named turn had already ended:
-// the Stop cancelled nothing.
+// ErrTurnNotRunning is Cancel's answer when the named turn had already ended,
+// and CancelInput's when the input had already finished: the Stop cancelled
+// nothing.
 var ErrTurnNotRunning = errors.New("the turn had already ended; nothing was stopped")
 
 // CancelInput stops one input by its idempotency key (the input_id it was
 // submitted with), wherever it is: withdrawn if still queued, cancelled if its
 // turn runs, and refused if its turn has not registered yet. The server does
 // this atomically with turn registration, so a caller whose answer was lost
-// can stop its own input without knowing which state it reached.
+// can stop its own input without knowing which state it reached. An input
+// that had already finished returns ErrTurnNotRunning.
 func (c *Client) CancelInput(convID, inputID string) error {
 	payload, _ := json.Marshal(map[string]string{"scope": "turn", "input_id": strings.TrimSpace(inputID)})
-	return c.postCancel(convID, payload)
+	err := c.postCancel(convID, payload)
+	var se *StatusError
+	if errors.As(err, &se) && se.Code == http.StatusConflict {
+		return ErrTurnNotRunning // the input had already finished: nothing was stopped
+	}
+	return err
 }
 
 func (c *Client) postCancel(convID string, payload []byte) error {

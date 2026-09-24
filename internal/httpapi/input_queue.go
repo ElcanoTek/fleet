@@ -636,13 +636,23 @@ func steerSourceOrNil(m *steerMailbox) agentcore.SteerSource {
 // settleUnqueuedInput gives a key whose direct claim was released for the
 // queue, and then refused by it, an outcome: a cancelled row (nothing ran),
 // which a resend that was already told "running" finds instead of nothing.
-// Best effort: the refusal itself was already answered.
+// The refusal itself was already answered; a failed write is retried.
 func (s *Server) settleUnqueuedInput(user, convID, key string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
-		ID: uuid.NewString(), ConversationID: convID, UserEmail: user, ClientInputID: key,
-	}); err != nil {
-		log.Printf("settle unqueued input (conv=%s): %v", convID, err)
+	id := uuid.NewString()
+	try := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, _, err := s.store.CancelInputKey(ctx, store.InputQueueRow{
+			ID: id, ConversationID: convID, UserEmail: user, ClientInputID: key,
+		}); err != nil {
+			log.Printf("settle unqueued input (conv=%s): %v", convID, err)
+			return false
+		}
+		return true
+	}
+	if !try() {
+		// Retried in the background like the other claim settlements: an
+		// acknowledged key must not be left with no row.
+		s.retryDirectInput("settle_unqueued", id, 1, directReleaseBackoff, try)
 	}
 }

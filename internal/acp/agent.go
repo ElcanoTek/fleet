@@ -94,11 +94,14 @@ type session struct {
 	// a client may number messageIds per session, so an unscoped key would
 	// match another session's prompt and answer this one with its replay.
 	ns string
-	// unsettled holds, per prompt text, the key of every prompt whose outcome
-	// is unknown (bounded by maxUnsettled): the request may
-	// have been accepted but the answer was lost (a transport failure). A
-	// retry of the same text reuses its idempotency key, so fleet recognises
-	// the input it already accepted instead of running it a second time.
+	// unsettled holds, per prompt text (by its hash), the key of every
+	// prompt whose outcome is unknown: the request may have been accepted
+	// but the answer was lost (a transport failure). A retry of the same
+	// text reuses its idempotency key, so fleet recognises the input it
+	// already accepted instead of running it a second time. Nothing is
+	// evicted — forgetting a key would let its retry run twice — so the
+	// memory is one small entry per prompt whose answer was lost, for the
+	// life of the session.
 	unsettled map[string]string
 	// keyConv maps each unresolved key to the conversation it was first
 	// submitted to ("" = it started the session's conversation). A retry
@@ -107,10 +110,6 @@ type session struct {
 	// posted into a conversation created since would run the input again.
 	keyConv map[string]string
 }
-
-// maxUnsettled bounds the unresolved-key memory per session. Past it the
-// oldest entry is dropped — a retry of that text then gets a fresh key.
-const maxUnsettled = 64
 
 // target returns the conversation a prompt under key is sent to: the one
 // its key was first submitted to while it is unresolved, else the session's.
@@ -131,33 +130,22 @@ func (s *session) settle(key, conv string, retain bool) {
 	if s.keyConv == nil {
 		s.keyConv = map[string]string{}
 	}
-	if _, ok := s.keyConv[key]; !ok && len(s.keyConv) >= maxUnsettled {
-		for k := range s.keyConv { // any entry; the map is small
-			s.forgetKey(k)
-			break
-		}
-	}
 	s.keyConv[key] = conv
 }
 
-// forgetKey drops everything remembered about an unresolved key at once — its
-// retry key and the conversation it targets — so a retained key never loses
-// its target (a retry into the wrong conversation would run the input again).
-func (s *session) forgetKey(key string) {
-	delete(s.keyConv, key)
-	for m, k := range s.unsettled {
-		if k == key {
-			delete(s.unsettled, m)
-		}
-	}
+// textKey is the unsettled map's key for a prompt's text: a fixed-size hash,
+// so the entry stays small however long the prompt was.
+func textKey(message string) string {
+	sum := sha256.Sum256([]byte(message))
+	return hex.EncodeToString(sum[:])
 }
 
 // clearUnsettled forgets message's retained key only if it is key: a later,
 // different prompt with the same text (say, one carrying a messageId, so a
 // different key) must not wipe an earlier prompt's pending retry key.
 func (s *session) clearUnsettled(message, key string) {
-	if s.unsettled[message] == key {
-		delete(s.unsettled, message)
+	if s.unsettled[textKey(message)] == key {
+		delete(s.unsettled, textKey(message))
 	}
 }
 
@@ -165,13 +153,7 @@ func (s *session) setUnsettled(message, key string) {
 	if s.unsettled == nil {
 		s.unsettled = map[string]string{}
 	}
-	if _, ok := s.unsettled[message]; !ok && len(s.unsettled) >= maxUnsettled {
-		for _, k := range s.unsettled { // any entry; the map is small
-			s.forgetKey(k)
-			break
-		}
-	}
-	s.unsettled[message] = key
+	s.unsettled[textKey(message)] = key
 }
 
 var _ acpsdk.Agent = (*Agent)(nil)
@@ -402,6 +384,11 @@ func (a *Agent) promptOnce(ctx context.Context, p acpsdk.PromptRequest, sess *se
 		stop.intervened = true
 		stopErr = a.reconcileLost(convID, key)
 	}
+	if errors.Is(stopErr, chattui.ErrTurnNotRunning) {
+		// The Stop by key found the input already finished: nothing was
+		// stopped, and it is not an unconfirmed stop either.
+		stopErr, stop.alreadyEnded = nil, true
+	}
 	if stopErr != nil {
 		// The stop is unconfirmed, so the original may still run: a retry of
 		// the same text must reuse its key and be answered with that run,
@@ -527,8 +514,10 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 	case <-time.After(conversationWait):
 	}
 	if tr.ended() {
-		cancelStream() // nothing left to stop; just stop reading
-		stopped <- stopOutcome{}
+		// The turn's terminal frame arrived first: nothing left to stop, and
+		// the turn's outcome (tool effects included) stands.
+		cancelStream()
+		stopped <- stopOutcome{alreadyEnded: true}
 		return
 	}
 	var err error
@@ -557,7 +546,7 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 		// submission gets a targeted Stop, a queue row with this key is
 		// withdrawn.
 		cancelStream()
-		err = a.reconcileLost(id, key)
+		err = a.reconcileLost(id, key) // ErrTurnNotRunning: already finished (promptOnce says so)
 	} else {
 		select {
 		case <-streamDone:
@@ -589,7 +578,7 @@ func idempotencyKey(messageID *string, sess *session, message string) string {
 		sum := sha256.Sum256([]byte(*messageID))
 		return "acp-msg-" + sess.ns + "-" + hex.EncodeToString(sum[:])
 	}
-	if k, ok := sess.unsettled[message]; ok {
+	if k, ok := sess.unsettled[textKey(message)]; ok {
 		return k
 	}
 	return "fleet-acp-" + randomID()
@@ -629,6 +618,9 @@ func (a *Agent) stopAccepted(convID, key string, q *chattui.QueuedError) error {
 		return nil
 	}
 	if err := a.client.CancelInput(convID, key); err != nil {
+		if errors.Is(err, chattui.ErrTurnNotRunning) {
+			return err // it had already finished; the caller says so
+		}
 		return fmt.Errorf("the message was accepted and could not be stopped: %w", err)
 	}
 	return nil

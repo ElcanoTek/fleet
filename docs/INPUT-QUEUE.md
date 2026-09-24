@@ -42,7 +42,9 @@ retention guarantee: after a terminal row is purged, reusing its
   (`fleet acp`) can never cancel a successor, and learns that the turn
   finished on its own rather than taking the Stop for a cancellation. A targeted Stop is turn-scoped and never sweeps the
   queue. An optional `input_id` targets one input by its idempotency key,
-  wherever it is: a still-queued row is withdrawn, a running turn for it is
+  wherever it is (an input that had already finished — it ran, or its turn
+  ended with only its settlement pending — stops nothing and answers `409`,
+  like a `turn_id` Stop of an ended turn): a still-queued row is withdrawn, a running turn for it is
   cancelled, a steer already injected into a running turn is cancelled and so
   is the turn carrying it (the model cannot un-read it), and a turn not
   registered yet (a direct claim still being prepared, a row the drain just

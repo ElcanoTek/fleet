@@ -704,6 +704,10 @@ func TestNoStopAfterTheTurnEnded(t *testing.T) {
 	if len(h.fleet.cancels) != 0 {
 		t.Errorf("a Stop was sent after the turn ended: %q", h.fleet.cancels)
 	}
+	// Nothing was stopped, and the transcript says the finished turn stands.
+	if !strings.Contains(h.client.text(), "already finished") {
+		t.Errorf("a cancel after the terminal frame read as a confirmed stop: %q", h.client.text())
+	}
 }
 
 // A timeout that fires as the turn completes is not a timeout.
@@ -1476,28 +1480,22 @@ func TestLongMessageIdIsBoundedAndStable(t *testing.T) {
 	}
 }
 
-// Past the bound, an unresolved prompt is forgotten as one record: its retry
-// key and its target conversation go together, so no retained key is left
-// without its conversation (a retry into a newer one would run it again).
-func TestUnresolvedPromptsAreEvictedWhole(t *testing.T) {
+// Every prompt whose answer was lost keeps its key for the session, however
+// many there are: a retry of the earliest one still reuses its key (and goes
+// to its conversation), so fleet never runs it twice.
+func TestUnresolvedPromptsAreNeverEvicted(t *testing.T) {
 	sess := &session{convID: "newer"}
-	for i := range maxUnsettled {
+	const n = 500
+	for i := range n {
 		msg, key := fmt.Sprintf("prompt %d", i), fmt.Sprintf("key-%d", i)
 		sess.setUnsettled(msg, key)
 		sess.settle(key, "", true) // first prompts: no conversation yet
 	}
-	// messageId prompts are unresolved too, but keyed by messageId rather
-	// than by text: they fill the conversation map and force evictions there.
-	for i := range 20 {
+	for i := range n {
 		sess.settle(fmt.Sprintf("acp-msg-%d", i), "newer", true)
 	}
-	if len(sess.unsettled) > maxUnsettled || len(sess.keyConv) > maxUnsettled {
-		t.Fatalf("bounds exceeded: %d unsettled, %d keyConv", len(sess.unsettled), len(sess.keyConv))
-	}
-	for msg, key := range sess.unsettled {
-		if c, ok := sess.keyConv[key]; !ok || c != "" {
-			t.Fatalf("%q kept key %q but lost its target conversation (got %q, %v)", msg, key, c, ok)
-		}
+	if k := idempotencyKey(nil, sess, "prompt 0"); k != "key-0" || sess.target(k) != "" {
+		t.Fatalf("retry of the first lost prompt = key %q conv %q, want key-0 in its original (none)", k, sess.target(k))
 	}
 }
 
@@ -1688,7 +1686,7 @@ func TestResentMessageIdFindsItsRetryRun(t *testing.T) {
 		_, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: &mid, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock("do " + mid)}})
 		return err
 	}
-	for i := range maxUnsettled + 10 {
+	for i := range 74 {
 		if err := send(fmt.Sprintf("msg-%d", i)); err != nil {
 			t.Fatal(err)
 		}
@@ -1696,7 +1694,7 @@ func TestResentMessageIdFindsItsRetryRun(t *testing.T) {
 	k.mu.Lock()
 	before := k.runs
 	k.mu.Unlock()
-	if before != maxUnsettled+10 {
+	if before != 74 {
 		t.Fatalf("runs = %d, want one per messageId", before)
 	}
 	if err := send("msg-0"); err != nil {
@@ -1769,5 +1767,41 @@ func TestExhaustedRetryChainAsksForANewMessage(t *testing.T) {
 	defer h.fleet.mu.Unlock()
 	if len(h.fleet.chats) != maxRetryKeys+1 {
 		t.Fatalf("chats = %d, want the key and its %d retries", len(h.fleet.chats), maxRetryKeys)
+	}
+}
+
+// A Stop by key (no turn id was known) that finds the input already finished
+// stops nothing (fleet answers 409): the prompt says the turn had finished
+// and its effects stand, neither a confirmed stop nor an unconfirmed one.
+func TestKeyedStopOfAFinishedInputSaysSo(t *testing.T) {
+	started := make(chan struct{})
+	h := newHarness(t, harnessOpts{cancelStatus: http.StatusConflict, turn: func(w *sseWriter, r *http.Request) {
+		w.emit("conversation", map[string]any{"id": "conv-f"})
+		close(started)
+		<-r.Context().Done() // no turn id is ever named
+	}})
+	sid := h.newSession(t)
+	done := make(chan acpsdk.PromptResponse, 1)
+	go func() {
+		r, _ := h.prompt(sid, "job")
+		done <- r
+	}()
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		text := h.client.text()
+		if r.StopReason != acpsdk.StopReasonCancelled || !strings.Contains(text, "already finished") || strings.Contains(text, "could not confirm") {
+			t.Fatalf("got %+v, text %q; want cancelled with the already-finished note", r, text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prompt did not return")
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 1 || !strings.Contains(h.fleet.cancels[0], `"input_id"`) {
+		t.Fatalf("cancels = %q, want one Stop by key", h.fleet.cancels)
 	}
 }
