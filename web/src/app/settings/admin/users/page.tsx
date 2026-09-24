@@ -16,7 +16,7 @@
 // /settings); authorization stays server-side — every endpoint here
 // independently 403s non-admins, and fetchUsers surfaces that below.
 
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -25,7 +25,6 @@ import {
   btnClass,
   InlineConfirmButton,
   RevealButton,
-  Segmented,
   SETTINGS_INPUT,
 } from "../../ui/atoms";
 import { ConnField, ConnForm, ConnPanel, SetSection } from "../../ui/panels";
@@ -99,13 +98,6 @@ const OPS_ROLE_OPTIONS = [
   label: string;
   description: string;
 }[];
-const ADMIN_OPTIONS = [
-  {
-    value: "admin",
-    label: "Fleet Admin",
-    description: "Full permissions in both Chat and the Ops Center.",
-  },
-] as const;
 const opsRoleOf = (u: AdminUser): OpsRole =>
   (OPS_ROLES as readonly string[]).includes(u.ops_center_role ?? "")
     ? ((u.ops_center_role || "none") as OpsRole)
@@ -125,69 +117,134 @@ function PermissionFields({
   labelPrefix?: string;
 }) {
   const ariaPrefix = labelPrefix ? `${labelPrefix} ` : "";
+  const fieldBaseId = useId();
+  const choiceClass = (emphasized: boolean) =>
+    [
+      "block w-full cursor-pointer rounded-[var(--radius-md)] border-2 border-transparent p-2 text-[0.75rem] text-[var(--color-text-secondary)]",
+      emphasized
+        ? "bg-[linear-gradient(var(--color-surface-2),var(--color-surface-2))_padding-box,var(--gradient-action-primary)_border-box] text-[var(--color-text-primary)]"
+        : "hover:bg-[var(--color-overlay-soft)]",
+    ].join(" ");
+  const inputClass =
+    "mr-[0.4rem] accent-[var(--color-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
+  const descriptionClass =
+    "ml-[1.35rem] mt-[0.12rem] block text-[0.7rem] leading-snug text-[var(--color-text-muted)]";
   return (
     <>
-      <div className="grid justify-items-start gap-[0.3rem]">
-        <span
-          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-          title="Admin grants full permissions in both Chat and the Ops Center."
-        >
+      <fieldset
+        aria-label={`${ariaPrefix}Fleet Admin permissions`}
+        className="m-0 grid min-w-0 gap-[0.3rem] border-0 p-0"
+      >
+        <legend className="mb-[0.3rem] text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
           Fleet Admin
-        </span>
-        <Segmented
-          value={role === "admin" ? "admin" : ""}
-          options={ADMIN_OPTIONS}
-          onChange={() => onChange({ role: "admin", opsRole: "admin" })}
-          onDeselect={() => onChange({ role: "member", opsRole: "none" })}
-          emphasized={role === "admin"}
-          label={`${ariaPrefix}Fleet Admin permissions`}
-        />
-      </div>
-      <div className="grid justify-items-start gap-[0.3rem]">
-        <span
-          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-          title="Chat permissions: what this account can do in chat. Viewer is read-only."
-        >
+        </legend>
+        <label className={choiceClass(role === "admin")}>
+          <input
+            type="checkbox"
+            checked={role === "admin"}
+            aria-label="Fleet Admin"
+            aria-describedby={`${fieldBaseId}-admin-description`}
+            onChange={(event) =>
+              onChange(
+                event.currentTarget.checked
+                  ? { role: "admin", opsRole: "admin" }
+                  : { role: "member", opsRole: "none" },
+              )
+            }
+            className={inputClass}
+          />
+          Fleet Admin
+          <small
+            id={`${fieldBaseId}-admin-description`}
+            className={descriptionClass}
+          >
+            Full permissions in both Chat and the Ops Center.
+          </small>
+        </label>
+      </fieldset>
+      <fieldset
+        aria-label={`${ariaPrefix}Chat permissions`}
+        className="m-0 grid min-w-0 gap-[0.15rem] border-0 p-0"
+      >
+        <legend className="mb-[0.3rem] text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
           Chat
-        </span>
-        <Segmented
-          value={role === "admin" ? "member" : role}
-          options={CHAT_ROLE_OPTIONS}
-          onChange={(nextRole) =>
-            onChange({
-              role: nextRole,
-              // Leaving unified Admin revokes its implied Ops Admin grant.
-              opsRole: role === "admin" ? "none" : opsRole,
-            })
-          }
-          label={`${ariaPrefix}Chat permissions`}
-          dividers
-          emphasized={role === "admin"}
-        />
-      </div>
-      <div className="grid justify-items-start gap-[0.3rem]">
-        <span
-          className="text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]"
-          title="Ops Center permissions: Viewer sees tasks and logs; Contributor also creates tasks."
+        </legend>
+        {CHAT_ROLE_OPTIONS.map((option) => (
+          <label
+            key={option.value}
+            className={choiceClass(
+              role === "admin" && option.value === "member",
+            )}
         >
+            <input
+              type="radio"
+              name={`${fieldBaseId}-chat`}
+              value={option.value}
+              checked={(role === "admin" ? "member" : role) === option.value}
+              aria-label={option.label}
+              aria-describedby={`${fieldBaseId}-chat-${option.value}-description`}
+              onChange={() =>
+                onChange({
+                  role: option.value,
+                  // Leaving unified Admin revokes its implied Ops Admin grant.
+                  opsRole: role === "admin" ? "none" : opsRole,
+                })
+              }
+              className={inputClass}
+            />
+            {option.label}
+            <small
+              id={`${fieldBaseId}-chat-${option.value}-description`}
+              className={descriptionClass}
+            >
+              {option.description}
+            </small>
+          </label>
+        ))}
+      </fieldset>
+      <fieldset
+        aria-label={`${ariaPrefix}Ops Center permissions`}
+        className="m-0 grid min-w-0 gap-[0.15rem] border-0 p-0"
+      >
+        <legend className="mb-[0.3rem] text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
           Ops Center
-        </span>
-        <Segmented
-          value={opsRole === "admin" ? "client" : opsRole}
-          options={OPS_ROLE_OPTIONS}
-          onChange={(nextOpsRole) =>
-            onChange({
-              // The member API role is the Chat Contributor fallback when a
-              // narrower Ops role replaces unified Admin.
-              role: role === "admin" ? "member" : role,
-              opsRole: nextOpsRole,
-            })
-          }
-          label={`${ariaPrefix}Ops Center permissions`}
-          dividers
-          emphasized={role === "admin"}
-        />
-      </div>
+        </legend>
+        {OPS_ROLE_OPTIONS.map((option) => (
+          <label
+            key={option.value}
+            className={choiceClass(
+              role === "admin" && option.value === "client",
+            )}
+        >
+            <input
+              type="radio"
+              name={`${fieldBaseId}-ops`}
+              value={option.value}
+              checked={
+                (opsRole === "admin" ? "client" : opsRole) === option.value
+              }
+              aria-label={option.label}
+              aria-describedby={`${fieldBaseId}-ops-${option.value}-description`}
+              onChange={() =>
+                onChange({
+                  // The member API role is the Chat Contributor fallback when
+                  // a narrower Ops role replaces unified Admin.
+                  role: role === "admin" ? "member" : role,
+                  opsRole: option.value,
+                })
+              }
+              className={inputClass}
+            />
+            {option.label}
+            <small
+              id={`${fieldBaseId}-ops-${option.value}-description`}
+              className={descriptionClass}
+            >
+              {option.description}
+            </small>
+          </label>
+        ))}
+      </fieldset>
     </>
   );
 }
@@ -392,7 +449,7 @@ type Menu = {
 };
 
 const MENU_WIDTH_PX = 352; // 22rem — the three permission sections need room
-const MENU_EST_HEIGHT_PX = 375; // flip-above threshold (three permission sections + team)
+const MENU_EST_HEIGHT_PX = 640; // flip-above threshold (described permissions + account actions)
 
 export default function AdminUsersPage() {
   const router = useRouter();
@@ -1334,7 +1391,7 @@ export default function AdminUsersPage() {
                     </button>
                   </div>
                 </ConnField>
-                <div className="grid w-full gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] p-[0.7rem]">
+                <div className="grid w-full gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-[0.7rem]">
                   <PermissionFields
                     role={newRole}
                     opsRole={newOpsRole}
