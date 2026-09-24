@@ -1708,6 +1708,60 @@ func TestCancelByInputKey_UnboundClaimIsCancelledDurably(t *testing.T) {
 	}
 }
 
+// A direct launch dropped after its turn registered — its claim cancelled by
+// a Stop, or its bind failing closed — finishes a registered turn that never
+// runs, so it re-kicks the queue itself: an input queued behind it deferred
+// to that turn, and no completion tail will drain it.
+func TestDirectLaunchDroppedAfterRegistration_RekicksTheQueue(t *testing.T) {
+	for _, stopped := range []bool{true, false} {
+		t.Run(map[bool]string{true: "stopped", false: "bind failed"}[stopped], func(t *testing.T) {
+			shortDirectPauses(t)
+			eng := &fakeEngine{}
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, eng, st)
+			var convID string
+			var once sync.Once
+			st.onClaim = func(r store.InputQueueRow) { convID = r.ConversationID }
+			st.onMemories = func() {
+				once.Do(func() { // the first launch only
+					st.mu.Lock()
+					defer st.mu.Unlock()
+					for i := range st.queue {
+						if st.queue[i].ClientInputID == "key-x" && stopped {
+							st.queue[i].State = store.InputStateCancelled // a Stop cancelled the claim
+						}
+					}
+					if !stopped {
+						st.bindFailures = directBindAttempts
+					}
+					st.queue = append(st.queue, store.InputQueueRow{ID: "r-next", ConversationID: convID, UserEmail: "u@x.com", ClientInputID: "key-next", Message: "next", Attachments: "[]", Mode: store.InputModeQueued, State: store.InputStateQueued, AcceptedSeq: 1 << 40})
+				})
+			}
+			w := postChatRequest(t, srv, map[string]any{"message": "send the report", "persona": "generic", "input_id": "key-x"})
+			want := http.StatusConflict
+			if !stopped {
+				want = http.StatusInternalServerError
+			}
+			if w.Code != want {
+				t.Fatalf("status %d, want %d: %s", w.Code, want, w.Body.String())
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				eng.mu.Lock()
+				turns := eng.turns
+				eng.mu.Unlock()
+				if turns == 1 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("the input queued behind the dropped launch did not run (%d turns)", turns)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}
+
 // A Stop by key never marks a bound claim cancelled: its turn may have run,
 // and a resend of the key reading "cancelled" would run it a second time.
 func TestCancelByInputKey_BoundClaimIsNotMarkedCancelled(t *testing.T) {
@@ -1756,6 +1810,42 @@ func TestCancelByInputKey_DrainedRowIsCancelledDurably(t *testing.T) {
 	}
 	if row, _ := st.LookupInput(context.Background(), conv.ID, "key-d"); row == nil || row.State != store.InputStateCancelled {
 		t.Fatalf("row = %+v, want cancelled", row)
+	}
+}
+
+// A drained launch refused at its bind (a Stop cancelled the row) finishes
+// a registered turn that never runs, so no completion tail drains the queue:
+// the launch re-kicks it itself, or an input queued behind the refused one —
+// which deferred to that registered turn — would wait for an unrelated kick.
+func TestCancelByInputKey_RefusedDrainRekicksTheQueue(t *testing.T) {
+	eng := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, eng, st)
+	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+	claim := store.ClaimTurnPrefix + "drain-1"
+	st.mu.Lock()
+	st.queue = append(st.queue,
+		store.InputQueueRow{ID: "r-d", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-d", Mode: store.InputModeQueued, State: store.InputStateCancelled, TurnID: claim},
+		store.InputQueueRow{ID: "r-next", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-next", Message: "next", Attachments: "[]", Mode: store.InputModeQueued, State: store.InputStateQueued, AcceptedSeq: 1})
+	st.mu.Unlock()
+	gen, _ := srv.stopGateForRow(conv.ID, 0)
+	srv.startTurn(nil, nil, "u@x.com", conv, chatRequest{ConversationID: conv.ID, Message: "later"},
+		&queuedLaunch{rowID: "r-d", claimTurnID: claim, sweepGen: gen, inputKey: "key-d"}, func() {}, nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		eng.mu.Lock()
+		turns := eng.turns
+		eng.mu.Unlock()
+		if turns == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the input queued behind the refused launch did not run (%d turns)", turns)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if row, _ := st.LookupInput(context.Background(), conv.ID, "key-d"); row == nil || row.State != store.InputStateCancelled {
+		t.Fatalf("refused row = %+v, want cancelled", row)
 	}
 }
 
@@ -2255,6 +2345,43 @@ func TestCancelSteerTurn_FlagsOnlyATurnItCancels(t *testing.T) {
 				t.Fatalf("stopped steers = %v, want flagged=%v", got, running)
 			}
 		})
+	}
+}
+
+// A turn that already emitted a terminal frame of its own — turn.error or
+// turn.model_required, while post-turn work keeps its buffer unsealed — is
+// not stopped by a later Stop: the cancel would be a no-op, so the Stop
+// reports it finished (409) rather than take the failure for its own
+// cancellation. A Stop by key still flags the turn, so its settlement does
+// not re-queue the input it named.
+func TestStop_TurnThatAlreadyFailedIsNotReportedStopped(t *testing.T) {
+	for _, frame := range []string{"turn.error", "turn.model_required", "turn.cancelled"} {
+		for _, keyed := range []bool{true, false} {
+			t.Run(frame+map[bool]string{true: "/by key", false: "/by turn"}[keyed], func(t *testing.T) {
+				srv := newDefaultChatServer(t, &fakeEngine{}, newFakeChatStore())
+				var cancelled atomic.Bool
+				buf, turnID, tok, _ := srv.registerTurn("conv-f", func() { cancelled.Store(true) })
+				defer srv.finishTurn("conv-f", tok)
+				srv.inflightMu.Lock()
+				e := srv.inflight["conv-f"]
+				e.inputKey = "k-f"
+				srv.inflight["conv-f"] = e
+				srv.inflightMu.Unlock()
+				buf.Emit(frame, map[string]any{}) // it ended on its own; the buffer stays open
+				var got turnStop
+				if keyed {
+					got = srv.cancelInputTurn("conv-f", "k-f")
+				} else {
+					got = srv.cancelInflightTurn("conv-f", turnID)
+				}
+				if got != turnNotStopped || cancelled.Load() {
+					t.Fatalf("Stop = %v (cancel sent %v), want turnNotStopped with no cancel", got, cancelled.Load())
+				}
+				if keyed && !buf.stoppedByKey.Load() {
+					t.Fatal("a keyed Stop of an ended, unsettled turn left its input to be re-queued")
+				}
+			})
+		}
 	}
 }
 

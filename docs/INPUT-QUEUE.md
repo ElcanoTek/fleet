@@ -42,8 +42,10 @@ retention guarantee: after a terminal row is purged, reusing its
   confirms a cancel against the turn's own terminal frame, read as soon as it
   is emitted (a turn does post-turn work, such as auto-titling, before its
   buffer seals). `turn.completed` (the turn finished in the instant between
-  the running check and the cancel) counts as finished (`409`); another
-  terminal frame is a confirmed stop (`204`); no terminal frame within a few
+  the running check and the cancel) counts as finished (`409`), as does a turn that had already emitted a
+  terminal frame of its own before the Stop (it failed, and post-turn work
+  still holds its buffer open, so the cancel would stop nothing); another
+  terminal frame after the cancel is a confirmed stop (`204`); no terminal frame within a few
   seconds answers `202`, sent but not yet confirmed, never assumed stopped, so a client stopping the turn it watched
   (`fleet acp`) can never cancel a successor, and learns that the turn
   finished on its own rather than taking the Stop for a cancellation. A targeted Stop is turn-scoped and never sweeps the
@@ -53,8 +55,11 @@ retention guarantee: after a terminal row is purged, reusing its
   like a `turn_id` Stop of an ended turn): a still-queued row is withdrawn, a running turn for it is
   cancelled (a drained row is cancelled too, unless its user entry had
   committed — by the Stop when the turn confirms it, and by the turn's own
-  settlement when the confirmation comes too late for the `202` — so it is
-  never returned to the queue for a later drain to run), a steer already injected into a running turn is cancelled and so
+  settlement when the confirmation comes too late for the `202`, or when
+  the turn had already failed before the Stop but not yet settled — so it
+  is never returned to the queue for a later drain to run; if that cancel
+  write fails, the turn's rows are left unsettled for a background retry
+  rather than settled without it), a steer already injected into a running turn is cancelled and so
   is the turn carrying it (the model cannot un-read it; if that turn had
   already ended, nothing is stopped, the Stop answers `409`, and the turn's
   own settlement records whether the steer ran; a stop the turn confirms too

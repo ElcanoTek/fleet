@@ -575,6 +575,24 @@ func (e inflightEntry) IsRunning() bool {
 	return true
 }
 
+// stoppable reports whether a Stop can still change how the turn ends: it
+// is running and has not emitted a terminal frame. A turn that already
+// ended — turn.error or turn.model_required included — while post-turn work
+// keeps its buffer unsealed ended on its own, so a cancel is a no-op there
+// and a Stop must report it finished rather than take its terminal frame
+// for the stop's.
+func (e inflightEntry) stoppable() bool {
+	if !e.IsRunning() {
+		return false
+	}
+	if e.buf != nil {
+		if _, ended := e.buf.terminalOutcome(); ended {
+			return false
+		}
+	}
+	return true
+}
+
 // New wires a Server. Call Routes() to get the http.Handler.
 //
 // mgr is the interactive agent engine (the turnEngine contract). It may be nil
@@ -832,20 +850,24 @@ func (s *Server) cancelInflightTurn(convID, turnID string) turnStop {
 // turn it first records the steer on the turn's buffer, so the settlement
 // (which runs after the turn ends) cancels an uncommitted steer instead of
 // returning it to the queue, even when the Stop is answered before the turn
-// confirms it. A turn that is not running is not flagged: the Stop stopped
-// nothing, and its settlement records whether the steer ran.
+// confirms it — or after the turn already ended on its own but has not
+// settled, since a Stop of the steer must not leave it to be re-queued. A
+// turn whose buffer sealed is not flagged: its settlement is its own.
 func (s *Server) cancelSteerTurn(convID, turnID, steerRowID string) turnStop {
 	s.inflightMu.Lock()
 	entry, ok := s.inflight[convID]
 	s.inflightMu.Unlock()
-	if ok && entry.turnID == turnID && entry.IsRunning() {
-		if steerRowID != "" && entry.buf != nil {
-			entry.buf.addStoppedSteer(steerRowID)
-		}
-		entry.cancel()
-		return entry.confirmStopped()
+	if !ok || entry.turnID != turnID || !entry.IsRunning() {
+		return turnNotStopped
 	}
-	return turnNotStopped
+	if steerRowID != "" && entry.buf != nil {
+		entry.buf.addStoppedSteer(steerRowID)
+	}
+	if !entry.stoppable() {
+		return turnNotStopped // it already ended: the cancel would stop nothing
+	}
+	entry.cancel()
+	return entry.confirmStopped()
 }
 
 // turnStop is what a Stop did to a turn, as its own terminal frame shows.
@@ -933,14 +955,21 @@ func (s *Server) cancelInputTurn(convID, key string) turnStop {
 		s.cancelledInputs[inputKeyMark(convID, key)] = now
 	}
 	s.inflightMu.Unlock()
-	if running {
-		if entry.buf != nil {
-			entry.buf.stoppedByKey.Store(true) // before the cancel: its settlement reads it after the turn ends
-		}
-		entry.cancel()
-		return entry.confirmStopped()
+	if !running {
+		return turnNotStopped
 	}
-	return turnNotStopped
+	if entry.buf != nil {
+		// Before the cancel: the settlement reads it after the turn ends.
+		// Set even for a turn that already ended on its own (a failure
+		// before its user entry committed), so its settlement does not
+		// re-queue the input the Stop named for an unattended re-run.
+		entry.buf.stoppedByKey.Store(true)
+	}
+	if !entry.stoppable() {
+		return turnNotStopped // it already ended: the cancel would stop nothing
+	}
+	entry.cancel()
+	return entry.confirmStopped()
 }
 
 // inputKeyStopped reports whether a Stop naming key is still in force.

@@ -1322,10 +1322,18 @@ done:
 	return &TurnResult{FinalText: "done", NewHistory: append([]agent.HistoryEntry{user}, reply...)}, nil
 }
 
-// stoppedDrainFailStore fails the first CancelStoppedDrain calls.
+// stoppedDrainFailStore fails the first CancelStoppedDrain and
+// CancelStoppedSteer calls.
 type stoppedDrainFailStore struct {
 	chatStore
-	failures atomic.Int32
+	failures, steerFailures atomic.Int32
+}
+
+func (w *stoppedDrainFailStore) CancelStoppedSteer(ctx context.Context, id string) (bool, error) {
+	if w.steerFailures.Add(-1) >= 0 {
+		return false, errors.New("injected: cancel stopped steer failed")
+	}
+	return w.chatStore.CancelStoppedSteer(ctx, id)
 }
 
 func (w *stoppedDrainFailStore) CancelStoppedDrain(ctx context.Context, id, turnID string) (bool, error) {
@@ -1350,6 +1358,7 @@ func TestQueue_UnconfirmedKeyedStopNeverRequeues(t *testing.T) {
 		{"drained row", false, false},
 		{"drained row, cancel write retried", false, true},
 		{"injected steer", true, false},
+		{"injected steer, cancel write retried", true, true},
 	} {
 		steer := tc.steer
 		t.Run(tc.name, func(t *testing.T) {
@@ -1361,6 +1370,10 @@ func TestQueue_UnconfirmedKeyedStopNeverRequeues(t *testing.T) {
 				directReleaseBackoff = 300 * time.Millisecond
 				fail := &stoppedDrainFailStore{chatStore: s.store}
 				fail.failures.Store(1)
+				if steer {
+					fail.failures.Store(0)
+					fail.steerFailures.Store(1)
+				}
 				s.store = fail
 			}
 			const user = "alice@x.com"
