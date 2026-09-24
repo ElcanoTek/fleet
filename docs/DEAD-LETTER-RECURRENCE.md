@@ -113,8 +113,15 @@ upgrade.
   day continues, two is systemic.
 - Spawning inside the lease-recovery UPDATE itself (would need RETURNING
   the quarantined rows). The sweep covers it.
+
+## Decided against
+
 - A separate notification when the `ReconcileRecurrences` sweep performs the
   park (after a transient database error deferred it past the dead-letter
   write). The usual park, in the dead-letter write, is announced in the
-  failure notification ("Schedule stopped: <reason>"); a sweep park records
+  failure notification ("Schedule stopped: <reason>"). A sweep park records
   the same reason for the Operations Center and logs it, but sends nothing.
+  The path needs a database error in the moment after the dead-letter
+  commits, the failure notification for that run has already gone out, and
+  the stop stays visible where the owner looks next; a second notification
+  path from a storage-only sweep is not worth its weight.

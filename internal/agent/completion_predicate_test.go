@@ -499,6 +499,33 @@ func TestFailedCriticalCallsKeysByAliasClass(t *testing.T) {
 	}
 }
 
+// A same-tool retry supersedes a failure (stale version, corrected arguments),
+// but not when the two calls name different records: a landed write of deal B
+// says nothing about the failed write of deal A. A retry naming no record
+// supersedes as it always has.
+func TestFailedCriticalCallsSameToolRetryOfAnotherRecordStaysFailed(t *testing.T) {
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"create_deal"}})
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	for _, tc := range []struct {
+		name    string
+		a, b    map[string]any
+		wantHit bool
+	}{
+		{"another record stays failed", map[string]any{"/deal_id": "a"}, map[string]any{"/deal_id": "b"}, true},
+		{"the same record supersedes", map[string]any{"/deal_id": "a"}, map[string]any{"/deal_id": "a", "/version": "2"}, false},
+		{"a retry naming no record supersedes", map[string]any{"/slug": "x"}, map[string]any{"/slug": "x", "/version": "2"}, false},
+	} {
+		records := []toolExecRecord{
+			{Name: "mcp_dsp_create_deal", Succeeded: false, Arguments: tc.a},
+			{Name: "mcp_dsp_create_deal", Succeeded: true, Arguments: tc.b},
+		}
+		got := failedCriticalCalls(records)
+		if (len(got) == 1) != tc.wantHit {
+			t.Fatalf("%s: failedCriticalCalls = %v", tc.name, got)
+		}
+	}
+}
+
 // A failed twin must not bridge two records: inline A fails, the upload twin
 // for A fails, then the upload succeeds for B. Nothing landed A, so the inline
 // failure stands — a failure supersedes nothing, and B is another record.
@@ -509,8 +536,11 @@ func TestFailedCriticalCallsFailedTwinBridgesNothing(t *testing.T) {
 		{Name: "mcp_pages_update_page_data_upload", Succeeded: false, Arguments: map[string]any{"/deal_id": "a"}},
 		{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_id": "b"}},
 	}
-	if got := failedCriticalCalls(records); fmt.Sprint(got) != "[mcp_pages_update_page_data]" {
-		t.Fatalf("failedCriticalCalls = %v, want [mcp_pages_update_page_data]", got)
+	// Both failures stand: nothing landed A, and the upload's own retry wrote
+	// another record, so it does not supersede the failed upload for A either.
+	want := "[mcp_pages_update_page_data mcp_pages_update_page_data_upload]"
+	if got := failedCriticalCalls(records); fmt.Sprint(got) != want {
+		t.Fatalf("failedCriticalCalls = %v, want %s", got, want)
 	}
 }
 
@@ -587,5 +617,45 @@ func TestScheduledVerifierOutageAfterUploadTwinForAnotherPageStaysFailed(t *test
 	}, verifier, nil, broker, nil)
 	if !errors.Is(err, agentcore.ErrCompletionUnverified) {
 		t.Fatalf("a verifier outage must not fail open while the failed inline write's page never landed: got %v, want ErrCompletionUnverified", err)
+	}
+}
+
+// A later success whose records cover the failed call's supersedes it: a batch
+// retry over a superset of the failed records, for the same tool or a
+// same-server twin. A retry over a subset missed a record, so the failure
+// stands.
+func TestFailedCriticalCallsBatchSupersetCoversTheFailure(t *testing.T) {
+	pagesTwinPolicy(t, true)
+	for _, tc := range []struct {
+		name     string
+		failed   map[string]any
+		then     toolExecRecord
+		wantFail bool
+	}{
+		{"same-tool superset supersedes", map[string]any{"/deal_ids": []any{"a"}}, toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"a", "b"}}}, false},
+		{"same-tool subset stays failed", map[string]any{"/deal_ids": []any{"a", "b"}}, toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"a"}}}, true},
+		{"twin superset of a single record supersedes", map[string]any{"/deal_id": "a"}, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"a", "b"}}}, false},
+		{"twin subset stays failed", map[string]any{"/deal_ids": []any{"a", "b"}}, toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"b"}}}, true},
+	} {
+		records := []toolExecRecord{{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: tc.failed}, tc.then}
+		if got := failedCriticalCalls(records); (len(got) > 0) != tc.wantFail {
+			t.Errorf("%s: failedCriticalCalls = %v", tc.name, got)
+		}
+	}
+}
+
+// A batch failure retried piecewise resolves once every record has landed:
+// [a,b] failed, then [a] and [b] succeeded (the audit ledger allows piecewise
+// batch execution). Until the last record lands the failure stands.
+func TestFailedCriticalCallsPiecewiseRetryResolvesTheBatch(t *testing.T) {
+	pagesTwinPolicy(t, true)
+	failed := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: false, Arguments: map[string]any{"/deal_ids": []any{"a", "b"}}}
+	onlyA := toolExecRecord{Name: "mcp_pages_update_page_data", Succeeded: true, Arguments: map[string]any{"/deal_ids": []any{"a"}}}
+	twinB := toolExecRecord{Name: "mcp_pages_update_page_data_upload", Succeeded: true, Arguments: map[string]any{"/deal_id": "b"}}
+	if got := failedCriticalCalls([]toolExecRecord{failed, onlyA}); len(got) != 1 {
+		t.Fatalf("record b has not landed, the failure must stand: %v", got)
+	}
+	if got := failedCriticalCalls([]toolExecRecord{failed, onlyA, twinB}); len(got) != 0 {
+		t.Fatalf("a and b both landed (same tool, then its twin), the failure is resolved: %v", got)
 	}
 }

@@ -776,24 +776,22 @@ func succeededCriticalCall(records []toolExecRecord) bool {
 	return false
 }
 
-// failedCriticalCalls names the critical tools with a failed attempt that no
-// later SUCCESS superseded (same records and success classification as the
-// verifier), each name once. A failed attempt is superseded only by a later
-// success of:
-//   - the same tool again — a stale-version retry or corrected arguments;
-//   - the action's alias twin on the same server (agentcore.CriticalActionKey,
-//     critical_tool_aliases #1604) that wrote the same record — a failed inline
-//     create of deal D followed by an upload that created deal D
-//     (sameCallTarget).
-//
-// A twin that wrote another record, or whose record cannot be proved the same,
-// supersedes nothing: an upload that landed deal B says nothing about the
-// failed write to deal A. A twin on another server or client variant is
-// another action and supersedes nothing.
+// failedCriticalCalls names the critical tools with a failed attempt that
+// later SUCCESSES did not resolve (same records and success classification as
+// the verifier), each name once. A failure is resolved by later successes of
+// the same action (agentcore.CriticalActionKey: the same tool, or its alias
+// twin on the same server, critical_tool_aliases #1604) that wrote every
+// record it targeted, one call or several (supersedes). A success that wrote
+// another record resolves nothing: an upload that landed deal B says nothing
+// about the failed write to deal A. A twin on another server or client variant
+// is another action and resolves nothing.
 func failedCriticalCalls(records []toolExecRecord) []string {
 	type attempt struct {
-		key        agentcore.CriticalAction
-		record     toolExecRecord
+		key    agentcore.CriticalAction
+		record toolExecRecord
+		// remaining is the failed attempt's record set (deal_id / deal_ids)
+		// not yet written by a later success; nil when it names no record.
+		remaining  map[string]bool
 		superseded bool
 	}
 	var attempts []attempt
@@ -802,20 +800,23 @@ func failedCriticalCalls(records []toolExecRecord) []string {
 		if !critical {
 			continue
 		}
-		for i := range attempts {
-			prior := &attempts[i]
-			if prior.superseded || prior.key != key {
-				continue
-			}
-			// Only a SUCCESS supersedes. A failed attempt proves nothing
-			// landed, so letting it supersede would let it bridge lineages: a
-			// failed twin for record A clears A's failure, and a later success
-			// of that twin's name for record B clears the twin.
-			if r.Succeeded && (prior.record.Name == r.Name || sameCallTarget(prior.record, r)) {
-				prior.superseded = true
+		if r.Succeeded {
+			for i := range attempts {
+				if prior := &attempts[i]; !prior.superseded && prior.key == key && !prior.record.Succeeded {
+					prior.superseded = supersedes(prior.record, prior.remaining, r)
+				}
 			}
 		}
-		attempts = append(attempts, attempt{key: key, record: r})
+		a := attempt{key: key, record: r}
+		if !r.Succeeded {
+			if ids := bindingRecords(recordBinding(r)); len(ids) > 0 {
+				a.remaining = make(map[string]bool, len(ids))
+				for _, id := range ids {
+					a.remaining[id] = true
+				}
+			}
+		}
+		attempts = append(attempts, a)
 	}
 	var failed []string
 	reported := make(map[string]bool)
@@ -828,20 +829,47 @@ func failedCriticalCalls(records []toolExecRecord) []string {
 	return failed
 }
 
-// sameCallTarget reports whether two alias-twin calls provably wrote the same
-// record: both argument projections are complete (the verifier's evidence
-// dropped nothing), and both name the same non-empty record binding
-// (agentcore.CallRecordBinding — deal_id, or a deal_ids set). Agreeing on
-// other arguments proves nothing: a shared flag such as dry_run identifies no
-// target. A call that names no record under that contract (a page addressed
-// by slug, for one) cannot be proved the same target, so its failure stands
-// and the outage spends a check, as it did before twins superseded.
-func sameCallTarget(a, b toolExecRecord) bool {
-	if a.ArgumentsOmitted || b.ArgumentsOmitted {
+// supersedes applies a later SUCCESS (only a success supersedes: a failed
+// attempt proves nothing landed, and letting it supersede would bridge
+// lineages) to a failed attempt of the same action, and reports whether the
+// failure is now resolved. remaining is the failed attempt's outstanding
+// record set, which it consumes as successes write those records, so a batch
+// retried piecewise ([a,b] failed, then [a] and [b] landed) resolves once
+// every record has landed.
+//   - The same tool: a retry that names no record, or of a failure that named
+//     none (a page by slug, a stale-version retry), supersedes as a retry
+//     always has. Otherwise it resolves the records it wrote.
+//   - An alias twin (another spelling of the action on the same server) must
+//     prove its target: both argument projections complete (the verifier's
+//     evidence dropped nothing) and a non-empty record binding
+//     (agentcore.CallRecordBinding — deal_id, or a deal_ids set). Agreeing on
+//     other arguments proves nothing — a shared dry_run flag, the same page
+//     slug — so a twin that names no record never resolves anything, and the
+//     outage spends a check, as it did before twins superseded.
+func supersedes(failed toolExecRecord, remaining map[string]bool, success toolExecRecord) bool {
+	wrote := bindingRecords(recordBinding(success))
+	if failed.Name == success.Name {
+		if remaining == nil || len(wrote) == 0 {
+			return true
+		}
+	} else if failed.ArgumentsOmitted || success.ArgumentsOmitted || remaining == nil || len(wrote) == 0 {
 		return false
 	}
-	ra, rb := recordBinding(a), recordBinding(b)
-	return ra != "" && ra == rb
+	for _, id := range wrote {
+		delete(remaining, id)
+	}
+	return len(remaining) == 0
+}
+
+// bindingRecords splits a CallRecordBinding into its record ids.
+func bindingRecords(binding string) []string {
+	if id, ok := strings.CutPrefix(binding, "id:"); ok {
+		return []string{id}
+	}
+	if ids, ok := strings.CutPrefix(binding, "ids:"); ok {
+		return strings.Split(ids, "\x00")
+	}
+	return nil
 }
 
 // recordBinding rebuilds a record's top-level projected arguments (JSON

@@ -508,13 +508,13 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 			return false, []string{fmt.Sprintf(
 				"You declared these actions in your audit's critical_actions but have not successfully executed them: %s. "+
 					"Execute each outstanding action now — the tool and its record binding must match the declaration — "+
-					"or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
-				strings.Join(outstanding, "; "))}
+					"or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.%s",
+				strings.Join(outstanding, "; "), o.standInClause())}
 		}
 		return false, []string{fmt.Sprintf(
 			"You declared %v in your audit's %s but have not successfully executed them. "+
-				"Execute each declared action now, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
-			missing, criticalActionsBeingUnblockedField)}
+				"Execute each declared action now, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.%s",
+			missing, criticalActionsBeingUnblockedField, o.standInClause())}
 	}
 
 	return true, nil
@@ -650,10 +650,11 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 				// actions executed. Finish now." — telling the model to finish
 				// before it had made the write it had just been authorized for.
 				if outstanding := orch.outstandingCommitmentSummary(); len(outstanding) > 0 {
+					standIns := orch.standInClause()
 					return fantasy.NewTextResponse(fmt.Sprintf("Audit Confirmed: \"%s\".\n%s\n"+
 						"Declared and not yet executed: %s. Execute exactly those call(s) now — the same tool "+
-						"name(s) and record(s) as declared — then finish.",
-						input.Reasoning, evidence, strings.Join(outstanding, ", "))), nil
+						"name(s) and record(s) as declared — then finish.%s",
+						input.Reasoning, evidence, strings.Join(outstanding, ", "), standIns)), nil
 				}
 				return fantasy.NewTextResponse(fmt.Sprintf("Audit Confirmed: \"%s\".\n%s\n"+
 					"All %d critical actions executed. Finish now.",

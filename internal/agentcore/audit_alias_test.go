@@ -551,3 +551,39 @@ func TestCallRecordBinding(t *testing.T) {
 		}
 	}
 }
+
+// A deal_ids batch whose members name no record ("n/a", "none") identifies no
+// records, so two such batches must not prove the same record: the upload
+// twin's placeholder batch leaves the inline call's placeholder batch pending,
+// even though both would otherwise key "ids:".
+func TestCriticalToolAliases_PlaceholderBatchTwinStaysPending(t *testing.T) {
+	withPagesPolicy(t, pagesAliases)
+	o := newOrchStateForTest()
+	inline := `{"deal_ids":["n/a"],"data":{}}`
+	o.pendingCriticalActions = append(o.pendingCriticalActions, pendingCriticalAction{
+		toolName: aliasInlineTool, argsHash: hashString(inline), record: pendingRecordKey(inline),
+	})
+	o.markPendingCriticalDone(aliasUploadTool, `{"deal_ids":["none"],"upload_id":"u-1"}`)
+	if len(o.pendingCriticalActions) != 1 {
+		t.Fatalf("a placeholder-batch twin cleared the blocked inline call: pending=%v", o.pendingCriticalActions)
+	}
+	if got := pendingRecordKey(`{"deal_ids":["a","n/a"]}`); got != unbindableRecordKey {
+		t.Fatalf("a batch with a placeholder member keyed %q, want unbindableRecordKey", got)
+	}
+	if got := pendingRecordKey(`{"deal_ids":["b","a"]}`); got != "ids:a\x00b" {
+		t.Fatalf("a real batch keyed %q, want ids:a\\x00b", got)
+	}
+}
+
+// A null, boolean, object or array batch member names no record; it must not
+// render to a non-empty id ("<nil>", "map[]") that two calls could share.
+func TestNonScalarBatchMembersBindNothing(t *testing.T) {
+	for _, raw := range []string{`{"deal_ids":[null]}`, `{"deal_ids":[{}]}`, `{"deal_ids":[true]}`, `{"deal_ids":["a",[]]}`} {
+		if got := pendingRecordKey(raw); got != unbindableRecordKey {
+			t.Errorf("pendingRecordKey(%s) = %q, want unbindableRecordKey", raw, got)
+		}
+		if got := CallRecordBinding(raw); got != "" {
+			t.Errorf("CallRecordBinding(%s) = %q, want \"\"", raw, got)
+		}
+	}
+}

@@ -364,12 +364,24 @@ func batchDealIDs(rawInput string) ([]string, bool) {
 	return ids, true
 }
 
+// unbindableRecordKey is pendingRecordKey's answer for a batch that names a
+// placeholder or empty member (deal_ids: ["n/a"]): such a set identifies no
+// records, so it must never compare equal to another call's — two placeholder
+// batches would otherwise both key "ids:" and a twin writing different records
+// would clear the blocked call. Matching refuses it on either side.
+const unbindableRecordKey = "\x00unbindable"
+
 // pendingRecordKey renders a call's record binding for matching a pending
 // (blocked pre-audit) entry against a later success: "ids:" plus the sorted
 // deal_ids of a batch, "id:" plus the single-record id, "" when the call names
-// no record. Only an equal key is the same record set.
+// no record, unbindableRecordKey for a batch with a member that names no
+// record. Only an equal key other than unbindableRecordKey is the same record
+// set.
 func pendingRecordKey(rawInput string) string {
 	if ids, ok := batchDealIDs(rawInput); ok {
+		if slices.Contains(ids, "") {
+			return unbindableRecordKey
+		}
 		sorted := append([]string(nil), ids...)
 		sort.Strings(sorted)
 		return "ids:" + strings.Join(sorted, "\x00")
@@ -490,6 +502,11 @@ func normalizeDealID(v any) string {
 			return strconv.FormatInt(int64(x), 10)
 		}
 		return strconv.FormatFloat(x, 'f', -1, 64)
+	case nil, bool, map[string]any, []any:
+		// null, a boolean, an object or an array names no record. Rendering
+		// it ("<nil>", "map[]") would give two such values the same non-empty
+		// id and let them compare equal as if they named one record.
+		return ""
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", x))
 	}
@@ -600,8 +617,11 @@ func (o *orchestrationState) resetBatchApprovals() {
 // name a full server-qualified critical tool a NARROWED run did not register
 // (narrowedMCPRoster, #1603); nil when the roster is not narrowed. The narrowing
 // removed such a tool from every path to the model — direct, deferred and
-// tool_call alike — so a call to it is answered "tool not found" and a
-// commitment to it could never be discharged. Entries the full-name check in
+// tool_call alike — so a call to it is answered "tool not found". An entry is
+// accepted when a registered tool could discharge it anyway: the same name, or
+// a same-server alias twin or approved substitute (the typedCommitment
+// nameMatches rule), so a declaration naming the inline write is not refused
+// when the run registered only its upload twin. Entries the full-name check in
 // registerCommittedActionsTyped drops anyway (a bare suffix, a non-critical
 // name) are left to it. Callers must hold o.mu.
 func (o *orchestrationState) unregisteredTypedActions(actions []criticalActionStruct) []string {
@@ -611,24 +631,132 @@ func (o *orchestrationState) unregisteredTypedActions(actions []criticalActionSt
 	var out []string
 	for _, a := range actions {
 		tool := strings.TrimSpace(a.Tool)
-		if suffix := criticalSuffixFor(tool); suffix == "" || tool == suffix {
+		suffix := criticalSuffixFor(tool)
+		if suffix == "" || tool == suffix {
 			continue
 		}
-		if !o.narrowedMCPRoster[tool] && !slices.Contains(out, tool) {
-			out = append(out, tool)
+		// A deal_ids list of placeholders only ("n/a") registers an unbound
+		// commitment (declaredDealIDs), so it is a batch only when a real id
+		// survives normalization.
+		if o.narrowedStandIn(tool, suffix, len(declaredDealIDs(a.DealIDs)) > 0) != "" || slices.Contains(out, tool) {
+			continue
 		}
+		out = append(out, tool)
 	}
 	return out
+}
+
+// narrowedStandIn returns the registered tool that could discharge a typed
+// commitment to tool (critical suffix suffix) in a narrowed run: tool itself,
+// or a registered same-server tool whose suffix the commitment's covers
+// (criticalSuffixCovers: a declared alias or an approved substitute); "" when
+// none can. A batch declaration (deal_ids) takes an alias only: its approved
+// record set is ledgered under the declared suffix's alias class, which
+// checkBatchBinding reads back under the executing tool's class, so a
+// substitute (another class) could never consume it. The lowest name wins, for
+// a stable answer. Callers must hold o.mu.
+func (o *orchestrationState) narrowedStandIn(tool, suffix string, batch bool) string {
+	if o.narrowedMCPRoster[tool] {
+		return tool
+	}
+	best := ""
+	for registered := range o.narrowedMCPRoster {
+		regSuffix := criticalSuffixFor(registered)
+		if !sameToolServer(tool, registered) {
+			continue
+		}
+		covers := criticalAliasesEquivalent(suffix, regSuffix) || (!batch && criticalSuffixCovers(suffix, regSuffix))
+		if covers && (best == "" || registered < best) {
+			best = registered
+		}
+	}
+	return best
+}
+
+// standInClause is the sentence every "execute the outstanding commitment"
+// instruction carries in a narrowed run whose declared tools are not all
+// registered — the confirm_audit confirmation, the finish-enforcement nudge
+// and the no-matching-commitment BLOCKED — naming the registered stand-in to
+// call. Without it a later nudge sends the model back to a declared tool that
+// answers "tool not found", and the run loops. "" when there is nothing to
+// name. Callers must hold o.mu.
+func (o *orchestrationState) standInClause() string {
+	notes := o.narrowedStandInNotes()
+	if len(notes) == 0 {
+		return ""
+	}
+	return " This run's tools are narrowed, and these declared tools are not in your tool list; call the " +
+		"registered stand-in instead, with the same record(s): " + strings.Join(notes, ", ") + "."
+}
+
+// legacyStandInNote is narrowedStandInNotes' entry for an outstanding legacy
+// commitment to suffix: "" when a registered tool carries suffix itself (the
+// declared name is callable), else "suffix → <registered tool>" for the lowest
+// registered tool of its alias class or an approved substitute, the tools
+// markCommittedExecuted discharges it with. Callers must hold o.mu.
+func (o *orchestrationState) legacyStandInNote(suffix string) string {
+	best := ""
+	for registered := range o.narrowedMCPRoster {
+		regSuffix := criticalSuffixFor(registered)
+		if regSuffix == suffix {
+			return ""
+		}
+		covers := regSuffix != "" && (criticalAliasClassOf(regSuffix) == criticalAliasClassOf(suffix) || substituteSatisfies(suffix, regSuffix))
+		if covers && (best == "" || registered < best) {
+			best = registered
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return suffix + " → " + best
+}
+
+// narrowedStandInNotes names, for each outstanding typed commitment whose
+// declared tool a narrowed run did not register (and each legacy commitment
+// whose suffix no registered tool carries), the registered stand-in to call
+// instead ("declared → stand-in"). confirm_audit appends them to its
+// "execute exactly those calls" instruction, which would otherwise send the
+// model to a tool that answers "tool not found". nil when not narrowed.
+// Callers must hold o.mu.
+func (o *orchestrationState) narrowedStandInNotes() []string {
+	if o.narrowedMCPRoster == nil {
+		return nil
+	}
+	var notes []string
+	// Legacy commitments are suffix-scoped: name a registered tool whose
+	// suffix discharges one when none carries the declared suffix itself.
+	for suffix := range o.committedCriticalActions {
+		if o.legacyHeadroomFor(suffix) <= 0 {
+			continue
+		}
+		if note := o.legacyStandInNote(suffix); note != "" && !slices.Contains(notes, note) {
+			notes = append(notes, note)
+		}
+	}
+	for _, c := range o.typedCommitments {
+		if c.remaining <= 0 || o.narrowedMCPRoster[c.tool] {
+			continue
+		}
+		standIn := o.narrowedStandIn(c.tool, c.suffix, len(c.dealIDs) > 0)
+		if note := c.tool + " → " + standIn; standIn != "" && !slices.Contains(notes, note) {
+			notes = append(notes, note)
+		}
+	}
+	sort.Strings(notes)
+	return notes
 }
 
 // unregisteredLegacyActions is unregisteredTypedActions for the legacy
 // free-text critical_actions_being_unblocked field: the critical suffixes its
 // declarations name (matchCriticalSuffix) that no tool the narrowed run
-// registered carries, compared by alias class (criticalAliasClassOf) — the
-// legacy commitment is suffix-scoped, so any registered tool of the class could
-// discharge it, and one outside every registered class never can. nil when the
-// roster is not narrowed. A declaration naming no critical suffix registers
-// nothing and is left to registerCommittedActions. Callers must hold o.mu.
+// registered carries, compared by alias class (criticalAliasClassOf) or by an
+// approved substitute (substituteSatisfies) — the legacy commitment is
+// suffix-scoped, and markCommittedExecuted discharges it by any registered
+// tool of the class or any registered substitute, so only a suffix no
+// registered tool covers is refused. nil when the roster is not narrowed. A
+// declaration naming no critical suffix registers nothing and is left to
+// registerCommittedActions. Callers must hold o.mu.
 func (o *orchestrationState) unregisteredLegacyActions(declared []string) []string {
 	if o.narrowedMCPRoster == nil {
 		return nil
@@ -636,13 +764,21 @@ func (o *orchestrationState) unregisteredLegacyActions(declared []string) []stri
 	registered := make(map[string]bool, len(o.narrowedMCPRoster))
 	for tool := range o.narrowedMCPRoster {
 		if suffix := criticalSuffixFor(tool); suffix != "" {
-			registered[criticalAliasClassOf(suffix)] = true
+			registered[suffix] = true
 		}
+	}
+	covered := func(suffix string) bool {
+		for r := range registered {
+			if criticalAliasClassOf(r) == criticalAliasClassOf(suffix) || substituteSatisfies(suffix, r) {
+				return true
+			}
+		}
+		return false
 	}
 	var out []string
 	for _, decl := range declared {
 		suffix := matchCriticalSuffix(decl)
-		if suffix == "" || registered[criticalAliasClassOf(suffix)] || slices.Contains(out, suffix) {
+		if suffix == "" || slices.Contains(out, suffix) || covered(suffix) {
 			continue
 		}
 		out = append(out, suffix)
@@ -654,7 +790,8 @@ func (o *orchestrationState) unregisteredLegacyActions(declared []string) []stri
 // field naming tools a narrowed run did not register (unregisteredTypedActions,
 // unregisteredLegacyActions).
 func unregisteredActionsRefusal(field string, tools []string) string {
-	return fmt.Sprintf("Audit Rejected: %s names %s, which this run cannot call. The run's MCP tools "+
+	return fmt.Sprintf("Audit Rejected: %s names %s, which this run cannot call, and no tool it can call "+
+		"stands in for them (an alias twin or an approved substitute on the same server). The run's MCP tools "+
 		"are narrowed to the task's required tools, and a call to any other tool is answered \"tool not found\", "+
 		"so this approval could never be discharged. Declare only tools from your tool list and re-run "+
 		"confirm_audit; a tool the task needs belongs in its EXECUTION REQUIREMENTS required_tools.",
@@ -1142,6 +1279,6 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		"call is genuinely required, re-run confirm_audit declaring it in typed critical_actions (tool + deal_id) — "+
 		"a re-audit of the same tool with the binding this call carried supersedes the declaration that refused it, "+
 		"provided nothing has executed under that declaration, so the stale entry will not stack — "+
-		"or abort via confirm_audit(success=false, user_visible_summary=...).",
-		toolName, target, strings.Join(o.outstandingCommitmentSummary(), "; "))
+		"or abort via confirm_audit(success=false, user_visible_summary=...).%s",
+		toolName, target, strings.Join(o.outstandingCommitmentSummary(), "; "), o.standInClause())
 }

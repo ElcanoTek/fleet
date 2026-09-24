@@ -1004,7 +1004,7 @@ func (o *orchestrationState) markPendingCriticalDone(toolName, rawInput string) 
 	// identity is already part of sameAliasedTool.
 	record := pendingRecordKey(rawInput)
 	for i, p := range o.pendingCriticalActions {
-		if sameAliasedTool(p.toolName, toolName) && p.record == record {
+		if sameAliasedTool(p.toolName, toolName) && p.record == record && record != unbindableRecordKey {
 			log.Printf("Enforcement: discharging pending %s via its declared alias %s", p.toolName, toolName)
 			o.dischargePendingCriticalAt(i)
 			return

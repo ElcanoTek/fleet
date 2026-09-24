@@ -79,7 +79,8 @@ run (`RunConfig.MCPRosterNarrowing`): a selected server none of whose tools is
 required registers nothing, and so does a server loaded mid-run that has no
 entry of its own, such as a `mcp_load_servers(client=…)` seat. Native, loader
 and `confirm_audit` tools are untouched, but `confirm_audit` refuses a critical
-action, typed or legacy, naming an MCP tool the run did not register.
+action, typed or legacy, naming an MCP tool the run did not register and that
+no registered alias twin or approved substitute stands in for.
 
 The live-registry section, the tool list the model is sent, and the disclosure
 threshold count all see the narrowed roster. A narrowed roster usually lands
