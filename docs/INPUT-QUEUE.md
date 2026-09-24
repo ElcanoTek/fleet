@@ -44,8 +44,11 @@ retention guarantee: after a terminal row is purged, reusing its
   buffer seals). `turn.completed` (the turn finished in the instant between
   the running check and the cancel) counts as finished (`409`), as does a turn that had already emitted a
   terminal frame of its own before the Stop (it failed, and post-turn work
-  still holds its buffer open, so the cancel would stop nothing); another
-  terminal frame after the cancel is a confirmed stop (`204`); no terminal frame within a few
+  still holds its buffer open, so the cancel would stop nothing) or that
+  fails on its own between the check and the cancel; only `turn.cancelled`
+  after the cancel is a confirmed stop (`204`) — an engine that fails with
+  the Stop's own cancellation (in preflight, say) is advertised
+  `turn.cancelled`, not `turn.error`; no terminal frame within a few
   seconds answers `202`, sent but not yet confirmed, never assumed stopped, so a client stopping the turn it watched
   (`fleet acp`) can never cancel a successor, and learns that the turn
   finished on its own rather than taking the Stop for a cancellation. A targeted Stop is turn-scoped and never sweeps the

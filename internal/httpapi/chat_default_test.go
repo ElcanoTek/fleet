@@ -2385,12 +2385,68 @@ func TestStop_TurnThatAlreadyFailedIsNotReportedStopped(t *testing.T) {
 	}
 }
 
+// cancelErrEngine runs each turn until it is cancelled, then fails with
+// err (the cancellation itself when err is nil) — an engine that reports a
+// Stop landing in preflight as an error rather than a turn.cancelled.
+type cancelErrEngine struct {
+	fakeEngine
+	err     error
+	started chan struct{}
+}
+
+func (f *cancelErrEngine) RunTurn(ctx context.Context, _ TurnInput, _ agent.EventSink) (*TurnResult, error) {
+	close(f.started)
+	<-ctx.Done()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return nil, ctx.Err()
+}
+
+// A Stop that makes the engine fail with the cancellation is advertised as
+// turn.cancelled, so the Stop is confirmed (only turn.cancelled confirms
+// one); an engine failure of its own, even one reached after a Stop, is
+// still turn.error.
+func TestStopCausedEngineErrorIsAdvertisedCancelled(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		err   error
+		frame string
+		want  turnStop
+	}{
+		{"the cancellation", nil, "turn.cancelled", turnStopped},
+		{"a failure of its own", errors.New("sandbox unavailable"), "turn.error", turnNotStopped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := &cancelErrEngine{err: tc.err, started: make(chan struct{})}
+			st := newFakeChatStore()
+			srv := newDefaultChatServer(t, eng, st)
+			conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
+			go postChatRequest(t, srv, map[string]any{"message": "go", "conversation_id": conv.ID})
+			<-eng.started
+			entry, ok := srv.getInflight(conv.ID)
+			if !ok {
+				t.Fatal("no inflight turn")
+			}
+			if got := srv.cancelInflightTurn(conv.ID, entry.turnID); got != tc.want {
+				t.Fatalf("Stop = %v, want %v", got, tc.want)
+			}
+			if got := entry.buf.terminalOutcome(); got != tc.frame {
+				t.Fatalf("terminal frame %q, want %q", got, tc.frame)
+			}
+		})
+	}
+}
+
 // A Stop confirms the cancel against the turn's own terminal frame, read as
 // soon as it is emitted: "running" is checked before the cancel, and a turn
 // that completes in between emits turn.completed — even while post-turn work
 // keeps its buffer unsealed — so the Stop reports it finished, not stopped.
-// A turn the cancel reaches mid-run emits turn.cancelled. A turn that emits
-// no terminal frame in time is unconfirmed, never assumed stopped.
+// A turn the cancel reaches mid-run emits turn.cancelled — the only frame
+// that confirms a Stop; one that fails on its own in between (turn.error,
+// turn.model_required) stopped for its own reasons, so the Stop stopped
+// nothing. A turn that emits no terminal frame in time is unconfirmed, never
+// assumed stopped.
 func TestStop_ConfirmsTheCancelAgainstTheTurnsEnd(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -2398,6 +2454,8 @@ func TestStop_ConfirmsTheCancelAgainstTheTurnsEnd(t *testing.T) {
 		want  turnStop
 	}{
 		{"completes anyway, still unsealed", "turn.completed", turnNotStopped},
+		{"fails on its own after the check", "turn.error", turnNotStopped},
+		{"model required after the check", "turn.model_required", turnNotStopped},
 		{"cancelled", "turn.cancelled", turnStopped},
 		{"no terminal frame yet", "", turnStopUnconfirmed},
 	} {

@@ -69,7 +69,7 @@ Flags: `--email`, `--server`, `--token-file`, `--env-file`, `--model`
 (the model a new session's conversation starts on; the workspace default otherwise. It is never re-sent on later prompts, so a model switch made in the web UI sticks), `--persona`, `--public-url`
 (the web UI base for links; when `--server` or `$FLEET_CHAT_URL` picks the
 server, only this flag is trusted, since an ambient public URL may belong to
-another deployment), and `--timeout` (default 30m, `0` = no bound). stdout carries protocol frames only, and every
+another deployment), and `--timeout` (default 30m, `0` = no bound; a negative value is refused). stdout carries protocol frames only, and every
 diagnostic goes to stderr.
 
 ## Protocol mapping

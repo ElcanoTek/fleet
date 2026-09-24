@@ -1370,7 +1370,14 @@ func (s *Server) runTurnAsync(
 		// Avoid emitting a redundant — and misleading — `turn.error` in
 		// that case; the frontend already has the structured reason and
 		// model slug it needs.
-		if !errors.Is(err, ErrModelSelectionRequired) {
+		switch {
+		case errors.Is(err, context.Canceled) && turnCtx.Err() != nil:
+			// A Stop cancelled the turn before the engine could report it
+			// cancelled itself (preflight, say): advertise the cancellation,
+			// not an error. A Stop is confirmed only by turn.cancelled, so a
+			// turn.error here would read as a failure of the turn's own.
+			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled"})
+		case !errors.Is(err, ErrModelSelectionRequired):
 			buf.Emit("turn.error", map[string]any{"message": err.Error()})
 		}
 		return

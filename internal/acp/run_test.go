@@ -112,6 +112,12 @@ func TestRunRejectsStrayArguments(t *testing.T) {
 	if code := run([]string{"--nope"}, strings.NewReader(""), io.Discard, &stderr); code != 2 {
 		t.Errorf("unknown flag: exit %d, want 2", code)
 	}
+	// Only 0 disables the bound: a negative timeout is refused, not taken as
+	// "unbounded".
+	stderr.Reset()
+	if code := run([]string{"--timeout=-1s"}, strings.NewReader(""), io.Discard, &stderr); code != 2 || !strings.Contains(stderr.String(), "negative") {
+		t.Errorf("negative timeout: exit %d, stderr %q; want 2 and a refusal", code, stderr.String())
+	}
 }
 
 // TestPackageStaysAClient pins the one-governed-loop invariant (ADR-0001) for

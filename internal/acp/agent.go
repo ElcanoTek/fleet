@@ -534,6 +534,17 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 			case <-streamDone:
 				stopped <- stopOutcome{alreadyEnded: true}
 				return
+			case <-tr.endedCh:
+				// The terminal frame is the answer; the stream can stay open
+				// a while longer for post-turn work (auto-titling), so let
+				// it finish only briefly, as for a completed turn above.
+				select {
+				case <-streamDone:
+				case <-time.After(stopSettleWait):
+					cancelStream()
+				}
+				stopped <- stopOutcome{alreadyEnded: true}
+				return
 			case <-time.After(conversationWait):
 				err = errors.New("the turn had already ended, but its final answer did not arrive")
 			}

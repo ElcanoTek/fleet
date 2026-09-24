@@ -346,21 +346,20 @@ func (b *turnBuffer) markNeedsBackfill() {
 // entry), so "sealed" is the earliest reliable this-turn-is-over signal — the
 // #785 busy check uses it to avoid queueing a submission that raced the last
 // microseconds of the previous turn's bookkeeping.
-// terminalOutcome reports whether the turn has emitted its terminal frame
-// yet (ended) and, if so, whether that frame is turn.completed. It reads the
-// frame itself, sealed or not: a turn does post-turn work before sealing.
-func (b *turnBuffer) terminalOutcome() (completed, ended bool) {
+// terminalOutcome returns the turn's terminal frame (turn.completed,
+// turn.cancelled, turn.error or turn.model_required), "" before it has
+// emitted one. It reads the frame itself, sealed or not: a turn does
+// post-turn work before sealing.
+func (b *turnBuffer) terminalOutcome() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for i := len(b.events) - 1; i >= 0; i-- {
-		switch b.events[i].Name {
-		case "turn.completed":
-			return true, true
-		case "turn.cancelled", "turn.error", "turn.model_required":
-			return false, true
+		switch name := b.events[i].Name; name {
+		case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
+			return name
 		}
 	}
-	return false, false
+	return ""
 }
 
 func (b *turnBuffer) Sealed() bool {

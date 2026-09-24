@@ -1537,10 +1537,22 @@ func TestPromptWhitespaceIsPreserved(t *testing.T) {
 // answers 409): the prompt keeps reading the turn to its end and, still
 // answering "cancelled" as ACP requires, says the turn had finished and what
 // it did stands — not a silent "cancelled" over tools that ran to completion.
+//
+// The terminal frame is enough: the stream may stay open well past it while
+// fleet finishes post-turn work (auto-titling), and that wait must not turn
+// the definite "already finished" into "could not confirm".
 func TestStopOfAnEndedTurnReportsItsOutcome(t *testing.T) {
+	for _, lingers := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stream ends", true: "stream lingers after the frame"}[lingers], func(t *testing.T) {
+			testStopOfAnEndedTurnReportsItsOutcome(t, lingers)
+		})
+	}
+}
+
+func testStopOfAnEndedTurnReportsItsOutcome(t *testing.T, lingers bool) {
 	started := make(chan struct{})
 	var h *harness
-	h = newHarness(t, harnessOpts{cancelStatus: http.StatusConflict, turn: func(w *sseWriter, _ *http.Request) {
+	h = newHarness(t, harnessOpts{cancelStatus: http.StatusConflict, turn: func(w *sseWriter, r *http.Request) {
 		w.emit("conversation", map[string]any{"id": "conv-e"})
 		w.emit("turn.started", map[string]any{"turn_id": "turn-e"})
 		close(started)
@@ -1555,6 +1567,12 @@ func TestStopOfAnEndedTurnReportsItsOutcome(t *testing.T) {
 		}
 		w.emit("text.delta", map[string]any{"text": "all done"})
 		w.emit("turn.completed", map[string]any{})
+		if lingers {
+			select { // post-turn work holds the stream open past conversationWait
+			case <-r.Context().Done():
+			case <-time.After(2 * conversationWait):
+			}
+		}
 	}})
 	sid := h.newSession(t)
 	done := make(chan acpsdk.PromptResponse, 1)

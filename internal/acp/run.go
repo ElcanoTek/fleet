@@ -53,6 +53,12 @@ func run(argv []string, in io.Reader, out, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "fleet acp: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
+	if *timeout < 0 {
+		// A signed duration parses, but only 0 means "no bound": a mistyped
+		// negative value must not silently remove the hang guard.
+		fmt.Fprintf(errOut, "fleet acp: --timeout %s is negative (use 0 for no bound)\n", *timeout)
+		return 2
+	}
 
 	cfg, cfgErr := chattui.ResolveFromEnvironment(f)
 	if cfgErr != nil {

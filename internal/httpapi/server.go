@@ -586,7 +586,7 @@ func (e inflightEntry) stoppable() bool {
 		return false
 	}
 	if e.buf != nil {
-		if _, ended := e.buf.terminalOutcome(); ended {
+		if e.buf.terminalOutcome() != "" {
 			return false
 		}
 	}
@@ -874,11 +874,12 @@ func (s *Server) cancelSteerTurn(convID, turnID, steerRowID string) turnStop {
 type turnStop int
 
 const (
-	// turnNotStopped: the turn was not running, or it completed anyway (it
-	// finished in the instant between the running check and the cancel).
+	// turnNotStopped: the turn was not running, or it ended on its own —
+	// completed, or failed — in the instant between the running check and
+	// the cancel.
 	turnNotStopped turnStop = iota
-	// turnStopped: the turn's terminal frame shows it ended without
-	// completing (cancelled, or an error) after the cancel.
+	// turnStopped: the turn's terminal frame after the cancel is
+	// turn.cancelled.
 	turnStopped
 	// turnStopUnconfirmed: the cancel was sent but no terminal frame
 	// arrived within stopConfirmWait. It is not claimed either way.
@@ -900,11 +901,15 @@ func (e inflightEntry) confirmStopped() turnStop {
 	}
 	deadline := time.Now().Add(stopConfirmWait)
 	for {
-		if completed, ended := e.buf.terminalOutcome(); ended {
-			if completed {
-				return turnNotStopped
-			}
+		switch e.buf.terminalOutcome() {
+		case "turn.cancelled":
 			return turnStopped
+		case "turn.completed", "turn.error", "turn.model_required":
+			// Completed, or failed on its own in the instant between the
+			// stoppable check and the cancel: the cancel stopped nothing. A
+			// failure the cancel itself caused is advertised turn.cancelled
+			// (runTurnAsync), so only a failure of the turn's own is here.
+			return turnNotStopped
 		}
 		if time.Now().After(deadline) {
 			return turnStopUnconfirmed
