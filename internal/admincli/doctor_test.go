@@ -8,9 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 )
 
 // TestDoctorDryRunSmoke — `doctor.sh --dry-run` must succeed on any host (no
@@ -89,20 +87,6 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		":100000:65536",
 		`cgroup_manager = "cgroupfs"`,
 		"podman system migrate",
-		// migrate stops every running container of the user; on a live box
-		// that deleted the service's whole --rm warm pool while the process
-		// kept handing out dead handles. It must stay gated on the service
-		// being down (or podman already broken, with a restart after).
-		// Learned in production on fleetdev.
-		"migrate would stop its live sandbox containers",
-		"sandbox smoke passed after podman system migrate + a ${SERVICE_NAME} restart",
-		// The decisions themselves live in scripts/lib/podman-migrate.sh
-		// (TestPodmanMigratePlan pins every branch); doctor must source it.
-		"lib/podman-migrate.sh",
-		// The manual recovery names the CONFIGURED unit: a literal "fleet"
-		// under FLEET_SERVICE_NAME would leave the real service running while
-		// migrate deletes its sandboxes.
-		"or by hand: stop ${SERVICE_NAME},",
 		"600 root",
 		"Report-only in every mode",
 		// Post-upgrade podman-info deferral: step 2's own stack upgrade must
@@ -160,51 +144,84 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 	}
 }
 
-// TestCmdDoctorCancelsWithSIGTERM — `fleet doctor` must hand an interrupt to
-// the script as a trappable SIGTERM, not exec's default SIGKILL: while doctor
-// has fleet stopped for a podman store reset (migrate_live_service), the
-// script's trap is what starts fleet again, and bash cannot trap SIGKILL.
-// The fixture script traps TERM, takes 3s in the trap (a restore is not
-// instant, so no forced-kill deadline may follow the SIGTERM) and exits 7;
-// the test signals its own process the way an operator's Ctrl-C / SIGTERM
-// reaches `fleet doctor`.
-func TestCmdDoctorCancelsWithSIGTERM(t *testing.T) {
+// TestDoctorNeverRunsPodmanMigrate — `podman system migrate` stops every
+// running container of the service user, and fleet's sandboxes run --rm, so
+// running it under a live fleet deletes the whole warm pool while the process
+// keeps handing out the dead handles: "no such container" on every chat turn
+// and task until a restart (learned in production on fleetdev, where a
+// repair-mode doctor did exactly that). Doctor must never run it; it detects a
+// stale pause process and prints the repair for an operator or agent to judge.
+func TestDoctorNeverRunsPodmanMigrate(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "doctor.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(body), "\n") {
+		code := strings.TrimSpace(line)
+		if strings.HasPrefix(code, "#") {
+			continue
+		}
+		// Printed guidance lives inside double-quoted strings; an executed
+		// call would be a bare command such as `run_as_fleet podman system migrate`.
+		if strings.Contains(code, "podman system migrate") && !strings.Contains(code, `"`) && !strings.Contains(code, `'`) {
+			t.Errorf("doctor.sh:%d executes podman system migrate: %s", i+1, code)
+		}
+		if strings.Contains(code, "run_as_fleet podman system migrate") {
+			t.Errorf("doctor.sh:%d executes podman system migrate: %s", i+1, code)
+		}
+	}
+}
+
+// TestDoctorStalePauseHelpers — the detection and the printed repair, run
+// straight out of doctor.sh. Only podman's own stale-pause error is matched
+// (a disk or PID failure is not migrate's to fix), and the repair names the
+// CONFIGURED unit, user and home, recreates /run/<user> (the stop removes it)
+// and brings fleet-web back (the stop takes it down through BindsTo=).
+func TestDoctorStalePauseHelpers(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "doctor.sh"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	// The trap takes a few seconds, as a real restore (a service start) does:
-	// a forced kill deadline after the SIGTERM would cut it short.
-	script := `trap 'kill "$sleeper" 2>/dev/null; sleep 3; echo trapped >"$DOCTOR_OUT"; exit 7' TERM
-sleep 30 & sleeper=$!
-: >"$DOCTOR_READY"
-wait
-`
-	if err := os.WriteFile(filepath.Join(root, "scripts", "doctor.sh"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	out, ready := filepath.Join(root, "out"), filepath.Join(root, "ready")
-	t.Setenv("FLEET_ROOT", root)
-	t.Setenv("DOCTOR_OUT", out)
-	t.Setenv("DOCTOR_READY", ready)
-	go func() {
-		for i := 0; i < 200; i++ {
-			if _, err := os.Stat(ready); err == nil {
-				// cmdDoctor's signal.NotifyContext is registered before the
-				// script starts, so this cancels the run rather than the test.
-				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
+	fns := make([]string, 0, 2)
+	for _, name := range []string{"is_stale_pause_error", "stale_pause_fix"} {
+		start := strings.Index(string(body), "\n"+name+"() {")
+		if start < 0 {
+			t.Fatalf("doctor.sh has no %s()", name)
 		}
-	}()
-	if code := cmdDoctor(nil); code != 7 {
-		t.Fatalf("cmdDoctor exit = %d, want 7 (the script's TERM trap); a SIGKILL cancel gives -1", code)
+		end := strings.Index(string(body)[start:], "\n}\n")
+		fns = append(fns, string(body)[start:start+end+3])
 	}
-	if b, err := os.ReadFile(out); err != nil || strings.TrimSpace(string(b)) != "trapped" {
-		t.Fatalf("the script's TERM trap did not run: %q, %v", b, err)
+	const stale = `Error: invalid internal status, try resetting the pause process with "podman system migrate": could not find any running process: no such process`
+	script := strings.Join(fns, "\n") + `
+SERVICE_NAME=fleet-prod SERVICE_USER=svc SERVICE_HOME=/srv/svc
+for e in "$STALE" "Error: crun: pids limit reached" "Error: no space left on device"; do
+  if is_stale_pause_error "$e"; then echo "match: $e"; else echo "no: $e"; fi
+done
+stale_pause_fix`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "STALE="+stale)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"match: " + stale,
+		"no: Error: crun: pids limit reached",
+		"no: Error: no space left on device",
+		"fleet sched task list --status running",
+		"sudo systemctl stop fleet-prod;",
+		"sudo install -d -m 0700 -o svc -g svc /run/svc;",
+		"cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate;",
+		"sudo systemctl start fleet-prod",
+		"sudo systemctl start fleet-web",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("want %q in:\n%s", want, out)
+		}
 	}
 }
