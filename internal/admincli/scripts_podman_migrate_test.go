@@ -85,6 +85,11 @@ func TestSmokeRetryPlan(t *testing.T) {
 		{"no-restart", "1", "0", "podman", stalePauseErr, "report"},
 		{"step 3 already migrated", "0", "1", "podman", stalePauseErr, "report"},
 		{"kubernetes backend", "1", "1", "kubernetes", stalePauseErr, "report"},
+		// Fail-closed: only a backend resolved as exactly podman may restart.
+		// An expression doctor could not interpolate (nested braces) or an
+		// unknown value restricts rather than being taken for podman.
+		{"uninterpolated manifest expression", "1", "1", "${RUNNER_BACKEND:-pre {inner}}", stalePauseErr, "report"},
+		{"unrecognized backend", "1", "1", "docker", stalePauseErr, "report"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := podmanMigrateLib(t, "smoke_retry_plan", tc.deferred, tc.canRestart, tc.backend, tc.smoke)
@@ -188,11 +193,14 @@ func TestDoctorResolvesBackendLikeTheDaemon(t *testing.T) {
 // run_as_fleet's output), so migrate_live_service's ordering
 // can be asserted without systemd, podman or root. Unit state lives in shell
 // variables the stub mutates: STOP_RC (the stop job's exit code) and
-// STOP_STICKS (the unit stays active) independently, START_RC, and WEB
+// STOP_STICKS (the unit stays active, or "deactivating") independently,
+// PROC_LINGERS (a fleet process survives the unit), START_RC, and WEB
 // (fleet-web's state before).
 const migrateLiveServiceStubs = `
-SERVICE_NAME=fleet
+SERVICE_NAME=fleet SERVICE_USER=fleet
 fleet=active; web="$WEB"
+# A fleet process outlives the unit when PROC_LINGERS=1.
+pgrep() { [[ "$PROC_LINGERS" == 1 ]]; }
 LOG="$(mktemp)"
 # The helper sends run_as_fleet's output to /dev/null, so log to a file.
 run_as_fleet() { echo "run_as_fleet $*" >>"$LOG"; }
@@ -204,9 +212,15 @@ systemctl() {
     is-active)
       if [[ "$unit" == fleet-web.service ]]; then [[ "$web" == active ]]; else [[ "$fleet" == active ]]; fi
       return ;;
+    show) echo "$fleet"; return 0 ;; # show -p ActiveState --value fleet.service
     stop)
       echo "stop $unit" >>"$LOG"
-      [[ "$STOP_STICKS" == 1 ]] || { fleet=inactive; web=inactive; } # BindsTo: fleet-web goes down with it
+      # STOP_STICKS=1: stays active; =deactivating: mid-stop, still running.
+      case "$STOP_STICKS" in
+        1) ;;
+        deactivating) fleet=deactivating ;;
+        *) fleet=inactive; web=inactive ;; # BindsTo: fleet-web goes down with it
+      esac
       return "$STOP_RC" ;;
     start)
       echo "start $unit" >>"$LOG"
@@ -236,25 +250,25 @@ func TestMigrateLiveService(t *testing.T) {
 	}{
 		{
 			name: "stop, migrate, start, fleet-web back",
-			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "START_RC=0", "WEB=active"},
+			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
 			want: []string{"stop fleet.service\nrun_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n", "fixed: fleet-web.service started again", "rc=0"},
 		},
 		{
 			name:      "fleet-web was not running",
-			env:       []string{"STOP_RC=0", "STOP_STICKS=0", "START_RC=0", "WEB=inactive"},
+			env:       []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=inactive"},
 			want:      []string{"run_as_fleet podman system migrate\nstart fleet.service\n", "rc=0"},
 			forbidden: []string{"start fleet-web.service"},
 		},
 		{
 			name:      "stop job fails, unit still active",
-			env:       []string{"STOP_RC=1", "STOP_STICKS=1", "START_RC=0", "WEB=active"},
-			want:      []string{"fail: fleet.service did not stop — podman system migrate NOT run", "rc=1"},
+			env:       []string{"STOP_RC=1", "STOP_STICKS=1", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
+			want:      []string{"fail: fleet.service did not stop (ActiveState=active) — podman system migrate NOT run", "rc=1"},
 			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
 		},
 		{
 			name:      "stop returns but the unit stays active",
-			env:       []string{"STOP_RC=0", "STOP_STICKS=1", "START_RC=0", "WEB=active"},
-			want:      []string{"fail: fleet.service did not stop — podman system migrate NOT run", "rc=1"},
+			env:       []string{"STOP_RC=0", "STOP_STICKS=1", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
+			want:      []string{"fail: fleet.service did not stop (ActiveState=active) — podman system migrate NOT run", "rc=1"},
 			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
 		},
 		{
@@ -262,12 +276,25 @@ func TestMigrateLiveService(t *testing.T) {
 			// the unit inactive: the store is safe to touch, and fleet must be
 			// started again rather than left down with nothing after it.
 			name: "stop job fails but the unit went inactive",
-			env:  []string{"STOP_RC=1", "STOP_STICKS=0", "START_RC=0", "WEB=active"},
+			env:  []string{"STOP_RC=1", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
 			want: []string{"stop fleet.service\nrun_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n", "rc=0"},
 		},
 		{
+			// is-active is false for "deactivating", but the unit still runs.
+			name:      "stop interrupted mid-deactivation",
+			env:       []string{"STOP_RC=1", "STOP_STICKS=deactivating", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
+			want:      []string{"fail: fleet.service did not stop (ActiveState=deactivating) — podman system migrate NOT run", "rc=1"},
+			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+		},
+		{
+			name:      "unit inactive but a fleet process lingers",
+			env:       []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=1", "START_RC=0", "WEB=active"},
+			want:      []string{"podman system migrate NOT run", "rc=1"},
+			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+		},
+		{
 			name: "fleet does not start again",
-			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "START_RC=1", "WEB=inactive"},
+			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=1", "WEB=inactive"},
 			want: []string{"run_as_fleet podman system migrate", "fail: podman system migrate run, but fleet.service did not start again", "rc=1"},
 		},
 	} {

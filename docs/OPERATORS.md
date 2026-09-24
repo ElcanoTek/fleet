@@ -424,8 +424,9 @@ production-only bug. The pass covers, in order:
    container of the user and no `fleet` process). While fleet is live it
    runs it only when podman itself reports a stale pause process **and**
    doctor can restart `fleet`, as one stop → migrate → start (fleet-web
-   brought back), so no process ever holds the deleted pool; a stop that
-   fails, or leaves the unit active, aborts before migrate. Under
+   brought back), so no process ever holds the deleted pool. migrate runs
+   only once the unit is proven stopped — `ActiveState` inactive or failed
+   and no `fleet` process left — else it aborts. Under
    `--no-restart`, or with fleet under another supervisor, it leaves the
    store alone and prints the stop → migrate → start sequence instead. A
    step-8 sandbox smoke that fails with that same error after a skip gets
@@ -435,7 +436,9 @@ production-only bug. The pass covers, in order:
    (`FLEET_SANDBOX_BACKEND`, else the bundle's `sandbox.backend`; each value,
    the bundle path and each `${VAR}` read the way the daemon reads them: its
    live process env, then the deployment env file) the step-8 recovery never
-   restarts `fleet` over a local podman fault. The backend only ever
+   restarts `fleet` over a local podman fault — it requires a backend
+   resolved as exactly `podman`, so an unknown value or an expression doctor
+   cannot interpolate restricts too. The backend only ever
    restricts doctor: step 3 gates on liveness for every backend, so a
    misread backend can cost a skipped repair, never a deleted pool.
    The decisions are `scripts/lib/podman-migrate.sh`.

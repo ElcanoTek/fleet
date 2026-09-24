@@ -5,8 +5,9 @@
 # Sourced by scripts/doctor.sh. The decisions are pure functions of what the
 # caller probed, so internal/admincli/scripts_podman_migrate_test.go can pin
 # every branch without root, podman or a broken rootless store. The one
-# action, migrate_live_service, uses the caller's SERVICE_NAME, run_as_fleet
-# and fixed/fail reporters (and systemctl), which the test stubs.
+# action, migrate_live_service, uses the caller's SERVICE_NAME, SERVICE_USER,
+# run_as_fleet and fixed/fail reporters (and systemctl, pgrep), which the test
+# stubs.
 #
 # Why this needs a gate at all: migrate is the documented reset for a stale
 # rootless pause process (one forked in an old mount namespace pins it and
@@ -79,11 +80,14 @@ podman_migrate_plan() {
 #   Step 8's decision after the sandbox smoke failed. DEFERRED is 1 when step 3
 #   skipped migrate; CAN_RESTART as above; SMOKE_ERR the failed run's stderr.
 #   Echoes "retry" (migrate, restart the service, re-smoke) only for podman's
-#   stale-pause error on the podman backend with a restart available; else
-#   "report" (fail the smoke, leave the live pool alone).
+#   stale-pause error on a backend resolved as EXACTLY "podman", with a
+#   restart available; else "report" (fail the smoke, leave the live pool
+#   alone). Fail-closed on the backend: kubernetes, an unrecognized value, or
+#   a manifest expression doctor could not interpolate all restrict — doctor
+#   need not mirror every interpolation form to stay safe.
 smoke_retry_plan() {
   local deferred="$1" can_restart="$2" backend="$3" smoke_err="$4"
-  if [[ "$deferred" == "1" && "$can_restart" == "1" && "$backend" != "kubernetes" ]] \
+  if [[ "$deferred" == "1" && "$can_restart" == "1" && "$backend" == "podman" ]] \
      && is_stale_pause_error "$smoke_err"; then
     echo retry
   else
@@ -99,19 +103,25 @@ smoke_retry_plan() {
 # answers /healthz while failing every tool call). fleet-web has
 # BindsTo=fleet.service, so the stop takes it down and starting fleet does not
 # bring it back — it is started again here when it was running before.
-# The gate is the unit's STATE after the stop, not the stop job's exit code:
-# migrating under a unit that is still active is the exact deletion this
-# helper exists to prevent, so that aborts; a stop that "failed" (a timeout
-# after systemd killed it) but left the unit inactive proceeds, so fleet is
-# migrated AND started again rather than left down. Reports its own failures
+# The gate is the unit's STATE after the stop, not the stop job's exit code,
+# and it must be PROVEN stopped: ActiveState exactly inactive or failed (a
+# negative is-active also covers "deactivating", a unit still running) and no
+# `fleet` process left for the service user. Anything else aborts — migrating
+# under a live process is the exact deletion this helper exists to prevent. A
+# stop that "failed" (a timeout after systemd killed it) but left the unit
+# proven-stopped proceeds, so fleet is migrated AND started again rather than
+# left down. Reports its own failures
 # (callers report only success) and returns non-zero when migrate did not run
 # or fleet did not come back.
 migrate_live_service() {
   local web_was_active=0 rc=0
   systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
+  local state
   systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
-  if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
-    fail "${SERVICE_NAME}.service did not stop — podman system migrate NOT run (it would delete the live sandbox pool); journalctl -u ${SERVICE_NAME} -n 50"
+  state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  if [[ "$state" != "inactive" && "$state" != "failed" ]] \
+     || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1; then
+    fail "${SERVICE_NAME}.service did not stop (ActiveState=${state:-unknown}) — podman system migrate NOT run (it would delete the live sandbox pool); journalctl -u ${SERVICE_NAME} -n 50"
     return 1
   fi
   run_as_fleet podman system migrate >/dev/null 2>&1 || true
