@@ -474,47 +474,31 @@ Error: invalid internal status, try resetting the pause process with "podman sys
 ```
 
 Doctor (step 3's `podman info`, or the step-8 sandbox smoke) reports this as a
-failure with the repair spelled out — and holds any service restart that
-run wanted, since fleet could not start its sandboxes on that store — but
-**never runs it**: `podman system
-migrate` stops every running container of the `fleet` user, and the sandboxes
-run `--rm`, so under a live fleet it deletes the whole warm sandbox pool while
-the process keeps handing out the dead handles — every chat turn and task
-then fails with `no such container` until fleet restarts. (Doctor used to run
-it on every pass; that is how fleetdev lost its pool.) Deciding when fleet can
-be stopped is a judgment call, so it is left to an operator or agent:
+failure — and holds any service restart that run wanted, since fleet could not
+start its sandboxes on that store — but **never resets it itself**. The reset
+is `podman system migrate` as the `fleet` user, and it stops every running
+container of that user; the sandboxes run `--rm`, so under a live fleet it
+deletes the whole warm sandbox pool while the process keeps handing out the
+dead handles, and every chat turn and task fails with `no such container`
+until fleet restarts. (Doctor used to run it on every pass; that is how
+fleetdev lost its pool.)
 
-Run each step and check its result before the next — these are steps for a
-person or agent with eyes on the output, not a script to paste:
+So the fix is: **when nothing is running, stop fleet, run `podman system
+migrate` as the `fleet` user, and start fleet again**, then re-run `sudo fleet
+doctor --check`. When is "safe" is a judgment call for whoever is on the box —
+check `sudo fleet sched task list --status running` (and `leased`) first.
+Things that bite:
 
-1. **Nothing in flight:** `sudo fleet sched task list --status running` and
-   `--status leased` are both empty, and no one is mid-chat. (`sudo`: the
-   scheduler DSN lives in the root-only `/etc/fleet/fleet.env`.)
-2. **Note the web tier:** `systemctl is-active fleet-web`. Stopping fleet
-   takes it down (`BindsTo=`), and starting fleet does not bring it back.
-3. **Stop fleet:** `sudo systemctl stop fleet` (under another supervisor,
-   stop it there instead).
-4. **Confirm it is gone:** `systemctl is-active fleet` says `inactive` or
-   `failed` (not `active` or `deactivating`), and `sudo pgrep -u fleet -x
-   fleet` prints nothing and exits 1. If either check fails, **do not run
-   step 6** — go to step 7.
-5. **Recreate the runtime dir** (the stop removes it — it is the unit's
-   `RuntimeDirectory=`): `sudo install -d -m 0700 -o fleet -g fleet /run/fleet`
-6. **Reset podman as the service user** — the `cd` happens *inside*, after
-   becoming `fleet`, since `/var/lib/fleet` is `0700`:
-
-   ```
-   sudo -u fleet env HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet sh -c 'cd "$HOME" && podman system migrate'
-   ```
-
-7. **Always start fleet again**, even if a step above failed or was
-   interrupted: `sudo systemctl start fleet` (or through its supervisor) —
-   and, only if step 2 said `active`, `sudo systemctl start fleet-web`.
-8. **Re-check:** `sudo fleet doctor --check` (the sandbox smoke must pass).
-
-Doctor's message fills in the configured unit name, user and home
-(`FLEET_SERVICE_NAME`, `FLEET_SERVICE_USER`), so copy the commands from it on a
-box that renames them.
+- Stopping the unit removes `/run/fleet` (its `RuntimeDirectory=`), which
+  podman needs as `XDG_RUNTIME_DIR` — recreate it (`0700`, owned by `fleet`)
+  before migrating.
+- `/var/lib/fleet` is `0700`: change into it as `fleet` (inside the `sudo -u
+  fleet` shell), not before `sudo`.
+- Stopping `fleet` also stops `fleet-web` (`BindsTo=`), and starting `fleet`
+  does not bring it back — start it too if it was running.
+- Make sure fleet has really stopped (no `fleet` process left, including one
+  under another supervisor) before migrating, and start it again even if the
+  migrate fails.
 
 Admins also get a **read-only** version of this report in the web UI —
 **Settings → Admin → Doctor** — run from inside the fleet process (DBs, disk

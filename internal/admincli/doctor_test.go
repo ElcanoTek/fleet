@@ -179,16 +179,11 @@ func TestDoctorNeverRunsPodmanMigrate(t *testing.T) {
 	}
 }
 
-// TestDoctorStalePauseHelpers — the detection and the printed repair, run
-// straight out of doctor.sh. Only podman's own stale-pause error is matched
-// (a disk or PID failure is not migrate's to fix). The repair is plain steps
-// for an operator or agent to run and check one at a time — not a pasted
-// program that must get sudo exit codes, failed restarts and interrupts right
-// unattended — naming the CONFIGURED unit, user and home, and it must hold
-// the lessons the automated attempts taught: prove fleet stopped before the
-// reset, recreate /run/<user> (the stop removes it), change into the service
-// home only AFTER becoming the service user (it is 0700), always start fleet
-// again, and bring fleet-web back only if it was running.
+// TestDoctorStalePauseHelpers — the detection and the hint, run straight out
+// of doctor.sh. Only podman's own stale-pause error is matched (a disk or PID
+// failure is not migrate's to fix), and the hint names the CONFIGURED unit and
+// user and points at the runbook rather than prescribing a script: when fleet
+// can be stopped is a judgment call for an operator or agent.
 func TestDoctorStalePauseHelpers(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -199,7 +194,7 @@ func TestDoctorStalePauseHelpers(t *testing.T) {
 		t.Fatal(err)
 	}
 	fns := make([]string, 0, 2)
-	for _, name := range []string{"is_stale_pause_error", "stale_pause_steps"} {
+	for _, name := range []string{"is_stale_pause_error", "stale_pause_hint"} {
 		start := strings.Index(string(body), "\n"+name+"() {")
 		if start < 0 {
 			t.Fatalf("doctor.sh has no %s()", name)
@@ -209,11 +204,11 @@ func TestDoctorStalePauseHelpers(t *testing.T) {
 	}
 	const stale = `Error: invalid internal status, try resetting the pause process with "podman system migrate": could not find any running process: no such process`
 	script := strings.Join(fns, "\n") + `
-SERVICE_NAME=fleet-prod SERVICE_USER=svc SERVICE_HOME="/srv/svc home"
+SERVICE_NAME=fleet-prod SERVICE_USER=svc
 for e in "$STALE" "Error: crun: pids limit reached" "Error: no space left on device"; do
   if is_stale_pause_error "$e"; then echo "match: $e"; else echo "no: $e"; fi
 done
-stale_pause_steps`
+stale_pause_hint`
 	cmd := exec.Command("bash", "-c", script)
 	cmd.Env = append(os.Environ(), "STALE="+stale)
 	out, err := cmd.CombinedOutput()
@@ -224,18 +219,8 @@ stale_pause_steps`
 		"match: " + stale,
 		"no: Error: crun: pids limit reached",
 		"no: Error: no space left on device",
-		"sudo fleet sched task list --status running",
-		"systemctl is-active fleet-web",
-		"sudo systemctl stop fleet-prod",
-		"systemctl is-active fleet-prod must say inactive or failed",
-		"sudo pgrep -u svc -x fleet must print nothing and exit 1",
-		"do NOT run step 6",
-		"sudo install -d -m 0700 -o svc -g svc /run/svc",
-		// cd happens as the service user, inside the elevated shell.
-		`sudo -u svc env HOME=/srv/svc\ home XDG_RUNTIME_DIR=/run/svc sh -c 'cd "$HOME" && podman system migrate'`,
-		"Always start fleet again, even if a step above failed or was interrupted: sudo systemctl start fleet-prod",
-		"only if step 2 said active: sudo systemctl start fleet-web",
-		"sudo fleet doctor --check",
+		"stop fleet-prod, run podman system migrate as svc, and start fleet-prod again",
+		`docs/OPERATORS.md, "Stale podman pause process"`,
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("want %q in:\n%s", want, out)

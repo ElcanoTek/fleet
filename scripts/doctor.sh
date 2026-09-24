@@ -232,30 +232,15 @@ is_stale_pause_error() {
   grep -qiE 'podman system migrate|pause process' <<<"$1"
 }
 
-# stale_pause_steps — print the repair for a stale pause process, which doctor
-# never runs itself. `podman system migrate` stops every running container of
-# the service user, and fleet's sandboxes run --rm: under a live fleet it
+# stale_pause_hint — what to do about a stale pause process, which doctor
+# never resets itself. `podman system migrate` stops every running container
+# of the service user, and fleet's sandboxes run --rm: under a live fleet it
 # deletes the whole warm pool while the process keeps handing out the dead
 # handles ("no such container" on every chat turn and task until a restart —
-# learned in production on fleetdev). Whether fleet can be stopped right now
-# (running tasks, a turn mid-flight) is an operator's or agent's judgment.
-# Plain steps, each checked before the next, on purpose: a pasted one-liner
-# has to get sudo exit codes, failed restarts, interrupts and optional units
-# right unattended, and a person or agent reading each step's output does not.
-stale_pause_steps() {
-  local home_q
-  printf -v home_q '%q' "$SERVICE_HOME"
-  cat <<STEPS
-    Repair (docs/OPERATORS.md, "Stale podman pause process") — run each step and check it before the next:
-      1. Nothing in flight: sudo fleet sched task list --status running   (and --status leased) — both empty; no one mid-chat.
-      2. Note whether the web tier is up: systemctl is-active fleet-web
-      3. Stop fleet: sudo systemctl stop ${SERVICE_NAME}   (under another supervisor, stop it there instead)
-      4. Confirm it is gone: systemctl is-active ${SERVICE_NAME} must say inactive or failed (not active or deactivating), and sudo pgrep -u ${SERVICE_USER} -x fleet must print nothing and exit 1. If either check fails, do NOT run step 6 — go to step 7.
-      5. Recreate the runtime dir (the stop removes it): sudo install -d -m 0700 -o ${SERVICE_USER} -g ${SERVICE_USER} /run/${SERVICE_USER}
-      6. Reset podman as the service user: sudo -u ${SERVICE_USER} env HOME=${home_q} XDG_RUNTIME_DIR=/run/${SERVICE_USER} sh -c 'cd "\$HOME" && podman system migrate'
-      7. Always start fleet again, even if a step above failed or was interrupted: sudo systemctl start ${SERVICE_NAME}   (or through its supervisor) — and, only if step 2 said active: sudo systemctl start fleet-web
-      8. Re-check: sudo fleet doctor --check   (the sandbox smoke must pass)
-STEPS
+# learned in production on fleetdev). When fleet can safely be stopped is a
+# judgment call for an operator or agent, so this is a pointer, not a script.
+stale_pause_hint() {
+  printf '%s' "when it is safe (nothing running), stop ${SERVICE_NAME}, run podman system migrate as ${SERVICE_USER}, and start ${SERVICE_NAME} again — see docs/OPERATORS.md, \"Stale podman pause process\""
 }
 
 # ── dry-run: print the checklist and exit ────────────────────────────────────
@@ -278,7 +263,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
   info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
-  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with the repair steps — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
+  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active"
@@ -680,7 +665,7 @@ CONF
   # Stale pause process: a rootless pause container forked inside an old mount
   # namespace pins that namespace and poisons later pulls/runs. The reset is
   # `podman system migrate`, which doctor deliberately never runs: it is NOT a
-  # no-op — it deletes a live fleet's sandbox pool (see stale_pause_steps). The
+  # no-op — it deletes a live fleet's sandbox pool (see stale_pause_hint). The
   # probe below detects the condition and prints the repair instead.
 
   if run_as_fleet podman info >/dev/null 2>&1; then
@@ -694,8 +679,7 @@ CONF
       # cannot start its sandboxes. stale_pause holds that restart; the
       # repair's own stop/start picks up whatever the restart was for.
       stale_pause=1
-      fail "rootless podman as $SERVICE_USER has a stale pause process (${podman_err}) — doctor does not reset it itself, and holds any service restart until it is repaired"
-      stale_pause_steps
+      fail "rootless podman as $SERVICE_USER has a stale pause process (${podman_err}) — doctor does not reset it itself, and holds any service restart until it is repaired: $(stale_pause_hint)"
     elif [[ "$restart_needed" == "1" && "$CHECK_ONLY" == "0" && "$NO_RESTART" == "0" ]]; then
       # Step 2 just upgraded the container stack (podman/crun/passt/...)
       # while the running fleet service's sandbox containers still hold the
@@ -1041,7 +1025,7 @@ else
   done
 
   if [[ "$restart_needed" == "1" && "${stale_pause:-0}" == "1" ]]; then
-    advise "fixes applied that want a restart — held: the rootless store has a stale pause process (step 3), so ${SERVICE_NAME} could not start its sandboxes; its repair steps restart it"
+    advise "fixes applied that want a restart — held: the rootless store has a stale pause process (step 3), so ${SERVICE_NAME} could not start its sandboxes; repairing it restarts fleet"
   elif [[ "$restart_needed" == "1" && "$CHECK_ONLY" == "0" && "$NO_RESTART" == "0" ]]; then
     # Branch on the restart's own result: reporting "restarted" (and counting
     # a fix) when the restart failed let a box end "✓ repaired" while the OLD
@@ -1254,8 +1238,7 @@ if [[ "${podman_recheck:-0}" == "1" ]]; then
   else
     podman_err="$(run_as_fleet podman info 2>&1 >/dev/null | tail -n1 || true)"
     if is_stale_pause_error "$podman_err"; then
-      fail "rootless podman as $SERVICE_USER STILL fails after the restart: a stale pause process (${podman_err}) — doctor does not reset it itself"
-      stale_pause_steps
+      fail "rootless podman as $SERVICE_USER STILL fails after the restart: a stale pause process (${podman_err}) — doctor does not reset it itself: $(stale_pause_hint)"
     else
       fail "rootless 'podman info' STILL fails as $SERVICE_USER after the restart: ${podman_err:-no error output} — run: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman info"
     fi
@@ -1311,8 +1294,7 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   if smoke_err="$(run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true 2>&1 >/dev/null)"; then
     pass "sandbox smoke passed ($sandbox_img runs as $SERVICE_USER)"
   elif is_stale_pause_error "$smoke_err"; then
-    fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER: a stale rootless pause process (${smoke_err##*$'\n'}) — doctor does not reset it itself"
-    stale_pause_steps
+    fail "sandbox image $sandbox_img NOT runnable as $SERVICE_USER: a stale rootless pause process (${smoke_err##*$'\n'}) — doctor does not reset it itself: $(stale_pause_hint)"
   else
     fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
   fi
