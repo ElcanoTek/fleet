@@ -203,7 +203,9 @@ fleet=active; web="$WEB"
 pgrep() { [[ "$PROC_LINGERS" == 1 ]]; }
 LOG="$(mktemp)"
 # The helper sends run_as_fleet's output to /dev/null, so log to a file.
-run_as_fleet() { echo "run_as_fleet $*" >>"$LOG"; }
+# RuntimeDirectory= is gone after a stop; the helper must recreate it.
+install() { echo "install $*" >>"$LOG"; }
+run_as_fleet() { echo "run_as_fleet $*" >>"$LOG"; [[ "${MIGRATE_RC:-0}" == 0 ]] || { echo "Error: migrate broke" >&2; return 1; }; }
 fixed() { echo "fixed: $*" >>"$LOG"; }
 fail() { echo "fail: $*" >>"$LOG"; }
 systemctl() {
@@ -251,7 +253,7 @@ func TestMigrateLiveService(t *testing.T) {
 		{
 			name: "stop, migrate, start, fleet-web back",
 			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
-			want: []string{"stop fleet.service\nrun_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n", "fixed: fleet-web.service started again", "rc=0"},
+			want: []string{"stop fleet.service\ninstall -d -m 0700 -o fleet -g fleet /run/fleet\nrun_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n", "fixed: fleet-web.service started again", "rc=0"},
 		},
 		{
 			name:      "fleet-web was not running",
@@ -260,16 +262,18 @@ func TestMigrateLiveService(t *testing.T) {
 			forbidden: []string{"start fleet-web.service"},
 		},
 		{
-			name:      "stop job fails, unit still active",
-			env:       []string{"STOP_RC=1", "STOP_STICKS=1", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
-			want:      []string{"fail: fleet.service did not stop (ActiveState=active) — podman system migrate NOT run", "rc=1"},
-			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+			name: "stop job fails, unit still active",
+			env:  []string{"STOP_RC=1", "STOP_STICKS=1", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
+			// Aborted, but the already-issued stop must not leave fleet down.
+			want:      []string{"fail: fleet.service did not stop (ActiveState=active) — podman system migrate NOT run", "rc=1", "start fleet.service"},
+			forbidden: []string{"run_as_fleet podman system migrate"},
 		},
 		{
-			name:      "stop returns but the unit stays active",
-			env:       []string{"STOP_RC=0", "STOP_STICKS=1", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
-			want:      []string{"fail: fleet.service did not stop (ActiveState=active) — podman system migrate NOT run", "rc=1"},
-			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+			name: "stop returns but the unit stays active",
+			env:  []string{"STOP_RC=0", "STOP_STICKS=1", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
+			// Aborted, but the already-issued stop must not leave fleet down.
+			want:      []string{"fail: fleet.service did not stop (ActiveState=active) — podman system migrate NOT run", "rc=1", "start fleet.service"},
+			forbidden: []string{"run_as_fleet podman system migrate"},
 		},
 		{
 			// A stop that "failed" (timed out, then systemd killed it) but left
@@ -277,25 +281,35 @@ func TestMigrateLiveService(t *testing.T) {
 			// started again rather than left down with nothing after it.
 			name: "stop job fails but the unit went inactive",
 			env:  []string{"STOP_RC=1", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
-			want: []string{"stop fleet.service\nrun_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n", "rc=0"},
+			want: []string{"stop fleet.service\ninstall -d -m 0700 -o fleet -g fleet /run/fleet\nrun_as_fleet podman system migrate\nstart fleet.service\nstart fleet-web.service\n", "rc=0"},
 		},
 		{
 			// is-active is false for "deactivating", but the unit still runs.
-			name:      "stop interrupted mid-deactivation",
-			env:       []string{"STOP_RC=1", "STOP_STICKS=deactivating", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
-			want:      []string{"fail: fleet.service did not stop (ActiveState=deactivating) — podman system migrate NOT run", "rc=1"},
-			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+			name: "stop interrupted mid-deactivation",
+			env:  []string{"STOP_RC=1", "STOP_STICKS=deactivating", "PROC_LINGERS=0", "START_RC=0", "WEB=active"},
+			// Aborted, but the already-issued stop must not leave fleet down.
+			want:      []string{"fail: fleet.service did not stop (ActiveState=deactivating) — podman system migrate NOT run", "rc=1", "start fleet.service"},
+			forbidden: []string{"run_as_fleet podman system migrate"},
 		},
 		{
-			name:      "unit inactive but a fleet process lingers",
-			env:       []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=1", "START_RC=0", "WEB=active"},
-			want:      []string{"podman system migrate NOT run", "rc=1"},
-			forbidden: []string{"run_as_fleet podman system migrate", "start fleet.service"},
+			name: "unit inactive but a fleet process lingers",
+			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=1", "START_RC=0", "WEB=active"},
+			// Aborted, but the already-issued stop must not leave fleet down.
+			want:      []string{"podman system migrate NOT run", "rc=1", "start fleet.service"},
+			forbidden: []string{"run_as_fleet podman system migrate"},
+		},
+		{
+			// A failed migrate is reported with podman's own diagnostic, and
+			// the service is still restored — never "fixed".
+			name:      "migrate itself fails",
+			env:       []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=0", "WEB=active", "MIGRATE_RC=1"},
+			want:      []string{"fail: podman system migrate failed as fleet: Error: migrate broke", "start fleet.service\nstart fleet-web.service\n", "rc=1"},
+			forbidden: []string{"fixed: podman"},
 		},
 		{
 			name: "fleet does not start again",
 			env:  []string{"STOP_RC=0", "STOP_STICKS=0", "PROC_LINGERS=0", "START_RC=1", "WEB=inactive"},
-			want: []string{"run_as_fleet podman system migrate", "fail: podman system migrate run, but fleet.service did not start again", "rc=1"},
+			want: []string{"run_as_fleet podman system migrate", "fail: fleet.service did not start again", "rc=1"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

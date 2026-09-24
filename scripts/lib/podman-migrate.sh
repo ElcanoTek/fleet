@@ -110,23 +110,37 @@ smoke_retry_plan() {
 # under a live process is the exact deletion this helper exists to prevent. A
 # stop that "failed" (a timeout after systemd killed it) but left the unit
 # proven-stopped proceeds, so fleet is migrated AND started again rather than
-# left down. Reports its own failures
-# (callers report only success) and returns non-zero when migrate did not run
-# or fleet did not come back.
+# left down. /run/<service user> is the unit's RuntimeDirectory=, which
+# systemd REMOVES on stop, and it is the XDG_RUNTIME_DIR every podman call
+# needs — so it is recreated (as step 3 does) before migrate, else migrate
+# fails with "lstat /run/fleet: no such file or directory" (found on fleetdev;
+# systemd takes the directory over again on start). Whatever happens, it ends by starting fleet (and fleet-web, if it
+# was running) again — an abort included, since its stop was already issued.
+# Reports its own failures (callers report only success) and returns non-zero
+# when migrate did not run, migrate itself failed, or fleet did not come back.
 migrate_live_service() {
-  local web_was_active=0 rc=0
+  local web_was_active=0 rc=0 state migrate_err
   systemctl is-active --quiet fleet-web.service 2>/dev/null && web_was_active=1
-  local state
   systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
   state="$(systemctl show -p ActiveState --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
   if [[ "$state" != "inactive" && "$state" != "failed" ]] \
      || pgrep -u "$SERVICE_USER" -x fleet >/dev/null 2>&1; then
     fail "${SERVICE_NAME}.service did not stop (ActiveState=${state:-unknown}) — podman system migrate NOT run (it would delete the live sandbox pool); journalctl -u ${SERVICE_NAME} -n 50"
-    return 1
+    rc=1
+  elif ! install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "/run/${SERVICE_USER}" 2>/dev/null; then
+    fail "could not recreate /run/${SERVICE_USER} — podman system migrate NOT run"
+    rc=1
+  elif ! migrate_err="$(run_as_fleet podman system migrate 2>&1 >/dev/null)"; then
+    # Keep podman's own diagnostic; the restore below still runs.
+    fail "podman system migrate failed as $SERVICE_USER: ${migrate_err##*$'\n'}"
+    rc=1
   fi
-  run_as_fleet podman system migrate >/dev/null 2>&1 || true
+  # Every path restores the service, including an aborted one: the stop was
+  # already issued and may still complete, and nothing after doctor's step 6
+  # would start fleet again. start waits out a pending stop, and is a no-op on
+  # a unit that never went down.
   if ! systemctl start "${SERVICE_NAME}.service" 2>/dev/null; then
-    fail "podman system migrate run, but ${SERVICE_NAME}.service did not start again — journalctl -u ${SERVICE_NAME} -n 50"
+    fail "${SERVICE_NAME}.service did not start again — journalctl -u ${SERVICE_NAME} -n 50"
     rc=1
   fi
   if [[ "$web_was_active" == "1" ]] && ! systemctl is-active --quiet fleet-web.service 2>/dev/null; then
