@@ -120,7 +120,8 @@ Checks + fixes: toolchain floors (node >= the major in web/.nvmrc — the ONE
 place it is declared, so this text cannot drift from it; go/git/podman/psql present),
 fleet-critical package currency (podman/crun/passt/conmon/...), the rootless-
 podman prerequisites of the fleet service user (subuid/subgid, /var/lib/fleet
-ownership, containers.conf, stale pause namespaces), systemd unit drift vs
+ownership, containers.conf; a stale pause process is reported with its manual
+repair, never reset — the reset deletes a live sandbox pool), systemd unit drift vs
 deploy/, the 0600 env files, the fleet-managed /etc/caddy/Caddyfile's layout
 (the /v1 API + webhooks must reach the Go backends, not the web tier — rewritten
 + caddy reloaded when drifted), service health (postgresql, fleet, fleet-web,
@@ -242,11 +243,12 @@ is_stale_pause_error() {
 # starting fleet does not bring back — hence those steps.
 stale_pause_fix() {
   # One &&-chain, so a paste stops at the first failure: above all, migrate
-  # never runs unless the stop succeeded AND no fleet process is left (a
-  # fleet under another supervisor is not stopped by systemctl). Only pgrep's
-  # explicit no-match (exit 1) passes: `! pgrep` would also pass when pgrep
-  # is missing (127).
-  printf '%s' "check nothing is running (fleet sched task list --status running; also leased), then run as one line: sudo systemctl stop ${SERVICE_NAME} && { pgrep -u ${SERVICE_USER} -x fleet >/dev/null; [ \$? -eq 1 ]; } && sudo install -d -m 0700 -o ${SERVICE_USER} -g ${SERVICE_USER} /run/${SERVICE_USER} && (cd ${SERVICE_HOME} && sudo -u ${SERVICE_USER} HOME=${SERVICE_HOME} XDG_RUNTIME_DIR=/run/${SERVICE_USER} podman system migrate) && sudo systemctl start ${SERVICE_NAME} — then, if installed, sudo systemctl start fleet-web. If fleet runs under another supervisor, stop it there first (the pgrep check refuses otherwise). See docs/OPERATORS.md, \"Stale podman pause process\""
+  # never runs unless the stop succeeded AND no fleet process is left. Only
+  # pgrep's explicit no-match (exit 1) passes: `! pgrep` would also pass when
+  # pgrep is missing (127). A fleet under another supervisor gets its own
+  # continuation, since systemctl can neither stop nor start it.
+  local reset="{ pgrep -u ${SERVICE_USER} -x fleet >/dev/null; [ \$? -eq 1 ]; } && sudo install -d -m 0700 -o ${SERVICE_USER} -g ${SERVICE_USER} /run/${SERVICE_USER} && (cd ${SERVICE_HOME} && sudo -u ${SERVICE_USER} HOME=${SERVICE_HOME} XDG_RUNTIME_DIR=/run/${SERVICE_USER} podman system migrate)"
+  printf '%s' "check nothing is running (sudo fleet sched task list --status running; also --status leased), then run as one line: sudo systemctl stop ${SERVICE_NAME} && ${reset} && sudo systemctl start ${SERVICE_NAME} — then, if installed, sudo systemctl start fleet-web. Under another supervisor: stop fleet there, run as one line: ${reset} — then start fleet there. See docs/OPERATORS.md, \"Stale podman pause process\""
 }
 
 # ── dry-run: print the checklist and exit ────────────────────────────────────

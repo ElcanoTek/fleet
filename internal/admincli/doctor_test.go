@@ -215,12 +215,15 @@ stale_pause_fix`
 		"match: " + stale,
 		"no: Error: crun: pids limit reached",
 		"no: Error: no space left on device",
-		"fleet sched task list --status running",
+		"sudo fleet sched task list --status running",
 		// One &&-chain: migrate runs only after a successful stop AND with
 		// no fleet process left (another supervisor is not stopped by
 		// systemctl), so a pasted repair can never migrate a live pool.
 		"sudo systemctl stop fleet-prod && { pgrep -u svc -x fleet >/dev/null; [ $? -eq 1 ]; } && sudo install -d -m 0700 -o svc -g svc /run/svc && (cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate) && sudo systemctl start fleet-prod",
 		"sudo systemctl start fleet-web",
+		// Another supervisor: systemctl can neither stop nor start it, so it
+		// gets its own continuation — the same gate, without systemctl.
+		"Under another supervisor: stop fleet there, run as one line: { pgrep -u svc -x fleet >/dev/null; [ $? -eq 1 ]; } && sudo install -d -m 0700 -o svc -g svc /run/svc && (cd /srv/svc && sudo -u svc HOME=/srv/svc XDG_RUNTIME_DIR=/run/svc podman system migrate) — then start fleet there",
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("want %q in:\n%s", want, out)
@@ -251,6 +254,27 @@ fix="$(stale_pause_fix)"; chain="${fix#*run as one line: }"; printf '%s' "${chai
 	chain, err := render.Output()
 	if err != nil || !strings.HasPrefix(string(chain), "sudo systemctl stop fleet && ") {
 		t.Fatalf("could not extract the repair chain (%v): %q", err, chain)
+	}
+	renderSup := exec.Command("bash", "-c", fn+`
+SERVICE_NAME=fleet SERVICE_USER=fleet SERVICE_HOME=/tmp
+fix="$(stale_pause_fix)"; chain="${fix#*Under another supervisor: stop fleet there, run as one line: }"; printf '%s' "${chain%% — then*}"`)
+	supChain, err := renderSup.Output()
+	if err != nil || !strings.HasPrefix(string(supChain), "{ pgrep ") {
+		t.Fatalf("could not extract the other-supervisor chain (%v): %q", err, supChain)
+	}
+	// The other-supervisor continuation carries the same gate.
+	for _, tc := range []struct {
+		name        string
+		pgrepRC     int
+		wantMigrate bool
+	}{{"supervisor stopped fleet", 1, true}, {"fleet still alive", 0, false}, {"pgrep missing", 127, false}} {
+		t.Run("other supervisor: "+tc.name, func(t *testing.T) {
+			stubs := fmt.Sprintf("sudo() { echo \"RAN: $*\"; }\npgrep() { return %d; }\n", tc.pgrepRC)
+			out, _ := exec.Command("bash", "-c", stubs+string(supChain)).CombinedOutput()
+			if got := strings.Contains(string(out), "podman system migrate"); got != tc.wantMigrate {
+				t.Errorf("migrate ran = %v, want %v\n%s", got, tc.wantMigrate, out)
+			}
+		})
 	}
 	for _, tc := range []struct {
 		name            string

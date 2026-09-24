@@ -482,8 +482,9 @@ then fails with `no such container` until fleet restarts. (Doctor used to run
 it on every pass; that is how fleetdev lost its pool.) Deciding when fleet can
 be stopped is a judgment call, so it is left to an operator or agent:
 
-1. Make sure nothing is mid-flight: `fleet sched task list --status running`
-   (and `--status leased`) returns nothing, and no one is mid-chat.
+1. Make sure nothing is mid-flight: `sudo fleet sched task list --status
+   running` (and `--status leased`) returns nothing, and no one is mid-chat.
+   (`sudo`: the scheduler DSN lives in the root-only `/etc/fleet/fleet.env`.)
 2. Stop fleet, prove it is gone, reset podman as the service user, and start
    fleet — as **one** `&&` chain, so nothing after a failed step runs (above
    all, migrate never runs while a fleet process is still alive):
@@ -496,10 +497,19 @@ be stopped is a judgment call, so it is left to an operator or agent:
    ```
 
    The stop also stops `fleet-web` (`BindsTo=`) and removes `/run/fleet` (the
-   unit's `RuntimeDirectory=`), hence the `install -d`. If fleet runs under a
-   supervisor other than systemd, stop it there first; the `pgrep` check
+   unit's `RuntimeDirectory=`), hence the `install -d`. The `pgrep` check
    continues only on pgrep's explicit "no match" (exit 1), so a live `fleet`
    process — or a missing `pgrep` — stops the chain.
+
+   **Under a supervisor other than systemd**, `systemctl` can neither stop
+   nor start fleet: stop it through that supervisor, run the same chain
+   without its first and last steps, then start fleet there again:
+
+   ```
+   { pgrep -u fleet -x fleet >/dev/null; [ $? -eq 1 ]; } \
+     && sudo install -d -m 0700 -o fleet -g fleet /run/fleet \
+     && (cd /var/lib/fleet && sudo -u fleet HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet podman system migrate)
+   ```
 3. Start the web tier again — starting `fleet` does not bring it back:
    `sudo systemctl start fleet-web`.
 4. Re-check: `sudo fleet doctor --check` (the sandbox smoke must pass).

@@ -288,7 +288,7 @@ func checkPodman(ctx context.Context) Check {
 		c.Status, c.Detail = StatusOK, "podman "+strings.TrimSpace(string(out))+" functional for this user"
 		return c
 	}
-	c.Status, c.Detail, c.Fix = StatusFail, "`podman info` fails for the service user", sudoDoctorFix+" (repairs the store dirs, containers.conf, and stale pause namespaces)"
+	c.Status, c.Detail, c.Fix = StatusFail, "`podman info` fails for the service user", sudoDoctorFix+" (repairs the store dirs and containers.conf; a stale pause process it reports with the manual repair — see docs/OPERATORS.md, \"Stale podman pause process\")"
 	return c
 }
 
