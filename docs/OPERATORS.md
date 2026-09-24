@@ -428,7 +428,11 @@ production-only bug. The pass covers, in order:
    doctor can restart `fleet`, as one stop → migrate → start (fleet-web
    brought back), so no process ever holds the deleted pool. migrate runs
    only once the unit is proven stopped — `ActiveState` inactive or failed
-   and no `fleet` process left — else it aborts. Under
+   and no `fleet` process left — else it aborts. Every path ends by starting
+   fleet again, including an interrupt: `fleet doctor` passes Ctrl-C /
+   SIGTERM to the script as SIGTERM (not SIGKILL) and the reset traps it.
+   A unit in its `Restart=always` auto-restart delay can be repaired this
+   way; a fleet under another supervisor cannot. Under
    `--no-restart`, or with fleet under another supervisor, it leaves the
    store alone and prints the manual sequence instead (stop fleet, recreate
    `/run/fleet`, which the stop removes, migrate, start fleet). A
