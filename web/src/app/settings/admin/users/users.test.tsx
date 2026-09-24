@@ -175,10 +175,10 @@ describe("AdminUsersPage", () => {
     const saveButton = screen.getByRole("button", { name: "Save" });
     expect(saveButton).toBeDisabled(); // no edits yet
 
-    // Edit role (segmented) + team, then save.
+    // Edit role + team, then save.
     fireEvent.click(
       within(screen.getByRole("group", { name: "Chat permissions" })).getByRole(
-        "button",
+        "radio",
         { name: "Viewer" },
       ),
     );
@@ -454,59 +454,58 @@ describe("AdminUsersPage", () => {
       "Ops Center permissions",
     ]);
     expect(
-      within(chat).getAllByRole("button").map((button) => button.textContent),
+      within(chat)
+        .getAllByRole("radio")
+        .map((radio) => radio.getAttribute("aria-label")),
     ).toEqual(["Viewer", "Contributor"]);
     expect(
-      within(ops).getAllByRole("button").map((button) => button.textContent),
+      within(ops)
+        .getAllByRole("radio")
+        .map((radio) => radio.getAttribute("aria-label")),
     ).toEqual(["None", "Viewer", "Contributor"]);
-    const expectTooltip = (button: HTMLElement, description: string) => {
-      expect(button).not.toHaveAttribute("title");
-      const tooltipId = button.getAttribute("aria-describedby");
-      expect(tooltipId).toBeTruthy();
-      expect(document.getElementById(tooltipId ?? "")).toHaveTextContent(
-        description,
-      );
-    };
-    expectTooltip(
-      within(admin).getByRole("button", { name: "Fleet Admin" }),
-      "Full permissions in both Chat and the Ops Center.",
-    );
-    expectTooltip(
-      within(chat).getByRole("button", { name: "Viewer" }),
-      "Read-only Chat access: can view but cannot create or change content.",
-    );
-    expectTooltip(
-      within(chat).getByRole("button", { name: "Contributor" }),
-      "Can actively use Chat, including creating and updating content.",
-    );
-    expectTooltip(
-      within(ops).getByRole("button", { name: "None" }),
-      "No access to the Ops Center.",
-    );
-    expectTooltip(
-      within(ops).getByRole("button", { name: "Viewer" }),
-      "Can view Ops Center tasks and logs but cannot change them.",
-    );
-    expectTooltip(
-      within(ops).getByRole("button", { name: "Contributor" }),
-      "Can view, create, and run Ops Center tasks.",
-    );
-    expect(within(chat).queryByRole("button", { name: "Admin" })).toBeNull();
-    expect(within(ops).queryByRole("button", { name: "Admin" })).toBeNull();
-    expect(within(admin).getAllByRole("button")).toHaveLength(1);
+    expect(
+      within(admin).getByText(
+        "Full permissions in both Chat and the Ops Center.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(chat).getByText(
+        "Read-only Chat access: can view but cannot create or change content.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(chat).getByText(
+        "Can actively use Chat, including creating and updating content.",
+      ),
+    ).toBeVisible();
+    expect(within(ops).getByText("No access to the Ops Center.")).toBeVisible();
+    expect(
+      within(ops).getByText(
+        "Can view Ops Center tasks and logs but cannot change them.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(ops).getByText("Can view, create, and run Ops Center tasks."),
+    ).toBeVisible();
+    expect(within(chat).queryByRole("radio", { name: "Admin" })).toBeNull();
+    expect(within(ops).queryByRole("radio", { name: "Admin" })).toBeNull();
+    expect(within(admin).getAllByRole("checkbox")).toHaveLength(1);
 
-    fireEvent.click(within(admin).getByRole("button", { name: "Fleet Admin" }));
-    expect(admin.className).toContain("gradient");
-    expect(chat.className).toContain("gradient");
-    expect(ops.className).toContain("gradient");
-    expect(within(chat).getByRole("button", { name: "Contributor" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(within(ops).getByRole("button", { name: "Contributor" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const adminCheckbox = within(admin).getByRole("checkbox", {
+      name: "Fleet Admin",
+    });
+    fireEvent.click(adminCheckbox);
+    expect(adminCheckbox.closest("label")?.className).toContain("gradient");
+    expect(
+      within(chat).getByRole("radio", { name: "Contributor" }).closest("label")
+        ?.className,
+    ).toContain("gradient");
+    expect(
+      within(ops).getByRole("radio", { name: "Contributor" }).closest("label")
+        ?.className,
+    ).toContain("gradient");
+    expect(within(chat).getByRole("radio", { name: "Contributor" })).toBeChecked();
+    expect(within(ops).getByRole("radio", { name: "Contributor" })).toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(calls).toHaveLength(1));
@@ -551,20 +550,15 @@ describe("AdminUsersPage", () => {
     const admin = screen.getByRole("group", { name: "Fleet Admin permissions" });
     const chat = screen.getByRole("group", { name: "Chat permissions" });
     const ops = screen.getByRole("group", { name: "Ops Center permissions" });
-    fireEvent.click(within(admin).getByRole("button", { name: "Fleet Admin" }));
+    fireEvent.click(within(admin).getByRole("checkbox", { name: "Fleet Admin" }));
 
-    expect(within(admin).getByRole("button", { name: "Fleet Admin" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
-    expect(within(chat).getByRole("button", { name: "Contributor" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(within(ops).getByRole("button", { name: "None" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(
+      within(admin).getByRole("checkbox", { name: "Fleet Admin" }),
+    ).not.toBeChecked();
+    expect(
+      within(chat).getByRole("radio", { name: "Contributor" }),
+    ).toBeChecked();
+    expect(within(ops).getByRole("radio", { name: "None" })).toBeChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls).toHaveLength(1));
@@ -599,26 +593,24 @@ describe("AdminUsersPage", () => {
     openKebab("alice@x.com");
 
     const admin = screen.getByRole("group", { name: "Fleet Admin permissions" });
-    expect(within(admin).getByRole("button", { name: "Fleet Admin" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(
+      within(admin).getByRole("checkbox", { name: "Fleet Admin" }),
+    ).toBeChecked();
     fireEvent.click(
       within(screen.getByRole("group", { name: "Chat permissions" })).getByRole(
-        "button",
+        "radio",
         { name: "Viewer" },
       ),
     );
-    expect(within(admin).getByRole("button", { name: "Fleet Admin" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(
+      within(admin).getByRole("checkbox", { name: "Fleet Admin" }),
+    ).not.toBeChecked();
     expect(
       within(screen.getByRole("group", { name: "Ops Center permissions" })).getByRole(
-        "button",
+        "radio",
         { name: "None" },
       ),
-    ).toHaveAttribute("aria-pressed", "true");
+    ).toBeChecked();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls).toHaveLength(1));
@@ -672,15 +664,27 @@ describe("AdminUsersPage", () => {
     const ops = screen.getByRole("group", {
       name: "New user Ops Center permissions",
     });
-    expect(within(admin).getAllByRole("button")).toHaveLength(1);
+    expect(within(admin).getAllByRole("checkbox")).toHaveLength(1);
     expect(
-      within(chat).getAllByRole("button").map((button) => button.textContent),
+      within(chat)
+        .getAllByRole("radio")
+        .map((radio) => radio.getAttribute("aria-label")),
     ).toEqual(["Viewer", "Contributor"]);
     expect(
-      within(ops).getAllByRole("button").map((button) => button.textContent),
+      within(ops)
+        .getAllByRole("radio")
+        .map((radio) => radio.getAttribute("aria-label")),
     ).toEqual(["None", "Viewer", "Contributor"]);
-    fireEvent.click(within(chat).getByRole("button", { name: "Viewer" }));
-    fireEvent.click(within(ops).getByRole("button", { name: "Contributor" }));
+    expect(
+      within(chat).getByText(
+        "Read-only Chat access: can view but cannot create or change content.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(ops).getByText("Can view, create, and run Ops Center tasks."),
+    ).toBeVisible();
+    fireEvent.click(within(chat).getByRole("radio", { name: "Viewer" }));
+    fireEvent.click(within(ops).getByRole("radio", { name: "Contributor" }));
     fireEvent.change(screen.getByLabelText("New user team"), {
       target: { value: "__new__" },
     });
@@ -739,7 +743,7 @@ describe("AdminUsersPage", () => {
     fireEvent.click(
       within(
         screen.getByRole("group", { name: "New user Fleet Admin permissions" }),
-      ).getByRole("button", { name: "Fleet Admin" }),
+      ).getByRole("checkbox", { name: "Fleet Admin" }),
     );
     fireEvent.click(screen.getByRole("button", { name: /^add user$/i }));
 
