@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 )
 
 // cmdDoctor wraps scripts/doctor.sh — the box-level diagnose-AND-REPAIR pass.
@@ -62,13 +61,18 @@ func cmdDoctor(argv []string) int {
 	defer stop()
 	//nolint:gosec // G204: fixed "bash" binary; args are the repo-local script path + operator-supplied flags passed as separate argv (no shell string interpolation).
 	cmd := exec.CommandContext(ctx, "bash", args...)
-	// Cancel with SIGTERM, not the default SIGKILL, and give the script time
-	// to finish: while doctor has fleet stopped for a podman store reset
-	// (scripts/lib/podman-migrate.sh, migrate_live_service) its trap must be
-	// able to start fleet again, and bash cannot trap a SIGKILL. The delay
-	// covers a migrate already in flight; SIGKILL follows only after it.
+	// Cancel with SIGTERM, not the default SIGKILL, and never force a kill
+	// after it (no WaitDelay): while doctor has fleet stopped for a podman
+	// store reset (scripts/lib/podman-migrate.sh, migrate_live_service) its
+	// trap must be able to start fleet again, and bash cannot trap SIGKILL.
+	// bash runs that trap only after a foreground migrate returns, and the
+	// start itself may take the unit's TimeoutStartSec, so any deadline here
+	// could cut the restore short. Outside that window bash exits on SIGTERM
+	// at once, so nothing hangs.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = 2 * time.Minute
+	// After the first signal, stop intercepting: a second Ctrl-C exits
+	// `fleet doctor` itself, while the script carries on restoring fleet.
+	go func() { <-ctx.Done(); stop() }()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin

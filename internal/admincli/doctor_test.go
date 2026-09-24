@@ -164,8 +164,10 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 // the script as a trappable SIGTERM, not exec's default SIGKILL: while doctor
 // has fleet stopped for a podman store reset (migrate_live_service), the
 // script's trap is what starts fleet again, and bash cannot trap SIGKILL.
-// The fixture script traps TERM and exits 7; the test signals its own process
-// the way an operator's Ctrl-C / SIGTERM reaches `fleet doctor`.
+// The fixture script traps TERM, takes 3s in the trap (a restore is not
+// instant, so no forced-kill deadline may follow the SIGTERM) and exits 7;
+// the test signals its own process the way an operator's Ctrl-C / SIGTERM
+// reaches `fleet doctor`.
 func TestCmdDoctorCancelsWithSIGTERM(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
@@ -174,7 +176,9 @@ func TestCmdDoctorCancelsWithSIGTERM(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := `trap 'kill "$sleeper" 2>/dev/null; echo trapped >"$DOCTOR_OUT"; exit 7' TERM
+	// The trap takes a few seconds, as a real restore (a service start) does:
+	// a forced kill deadline after the SIGTERM would cut it short.
+	script := `trap 'kill "$sleeper" 2>/dev/null; sleep 3; echo trapped >"$DOCTOR_OUT"; exit 7' TERM
 sleep 30 & sleeper=$!
 : >"$DOCTOR_READY"
 wait
