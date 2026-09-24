@@ -188,7 +188,11 @@ func TestCancelEndpoint_TurnTargeted(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, turnID, tok, _ := s.registerTurn(conv.ID, cancel)
+	var buf *turnBuffer
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, func() {
+		cancel()
+		buf.Emit("turn.cancelled", map[string]any{}) // a real turn reports its stop
+	})
 	defer s.finishTurn(conv.ID, tok)
 	h := s.Routes()
 
@@ -251,7 +255,11 @@ func TestCancelEndpoint_InputTargetedInjectedSteer(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, turnID, tok, _ := s.registerTurn(conv.ID, cancel)
+	var buf *turnBuffer
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, func() {
+		cancel()
+		buf.Emit("turn.cancelled", map[string]any{}) // a real turn reports its stop
+	})
 	defer s.finishTurn(conv.ID, tok)
 	if _, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
 		ID: "row-steer", ConversationID: conv.ID, UserEmail: "alice@x.com",

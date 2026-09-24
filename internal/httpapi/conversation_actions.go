@@ -548,6 +548,40 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// inputStop is what a targeted Stop (by turn_id or input_id) did.
+type inputStop int
+
+const (
+	inputStopped         inputStop = iota // confirmed stopped, or it never ran and will not (204)
+	inputFinished                         // it had already run: nothing was stopped (409)
+	inputStopUnconfirmed                  // the cancel was sent; its outcome is not yet known (202)
+)
+
+// stopFromTurn maps a turn Stop onto the targeted-Stop answer.
+func stopFromTurn(t turnStop) inputStop {
+	switch t {
+	case turnStopped:
+		return inputStopped
+	case turnStopUnconfirmed:
+		return inputStopUnconfirmed
+	default:
+		return inputFinished
+	}
+}
+
+// writeStopResult answers a targeted Stop: 204 stopped, 409 nothing to stop
+// (with finishedMsg), 202 cancel sent but not yet confirmed by the turn.
+func writeStopResult(w http.ResponseWriter, res inputStop, finishedMsg string) {
+	switch res {
+	case inputFinished:
+		http.Error(w, finishedMsg, http.StatusConflict)
+	case inputStopUnconfirmed:
+		http.Error(w, "the Stop was sent, but the turn has not confirmed it yet", http.StatusAccepted)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // handleConversationCancel serves POST /conversations/{id}/cancel.
 //
 // Explicit Stop button. Owner-scoped: the withOwnedConversation gate confirms
@@ -598,29 +632,20 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if inputID != "" {
-		finished, ok := s.stopInput(r.Context(), user, id, inputID)
+		res, ok := s.stopInput(r.Context(), user, id, inputID)
 		if !ok {
 			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
 			return
 		}
-		if finished {
-			// It had already run: the Stop stopped nothing, and says so (as
-			// a turn_id Stop of an ended turn does) rather than a bare 204.
-			http.Error(w, "the input had already finished", http.StatusConflict)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		writeStopResult(w, res, "the input had already finished")
 		return
 	}
 	if turnID != "" {
-		if !s.cancelInflightTurn(id, turnID) {
-			// Nothing was stopped: the named turn had already ended (or never
-			// ran here). Said so, not a bare 204, so a caller that watched the
-			// turn reads its real outcome instead of reporting it cancelled.
-			http.Error(w, "the named turn is not running", http.StatusConflict)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		// Nothing stopped (the named turn had ended, or completed as the
+		// cancel landed) is said so, not a bare 204, so a caller that
+		// watched the turn reads its real outcome instead of reporting it
+		// cancelled.
+		writeStopResult(w, stopFromTurn(s.cancelInflightTurn(id, turnID)), "the named turn is not running")
 		return
 	}
 	if scope == "all" {
@@ -675,10 +700,10 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 // completion, or its turn ended and only its settlement is pending — so the
 // Stop stopped nothing and the caller can say so rather than report a
 // cancellation.
-func (s *Server) stopInput(ctx context.Context, user, convID, key string) (finished, ok bool) {
-	stoppedTurn := s.cancelInputTurn(convID, key)
+func (s *Server) stopInput(ctx context.Context, user, convID, key string) (res inputStop, ok bool) {
+	turn := s.cancelInputTurn(convID, key)
 	defer func() {
-		if finished && ok {
+		if res == inputFinished && ok {
 			s.clearInputKeyMark(convID, key) // it already ran: no launch left to refuse
 		}
 	}()
@@ -687,7 +712,7 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (finis
 	row, err := s.store.LookupInput(qctx, convID, key)
 	if err != nil {
 		log.Printf("cancel input lookup (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
-		return false, false
+		return inputStopped, false
 	}
 	if row == nil {
 		// Nothing holds the key yet: its submission may still be in transit.
@@ -698,10 +723,10 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (finis
 		})
 		if err != nil {
 			log.Printf("cancel input key (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
-			return false, false
+			return inputStopped, false
 		}
 		if created {
-			return false, true
+			return inputStopped, true
 		}
 		row = &held // the submission's row landed first: stop it below
 	}
@@ -709,17 +734,17 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (finis
 		removed, err := s.store.RemoveQueuedInput(qctx, user, convID, row.ID)
 		if err != nil {
 			log.Printf("cancel input withdraw (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
-			return false, false
+			return inputStopped, false
 		}
 		if removed {
 			s.emitQueueUpdate(qctx, user, convID)
-			return false, true
+			return inputStopped, true
 		}
 		// It left the queue between the lookup and the withdrawal: a drained
 		// row is covered by the mark, an injected steer is handled below.
 		if row, err = s.store.LookupInput(qctx, convID, key); err != nil {
 			log.Printf("cancel input lookup (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated conv id + internal error — no request-authored text.
-			return false, false
+			return inputStopped, false
 		}
 	}
 	if row != nil && row.State == store.InputStateRunning {
@@ -731,26 +756,38 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (finis
 		cancelled, err := s.store.CancelUnlaunchedInput(qctx, row.ID)
 		if err != nil {
 			log.Printf("cancel unlaunched input (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
-			return false, false
+			return inputStopped, false
 		}
 		if cancelled && row.Mode != store.InputModeDirect {
 			s.emitQueueUpdate(qctx, user, convID)
 		}
+		if cancelled {
+			return inputStopped, true
+		}
 		// Not cancelled here means the row is bound to its turn, and a
 		// turn binds only after it registered, so the Stop above found it
-		// running — unless it had already ended (settlement pending).
-		return !cancelled && !stoppedTurn, true
+		// running — its terminal frame says what the cancel did — unless
+		// it had already ended (settlement pending: finished).
+		return stopFromTurn(turn), true
 	}
 	if row != nil && row.State == store.InputStateCompleted {
-		return true, true // it ran; there was nothing left to stop
+		return inputFinished, true // it ran; there was nothing left to stop
 	}
 	if row != nil && row.State == store.InputStateInjected {
 		// The model cannot un-read an injected steer, so the turn carrying it
 		// is what is stopped. If that turn had already ended, nothing was
 		// stopped: say so (finished) and leave the row to the turn's own
 		// settlement, which records whether the steer ran.
-		if !s.cancelInflightTurn(convID, row.TurnID) {
-			return true, true
+		switch s.cancelInflightTurn(convID, row.TurnID) {
+		case turnNotStopped:
+			return inputFinished, true
+		case turnStopUnconfirmed:
+			// Not known to be stopped, so the row is left as it is: its
+			// turn's settlement records the outcome, and a re-queued copy
+			// is refused by the key's mark.
+			return inputStopUnconfirmed, true
+		case turnStopped:
+			// Stopped: cancel the row below.
 		}
 		// Stopped. Cancel the row too, or the cancelled turn's settlement
 		// could return it to the queue — guarded, so a settlement that
@@ -758,9 +795,9 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (finis
 		// re-queued copy a drain claims first is refused by the key's mark.
 		if _, err := s.store.CancelStoppedSteer(qctx, row.ID); err != nil {
 			log.Printf("cancel injected input (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated ids + internal error — no request-authored text.
-			return false, false
+			return inputStopped, false
 		}
 		s.emitQueueUpdate(qctx, user, convID)
 	}
-	return false, true
+	return inputStopped, true
 }

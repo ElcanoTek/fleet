@@ -1861,7 +1861,11 @@ func TestCancelByTurnID_ReportsANoOp(t *testing.T) {
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
 	var cancelled atomic.Bool
-	_, turnID, tok, _ := srv.registerTurn(conv.ID, func() { cancelled.Store(true) })
+	var buf *turnBuffer
+	buf, turnID, tok, _ := srv.registerTurn(conv.ID, func() {
+		cancelled.Store(true)
+		buf.Emit("turn.cancelled", map[string]any{}) // a real turn reports its stop
+	})
 	defer srv.finishTurn(conv.ID, tok)
 	cancel := func(turn string) int {
 		raw, _ := json.Marshal(map[string]any{"scope": "turn", "turn_id": turn})
@@ -1998,8 +2002,8 @@ func TestCancelByInputKey_FinishedInputLeavesNoMark(t *testing.T) {
 	st.mu.Lock()
 	st.queue = append(st.queue, store.InputQueueRow{ID: "r-done", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "key-old", Mode: store.InputModeDirect, State: store.InputStateCompleted, TurnID: "t-1"})
 	st.mu.Unlock()
-	if finished, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-old"); !finished || !ok {
-		t.Fatalf("stopInput = finished %v ok %v, want the finished input reported", finished, ok)
+	if res, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "key-old"); res != inputFinished || !ok {
+		t.Fatalf("stopInput = %v ok %v, want the finished input reported", res, ok)
 	}
 	st.mu.Lock()
 	st.queue = nil // retention purges the finished row
@@ -2027,16 +2031,21 @@ func TestCancelByInputKey_InjectedSteer(t *testing.T) {
 			var stopped atomic.Bool
 			if running {
 				var tok uint64
-				_, turnID, tok, _ = srv.registerTurn(conv.ID, func() { stopped.Store(true) })
+				var buf *turnBuffer
+				buf, turnID, tok, _ = srv.registerTurn(conv.ID, func() {
+					stopped.Store(true)
+					buf.Emit("turn.cancelled", map[string]any{}) // the cancel reaches it mid-run
+				})
 				defer srv.finishTurn(conv.ID, tok)
 			}
 			st.mu.Lock()
 			st.queue = append(st.queue, store.InputQueueRow{ID: "s-1", ConversationID: conv.ID, UserEmail: "u@x.com", ClientInputID: "steer-k", Mode: store.InputModeSteer, State: store.InputStateInjected, TurnID: turnID})
 			st.mu.Unlock()
-			finished, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "steer-k")
+			res, ok := srv.stopInput(context.Background(), "u@x.com", conv.ID, "steer-k")
+			finished := res == inputFinished
 			row, _ := st.LookupInput(context.Background(), conv.ID, "steer-k")
 			if !ok || finished == running || stopped.Load() != running {
-				t.Fatalf("finished %v ok %v stopped %v; want finished=%v", finished, ok, stopped.Load(), !running)
+				t.Fatalf("result %v ok %v stopped %v; want finished=%v", res, ok, stopped.Load(), !running)
 			}
 			want := store.InputStateCancelled
 			if !running {
@@ -2049,27 +2058,32 @@ func TestCancelByInputKey_InjectedSteer(t *testing.T) {
 	}
 }
 
-// A Stop confirms the cancel against the turn's own terminal frame: "running"
-// is checked before the cancel, and a turn that completes in between seals
-// with turn.completed, so the Stop reports it finished (nothing was stopped)
-// rather than stopped. A turn the cancel reaches mid-run seals cancelled.
+// A Stop confirms the cancel against the turn's own terminal frame, read as
+// soon as it is emitted: "running" is checked before the cancel, and a turn
+// that completes in between emits turn.completed — even while post-turn work
+// keeps its buffer unsealed — so the Stop reports it finished, not stopped.
+// A turn the cancel reaches mid-run emits turn.cancelled. A turn that emits
+// no terminal frame in time is unconfirmed, never assumed stopped.
 func TestStop_ConfirmsTheCancelAgainstTheTurnsEnd(t *testing.T) {
-	for _, completes := range []bool{true, false} {
+	for _, tc := range []struct {
+		name  string
+		frame string // "" = no terminal frame in time
+		want  turnStop
+	}{
+		{"completes anyway, still unsealed", "turn.completed", turnNotStopped},
+		{"cancelled", "turn.cancelled", turnStopped},
+		{"no terminal frame yet", "", turnStopUnconfirmed},
+	} {
 		for _, keyed := range []bool{true, false} {
-			name := map[bool]string{true: "completes anyway", false: "cancelled"}[completes] + map[bool]string{true: "/by key", false: "/by turn"}[keyed]
-			t.Run(name, func(t *testing.T) {
+			t.Run(tc.name+map[bool]string{true: "/by key", false: "/by turn"}[keyed], func(t *testing.T) {
 				st := newFakeChatStore()
 				srv := newDefaultChatServer(t, &fakeEngine{}, st)
 				conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
 				var buf *turnBuffer
 				buf, turnID, tok, _ := srv.registerTurn(conv.ID, func() {
-					// The turn ends as the cancel lands: how depends on timing.
-					if completes {
-						buf.Emit("turn.completed", map[string]any{})
-					} else {
-						buf.Emit("turn.cancelled", map[string]any{})
+					if tc.frame != "" {
+						buf.Emit(tc.frame, map[string]any{}) // never sealed: post-turn work continues
 					}
-					buf.Finish()
 				})
 				defer srv.finishTurn(conv.ID, tok)
 				srv.inflightMu.Lock()
@@ -2077,14 +2091,14 @@ func TestStop_ConfirmsTheCancelAgainstTheTurnsEnd(t *testing.T) {
 				e.inputKey = "k-c"
 				srv.inflight[conv.ID] = e
 				srv.inflightMu.Unlock()
-				var stopped bool
+				var got turnStop
 				if keyed {
-					stopped = srv.cancelInputTurn(conv.ID, "k-c")
+					got = srv.cancelInputTurn(conv.ID, "k-c")
 				} else {
-					stopped = srv.cancelInflightTurn(conv.ID, turnID)
+					got = srv.cancelInflightTurn(conv.ID, turnID)
 				}
-				if stopped == completes {
-					t.Fatalf("stopped = %v for a turn that %s", stopped, name)
+				if got != tc.want {
+					t.Fatalf("Stop = %v, want %v", got, tc.want)
 				}
 			})
 		}

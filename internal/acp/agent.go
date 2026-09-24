@@ -499,7 +499,7 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 		// any other turn, so the Stop cannot hit a successor that started
 		// after the watched turn ended.
 		err = a.client.Cancel(id, turn)
-		if err == nil {
+		if err == nil || errors.Is(err, chattui.ErrStopUnconfirmed) {
 			// Accepted — but the turn may have finished in the instant
 			// between fleet's check and its cancel, which then stops
 			// nothing. Read on to the terminal frame (bounded) and trust it:
@@ -509,6 +509,9 @@ func (a *Agent) stopTurn(stop context.Context, tr *translator, key string, strea
 			case <-tr.endedCh:
 			case <-streamDone:
 			case <-time.After(stopSettleWait):
+			}
+			if errors.Is(err, chattui.ErrStopUnconfirmed) && tr.ended() && !tr.completedTurn() {
+				err = nil // the turn's own terminal frame confirms the stop
 			}
 			if tr.completedTurn() {
 				// The terminal frame is in; let the stream finish on its own
@@ -650,8 +653,8 @@ func (a *Agent) stopAccepted(convID, key string, q *chattui.QueuedError) error {
 		return nil // it never ran, and will not
 	}
 	if err := a.client.CancelInput(convID, key); err != nil {
-		if errors.Is(err, chattui.ErrTurnNotRunning) {
-			return err // it had already finished; the caller says so
+		if errors.Is(err, chattui.ErrTurnNotRunning) || errors.Is(err, chattui.ErrStopUnconfirmed) {
+			return err // already finished, or not yet confirmed: the caller says which
 		}
 		return fmt.Errorf("the message was accepted and could not be stopped: %w", err)
 	}

@@ -1839,3 +1839,54 @@ func TestTimeoutThatLosesTheRaceReportsTheCompletedTurn(t *testing.T) {
 		t.Fatalf("got %+v, %v, text %q; want the completed turn's end_turn", r, err, h.client.text())
 	}
 }
+
+// A Stop fleet sent but could not yet confirm (202) is settled by the turn's
+// own stream: a turn.cancelled that follows confirms it as a clean stop; no
+// terminal frame at all leaves it unconfirmed, and the prompt says the turn
+// may still be running rather than claiming it stopped.
+func TestUnconfirmedStopIsSettledByTheStream(t *testing.T) {
+	for _, confirms := range []bool{true, false} {
+		t.Run(map[bool]string{true: "stream confirms", false: "never confirmed"}[confirms], func(t *testing.T) {
+			started := make(chan struct{})
+			var h *harness
+			h = newHarness(t, harnessOpts{cancelStatus: http.StatusAccepted, turn: func(w *sseWriter, r *http.Request) {
+				w.emit("conversation", map[string]any{"id": "conv-u"})
+				w.emit("turn.started", map[string]any{"turn_id": "turn-u"})
+				close(started)
+				for {
+					h.fleet.mu.Lock()
+					n := len(h.fleet.cancels)
+					h.fleet.mu.Unlock()
+					if n > 0 {
+						break
+					}
+					time.Sleep(2 * time.Millisecond)
+				}
+				if confirms {
+					w.emit("turn.cancelled", map[string]any{})
+					return
+				}
+				<-r.Context().Done() // no terminal frame
+			}})
+			sid := h.newSession(t)
+			done := make(chan acpsdk.PromptResponse, 1)
+			go func() {
+				r, _ := h.prompt(sid, "long job")
+				done <- r
+			}()
+			<-started
+			if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case r := <-done:
+				unconfirmed := strings.Contains(h.client.text(), "could not confirm")
+				if r.StopReason != acpsdk.StopReasonCancelled || unconfirmed == confirms {
+					t.Fatalf("got %+v, text %q; want unconfirmed=%v", r, h.client.text(), !confirms)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("prompt did not return")
+			}
+		})
+	}
+}

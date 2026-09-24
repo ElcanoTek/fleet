@@ -39,9 +39,12 @@ retention guarantee: after a terminal row is purged, reusing its
   optional `turn_id` (from `turn.started`) targets one turn: it is cancelled
   only while it is the running turn (`204`); once it has ended the request
   stops nothing and answers `409`. Either Stop, by `turn_id` or by `input_id`,
-  confirms a cancel against the turn's own terminal frame (waiting briefly for
-  it): a turn that completed in the instant between the running check and the
-  cancel seals `turn.completed`, and counts as finished, not stopped, so a client stopping the turn it watched
+  confirms a cancel against the turn's own terminal frame, read as soon as it
+  is emitted (a turn does post-turn work, such as auto-titling, before its
+  buffer seals). `turn.completed` (the turn finished in the instant between
+  the running check and the cancel) counts as finished (`409`); another
+  terminal frame is a confirmed stop (`204`); no terminal frame within a few
+  seconds answers `202`, sent but not yet confirmed, never assumed stopped, so a client stopping the turn it watched
   (`fleet acp`) can never cancel a successor, and learns that the turn
   finished on its own rather than taking the Stop for a cancellation. A targeted Stop is turn-scoped and never sweeps the
   queue. An optional `input_id` targets one input by its idempotency key,

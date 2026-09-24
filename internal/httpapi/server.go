@@ -823,7 +823,7 @@ func (s *Server) cancelInflight(convID string) bool {
 // cancelInflightTurn cancels convID's running turn only if it is turnID. The
 // check and the cancel read one snapshot taken under inflightMu, and a turn id
 // is never reused, so a successor registered after turnID ended is never hit.
-func (s *Server) cancelInflightTurn(convID, turnID string) (cancelled bool) {
+func (s *Server) cancelInflightTurn(convID, turnID string) turnStop {
 	s.inflightMu.Lock()
 	entry, ok := s.inflight[convID]
 	s.inflightMu.Unlock()
@@ -831,31 +831,50 @@ func (s *Server) cancelInflightTurn(convID, turnID string) (cancelled bool) {
 		entry.cancel()
 		return entry.confirmStopped()
 	}
-	return false
+	return turnNotStopped
 }
 
+// turnStop is what a Stop did to a turn, as its own terminal frame shows.
+type turnStop int
+
+const (
+	// turnNotStopped: the turn was not running, or it completed anyway (it
+	// finished in the instant between the running check and the cancel).
+	turnNotStopped turnStop = iota
+	// turnStopped: the turn's terminal frame shows it ended without
+	// completing (cancelled, or an error) after the cancel.
+	turnStopped
+	// turnStopUnconfirmed: the cancel was sent but no terminal frame
+	// arrived within stopConfirmWait. It is not claimed either way.
+	turnStopUnconfirmed
+)
+
 // stopConfirmWait bounds how long a Stop waits for the turn it cancelled to
-// seal, to learn whether the cancel stopped it. A var so tests can shorten it.
+// emit its terminal frame. A var so tests can shorten it.
 var stopConfirmWait = 3 * time.Second
 
-// confirmStopped reports whether a turn just cancelled was actually stopped.
-// "Running" is checked before the cancel, and the turn can finish in between,
-// which makes the cancel a no-op. So the turn's own terminal frame decides:
-// a turn that seals with turn.completed ran to its end; anything else
-// (turn.cancelled, an error, or still unwinding at the deadline, the cancel
-// having reached it mid-run) was stopped.
-func (e inflightEntry) confirmStopped() bool {
+// confirmStopped reads what a cancel did. "Running" is checked before the
+// cancel and the turn can finish in between, which makes the cancel a no-op,
+// so only the turn's terminal frame decides — read as soon as it is emitted,
+// not when the buffer seals (post-turn work such as auto-titling runs before
+// the seal). No frame by the deadline is unconfirmed, never assumed stopped.
+func (e inflightEntry) confirmStopped() turnStop {
 	if e.buf == nil {
-		return true
+		return turnStopUnconfirmed
 	}
 	deadline := time.Now().Add(stopConfirmWait)
-	for !e.buf.Sealed() {
+	for {
+		if completed, ended := e.buf.terminalOutcome(); ended {
+			if completed {
+				return turnNotStopped
+			}
+			return turnStopped
+		}
 		if time.Now().After(deadline) {
-			return true
+			return turnStopUnconfirmed
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	return !e.buf.endedCompleted()
 }
 
 // cancelledInputTTL bounds how long a Stop by input key is remembered for a
@@ -872,7 +891,7 @@ func inputKeyMark(convID, key string) string { return convID + "\x00" + key }
 // cancelled, and the key is marked so a turn not registered yet is refused
 // by registerTurnGated. Both happen in one inflightMu section, the one
 // registration takes, so no launch can slip between them.
-func (s *Server) cancelInputTurn(convID, key string) (stoppedTurn bool) {
+func (s *Server) cancelInputTurn(convID, key string) turnStop {
 	now := time.Now()
 	s.inflightMu.Lock()
 	if s.cancelledInputs == nil {
@@ -904,7 +923,7 @@ func (s *Server) cancelInputTurn(convID, key string) (stoppedTurn bool) {
 		entry.cancel()
 		return entry.confirmStopped()
 	}
-	return false
+	return turnNotStopped
 }
 
 // inputKeyStopped reports whether a Stop naming key is still in force.

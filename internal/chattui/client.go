@@ -520,6 +520,11 @@ func (c *Client) Cancel(convID, turnID string) error {
 	return err
 }
 
+// ErrStopUnconfirmed is a targeted Stop's answer when fleet sent the cancel
+// but the turn had not confirmed it (by its terminal frame) in time: it may
+// have been stopped, or may have completed anyway.
+var ErrStopUnconfirmed = errors.New("fleet sent the Stop, but the turn has not confirmed it yet")
+
 // ErrTurnNotRunning is Cancel's answer when the named turn had already ended,
 // and CancelInput's when the input had already finished: the Stop cancelled
 // nothing.
@@ -559,6 +564,9 @@ func (c *Client) postCancel(convID string, payload []byte) error {
 		return fmt.Errorf("connect %s: %w", c.cfg.ServerURL, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusAccepted {
+		return ErrStopUnconfirmed // sent, but the turn has not confirmed it yet
+	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("cancel returned %d: %s", resp.StatusCode, strings.TrimSpace(string(excerpt)))}

@@ -55,3 +55,16 @@ func TestQueuedReplayIsTheServersStatus(t *testing.T) {
 		srv.Close()
 	}
 }
+
+// A 202 from a targeted Stop is ErrStopUnconfirmed: sent, not yet confirmed.
+func TestCancelReportsAnUnconfirmedStop(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
+	defer srv.Close()
+	c := NewClient(Config{ServerURL: srv.URL, Email: "u@example.com", Token: "t"})
+	if err := c.Cancel("conv", "turn"); !errors.Is(err, ErrStopUnconfirmed) {
+		t.Fatalf("Cancel: %v, want ErrStopUnconfirmed", err)
+	}
+	if err := c.CancelInput("conv", "key"); !errors.Is(err, ErrStopUnconfirmed) {
+		t.Fatalf("CancelInput: %v, want ErrStopUnconfirmed", err)
+	}
+}
