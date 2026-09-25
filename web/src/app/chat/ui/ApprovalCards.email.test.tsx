@@ -36,7 +36,7 @@ describe("the email approval card's envelope", () => {
     expect(screen.queryByTestId("email-bcc")).toBeNull();
   });
 
-  it("lists every attachment by file name, even when the body is collapsed", () => {
+  it("lists every outbound file, inline ones included, even when the body is collapsed", () => {
     renderEmailCard(
       {
         to: "a@example.com",
@@ -46,12 +46,14 @@ describe("the email approval card's envelope", () => {
       "approved",
     );
     const box = screen.getByTestId("email-attachments");
-    expect(within(box).getByText("📎 2 attachments")).toBeTruthy();
+    expect(within(box).getByText("📎 3 attachments")).toBeTruthy();
     expect(within(box).getByText("report.csv")).toBeTruthy();
     expect(within(box).getByText("deck.pdf")).toBeTruthy();
     expect(within(box).getByText("/workspace/out/report.csv")).toBeTruthy();
-    // Inline images render inside the preview, not in the attachment list.
-    expect(within(box).queryByText("chart.png")).toBeNull();
+    // Inline files are sent too (an unreferenced cid still goes out), so they
+    // are listed as well, tagged.
+    expect(within(box).getByText("chart.png")).toBeTruthy();
+    expect(within(box).getAllByText("inline")).toHaveLength(1);
   });
 
   it("shows no attachment block for an email without files", () => {

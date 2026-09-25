@@ -281,7 +281,7 @@ export type Approval = {
     content_overflow?: boolean;
     /** Frozen send_email attachments arg: bare paths or `{path, filename?}` objects. */
     attachments?: unknown;
-    /** Inline cid attachments; rendered inside the preview, not listed. */
+    /** Inline cid attachments (`{path, cid}`); listed on the card tagged "inline". */
     inline_attachments?: unknown;
 
     // bash

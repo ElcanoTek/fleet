@@ -337,7 +337,7 @@ about the first kind.
 
 | Card | When it appears | Your choices |
 | --- | --- | --- |
-| Send this email? | The assistant has drafted a message and wants to send it. The card shows the sender, the subject, and the To, Cc, and Bcc recipients each on their own line, lists every attached file by name (visible even with the body collapsed), and shows the body. | **Send** · **Cancel** |
+| Send this email? | The assistant has drafted a message and wants to send it. The card shows the sender, the subject, and the To, Cc, and Bcc recipients each on their own line, lists every file that goes out with it by name, inline images included (visible even with the body collapsed), and shows the body. | **Send** · **Cancel** |
 | Email preview | The assistant wants to show you a draft without sending it. | **Dismiss** — display-only by design |
 | Run this shell command? | A command the platform treats as risky. | **Approve & run** · **Cancel** |
 | Schedule a task | The assistant proposes a scheduled task, usually because you chose **Make recurring task…**. See [From chat to a task](#10-from-chat-to-a-task). | **Approve & schedule** · **Edit** · **Cancel** |

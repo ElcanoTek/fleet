@@ -521,7 +521,13 @@ export function ApprovalCard({
   const toLine = toRecipientList(approval.summary.to);
   const ccLine = toRecipientList(approval.summary.cc);
   const bccLine = toRecipientList(approval.summary.bcc);
-  const attachments = emailAttachmentNames(approval.summary.attachments);
+  // Both arrays go out with the email (execution replays the frozen args), so
+  // both are listed: an inline file whose cid the body never references is
+  // still sent, and would otherwise appear nowhere on the card.
+  const attachments = [
+    ...emailAttachmentNames(approval.summary.attachments),
+    ...emailAttachmentNames(approval.summary.inline_attachments).map((a) => ({ ...a, inline: true })),
+  ];
   const subject = approval.summary.subject ?? "(no subject)";
   const from = approval.summary.from ?? "";
   const preview = approval.summary.preview ?? "";
@@ -649,7 +655,7 @@ export function ApprovalCard({
       {/* Attachments sit OUTSIDE the collapsible body so a collapsed send card
           still says which files go out with it — a report sent without its
           CSV (or with the wrong one) is the mistake this card exists to catch.
-          Inline (cid:) images are left out: they render in the preview. */}
+          Inline (cid:) files are listed too, tagged "inline". */}
       {attachments.length > 0 ? (
         <div
           data-testid="email-attachments"
@@ -662,6 +668,11 @@ export function ApprovalCard({
             {attachments.map((a, i) => (
               <li key={`${a.path}-${i}`} className="break-all text-[var(--color-text-secondary)]" title={a.path}>
                 <span className="font-medium text-[var(--color-text-primary)]">{a.name}</span>
+                {"inline" in a ? (
+                  <span className="ml-1.5 rounded-full border border-[var(--color-border-strong)] px-1.5 text-[0.66rem] text-[var(--color-text-muted)]">
+                    inline
+                  </span>
+                ) : null}
                 {a.path !== a.name ? (
                   <span className="ml-1.5 text-[0.72rem] text-[var(--color-text-muted)]">{a.path}</span>
                 ) : null}
