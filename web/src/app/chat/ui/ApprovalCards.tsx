@@ -2006,7 +2006,8 @@ function SegButton({
 
 // emailAttachmentNames normalizes a staged send_email `attachments` argument
 // for display. The bundles' senders accept bare paths or objects with a "path"
-// key (optionally a display "filename"/"name"), and models emit a single bare
+// key (or its inline-shape alias "file"; optionally a display "filename"/"name"),
+// and models emit a single bare
 // string too — the same shapes internal/agentcore's attachmentNames accepts.
 // Anything unrecognizable is skipped rather than rendered as "[object Object]".
 export function emailAttachmentNames(value: unknown): Array<{ name: string; path: string }> {
@@ -2019,7 +2020,14 @@ export function emailAttachmentNames(value: unknown): Array<{ name: string; path
       path = item.trim();
     } else if (item && typeof item === "object") {
       const rec = item as Record<string, unknown>;
-      if (typeof rec.path === "string") path = rec.path.trim();
+      // "file" is the inline shape's alias for "path" — the server's cid
+      // expansion and the send fingerprint both accept it, so the card must.
+      for (const k of ["path", "file"]) {
+        if (typeof rec[k] === "string" && (rec[k] as string).trim()) {
+          path = (rec[k] as string).trim();
+          break;
+        }
+      }
       for (const k of ["filename", "name"]) {
         if (typeof rec[k] === "string" && (rec[k] as string).trim()) {
           label = (rec[k] as string).trim();

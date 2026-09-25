@@ -69,6 +69,7 @@ describe("emailAttachmentNames", () => {
         "report.csv",
         { path: "C:\\out\\a.xlsx" },
         { path: "/w/x.bin", filename: "Q3 Report.xlsx" },
+        { file: "/w/chart.png", cid: "chart" },
         { nope: 1 },
         42,
       ]),
@@ -76,6 +77,7 @@ describe("emailAttachmentNames", () => {
       { name: "report.csv", path: "report.csv" },
       { name: "a.xlsx", path: "C:\\out\\a.xlsx" },
       { name: "Q3 Report.xlsx", path: "/w/x.bin" },
+      { name: "chart.png", path: "/w/chart.png" },
     ]);
     expect(emailAttachmentNames("/w/solo.csv")).toEqual([{ name: "solo.csv", path: "/w/solo.csv" }]);
     expect(emailAttachmentNames(undefined)).toEqual([]);
