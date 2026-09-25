@@ -515,7 +515,19 @@ export function ApprovalCard({
     );
   }
 
-  const recipients = toRecipientList(approval.summary.to, approval.summary.cc, approval.summary.bcc);
+  // To, Cc and Bcc each get their own line: folding them into one "To:" list
+  // hid who was only copied (or blind-copied) — exactly what a reviewer checks
+  // before letting a client-facing email go.
+  const toLine = toRecipientList(approval.summary.to);
+  const ccLine = toRecipientList(approval.summary.cc);
+  const bccLine = toRecipientList(approval.summary.bcc);
+  // Both arrays go out with the email (execution replays the frozen args), so
+  // both are listed: an inline file whose cid the body never references is
+  // still sent, and would otherwise appear nowhere on the card.
+  const attachments = [
+    ...emailAttachmentNames(approval.summary.attachments),
+    ...emailAttachmentNames(approval.summary.inline_attachments).map((a) => ({ ...a, inline: true })),
+  ];
   const subject = approval.summary.subject ?? "(no subject)";
   const from = approval.summary.from ?? "";
   const preview = approval.summary.preview ?? "";
@@ -633,10 +645,42 @@ export function ApprovalCard({
       </div>
 
       <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
-        {recipients ? <div><span className="text-[var(--color-text-muted)]">To: </span>{recipients}</div> : null}
+        {toLine ? <div data-testid="email-to"><span className="text-[var(--color-text-muted)]">To: </span>{toLine}</div> : null}
+        {ccLine ? <div data-testid="email-cc"><span className="text-[var(--color-text-muted)]">Cc: </span>{ccLine}</div> : null}
+        {bccLine ? <div data-testid="email-bcc"><span className="text-[var(--color-text-muted)]">Bcc: </span>{bccLine}</div> : null}
         <div><span className="text-[var(--color-text-muted)]">Subject: </span>{subject}</div>
         {from ? <div><span className="text-[var(--color-text-muted)]">From: </span>{from}</div> : null}
       </div>
+
+      {/* Attachments sit OUTSIDE the collapsible body so a collapsed send card
+          still says which files go out with it — a report sent without its
+          CSV (or with the wrong one) is the mistake this card exists to catch.
+          Inline (cid:) files are listed too, tagged "inline". */}
+      {attachments.length > 0 ? (
+        <div
+          data-testid="email-attachments"
+          className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1.5 text-[0.78rem]"
+        >
+          <div className="mb-1 text-[var(--color-text-muted)]">
+            📎 {attachments.length} attachment{attachments.length === 1 ? "" : "s"}
+          </div>
+          <ul className="grid gap-0.5">
+            {attachments.map((a, i) => (
+              <li key={`${a.path}-${i}`} className="break-all text-[var(--color-text-secondary)]" title={a.path}>
+                <span className="font-medium text-[var(--color-text-primary)]">{a.name}</span>
+                {"inline" in a ? (
+                  <span className="ml-1.5 rounded-full border border-[var(--color-border-strong)] px-1.5 text-[0.66rem] text-[var(--color-text-muted)]">
+                    inline
+                  </span>
+                ) : null}
+                {a.path !== a.name ? (
+                  <span className="ml-1.5 text-[0.72rem] text-[var(--color-text-muted)]">{a.path}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {effectiveExpanded && hasBody ? (
         <EmailPreview
@@ -1958,6 +2002,44 @@ function SegButton({
       {children}
     </button>
   );
+}
+
+// emailAttachmentNames normalizes a staged send_email `attachments` argument
+// for display. The bundles' senders accept bare paths or objects with a "path"
+// key (or its inline-shape alias "file"; optionally a display "filename"/"name"),
+// and models emit a single bare
+// string too — the same shapes internal/agentcore's attachmentNames accepts.
+// Anything unrecognizable is skipped rather than rendered as "[object Object]".
+export function emailAttachmentNames(value: unknown): Array<{ name: string; path: string }> {
+  const items = Array.isArray(value) ? value : value == null ? [] : [value];
+  const out: Array<{ name: string; path: string }> = [];
+  for (const item of items) {
+    let path = "";
+    let label = "";
+    if (typeof item === "string") {
+      path = item.trim();
+    } else if (item && typeof item === "object") {
+      const rec = item as Record<string, unknown>;
+      // "file" is the inline shape's alias for "path" — the server's cid
+      // expansion and the send fingerprint both accept it, so the card must.
+      for (const k of ["path", "file"]) {
+        if (typeof rec[k] === "string" && (rec[k] as string).trim()) {
+          path = (rec[k] as string).trim();
+          break;
+        }
+      }
+      for (const k of ["filename", "name"]) {
+        if (typeof rec[k] === "string" && (rec[k] as string).trim()) {
+          label = (rec[k] as string).trim();
+          break;
+        }
+      }
+    }
+    if (!path && !label) continue;
+    const base = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+    out.push({ name: label || base, path: path || label });
+  }
+  return out;
 }
 
 function toRecipientList(...groups: Array<string | string[] | undefined>): string {

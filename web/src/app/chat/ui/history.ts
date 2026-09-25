@@ -279,6 +279,10 @@ export type Approval = {
     content_type?: string;
     /** true when the server truncated `content` because the payload exceeded the preview cap. */
     content_overflow?: boolean;
+    /** Frozen send_email attachments arg: bare paths or `{path, filename?}` objects. */
+    attachments?: unknown;
+    /** Inline cid attachments (`{path, cid}`); listed on the card tagged "inline". */
+    inline_attachments?: unknown;
 
     // bash
     command?: string;
