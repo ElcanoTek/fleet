@@ -76,7 +76,7 @@ identity to fall back on.
 ## The built-in directory
 
 fleet ships a large curated directory of hosted MCP servers **embedded in the
-binary** (`internal/clientconfig/builtin_remote_catalog.yaml`, ~275 entries
+binary** (`internal/clientconfig/builtin_remote_catalog.yaml`, ~290 entries
 across ~19 categories), so every deployment gets a rich, searchable connector
 directory without each client bundle copying hundreds of lines of listings.
 Every bundle inherits it by default.

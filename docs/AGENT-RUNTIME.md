@@ -853,7 +853,7 @@ How the invariants hold:
   probe's `initialize` announces the same protocol revision as fleet's real
   transport (pinned by a test), and a session it happens to open is
   terminated before discovery moves on.
-  Intercom, Plaid, Cartesia, GoCardless and Square publish only that shape
+  Intercom, Plaid, Cartesia and GoCardless publish only that shape
   and could not be added before (#1006 catalog audit).
 - **A document that names another issuer is accepted only when every
   endpoint in it is vouched for.** Five official vendors (DocuSign,

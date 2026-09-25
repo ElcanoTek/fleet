@@ -91,11 +91,11 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   2026-09-14 build. `main` currently refuses them at Add (their MCP path
   answers 401 under every sub-path, which the discovery code reads as a
   server failure). Known and deliberately not fixed at the time of writing.
-- **Square, Smartlead** — SSE-only endpoints. fleet's hosted-connector
-  transport is streamable HTTP; these cannot connect today.
-
-## Running with connections
-
+- **Square, Smartlead** — SSE-only endpoints, which fleet's hosted-connector
+  transport does not speak. Both were removed from the built-in directory in
+  #986 Phase 4 (2026-09-25); a connection row from before that keeps its URL
+  and still cannot connect. Re-add either from the vendor's docs when it
+  offers streamable HTTP.
 - **Chat.** A connection mounts only when it is enabled in the conversation's
   Tools picker. The web UI pre-enables the default set; an API client must
   send `enabled_optional` naming the connection, or nothing hosted mounts and
