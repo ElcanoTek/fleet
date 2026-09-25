@@ -35,8 +35,10 @@ export function SharedConversationView({ snapshot }: { snapshot: SharedSnapshot 
   const bubbles = toBubbles(snapshot.messages);
   const created = formatDate(snapshot.created_at);
 
+  // `shared-page` opts this document-scrolling page out of the app shell's
+  // scroll-hostile body rules — see the matching block in globals.css.
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-[48rem] flex-col gap-6 px-4 py-8 text-[var(--color-text-primary)]">
+    <main className="shared-page mx-auto flex min-h-screen w-full max-w-[48rem] flex-col gap-6 px-4 py-8 text-[var(--color-text-primary)]">
       <header className="border-b border-[var(--color-border-strong)] pb-4">
         <h1 className="text-[1.4rem] font-semibold leading-tight">{snapshot.title || "Shared conversation"}</h1>
         <p className="mt-1 text-[0.8125rem] text-[var(--color-text-muted)]">

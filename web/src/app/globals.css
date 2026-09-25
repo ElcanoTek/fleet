@@ -883,6 +883,41 @@ body {
     background var(--transition-base);
 }
 
+/* Document-scrolling pages (the public /shared/[token] transcript). The rules
+   above are tuned for the app shell, where <body> never scrolls — every view
+   scrolls an inner pane. A shared conversation instead scrolls the whole
+   document, often tens of thousands of pixels of it, and there two of those
+   rules made it scroll badly:
+   - overflow-x: hidden on BOTH html and body turns <body> into a second
+     scroll container (its overflow-y computes to auto). clip hides the same
+     horizontal overflow without creating one, so the viewport is the only
+     scroller and momentum/scroll-chaining behave normally on touch devices.
+   - background-attachment: fixed forces main-thread scrolling: the browser
+     repaints the whole viewport on every scroll frame (and iOS ignores fixed
+     entirely, stretching the cover-sized gradient over the full page height).
+     The gradient moves to a fixed, composited pseudo-element instead, which
+     looks identical and costs nothing to scroll.
+   overscroll-behavior goes back to the default here too: stopping the bounce
+   "past the chat" is an app-shell concern, and on a plain document the
+   rubber-band is what tells a reader they reached the end. */
+html:has(> body > .shared-page),
+body:has(> .shared-page) {
+  overflow-x: clip;
+  overscroll-behavior: auto;
+}
+body:has(> .shared-page) {
+  background-image: none;
+}
+body:has(> .shared-page)::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: var(--gradient-bg);
+  background-size: cover;
+}
+
 /* ── Tabular figures ────────────────────────────────────────────────────────
    Nebula Sans ships PROPORTIONAL figures by default: its digit advances span
    407–625 units per 1000, so "1" is a third narrower than "8". The face this
