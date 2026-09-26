@@ -104,6 +104,20 @@ func loadBuiltinRemoteCatalog() ([]RemoteMCPCatalogEntry, error) {
 	return builtinCatalog, errBuiltinCatalog
 }
 
+// BuiltinRemoteCatalog returns the embedded directory as shipped — every
+// entry, before any bundle's overrides, hidden list or community opt-in
+// narrow it. That is the view a check of the DIRECTORY wants (the nightly
+// catalog smoke in internal/remotemcp, which must not skip an entry just
+// because the default bundle leaves community entries off); a deployment's
+// view is Bundle.RemoteMCPCatalog. The slice is a copy.
+func BuiltinRemoteCatalog() ([]RemoteMCPCatalogEntry, error) {
+	entries, err := loadBuiltinRemoteCatalog()
+	if err != nil {
+		return nil, err
+	}
+	return append([]RemoteMCPCatalogEntry(nil), entries...), nil
+}
+
 // mergeBuiltinRemoteCatalog resolves the embedded directory and delegates to
 // mergeRemoteCatalog. builtinKnob is the manifest's remote_mcp_catalog_builtin
 // pointer — nil means absent, which defaults to inherit.

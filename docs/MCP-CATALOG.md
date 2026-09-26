@@ -319,6 +319,10 @@ For bundle authors:
 - Endpoint URLs rot as vendors move; the shipped list is a snapshot maintained
   in fleet releases, with `remote_mcp_catalog_hidden` as the between-release
   kill switch. A stale URL fails at add/connect time with the normal discovery
-  error — nothing silent.
+  error — nothing silent. The repository (not the running product) checks the
+  snapshot once a day: a dead-link lint over every `docs_url` and a
+  credential-less handshake against every `open` entry
+  ([`MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md)); OAuth entries are verified
+  by hand ([`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md)).
 - `auth` is a UI hint derived from vendor docs at curation time, not an
   enforced contract.
