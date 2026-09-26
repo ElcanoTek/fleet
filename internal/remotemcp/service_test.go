@@ -541,8 +541,8 @@ func TestServiceAddOpenServerProbesWithoutOAuthDiscovery(t *testing.T) {
 	if server.Status != store.RemoteMCPStatusConnected || server.Issuer != "" {
 		t.Errorf("open server = %+v, want connected without an OAuth issuer", server)
 	}
-	if toolCount != 3 {
-		t.Errorf("probed tool count = %d, want 3", toolCount)
+	if toolCount.ToolCount != 3 {
+		t.Errorf("probed tool count = %d, want 3", toolCount.ToolCount)
 	}
 	bearer, err := svc.AcquireTokenByID(context.Background(), "u@x.com", server.ID)
 	if err != nil || bearer != "" {
@@ -617,8 +617,8 @@ func TestServiceAddAPIKeyServerValidatesKey(t *testing.T) {
 	if server.APIKeyHeader != "X-API-Key" {
 		t.Errorf("api_key header = %q", server.APIKeyHeader)
 	}
-	if toolCount != 5 {
-		t.Errorf("probed tool count = %d, want 5", toolCount)
+	if toolCount.ToolCount != 5 {
+		t.Errorf("probed tool count = %d, want 5", toolCount.ToolCount)
 	}
 
 	// The run loop's credential path returns the key itself.
@@ -640,8 +640,8 @@ func TestServiceAddAPIKeyServerValidatesKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetAPIKey: %v", err)
 	}
-	if rotatedCount != 5 {
-		t.Errorf("rotation tool count = %d, want 5", rotatedCount)
+	if rotatedCount.ToolCount != 5 {
+		t.Errorf("rotation tool count = %d, want 5", rotatedCount.ToolCount)
 	}
 	if cred, _ := svc.AcquireTokenByID(ctx, "u@x.com", server.ID); cred != "sk-live-456" {
 		t.Errorf("rotated key = %q", cred)
@@ -1001,8 +1001,8 @@ func TestAddServerAPIKeyQueryParam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddServer: %v", err)
 	}
-	if toolCount != 2 {
-		t.Errorf("toolCount = %d, want 2", toolCount)
+	if toolCount.ToolCount != 2 {
+		t.Errorf("toolCount = %d, want 2", toolCount.ToolCount)
 	}
 	if server.Status != store.RemoteMCPStatusConnected {
 		t.Errorf("status = %q, want connected", server.Status)

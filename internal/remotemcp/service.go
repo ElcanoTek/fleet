@@ -271,29 +271,30 @@ type AddServerInput struct {
 // they are validated NOW with a real MCP handshake (probeServer) and only
 // land connected if the server answers; a wrong key or mistyped tenant URL
 // fails the add with an actionable error instead of surfacing mid-run. The
-// returned tool count is >= 0 for probed adds and -1 when no probe ran.
-func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.RemoteMCPServer, int, error) {
+// returned ProbeReport carries the tool count (>= 0 for probed adds, -1 when
+// no probe ran) and, for api_key adds, whether the key was verified.
+func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.RemoteMCPServer, ProbeReport, error) {
 	if !s.Enabled() {
-		return nil, -1, ErrDisabled
+		return nil, noProbe, ErrDisabled
 	}
 	canonURL, err := mcpoauth.ValidateServerURL(in.URL, s.cfg.AllowInsecureHTTP)
 	if err != nil {
-		return nil, -1, err
+		return nil, noProbe, err
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		return nil, -1, errors.New("a name is required")
+		return nil, noProbe, errors.New("a name is required")
 	}
 	// Validate the seat label up front: an OAuth add registers a client at
 	// the vendor before the row exists, and a label rejected only at insert
 	// would leave that registration dangling.
 	if _, err := store.CanonicalRemoteMCPAccount(in.Account); err != nil {
-		return nil, -1, err
+		return nil, noProbe, err
 	}
 	if in.AuthMode == store.RemoteMCPAuthOpen {
-		toolCount, perr := s.probeServer(ctx, canonURL, "", "", "")
+		report, perr := s.probeServer(ctx, canonURL, "", "", "")
 		if perr != nil {
-			return nil, -1, fmt.Errorf("could not connect to the MCP server: %w", perr)
+			return nil, noProbe, fmt.Errorf("could not connect to the MCP server: %w", perr)
 		}
 		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
 			UserEmail: in.Email, Name: name, Account: in.Account, URL: canonURL,
@@ -301,20 +302,20 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 			Status:    store.RemoteMCPStatusConnected,
 			AuthKind:  store.RemoteMCPAuthOpen,
 		})
-		return server, toolCount, cerr
+		return server, report, cerr
 	}
 	if in.AuthMode == store.RemoteMCPAuthAPIKey {
 		header, verr := validateAPIKeyAuth(in.APIKey, in.APIKeyHeader)
 		if verr != nil {
-			return nil, -1, verr
+			return nil, noProbe, verr
 		}
 		query := strings.TrimSpace(in.APIKeyQuery)
 		if query != "" {
 			if header != "" {
-				return nil, -1, errors.New("an API key is sent under a header OR a query parameter, not both")
+				return nil, noProbe, errors.New("an API key is sent under a header OR a query parameter, not both")
 			}
 			if !mcp.QueryParamNameOK(query) {
-				return nil, -1, fmt.Errorf("invalid API key query-parameter name %q", query)
+				return nil, noProbe, fmt.Errorf("invalid API key query-parameter name %q", query)
 			}
 		}
 		// Control-plane acquisition (#1274): the add-time probe sends this key
@@ -324,9 +325,9 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		// rotation per user cannot grow the literal set the way token refresh
 		// did. There is no row yet either.
 		s.noteSecrets(in.APIKey)
-		toolCount, perr := s.probeServer(ctx, canonURL, header, query, in.APIKey)
+		report, perr := s.probeServer(ctx, canonURL, header, query, in.APIKey)
 		if perr != nil {
-			return nil, -1, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
+			return nil, noProbe, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
 		}
 		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
 			UserEmail: in.Email, Name: name, Account: in.Account, URL: canonURL,
@@ -337,15 +338,15 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 			APIKeyHeader: header,
 			APIKeyQuery:  query,
 		})
-		return server, toolCount, cerr
+		return server, report, cerr
 	}
 	if in.AuthMode != "" && in.AuthMode != store.RemoteMCPAuthOAuth {
-		return nil, -1, fmt.Errorf("unsupported remote MCP auth mode %q", in.AuthMode)
+		return nil, noProbe, fmt.Errorf("unsupported remote MCP auth mode %q", in.AuthMode)
 	}
 
 	disco, err := mcpoauth.Discover(ctx, s.httpClient, canonURL)
 	if err != nil {
-		return nil, -1, fmt.Errorf("discover authorization server: %w", err)
+		return nil, noProbe, fmt.Errorf("discover authorization server: %w", err)
 	}
 
 	scopes := strings.Join(disco.RequestedScopes(), " ")
@@ -359,11 +360,11 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	authMethods := disco.AS.TokenEndpointAuthMethodsSupported
 	if clientID == "" {
 		if disco.AS.RegistrationEndpoint == "" {
-			return nil, -1, ErrManualClientRequired
+			return nil, noProbe, ErrManualClientRequired
 		}
 		reg, rerr := mcpoauth.Register(ctx, s.httpClient, disco.AS.RegistrationEndpoint, s.cfg.ClientName, s.RedirectURI(), scopes, disco.AS.TokenEndpointAuthMethodsSupported)
 		if rerr != nil {
-			return nil, -1, fmt.Errorf("dynamic client registration: %w", rerr)
+			return nil, noProbe, fmt.Errorf("dynamic client registration: %w", rerr)
 		}
 		clientID = reg.ClientID
 		clientSecret = reg.ClientSecret
@@ -379,7 +380,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		// A bring-your-own client with no secret can only work against an AS
 		// that accepts public clients; otherwise the exchange after consent is
 		// doomed, so fail here, where the user can still add the secret.
-		return nil, -1, ErrClientSecretRequired
+		return nil, noProbe, ErrClientSecretRequired
 	}
 	// Control-plane acquisition (#1274): a dynamic registration just minted a
 	// client secret + registration access token, and a manual add supplied one
@@ -413,38 +414,54 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		ClientSecret:          clientSecret,
 		RegistrationToken:     regToken,
 	})
-	return server, -1, err
+	return server, noProbe, err
 }
 
 // probeServer performs a real MCP handshake — initialize + tools/list, over
 // the SSRF-safe client — against url with the given credential, and returns
-// the server's tool count. It is the add/rotate-time validation for
+// what it learned (ProbeReport). It is the add/rotate-time validation for
 // connections that have no OAuth login step: without it a wrong key or a
 // mistyped tenant URL would be stored as "connected" and only fail mid-run,
-// where the error is far from the person who can fix it. The ephemeral client
-// is closed before returning; nothing is registered.
-func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, credential string) (int, error) {
+// where the error is far from the person who can fix it. With a credential
+// the handshake is followed by one read-only tool call, because many vendors
+// check the key only there (see ProbeReport). The ephemeral client is closed
+// before returning; nothing is registered.
+func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, credential string) (ProbeReport, error) {
 	client := mcp.NewClient()
 	defer func() { _ = client.Close() }()
-	opts := mcp.HTTPServerOptions{HTTPClient: s.httpClient}
-	switch {
-	case credential != "" && queryName != "":
-		// Query-authenticated vendor: the transport attaches the key so the
-		// probed URL (which lands in error strings) never carries it.
-		opts.HTTPClient = mcp.WithQueryParam(s.httpClient, queryName, credential)
-	case credential != "":
-		header, value := "Authorization", "Bearer "+credential
-		if headerName != "" {
-			header, value = headerName, credential
-		}
-		opts.Headers = map[string]string{header: value}
-	}
-	pctx, cancel := context.WithTimeout(ctx, s.cfg.HTTPTimeout)
+	hctx, cancel := probeTimeout(ctx, s.cfg.HTTPTimeout)
 	defer cancel()
-	if err := client.AddHTTPServerWithOptions(pctx, "verify", url, opts); err != nil {
-		return 0, err
+	if err := client.AddHTTPServerWithOptions(hctx, "verify", url, s.keyClientOptions(headerName, queryName, credential)); err != nil {
+		return ProbeReport{}, err
 	}
-	return len(client.GetAllTools()), nil
+	report := ProbeReport{ToolCount: len(client.GetAllTools())}
+	if credential == "" {
+		return report, nil
+	}
+	// The real key: one blind read-only call. Only a definite rejection of
+	// the credential fails the add (see ProbeReport); a scope denial or an
+	// argument-validation error is not evidence against the key.
+	tool := probeTool(client)
+	actual := callOutcome{kind: callOK}
+	if tool != "" {
+		actual = s.blindCall(ctx, client, "verify", tool)
+		if isDefiniteKeyRejection(actual) {
+			return ProbeReport{}, &keyRejectedError{tool: tool, reason: truncateReason(actual.text)}
+		}
+	}
+	report.CheckedWith = tool
+	// The control: the same probe with an invalid key. Only a vendor that
+	// answers it differently has shown it checks keys where fleet can see,
+	// and only then is the real key's pass a verification.
+	report.KeyVerified = s.controlProbe(ctx, url, headerName, queryName, tool, actual)
+	if !report.KeyVerified {
+		where := "and offers no read-only tool to try it on"
+		if tool != "" {
+			where = "or at " + tool
+		}
+		log.Printf("remote-mcp: %s answered an invalid key the same as the real one at the handshake %s; the key could not be verified now and is checked on first use", url, where)
+	}
+	return report, nil
 }
 
 // validateAPIKeyAuth vets a user-supplied API key + header name before either
@@ -483,28 +500,28 @@ func validateAPIKeyAuth(key, header string) (string, error) {
 // validated with a real MCP handshake before it replaces the old one — a
 // rejected key leaves the stored key untouched — and the probed tool count is
 // returned for the UI's confirmation notice.
-func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string) (int, error) {
+func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string) (ProbeReport, error) {
 	if !s.Enabled() {
-		return 0, ErrDisabled
+		return ProbeReport{}, ErrDisabled
 	}
 	if _, err := validateAPIKeyAuth(apiKey, ""); err != nil {
-		return 0, err
+		return ProbeReport{}, err
 	}
 	server, err := s.store.GetRemoteMCPServer(ctx, email, serverID)
 	if err != nil {
-		return 0, err
+		return ProbeReport{}, err
 	}
 	if server.AuthKind != store.RemoteMCPAuthAPIKey {
-		return 0, errors.New("this connection does not use an API key")
+		return ProbeReport{}, errors.New("this connection does not use an API key")
 	}
 	// Same registration as the add-time probe (#1274): the rotated key rides
 	// this request and the wrapped failure reaches the caller.
 	s.noteSecrets(apiKey)
-	toolCount, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, apiKey)
+	report, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, apiKey)
 	if err != nil {
-		return 0, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
+		return ProbeReport{}, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
 	}
-	return toolCount, s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)
+	return report, s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)
 }
 
 // SetDefaultSeat makes serverID the default seat among the caller's seats of

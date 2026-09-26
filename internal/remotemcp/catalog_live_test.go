@@ -6,13 +6,11 @@ package remotemcp
 import (
 	"context"
 	"errors"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
-	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 )
 
@@ -53,12 +51,15 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 	return &Service{cfg: cfg, httpClient: mcpoauth.SafeHTTPClient(cfg.HTTPTimeout)}, entries
 }
 
-// probe runs one add-time handshake under the service's own timeout.
+// probeForTest runs one add-time probe under the service's own timeout and
+// returns the tool count; a refused key (at the handshake or at the
+// read-only verification call) comes back as the error.
 func (s *Service) probeForTest(t *testing.T, url, header, query, credential string) (int, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPTimeout)
 	defer cancel()
-	return s.probeServer(ctx, url, header, query, credential)
+	report, err := s.probeServer(ctx, url, header, query, credential)
+	return report.ToolCount, err
 }
 
 // TestCatalogLiveOpenEntries: every built-in `open` entry whose URL carries no
@@ -97,10 +98,12 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 // fleet can attach a key — the default `Authorization: Bearer`, a raw named
 // header, and a URL query parameter — and to include vendors that reject a
 // wrong key at the handshake, so a fixture also proves the header shape rather
-// than only that the endpoint is up. RejectsBadKey is false for vendors that
-// answer initialize/tools/list to any bearer and check the key at the first
-// tool call (F14 in docs/MCP-CATALOG-STATUS.md); for them a fixture proves
-// reachability and the tool list, nothing about the key itself.
+// than only that the endpoint is up. RejectsBadKey means the vendor refuses
+// a wrong key somewhere the add-time probe looks — at the handshake or at the
+// read-only verification call. It is false for vendors that answer both to
+// any bearer and check the key only on a real call (F14 in
+// docs/MCP-CATALOG-STATUS.md); for them a fixture proves reachability and
+// the tool list, nothing about the key itself.
 //
 // The other half of each fixture is the `env:` block of
 // .github/workflows/mcp-catalog-smoke.yml, which forwards the repository
@@ -120,20 +123,6 @@ var catalogKeyFixtures = []struct {
 // catalogKeyEnv is the environment variable that arms a fixture.
 func catalogKeyEnv(entry string) string {
 	return "FLEET_CATALOG_KEY_" + strings.ToUpper(strings.ReplaceAll(entry, "-", "_"))
-}
-
-// isCredentialRefusal reports whether a handshake error is the vendor
-// refusing the credential — an HTTP 401/403, or a JSON-RPC error reply (a
-// server that answers initialize with an error object is speaking, not down)
-// — as opposed to a timeout, a resolver failure or a 5xx, which say nothing
-// about the key.
-func isCredentialRefusal(err error) bool {
-	var hs *mcp.HTTPStatusError
-	if errors.As(err, &hs) {
-		return hs.StatusCode == http.StatusUnauthorized || hs.StatusCode == http.StatusForbidden
-	}
-	var rpc *mcp.RPCError
-	return errors.As(err, &rpc)
 }
 
 // TestCatalogLiveAPIKeyFixtures runs fleet's add-time key validation for each
@@ -175,11 +164,12 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 				return
 			}
 			badTools, badErr := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, "fleet-catalog-smoke-invalid-key")
-			switch {
-			case badErr == nil:
-				t.Fatalf("%s accepted an invalid key at the handshake (%d tools); the vendor changed, or the key is not being sent where it expects it", f.Entry, badTools)
-			case !isCredentialRefusal(badErr):
-				t.Fatalf("%s: the invalid-key handshake failed, but not as a credential refusal: %v", f.Entry, badErr)
+			if badErr == nil {
+				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", f.Entry, badTools)
+			}
+			var kr *keyRejectedError
+			if !handshakeRefused(badErr) && !errors.As(badErr, &kr) {
+				t.Fatalf("%s: the invalid-key probe failed, but not as the vendor refusing it: %v", f.Entry, badErr)
 			}
 		})
 	}
