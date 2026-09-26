@@ -27,6 +27,9 @@ workflow files themselves:
   [`.github/workflows/govulncheck-scheduled.yml`](../.github/workflows/govulncheck-scheduled.yml)
   — scheduled, non-blocking re-scans of unchanged code (never PR gates), because
   a CVE/advisory verdict is a function of the clock as well as the commit.
+- [`.github/workflows/mcp-catalog-smoke.yml`](../.github/workflows/mcp-catalog-smoke.yml)
+  — the nightly check of the built-in MCP directory: dead documentation links
+  and a credential-less handshake against every open entry (never a PR gate).
 
 If a command here ever disagrees with those files, the workflow wins — please
 fix this doc (and the `make` targets) to match.
@@ -52,6 +55,7 @@ fix this doc (and the `make` targets) to match.
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
 | Playwright (live) | `e2e-live` | Real stack + rootless-Podman sandbox, fake LLM | `npm run test:e2e:live` |
 | Playwright (canary) | `canary` (nightly) | Fleet default OpenRouter model, drift detection | `npm run test:e2e:canary` |
+| MCP catalog smoke | `links` + `smoke` (nightly) | Built-in directory: dead `docs_url` links; open entries still answer fleet's handshake | `make lint-catalog-links`; `FLEET_CATALOG_LIVE=1 go test -run TestCatalogLive ./internal/remotemcp/` |
 
 The fast PR-gate subset (everything except the browser/sandbox e2e lanes) is one
 command: `make ci-local`.
@@ -719,6 +723,23 @@ scripts/mcp-catalog-lint.sh --report links.tsv            # machine-readable
 `scripts/check_mcp_catalog_lint_test.go` drives the script against a local
 server that plays every verdict, and pins that the extraction yields exactly
 one `docs_url` per catalog entry.
+
+## Nightly MCP catalog smoke — `mcp-catalog-smoke.yml`
+
+A second **non-blocking** nightly lane, for the built-in remote MCP directory
+rather than the product. It runs the catalog link lint above over every
+entry's `docs_url`, and the live catalog tests in `internal/remotemcp`, which
+run fleet's own add-time handshake against every `open` entry plus any
+`api_key` fixture whose `FLEET_CATALOG_KEY_<ENTRY>` secret is set. A
+scheduled failure files an issue. Nothing here gates a PR — a vendor's outage
+must never redden one. Locally:
+
+```sh
+make lint-catalog-links
+FLEET_CATALOG_LIVE=1 go test -tags fleet_host_executor -run TestCatalogLive -v ./internal/remotemcp/
+```
+
+Design note: [`docs/MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md).
 
 ---
 

@@ -1,0 +1,167 @@
+# Nightly MCP catalog smoke — NON-BLOCKING (#986, Phase 2).
+#
+# The built-in remote MCP directory (internal/clientconfig/builtin_remote_catalog.yaml)
+# is a static snapshot of ~290 vendor endpoints and documentation links, and it
+# rots: vendors move docs pages, sunset betas and rename endpoints, and the
+# only way a fleet operator finds out today is a user hitting "failed to
+# connect". This lane checks what CAN be checked without a human once a day:
+#
+#   links  — scripts/mcp-catalog-lint.sh fetches every docs_url and fails on
+#            an obviously dead one (404/410/unresolvable). Bot walls and rate
+#            limits are warnings, not failures.
+#   smoke  — internal/remotemcp's live catalog tests run fleet's own add-time
+#            handshake (initialize + tools/list over the SSRF-safe client)
+#            against every `open` entry, and against a handful of `api_key`
+#            entries when their keys are present as repository secrets
+#            (FLEET_CATALOG_KEY_<ENTRY>; a missing secret skips that fixture,
+#            it never fails). OAuth entries need a browser consent step and are
+#            verified by hand — see docs/MCP-CATALOG-STATUS.md.
+#
+# It is NEVER a PR gate: it runs on a schedule and on manual dispatch only, and
+# a red run files an issue (same alarm as the other scheduled lanes) instead of
+# blocking anyone. It is also not a production health-check of third-party
+# services — it checks that fleet's shipped listing still points at something
+# real, which is the catalog's curation contract (docs/MCP-CATALOG.md).
+# Design note: docs/MCP-CATALOG-SMOKE.md.
+name: Nightly MCP catalog smoke
+
+on:
+  schedule:
+    # 06:30 UTC daily — offset from the 07:00 canary, the 08:00 govulncheck
+    # scan and the Monday 09:00 Grype scan so the lanes don't contend.
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+    inputs:
+      fields:
+        description: 'Catalog link fields to check (comma-separated)'
+        required: false
+        default: 'docs_url'
+      strict_links:
+        description: 'Fail the links job on warnings (bot walls, 5xx) too'
+        required: false
+        type: boolean
+        default: false
+
+# `issues: write` is held by the alarm job alone (see govulncheck-scheduled.yml
+# for why it must not sit at workflow scope next to jobs that talk to ~300
+# third-party hosts).
+permissions:
+  contents: read
+
+# One sweep at a time: a dispatch overlapping the schedule would hit every
+# vendor host twice at once, which is exactly the rate the script's per-host
+# delay exists to avoid. Queue rather than cancel — both runs are wanted.
+concurrency:
+  group: mcp-catalog-smoke
+  cancel-in-progress: false
+
+jobs:
+  links:
+    name: Documentation links (docs_url)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check every catalog link
+        env:
+          FIELDS: ${{ inputs.fields || 'docs_url' }}
+          STRICT: ${{ inputs.strict_links == true && '--strict' || '' }}
+        # The script's own concurrency/delay defaults are the politeness
+        # policy; this lane does not override them. STRICT is empty or one flag.
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          scripts/mcp-catalog-lint.sh --fields "$FIELDS" --report mcp-catalog-links.tsv $STRICT
+
+      - name: Upload the link report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcp-catalog-links
+          path: mcp-catalog-links.tsv
+          if-no-files-found: ignore
+          retention-days: 30
+
+  smoke:
+    name: Live handshake (open entries + api_key fixtures)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the live catalog tests
+        # Same build tag as scripts/go-test.sh so the test tree matches CI's.
+        # The key variables are empty when the secret is not configured, and
+        # the fixture then skips itself — configure a secret to arm it.
+        env:
+          FLEET_CATALOG_LIVE: '1'
+          FLEET_CATALOG_KEY_TAVILY: ${{ secrets.FLEET_CATALOG_KEY_TAVILY }}
+          FLEET_CATALOG_KEY_PAGERDUTY: ${{ secrets.FLEET_CATALOG_KEY_PAGERDUTY }}
+          FLEET_CATALOG_KEY_EXA: ${{ secrets.FLEET_CATALOG_KEY_EXA }}
+          FLEET_CATALOG_KEY_BROWSERBASE: ${{ secrets.FLEET_CATALOG_KEY_BROWSERBASE }}
+          FLEET_CATALOG_KEY_FIRECRAWL: ${{ secrets.FLEET_CATALOG_KEY_FIRECRAWL }}
+        # The summary is written on a FAILED run too — that is the run whose
+        # alarm issue someone will open — so the exit status is captured, not
+        # allowed to abort the step before the summary.
+        run: |
+          set -uo pipefail
+          rc=0
+          go test -tags fleet_host_executor -count=1 -v -run 'TestCatalogLive' ./internal/remotemcp/ 2>&1 | tee catalog-smoke.log || rc=$?
+          {
+            echo "### Live catalog handshake (go test exit $rc)"
+            echo '```'
+            grep -E '^\s*--- (PASS|FAIL|SKIP)' catalog-smoke.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  alarm:
+    # Split out so `issues: write` is the ONLY scope in play here, held by a
+    # job that checks out nothing and runs no third-party code — it only calls
+    # `gh`. Same shape as govulncheck-scheduled.yml and grype-scheduled.yml.
+    name: File an issue so a red cron cannot rot silently
+    needs: [links, smoke]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File an issue so a red cron cannot rot silently
+        # A scheduled failure has no PR attached, so nothing surfaces it. Files
+        # one issue per breakage (deduped by title), comments on re-failures.
+        # schedule-only: a red manual dispatch has a human watching. This step
+        # body is duplicated across the five scheduled lanes (codeql, semgrep,
+        # govulncheck, grype, mcp-catalog-smoke) — keep them in sync.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Scheduled ${WORKFLOW_NAME} run failed"
+          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" \
+              --body "Still failing: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The scheduled $WORKFLOW_NAME lane went red: $RUN_URL
+
+          A failing cron has no PR to make it visible, so this issue is the
+          alarm. Close it when the lane is green again."
+          fi

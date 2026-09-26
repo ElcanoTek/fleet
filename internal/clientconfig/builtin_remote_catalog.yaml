@@ -2426,7 +2426,7 @@ servers:
       database (100M+ companies, 300M+ contacts).
     url: "https://mcp.zoominfo.com/mcp"
     vendor: ZoomInfo Technologies LLC
-    docs_url: "https://docs.zoominfo.com/docs/zi-api-mcp-overview"
+    docs_url: "https://docs.gtm.ai/docs/connect-to-zoominfo-mcp"
     category: crm-sales
     tags: [sales-intelligence, b2b-data, enrichment, prospecting]
     provenance: official

@@ -122,8 +122,9 @@ jobs:
         # exact rot pattern that let the CodeQL toolchain break sit red for
         # weeks. Files one issue per breakage (deduped by title), comments on
         # re-failures. schedule-only: a red manual dispatch has a human watching.
-        # This step body is duplicated across the four scheduled scan lanes
-        # (codeql, semgrep, govulncheck, grype) — keep them in sync.
+        # This step body is duplicated across the five scheduled lanes
+        # (codeql, semgrep, govulncheck, grype, mcp-catalog-smoke) — keep them
+        # in sync.
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_NAME: ${{ github.workflow }}
