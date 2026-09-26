@@ -1929,6 +1929,12 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 	if u := strings.TrimSpace(e.SetupURL); u != "" && !strings.HasPrefix(u, "https://") {
 		return fmt.Errorf("remote_mcp_catalog[%q]: setup_url must be https:// (got %q)", name, e.SetupURL)
 	}
+	// docs_url is the page the directory card sends a user to before they
+	// connect; it gets the same bar as repo_url and setup_url (the built-in
+	// catalog requires it on every entry, a bundle may omit it).
+	if u := strings.TrimSpace(e.DocsURL); u != "" && !strings.HasPrefix(u, "https://") {
+		return fmt.Errorf("remote_mcp_catalog[%q]: docs_url must be https:// (got %q)", name, e.DocsURL)
+	}
 	if h := strings.TrimSpace(e.APIKeyHeader); h != "" {
 		if e.Auth != "api_key" {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header is only meaningful with auth: api_key", name)

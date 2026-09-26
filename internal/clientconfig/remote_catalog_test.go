@@ -262,6 +262,18 @@ remote_mcp_catalog:
 			"repo_url must be https",
 		},
 		{
+			"plain-http docs_url",
+			`
+remote_mcp_catalog:
+  - name: x
+    display_name: X
+    description: d
+    url: "https://x.test/mcp"
+    docs_url: "http://x.test/docs"
+`,
+			"docs_url must be https",
+		},
+		{
 			"uppercase tag",
 			`
 remote_mcp_catalog:
@@ -367,6 +379,23 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 	}
 	if len(categories) < 8 {
 		t.Errorf("builtin catalog should span many categories, got %d: %v", len(categories), categories)
+	}
+
+	// Two entries pointing at the same endpoint are one listing wearing two
+	// names — a copy-paste slip, or a vendor listed once under its own name
+	// and once under a product name — and the directory would show the user
+	// two cards that connect to the same thing. Placeholder URLs are exempt:
+	// the self-hosted templates legitimately share `https://{your-server-host}/mcp`.
+	byURL := map[string]string{}
+	for _, e := range entries {
+		if strings.Contains(e.URL, "{") {
+			continue
+		}
+		key := strings.TrimRight(strings.ToLower(strings.TrimSpace(e.URL)), "/")
+		if prev, dup := byURL[key]; dup {
+			t.Errorf("entries %q and %q list the same endpoint %q", prev, e.Name, e.URL)
+		}
+		byURL[key] = e.Name
 	}
 
 	// The Featured shelf is a short curated recommendation, not a second
