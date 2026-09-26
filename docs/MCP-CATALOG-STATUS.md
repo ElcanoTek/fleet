@@ -100,13 +100,13 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | F12 | Bugsnag's 401 points at its metadata over plain `http://`; the vendor redirects to https, fleet's client refuses redirects, and since #1485 a failed advertised pointer is fatal (it fell through to the well-known locations before) | open, not started — a same-host `http`→`https` upgrade of the pointer would cover it |
 | F13 | Saved connections retain their original URL and auth across catalog corrections until removed and re-added. | Open — reconciliation of saved rows to updated definitions is deferred, requiring a manual re-add for Cartesia, Octagon, and Globalping. |
 | V1 | 25 entries publish no scopes anywhere | live add needed per vendor |
-| V2 | GoCardless, Adobe, Square, Wrike answer 403 to every unauthenticated request from the audit network | re-probe from another network before calling them broken |
+| V2 | GoCardless and Square answer 403 to every unauthenticated request from the audit network; Adobe and Wrike did so on 2026-09-14 and passed discovery on 2026-09-25 | re-probe from another network before calling them broken |
 | V3 | 22 tenant entries have a placeholder in the hostname and cannot be probed | expected |
-| F14 | fleet's add-time validation of an api_key connection (initialize + tools/list) **passes an invalid key** at 25 of the 51 built-in api_key vendors — they check the key only at the first tools/call, so a wrong key is saved with a "connected, N tools" confirmation and fails in the first turn | open, not started — Phase 2 candidate: follow tools/list with one cheap read-only call where a vendor documents one, or say on the card that the check proved reachability |
+| F14 | fleet's add-time validation of an api_key connection (initialize + tools/list) **passes an invalid key** at 25 of the 51 built-in api_key vendors — they check the key only at the first tools/call, so a wrong key is saved with a "connected, N tools" confirmation and fails in the first turn. The set moves with the vendors: by 2026-09-25 Braintrust rejected a wrong key and Vultr accepted one — still 25 | open, not started — Phase 2 candidate: follow tools/list with one cheap read-only call where a vendor documents one, or say on the card that the check proved reachability |
 | F15 | 19 api_key entries also publish OAuth protected-resource metadata on the 401 (`resource_metadata` pointer): Braintrust, Brevo, Buffer, Censys, Coda, fal.ai, Fireflies, Instantly, Kong Konnect, Mollie, Paddle, PagerDuty, Parallel, Raygun, Razorpay, Tavily, Upsun, Vultr, Whop | observation — each could become a one-click `auth: oauth` entry after a live add; not changed |
 | C10 | Composio's documented tenant URL (`…/v3/mcp/{SERVER_ID}?user_id={USER_ID}`) answers 307 to `…/v3/mcp/{SERVER_ID}/mcp?user_id=…` for a made-up id; fleet refuses redirects, so Connect would fail at discovery if a real id redirects the same way | open — verify with a real Composio server id before changing the URL |
 | C11 | Synter Ads (community, hidden by default) lists `https://syntermedia.ai/mcp`, which serves the vendor's HTML page to an MCP initialize | open — the only **dead-suspect** entry; hide or fix once the vendor documents a real endpoint |
-| V4 | `docs_url` answers a non-2xx to a plain GET from the audit box for Coda (403) and Leonardo.Ai (500); ZoomInfo's was a real 404 | Coda/Leonardo look like bot walls, re-check from a browser; ZoomInfo's link replaced with the vendor's current page (the docs moved to its GTM AI rebrand, `docs.gtm.ai`) alongside the nightly smoke |
+| V4 | `docs_url` answers 403 to a plain GET from the audit box for Coda (Leonardo.Ai's 500 on 2026-09-16 was transient — 200 since); ZoomInfo's was a real 404 | Coda looks like a bot wall, re-check from a browser; ZoomInfo's link replaced with the vendor's current page (the docs moved to its GTM AI rebrand, `docs.gtm.ai`) alongside the nightly smoke |
 
 ### The remaining 57 entries (2026-09-16)
 
@@ -139,6 +139,23 @@ is filled in; Composio's documented URL redirects (C10). The two self-hosted
 templates have a placeholder hostname and cannot be probed. No api_key entry
 is missing a `setup_hint` or `setup_url`.
 
+### Re-check (2026-09-25)
+
+Every entry was probed again nine days later — the same discovery probe for
+the 231 official OAuth, tenant and open entries, the same three handshake
+checks for the other 57, the bogus-key replay of the add-time validation for
+the 51 api_key entries, and the link lint over all 288 `docs_url` — and the
+result was diffed against the inventory. The catalog itself had not changed.
+281 of 288 rows kept their verdict. What moved: Adobe Creativity and Wrike,
+which had answered 403 to everything from the audit network, now complete
+discovery (V2 is down to GoCardless and Square); Braintrust started rejecting
+a wrong key at the handshake and Vultr started accepting one (F14 stays at
+25); Leonardo.Ai's documentation page answers 200 (V4 is down to Coda). The
+links were otherwise identical: 275 OK, the same 12 warnings, ZoomInfo's
+still dead until its corrected URL lands. Rows touched by the re-check carry
+`2026-09-25 probe` as their last-verified date; the rest keep the date they
+were last actually checked.
+
 ## Appendix — the inventory: every built-in entry (#986 Phase 1)
 
 All 288 entries of `internal/clientconfig/builtin_remote_catalog.yaml` as of
@@ -163,15 +180,15 @@ while public DNS is fine). A row is not re-verified by later releases.
 Counts — can CI hit?: yes 12 · key-fixture 53 · oauth-manual 182 · tenant 40 ·
 dead-suspect 1. Auth: oauth 182 · tenant 40 · api_key 51 · open 15.
 Provenance: official 280 · third_party 5 · community 3. Featured: 20. Last
-verified: live 12 · probe 2026-09-14 187 · probe 2026-09-16 55 · not probeable
-34. Of the 2026-09-14 probe: discovery ✓ 177 · discovery ✗ 7 (four answer
+verified: live 11 · probe 2026-09-14 186 · probe 2026-09-16 52 · probe
+2026-09-25 5 · not probeable 34. Of the 2026-09-14 probe: discovery ✓ 177 · discovery ✗ 7 (four answer
 403 to everything from the audit network, Plaid and Intercom are skipped by
 decision, Bugsnag is F12) · open ✓ 12 · open with a key in the URL 3 · tenant
 not probeable 31 · not probeable from the audit box 1.
 
 | entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
 |---|---|---|---|---|---|---|---|---|
-| adobe-creativity | oauth | official | design-media | ★ | oauth-manual | 2026-09-14 probe | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) |  |
+| adobe-creativity | oauth | official | design-media | ★ | oauth-manual | 2026-09-25 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified; third-party authorization server host: ims-na1.adobelogin.com; answered 403 to everything on 2026-09-14 (V2) |
 | ahrefs | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
 | airbyte | oauth | official | data-analytics |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1) |
 | airtable | oauth | official | productivity | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
@@ -197,7 +214,7 @@ not probeable 31 · not probeable from the audit box 1.
 | better-stack | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | black-forest-labs | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; advertises `offline_access`; refresh unverified |
 | box | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret; no scopes published (V1) |
-| braintrust | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (43 tools listed; the key is checked only at tools/call) (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| braintrust | api_key | official | observability |  | key-fixture | 2026-09-25 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (JSON-RPC error on the initialize reply) — it passed one on 2026-09-16, so the vendor tightened up (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | brevo | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | brex | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | bright-data | tenant | official | web-search |  | tenant | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
@@ -314,7 +331,7 @@ not probeable 31 · not probeable from the audit box 1.
 | langfuse | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
 | langsmith | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
 | lemlist | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
-| leonardo-ai | api_key | official | ai-ml |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | docs_url answers 500 to a plain GET (bot wall?); **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14) |
+| leonardo-ai | api_key | official | ai-ml |  | key-fixture | 2026-09-25 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14); docs_url answered 500 on 2026-09-16, 200 since |
 | linear | oauth | official | productivity | ★ | oauth-manual | 2026-09-09 live | live PASS; discovery ✓ | self-registering, public client ok |
 | linkup | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (4 tools listed; the key is checked only at tools/call) (F14) |
 | looker | tenant | official | data-analytics |  | tenant | — | tenant — not probeable without a real tenant value |  |
@@ -444,14 +461,14 @@ not probeable 31 · not probeable from the audit box 1.
 | vercel | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified |
 | victoriametrics-cloud | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (24 tools listed; the key is checked only at tools/call) (F14) |
 | vimeo | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
-| vultr | api_key | official | cloud-infrastructure |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| vultr | api_key | official | cloud-infrastructure |  | key-fixture | 2026-09-25 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (191 tools listed; the key is checked only at tools/call) (F14) — it rejected one on 2026-09-16, so the vendor loosened up; also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | wandb | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (30 tools listed; the key is checked only at tools/call) (F14) |
 | webflow | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
 | whop | api_key | official | commerce-payments |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | wix | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | wiz | oauth | official | security |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | wordpress-com | oauth | official | design-media |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
-| wrike | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) |  |
+| wrike | oauth | official | productivity |  | oauth-manual | 2026-09-25 probe | discovery ✓ | manual client, secret; PRM resource `https://mcp.wrike.com/app/mcp` differs from the endpoint (Slack shape; handled since #1471); no revocation endpoint (sign-out clears locally only); answered 403 to everything on 2026-09-14 (V2) |
 | x-docs | open | official | knowledge-docs |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
 | xero | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
 | zapier | oauth | third_party | automation | ★ | oauth-manual | 2026-09-16 probe | discovery ✓ | self-registering, public client ok |
