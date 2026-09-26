@@ -95,18 +95,19 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | F8 | the broker masks a vendor's 4xx argument error as "credential-owner call failed" | open, not started |
 | F9 | `tool_search` ranks other connectors above the one named in the query | observation |
 | F10 | a connect failure is announced to the model as "needs re-authorization" | open, not started |
-| F11 | fleet has no legacy HTTP+SSE transport; Square and Smartlead document SSE-only endpoints | **skipped by decision**; entries left as they are |
+| F11 | fleet has no legacy HTTP+SSE transport; Square and Smartlead document SSE-only endpoints (Smartlead's `/sse` confirmed live and SSE-only on 2026-09-25; Square answers 403 to everything from the audit network) | **resolved in Phase 4 — both entries removed** from the shipped directory: a listing fleet cannot connect to is advertising, not onboarding. Re-add either when it offers streamable HTTP |
 | C1–C9 | seven catalog data errors (Expensify, Cartesia, Octagon, Globalping, Zerodha Kite (its `login` tool session is per-turn only; no scheduled-run auth), Sage Intacct, OpenRouter); Square, Smartlead untouched | landed in #1501 (superseded #1495) |
 | F12 | Bugsnag's 401 points at its metadata over plain `http://`; the vendor redirects to https, fleet's client refuses redirects, and since #1485 a failed advertised pointer is fatal (it fell through to the well-known locations before) | open, not started — a same-host `http`→`https` upgrade of the pointer would cover it |
-| F13 | Saved connections retain their original URL and auth across catalog corrections until removed and re-added. | Open — reconciliation of saved rows to updated definitions is deferred, requiring a manual re-add for Cartesia, Octagon, and Globalping. |
+| F13 | Saved connections retain their original URL and auth across catalog corrections until removed and re-added. | Open — reconciliation of saved rows to updated definitions is deferred, requiring a manual re-add for Cartesia, Octagon, Globalping, and after Phase 4 for Synter Ads (new URL) and Composio (new auth shape). |
 | V1 | 25 entries publish no scopes anywhere | live add needed per vendor |
-| V2 | GoCardless and Square answer 403 to every unauthenticated request from the audit network; Adobe and Wrike did so on 2026-09-14 and passed discovery on 2026-09-25 | re-probe from another network before calling them broken |
+| V2 | GoCardless answers 403 to every unauthenticated request from the audit network (so did Square, which left the directory in Phase 4 — F11); Adobe and Wrike did so on 2026-09-14 and passed discovery on 2026-09-25 | re-probe from another network before calling it broken |
 | V3 | 22 tenant entries have a placeholder in the hostname and cannot be probed | expected |
-| F14 | fleet's add-time validation of an api_key connection (initialize + tools/list) **passes an invalid key** at 25 of the 51 built-in api_key vendors — they check the key only at the first tools/call, so a wrong key is saved with a "connected, N tools" confirmation and fails in the first turn. The set moves with the vendors: by 2026-09-25 Braintrust rejected a wrong key and Vultr accepted one — still 25 | open, not started — Phase 2 candidate: follow tools/list with one cheap read-only call where a vendor documents one, or say on the card that the check proved reachability |
-| F15 | 19 api_key entries also publish OAuth protected-resource metadata on the 401 (`resource_metadata` pointer): Braintrust, Brevo, Buffer, Censys, Coda, fal.ai, Fireflies, Instantly, Kong Konnect, Mollie, Paddle, PagerDuty, Parallel, Raygun, Razorpay, Tavily, Upsun, Vultr, Whop | observation — each could become a one-click `auth: oauth` entry after a live add; not changed |
-| C10 | Composio's documented tenant URL (`…/v3/mcp/{SERVER_ID}?user_id={USER_ID}`) answers 307 to `…/v3/mcp/{SERVER_ID}/mcp?user_id=…` for a made-up id; fleet refuses redirects, so Connect would fail at discovery if a real id redirects the same way | open — verify with a real Composio server id before changing the URL |
-| C11 | Synter Ads (community, hidden by default) lists `https://syntermedia.ai/mcp`, which serves the vendor's HTML page to an MCP initialize | open — the only **dead-suspect** entry; hide or fix once the vendor documents a real endpoint |
+| F14 | fleet's add-time validation of an api_key connection (initialize + tools/list) **passes an invalid key** at 25 of the 51 api_key vendors measured on 2026-09-16 (53 listed after Phase 4: Perplexity rejects a wrong key; Composio needs a real server id to measure) — they check the key only at the first tools/call, so a wrong key is saved with a "connected, N tools" confirmation and fails in the first turn. The set moves with the vendors: by 2026-09-25 Braintrust rejected a wrong key and Vultr accepted one — still 25 | open, not started — Phase 2 candidate: follow tools/list with one cheap read-only call where a vendor documents one, or say on the card that the check proved reachability |
+| F15 | 20 api_key entries also publish OAuth protected-resource metadata on the 401 (`resource_metadata` pointer): Braintrust, Brevo, Buffer, Censys, Coda, fal.ai, Fireflies, Instantly, Kong Konnect, Mollie, Paddle, PagerDuty, Parallel, Raygun, Razorpay, Tavily, Upsun, Vultr, Whop, and Perplexity (added in Phase 4) | observation — each could become a one-click `auth: oauth` entry after a live add; not changed |
+| C10 | Composio's documented URL (`…/v3/mcp/{SERVER_ID}?user_id={USER_ID}`) answers 307 to `…/v3/mcp/{SERVER_ID}/mcp?user_id=…`, which fleet refuses to follow; and Composio's own docs require an `x-api-key` header on every MCP request (the default for new organisations) with no OAuth, so the entry's `tenant` shape could never have connected | **fixed in Phase 4** — retyped `api_key` with `api_key_header: x-api-key` on the URL the vendor redirects to (the guided form collects the placeholder values and the key together). Not live-tested: it needs a real Composio server id. The built-in shape test, which had forbidden a placeholder on an api_key entry although the product supports it, now allows it |
+| C11 | Synter Ads (community, hidden by default) listed `https://syntermedia.ai/mcp`, which serves the vendor's HTML page to an MCP initialize | **fixed in Phase 4** — the server is at `https://mcp.syntermedia.ai` (answers initialize; rejects a wrong `X-Synter-Key` with 401); `setup_url` now points at the developer portal |
 | V4 | `docs_url` answers 403 to a plain GET from the audit box for Coda (Leonardo.Ai's 500 on 2026-09-16 was transient — 200 since); ZoomInfo's was a real 404 | Coda looks like a bot wall, re-check from a browser; ZoomInfo's link replaced with the vendor's current page (the docs moved to its GTM AI rebrand, `docs.gtm.ai`) alongside the nightly smoke |
+| C12 | three hosted endpoints missing from the directory, each verified with fleet's discovery on 2026-09-25: **Perplexity** (`api.perplexity.ai/mcp`, api_key as bearer, rejects a wrong key at the handshake), **LaunchDarkly** (`mcp.launchdarkly.com/mcp/launchdarkly`, OAuth, dynamic registration, public client), **CircleCI** (`mcp.circleci.com/v1/mcp`, OAuth, dynamic registration, confidential client via #1488, no scopes published). Zendesk's per-tenant server (`https://{subdomain}.zendesk.com/api/mcp`, OAuth + dynamic registration, scopes read/write) was verified live on Zendesk's own subdomain but held back: Zendesk documents only its MCP *client* feature, and the directory lists nothing without a vendor page to send users to | **added in Phase 4** (Perplexity, LaunchDarkly, CircleCI); Zendesk pending a vendor documentation page. Brave, Discord, MongoDB Atlas, Qdrant and Weaviate were checked and offer no connectable hosted endpoint (self-hosted, or a service-account proxy) |
 
 ### The remaining 57 entries (2026-09-16)
 
@@ -148,7 +149,7 @@ the 51 api_key entries, and the link lint over all 288 `docs_url` — and the
 result was diffed against the inventory. The catalog itself had not changed.
 281 of 288 rows kept their verdict. What moved: Adobe Creativity and Wrike,
 which had answered 403 to everything from the audit network, now complete
-discovery (V2 is down to GoCardless and Square); Braintrust started rejecting
+discovery (V2 is down to GoCardless, Square having left the directory in Phase 4); Braintrust started rejecting
 a wrong key at the handshake and Vultr started accepting one (F14 stays at
 25); Leonardo.Ai's documentation page answers 200 (V4 is down to Coda). The
 links were otherwise identical: 275 OK, the same 12 warnings, ZoomInfo's
@@ -156,10 +157,27 @@ still dead until its corrected URL lands. Rows touched by the re-check carry
 `2026-09-25 probe` as their last-verified date; the rest keep the date they
 were last actually checked.
 
+### Phase 4 — the directory changes (2026-09-25)
+
+From the findings above and nothing else. Removed: Square and Smartlead
+(F11 — SSE-only endpoints fleet cannot speak to). Fixed: Synter Ads (C11 —
+the real server, at the `mcp.` host, was hiding behind the vendor's web
+page) and Composio (C10 — retyped from `tenant` to `api_key` with the
+`x-api-key` header its docs require, on the URL its server redirects to; the
+built-in shape test that had forbidden a key entry with a placeholder URL
+was wrong about the product and now allows it). Added, each after fleet's own
+discovery probe, and for Perplexity the bogus-key replay of the add-time
+validation as well: Perplexity, LaunchDarkly and CircleCI (C12). Held back:
+Zendesk, whose per-tenant server is live and discoverable but undocumented
+by the vendor. The count goes from 288 to 289 (two out, three in); the
+Featured shelf is untouched at 20, none community. No entry lacks a
+`setup_hint` or `setup_url` where the loader requires one, and no stdio-only
+package is listed.
+
 ## Appendix — the inventory: every built-in entry (#986 Phase 1)
 
-All 288 entries of `internal/clientconfig/builtin_remote_catalog.yaml` as of
-`main` on 2026-09-16, one row each, sorted by name. Columns follow the plan in
+All 289 entries of `internal/clientconfig/builtin_remote_catalog.yaml` as of
+the Phase 4 changes on 2026-09-25, one row each, sorted by name. Columns follow the plan in
 #986: **featured** (★) is the Featured-shelf flag; **can CI hit?** says what
 an automated smoke (Phase 2) could do with the entry without a human —
 `yes` the endpoint answers `initialize` with no credentials (open); `key-fixture`
@@ -177,14 +195,12 @@ handshake sweep described above — and `—` when nothing could be checked
 templates, and Render, whose hostname resolves to 127.0.0.1 on the audit box
 while public DNS is fine). A row is not re-verified by later releases.
 
-Counts — can CI hit?: yes 12 · key-fixture 53 · oauth-manual 182 · tenant 40 ·
-dead-suspect 1. Auth: oauth 182 · tenant 40 · api_key 51 · open 15.
-Provenance: official 280 · third_party 5 · community 3. Featured: 20. Last
-verified: live 11 · probe 2026-09-14 186 · probe 2026-09-16 52 · probe
-2026-09-25 5 · not probeable 34. Of the 2026-09-14 probe: discovery ✓ 177 · discovery ✗ 7 (four answer
-403 to everything from the audit network, Plaid and Intercom are skipped by
-decision, Bugsnag is F12) · open ✓ 12 · open with a key in the URL 3 · tenant
-not probeable 31 · not probeable from the audit box 1.
+Counts — can CI hit?: yes 12 · key-fixture 54 · oauth-manual 183 · tenant 40 ·
+dead-suspect 0. Auth: oauth 183 · tenant 39 · api_key 53 · open 14.
+Provenance: official 281 · third_party 5 · community 3. Featured: 20. Last
+verified: live 11 · probe 2026-09-14 184 · probe 2026-09-16 50 · probe
+2026-09-25 10 · not probeable 34. These totals are derived from the table
+and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
 | entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
 |---|---|---|---|---|---|---|---|---|
@@ -236,6 +252,7 @@ not probeable 31 · not probeable from the audit box 1.
 | chroma-package-search | api_key | official | databases |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14) |
 | chromatic | tenant | official | development |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | chronosphere | tenant | official | observability |  | tenant | — | tenant — not probeable without a real tenant value |  |
+| circleci | oauth | official | development |  | oauth-manual | 2026-09-25 probe | discovery ✓ | added in Phase 4 (C12); self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); no scopes published (V1); no revocation endpoint (sign-out clears locally only) |
 | clickhouse | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | clickup | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | close | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
@@ -246,7 +263,7 @@ not probeable 31 · not probeable from the audit box 1.
 | coda | api_key | official | productivity |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | docs_url answers 403 to a plain GET (bot wall?); add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | coingecko | open | official | finance |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
 | coinmarketcap | api_key | official | finance |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (14 tools listed; the key is checked only at tools/call) (F14) |
-| composio | tenant | third_party | automation |  | tenant | 2026-09-16 probe | not probeable — `{placeholder}` in the URL; origin answers | with placeholder values substituted, the documented URL 307-redirects to `/v3/mcp/{SERVER_ID}/mcp?user_id={USER_ID}`; fleet refuses redirects — verify with a real server id (C10) |
+| composio | api_key | third_party | automation |  | tenant | 2026-09-25 probe | not probeable — `{placeholder}` in the URL; the route answers 404 "MCP server not found" for a made-up server id | retyped in Phase 4 (C10): `api_key` with an `x-api-key` header and the URL the vendor's own server redirects to (`…/{SERVER_ID}/mcp?user_id=…`); not live-tested with a real server id |
 | confluent | api_key | official | data-analytics |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
 | contentful | oauth | official | knowledge-docs |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
 | context7 | open | official | development |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
@@ -330,6 +347,7 @@ not probeable 31 · not probeable from the audit box 1.
 | lambdatest | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
 | langfuse | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
 | langsmith | oauth | official | observability |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
+| launchdarkly | oauth | official | development |  | oauth-manual | 2026-09-25 probe | discovery ✓ | added in Phase 4 (C12); self-registering, public client ok |
 | lemlist | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | leonardo-ai | api_key | official | ai-ml |  | key-fixture | 2026-09-25 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14); docs_url answered 500 on 2026-09-16, 200 since |
 | linear | oauth | official | productivity | ★ | oauth-manual | 2026-09-09 live | live PASS; discovery ✓ | self-registering, public client ok |
@@ -380,6 +398,7 @@ not probeable 31 · not probeable from the audit box 1.
 | parallel-search | open | official | web-search |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
 | parallel-task | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (4 tools listed; the key is checked only at tools/call) (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | paypal | oauth | official | commerce-payments | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| perplexity | api_key | official | web-search |  | key-fixture | 2026-09-25 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | added in Phase 4 (C12); add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | pika | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | pinecone-assistant | tenant | official | databases |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | pipedream | api_key | third_party | automation |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (JSON-RPC error on the initialize reply) |
@@ -426,7 +445,6 @@ not probeable 31 · not probeable from the audit box 1.
 | similarweb | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
 | slack | oauth | official | communication | ★ | oauth-manual | 2026-09-10 live | live PASS with caveats; discovery ✓ | manual client, secret |
 | slite | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
-| smartlead | open | official | marketing-social |  | key-fixture | 2026-09-14 probe | open — key in the URL; probe used a bogus key (answered 404) |  |
 | smartsheet | api_key | official | productivity |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
 | smithery | tenant | third_party | automation |  | tenant | 2026-09-16 probe | not probeable — `{placeholder}` in the URL; origin answers | authorization server found at the origin: https://auth.smithery.ai/{server} |
 | snowflake | tenant | official | databases |  | tenant | — | tenant — not probeable without a real tenant value |  |
@@ -434,13 +452,12 @@ not probeable 31 · not probeable from the audit box 1.
 | sourcegraph | tenant | official | development |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | spacelift | tenant | official | cloud-infrastructure |  | tenant | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | sprout-social | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| square | oauth | official | commerce-payments |  | oauth-manual | 2026-09-14 probe | discovery ✗ — 403 to every unauthenticated request from the audit network (V2) |  |
 | stainless | tenant | official | development |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | stripe | oauth | official | commerce-payments | ★ | oauth-manual | 2026-09-14 live | live PASS (connect + tools); discovery ✓ | self-registering, public client ok |
 | supabase | oauth | official | databases |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
 | superhuman-mail | oauth | official | communication |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | surveymonkey | oauth | official | marketing-social |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
-| synter-ads | api_key | community | marketing-social |  | dead-suspect | 2026-09-16 probe | endpoint ✗ — the URL serves an HTML page, not an MCP endpoint (dead-suspect) |  |
+| synter-ads | api_key | community | marketing-social |  | key-fixture | 2026-09-25 probe | endpoint ✓ — initialize 200 without a key, 401 with a bogus key | URL corrected in Phase 4 (C11: the catalog pointed at the vendor's web page; the server is at the `mcp.` host); add-time check rejects a bogus key (HTTP 401); the setup link redirects to a sign-in page until the user has an account |
 | tavily | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | teamwork | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | tenable | api_key | official | security |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 400 with a bogus key | add-time check rejects a bogus key (HTTP 400) |

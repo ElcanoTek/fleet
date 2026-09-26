@@ -102,7 +102,7 @@ raw-URL add form and every vendor that carries no flag.
   (humanized labels), a live preview of the resulting endpoint, then the
   normal add. `auth: tenant` = your URL + OAuth discovery; `auth: open` with a
   placeholder covers vendors whose key/account id rides in the URL itself
-  (Scrapfly, thirdweb, Smartlead — their hints disclose that the key becomes
+  (Scrapfly, thirdweb — their hints disclose that the key becomes
   part of the connection URL).
 - API-key entries: a write-only key field; the add lands `connected`
   immediately.

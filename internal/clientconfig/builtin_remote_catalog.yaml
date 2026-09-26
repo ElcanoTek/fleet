@@ -58,6 +58,34 @@ servers:
     tags: [testing, browsers, devices, qa, automation]
     provenance: official
     auth: oauth
+  - name: launchdarkly
+    display_name: LaunchDarkly
+    description: >-
+      Manage feature flags, AI configs and observability data in LaunchDarkly:
+      read and change flags, query logs, traces and errors, and inspect
+      dashboards as the signed-in user.
+    url: "https://mcp.launchdarkly.com/mcp/launchdarkly"
+    vendor: Catamorphic Co. (LaunchDarkly)
+    docs_url: "https://launchdarkly.com/docs/home/getting-started/mcp-hosted"
+    repo_url: "https://github.com/launchdarkly/mcp-server"
+    category: development
+    tags: [feature-flags, experimentation, observability, ai-configs]
+    provenance: official
+    auth: oauth
+  - name: circleci
+    display_name: CircleCI
+    description: >-
+      Inspect and act on CircleCI pipelines: find failing builds, read job
+      logs and test results, trigger runs and check config, with the
+      signed-in user's permissions.
+    url: "https://mcp.circleci.com/v1/mcp"
+    vendor: Circle Internet Services, Inc.
+    docs_url: "https://circleci.com/docs/guides/toolkit/circleci-mcp-overview/"
+    repo_url: "https://github.com/CircleCI-Public/mcp-server-circleci"
+    category: development
+    tags: [ci, pipelines, builds, logs, tests]
+    provenance: official
+    auth: oauth
   - name: buildkite
     display_name: Buildkite
     description: >-
@@ -1443,6 +1471,24 @@ servers:
       app.tavily.com and paste it here; it can also be passed in the URL
       as ?tavilyApiKey=YOUR_KEY.
     setup_url: "https://docs.tavily.com/documentation/mcp"
+  - name: perplexity
+    display_name: Perplexity
+    description: >-
+      Search the web and get answers with citations from Perplexity's Sonar
+      models: search, ask, research and reason tools over live web results.
+    url: "https://api.perplexity.ai/mcp"
+    vendor: Perplexity AI, Inc.
+    docs_url: "https://docs.perplexity.ai/docs/getting-started/integrations/mcp-server"
+    repo_url: "https://github.com/perplexityai/modelcontextprotocol"
+    category: web-search
+    tags: [search, research, answers, citations]
+    provenance: official
+    auth: api_key
+    setup_hint: >-
+      Create an API key in your Perplexity account's API settings (the API is
+      billed separately from the consumer app) and paste it here; it is sent
+      as a bearer token.
+    setup_url: "https://docs.perplexity.ai/docs/getting-started/integrations/mcp-server"
   - name: airtable
     display_name: Airtable
     description: >-
@@ -2795,19 +2841,6 @@ servers:
       sign-in or key needed for public catalog data, though some stores
       restrict access.
     setup_url: "https://shopify.dev/docs/apps/build/storefront-mcp/servers/storefront"
-  - name: square
-    display_name: Square
-    description: >-
-      Bridge to the full Square API platform — customers, orders, catalog, and
-      payments — with granular permissions.
-    url: "https://mcp.squareup.com/sse"
-    vendor: Block, Inc.
-    docs_url: "https://developer.squareup.com/docs/mcp"
-    repo_url: "https://github.com/square/square-mcp-server"
-    category: commerce-payments
-    tags: [payments, orders, catalog, pos]
-    provenance: official
-    auth: oauth
   - name: stripe
     display_name: Stripe
     description: >-
@@ -4202,21 +4235,23 @@ servers:
   - name: composio
     display_name: Composio
     description: >-
-      Managed MCP gateway routing to 500+/1000+ app integrations (Gmail, Slack,
-      Notion, etc.) through per-tenant server IDs; requires an x-api-key header
-      and a user_id query param.
-    url: "https://backend.composio.dev/v3/mcp/{SERVER_ID}?user_id={USER_ID}"
+      Route one agent to 500+ app integrations (Gmail, Slack, Notion and
+      more) through a Composio MCP server you configure, with the tools and
+      connected accounts that server exposes.
+    url: "https://backend.composio.dev/v3/mcp/{SERVER_ID}/mcp?user_id={USER_ID}"
     vendor: Composio
     docs_url: "https://docs.composio.dev/mcp/introduction"
     category: automation
     tags: [aggregator, integrations, tool-router, saas]
     provenance: third_party
-    auth: tenant
+    auth: api_key
+    api_key_header: x-api-key
     setup_hint: >-
-      The SERVER_ID is created when you set up an MCP config in the
-      Composio dashboard (or via composio.mcp.create() in the SDK);
-      user_id is any identifier you choose for the end user. Requires your
-      Composio API key as a header.
+      Create an MCP server in the Composio dashboard (or with
+      composio.mcp.create() in the SDK) and copy its SERVER_ID; USER_ID is
+      any identifier you choose for the end user. Paste your Composio API
+      key here — Composio requires it as an x-api-key header on every
+      request.
     setup_url: "https://docs.composio.dev/mcp/introduction"
   - name: make
     display_name: Make
@@ -4550,25 +4585,6 @@ servers:
       plan. The same key as the REST API works.
     setup_url: "https://developers.similarweb.com/docs/similarweb-mcp"
     api_key_header: api-key
-  - name: smartlead
-    display_name: Smartlead
-    description: >-
-      Official Smartlead-hosted MCP for cold outbound; 116+ tools across
-      campaign management, lead lifecycle, mailbox/deliverability diagnostics,
-      analytics, and webhooks. SSE-only transport; the API key is passed as a
-      user_api_key query parameter on the endpoint URL.
-    url: "https://mcp.smartlead.ai/sse?user_api_key={api-key}"
-    vendor: Smartlead
-    docs_url: "https://helpcenter.smartlead.ai/en/articles/300-smartlead-mcp-server"
-    category: marketing-social
-    tags: [cold-email, outbound, deliverability, campaigns, analytics]
-    provenance: official
-    auth: open
-    setup_hint: >-
-      Generate an API key in Smartlead under Settings → API Keys and enter
-      it below — it becomes part of your connection URL, which is how this
-      endpoint authenticates.
-    setup_url: "https://helpcenter.smartlead.ai/en/articles/300-smartlead-mcp-server"
   - name: sprout-social
     display_name: Sprout Social
     description: >-
@@ -4605,7 +4621,7 @@ servers:
       generation; API key passed via X-Synter-Key header. Notable as a hosted
       route to Reddit and TikTok ads, which lack GA official hosted MCPs as of
       July 2026.
-    url: "https://syntermedia.ai/mcp"
+    url: "https://mcp.syntermedia.ai"
     vendor: Synter Media AI
     docs_url: "https://syntermedia.ai/mcp"
     repo_url: "https://github.com/Synter-Media-AI/mcp-server"
@@ -4615,9 +4631,9 @@ servers:
     auth: api_key
     setup_hint: >-
       Create a Synter account, connect your ad platforms via OAuth, then
-      generate an API key from the Synter Developer Portal and paste it
-      here.
-    setup_url: "https://syntermedia.ai/mcp"
+      generate an API key (it starts with syn_) from the Synter Developer
+      Portal and paste it here.
+    setup_url: "https://syntermedia.ai/developer"
     api_key_header: X-Synter-Key
   - name: typeform
     display_name: Typeform

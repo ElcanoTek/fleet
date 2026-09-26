@@ -353,15 +353,19 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 		// A {placeholder} URL is the guided-form signal. auth=tenant means
 		// "your URL + OAuth"; an open entry may also carry a placeholder when
 		// the vendor authenticates via the URL itself (a key or account id as
-		// a query parameter) — but tenant without a placeholder is always a
-		// data bug, as is a placeholder on an oauth/api_key entry (those
-		// one-click flows never render the URL form).
+		// a query parameter); an api_key entry may carry one when the vendor
+		// needs a per-tenant URL AND a key header (Composio) — the guided
+		// form collects the placeholder values and the key together and the
+		// add path probes the filled URL with the key. Tenant without a
+		// placeholder is always a data bug, as is a placeholder on an oauth
+		// entry: that is a tenant entry mislabelled, and the one-click OAuth
+		// flow never renders the URL form.
 		hasPlaceholder := strings.Contains(e.URL, "{")
 		if e.Auth == "tenant" && !hasPlaceholder {
 			t.Errorf("entry %q: auth=tenant requires a {placeholder} URL (url=%q)", e.Name, e.URL)
 		}
-		if hasPlaceholder && e.Auth != "tenant" && e.Auth != "open" {
-			t.Errorf("entry %q: a {placeholder} URL requires auth tenant or open (url=%q auth=%q)", e.Name, e.URL, e.Auth)
+		if hasPlaceholder && e.Auth == "oauth" {
+			t.Errorf("entry %q: a {placeholder} URL on an oauth entry should be auth: tenant (url=%q)", e.Name, e.URL)
 		}
 		if e.Provenance == "community" && strings.TrimSpace(e.RepoURL) == "" {
 			t.Errorf("entry %q: a community-hosted entry must link its source repo so users can vet it", e.Name)
