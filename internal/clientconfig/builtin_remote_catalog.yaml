@@ -4649,7 +4649,6 @@ servers:
     tags: [forms, surveys, contacts, insights, lead-capture]
     provenance: official
     auth: oauth
-
   # ── knowledge-docs ──────────────────────────────────────────────
   - name: aws-knowledge
     display_name: AWS Knowledge

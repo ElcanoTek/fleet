@@ -96,6 +96,9 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   #986 Phase 4 (2026-09-25); a connection row from before that keeps its URL
   and still cannot connect. Re-add either from the vendor's docs when it
   offers streamable HTTP.
+
+## Running with connections
+
 - **Chat.** A connection mounts only when it is enabled in the conversation's
   Tools picker. The web UI pre-enables the default set; an API client must
   send `enabled_optional` naming the connection, or nothing hosted mounts and
