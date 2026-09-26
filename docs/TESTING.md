@@ -692,6 +692,34 @@ export OPENROUTER_API_KEY="…"        # your real key — kept outside the repo
 npm run test:e2e:canary              # = E2E_CANARY=1 playwright test --project=canary
 ```
 
+## Catalog link lint — `scripts/mcp-catalog-lint.sh`
+
+The built-in remote MCP directory sends users to a vendor `docs_url` before
+they connect, and those pages move. `make lint-catalog-links` fetches every
+one (other link fields with `--fields docs_url,setup_url,repo_url`) and
+reports each as **OK** (2xx/3xx), **DEAD** (404, 410, or a host that still
+does not resolve after retries — these fail the run) or **WARN** (401/403/405/
+406/429, 5xx, TLS or timeout errors — reported, not failing, because a
+curl-shaped request being refused is not evidence the page is gone;
+`--strict` promotes them). Links are grouped by host; hosts run in parallel
+while each host's links run one at a time with a delay, and a 429/503 waits
+for `Retry-After` before anything else is asked of that host. It needs only
+bash, awk and curl. It is **not** part of `make lint` and nothing in the PR
+gate calls it: it touches ~250 third-party hosts, and a vendor's bot wall must
+never redden a PR. Exit 0 clean, 1 dead links (or warnings under `--strict`),
+2 a usage or setup error, including a link that produced no result.
+
+```sh
+make lint-catalog-links                                   # every docs_url
+scripts/mcp-catalog-lint.sh --only stripe,linear          # a few entries
+scripts/mcp-catalog-lint.sh --list                        # what would be checked; no network
+scripts/mcp-catalog-lint.sh --report links.tsv            # machine-readable
+```
+
+`scripts/check_mcp_catalog_lint_test.go` drives the script against a local
+server that plays every verdict, and pins that the extraction yields exactly
+one `docs_url` per catalog entry.
+
 ---
 
 ## What to run before opening a PR

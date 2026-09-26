@@ -1,4 +1,4 @@
-.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions fmt tidy sync-guides clean help \
+.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-python lint-migrations lint-actions lint-catalog-links fmt tidy sync-guides clean help \
 	version helm-package govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 # GOTOOLCHAIN=auto — the operator does NOT have to hand-install the pinned Go.
@@ -39,6 +39,7 @@ help:
 	@echo "  make lint-go     golangci-lint only"
 	@echo "  make lint-python ruff check + ruff format --check (skips loudly if ruff is absent)"
 	@echo "  make lint-migrations  reject dangerous DDL in changed migration files (#256)"
+	@echo "  make lint-catalog-links  fetch every docs_url in the built-in MCP catalog; fails on dead links (network)"
 	@echo "  make fleet-bench build the load-testing tool (cmd/fleet-bench, #296)"
 	@echo "  make version     print this tree's date-based build identity (docs/VERSIONING.md)"
 	@echo "  make helm-package package the Helm chart, stamped from the release tags"
@@ -207,6 +208,15 @@ lint-actions:
 		echo "shellcheck not installed — SKIPPING the shell lint (CI still enforces it)."; \
 		echo "  install: dnf install ShellCheck   # or: apt-get install shellcheck"; \
 	fi
+
+# lint-catalog-links: fetch every docs_url in the built-in remote MCP catalog
+# and fail on an obviously dead one (404/410/unresolvable host); bot walls and
+# rate limits are reported, not failed. Hits ~250 vendor hosts, so it is NOT
+# part of `make lint` and nothing in the PR gate calls it — it is meant for a
+# scheduled lane or a deliberate sweep (docs/TESTING.md). Extra fields:
+#   scripts/mcp-catalog-lint.sh --fields docs_url,setup_url,repo_url
+lint-catalog-links:
+	scripts/mcp-catalog-lint.sh
 
 fmt:
 	gofmt -w .
