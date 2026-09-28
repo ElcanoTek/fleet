@@ -278,12 +278,48 @@ connection, both are **validated at add time with a real MCP handshake**
 stored: a rejected key or unreachable URL fails the add with an actionable
 error and the guided form keeps the typed values, while a successful add
 confirms with the observed tool count. Rotation validates the new key the
-same way and keeps the old key on rejection. The check proves the key only
-where the vendor checks it at the handshake: 25 of the 51 built-in api_key
-vendors answer `initialize` and `tools/list` to any bearer and reject a bad
-key at the first tool call instead, so for those a successful add proves
-reachability, not the key (F14 in
-[`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md)).
+same way and keeps the old key on rejection.
+
+The handshake alone is not proof of a key: about half of the built-in
+api_key vendors answer `initialize` and `tools/list` to any bearer and check
+the key only at the first `tools/call` (F14 in
+[`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md)). So for an api_key add or
+rotation the probe does two more things after the handshake.
+
+First, with the real key, **one read-only tool call with no arguments**. It
+picks the tool the server itself marks `readOnlyHint` (never one marked
+`destructiveHint` or `readOnlyHint: false`), else a tool whose name carries
+a read verb such as `list`, `get`, `search` or `describe` as a whole token
+and none of a long list of write verbs or conjunctions (`search_and_replace`
+and `check_in` are not reads), preferring one that requires no arguments;
+the choice is deterministic. Only a **definite** rejection of the credential
+on that call fails the add — an HTTP 401, or an error whose wording names
+the API key, access token or credentials as invalid, missing or expired —
+with the vendor's own message and the tool's name. An HTTP 403 or a
+"forbidden" is not one: a valid key can be denied a single tool by scope,
+and the connection was addable before this check existed. Nor is an
+argument-validation error, which is what a blind call usually provokes.
+
+Second, a **control probe**: the same handshake and the same call with a
+deliberately invalid key, sent exactly as the real one was. The two answers
+are compared. If the vendor told the keys apart — refused the handshake it
+had just accepted, or answered the call with an error where the real key got
+a result or a different error — it checks keys where the probe can see, the
+real key's pass was a real check, and the response says `key_verified:
+true`; the confirmation notice reads "key verified". If both keys got the
+same answer, the add still succeeds (the key may well be right), the
+response says `key_verified: false`, and the notice says the key could not
+be verified now and is checked on the first call — without naming a cause,
+because the probe cannot tell a vendor that validates arguments first from a
+tool that needs no key, a scope denial both keys share, or a control probe
+that got no answer. Each stage runs under its own timeout, and one invalid
+attempt per add or rotation is all the probe ever sends. Measured against
+the live directory on 2026-09-28: of 51 api_key vendors probed with a wrong
+key, 26 refuse it at the handshake, 12 more at the read-only call, and 13
+refuse it nowhere the probe looks; a wrong key at any of the first 38 now
+fails the add, where before this it was stored as "connected". The live
+measurement is `TestAPIKeyProbeRefusesBogusKeyLive` in `internal/remotemcp`,
+gated on `FLEET_CATALOG_LIVE=1`.
 
 ### Self-hosted entries
 

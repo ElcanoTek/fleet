@@ -18,6 +18,7 @@ import {
   provenanceBadge,
   setupLink,
   toolCountSuffix,
+  keyVerifiedSuffix,
   type CatalogThirdParty,
 } from "./catalog";
 
@@ -215,6 +216,14 @@ describe("toolCountSuffix", () => {
     expect(toolCountSuffix(1)).toBe(" — 1 tool available");
     expect(toolCountSuffix(0)).toBe("");
     expect(toolCountSuffix(undefined)).toBe("");
+  });
+});
+
+describe("keyVerifiedSuffix", () => {
+  it("names a verified key, warns when the vendor only checks it on first use, stays silent otherwise", () => {
+    expect(keyVerifiedSuffix(true)).toBe("; key verified");
+    expect(keyVerifiedSuffix(false)).toContain("could not be verified now");
+    expect(keyVerifiedSuffix(undefined)).toBe("");
   });
 });
 

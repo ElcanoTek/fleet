@@ -45,6 +45,24 @@ type addRemoteMCPRequest struct {
 	APIKeyQuery  string `json:"api_key_query,omitempty"`
 }
 
+// probedServerResponse is the add reply for a connection the service
+// validated with a real handshake: the row plus what the probe learned.
+// key_verified is present only for api_key connections (see
+// remotemcp.ProbeReport); open and OAuth adds carry no key to verify.
+type probedServerResponse struct {
+	*store.RemoteMCPServer
+	ToolCount   int   `json:"tool_count"`
+	KeyVerified *bool `json:"key_verified,omitempty"`
+}
+
+func keyVerifiedField(authKind string, report remotemcp.ProbeReport) *bool {
+	if authKind != store.RemoteMCPAuthAPIKey {
+		return nil
+	}
+	v := report.KeyVerified
+	return &v
+}
+
 // remoteMCPServers handles GET (list) and POST (add) on /remote-mcp-servers.
 func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 	if !s.remoteMCPReady(w) {
@@ -89,7 +107,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		server, toolCount, err := s.remoteMCP.AddServer(r.Context(), remotemcp.AddServerInput{
+		server, report, err := s.remoteMCP.AddServer(r.Context(), remotemcp.AddServerInput{
 			Email:        user,
 			Name:         req.Name,
 			Account:      req.Account,
@@ -107,12 +125,11 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		}
 		// Probed adds (open/api_key) validated the connection with a real MCP
 		// handshake; surface the observed tool count so the UI can confirm
-		// "connected — N tools" instead of a bare "added".
-		if toolCount >= 0 {
-			writeJSON(w, struct {
-				*store.RemoteMCPServer
-				ToolCount int `json:"tool_count"`
-			}{server, toolCount})
+		// "connected — N tools" instead of a bare "added", and for api_key
+		// adds whether the key itself was proven (a read-only tool call) or
+		// only the reachability — the card words its confirmation on that.
+		if report.ToolCount >= 0 {
+			writeJSON(w, probedServerResponse{server, report.ToolCount, keyVerifiedField(server.AuthKind, report)})
 			return
 		}
 		writeJSON(w, server)
@@ -176,12 +193,16 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		toolCount, err := s.remoteMCP.SetAPIKey(r.Context(), user, id, req.APIKey)
+		report, err := s.remoteMCP.SetAPIKey(r.Context(), user, id, req.APIKey)
 		if err != nil {
 			s.remoteMCPError(w, err)
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "tool_count": toolCount})
+		writeJSON(w, struct {
+			OK          bool  `json:"ok"`
+			ToolCount   int   `json:"tool_count"`
+			KeyVerified *bool `json:"key_verified,omitempty"`
+		}{true, report.ToolCount, keyVerifiedField(store.RemoteMCPAuthAPIKey, report)})
 	case sub == "default" && r.Method == http.MethodPost:
 		// Make this seat the default among the caller's seats of the same
 		// connection name (#988). Owner-only; idempotent.

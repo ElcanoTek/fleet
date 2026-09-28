@@ -312,6 +312,19 @@ export function toolCountSuffix(count: number | undefined): string {
   return ` — ${count} ${count === 1 ? "tool" : "tools"} available`;
 }
 
+// keyVerifiedSuffix words the api_key confirmation honestly. The add-time
+// probe counts a key as verified only when the vendor answered a deliberately
+// invalid key differently from the real one (at the handshake or at one
+// read-only tool call). When it did not — the vendor validates arguments
+// before it authenticates, the tool needs no key, the key is not allowed that
+// tool, or the control probe simply got no answer — nothing was proven, and
+// the notice says so without guessing at the cause: the key is checked on
+// the user's first real call. Undefined (an open or OAuth add) says nothing.
+export function keyVerifiedSuffix(verified: boolean | undefined): string {
+  if (verified === undefined) return "";
+  return verified ? "; key verified" : "; the key could not be verified now — it is checked on your first call";
+}
+
 // setupLink is the best "how do I connect this?" destination: the explicit
 // setup walkthrough when the entry has one, else the vendor docs.
 export function setupLink(e: CatalogThirdParty): string | null {

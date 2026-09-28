@@ -22,6 +22,7 @@ import {
   provenanceBadge,
   setupLink,
   toolCountSuffix,
+  keyVerifiedSuffix,
   type CatalogBundled,
   type CatalogResponse,
   type CatalogThirdParty,
@@ -1159,10 +1160,12 @@ function ConnectionsPageInner() {
         const data =
           res.status === 204
             ? null
-            : ((await res.json()) as { tool_count?: number });
+            : ((await res.json()) as { tool_count?: number; key_verified?: boolean });
         setKeyOpenFor(null);
         setKeyValue("");
-        setNotice(`API key updated${toolCountSuffix(data?.tool_count)}.`);
+        setNotice(
+          `API key updated${toolCountSuffix(data?.tool_count)}${keyVerifiedSuffix(data?.key_verified)}.`,
+        );
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -1252,7 +1255,11 @@ function ConnectionsPageInner() {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
-        const data = (await res.json()) as { id?: string; tool_count?: number };
+        const data = (await res.json()) as {
+          id?: string;
+          tool_count?: number;
+          key_verified?: boolean;
+        };
         const shown = `${group.name} (${label})`;
         setAddSeatFor(null);
         setAddSeatLabel("");
@@ -1261,7 +1268,9 @@ function ConnectionsPageInner() {
           setNotice(`${shown} added. Click Connect to sign in.`);
           if (data.id) setConnectPromptFor({ id: data.id, name: shown });
         } else {
-          setNotice(`${shown} connected${toolCountSuffix(data.tool_count)}.`);
+          setNotice(
+            `${shown} connected${toolCountSuffix(data.tool_count)}${keyVerifiedSuffix(data.key_verified)}.`,
+          );
         }
         refresh();
       })
@@ -1332,12 +1341,18 @@ function ConnectionsPageInner() {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
-        const data = (await res.json()) as { id?: string; tool_count?: number };
+        const data = (await res.json()) as {
+          id?: string;
+          tool_count?: number;
+          key_verified?: boolean;
+        };
         const shown = overrides?.account
           ? `${entry.display_name} (${overrides.account})`
           : entry.display_name;
         if (entry.auth === "open" || entry.auth === "api_key") {
-          setNotice(`${shown} connected${toolCountSuffix(data.tool_count)}.`);
+          setNotice(
+            `${shown} connected${toolCountSuffix(data.tool_count)}${keyVerifiedSuffix(data.key_verified)}.`,
+          );
         } else {
           setNotice(`${shown} added. Click Connect to sign in.`);
           // OAuth adds land in login_required — offer the sign-in right here

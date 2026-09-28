@@ -112,6 +112,23 @@ type Tool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"inputSchema"`
+	// Annotations are the server's own hints about the tool's behaviour
+	// (MCP 2025-03-26 §tools.annotations). They are advisory — a server may
+	// omit or misstate them — and fleet uses them only where a wrong hint
+	// costs nothing: the add-time key probe (internal/remotemcp) prefers a
+	// tool the server marks read-only for its one verification call. Nil
+	// when the server sent none.
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+}
+
+// ToolAnnotations mirrors the MCP tool annotation object. Every hint is a
+// pointer so "absent" and "false" stay distinguishable.
+type ToolAnnotations struct {
+	Title           string `json:"title,omitempty"`
+	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
 }
 
 // ToolResult represents the result of a tool call
