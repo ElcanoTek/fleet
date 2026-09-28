@@ -12,13 +12,19 @@
 #
 # Verdicts, per link:
 #   OK    — final status 2xx/3xx after following up to 5 redirects.
-#   DEAD  — 404 or 410, or the hostname still does not resolve after the
-#           retries. These FAIL the run.
+#   DEAD  — 404 or 410 at the URL itself, or the hostname still does not
+#           resolve after the retries. These FAIL the run.
 #   WARN  — anything else: 401/403/405/406/429 (documentation sites often sit
 #           behind a bot wall that rejects a non-browser client), 5xx, TLS or
-#           timeout errors. Reported, not failing, because a curl-shaped
-#           request being refused is not evidence the page is gone. Pass
-#           --strict to make WARN fail too.
+#           timeout errors — and a 404/410 reached only AFTER a redirect. That
+#           last one is the vendor routing the request somewhere else (a
+#           localised copy chosen by the caller's region, say) and that
+#           somewhere being missing; the first nightly run met exactly this
+#           when Razorpay sent the US runner to a /docs/us/ variant of a page
+#           that exists everywhere else. It is worth a look, not a red run.
+#           Reported, not failing, because a curl-shaped request being refused
+#           or rerouted is not evidence the page is gone. Pass --strict to
+#           make WARN fail too.
 #
 # Rate-limit aware: links are grouped by hostname; hosts run in parallel
 # (--concurrency) but each host's links run one at a time with --delay seconds
@@ -201,9 +207,9 @@ fetch() {
   printf '%s%s%s%s%s%s%s\n' "${code:-000}" "$US" "$rc" "$US" "${ra:-}" "$US" "${eff:-$url}"
 }
 
-# classify HTTP_CODE CURL_EXIT → "OK|WARN|DEAD<US>note"
+# classify HTTP_CODE CURL_EXIT URL FINAL_URL → "OK|WARN|DEAD<US>note"
 classify() {
-  local code="$1" rc="$2"
+  local code="$1" rc="$2" url="$3" eff="$4"
   if (( rc != 0 )); then
     case "$rc" in
       6) printf 'DEAD%scould not resolve host (after %s retries)\n' "$US" "$RETRIES" ;;
@@ -216,7 +222,13 @@ classify() {
   fi
   case "$code" in
     2*|3*) printf 'OK%s\n' "$US" ;;
-    404|410) printf 'DEAD%sHTTP %s\n' "$US" "$code" ;;
+    404|410)
+      if [[ "${eff%/}" != "${url%/}" ]]; then
+        printf 'WARN%sHTTP %s after a redirect to %s (the vendor routes this URL elsewhere — a localised copy may be missing; the original may still be fine from a browser)\n' "$US" "$code" "$eff"
+      else
+        printf 'DEAD%sHTTP %s\n' "$US" "$code"
+      fi
+      ;;
     401|403|405|406|429) printf 'WARN%sHTTP %s (bot wall or rate limit; re-check in a browser)\n' "$US" "$code" ;;
     5*) printf 'WARN%sHTTP %s (server error)\n' "$US" "$code" ;;
     *) printf 'WARN%sHTTP %s\n' "$US" "$code" ;;
@@ -269,7 +281,7 @@ check_url() {
     fi
     break
   done
-  IFS="$US" read -r verdict note < <(classify "$code" "$rc")
+  IFS="$US" read -r verdict note < <(classify "$code" "$rc" "$url" "$eff")
   line="$(printf '%s%s%s%s%s%s%s%s%s%s%s%s%s' "$verdict" "$US" "$code" "$US" "$name" "$US" "$field" "$US" "$url" "$US" "$eff" "$US" "$note")"
   echo "$line" >> "$RESULTS"
 }

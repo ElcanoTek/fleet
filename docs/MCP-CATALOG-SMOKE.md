@@ -39,13 +39,19 @@ tries HEAD before GET, follows up to five redirects, and retries a 429/503
 honouring `Retry-After`. Verdicts:
 
 - **OK** — final status 2xx/3xx.
-- **DEAD** — 404, 410, or the hostname does not resolve. These fail the run,
-  because they are the one thing a documentation link cannot legitimately do.
+- **DEAD** — 404 or 410 at the URL itself, or a hostname that still does
+  not resolve after retries. These fail the run, because they are the one
+  thing a documentation link cannot legitimately do.
 - **WARN** — everything else: 401/403/405/406/429 (help-centre platforms
-  routinely refuse a non-browser client), 5xx, TLS or timeout errors.
-  Reported, not failing: a curl-shaped request being turned away is not
-  evidence the page is gone. `--strict` (the `strict_links` dispatch input)
-  turns warnings into failures for a deliberate sweep.
+  routinely refuse a non-browser client), 5xx, TLS or timeout errors, and a
+  404/410 reached only after a redirect. Reported, not failing: a curl-shaped
+  request being turned away is not evidence the page is gone, and a redirect
+  that lands on a missing page is the vendor's routing, not the link. The
+  first two scheduled runs (2026-09-27 and 28) went red on exactly that:
+  Razorpay sends the US-hosted runner to a `/docs/us/` copy of its MCP page
+  that does not exist, while the page itself answers 200 from everywhere
+  else. `--strict` (the `strict_links` dispatch input) turns warnings into
+  failures for a deliberate sweep.
 
 The first full runs (2026-09-16 and 2026-09-25) over all 288 `docs_url`
 links: 275 OK, 12 WARN, 1 DEAD, identical both times. The warnings were nine Zendesk/Salesforce-style help centres and

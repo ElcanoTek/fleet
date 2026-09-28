@@ -701,11 +701,12 @@ npm run test:e2e:canary              # = E2E_CANARY=1 playwright test --project=
 The built-in remote MCP directory sends users to a vendor `docs_url` before
 they connect, and those pages move. `make lint-catalog-links` fetches every
 one (other link fields with `--fields docs_url,setup_url,repo_url`) and
-reports each as **OK** (2xx/3xx), **DEAD** (404, 410, or a host that still
-does not resolve after retries — these fail the run) or **WARN** (401/403/405/
-406/429, 5xx, TLS or timeout errors — reported, not failing, because a
-curl-shaped request being refused is not evidence the page is gone;
-`--strict` promotes them). Links are grouped by host; hosts run in parallel
+reports each as **OK** (2xx/3xx), **DEAD** (404 or 410 at the URL itself, or
+a host that still does not resolve after retries — these fail the run) or
+**WARN** (401/403/405/406/429, 5xx, TLS or timeout errors, and a 404 reached
+only after a redirect — reported, not failing, because a curl-shaped request
+being refused or rerouted is not evidence the page is gone; `--strict`
+promotes them). Links are grouped by host; hosts run in parallel
 while each host's links run one at a time with a delay, and a 429/503 waits
 for `Retry-After` before anything else is asked of that host. It needs only
 bash, awk and curl. It is **not** part of `make lint` and nothing in the PR
