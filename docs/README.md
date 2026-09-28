@@ -205,6 +205,7 @@ above fails otherwise.
 - [`AUX-MODEL-CALL-METERING.md`](AUX-MODEL-CALL-METERING.md) — Auxiliary model-call metering (#1118)
 - [`BACKUP_RESTORE.md`](BACKUP_RESTORE.md) — Backup & restore (disaster recovery)
 - [`BENTO-PDF-EXPORT.md`](BENTO-PDF-EXPORT.md) — Bento PDF export — what shipped, and what it is not
+- [`BENTO-STARTERS.md`](BENTO-STARTERS.md) — Bundle-provided default Bento themes and layouts, with custom and blank-deck overrides
 - [`BRANDING.md`](BRANDING.md) — White-labeling fleet from a bundle
 - [`BROWSERBASE.md`](BROWSERBASE.md) — Browserbase: hosted browser sessions with a human handoff (#987)
 - [`BUILDING-ON-FLEET.md`](BUILDING-ON-FLEET.md) — Building on fleet: the API as your automation substrate

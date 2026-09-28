@@ -188,6 +188,91 @@ func runHelper(t *testing.T, helper, dir string, args ...string) (string, string
 	return stdout.String(), stderr.String(), err
 }
 
+func TestBentoBundleStarter(t *testing.T) {
+	dir := t.TempDir()
+	helper := bentoHelper(t)
+	if _, stderr, err := runHelper(t, helper, dir, "new", "seed.bento.html"); err != nil {
+		t.Fatalf("seed: %v\n%s", err, stderr)
+	}
+	output, _, err := runHelper(t, helper, dir, "get", "seed.bento.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(output), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["docId"] = "starter-identity"
+	doc["theme"].(map[string]any)["accent"] = "#123456"
+	doc["assets"] = map[string]any{"notice": "data:text/plain,Example%20notice"}
+	bundle := filepath.Join(dir, "skills")
+	starter := filepath.Join(bundle, "bento-theme", "document.json")
+	if err := os.MkdirAll(filepath.Dir(starter), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, starter, doc)
+	mustWrite(t, filepath.Join(bundle, "bento-theme", "SKILL.md"), "---\nname: bento-theme\ndescription: Test starter\n---\n")
+	merged, err := materializeMergedSkills(bundle, true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper = filepath.Join(merged, bentoHelperRel)
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		accent string
+	}{
+		{"default", nil, "#123456"},
+		{"blank", []string{"--blank"}, "#FF9E8A"},
+		{"explicit", []string{"--starter", starter}, "#123456"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deck := tc.name + ".bento.html"
+			args := append([]string{"new", deck, "--title", "Review <Q4> & Co"}, tc.args...)
+			if _, stderr, err := runHelper(t, helper, dir, args...); err != nil {
+				t.Fatalf("new: %v\n%s", err, stderr)
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, deck))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(docBlock(t, raw), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got["docId"] != nil || got["title"] != "Review <Q4> & Co" || got["theme"].(map[string]any)["accent"] != tc.accent {
+				t.Fatalf("wrong starter/title/identity: %v", got)
+			}
+			first := got["slides"].([]any)[0].(map[string]any)["elements"].([]any)[0].(map[string]any)
+			if first["html"] != "Review &lt;Q4&gt; &amp; Co" {
+				t.Fatalf("title markup: %v", first["html"])
+			}
+			if tc.name != "blank" && got["assets"].(map[string]any)["notice"] != "data:text/plain,Example%20notice" {
+				t.Fatal("starter assets lost")
+			}
+			tpl, err := os.ReadFile(filepath.Join(merged, bentoTemplateRel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(raw, []byte(bentoGuardID)) || !bytes.Equal(suffixAfterBlock(t, raw), suffixAfterBlock(t, tpl)) {
+				t.Fatal("guard or app shell changed")
+			}
+			if _, stderr, err := runHelper(t, helper, dir, "validate", deck); err != nil {
+				t.Fatalf("validate: %v\n%s", err, stderr)
+			}
+		})
+	}
+	for _, bad := range []string{"{", `{"format":"bento/slides"}`, `{"collab":{}}`} {
+		mustWrite(t, filepath.Join(merged, "bento-theme", "document.json"), bad)
+		if _, _, err := runHelper(t, helper, dir, "new", "bad.bento.html"); err == nil {
+			t.Fatal("bad starter accepted")
+		}
+		if _, err := os.Stat(filepath.Join(dir, "bad.bento.html")); !os.IsNotExist(err) {
+			t.Fatal("failed new left an output behind")
+		}
+	}
+}
+
 // The core contract: new -> get -> edit -> set -> get round-trips the document,
 // preserves docId, and leaves every byte of the app shell untouched.
 func TestBentoDocHelperRoundTrip(t *testing.T) {

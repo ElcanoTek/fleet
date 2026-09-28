@@ -29,9 +29,17 @@ Create it **in the workspace root, not a subdirectory**, and name it after the
 topic using only letters, digits, `.`, `_` and `-` — a space or a `#` in the name
 breaks the download link even though the file exists. `new` refuses anything else.
 
-It arrives with one title slide, so it is already a valid deck you can open. The
-bundled app is read-only — `new` copies it, so never try to write into
+By default, `new` uses `skills/bento-theme/document.json` when your bundle supplies
+that companion skill; read its `SKILL.md` for theme guidance. Otherwise it starts
+with one generic title slide. The bundled app is read-only — never write into
 `skills/bento-slides/`.
+
+A starter is a starting point, not a restriction. Adapt, add, or remove layouts
+and theme freely to meet the user's request. Replace illustrative starter data
+before delivery. `new --blank` bypasses the bundle theme; `new --starter custom.json`
+uses any valid Bento document JSON instead. `--title "Q4 Review"` sets the deck
+title and the first slide's text element with id `title`, if present. Starters
+must not contain collaboration settings; a fresh deck never inherits their identity.
 
 ## Step 2 — read the format reference
 

@@ -29,9 +29,9 @@ Usage:
 
 import argparse
 import contextlib
+import html
 import json
 import os
-import shutil
 import sys
 import tempfile
 
@@ -126,6 +126,16 @@ TEMPLATE = os.path.join(
     os.pardir,
     "templates",
     "Bento_Slides.bento.html",
+)
+
+# A companion bundle skill supplies data without replacing this helper or the
+# pinned app shell. The same relative tree is mounted by both sandbox backends.
+STARTER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    os.pardir,
+    os.pardir,
+    "bento-theme",
+    "document.json",
 )
 
 # Names of the collab fields whose VALUES are credentials (private keys and an
@@ -596,26 +606,17 @@ def cmd_new(args):
             "(and note that re-delivering a revision under a NEW filename is "
             "required anyway — workspace downloads are cached for 24h)." % path
         )
-    parent = os.path.dirname(os.path.abspath(path))
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
-
     if not os.path.isfile(TEMPLATE):
         raise DeckError(
             "the bundled Bento template is missing (looked for %s). The skills "
             "tree may not be mounted in this run." % TEMPLATE
         )
-    shutil.copyfile(TEMPLATE, path)
-
-    # Verify the copy before building on it: the source is a 689KB file on a
-    # read-only bind mount that is re-materialized on the host, so a truncated
-    # or missing copy is worth catching here rather than three steps later.
-    raw = _read(path)
+    # Validate everything before creating the output, including a bundle's
+    # starter. A malformed starter must not leave a bare, unguarded app behind.
+    raw = _read(TEMPLATE)
     if raw.count(OPEN_TAG) != 1:
-        os.unlink(path)
         raise DeckError(
-            "the copied template does not contain exactly one document block; "
-            "the copy or the bundled template is corrupt"
+            "the bundled template does not contain exactly one document block"
         )
 
     # Plant the no-update-check guard before the document is spliced in, so the
@@ -645,7 +646,7 @@ def cmd_new(args):
                         "h": 160,
                         "rotation": 0,
                         "opacity": 1,
-                        "html": title,
+                        "html": html.escape(title),
                         "fontSize": 88,
                         "fontFamily": DEFAULT_THEME["fontFamily"],
                         "fontWeight": 800,
@@ -661,9 +662,26 @@ def cmd_new(args):
         # open. A tool must never invent one.
         "modified": "1970-01-01T00:00:00.000Z",
     }
+    starter = args.starter
+    if not starter and not args.blank and os.path.exists(STARTER):
+        starter = STARTER
+    if starter:
+        doc = _decode_block(_read(starter))
+        if "collab" in doc:
+            raise DeckError("a starter must not contain a collab block")
+        validate_doc(doc)
+        # A starter is reusable content, never an existing document's identity.
+        doc.pop("docId", None)
+        doc["modified"] = "1970-01-01T00:00:00.000Z"
+        doc["title"] = title
+        for element in doc["slides"][0].get("elements", []):
+            if element.get("type") == "text" and element.get("id") == "title":
+                element["html"] = html.escape(title)
     validate_doc(doc)
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
     _splice(path, raw, doc)
-    print("created %s — one title slide, ready to author" % path)
+    print("created %s — %d slide(s), ready to author" % (path, len(doc["slides"])))
     print("offline-only deck: no update check, no live collaboration, no network")
     print("next: bento_doc.py get %s -o doc.json" % path)
     print(
@@ -980,6 +998,13 @@ def main(argv=None):
     p_new.add_argument("deck", help="path to create, e.g. decks/Q4_Review.bento.html")
     p_new.add_argument(
         "--title", help="deck title (default: derived from the filename)"
+    )
+    source = p_new.add_mutually_exclusive_group()
+    source.add_argument(
+        "--starter", help="use this document JSON instead of the bundle default"
+    )
+    source.add_argument(
+        "--blank", action="store_true", help="start with a generic title slide"
     )
     p_new.set_defaults(func=cmd_new)
 

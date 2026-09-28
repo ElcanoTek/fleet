@@ -271,6 +271,11 @@ own when a task fits, or that you can invoke directly by typing `/` at the very
 start of a message and choosing from the list. The platform ships a small pack
 of general-purpose skills, and your deployment can add its own.
 
+For Bento presentations, your deployment can supply a default branded starter.
+Ask for a different theme or a blank deck whenever you prefer; the starter's
+layouts and styling are editable. Download the `.bento.html` file and open it in
+a browser to view and edit it offline.
+
 ## 4. Getting data in
 
 Four ways data reaches a conversation. Most days you will use the first two.
