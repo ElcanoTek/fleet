@@ -66,6 +66,9 @@ func TestMCPCatalogLintVerdicts(t *testing.T) {
 	mux.HandleFunc("/ok", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/moved", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ok", http.StatusFound) })
 	mux.HandleFunc("/gone", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	// A geo-style reroute: the URL exists, the vendor sends this caller to a
+	// localised copy, and the copy is missing (Razorpay, first nightly run).
+	mux.HandleFunc("/regional", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/us/regional", http.StatusFound) })
 	mux.HandleFunc("/wall", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
 	mux.HandleFunc("/headno", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead {
@@ -100,6 +103,7 @@ func TestMCPCatalogLintVerdicts(t *testing.T) {
 		{"stale-setup", hostA + "/ok", hostA + "/gone"},
 		{"commented", hostB + "/ok", ""},
 		{"unresolvable", "http://nowhere.invalid/docs", ""},
+		{"rerouted", hostA + "/regional", ""},
 	}
 	catalog := filepath.Join(t.TempDir(), "catalog.yaml")
 	var b strings.Builder
@@ -145,7 +149,7 @@ func TestMCPCatalogLintVerdicts(t *testing.T) {
 			t.Fatalf("exit %d, want 1 (dead links); output:\n%s", code, out)
 		}
 		for _, want := range []string{
-			"checking 9 link(s) across 3 host(s)",
+			"checking 10 link(s) across 3 host(s)",
 			"OK   200  alive  docs_url",
 			"OK   200  moved  docs_url",
 			"OK   200  headless  docs_url",
@@ -154,7 +158,8 @@ func TestMCPCatalogLintVerdicts(t *testing.T) {
 			"WARN 403  walled  docs_url  " + hostA + "/wall  — HTTP 403 (bot wall or rate limit; re-check in a browser)",
 			"DEAD 404  vanished  docs_url  " + hostB + "/gone  — HTTP 404",
 			"DEAD 000  unresolvable  docs_url  http://nowhere.invalid/docs  — could not resolve host (after 2 retries)",
-			"links: 9  ok: 6  warn: 1  dead: 2",
+			"WARN 404  rerouted  docs_url  " + hostA + "/regional  — HTTP 404 after a redirect to " + hostA + "/us/regional",
+			"links: 10  ok: 6  warn: 2  dead: 2",
 		} {
 			if !strings.Contains(out, want) {
 				t.Errorf("output lacks %q:\n%s", want, out)
@@ -194,7 +199,7 @@ func TestMCPCatalogLintVerdicts(t *testing.T) {
 		for _, want := range []string{
 			"DEAD 404  stale-setup  setup_url",
 			"OK   200  vanished  setup_url",
-			"links: 11  ok: 7  warn: 1  dead: 3",
+			"links: 12  ok: 7  warn: 2  dead: 3",
 		} {
 			if !strings.Contains(out, want) {
 				t.Errorf("output lacks %q:\n%s", want, out)
