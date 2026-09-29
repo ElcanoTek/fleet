@@ -96,7 +96,10 @@ var ErrReservedWebhookSecret = fmt.Errorf("%w: the webhook signing secret must d
 func (s *Service) ReserveSigningSecret(secret string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.reserved = strings.TrimSpace(secret)
+	// Byte for byte: a key differing only in whitespace signs differently,
+	// so it is no collision. (A panel-entered secret is stored trimmed, and
+	// Save compares that trimmed form.)
+	s.reserved = secret
 }
 
 // NewService builds the service. env is the notify.Load() result captured at

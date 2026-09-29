@@ -1721,8 +1721,11 @@ func Load(envFile string) (*Config, error) {
 		LogArchiveAfterDays:     lp.getenvFleetInt("LOG_ARCHIVE_AFTER_DAYS", 0),
 		LogArchiveEncryptionKey: logArchiveEncryptionKey(),
 
-		AccountEventsURL:    strings.TrimSpace(getenvFleet("ACCOUNT_EVENTS_URL")),
-		AccountEventsSecret: strings.TrimSpace(getenvFleet("ACCOUNT_EVENTS_SECRET")),
+		AccountEventsURL: strings.TrimSpace(getenvFleet("ACCOUNT_EVENTS_URL")),
+		// The signing key is used byte for byte, like FLEET_WEBHOOK_SECRET: the
+		// env-file parser preserves quoted whitespace, and trimming here would
+		// sign under a different key than the receiver holds.
+		AccountEventsSecret: getenvFleet("ACCOUNT_EVENTS_SECRET"),
 
 		PublicBaseURL:              strings.TrimRight(strings.TrimSpace(getenvFleet("PUBLIC_BASE_URL")), "/"),
 		MCPOAuthEncryptionKey:      mcpOAuthEncryptionKey(),
@@ -1881,7 +1884,7 @@ func Load(envFile string) (*Config, error) {
 
 	// The account-events feed fails closed at boot (and so in validate-config,
 	// which reports a Load error): never publish membership changes unsigned.
-	if err := cfg.validateAccountEvents(strings.TrimSpace(os.Getenv("FLEET_WEBHOOK_SECRET"))); err != nil {
+	if err := cfg.validateAccountEvents(os.Getenv("FLEET_WEBHOOK_SECRET")); err != nil {
 		return nil, err
 	}
 
@@ -2014,7 +2017,7 @@ func (c *Config) validateAccountEvents(webhookSecret string) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_URL must be an absolute http(s) URL")
 	}
-	if c.AccountEventsSecret == "" {
+	if strings.TrimSpace(c.AccountEventsSecret) == "" {
 		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_URL is set but FLEET_ACCOUNT_EVENTS_SECRET is not: account events are always signed")
 	}
 	if c.AccountEventsSecret == webhookSecret {

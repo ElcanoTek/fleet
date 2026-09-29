@@ -1852,13 +1852,23 @@ func seedBootstrapAdmins(schedStorage *storage.Storage, events *accountevents.Re
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, email := range admins {
-		change := events.Begin(ctx, email)
-		if err := schedStorage.EnsureAdminUser(ctx, email); err != nil {
-			return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
+		if err := seedBootstrapAdmin(ctx, schedStorage, events, email); err != nil {
+			return err
 		}
-		change.CommitLogged(ctx, store.AccountEventSourceSystem, "")
 	}
 	log.Printf("orchestrator bootstrap admin(s) ensured: %d", len(admins))
+	return nil
+}
+
+// seedBootstrapAdmin seeds one admin. The feed's commit is deferred so it runs
+// on every exit: EnsureAdminUser can commit the role and then fail enabling the
+// row, and a boot that exits there without publishing would leave the change
+// unreported for good — the next boot sees the role already set, no change.
+func seedBootstrapAdmin(ctx context.Context, schedStorage *storage.Storage, events *accountevents.Recorder, email string) error {
+	defer events.Begin(ctx, email).CommitLogged(context.WithoutCancel(ctx), store.AccountEventSourceSystem, "")
+	if err := schedStorage.EnsureAdminUser(ctx, email); err != nil {
+		return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
+	}
 	return nil
 }
 

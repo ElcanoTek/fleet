@@ -313,3 +313,21 @@ func TestImportPublishesCreatedAccounts(t *testing.T) {
 		t.Fatalf("events = %+v, want one cli event for the imported Chat account", evs)
 	}
 }
+
+// TestEnvShowMasksReceiverURLPaths: a receiver URL often carries its own
+// credential in the path or query under a name no secret heuristic matches;
+// `fleet env show` prints scheme and host only.
+func TestEnvShowMasksReceiverURLPaths(t *testing.T) {
+	for key, in := range map[string]string{
+		"FLEET_ACCOUNT_EVENTS_URL": "https://auth.example.com/apps/fleet/events?token=sekrit",
+		"FLEET_WEBHOOK_URL":        "https://hooks.example.com/services/T0/B0/sekrit",
+	} {
+		got := redactEnvValue(key, in)
+		if strings.Contains(got, "sekrit") || !strings.HasPrefix(got, "https://") || !strings.Contains(got, ".example.com") {
+			t.Errorf("%s shown as %q", key, got)
+		}
+	}
+	if got := redactEnvValue("FLEET_ACCOUNT_EVENTS_URL", "https://auth.example.com"); got != "https://auth.example.com" {
+		t.Errorf("a bare origin shown as %q", got)
+	}
+}

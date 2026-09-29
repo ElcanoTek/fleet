@@ -20,7 +20,9 @@ then restart `fleet.service`:
 | `FLEET_ACCOUNT_EVENTS_URL` | Where events are POSTed. Unset = the feed is off. Must be an absolute `http`/`https` URL. |
 | `FLEET_ACCOUNT_EVENTS_SECRET` | HMAC-SHA256 signing key shared with the receiver. **Required** when the URL is set: boot and `fleet validate-config` refuse a URL without it, so events are never sent unsigned. It must also **differ from the task webhook's secret**: the two feeds use the same signing scheme and the signed string names neither, so under one key a task-webhook body would verify at the account-events receiver. Boot refuses a shared `FLEET_WEBHOOK_SECRET`; the Settings → Admin → Notifications panel refuses to save a shared secret, and a secret saved there before the feed was configured switches the task webhook off (logged, and shown disabled in the panel) rather than sign with the feed's key. |
 
-The URL is operator-trusted, the same trust class as `FLEET_WEBHOOK_URL`:
+`fleet env show` prints this URL (and `FLEET_WEBHOOK_URL`) as scheme and host
+only, since a receiver credential often rides in its path or query. The URL is
+operator-trusted, the same trust class as `FLEET_WEBHOOK_URL`:
 there is no SSRF guard, and a loopback receiver (for example an identity
 provider on the same box) is allowed. The secret is held host-side and is
 never logged, returned by an API or shipped into the sandbox. These two
@@ -211,6 +213,14 @@ it is. This happens only with the feed on
 - The feed reports Chat accounts only; Ops-only identities and team
   assignments are not part of it.
 - Delivery is at-least-once. Receivers must dedupe on `id`.
+- Under two overlapping writes to one account, the **state** is always right
+  and the last event carries the final state, but `source` and `actor` are
+  best effort: the per-account lock orders the read-back and queuing, not the
+  writes themselves, so the later of the two commits can report the final
+  state under its own name (and a change the identity provider made can then
+  arrive as `admin_ui`). Serializing the writes as well would hold a database
+  connection across each admin request. A receiver that also follows rule 3
+  below (skip a report matching what it already stores) is unaffected.
 - There is no UI for the feed; configuration is env-only and needs a restart.
 - Fleet does not read anything back from the receiver. Whether a receiver acts
   on an event (Central Auth ignores accounts it has not granted Fleet) is the

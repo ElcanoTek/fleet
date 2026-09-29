@@ -52,3 +52,20 @@ func TestLoadRefusesUnsignedAccountEvents(t *testing.T) {
 		t.Fatalf("cfg = %q / %q", cfg.AccountEventsURL, cfg.AccountEventsSecret)
 	}
 }
+
+// TestAccountEventsSecretKeepsItsBytes: the HMAC key is used exactly as
+// loaded, like FLEET_WEBHOOK_SECRET; only emptiness is judged trimmed.
+func TestAccountEventsSecretKeepsItsBytes(t *testing.T) {
+	t.Setenv("FLEET_ACCOUNT_EVENTS_URL", "https://auth.example.com/apps/fleet/events")
+	t.Setenv("FLEET_ACCOUNT_EVENTS_SECRET", " key ")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AccountEventsSecret != " key " {
+		t.Fatalf("secret = %q, want it byte for byte", cfg.AccountEventsSecret)
+	}
+	if err := (&Config{AccountEventsURL: "https://a.example.com/e", AccountEventsSecret: "   "}).validateAccountEvents(""); err == nil {
+		t.Fatal("an all-whitespace secret was accepted")
+	}
+}
