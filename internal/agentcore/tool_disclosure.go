@@ -260,13 +260,13 @@ func (t *deferredToolCall) Run(ctx context.Context, tc fantasy.ToolCall) (fantas
 		return fantasy.NewTextErrorResponse("tool_call: " + err.Error()), nil
 	}
 	// Refuse a call that omits an argument the tool's own schema marks
-	// required, and NAME the missing ones. The vendor would refuse it anyway,
-	// but its answer reaches the model only as the broker's masked
-	// "credential-owner call failed" (the real text is a host-log line), which
-	// reads as a broken credential rather than a fixable call — Stripe's
-	// `stripe_context`/`livemode` 422s sent a model off to tell the user to
-	// reconnect (#1006). Checked here, before the broker and before any
-	// policy or audit record, so the correction costs one model step.
+	// required, and NAME the missing ones. The vendor would refuse it anyway
+	// — and since F8 its 4xx answer does reach the model through the broker
+	// (mcpbroker.describeCallError) — but that costs a vendor round trip and
+	// a model step; Stripe's `stripe_context`/`livemode` 422s, back when the
+	// broker masked them as "credential-owner call failed", sent a model off
+	// to tell the user to reconnect (#1006). Checked here, before the broker
+	// and before any policy or audit record, so the correction is free.
 	info := tool.Info()
 	if missing := missingRequiredArguments(info.Required, info.Parameters, args); len(missing) > 0 {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf(

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Composer } from "./Composer";
 
 // Focus + Escape behavior of the composer's model picker.
@@ -35,6 +35,19 @@ function Host({
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const personaPickerRef = useRef<HTMLDivElement | null>(null);
   const mcpPickerRef = useRef<HTMLDivElement | null>(null);
+  // Mirrors ChatExperience's outside-click close for the tools popover
+  // (same ref check), so a test can prove a control INSIDE the popover keeps
+  // it open and a mousedown outside closes it.
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (mcpPickerRef.current?.contains(target)) return;
+      setMcpPickerOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragCounterRef = useRef(0);
   const activeConversationIdRef = useRef<string | null>(null);
@@ -90,6 +103,7 @@ function Host({
     isLoadingMcpServers: false,
     loadMcpServerCatalog: noop,
     toggleMcpServer: noop,
+    setAllMcpServers: noop,
     setMcpServerAccount: noop,
     activeConversationId: null,
     messages: [],
@@ -192,6 +206,95 @@ describe("Composer — tools popover seat picker", () => {
     // The row is still the toggle it always was.
     fireEvent.click(screen.getByRole("button", { name: /Decks and docs/ }));
     expect(toggleMcpServer).toHaveBeenCalledWith(null, "gamma");
+  });
+});
+
+// "All on" / "All off" in the tools popover: one control for the whole
+// optional list, never touching always-on rows, and never offered when there
+// is nothing optional to flip. The visible text IS the accessible name
+// (WCAG 2.5.3): no aria-label restates it.
+describe("Composer — all connectors on / off", () => {
+  const ROWS = [
+    {
+      name: "email",
+      display_name: "Email",
+      description: "",
+      tools: [],
+      tool_count: 3,
+      enabled: true,
+      always_on: true,
+    },
+    { name: "gamma", description: "", tools: [], tool_count: 2, enabled: true },
+    { name: "xandr", description: "", tools: [], tool_count: 5, enabled: false },
+  ];
+  const allOn = () => screen.getByRole("button", { name: "All on" });
+  const allOff = () => screen.getByRole("button", { name: "All off" });
+
+  it("offers both actions, shows the count, and calls setAllMcpServers with the direction", () => {
+    const setAllMcpServers = vi.fn();
+    render(<Host overrides={{ mcpServers: ROWS, setAllMcpServers }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    expect(screen.getByTestId("chat-mcp-all-actions")).toHaveTextContent("1 of 2 on");
+    expect(allOn()).not.toHaveAttribute("aria-disabled");
+    expect(allOff()).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(allOn());
+    expect(setAllMcpServers).toHaveBeenCalledWith(null, true);
+    fireEvent.click(allOff());
+    expect(setAllMcpServers).toHaveBeenCalledWith(null, false);
+    expect(setAllMcpServers).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the action that would change nothing aria-disabled and ignores its click", () => {
+    const setAllMcpServers = vi.fn();
+    const everyOn = ROWS.map((r) => (r.always_on ? r : { ...r, enabled: true }));
+    const { unmount } = render(<Host overrides={{ mcpServers: everyOn, setAllMcpServers }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    expect(screen.getByTestId("chat-mcp-all-actions")).toHaveTextContent("2 of 2 on");
+    expect(allOn()).toHaveAttribute("aria-disabled", "true");
+    expect(allOff()).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(allOn());
+    expect(setAllMcpServers).not.toHaveBeenCalled();
+    unmount();
+
+    const everyOff = ROWS.map((r) => (r.always_on ? r : { ...r, enabled: false }));
+    render(<Host overrides={{ mcpServers: everyOff, setAllMcpServers }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    expect(screen.getByTestId("chat-mcp-all-actions")).toHaveTextContent("0 of 2 on");
+    expect(allOn()).not.toHaveAttribute("aria-disabled");
+    expect(allOff()).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(allOff());
+    expect(setAllMcpServers).not.toHaveBeenCalled();
+  });
+
+  it("keeps a no-op action focusable so Escape still closes the popover and returns focus", () => {
+    const everyOn = ROWS.map((r) => (r.always_on ? r : { ...r, enabled: true }));
+    render(<Host overrides={{ mcpServers: everyOn }} />);
+    const trigger = screen.getByRole("button", { name: "Connectors" });
+    fireEvent.click(trigger);
+    const button = allOn();
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    button.focus();
+    expect(document.activeElement).toBe(button);
+    fireEvent.keyDown(button, { key: "Escape" });
+    expect(screen.queryByTestId("chat-mcp-all-actions")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("stays open on a mousedown inside the bar and closes on one outside", () => {
+    render(<Host overrides={{ mcpServers: ROWS }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    fireEvent.mouseDown(allOff());
+    expect(screen.getByTestId("chat-mcp-all-actions")).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId("chat-mcp-all-actions")).not.toBeInTheDocument();
+  });
+
+  it("is not offered when every row is always-on", () => {
+    render(<Host overrides={{ mcpServers: ROWS.filter((r) => r.always_on) }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    expect(screen.getByTestId("chat-mcp-always-on-email")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-mcp-all-actions")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "All on" })).not.toBeInTheDocument();
   });
 });
 

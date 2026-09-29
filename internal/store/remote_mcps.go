@@ -66,7 +66,7 @@ var (
 	ErrRemoteMCPNotFound = errors.New("remote mcp server not found")
 	// ErrRemoteMCPNeedsReauth is returned by EnsureFreshToken when the stored
 	// refresh token is dead (the connection must be re-authorized by the user).
-	ErrRemoteMCPNeedsReauth = errors.New("remote mcp server needs re-authorization")
+	ErrRemoteMCPNeedsReauth error = &remoteMCPNeedsReauthError{}
 	// ErrRemoteMCPAccountInvalid is returned for a seat label that does not
 	// canonicalize to the public account shape (see CanonicalRemoteMCPAccount).
 	ErrRemoteMCPAccountInvalid = errors.New("invalid remote mcp account label")
@@ -76,6 +76,19 @@ var (
 	// ErrOAuthFlowNotFound is returned when a callback state is unknown/expired/used.
 	ErrOAuthFlowNotFound = errors.New("oauth flow state not found or expired")
 )
+
+// remoteMCPNeedsReauthError is ErrRemoteMCPNeedsReauth's concrete type. It is
+// a single shared value, so errors.Is comparisons keep working, and it carries
+// NeedsReauth so a package that cannot import store (internal/agent, which
+// store itself imports) can still recognise the class through errors.As on
+// the interface — the hosted overlay uses it to say "reconnect" only for a
+// login that actually needs it (F10).
+type remoteMCPNeedsReauthError struct{}
+
+func (*remoteMCPNeedsReauthError) Error() string { return "remote mcp server needs re-authorization" }
+
+// NeedsReauth marks the error as a re-authorization requirement.
+func (*remoteMCPNeedsReauthError) NeedsReauth() bool { return true }
 
 // RemoteMCPServer is a user's hosted MCP connection. It carries the OAuth
 // discovery + DCR result but NOT the secrets (those decrypt only via the

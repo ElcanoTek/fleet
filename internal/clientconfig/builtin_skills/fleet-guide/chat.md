@@ -312,8 +312,11 @@ Center.
 | Selection | The **Connectors** picker in the composer | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; the assistant cannot reach what is not selected. |
 | Binding | The task form in the Operations Center | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
 
-Some connectors are marked **Always on**: they are part of the deployment and
-cannot be switched off per conversation. Each connector is also badged as
+The picker also offers **All on** and **All off**, which switch every
+optional connector in the conversation at once; the count beside them says
+how many are on. Some connectors are marked **Always on**: they are part of
+the deployment and cannot be switched off per conversation, and the two
+buttons leave them alone. Each connector is also badged as
 **Bundled**, shipped and operated with the deployment, or as a third-party
 service you have signed into yourself, so you always know whose system you are
 reaching. A **Beta** badge means it works but still has rough edges. A

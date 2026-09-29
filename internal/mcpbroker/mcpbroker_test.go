@@ -56,7 +56,7 @@ type fakeScopedBroker struct {
 	scopeMu        sync.Mutex
 	scopeID        string
 	scopeTools     []ToolDescriptor
-	scopeSkipped   []string
+	scopeSkipped   []SkippedServer
 	openSpec       ScopeSpec
 	lastCallScope  string
 	closedScopes   []string
@@ -100,7 +100,7 @@ func (b *fakeScopedBroker) Reload(ctx context.Context) (*ReloadResult, error) {
 	return b.reloadResult, b.reloadErr
 }
 
-func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string, []ToolDescriptor, []string, error) {
+func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string, []ToolDescriptor, []SkippedServer, error) {
 	if b.panicOpen != nil {
 		panic(b.panicOpen)
 	}
@@ -113,7 +113,7 @@ func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string,
 	if b.openRelease != nil {
 		<-b.openRelease
 	}
-	return b.scopeID, b.scopeTools, append([]string(nil), b.scopeSkipped...), b.openErr
+	return b.scopeID, b.scopeTools, append([]SkippedServer(nil), b.scopeSkipped...), b.openErr
 }
 
 func (b *fakeScopedBroker) CallMCPInScope(ctx context.Context, scopeID, server, tool string, args map[string]any) (string, bool, error) {
@@ -746,7 +746,7 @@ func TestClientServer_RemoteScopeMetadata(t *testing.T) {
 		fakeBroker:   &fakeBroker{},
 		scopeID:      "remote-scope-1",
 		scopeTools:   []ToolDescriptor{{Server: "github", Tool: "search"}},
-		scopeSkipped: []string{"linear"},
+		scopeSkipped: []SkippedServer{{Name: "linear", Reason: "needs_reauth"}},
 	}
 	client := loopback(t, fake)
 	spec := ScopeSpec{Remote: &RemoteScopeSpec{
@@ -784,6 +784,11 @@ func TestClientServer_RemoteScopeMetadata(t *testing.T) {
 	skipped[0] = "mutated"
 	if got := scope.Skipped(); len(got) != 1 || got[0] != "linear" {
 		t.Fatalf("Skipped returned mutable internal slice: %v", got)
+	}
+	// The reason class rides the wire with the name (F10): the parent's
+	// prompt can only say "reconnect" for the right connector if it knows.
+	if reasons := scope.SkipReasons(); reasons["linear"] != "needs_reauth" {
+		t.Fatalf("SkipReasons = %v, want linear → needs_reauth", reasons)
 	}
 }
 
@@ -1049,7 +1054,7 @@ func TestClientServer_ScopeOpenErrorDoesNotCrossCredentialValues(t *testing.T) {
 		fakeBroker:   &fakeBroker{},
 		scopeID:      "partial-scope",
 		scopeTools:   []ToolDescriptor{{Server: "partial", Tool: "secret"}},
-		scopeSkipped: []string{"partial-secret"},
+		scopeSkipped: []SkippedServer{{Name: "partial-secret"}},
 		openErr:      errors.New(secret),
 	})
 	scope, err := client.OpenScope(context.Background(), ScopeSpec{})

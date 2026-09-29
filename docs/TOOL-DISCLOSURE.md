@@ -29,8 +29,10 @@ tunable live from Settings → Admin → Feature settings, see
   - `tool_call {name, arguments}` — dispatches to the real tool's `Run`, after
     refusing — with the missing names spelled out — a call that omits an
     argument the tool's schema marks required. The vendor would refuse it
-    too, but its answer reaches the model only as the broker's masked
-    "credential-owner call failed", which reads as a broken credential rather
+    too — and since F8 its 4xx answer reaches the model through the broker
+    — but that costs a vendor round trip; refusing here is free, and before
+    F8 the vendor's answer arrived only as the broker's masked
+    "credential-owner call failed", which read as a broken credential rather
     than a fixable call. `required` means *present*: a required argument sent
     as JSON `null` is refused only when the property's own schema does not
     admit null. The schema's keywords apply together, as JSON Schema says:

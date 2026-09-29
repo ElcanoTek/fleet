@@ -20,10 +20,12 @@ package remotemcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -187,6 +189,31 @@ func (s *Service) SetSecretObserver(fn SecretObserver) {
 	s.observeSecret = fn
 }
 
+// secretSpellings returns the raw secret and every wire spelling a vendor
+// could echo it back in — URL query-escaped (mcp.WithQueryParam encodes with
+// url.Values, so a space is "+"), the "%20" variant, path-escaped, and
+// JSON-string-escaped — so the literal redactors catch an echoed key in a
+// vendor's 4xx body (which since F8 can reach the model through the broker)
+// as well as in a log line. Spellings identical to the raw value are not
+// repeated.
+func secretSpellings(v string) []string {
+	out := []string{v}
+	seen := map[string]bool{v: true}
+	add := func(x string) {
+		if x != "" && !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	add(url.QueryEscape(v))
+	add(strings.ReplaceAll(url.QueryEscape(v), "+", "%20"))
+	add(url.PathEscape(v))
+	if b, err := json.Marshal(v); err == nil && len(b) >= 2 {
+		add(string(b[1 : len(b)-1]))
+	}
+	return out
+}
+
 // noteSecrets registers non-rotating credentials for the process lifetime: a
 // static api_key, a client secret or registration token acquired before its
 // server row exists. No-op when no observer is registered.
@@ -217,7 +244,7 @@ func (s *Service) observe(scope string, rotated bool, values ...string) {
 	kept := make([]string, 0, len(values))
 	for _, v := range values {
 		if v != "" {
-			kept = append(kept, v)
+			kept = append(kept, secretSpellings(v)...)
 		}
 	}
 	// A rotation with nothing to register still has to be reported: it is what
