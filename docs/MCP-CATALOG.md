@@ -355,7 +355,15 @@ For bundle authors:
 - Endpoint URLs rot as vendors move; the shipped list is a snapshot maintained
   in fleet releases, with `remote_mcp_catalog_hidden` as the between-release
   kill switch. A stale URL fails at add/connect time with the normal discovery
-  error — nothing silent. The repository (not the running product) checks the
+  error — nothing silent. A connection saved before a correction keeps the
+  URL and auth it was added with (the directory is a snapshot, not the
+  connection's owner, and a login is bound to what it was made against):
+  the connection list reports the difference as `catalog_drift` and the
+  Connections page badges the row **Directory changed**, naming what the
+  directory lists now; the user removes and re-adds the connection to take
+  it. The comparison is by name against the directory as shown, so an entry
+  the operator hides or a release removes is not compared, and a server the
+  user typed by hand under a directory name is compared like any other. The repository (not the running product) checks the
   snapshot once a day: a dead-link lint over every `docs_url` and a
   credential-less handshake against every `open` entry
   ([`MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md)); OAuth entries are verified
