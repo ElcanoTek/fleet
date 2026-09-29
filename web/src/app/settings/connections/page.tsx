@@ -86,6 +86,12 @@ type RemoteServer = {
   is_default: boolean;
   created_at: number;
   updated_at: number;
+  // What the shipped directory entry of this name now says differently from
+  // the row (F13): the row keeps the URL and auth it was added with, so a
+  // corrected entry is surfaced here and taken by removing and re-adding the
+  // connection. Absent when the row matches its entry, or no directory entry
+  // has its name — the join is the name, not where the row came from.
+  catalog_drift?: { url?: string; auth?: string; key_sent_as?: string };
 };
 
 // A server another user shared with you: usable in your chats and scheduled
@@ -121,6 +127,25 @@ const STATUS_VARIANTS: Record<string, BadgeVariant> = {
 
 function statusVariant(status: string): BadgeVariant {
   return STATUS_VARIANTS[status] ?? "neutral";
+}
+
+const AUTH_LABEL: Record<string, string> = {
+  oauth: "OAuth",
+  api_key: "API key",
+  open: "no",
+};
+
+// driftSummary words a row's catalog_drift for the row's sub line: what the
+// directory entry of this name lists now, and that re-adding is how to take
+// it. The join is the name, not provenance — a server added by hand under a
+// directory name is compared too — so the sentence says what the directory
+// lists, never where the row came from.
+function driftSummary(d: NonNullable<RemoteServer["catalog_drift"]>): string {
+  const parts: string[] = [];
+  if (d.url) parts.push(`the address ${d.url}`);
+  if (d.auth) parts.push(`${AUTH_LABEL[d.auth] ?? d.auth} sign-in`);
+  if (d.key_sent_as) parts.push(`the key sent in ${d.key_sent_as}`);
+  return `The directory entry of this name now lists ${parts.join(", ")}. Remove this connection and add it again from the directory to take the change, or keep it as it is if you set it up by hand.`;
 }
 
 const PROVENANCE_VARIANTS: Record<string, BadgeVariant> = {
@@ -1775,9 +1800,22 @@ function ConnectionsPageInner() {
                               <ConnBadge variant={statusVariant(s.status)}>
                                 {STATUS_LABEL[s.status] ?? s.status}
                               </ConnBadge>
+                              {s.catalog_drift ? (
+                                <ConnBadge variant="warn">Directory changed</ConnBadge>
+                              ) : null}
                             </span>
                           }
-                          sub={s.url}
+                          sub={
+                            s.catalog_drift ? (
+                              <>
+                                {s.url}
+                                <br />
+                                {driftSummary(s.catalog_drift)}
+                              </>
+                            ) : (
+                              s.url
+                            )
+                          }
                           actions={
                             <>
                               <span className="mr-[0.25rem]">

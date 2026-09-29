@@ -322,7 +322,14 @@ the deployment and cannot be switched off per conversation, and the two
 buttons leave them alone. Each connector is also badged as
 **Bundled**, shipped and operated with the deployment, or as a third-party
 service you have signed into yourself, so you always know whose system you are
-reaching. A **Beta** badge means it works but still has rough edges.
+reaching. A **Beta** badge means it works but still has rough edges. A
+**Directory changed** badge on a third-party connection in **Settings →
+Connections** means the directory entry of that name now lists a different
+address, sign-in method or key placement from the connection; the row says
+what differs. A connection keeps what it was added with, so remove it and add
+it again from the directory to take the change — an existing sign-in cannot be
+carried over. A connection you set up by hand under a directory name shows the
+badge too, and can be kept as it is.
 
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before

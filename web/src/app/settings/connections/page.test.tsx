@@ -414,6 +414,57 @@ describe("ConnectionsPage multi-login seats", () => {
     expect(within(group).getByText(/Chats use the default login/)).toBeInTheDocument();
   });
 
+  it("badges a row whose directory entry changed and says what to do", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, {
+        ...EMPTY_LIST,
+        servers: [
+          {
+            ...GAMMA_PRIMARY,
+            catalog_drift: { url: "https://mcp.gamma.example.com/mcp", auth: "api_key" },
+          },
+        ],
+      }),
+    );
+    visit("");
+    const group = await screen.findByTestId("remote-group-gamma");
+    expect(within(group).getByText("Directory changed")).toBeInTheDocument();
+    expect(
+      within(group).getByText(
+        /The directory entry of this name now lists the address https:\/\/mcp\.gamma\.example\.com\/mcp, API key sign-in\. Remove this connection and add it again from the directory to take the change, or keep it as it is if you set it up by hand\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("words a key-placement-only change on its own", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, {
+        ...EMPTY_LIST,
+        servers: [{ ...GAMMA_PRIMARY, catalog_drift: { key_sent_as: "the X-Api-Key header" } }],
+      }),
+    );
+    visit("");
+    const group = await screen.findByTestId("remote-group-gamma");
+    expect(within(group).getByText("Directory changed")).toBeInTheDocument();
+    expect(
+      within(group).getByText(
+        /The directory entry of this name now lists the key sent in the X-Api-Key header\. Remove/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no directory badge on a row that matches its entry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, { ...EMPTY_LIST, servers: [GAMMA_PRIMARY] }),
+    );
+    visit("");
+    const group = await screen.findByTestId("remote-group-gamma");
+    expect(within(group).queryByText("Directory changed")).toBeNull();
+  });
+
   it("does not offer Set default on a single-seat group", async () => {
     vi.stubGlobal(
       "fetch",

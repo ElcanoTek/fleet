@@ -20,7 +20,12 @@ deferred.
    `resource_metadata` pointer. Uptime Robot names it only on a POST, so the
    probe tries both.
 2. **Fetch** the RFC 9728 Protected Resource Metadata from the advertised
-   location, else from the well-known candidates.
+   location, else from the well-known candidates. A pointer that names the
+   server's own host over plain `http://` is raised to `https://` before the
+   fetch (Bugsnag spells its pointer that way and answers the http URL with
+   a redirect fleet's client refuses to follow — #1006 finding F12). The
+   upgrade is narrow: the server must be https, the pointer plain http on
+   the same host; a pointer to another host is fetched as spelled.
 3. **Pick** the authorization server from `authorization_servers`.
 4. **Fetch** its RFC 8414 / OIDC document and verify PKCE S256.
 
