@@ -384,6 +384,13 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_WEBHOOK_SECRET":        true,
 	"FLEET_PUBLIC_URL":            true,
 
+	// ── account-events feed (docs/ACCOUNT-EVENTS.md) ──
+	// Signed membership/role change events for an identity provider or audit
+	// sink. OFF unless the URL is set; the secret is then required and is held
+	// host-side, never logged or shipped into the sandbox.
+	"FLEET_ACCOUNT_EVENTS_URL":    true,
+	"FLEET_ACCOUNT_EVENTS_SECRET": true,
+
 	// ── browser Web Push notifications (#292) ──
 	// OFF unless all three FLEET_VAPID_* vars are set (generate them with
 	// `fleet generate-vapid-keys`). The private key is a SECRET held host-side
@@ -1026,6 +1033,14 @@ type Config struct {
 	// the base64 FLEET_LOG_ARCHIVE_ENCRYPTION_KEY) used to encrypt archived log
 	// payloads. nil/empty = archives are gzip-only. Held host-side; never logged.
 	LogArchiveEncryptionKey []byte
+
+	// ── account-events feed (docs/ACCOUNT-EVENTS.md) ──
+	// AccountEventsURL (FLEET_ACCOUNT_EVENTS_URL) is where signed account events
+	// are POSTed; empty = the feed is off and nothing is queued.
+	// AccountEventsSecret (FLEET_ACCOUNT_EVENTS_SECRET) is the HMAC signing key,
+	// required whenever the URL is set. Held host-side; never logged.
+	AccountEventsURL    string
+	AccountEventsSecret string
 
 	// ── remote (hosted) MCP servers + per-user OAuth (#443) ──
 	// PublicBaseURL is the externally-reachable origin of the web app, e.g.
@@ -1706,6 +1721,9 @@ func Load(envFile string) (*Config, error) {
 		LogArchiveAfterDays:     lp.getenvFleetInt("LOG_ARCHIVE_AFTER_DAYS", 0),
 		LogArchiveEncryptionKey: logArchiveEncryptionKey(),
 
+		AccountEventsURL:    strings.TrimSpace(getenvFleet("ACCOUNT_EVENTS_URL")),
+		AccountEventsSecret: strings.TrimSpace(getenvFleet("ACCOUNT_EVENTS_SECRET")),
+
 		PublicBaseURL:              strings.TrimRight(strings.TrimSpace(getenvFleet("PUBLIC_BASE_URL")), "/"),
 		MCPOAuthEncryptionKey:      mcpOAuthEncryptionKey(),
 		RemoteMCPAllowInsecureHTTP: lp.getenvFleetBool("REMOTE_MCP_ALLOW_INSECURE_HTTP", false),
@@ -1861,6 +1879,12 @@ func Load(envFile string) (*Config, error) {
 		return nil, fmt.Errorf("FLEET_DEFAULT_NETWORK_MODE must be one of open|allowlisted|lockdown, got %q", cfg.DefaultNetworkMode)
 	}
 
+	// The account-events feed fails closed at boot (and so in validate-config,
+	// which reports a Load error): never publish membership changes unsigned.
+	if err := cfg.validateAccountEvents(); err != nil {
+		return nil, err
+	}
+
 	// Retired knobs (ADR-0063): the Rampart PII engine is gone, so these two do
 	// nothing any more. Say so once at boot instead of silently ignoring an
 	// operator's env file — PII redaction always runs the built-in pattern engine.
@@ -1969,6 +1993,23 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateTLS(); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateAccountEvents fails closed on the account-events feed: a URL without
+// a signing secret would publish membership changes unsigned, which a receiver
+// acting on them must never accept.
+func (c *Config) validateAccountEvents() error {
+	if c.AccountEventsURL == "" {
+		return nil
+	}
+	u, err := url.Parse(c.AccountEventsURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_URL must be an absolute http(s) URL")
+	}
+	if c.AccountEventsSecret == "" {
+		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_URL is set but FLEET_ACCOUNT_EVENTS_SECRET is not: account events are always signed")
 	}
 	return nil
 }

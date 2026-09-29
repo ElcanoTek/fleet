@@ -88,8 +88,12 @@ func chatUserRole(argv []string) int {
 		return errf(1, "open chat DB: %v", err)
 	}
 	defer st.Close()
+	ctx := context.Background()
+	events, closeEvents := openAccountEvents(st, nil, "")
+	defer closeEvents()
+	defer commitCLIAccountChange(ctx, events.Begin(ctx, email))
 
-	u, err := st.SetUserRoleTeam(context.Background(), email, rolePtr, teamPtr)
+	u, err := st.SetUserRoleTeam(ctx, email, rolePtr, teamPtr)
 	if err != nil {
 		return errf(5, "%v", err)
 	}
@@ -138,6 +142,9 @@ func chatUserUpsert(argv []string, create bool) int {
 	ctx := context.Background()
 
 	if create {
+		events, closeEvents := openAccountEvents(st, nil, "")
+		defer closeEvents()
+		defer commitCLIAccountChange(ctx, events.Begin(ctx, email))
 		if _, err := st.CreateUser(ctx, email, password); err != nil {
 			return errf(5, "%v", err)
 		}
@@ -170,7 +177,11 @@ func chatUserDel(argv []string) int {
 		return errf(1, "open chat DB: %v", err)
 	}
 	defer st.Close()
-	if err := st.DeleteUser(context.Background(), email); err != nil {
+	ctx := context.Background()
+	events, closeEvents := openAccountEvents(st, nil, "")
+	defer closeEvents()
+	defer commitCLIAccountChange(ctx, events.Begin(ctx, email))
+	if err := st.DeleteUser(ctx, email); err != nil {
 		return errf(5, "%v", err)
 	}
 	fmt.Printf("deleted chat user %s\n", email)

@@ -47,6 +47,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
+	"github.com/ElcanoTek/fleet/internal/accountevents"
 	"github.com/ElcanoTek/fleet/internal/admincli"
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -583,7 +584,8 @@ func run() error {
 	// Bootstrap operators (#458): provision/promote the configured emails as
 	// orchestrator admins so they reach the Operations Center seamlessly via the
 	// shared chat session cookie. See seedBootstrapAdmins for the rationale.
-	if err := seedBootstrapAdmins(schedStorage); err != nil {
+	accountEvents := accountEventsRecorder(cfg, chatStore, schedStorage)
+	if err := seedBootstrapAdmins(schedStorage, accountEvents); err != nil {
 		return err
 	}
 
@@ -672,6 +674,8 @@ func run() error {
 		// admin alongside chat-role changes) — same composition `fleet admin
 		// add` does, triggered over HTTP.
 		httpapi.WithOpsAdmins(opsAdminsService{st: schedStorage}),
+		// Signed account-events feed (docs/ACCOUNT-EVENTS.md); nil = off.
+		httpapi.WithAccountEvents(accountEvents),
 		// Knowledge-graph extraction (#523): the seam is always wired; whether
 		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
 		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
@@ -1136,6 +1140,7 @@ func run() error {
 	// retention sweeps, attachment + temp-upload files, orphan workspaces,
 	// stale git worktrees). See startMaintenanceLoop.
 	startMaintenanceLoop(ctx, cfg, h, chatSrv, chatStore)
+	startAccountEventsDelivery(ctx, cfg, chatStore)
 
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
@@ -1830,7 +1835,11 @@ func defaultTaskTimezone() string {
 // clear "ask an admin" page, never silent admin), preserving the deliberate
 // chat/orchestrator membership separation (ADR-0005). Extracted from run() to
 // keep it within the cyclomatic budget.
-func seedBootstrapAdmins(schedStorage *storage.Storage) error {
+//
+// A seed that changes a Chat account's effective Ops role is published on the
+// account-events feed (source "system"); re-asserting an existing grant on
+// every boot is not a change and publishes nothing.
+func seedBootstrapAdmins(schedStorage *storage.Storage, events *accountevents.Recorder) error {
 	admins := bootstrapAdmins()
 	if len(admins) == 0 {
 		return nil
@@ -1838,9 +1847,11 @@ func seedBootstrapAdmins(schedStorage *storage.Storage) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, email := range admins {
+		change := events.Begin(ctx, email)
 		if err := schedStorage.EnsureAdminUser(ctx, email); err != nil {
 			return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
 		}
+		change.CommitLogged(ctx, store.AccountEventSourceSystem, "")
 	}
 	log.Printf("orchestrator bootstrap admin(s) ensured: %d", len(admins))
 	return nil

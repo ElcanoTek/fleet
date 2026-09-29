@@ -86,6 +86,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	defer s.beginAccountChange(r, email, store.AccountEventSourceAdminUI, userFromCtx(r.Context()))()
 	u, err := s.store.CreateUser(r.Context(), email, body.Password)
 	if err != nil {
 		switch {
@@ -130,6 +131,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, "refusing to delete your own account", http.StatusBadRequest)
 		return
 	}
+	defer s.beginAccountChange(r, email, store.AccountEventSourceAdminUI, actor)()
 	if err := s.store.DeleteUser(r.Context(), email); err != nil {
 		if errors.Is(err, store.ErrUserNotFound) {
 			http.Error(w, "user not found", http.StatusNotFound)

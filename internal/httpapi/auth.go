@@ -391,6 +391,9 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 		Version: body.Version, Allowed: allowed, EventID: body.EventID,
 		ChatRole: chatRole, OpsRole: opsRole, IssuedAt: body.IssuedAt,
 	}
+	// A change Fleet applies on the identity provider's word is still published
+	// (audit sinks want it), tagged so the provider itself can ignore its echo.
+	defer s.beginAccountChange(r, desired.Email, store.AccountEventSourceIdentityProvider, "")()
 	applied, _, err := accessStore.ApplyExternalAccess(r.Context(), desired)
 	if err != nil {
 		http.Error(w, "external access update failed", http.StatusInternalServerError)
