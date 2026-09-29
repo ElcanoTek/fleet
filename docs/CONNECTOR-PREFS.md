@@ -6,7 +6,7 @@ Three layers, each with a different lifetime:
 | Layer | Surface | Lifetime | Question it answers |
 | --- | --- | --- | --- |
 | **Availability** | Settings → Connections | durable, per-user | "does this connector exist in my universe, and which credential account is my default?" |
-| **Selection** | chat Tools picker | per conversation | "which of my available connectors are live in *this* chat?" |
+| **Selection** | chat Tools picker | per conversation | "which of my available connectors are live in *this* chat?" The picker's **All on** / **All off** flip every optional row of this layer at once (always-on rows untouched; one full-state POST once the conversation exists, otherwise the flip rides on the first `/chat` body like a single toggle); they never write preferences. |
 | **Binding** | Operations Center task modal | pinned per task | "which connectors + account seats does this automation use, forever?" |
 
 Chat is **supervised** — a human watches every turn — so it follows the user's

@@ -128,6 +128,16 @@ const POP_ROW_SELECTED =
   "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]";
 const POP_TITLE = "text-[0.82rem] font-medium text-[var(--color-text-primary)]";
 const POP_DESC = "text-[0.7rem] text-[var(--color-text-muted)]";
+// A small pill action inside a popover (the tools popover's "All on" /
+// "All off"): the design's pill outline at the pop-desc type size, so it
+// reads as a control for the list rather than as one of its rows. When the
+// action would change nothing it is marked aria-disabled and dimmed, NOT
+// natively disabled: the button that was just activated is the one that
+// becomes a no-op, and a natively disabled element drops focus, which would
+// break the popover's Escape-closes / focus-returns-to-trigger contract for
+// a keyboard user mid-gesture.
+const POP_ACTION_BTN =
+  "rounded-[var(--radius-pill)] border border-[var(--color-border)] px-[0.55rem] py-[0.1rem] text-[0.68rem] font-medium text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 
 // The design's .mini-switch: the visual toggle knob inside a tools pop-row.
 // Purely decorative — the row <button> carries the aria-pressed state.
@@ -245,6 +255,12 @@ export type ComposerProps = {
     conversationId: string | null,
     name: string,
   ) => void | Promise<void>;
+  // "All on" / "All off": every optional connector in this conversation at
+  // once; always-on rows are never part of it.
+  setAllMcpServers: (
+    conversationId: string | null,
+    enabled: boolean,
+  ) => void | Promise<void>;
   // Credential-seat override for one server in this conversation (#988);
   // "" = back to the user's default seat.
   setMcpServerAccount: (
@@ -318,6 +334,7 @@ export function Composer({
   isLoadingMcpServers,
   loadMcpServerCatalog,
   toggleMcpServer,
+  setAllMcpServers,
   setMcpServerAccount,
   activeConversationId,
   messages,
@@ -1191,6 +1208,49 @@ export function Composer({
                 })()}
                 {mcpPickerOpen && !isStreaming ? (
                   <div className={COMPOSER_POP}>
+                    {(() => {
+                      // "All on" / "All off" act on the optional rows only,
+                      // so they are offered only when there is at least one
+                      // and each is disabled when it would change nothing —
+                      // the count between them says which state the list
+                      // is in without reading every switch.
+                      if (isLoadingMcpServers) return null;
+                      const optional = mcpServers.filter((s) => !s.always_on);
+                      if (optional.length === 0) return null;
+                      const on = optional.filter((s) => s.enabled).length;
+                      return (
+                        <div
+                          className="flex items-center gap-[0.3rem] px-[0.6rem] pb-[0.3rem] pt-[0.15rem]"
+                          data-testid="chat-mcp-all-actions"
+                        >
+                          <span className={`${POP_DESC} mr-auto tabular-nums`}>
+                            {on} of {optional.length} on
+                          </span>
+                          <button
+                            type="button"
+                            className={POP_ACTION_BTN}
+                            aria-disabled={on === optional.length || undefined}
+                            onClick={() => {
+                              if (on === optional.length) return;
+                              void setAllMcpServers(activeConversationId, true);
+                            }}
+                          >
+                            All on
+                          </button>
+                          <button
+                            type="button"
+                            className={POP_ACTION_BTN}
+                            aria-disabled={on === 0 || undefined}
+                            onClick={() => {
+                              if (on === 0) return;
+                              void setAllMcpServers(activeConversationId, false);
+                            }}
+                          >
+                            All off
+                          </button>
+                        </div>
+                      );
+                    })()}
                     {/* Optional rows remain per-conversation controls;
                               always-on rows are locked live-status indicators. */}
                     <div className="grid max-h-80 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto">
