@@ -97,7 +97,7 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | F10 | a connect failure is announced to the model as "needs re-authorization" | open, not started |
 | F11 | fleet has no legacy HTTP+SSE transport; Square and Smartlead document SSE-only endpoints (Smartlead's `/sse` confirmed live and SSE-only on 2026-09-25; Square answers 403 to everything from the audit network) | **resolved in Phase 4 — both entries removed** from the shipped directory: a listing fleet cannot connect to is advertising, not onboarding. Re-add either when it offers streamable HTTP |
 | C1–C9 | seven catalog data errors (Expensify, Cartesia, Octagon, Globalping, Zerodha Kite (its `login` tool session is per-turn only; no scheduled-run auth), Sage Intacct, OpenRouter); Square, Smartlead untouched | landed in #1501 (superseded #1495) |
-| F12 | Bugsnag's 401 points at its metadata over plain `http://`; the vendor redirects to https, fleet's client refuses redirects, and since #1485 a failed advertised pointer is fatal (it fell through to the well-known locations before) | **fixed** — a pointer that names the server's own host over plain `http://` is raised to `https://` before the fetch (`upgradeAdvertisedPointer`; the server must be https, the pointer plain http on the same host; another host is fetched as spelled). Verified live 2026-09-29: Bugsnag adds and lands in `login_required` with `oauth.bugsnag.com` as the issuer and a registered client |
+| F12 | Bugsnag's 401 points at its metadata over plain `http://`; the vendor redirects to https, fleet's client refuses redirects, and since #1485 a failed advertised pointer is fatal (it fell through to the well-known locations before) | **fixed** — a pointer that names the server's own host over plain `http://` is raised to `https://` before the fetch (`upgradeAdvertisedPointer`; the server must be https, the pointer plain http on the same host; another host is fetched as spelled). Verified by a credential-less probe on the rig 2026-09-29 (no account login yet, so the row stays a `probe`): Bugsnag adds and lands in `login_required` with `oauth.bugsnag.com` as the issuer and a registered client |
 | F13 | Saved connections retain their original URL and auth across catalog corrections until removed and re-added. | Open — reconciliation of saved rows to updated definitions is deferred, requiring a manual re-add for Cartesia, Octagon, Globalping, and after Phase 4 for Synter Ads (new URL) and Composio (new auth shape). |
 | V1 | 25 entries publish no scopes anywhere | live add needed per vendor |
 | V2 | GoCardless answers 403 to every unauthenticated request from the audit network (so did Square, which left the directory in Phase 4 — F11); Adobe and Wrike did so on 2026-09-14 and passed discovery on 2026-09-25 | re-probe from another network before calling it broken |
@@ -198,8 +198,8 @@ while public DNS is fine). A row is not re-verified by later releases.
 Counts — can CI hit?: yes 12 · key-fixture 54 · oauth-manual 183 · tenant 40 ·
 dead-suspect 0. Auth: oauth 183 · tenant 39 · api_key 53 · open 14.
 Provenance: official 281 · third_party 5 · community 3. Featured: 20. Last
-verified: live 12 · probe 2026-09-14 183 · probe 2026-09-16 50 · probe
-2026-09-25 10 · not probeable 34. These totals are derived from the table
+verified: live 11 · probe 2026-09-14 183 · probe 2026-09-16 50 · probe
+2026-09-25 10 · probe 2026-09-29 1 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
 | entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
@@ -238,7 +238,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | browserstack | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | buffer | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | bugcrowd | api_key | official | security |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
-| bugsnag | oauth | official | observability |  | oauth-manual | 2026-09-29 live | discovery ✓ — the 401 names the metadata over plain http; raised to https (F12); registration ✓ | self-registering, confidential client (`client_secret_post`); scopes `api openid profile`; login not yet exercised |
+| bugsnag | oauth | official | observability |  | oauth-manual | 2026-09-29 probe | discovery ✓ — the 401 names the metadata over plain http; raised to https (F12); registration ✓ | self-registering, confidential client (`client_secret_post`); scopes `api openid profile`; login not yet exercised |
 | buildkite | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | cal-com | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
 | calendly | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |

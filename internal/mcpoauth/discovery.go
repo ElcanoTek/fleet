@@ -133,9 +133,9 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		// the operator retries.
 		if loc.advertised {
 			if loc.upgradedFrom != "" {
-				return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s (raised to https from the plain-http pointer %s the server named): %w", loc.candidates[0], loc.upgradedFrom, fetchErr)
+				return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s (raised to https from the plain-http pointer %s the server named): %w", redactURLUserinfo(loc.candidates[0]), redactURLUserinfo(loc.upgradedFrom), fetchErr)
 			}
-			return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s: %w", loc.candidates[0], fetchErr)
+			return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s: %w", redactURLUserinfo(loc.candidates[0]), fetchErr)
 		}
 		if operationalErr != nil {
 			return nil, fmt.Errorf("fetch protected-resource metadata: %w (not a 404, so the server is not treated as one without metadata; retry, or check the server)", operationalErr)
@@ -421,10 +421,11 @@ func advertisedLocation(canonicalServerURL, pointer string) prmLocations {
 // explicit port — except http's default, :80 in any numeric spelling, which
 // is dropped rather than carried into an https URL that would then dial TLS
 // to port 80. The consequence is stated plainly: a vendor that really does
-// serve its metadata over plain http on some other port of the same host
-// (none in the shipped directory does) is now asked over TLS on that port
-// and fails discovery, with no plain-http fallback — the metadata is what
-// names the authorization server, and it is not taken in the clear.
+// serve its metadata only over plain http on the same host — on port 80
+// with nothing at the https URL, or on some other port (none in the shipped
+// directory does either) — is now asked over TLS and fails discovery, with
+// no plain-http fallback — the metadata is what names the authorization
+// server, and it is not taken in the clear.
 func upgradeAdvertisedPointer(canonicalServerURL, pointer string) string {
 	su, err := url.Parse(canonicalServerURL)
 	if err != nil || su.Scheme != "https" {
@@ -1389,7 +1390,9 @@ type httpStatusError struct {
 	Status int
 }
 
-func (e *httpStatusError) Error() string { return fmt.Sprintf("GET %s: status %d", e.URL, e.Status) }
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("GET %s: status %d", redactURLUserinfo(e.URL), e.Status)
+}
 
 // metadataAbsent reports whether a fetchJSON failure means the document does
 // not exist at that location, as opposed to an operational failure (a 5xx, a
@@ -1419,10 +1422,10 @@ func fetchJSON(ctx context.Context, httpClient *http.Client, url string, out any
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataBytes))
 	if err != nil {
-		return fmt.Errorf("read %s: %w", url, err)
+		return fmt.Errorf("read %s: %w", redactURLUserinfo(url), err)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("decode %s: %w", url, err)
+		return fmt.Errorf("decode %s: %w", redactURLUserinfo(url), err)
 	}
 	return nil
 }

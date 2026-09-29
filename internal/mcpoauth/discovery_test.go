@@ -2633,3 +2633,23 @@ func TestDiscoverNamesBothPointersWhenTheUpgradeFails(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// TestDiscoverRedactsUserinfoInAFailedAdvertisedPointer pins that a pointer
+// carrying userinfo is never named with it: the raised URL and the plain one
+// the server spelled both go into an operator-facing error, and credentials
+// never reach operators or logs (AGENTS.md).
+func TestDiscoverRedactsUserinfoInAFailedAdvertisedPointer(t *testing.T) {
+	srv := newTLSDiscoveryServer(t, func(base string) string {
+		return "http://vendor:s3cret@" + strings.TrimPrefix(base, "https://") + "/nowhere"
+	})
+	_, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp")
+	if err == nil {
+		t.Fatal("Discover succeeded against a pointer that answers 404")
+	}
+	if strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "vendor:") {
+		t.Fatalf("error names the pointer's userinfo: %v", err)
+	}
+	if !strings.Contains(err.Error(), "raised to https from the plain-http pointer http://redacted@") {
+		t.Fatalf("error = %v", err)
+	}
+}
