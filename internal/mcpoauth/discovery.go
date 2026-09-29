@@ -132,6 +132,9 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 		// configuration the server never published. Surface that failure so
 		// the operator retries.
 		if loc.advertised {
+			if loc.upgradedFrom != "" {
+				return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s (raised to https from the plain-http pointer %s the server named): %w", loc.candidates[0], loc.upgradedFrom, fetchErr)
+			}
 			return nil, fmt.Errorf("fetch protected-resource metadata the server advertised at %s: %w", loc.candidates[0], fetchErr)
 		}
 		if operationalErr != nil {
@@ -352,7 +355,9 @@ func containsScope(list []string, want string) bool {
 // a GET; Uptime Robot (and, per the MCP transport, any server that treats GET
 // as the SSE stream) answers the GET with 404 and puts the pointer only on the
 // 401 to a POST — the JSON-RPC initialize a real client would send — so both
-// are probed, and the first pointer wins (#1006 catalog audit).
+// are probed, and the first pointer wins (#1006 catalog audit). A pointer
+// that names the server's own host over plain http is raised to https before
+// it is fetched (upgradeAdvertisedPointer — Bugsnag, F12).
 //
 // Failing a pointer, the conventional well-known locations: RFC 9728 §3.1's
 // path-inserted form (origin + /.well-known/oauth-protected-resource + path,
@@ -372,18 +377,86 @@ type prmLocations struct {
 	candidates []string
 	advertised bool
 	probeErr   error
+	// upgradedFrom is the pointer as the server spelled it when candidates[0]
+	// is its https upgrade (upgradeAdvertisedPointer), so a fetch failure
+	// can say which URL was named and which was asked.
+	upgradedFrom string
+}
+
+// advertisedLocation is the prmLocations for a pointer the server named in
+// its 401: that one URL, with a plain-http pointer to the server's own host
+// raised to https.
+func advertisedLocation(canonicalServerURL, pointer string) prmLocations {
+	loc := prmLocations{candidates: []string{pointer}, advertised: true}
+	if up := upgradeAdvertisedPointer(canonicalServerURL, pointer); up != pointer {
+		loc.candidates[0] = up
+		loc.upgradedFrom = pointer
+	}
+	return loc
+}
+
+// upgradeAdvertisedPointer raises a plain-http resource_metadata pointer to
+// https when the https MCP server that advertised it named its OWN host.
+//
+// Bugsnag's 401 names http://bugsnag.mcp.smartbear.com/.well-known/… for a
+// server at https://bugsnag.mcp.smartbear.com/mcp; the vendor's edge answers
+// the http URL with a 301 to https, which the SSRF-safe client refuses to
+// follow (a redirect must never carry a request to a new origin), and a
+// pointer the server itself named is fatal when it cannot be fetched (#1006
+// catalog audit, F12). Fetching the document over plain http would be worse
+// than that failure: RFC 9728 has the metadata served over TLS precisely so
+// an on-path party cannot swap in its own authorization server. Raising the
+// scheme keeps the vendor's host and path and asks over TLS instead — the
+// only thing the pointer said was WHERE, and that is unchanged.
+//
+// The upgrade is deliberately narrow. The server URL must be https (an http
+// server in a development install advertising http is consistent and is
+// left alone); the pointer must be plain http; and both must name the same
+// host, compared case-insensitively and re-emitted as the pointer spelled
+// it. A pointer on another host is returned as spelled — nothing is known
+// about that host, so nothing is guessed.
+//
+// The rewrite assumes only the scheme was misspelled, which is Bugsnag's
+// class of mistake, so everything else is kept: path, query, and an
+// explicit port — except http's default, :80 in any numeric spelling, which
+// is dropped rather than carried into an https URL that would then dial TLS
+// to port 80. The consequence is stated plainly: a vendor that really does
+// serve its metadata over plain http on some other port of the same host
+// (none in the shipped directory does) is now asked over TLS on that port
+// and fails discovery, with no plain-http fallback — the metadata is what
+// names the authorization server, and it is not taken in the clear.
+func upgradeAdvertisedPointer(canonicalServerURL, pointer string) string {
+	su, err := url.Parse(canonicalServerURL)
+	if err != nil || su.Scheme != "https" {
+		return pointer
+	}
+	ptr, err := url.Parse(pointer)
+	if err != nil || ptr.Scheme != "http" || ptr.Hostname() == "" || !strings.EqualFold(ptr.Hostname(), su.Hostname()) {
+		return pointer
+	}
+	host := ptr.Hostname()
+	if strings.Contains(host, ":") { // an IPv6 literal, which Hostname() unbrackets
+		host = "[" + host + "]"
+	}
+	if port := canonicalPort("http", ptr.Port()); port != "" {
+		host += ":" + port
+	}
+	up := *ptr
+	up.Scheme = "https"
+	up.Host = host
+	return up.String()
 }
 
 func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (prmLocations, error) {
 	var probeErr error
 	u, perr := probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodGet, "")
 	if u != "" {
-		return prmLocations{candidates: []string{u}, advertised: true}, nil
+		return advertisedLocation(canonicalServerURL, u), nil
 	}
 	probeErr = perr
 	u, perr = probeResourceMetadataPointer(ctx, httpClient, canonicalServerURL, http.MethodPost, initializeProbeBody)
 	if u != "" {
-		return prmLocations{candidates: []string{u}, advertised: true}, nil
+		return advertisedLocation(canonicalServerURL, u), nil
 	}
 	if probeErr == nil {
 		probeErr = perr

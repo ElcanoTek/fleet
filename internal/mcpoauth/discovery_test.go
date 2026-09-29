@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -2512,5 +2513,123 @@ func TestRequireHTTPSchemeAcceptsHTTPAndHTTPS(t *testing.T) {
 		if err := requireHTTPScheme(raw); err != nil {
 			t.Fatalf("requireHTTPScheme(%q) = %v, want nil", raw, err)
 		}
+	}
+}
+
+func TestUpgradeAdvertisedPointer(t *testing.T) {
+	cases := []struct{ name, server, pointer, want string }{
+		{"own host over plain http is raised", "https://mcp.example.com/mcp", "http://mcp.example.com/.well-known/oauth-protected-resource", "https://mcp.example.com/.well-known/oauth-protected-resource"},
+		{"host case is matched case-insensitively and kept as spelled, :80 dropped, the query kept", "https://mcp.example.com/mcp", "http://MCP.Example.com:80/.well-known/oauth-protected-resource?tenant=a", "https://MCP.Example.com/.well-known/oauth-protected-resource?tenant=a"},
+		{":80 is recognised numerically, like the canonicaliser", "https://mcp.example.com/mcp", "http://mcp.example.com:0080/prm", "https://mcp.example.com/prm"},
+		{"a matching non-default port is kept", "https://mcp.example.com:8443/mcp", "http://mcp.example.com:8443/prm", "https://mcp.example.com:8443/prm"},
+		{"a zero-padded non-default port is normalised", "https://mcp.example.com/mcp", "http://mcp.example.com:08443/prm", "https://mcp.example.com:8443/prm"},
+		{"another non-default port is kept as spelled", "https://mcp.example.com/mcp", "http://mcp.example.com:8080/prm", "https://mcp.example.com:8080/prm"},
+		{"an IPv6 literal stays bracketed", "https://[2001:db8::1]/mcp", "http://[2001:db8::1]/prm", "https://[2001:db8::1]/prm"},
+		{"another host is left alone", "https://mcp.example.com/mcp", "http://other.example.com/prm", "http://other.example.com/prm"},
+		{"a host that merely starts with ours is another host", "https://mcp.example.com/mcp", "http://mcp.example.com.evil.net/prm", "http://mcp.example.com.evil.net/prm"},
+		{"an https pointer is untouched", "https://mcp.example.com/mcp", "https://mcp.example.com/prm", "https://mcp.example.com/prm"},
+		{"an http server (development install) advertising http is consistent", "http://mcp.example.com/mcp", "http://mcp.example.com/prm", "http://mcp.example.com/prm"},
+		{"an unparsable pointer is returned as is", "https://mcp.example.com/mcp", "::not a url", "::not a url"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := upgradeAdvertisedPointer(tc.server, tc.pointer); got != tc.want {
+				t.Fatalf("upgradeAdvertisedPointer(%q, %q) = %q, want %q", tc.server, tc.pointer, got, tc.want)
+			}
+		})
+	}
+}
+
+// newTLSDiscoveryServer is newDiscoveryServer over TLS, with the 401 pointer
+// spelled as the test asks (pointerFor is given the https base URL and returns
+// the resource_metadata value). A plain-http request to this listener never
+// reaches a handler: Go's server answers it with 400 "Client sent an HTTP
+// request to an HTTPS server" first — which is what makes a successful
+// Discover the proof that the pointer was asked over TLS.
+func newTLSDiscoveryServer(t *testing.T, pointerFor func(base string) string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	base := srv.URL
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+pointerFor(base)+`"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: base + "/mcp", AuthorizationServers: []string{base}})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AuthServerMetadata{
+			Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token",
+			RegistrationEndpoint: base + "/register", CodeChallengeMethodsSupported: []string{"S256"},
+		})
+	})
+	return srv
+}
+
+// TestDiscoverRaisesPlainHTTPPointerOnOwnHost is F12 end to end: an https
+// server whose 401 names its metadata over plain http (Bugsnag) discovers,
+// because the pointer is asked over TLS. Without the upgrade the plain-http
+// request reaches the TLS listener, which answers 400, and a pointer the
+// server advertised is fatal on any fetch failure — so this test fails on
+// the old code.
+func TestDiscoverRaisesPlainHTTPPointerOnOwnHost(t *testing.T) {
+	srv := newTLSDiscoveryServer(t, func(base string) string {
+		return "http://" + strings.TrimPrefix(base, "https://") + "/.well-known/oauth-protected-resource"
+	})
+	d, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if d.Resource != srv.URL+"/mcp" || d.AS.Issuer != srv.URL || d.LegacyOrigin {
+		t.Fatalf("discovered = resource %q issuer %q legacy %v", d.Resource, d.AS.Issuer, d.LegacyOrigin)
+	}
+}
+
+// TestDiscoverKeepsPlainHTTPPointerOnAnotherHost pins the narrowness of the
+// upgrade: a plain-http pointer to a DIFFERENT host is fetched as the server
+// spelled it (the pre-F12 behaviour), not raised to an https listener that
+// may not exist. The other host here is a plain-http server that would fail
+// a TLS handshake.
+func TestDiscoverKeepsPlainHTTPPointerOnAnotherHost(t *testing.T) {
+	other := http.NewServeMux()
+	otherSrv := httptest.NewServer(other)
+	t.Cleanup(otherSrv.Close)
+	// Spelled as localhost so the hostname differs from the TLS server's
+	// 127.0.0.1 while reaching the same loopback listener.
+	otherBase := "http://localhost" + strings.TrimPrefix(otherSrv.URL, "http://127.0.0.1")
+	srv := newTLSDiscoveryServer(t, func(string) string { return otherBase + "/prm" })
+	var fetched atomic.Bool
+	other.HandleFunc("/prm", func(w http.ResponseWriter, _ *http.Request) {
+		fetched.Store(true)
+		_ = json.NewEncoder(w).Encode(ProtectedResourceMetadata{Resource: srv.URL + "/mcp", AuthorizationServers: []string{srv.URL}})
+	})
+	d, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if !fetched.Load() {
+		t.Fatal("the other host's pointer was not fetched as spelled")
+	}
+	if d.AS.Issuer != srv.URL {
+		t.Fatalf("issuer = %q", d.AS.Issuer)
+	}
+}
+
+// TestDiscoverNamesBothPointersWhenTheUpgradeFails pins the operator-facing
+// error: when the raised pointer cannot be fetched either, the failure names
+// the URL asked and the plain-http one the server spelled.
+func TestDiscoverNamesBothPointersWhenTheUpgradeFails(t *testing.T) {
+	srv := newTLSDiscoveryServer(t, func(base string) string {
+		return "http://" + strings.TrimPrefix(base, "https://") + "/nowhere"
+	})
+	_, err := Discover(context.Background(), srv.Client(), srv.URL+"/mcp")
+	if err == nil {
+		t.Fatal("Discover succeeded against a pointer that answers 404")
+	}
+	plain := "http://" + strings.TrimPrefix(srv.URL, "https://") + "/nowhere"
+	if !strings.Contains(err.Error(), "advertised at "+srv.URL+"/nowhere (raised to https from the plain-http pointer "+plain) {
+		t.Fatalf("error = %v", err)
 	}
 }
