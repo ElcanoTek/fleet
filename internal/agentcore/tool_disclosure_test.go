@@ -180,7 +180,7 @@ func TestDisclosureSearchDescribeCall(t *testing.T) {
 // audit regression: Stripe's every API tool marks `stripe_context` and
 // `livemode` required, tool_describe printed the properties map without the
 // required list, and a deferred-mode model omitted them; Stripe answered
-// HTTP 422, which the broker masked as "credential-owner call failed", and the
+// HTTP 422, which the broker then masked as "credential-owner call failed" (F8 has since let a 4xx through), and the
 // model told the user to reconnect. tool_describe must show `required`, and
 // tool_call must refuse the incomplete call BEFORE the broker, naming what is
 // missing.

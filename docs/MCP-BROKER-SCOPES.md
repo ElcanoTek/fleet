@@ -67,11 +67,18 @@ Scope-open resolver and per-server token/handshake failure values are
 deliberately not logged by the overlay builder or returned through scope open.
 A whole-scope resolver failure becomes the fixed `remote MCP scope unavailable`
 error; recoverable per-server failures return only public skipped names.
-All credential-owner operational failures follow the same rule: call,
-discovery, scope-open, scope-close, and reload errors cross the pipe only as
-stable value-free classes. A failed call also discards partial text and the
-tool-error bit. Successful MCP tool-level errors remain model-visible output;
-protocol validation remains precise because neither originates as credentialed
+Credential-owner operational failures cross the pipe only as stable
+value-free classes: discovery, scope-open, scope-close and reload errors, and
+a call that failed in the transport, with a 5xx, or on a bundle server. A
+failed call also discards partial text and the tool-error bit. One class is
+narrower since F8 (ADR-0075): for a call routed through a hosted scope, the
+vendor's own answer — an HTTP 4xx other than 401, or a JSON-RPC error object
+— crosses as its status or code plus a bounded, scrubbed first line, and a
+401 as a value-free credential rejection, so the model can correct an
+argument instead of sending the user to reconnect. The child marks those
+errors (`mcpbroker.HostedCallError`); nothing unmarked is ever passed.
+Successful MCP tool-level errors remain model-visible output; protocol
+validation remains precise because neither originates as credentialed
 backend detail.
 
 The protocol also supports credential-owner reload. The parent sends an empty

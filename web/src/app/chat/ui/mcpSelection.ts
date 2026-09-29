@@ -66,3 +66,15 @@ export function droppedOptionalMcpServerNames(
   const persisted = lowerSet(persistedEnabledOptional);
   return requested.filter((name) => !persisted.has(name.toLowerCase()));
 }
+
+/**
+ * Every optional row set to `enabled` at once — the picker's "All on" /
+ * "All off". Always-on rows are returned untouched for the same reason
+ * reconcileMcpSelection leaves them alone: they are status, not a choice.
+ */
+export function setAllOptionalMcpServers<T extends ChatConnectorSelectionRow>(
+  rows: readonly T[],
+  enabled: boolean,
+): T[] {
+  return rows.map((row) => (row.always_on || row.enabled === enabled ? row : { ...row, enabled }));
+}

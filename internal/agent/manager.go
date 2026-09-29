@@ -1667,8 +1667,8 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 				// Interactive: the user can see+fix these on the Connections page.
 				// Skipped carries USER-NAMED servers — CR/LF-strip them so a
 				// hostile name cannot forge a log entry (log-injection guard).
-				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %s",
-					logSafeAgent(in.UserEmail), logSafeAgent(strings.Join(ov.Skipped, ", ")))
+				log.Printf("RunTurn: remote MCP server(s) not mounted for %s: %s",
+					logSafeAgent(in.UserEmail), logSafeAgent(skippedWithReasons(ov)))
 			}
 		}
 	}

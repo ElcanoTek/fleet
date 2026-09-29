@@ -284,11 +284,95 @@ type RemoteMCPOverlay struct {
 	// CloseScope releases a broker-owned scope. It is called with a fresh,
 	// bounded context so cancellation of the run cannot suppress cleanup.
 	CloseScope func(context.Context) error
-	// Skipped names servers that were selected but could not be wired this run —
-	// today only because their token is unavailable (needs re-auth) or the server
-	// failed to connect. Callers surface these to the owner (a needs-reauth server
-	// silently doing nothing is a correctness trap, especially for headless runs).
+	// Skipped names servers that were selected but could not be wired this run.
+	// Callers surface these to the owner (a needs-reauth server silently doing
+	// nothing is a correctness trap, especially for headless runs). SkipReasons
+	// says WHY, per name, because the right advice differs: a login that needs
+	// re-authorizing is fixed by reconnecting, a vendor that did not respond is
+	// not — telling the user to reconnect a working connection was F10 (#1006).
 	Skipped []string
+	// SkipReasons maps a Skipped name to one of the SkipReason* classes. Nil
+	// when nothing was skipped; a name missing here reads as SkipReasonUnreachable.
+	SkipReasons map[string]string
+}
+
+// The classes a skipped hosted connection can fall into.
+const (
+	// SkipReasonNeedsReauth: the stored credential is gone or the vendor
+	// refused it (HTTP 401 at mount, a terminal refresh failure). Reconnecting
+	// fixes it.
+	SkipReasonNeedsReauth = "needs_reauth"
+	// SkipReasonUnreachable: the vendor did not answer, or answered with
+	// something that is not a credential refusal (a 5xx, a timeout, a TLS or
+	// DNS failure, a JSON-RPC error at initialize). Reconnecting changes
+	// nothing; the user waits or the operator looks at the vendor.
+	SkipReasonUnreachable = "unreachable"
+	// SkipReasonSeatNotConnected: the run pinned an account that is not
+	// connected under that name. The owner connects (or re-pins) it.
+	SkipReasonSeatNotConnected = "seat_not_connected"
+	// SkipReasonUnknown: fleet could not say — a credential that could not
+	// be read from the store, an overlay built without reasons. The notice
+	// then asserts nothing about the login or the vendor.
+	SkipReasonUnknown = "unknown"
+)
+
+// skip records a name in Skipped with its reason class.
+func (o *RemoteMCPOverlay) skip(name, reason string) {
+	o.Skipped = append(o.Skipped, name)
+	if o.SkipReasons == nil {
+		o.SkipReasons = map[string]string{}
+	}
+	o.SkipReasons[name] = reason
+}
+
+// skippedWithReasons renders "name (reason), …" for a log line.
+func skippedWithReasons(o *RemoteMCPOverlay) string {
+	parts := make([]string, 0, len(o.Skipped))
+	for _, name := range o.Skipped {
+		parts = append(parts, name+" ("+o.SkipReason(name)+")")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// SkipReason returns the class recorded for a skipped name. A name without a
+// recorded class — an overlay built without reasons, or a class this build
+// does not know — is SkipReasonUnknown, never a guess: the notice must not
+// tell the model "not the login" or "reconnect" on no evidence.
+func (o *RemoteMCPOverlay) SkipReason(name string) string {
+	if o == nil || o.SkipReasons == nil {
+		return SkipReasonUnknown
+	}
+	switch r := o.SkipReasons[name]; r {
+	case SkipReasonNeedsReauth, SkipReasonUnreachable, SkipReasonSeatNotConnected:
+		return r
+	}
+	return SkipReasonUnknown
+}
+
+// connectSkipReason classifies a mount failure the way recordRefusedMount
+// does: only a vendor refusing the credential is a re-auth matter.
+func connectSkipReason(err error) string {
+	var hs *mcp.HTTPStatusError
+	if errors.As(err, &hs) && hs.Unauthorized() {
+		return SkipReasonNeedsReauth
+	}
+	return SkipReasonUnreachable
+}
+
+// tokenSkipReason classifies a credential-acquisition failure: the store's
+// needs-reauth sentinel (a terminal refresh failure, a signed-out row) is a
+// re-auth matter. Anything else — a store read that failed, a refresh whose
+// transport failed — says nothing either way, so it is unknown rather than
+// "unreachable", which would tell the model the login is fine. The sentinel
+// is recognised through its NeedsReauth method rather than by identity
+// because this package cannot import internal/store (store imports it);
+// store.ErrRemoteMCPNeedsReauth implements the method for exactly this.
+func tokenSkipReason(err error) string {
+	var nr interface{ NeedsReauth() bool }
+	if errors.As(err, &nr) && nr.NeedsReauth() {
+		return SkipReasonNeedsReauth
+	}
+	return SkipReasonUnknown
 }
 
 // recordRefusedMount flips the connection to needs_reauth when the mount
@@ -517,9 +601,16 @@ func (o *RemoteMCPOverlay) Active() bool {
 // whether that roster was deferred behind the disclosure bridges (#1006).
 type hostedMCPRoster struct {
 	// skipped are the registration names of selected connections that could
-	// not be mounted (token unavailable, connect failure), sorted, so the model
-	// can tell the user to reconnect instead of improvising around the gap.
-	skipped []string
+	// not be mounted, sorted, each with its SkipReason* class, so the model can
+	// tell the user the right thing: reconnect for a dead login, wait or retry
+	// for a vendor that did not answer — never "reconnect" for the latter (F10).
+	skipped []skippedConnector
+}
+
+// skippedConnector is one entry of hostedMCPRoster.skipped.
+type skippedConnector struct {
+	name   string
+	reason string
 }
 
 // hostedRosterFromOverlay derives the prompt notice from an opened overlay.
@@ -537,9 +628,16 @@ func hostedRosterFromOverlay(o *RemoteMCPOverlay) hostedMCPRoster {
 	}
 	var r hostedMCPRoster
 	for _, name := range o.Skipped {
-		r.skipped = append(r.skipped, promptSafeName(name))
+		r.skipped = append(r.skipped, skippedConnector{name: promptSafeName(name), reason: o.SkipReason(name)})
 	}
-	sort.Strings(r.skipped)
+	// Stable, and keyed on the reason too: two raw names that reduce to the
+	// same prompt-safe name must not swap between builds (prompt-cache bytes).
+	sort.SliceStable(r.skipped, func(i, j int) bool {
+		if r.skipped[i].name != r.skipped[j].name {
+			return r.skipped[i].name < r.skipped[j].name
+		}
+		return r.skipped[i].reason < r.skipped[j].reason
+	})
 	return r
 }
 
@@ -621,7 +719,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		// account under the same name — surface it so the owner can connect
 		// (or re-pin) it.
 		log.Printf("remote-mcp: skipping %q for %s — the pinned seat is not connected", name, email)
-		overlay.Skipped = append(overlay.Skipped, name)
+		overlay.skip(name, SkipReasonSeatNotConnected)
 	}
 	registered := 0
 	for _, conn := range chosen {
@@ -644,7 +742,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// needs-reauth / refresh failure: skip this server, keep the rest, and
 			// record it so the caller can tell the owner.
 			log.Printf("remote-mcp: skipping server %q for %s — token unavailable", regName, email)
-			overlay.Skipped = append(overlay.Skipped, regName)
+			overlay.skip(regName, tokenSkipReason(terr))
 			continue
 		}
 		opts := mcp.HTTPServerOptions{HTTPClient: httpClient}
@@ -671,7 +769,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// to which one it was. The wire to the parent still carries only the
 			// public name — this stays a host-side log line.
 			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(bearer, aerr))
-			overlay.Skipped = append(overlay.Skipped, regName)
+			overlay.skip(regName, connectSkipReason(aerr))
 			recordRefusedMount(ctx, resolver, email, regName, conn, aerr)
 			continue
 		}

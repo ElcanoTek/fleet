@@ -41,7 +41,7 @@ for line in sys.stdin:
             else:
                 resp["scope"] = "remote-scope"
                 resp["tools"] = [{"server":"hosted","tool":"search","inputSchema":{"type":"object"}}]
-                resp["skipped"] = ["needs-login"]
+                resp["skipped"] = [{"name":"needs-login","reason":"needs_reauth"}]
         elif spec.get("taskId") != "task-123" or spec.get("workspace") != "/workspace" or spec.get("selection") != [{"server":"demo","account":"blue"}]:
             resp["err"] = "scope metadata mismatch"
         else:
@@ -176,7 +176,8 @@ func assertProductionRemoteOverlay(t *testing.T, runtime *productionMCPRuntime) 
 	}
 	if len(remote.Catalog) != 1 || remote.Catalog[0].ServerName != "hosted" ||
 		remote.Catalog[0].Tool.Name != "search" || !remote.Servers["hosted"] ||
-		!slices.Equal(remote.Skipped, []string{"needs-login"}) {
+		!slices.Equal(remote.Skipped, []string{"needs-login"}) ||
+		remote.SkipReason("needs-login") != agent.SkipReasonNeedsReauth {
 		t.Fatalf("remote overlay = %+v", remote)
 	}
 	text, isError, err := remote.Broker.CallMCP(context.Background(), "hosted", "search", map[string]any{"q": "fleet"})

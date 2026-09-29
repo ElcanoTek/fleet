@@ -192,6 +192,11 @@ type brokerScope struct {
 	mu     sync.RWMutex
 	client *mcp.Client
 	broker agentcore.MCPBroker
+	// remote marks a per-user hosted scope: a failed call's answer from one
+	// of ITS servers is a vendor's own reply and may cross the pipe bounded
+	// and scrubbed (mcpbroker.HostedCallError, ADR-0075); a bundle scope's
+	// errors stay masked.
+	remote bool
 	// authz is this scope's effective child-side gate. Calls are checked
 	// against it before they reach the credentialed client, and the scope's
 	// advertised catalog was already filtered through it at open.
@@ -238,7 +243,7 @@ func (b *brokerBackend) ListAccounts(_ context.Context, _ string, baseVars []str
 	return creds.AccountsFor(baseVars), nil
 }
 
-func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec) (string, []mcpbroker.ToolDescriptor, []string, error) {
+func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec) (string, []mcpbroker.ToolDescriptor, []mcpbroker.SkippedServer, error) {
 	if spec.Remote != nil {
 		return b.openRemoteScope(ctx, *spec.Remote, spec.Policy)
 	}
@@ -312,7 +317,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	return id, authz.filterTools(describeTools(client)), nil, nil
 }
 
-func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.RemoteScopeSpec, policy *mcpbroker.ScopePolicy) (string, []mcpbroker.ToolDescriptor, []string, error) {
+func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.RemoteScopeSpec, policy *mcpbroker.ScopePolicy) (string, []mcpbroker.ToolDescriptor, []mcpbroker.SkippedServer, error) {
 	if b.remoteMCP == nil {
 		return "", nil, nil, errors.New("remote MCP OAuth is not configured in broker")
 	}
@@ -340,13 +345,17 @@ func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.Remo
 		return "", nil, nil, errors.New("remote MCP scope unavailable")
 	}
 	client := mcp.NewClient()
-	var skipped []string
+	var skipped []mcpbroker.SkippedServer
 	if overlay != nil {
 		if overlay.Client != nil {
 			_ = client.Close()
 			client = overlay.Client
 		}
-		skipped = append([]string(nil), overlay.Skipped...)
+		// The name and its reason class cross the wire; the failure detail
+		// (which can quote a resolved URL or a vendor body) stays here.
+		for _, name := range overlay.Skipped {
+			skipped = append(skipped, mcpbroker.SkippedServer{Name: name, Reason: overlay.SkipReason(name)})
+		}
 	}
 	tools := describeTools(client)
 	connected := make([]string, 0, len(tools))
@@ -362,6 +371,7 @@ func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.Remo
 		client: client,
 		broker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
 		authz:  authz,
+		remote: true,
 	}
 	id := uuid.NewString()
 	b.mu.Lock()
@@ -447,7 +457,15 @@ func (b *brokerBackend) CallMCPInScope(ctx context.Context, scopeID, server, too
 	if !scope.authz.permits(server, tool) {
 		return denyPolicy(server, tool), true, nil
 	}
-	return scope.broker.CallMCP(ctx, server, tool, args)
+	text, isErr, err := scope.broker.CallMCP(ctx, server, tool, args)
+	if err != nil && scope.remote {
+		// A hosted vendor's own answer may cross the pipe bounded and
+		// scrubbed (mcpbroker.describeCallError, ADR-0075); the marker is what
+		// lets it. Bundle scopes leave their errors unmarked, so they stay
+		// masked.
+		err = &mcpbroker.HostedCallError{Err: err}
+	}
+	return text, isErr, err
 }
 
 // CallMCP is the UNSCOPED shared-client path. Production agent turns and
