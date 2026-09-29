@@ -94,7 +94,7 @@ type Scope struct {
 	client  *Client
 	id      string
 	tools   []ToolDescriptor
-	skipped []string
+	skipped []SkippedServer
 
 	mu        sync.Mutex
 	active    int
@@ -128,7 +128,7 @@ func (c *Client) OpenScope(ctx context.Context, spec ScopeSpec) (*Scope, error) 
 		client:    c,
 		id:        resp.Scope,
 		tools:     cloneToolDescriptors(resp.Tools),
-		skipped:   append([]string(nil), resp.Skipped...),
+		skipped:   append([]SkippedServer(nil), resp.Skipped...),
 		closeGate: make(chan struct{}, 1),
 	}, nil
 }
@@ -168,7 +168,28 @@ func (s *Scope) Tools() []ToolDescriptor {
 func (s *Scope) Skipped() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]string(nil), s.skipped...)
+	names := make([]string, 0, len(s.skipped))
+	for _, sk := range s.skipped {
+		names = append(names, sk.Name)
+	}
+	return names
+}
+
+// SkipReasons returns the reason class per skipped name (see SkippedServer),
+// nil when nothing was skipped.
+func (s *Scope) SkipReasons() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.skipped) == 0 {
+		return nil
+	}
+	reasons := make(map[string]string, len(s.skipped))
+	for _, sk := range s.skipped {
+		if sk.Reason != "" {
+			reasons[sk.Name] = sk.Reason
+		}
+	}
+	return reasons
 }
 
 func cloneToolDescriptors(src []ToolDescriptor) []ToolDescriptor {

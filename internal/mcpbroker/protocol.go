@@ -230,10 +230,22 @@ type response struct {
 	Accounts []string         `json:"accounts,omitempty"`
 	// Scope answers methodOpenScope with the broker-issued opaque ID.
 	Scope string `json:"scope,omitempty"`
-	// Skipped names selected remote servers that could not be connected for this
-	// scope. Names are public configuration identifiers; failure details stay in
-	// the credential-owning process because they may contain resolved URLs.
-	Skipped []string `json:"skipped,omitempty"`
+	// Skipped lists selected remote servers that could not be connected for
+	// this scope: the public configuration name and a fixed reason class (see
+	// SkippedServer). Failure details stay in the credential-owning process
+	// because they may contain resolved URLs.
+	Skipped []SkippedServer `json:"skipped,omitempty"`
 	// Reload answers methodReload with the diff and refreshed public catalog.
 	Reload *ReloadResult `json:"reload,omitempty"`
+}
+
+// SkippedServer is one remote server a scope could not mount. Reason is one
+// of the agent package's SkipReason* classes ("needs_reauth", "unreachable",
+// "seat_not_connected"), carried as a plain string because this package
+// cannot import agent; it is the only thing about the failure that crosses
+// the wire, and it is what lets the parent's prompt say "reconnect" only for
+// a login that needs it (F10). An empty Reason reads as unreachable.
+type SkippedServer struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason,omitempty"`
 }
