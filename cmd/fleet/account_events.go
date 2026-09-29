@@ -106,3 +106,14 @@ func accountEventsCreateUser(next http.HandlerFunc, events *accountevents.Record
 
 // accountEventTimeout bounds each half of the feed's work on a request.
 const accountEventTimeout = 10 * time.Second
+
+// reservedAccountEventsSecret is the key the task webhook must not share: the
+// feed's secret, but only while the feed is on. With FLEET_ACCOUNT_EVENTS_URL
+// unset the feed is off and signs nothing, so a leftover secret reserves
+// nothing either (docs/ACCOUNT-EVENTS.md: an unset URL changes nothing).
+func reservedAccountEventsSecret(cfg *config.Config) string {
+	if cfg.AccountEventsURL == "" {
+		return ""
+	}
+	return cfg.AccountEventsSecret
+}

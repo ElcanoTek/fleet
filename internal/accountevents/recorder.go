@@ -51,7 +51,13 @@ type State struct {
 // (store.ProviderStateToken) so a provider push that lands in between wins.
 type BaselineAdopter interface {
 	ProviderStateToken(ctx context.Context, email string) (string, error)
-	AdoptFleetAccessChange(ctx context.Context, email, token string, exists bool, chatRole, opsRole string) (bool, error)
+	AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error)
+}
+
+// AccountLocker serializes one account's snapshot-to-enqueue interval across
+// processes (store.LockAccountEvents).
+type AccountLocker interface {
+	LockAccountEvents(ctx context.Context, email string) (func(), error)
 }
 
 // Recorder turns before/after snapshots into outbox rows. A nil *Recorder is
@@ -62,6 +68,7 @@ type Recorder struct {
 	ops      OpsRoleReader
 	queue    Queue
 	baseline BaselineAdopter
+	locker   AccountLocker
 }
 
 // NewRecorder wires a Recorder. ops may be nil (no Operations Center plane);
@@ -70,7 +77,8 @@ type Recorder struct {
 // chat store can), Commit does so — see Commit.
 func NewRecorder(chat ChatReader, ops OpsRoleReader, queue Queue) *Recorder {
 	baseline, _ := queue.(BaselineAdopter)
-	return &Recorder{chat: chat, ops: ops, queue: queue, baseline: baseline}
+	locker, _ := queue.(AccountLocker)
+	return &Recorder{chat: chat, ops: ops, queue: queue, baseline: baseline, locker: locker}
 }
 
 // Snapshot reads email's current state across both planes. The Ops plane is
@@ -160,6 +168,11 @@ func (c *Change) Commit(ctx context.Context, source, actor string) error {
 	if c.err != nil {
 		return fmt.Errorf("%w for %s: %w", ErrNotQueued, c.email, c.err)
 	}
+	unlock, err := c.r.lock(ctx, c.email)
+	if err != nil {
+		return fmt.Errorf("%w for %s: %w", ErrNotQueued, c.email, err)
+	}
+	defer unlock()
 	after, err := c.r.Snapshot(ctx, c.email)
 	if err != nil {
 		return fmt.Errorf("%w for %s: %w", ErrNotQueued, c.email, err)
@@ -185,7 +198,7 @@ func (c *Change) Commit(ctx context.Context, source, actor string) error {
 		if adoptErr == nil {
 			// adopted=false is a provider push that landed meanwhile (the more
 			// recent change), or no provider row: nothing to adopt either way.
-			_, adoptErr = c.r.baseline.AdoptFleetAccessChange(ctx, c.email, c.token, after.Exists, after.ChatRole, after.OpsRole)
+			_, adoptErr = c.r.baseline.AdoptFleetAccessChange(ctx, c.email, c.token, after.Exists, after.Enabled, after.ChatRole, after.OpsRole)
 		}
 		if adoptErr != nil {
 			err = errors.Join(err, fmt.Errorf("adopt the change for %s into the identity provider's desired state: %w", c.email, adoptErr))
@@ -208,11 +221,45 @@ func logSafe(s string) string {
 	return strings.NewReplacer("\n", " ", "\r", " ").Replace(s)
 }
 
+// lock takes the per-account lock when the queue offers one (the chat store
+// does; test fakes need not).
+func (r *Recorder) lock(ctx context.Context, email string) (func(), error) {
+	if r.locker == nil {
+		return func() {}, nil
+	}
+	return r.locker.LockAccountEvents(ctx, email)
+}
+
 // Publish queues email's current state unconditionally (resync). Accounts that
-// no longer exist are skipped; PublishDeleted covers those.
+// no longer exist are skipped; PublishDeleted covers those. It reports state
+// and changes nothing, so it does not adopt a baseline: resync must not
+// overwrite a provider push's retry target with a half-applied read-back.
 func (r *Recorder) Publish(ctx context.Context, email, source, actor string) (bool, error) {
+	return r.publish(ctx, email, source, actor, false)
+}
+
+// PublishChanged is Publish for a change Fleet itself made without a before
+// snapshot (`fleet import` publishes after both of its sections): the state is
+// queued and, like Commit, adopted as the provider's baseline, guarded by the
+// provider state read here.
+func (r *Recorder) PublishChanged(ctx context.Context, email, source, actor string) (bool, error) {
+	return r.publish(ctx, email, source, actor, true)
+}
+
+func (r *Recorder) publish(ctx context.Context, email, source, actor string, adopt bool) (bool, error) {
 	if r == nil {
 		return false, nil
+	}
+	unlock, err := r.lock(ctx, email)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	var token string
+	if adopt && r.baseline != nil {
+		if token, err = r.baseline.ProviderStateToken(ctx, email); err != nil {
+			return false, err
+		}
 	}
 	st, err := r.Snapshot(ctx, email)
 	if err != nil {
@@ -221,7 +268,13 @@ func (r *Recorder) Publish(ctx context.Context, email, source, actor string) (bo
 	if !st.Exists {
 		return false, nil
 	}
-	return true, r.enqueue(ctx, email, st, store.AccountEventAccessChanged, source, actor)
+	err = r.enqueue(ctx, email, st, store.AccountEventAccessChanged, source, actor)
+	if adopt && r.baseline != nil {
+		if _, adoptErr := r.baseline.AdoptFleetAccessChange(ctx, email, token, true, st.Enabled, st.ChatRole, st.OpsRole); adoptErr != nil {
+			err = errors.Join(err, fmt.Errorf("adopt the change for %s into the identity provider's desired state: %w", email, adoptErr))
+		}
+	}
+	return true, err
 }
 
 // PublishDeleted queues a user.deleted event for email when it has no Chat
@@ -232,6 +285,11 @@ func (r *Recorder) PublishDeleted(ctx context.Context, email, source, actor stri
 	if r == nil {
 		return false, nil
 	}
+	unlock, err := r.lock(ctx, email)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	st, err := r.Snapshot(ctx, email)
 	if err != nil {
 		return false, err

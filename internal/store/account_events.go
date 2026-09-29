@@ -333,7 +333,8 @@ func providerStateToken(ctx context.Context, q queryer, email, lock string) (str
 // change: handleExternalAccess reconciles the Ops plane from this row even for
 // a version it has already seen. exists=false (the account was deleted in
 // Fleet) marks the row not allowed, keeping its roles so a newer grant from the
-// provider is non-destructive. Only the roles and allowed flag move — the
+// provider is non-destructive; exists with enabled restores it. Only the
+// roles and allowed flag move — the
 // version stays the provider's, so its next real change still wins.
 //
 // token is ProviderStateToken as read before Fleet's change. The rows are
@@ -344,7 +345,7 @@ func providerStateToken(ctx context.Context, q queryer, email, lock string) (str
 // reconciling Ops from roles the provider never sent while Chat, already at
 // that version, is not touched. adopted=false reports that skip (or that the
 // provider holds no row for email).
-func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string, exists bool, chatRole, opsRole string) (bool, error) {
+func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
 	email = normalizeEmail(email)
 	if exists && (!ValidRole(chatRole) || !validOpsRole(opsRole)) {
 		return false, fmt.Errorf("adopt fleet access change: invalid roles %q/%q", chatRole, opsRole)
@@ -362,8 +363,12 @@ func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string,
 		return false, nil
 	}
 	if exists {
-		_, err = tx.ExecContext(ctx, `UPDATE external_access_state SET chat_role = $2, ops_role = $3 WHERE email = $1`,
-			email, chatRole, opsRole)
+		// allowed follows the account's enabled state, so an account Fleet
+		// re-creates after deleting it is allowed again (its deletion had set
+		// allowed=false, and a redelivery would otherwise revoke the new Ops
+		// grant), while a change to a centrally disabled account keeps it off.
+		_, err = tx.ExecContext(ctx, `UPDATE external_access_state SET chat_role = $2, ops_role = $3, allowed = $4 WHERE email = $1`,
+			email, chatRole, opsRole, enabled)
 	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE external_access_state SET allowed = FALSE WHERE email = $1`, email)
 	}
@@ -371,4 +376,34 @@ func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string,
 		return false, err
 	}
 	return true, tx.Commit()
+}
+
+// accountEventsLockClass is the first key of the two-key advisory lock that
+// serializes one account's feed work (the two-key form never collides with
+// the single-key migration lock).
+const accountEventsLockClass = 0x0ACC
+
+// LockAccountEvents takes a session advisory lock on email in the chat
+// database and returns its release. The Recorder holds it from the after-
+// snapshot through the enqueue (and the baseline adoption), across every
+// process that writes the feed — `fleet serve` and the CLI alike — so two
+// overlapping changes to one account enqueue in the order they read the
+// state: a mutation that snapshotted before another one's change can never be
+// enqueued after it, which would leave a receiver on the stale state for good.
+// The lock waits under ctx; release always runs on a short detached context.
+func (s *Store) LockAccountEvents(ctx context.Context, email string) (func(), error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1, hashtext($2))`, accountEventsLockClass, normalizeEmail(email)); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("lock account events: %w", err)
+	}
+	return func() {
+		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(c, `SELECT pg_advisory_unlock($1, hashtext($2))`, accountEventsLockClass, normalizeEmail(email))
+		_ = conn.Close()
+	}, nil
 }

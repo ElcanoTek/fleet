@@ -848,8 +848,10 @@ func printImportSummary(stats *importStats, dryRun bool) {
 // planes. It runs after both sections rather than per row because an import
 // writes the Chat account and its Ops identity in separate sections — a
 // per-section snapshot would report the half the other section had not
-// written yet. Publish skips a name that is no Chat account (an Ops-only API
-// user), so only Chat accounts emit, as everywhere else. A failure warns and
+// written yet. Like every other Fleet-side writer the result is adopted as the
+// identity provider's baseline (PublishChanged), so a redelivered push cannot
+// revert what the import granted. A name that is no Chat account (an Ops-only
+// API user) is skipped, so only Chat accounts emit, as everywhere else. A failure warns and
 // names resync; it never fails the import.
 func publishImportedAccounts(ctx context.Context, chatFlag, schedFlag string, names []string) {
 	if len(names) == 0 || !accountEventsConfigured() {
@@ -884,7 +886,7 @@ func publishImportedAccounts(ctx context.Context, chatFlag, schedFlag string, na
 			continue
 		}
 		seen[key] = true
-		if _, err := rec.Publish(ctx, key, store.AccountEventSourceCLI, ""); err != nil {
+		if _, err := rec.PublishChanged(ctx, key, store.AccountEventSourceCLI, ""); err != nil {
 			warnAccountEvent(err)
 		}
 	}

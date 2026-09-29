@@ -156,3 +156,14 @@ func TestAccountEventsDeliveryStopsAndSignalsDone(t *testing.T) {
 		t.Fatal("deliverer did not stop after cancel")
 	}
 }
+
+// TestReservedAccountEventsSecretOnlyWhileTheFeedIsOn: a dormant secret with
+// no URL reserves nothing, so the task webhook behaves exactly as before.
+func TestReservedAccountEventsSecretOnlyWhileTheFeedIsOn(t *testing.T) {
+	if got := reservedAccountEventsSecret(&config.Config{AccountEventsSecret: "k"}); got != "" {
+		t.Fatalf("reserved %q with the feed off, want nothing", got)
+	}
+	if got := reservedAccountEventsSecret(&config.Config{AccountEventsURL: "https://auth.example.com/e", AccountEventsSecret: "k"}); got != "k" {
+		t.Fatalf("reserved %q with the feed on, want the feed's secret", got)
+	}
+}

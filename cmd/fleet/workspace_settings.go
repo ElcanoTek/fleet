@@ -461,6 +461,8 @@ func appendNotifySettingsOption(opts []httpapi.Option, st *store.Store, notifier
 	// The task webhook must never sign with the account-events feed's key
 	// (docs/ACCOUNT-EVENTS.md); config.Load covers the env var, this the panel.
 	svc.ReserveSigningSecret(accountEventsSecret)
+	// (The caller passes "" while the feed is off: a dormant secret with no URL
+	// must leave the task webhook exactly as it was.)
 	if err := svc.ApplyBoot(context.Background()); err != nil {
 		log.Printf("notify settings: DISABLED — boot apply failed, serving env-derived config (admin settings NOT in effect): %v", err)
 		return opts

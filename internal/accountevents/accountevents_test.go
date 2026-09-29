@@ -401,7 +401,7 @@ func (a *adoptingPlanes) ProviderStateToken(context.Context, string) (string, er
 	return a.token, nil
 }
 
-func (a *adoptingPlanes) AdoptFleetAccessChange(_ context.Context, email, token string, exists bool, chatRole, opsRole string) (bool, error) {
+func (a *adoptingPlanes) AdoptFleetAccessChange(_ context.Context, email, token string, exists, _ bool, chatRole, opsRole string) (bool, error) {
 	if token != a.token {
 		return false, nil
 	}

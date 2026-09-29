@@ -133,7 +133,11 @@ polls every 2 seconds. Rows queued by the CLI are delivered by the running
 server too.
 
 - **Order:** one account's events are delivered in order. A newer event for
-  an email waits while an older one is retrying.
+  an email waits while an older one is retrying. They are also queued in the
+  order their state was read: every writer (the server and the CLI alike)
+  holds a per-account lock in the chat database from reading the resulting
+  state to queuing it, so two overlapping changes to one account cannot leave
+  the older state queued last.
 - **Success:** any 2xx.
 - **Rejected:** 400, 409, 410, 413, 415 or 422 means the receiver refused the
   body itself, which retrying the same bytes cannot change. The row is marked

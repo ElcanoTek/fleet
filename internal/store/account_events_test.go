@@ -177,13 +177,11 @@ func TestAccountEventsReleaseLeasesAndLastErrorByFailureTime(t *testing.T) {
 	}
 }
 
-func TestDeletedAccountEmailsAndAdoptFleetAccessChange(t *testing.T) {
-	st := newTestStore(t)
+func provisionedTestAccount(t *testing.T, st *Store) ExternalAccessState {
+	t.Helper()
 	ctx := context.Background()
-	for _, email := range []string{"kept@x.com", "idp@x.com"} {
-		if _, err := st.CreateUser(ctx, email, "pw-123456789"); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := st.CreateUser(ctx, "idp@x.com", "pw-123456789"); err != nil {
+		t.Fatal(err)
 	}
 	state := ExternalAccessState{
 		Issuer: "https://auth.example.com", Subject: "s1", Email: "idp@x.com", Version: 3, Allowed: true,
@@ -192,43 +190,99 @@ func TestDeletedAccountEmailsAndAdoptFleetAccessChange(t *testing.T) {
 	if _, _, err := st.ApplyExternalAccess(ctx, state); err != nil {
 		t.Fatal(err)
 	}
-	// A Fleet-side role change becomes the provider row's baseline; the version
-	// stays the provider's.
-	token, err := st.ProviderStateToken(ctx, "idp@x.com")
+	return state
+}
+
+// adopt reads a fresh token and adopts under it.
+func adopt(t *testing.T, st *Store, exists, enabled bool, chatRole, opsRole string) {
+	t.Helper()
+	token, err := st.ProviderStateToken(context.Background(), "idp@x.com")
 	if err != nil || token == "" {
 		t.Fatalf("token = (%q, %v)", token, err)
 	}
-	if ok, err := st.AdoptFleetAccessChange(ctx, "IDP@x.com", token, true, RoleViewer, "client"); err != nil || !ok {
+	if ok, err := st.AdoptFleetAccessChange(context.Background(), "IDP@x.com", token, exists, enabled, chatRole, opsRole); err != nil || !ok {
 		t.Fatalf("adopt = (%v, %v)", ok, err)
 	}
-	got, _, err := st.ExternalAccessState(ctx, state.Issuer, state.Subject)
-	if err != nil || got.ChatRole != RoleViewer || got.OpsRole != "client" || got.Version != 3 || !got.Allowed {
-		t.Fatalf("state after adopt = (%+v, %v)", got, err)
+}
+
+func providerState(t *testing.T, st *Store, s ExternalAccessState) ExternalAccessState {
+	t.Helper()
+	got, _, err := st.ExternalAccessState(context.Background(), s.Issuer, s.Subject)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// A provider push that lands while a Fleet change is in flight is the more
-	// recent change: the adoption, guarded by the token read before it, skips.
-	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
+	return got
+}
+
+// TestAdoptFleetAccessChange: a Fleet-side change becomes the provider row's
+// baseline (roles and allowed; never the version), a deletion marks it not
+// allowed, and a re-creation allows it again.
+func TestAdoptFleetAccessChange(t *testing.T) {
+	st := newTestStore(t)
+	state := provisionedTestAccount(t, st)
+	adopt(t, st, true, true, RoleViewer, "client")
+	if got := providerState(t, st, state); got.ChatRole != RoleViewer || got.OpsRole != "client" || got.Version != 3 || !got.Allowed {
+		t.Fatalf("after adopt = %+v", got)
+	}
+	adopt(t, st, false, false, "", "")
+	if got := providerState(t, st, state); got.Allowed || got.ChatRole != RoleViewer {
+		t.Fatalf("after a Fleet deletion = %+v, want not allowed with its roles kept", got)
+	}
+	adopt(t, st, true, true, RoleMember, "readonly")
+	if got := providerState(t, st, state); !got.Allowed || got.OpsRole != "readonly" {
+		t.Fatalf("after a re-creation = %+v, want allowed again", got)
+	}
+}
+
+// TestAdoptFleetAccessChangeSkipsWhenTheRowMoved: the token read before a
+// Fleet change guards its adoption against a provider push that landed
+// meanwhile and against another Fleet change's adoption.
+func TestAdoptFleetAccessChangeSkipsWhenTheRowMoved(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	state := provisionedTestAccount(t, st)
+
+	token, _ := st.ProviderStateToken(ctx, "idp@x.com")
 	newer := state
 	newer.Version, newer.EventID, newer.ChatRole, newer.OpsRole = 4, "e4", RoleAdmin, "admin"
 	if _, _, err := st.ApplyExternalAccess(ctx, newer); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, RoleViewer, "readonly"); err != nil || ok {
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleViewer, "readonly"); err != nil || ok {
 		t.Fatalf("adopt over a newer push = (%v, %v), want skipped", ok, err)
 	}
-	got, _, _ = st.ExternalAccessState(ctx, state.Issuer, state.Subject)
-	if got.Version != 4 || got.ChatRole != RoleAdmin || got.OpsRole != "admin" {
-		t.Fatalf("state after a skipped adopt = %+v, want the provider's v4 roles", got)
+	if got := providerState(t, st, state); got.Version != 4 || got.OpsRole != "admin" {
+		t.Fatalf("after a skipped adopt = %+v, want the provider's v4", got)
 	}
-	// Outbox history: one account gone after an access event, one whose latest
-	// event is already a deletion, one that still exists.
+
+	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleMember, "client"); err != nil || !ok {
+		t.Fatalf("first overlapping adopt = (%v, %v)", ok, err)
+	}
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleViewer, "readonly"); err != nil || ok {
+		t.Fatalf("stale overlapping adopt = (%v, %v), want skipped", ok, err)
+	}
+	if got := providerState(t, st, state); got.ChatRole != RoleMember || got.OpsRole != "client" {
+		t.Fatalf("after overlapping adopts = %+v, want the first kept", got)
+	}
+}
+
+// TestDeletedAccountEmails: gone accounts known from provider rows or outbox
+// history, including a deletion the receiver rejected; not one whose deletion
+// is already reported, nor one that still exists.
+func TestDeletedAccountEmails(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	provisionedTestAccount(t, st)
+	if _, err := st.CreateUser(ctx, "kept@x.com", "pw-123456789"); err != nil {
+		t.Fatal(err)
+	}
 	enqueueTestEvent(t, st, "lost-delete@x.com", RoleMember)
 	enqueueTestEvent(t, st, "reported@x.com", RoleMember)
 	if _, err := st.EnqueueAccountEvent(ctx, AccountEvent{Type: AccountEventDeleted, Email: "reported@x.com", Source: AccountEventSourceCLI}); err != nil {
 		t.Fatal(err)
 	}
 	enqueueTestEvent(t, st, "kept@x.com", RoleMember)
-	// A deletion the receiver rejected is repaired by resync too.
 	rejected, err := st.EnqueueAccountEvent(ctx, AccountEvent{Type: AccountEventDeleted, Email: "rejected@x.com", Source: AccountEventSourceCLI})
 	if err != nil {
 		t.Fatal(err)
@@ -240,31 +294,46 @@ func TestDeletedAccountEmailsAndAdoptFleetAccessChange(t *testing.T) {
 	if err := st.DeleteUser(ctx, "idp@x.com"); err != nil {
 		t.Fatal(err)
 	}
-	// Two overlapping Fleet changes read the same token; once one adopts, the
-	// other's delayed adoption is stale and skips rather than overwrite it.
-	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
-	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, RoleMember, "client"); err != nil || !ok {
-		t.Fatalf("first overlapping adopt = (%v, %v)", ok, err)
-	}
-	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, RoleViewer, "readonly"); err != nil || ok {
-		t.Fatalf("stale overlapping adopt = (%v, %v), want skipped", ok, err)
-	}
-	if got, _, _ = st.ExternalAccessState(ctx, state.Issuer, state.Subject); got.ChatRole != RoleMember || got.OpsRole != "client" {
-		t.Fatalf("state after overlapping adopts = %+v, want the first adoption kept", got)
-	}
-	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
-	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, false, "", ""); err != nil || !ok {
-		t.Fatalf("adopt deletion = (%v, %v)", ok, err)
-	}
-	got, _, _ = st.ExternalAccessState(ctx, state.Issuer, state.Subject)
-	if got.Allowed || got.ChatRole != RoleMember {
-		t.Fatalf("state after a Fleet deletion = %+v, want not allowed with its roles kept", got)
-	}
 	gone, err := st.DeletedAccountEmails(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(gone, ",") != "idp@x.com,lost-delete@x.com,rejected@x.com" {
-		t.Fatalf("deleted emails = %v, want the provider-known and the history-known gone accounts", gone)
+		t.Fatalf("deleted emails = %v", gone)
+	}
+}
+
+// TestLockAccountEventsSerializesOneAccount: a second holder of the same
+// account's lock waits for the first; another account's lock does not.
+func TestLockAccountEventsSerializesOneAccount(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	unlock, err := st.LockAccountEvents(ctx, "Lock@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := st.LockAccountEvents(ctx, "other@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other()
+	got := make(chan struct{})
+	go func() {
+		release, err := st.LockAccountEvents(ctx, "lock@x.com")
+		if err == nil {
+			release()
+		}
+		close(got)
+	}()
+	select {
+	case <-got:
+		t.Fatal("a second holder took the account's lock while it was held")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lock was not handed on after release")
 	}
 }
