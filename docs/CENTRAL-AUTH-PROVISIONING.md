@@ -67,3 +67,12 @@ admin APIs and operator commands remain available, but a later Auth desired
 state for that identity is authoritative for enabled state and the two roles.
 This change does not delete dormant accounts or migrate application data into
 Auth.
+
+## The other direction
+
+Role changes and removals made in Fleet reach Auth through Fleet's generic
+account-events feed ([ACCOUNT-EVENTS.md](ACCOUNT-EVENTS.md),
+[ADR-0076](adr/0076-fleet-publishes-account-events.md)) when the operator
+points it at Auth. Fleet does not know the receiver is Auth. With the feed
+configured, the most recent change on either side wins; without it, the
+paragraph above still describes the behavior.

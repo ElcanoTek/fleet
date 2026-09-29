@@ -90,6 +90,12 @@
 #   # FLEET_WEBHOOK_SECRET=...                    # SECRET — if set, body is HMAC-SHA256-signed (X-Fleet-Signature)
 #   # FLEET_NOTIFY_TIMEOUT=10s                    # per-attempt timeout (default 10s)
 #   # FLEET_NOTIFY_RETRIES=2                      # additional attempts after the first (default 2)
+#
+#   # Account events (docs/ACCOUNT-EVENTS.md): signed Chat membership/role changes
+#   # for an identity provider or audit sink. OFF unless the URL is set; the
+#   # secret is then REQUIRED (events are never sent unsigned).
+#   # FLEET_ACCOUNT_EVENTS_URL=https://auth.example.com/apps/fleet/events
+#   # FLEET_ACCOUNT_EVENTS_SECRET=...             # SECRET: HMAC-SHA256 key shared with the receiver; must differ from FLEET_WEBHOOK_SECRET
 
 [Unit]
 Description=fleet (chat + orchestrator + scheduler + worker pool)

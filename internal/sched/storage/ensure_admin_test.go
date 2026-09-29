@@ -93,3 +93,30 @@ func TestEnsureAdminUser(t *testing.T) {
 		t.Errorf("EnsureAdminUser(blank) should be a no-op, got %v", err)
 	}
 }
+
+// TestOpsRoleReportsEnabledRoleOnly pins the account-events read-back: a
+// missing row and a centrally disabled row both read as "none".
+func TestOpsRoleReportsEnabledRoleOnly(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	const email = "Ops-Role@Example.com"
+	if role, err := store.OpsRole(ctx, email); err != nil || role != "none" {
+		t.Fatalf("missing row = (%q, %v), want none", role, err)
+	}
+	if err := store.EnsureUserWithRole(ctx, email, "client"); err != nil {
+		t.Fatal(err)
+	}
+	if role, err := store.OpsRole(ctx, email); err != nil || role != "client" {
+		t.Fatalf("enabled row = (%q, %v), want client", role, err)
+	}
+	u, err := store.GetAnyUserByUsernameWithContext(ctx, "ops-role@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetUserEnabled(ctx, u.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if role, err := store.OpsRole(ctx, email); err != nil || role != "none" {
+		t.Fatalf("disabled row = (%q, %v), want none", role, err)
+	}
+}

@@ -254,6 +254,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 			return
 		}
 	}
+	defer s.beginAccountChange(r, email, store.AccountEventSourceAdminUI, userFromCtx(r.Context()))()
 	u, err := s.store.SetUserRoleTeam(r.Context(), email, body.Role, body.TeamID)
 	if err != nil {
 		switch {
