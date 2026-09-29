@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -96,8 +97,18 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		for _, m := range sharedRows {
 			sharedWithMe = append(sharedWithMe, sharedServerView{RemoteMCPServer: m, Owner: m.UserEmail})
 		}
+		// Own rows carry the directory drift (F13); a shared row carries
+		// none, since only the owner can act on it.
+		var catalog []clientconfig.RemoteMCPCatalogEntry
+		if s.clientConfig != nil {
+			catalog = s.clientConfig.RemoteMCPCatalog
+		}
+		views := make([]remoteServerView, 0, len(servers))
+		for _, row := range servers {
+			views = append(views, remoteServerView{RemoteMCPServer: row, CatalogDrift: driftFromCatalog(row, catalog)})
+		}
 		writeJSON(w, map[string]any{
-			"servers":        servers,
+			"servers":        views,
 			"shares":         shares,
 			"shared_with_me": sharedWithMe,
 		})
