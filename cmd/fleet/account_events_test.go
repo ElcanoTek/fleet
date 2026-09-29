@@ -134,3 +134,25 @@ func TestAccountEventsCreateUserPublishesAChatAccountsOpsGrant(t *testing.T) {
 		t.Fatalf("events = %+v, want one cli event for the Chat account only", evs)
 	}
 }
+
+// TestAccountEventsDeliveryStopsAndSignalsDone: the worker's done channel
+// closes after ctx ends, which is what shutdown waits on.
+func TestAccountEventsDeliveryStopsAndSignalsDone(t *testing.T) {
+	chatDsn := os.Getenv("FLEET_TEST_DATABASE_URL")
+	if chatDsn == "" {
+		t.Skip("FLEET_TEST_DATABASE_URL is required; skipping Postgres-backed test")
+	}
+	chat, err := store.Open(chatDsn, store.DefaultPoolConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chat.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := startAccountEventsDelivery(ctx, &config.Config{}, chat)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deliverer did not stop after cancel")
+	}
+}

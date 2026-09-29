@@ -291,3 +291,25 @@ func TestCLIWarnsWhenTheServerEnvFileIsUnreadable(t *testing.T) {
 		t.Fatal("feed state should be unknown")
 	}
 }
+
+// TestImportPublishesCreatedAccounts: `fleet import` writes Chat users and Ops
+// identities in separate sections, and afterwards publishes each created Chat
+// account once with its state across both; an Ops-only name publishes nothing.
+func TestImportPublishesCreatedAccounts(t *testing.T) {
+	chat, sched := accountEventsCLIFixture(t)
+	ctx := context.Background()
+	if _, err := chat.CreateUser(ctx, "imp@acctev.test", "import-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.EnsureUserWithRole(ctx, "imp@acctev.test", "client"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.EnsureUserWithRole(ctx, "api@acctev.test", "readonly"); err != nil {
+		t.Fatal(err)
+	}
+	publishImportedAccounts(ctx, "", "", []string{"imp@acctev.test", "api@acctev.test", "IMP@acctev.test"})
+	evs := drainCLIEvents(t, chat)
+	if len(evs) != 1 || evs[0].Email != "imp@acctev.test" || evs[0].OpsRole != "client" || evs[0].Source != "cli" {
+		t.Fatalf("events = %+v, want one cli event for the imported Chat account", evs)
+	}
+}

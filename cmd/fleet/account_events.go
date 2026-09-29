@@ -31,12 +31,35 @@ func accountEventsRecorder(cfg *config.Config, chatStore *store.Store, schedStor
 // of ctx. Rows queued by the operator CLI (a separate process) are delivered
 // here too. With the feed off it still runs the retention sweep: a feed that
 // was on and then switched off must not keep its delivered and given-up rows
-// past the documented 7 and 30 days.
-func startAccountEventsDelivery(ctx context.Context, cfg *config.Config, chatStore *store.Store) {
+// past the documented 7 and 30 days. The returned channel closes when the
+// worker has stopped — after ctx ends, once it has recorded the attempt it was
+// in and handed unsent rows back (awaitAccountEventsDelivery).
+func startAccountEventsDelivery(ctx context.Context, cfg *config.Config, chatStore *store.Store) <-chan struct{} {
 	if cfg.AccountEventsURL != "" {
 		log.Printf("account events: delivering to the configured FLEET_ACCOUNT_EVENTS_URL")
 	}
-	go accountevents.NewDeliverer(chatStore, cfg.AccountEventsURL, cfg.AccountEventsSecret).Run(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		accountevents.NewDeliverer(chatStore, cfg.AccountEventsURL, cfg.AccountEventsSecret).Run(ctx)
+	}()
+	return done
+}
+
+// accountEventsShutdownWait bounds the wait for the deliverer at exit: its
+// post-stop bookkeeping runs on a 5s detached context per write, and a
+// wedged database must not hold the process past its supervisor's patience.
+const accountEventsShutdownWait = 15 * time.Second
+
+// awaitAccountEventsDelivery waits for the deliverer to stop, bounded. Without
+// it the process can exit mid-cleanup, and every row the stopped pass had
+// claimed stays leased for claimLease after the restart.
+func awaitAccountEventsDelivery(done <-chan struct{}) {
+	select {
+	case <-done:
+	case <-time.After(accountEventsShutdownWait):
+		log.Printf("account events: deliverer did not stop within %s; claimed rows are reclaimable once their lease expires", accountEventsShutdownWait)
+	}
 }
 
 // accountEventsCreateUser wraps the orchestrator admin API's `POST /users`

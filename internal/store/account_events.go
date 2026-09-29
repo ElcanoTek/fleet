@@ -259,8 +259,9 @@ func (s *Store) PruneAccountEvents(ctx context.Context, deliveredBefore, failedB
 
 // DeletedAccountEmails returns emails the feed has reason to believe once had a
 // Chat account that no longer exists: an identity-provider desired-state row,
-// or an outbox row whose latest event for the email is not already a
-// deletion. `fleet account-events resync` republishes these as user.deleted,
+// or an outbox row whose latest event for the email is not a deletion that is
+// delivered or still pending (a deletion the receiver rejected or that gave up
+// is repaired too, once the receiver is fixed). `fleet account-events resync` republishes these as user.deleted,
 // so a deletion event that was lost (a crash before enqueue, a CLI that could
 // not open a database, a give-up) is repaired like any other. Delivered and
 // given-up outbox rows are pruned after 7 and 30 days, so the provider rows
@@ -271,10 +272,10 @@ func (s *Store) DeletedAccountEmails(ctx context.Context) ([]string, error) {
 			SELECT email FROM external_access_state
 			UNION
 			SELECT email FROM (
-				SELECT DISTINCT ON (email) email, type
+				SELECT DISTINCT ON (email) email, type, failed_at
 				  FROM account_events
 				 ORDER BY email, id DESC
-			) latest WHERE type <> 'user.deleted'
+			) latest WHERE type <> 'user.deleted' OR failed_at IS NOT NULL
 		) known
 		WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.email = known.email)
 		ORDER BY email`)
@@ -294,28 +295,33 @@ func (s *Store) DeletedAccountEmails(ctx context.Context) ([]string, error) {
 }
 
 // ProviderStateToken identifies the identity provider's stored desired state
-// for email as it is now — every row's issuer, subject and version — so a later
-// AdoptFleetAccessChange can tell whether a provider push landed in between.
-// "" means the provider holds no row for email.
+// for email as it is now — every row's issuer, subject and version, and the
+// fields a Fleet adoption writes (allowed, chat_role, ops_role) — so a later
+// AdoptFleetAccessChange can tell whether anything moved it in between: a
+// provider push, or another Fleet change's adoption (two overlapping Fleet
+// mutations of one account both read the same token; without the adopted
+// fields, the one adopting last could overwrite the final state with its
+// stale snapshot). "" means the provider holds no row for email.
 func (s *Store) ProviderStateToken(ctx context.Context, email string) (string, error) {
 	return providerStateToken(ctx, s.db, normalizeEmail(email), "")
 }
 
 func providerStateToken(ctx context.Context, q queryer, email, lock string) (string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT issuer, subject, version FROM external_access_state
-		WHERE email = $1 ORDER BY issuer, subject`+lock, email)
+	rows, err := q.QueryContext(ctx, `SELECT issuer, subject, version, allowed, chat_role, ops_role
+		FROM external_access_state WHERE email = $1 ORDER BY issuer, subject`+lock, email)
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
 	var b strings.Builder
 	for rows.Next() {
-		var issuer, subject string
+		var issuer, subject, chatRole, opsRole string
 		var version int64
-		if err := rows.Scan(&issuer, &subject, &version); err != nil {
+		var allowed bool
+		if err := rows.Scan(&issuer, &subject, &version, &allowed, &chatRole, &opsRole); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "%s\x00%s\x00%d\x00", issuer, subject, version)
+		fmt.Fprintf(&b, "%s\x00%s\x00%d\x00%t\x00%s\x00%s\x00", issuer, subject, version, allowed, chatRole, opsRole)
 	}
 	return b.String(), rows.Err()
 }

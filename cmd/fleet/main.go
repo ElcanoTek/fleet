@@ -1140,7 +1140,7 @@ func run() error {
 	// retention sweeps, attachment + temp-upload files, orphan workspaces,
 	// stale git worktrees). See startMaintenanceLoop.
 	startMaintenanceLoop(ctx, cfg, h, chatSrv, chatStore)
-	startAccountEventsDelivery(ctx, cfg, chatStore)
+	accountEventsDone := startAccountEventsDelivery(ctx, cfg, chatStore)
 
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
@@ -1153,6 +1153,9 @@ func run() error {
 	// then drain. Extracted so run() stays within the cyclomatic budget.
 	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
 	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer)
+	// performShutdown cancelled ctx; let the deliverer record its last attempt
+	// and hand unsent rows back before the process exits.
+	awaitAccountEventsDelivery(accountEventsDone)
 	return nil
 }
 

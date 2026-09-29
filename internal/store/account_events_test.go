@@ -228,22 +228,43 @@ func TestDeletedAccountEmailsAndAdoptFleetAccessChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	enqueueTestEvent(t, st, "kept@x.com", RoleMember)
+	// A deletion the receiver rejected is repaired by resync too.
+	rejected, err := st.EnqueueAccountEvent(ctx, AccountEvent{Type: AccountEventDeleted, Email: "rejected@x.com", Source: AccountEventSourceCLI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	if err := st.MarkAccountEventFailed(ctx, rejected.ID, now, now, true, "receiver rejected the event: status 400"); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.DeleteUser(ctx, "idp@x.com"); err != nil {
 		t.Fatal(err)
+	}
+	// Two overlapping Fleet changes read the same token; once one adopts, the
+	// other's delayed adoption is stale and skips rather than overwrite it.
+	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, RoleMember, "client"); err != nil || !ok {
+		t.Fatalf("first overlapping adopt = (%v, %v)", ok, err)
+	}
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, RoleViewer, "readonly"); err != nil || ok {
+		t.Fatalf("stale overlapping adopt = (%v, %v), want skipped", ok, err)
+	}
+	if got, _, _ = st.ExternalAccessState(ctx, state.Issuer, state.Subject); got.ChatRole != RoleMember || got.OpsRole != "client" {
+		t.Fatalf("state after overlapping adopts = %+v, want the first adoption kept", got)
 	}
 	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
 	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, false, "", ""); err != nil || !ok {
 		t.Fatalf("adopt deletion = (%v, %v)", ok, err)
 	}
 	got, _, _ = st.ExternalAccessState(ctx, state.Issuer, state.Subject)
-	if got.Allowed || got.ChatRole != RoleAdmin {
+	if got.Allowed || got.ChatRole != RoleMember {
 		t.Fatalf("state after a Fleet deletion = %+v, want not allowed with its roles kept", got)
 	}
 	gone, err := st.DeletedAccountEmails(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(gone, ",") != "idp@x.com,lost-delete@x.com" {
+	if strings.Join(gone, ",") != "idp@x.com,lost-delete@x.com,rejected@x.com" {
 		t.Fatalf("deleted emails = %v, want the provider-known and the history-known gone accounts", gone)
 	}
 }

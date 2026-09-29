@@ -184,6 +184,7 @@ type fakeOutbox struct {
 	failed    []failedMark
 	released  []int64
 	pruned    int
+	markErr   error
 }
 
 type failedMark struct {
@@ -203,6 +204,9 @@ func (f *fakeOutbox) ClaimDueAccountEvents(context.Context, int64, int, time.Dur
 func (f *fakeOutbox) MarkAccountEventDelivered(_ context.Context, id, _ int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.markErr != nil {
+		return f.markErr
+	}
 	f.delivered = append(f.delivered, id)
 	return nil
 }
@@ -572,5 +576,24 @@ func TestDeletionWithResidualOpsIsNotReportedAsDeleted(t *testing.T) {
 	}
 	if len(p.queued) != 3 {
 		t.Fatalf("an Ops-only identity emitted: %+v", p.queued[3:])
+	}
+}
+
+// TestDeliveryReleasesUnsentRowsAfterABookkeepingError: one failed outbox
+// write ends the pass, but the rows it had not sent yet go back at once rather
+// than sit leased behind it.
+func TestDeliveryReleasesUnsentRowsAfterABookkeepingError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer srv.Close()
+	now := time.Now()
+	out := &fakeOutbox{
+		due:     []store.AccountEvent{sampleEvent(1, now), sampleEvent(2, now), sampleEvent(3, now)},
+		markErr: errors.New("db unavailable"),
+	}
+	if err := NewDeliverer(out, srv.URL, "s").RunOnce(context.Background(), now); err == nil {
+		t.Fatal("RunOnce hid the bookkeeping error")
+	}
+	if len(out.released) != 2 || out.released[0] != 2 || out.released[1] != 3 {
+		t.Fatalf("released = %v, want the two unsent rows", out.released)
 	}
 }

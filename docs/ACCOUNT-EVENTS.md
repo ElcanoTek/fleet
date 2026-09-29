@@ -46,7 +46,7 @@ Writers that publish:
 | Source | What |
 | --- | --- |
 | `admin_ui` | Settings → Admin → Users: create, role / Ops role change, delete |
-| `cli` | `fleet admin add/rm`, `fleet chat user add/role/del`, `fleet sched user add/set-role/rename/del`, and the orchestrator admin API's `POST /users` (`ADMIN_API_KEY`) when the username is a Chat account's email |
+| `cli` | `fleet admin add/rm`, `fleet chat user add/role/del`, `fleet sched user add/set-role/rename/del`, the orchestrator admin API's `POST /users` (`ADMIN_API_KEY`) when the username is a Chat account's email, and `fleet import` (each account it creates, published once after both sections with its resulting state) |
 | `system` | The `FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS` boot seed, when it actually changes a Chat account's Ops role |
 | `identity_provider` | A change Fleet applied because its identity provider told it to (the Central Auth provisioning push, [CENTRAL-AUTH-PROVISIONING.md](CENTRAL-AUTH-PROVISIONING.md)) |
 | `resync` | `fleet account-events resync` |
@@ -143,7 +143,9 @@ server too.
   a signed body reaches only the configured URL; and 401/403/404, usually a
   secret or URL the operator can fix) and any transport error. The wait starts
   at 5 seconds and doubles to a one-hour ceiling. A shutdown mid-send records
-  no attempt and hands the claimed rows straight back.
+  no attempt and hands the claimed rows straight back (`fleet serve` waits up
+  to 15 seconds for that before exiting), and so does a pass cut short by a
+  failed outbox write.
 - **Give up:** 7 days after the event was queued, the row is marked failed and
   the account's next event proceeds. Failed rows are visible in
   `fleet account-events status` and kept 30 days; delivered rows are kept 7.
@@ -162,8 +164,9 @@ fleet account-events resync   # queue every Chat account's current state, and us
 
 `resync` knows an account once existed from the identity provider's stored
 desired state or from the outbox's own history (rows are kept 7 or 30 days),
-so an account deleted with no event queued is reported gone even when the
-receiver is not an identity provider — within that retention for one.
+so an account deleted with no event queued — or whose deletion the receiver
+rejected or never acknowledged — is reported gone even when the receiver is
+not an identity provider, within that retention for one.
 
 `export` works with the feed off and changes nothing, so an operator can
 compare Fleet's state with a receiver before switching the feed on. `resync`

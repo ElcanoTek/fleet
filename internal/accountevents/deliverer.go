@@ -160,7 +160,7 @@ func (d *Deliverer) RunOnce(ctx context.Context, now time.Time) error {
 			// row is redelivered after its lease (harmless, receivers dedupe on
 			// id, but avoidable).
 			if err := d.book(ctx, func(c context.Context) error { return d.outbox.MarkAccountEventDelivered(c, ev.ID, done.Unix()) }); err != nil {
-				return fmt.Errorf("mark delivered: %w", err)
+				return d.abandon(ctx, events[i+1:], fmt.Errorf("mark delivered: %w", err))
 			}
 			continue
 		}
@@ -170,7 +170,7 @@ func (d *Deliverer) RunOnce(ctx context.Context, now time.Time) error {
 		if err := d.book(ctx, func(c context.Context) error {
 			return d.outbox.MarkAccountEventFailed(c, ev.ID, done.Unix(), retryAt, giveUp, sendErr.Error())
 		}); err != nil {
-			return fmt.Errorf("mark failed: %w", err)
+			return d.abandon(ctx, events[i+1:], fmt.Errorf("mark failed: %w", err))
 		}
 		switch {
 		case rejected:
@@ -191,8 +191,22 @@ func (d *Deliverer) book(ctx context.Context, write func(context.Context) error)
 	return write(c)
 }
 
+// abandon ends a pass on a bookkeeping error: the rows not yet sent go back
+// now, instead of sitting leased for claimLease behind one failed write (the
+// row whose mark failed stays leased: it was sent, and redelivering it after
+// its lease is the at-least-once promise).
+func (d *Deliverer) abandon(ctx context.Context, unsent []store.AccountEvent, cause error) error {
+	if err := d.release(ctx, unsent); err != nil && !errors.Is(err, context.Canceled) {
+		return errors.Join(cause, err)
+	}
+	return cause
+}
+
 // release hands events back to the outbox after ctx ended.
 func (d *Deliverer) release(ctx context.Context, events []store.AccountEvent) error {
+	if len(events) == 0 {
+		return ctx.Err()
+	}
 	ids := make([]int64, len(events))
 	for i, ev := range events {
 		ids[i] = ev.ID
