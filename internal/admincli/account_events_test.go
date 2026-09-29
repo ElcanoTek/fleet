@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -189,5 +191,78 @@ func TestCLIExportAndResync(t *testing.T) {
 	})
 	if !strings.Contains(status, "feed:      on") || !strings.Contains(status, "delivered: 2") || strings.Contains(status, "127.0.0.1") {
 		t.Fatalf("status output:\n%s", status)
+	}
+}
+
+// TestCLIResyncRepublishesALostDeletion: an account deleted with no event
+// queued (the crash window, a CLI that could not open a database) is known
+// to the feed from its outbox history, and resync reports it gone.
+func TestCLIResyncRepublishesALostDeletion(t *testing.T) {
+	chat, _ := accountEventsCLIFixture(t)
+	ctx := context.Background()
+	if _, err := chat.CreateUser(ctx, "lost@acctev.test", "lost-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chat.EnqueueAccountEvent(ctx, store.AccountEvent{
+		Type: store.AccountEventAccessChanged, Email: "lost@acctev.test", Enabled: true,
+		ChatRole: store.RoleMember, OpsRole: "none", Source: store.AccountEventSourceCLI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	drainCLIEvents(t, chat)
+	if err := chat.DeleteUser(ctx, "lost@acctev.test"); err != nil { // no event: the lost one
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if code := cmdAccountEvents([]string{"resync"}); code != 0 {
+			t.Errorf("resync: exit %d", code)
+		}
+	})
+	evs := drainCLIEvents(t, chat)
+	if len(evs) != 1 || evs[0].Type != store.AccountEventDeleted || evs[0].Email != "lost@acctev.test" || evs[0].Source != "resync" {
+		t.Fatalf("resync events = %+v, want the lost deletion", evs)
+	}
+	if !strings.Contains(out, "(1 deletion(s))") {
+		t.Fatalf("resync output = %q", out)
+	}
+	// Once reported, a second resync does not repeat it.
+	captureStdout(t, func() { cmdAccountEvents([]string{"resync"}) })
+	if evs := drainCLIEvents(t, chat); len(evs) != 0 {
+		t.Fatalf("second resync = %+v, want nothing", evs)
+	}
+}
+
+// TestCLIWarnsWhenTheServerEnvFileIsUnreadable: a CLI that cannot read the
+// env file cannot know whether the feed is on, and says so instead of
+// silently publishing nothing.
+func TestCLIWarnsWhenTheServerEnvFileIsUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a 0000 file; the unreadable case cannot be staged")
+	}
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_ACCOUNT_EVENTS_URL=https://auth.example.com/e\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_ENV_FILE", envFile)
+	t.Setenv("FLEET_ACCOUNT_EVENTS_URL", "")
+	resetEnvFileCache()
+	warnEnvFileUnreadable = sync.Once{}
+	t.Cleanup(resetEnvFileCache)
+
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	on := accountEventsConfigured()
+	os.Stderr = orig
+	_ = w.Close()
+	msg, _ := io.ReadAll(r)
+	if on {
+		t.Fatal("feed reported on from a file that could not be read")
+	}
+	if !strings.Contains(string(msg), "cannot tell whether the account-events feed is on") {
+		t.Fatalf("stderr = %q, want the unreadable-env-file warning", msg)
 	}
 }

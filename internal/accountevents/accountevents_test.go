@@ -182,6 +182,8 @@ type fakeOutbox struct {
 	due       []store.AccountEvent
 	delivered []int64
 	failed    []failedMark
+	released  []int64
+	pruned    int
 }
 
 type failedMark struct {
@@ -212,7 +214,22 @@ func (f *fakeOutbox) MarkAccountEventFailed(_ context.Context, id, now, retryAt 
 	return nil
 }
 
-func (f *fakeOutbox) PruneAccountEvents(context.Context, int64, int64) (int64, error) { return 0, nil }
+func (f *fakeOutbox) ReleaseAccountEventLeases(ctx context.Context, ids []int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	f.released = append(f.released, ids...)
+	return nil
+}
+
+func (f *fakeOutbox) PruneAccountEvents(context.Context, int64, int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pruned++
+	return 0, nil
+}
 
 func sampleEvent(id int64, createdAt time.Time) store.AccountEvent {
 	return store.AccountEvent{
@@ -359,5 +376,144 @@ func TestBodyForDeletedEvent(t *testing.T) {
 	}
 	if p.Type != "user.deleted" || p.User.Enabled || p.User.ChatRole != "" || p.User.OpsRole != "" || p.Sequence != 5 {
 		t.Fatalf("payload = %+v", p)
+	}
+}
+
+// adoptingPlanes is fakePlanes that also holds the identity provider's stored
+// desired state, the way the chat store does.
+type adoptingPlanes struct {
+	*fakePlanes
+	adopted []adoption
+}
+
+type adoption struct {
+	email             string
+	exists            bool
+	chatRole, opsRole string
+}
+
+func (a *adoptingPlanes) AdoptFleetAccessChange(_ context.Context, email string, exists bool, chatRole, opsRole string) error {
+	a.adopted = append(a.adopted, adoption{email, exists, chatRole, opsRole})
+	return nil
+}
+
+// TestCommitAdoptsFleetChangesIntoTheProviderBaseline: a change made in Fleet
+// becomes the provider's stored baseline (so a redelivered, older push cannot
+// revert it), a deletion marks it not allowed, and a change applied on the
+// provider's own word is not adopted.
+func TestCommitAdoptsFleetChangesIntoTheProviderBaseline(t *testing.T) {
+	ctx := context.Background()
+	p := &adoptingPlanes{fakePlanes: newPlanes()}
+	rec := NewRecorder(p, p, p)
+	const email = "fay@x.com"
+	p.chat[email] = store.AccountAccess{Email: email, Role: store.RoleMember, Enabled: true}
+	p.ops[email] = "readonly"
+
+	c := rec.Begin(ctx, email)
+	p.ops[email] = "client"
+	if err := c.Commit(ctx, store.AccountEventSourceAdminUI, "boss@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	c = rec.Begin(ctx, email)
+	p.ops[email] = "readonly"
+	if err := c.Commit(ctx, store.AccountEventSourceIdentityProvider, ""); err != nil {
+		t.Fatal(err)
+	}
+	c = rec.Begin(ctx, email)
+	delete(p.chat, email)
+	if err := c.Commit(ctx, store.AccountEventSourceCLI, ""); err != nil {
+		t.Fatal(err)
+	}
+	want := []adoption{{email, true, "member", "client"}, {email, false, "", ""}}
+	if len(p.adopted) != len(want) || p.adopted[0] != want[0] || p.adopted[1].exists {
+		t.Fatalf("adopted = %+v, want %+v (the identity_provider change not adopted)", p.adopted, want)
+	}
+	if len(p.queued) != 3 {
+		t.Fatalf("queued %d events, want 3", len(p.queued))
+	}
+}
+
+func TestPublishDeletedQueuesOnlyForGoneAccounts(t *testing.T) {
+	ctx := context.Background()
+	p := newPlanes()
+	p.chat["here@x.com"] = store.AccountAccess{Email: "here@x.com", Role: store.RoleMember, Enabled: true}
+	rec := NewRecorder(p, p, p)
+	if ok, err := rec.PublishDeleted(ctx, "here@x.com", store.AccountEventSourceResync, ""); ok || err != nil {
+		t.Fatalf("existing account = (%v, %v), want skipped", ok, err)
+	}
+	if ok, err := rec.PublishDeleted(ctx, "gone@x.com", store.AccountEventSourceResync, ""); !ok || err != nil {
+		t.Fatalf("gone account = (%v, %v), want queued", ok, err)
+	}
+	if len(p.queued) != 1 || p.queued[0].Type != store.AccountEventDeleted || p.queued[0].Email != "gone@x.com" ||
+		p.queued[0].ChatRole != "" || p.queued[0].Enabled {
+		t.Fatalf("queued %+v", p.queued)
+	}
+}
+
+func TestLogSafeStripsLineBreaks(t *testing.T) {
+	if got := logSafe("a@x.com\nforged line\r"); strings.ContainsAny(got, "\r\n") {
+		t.Fatalf("logSafe = %q", got)
+	}
+}
+
+// TestDeliveryGivesUpAtOnceOnARejectedBody: a receiver refusing the body
+// itself cannot change its mind about the same bytes, so the row stops
+// blocking the account's later events; an auth failure keeps retrying.
+func TestDeliveryGivesUpAtOnceOnARejectedBody(t *testing.T) {
+	for code, wantGiveUp := range map[int]bool{
+		http.StatusBadRequest: true, http.StatusUnprocessableEntity: true, http.StatusConflict: true,
+		http.StatusUnauthorized: false, http.StatusNotFound: false, http.StatusTooManyRequests: false,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }))
+		out := &fakeOutbox{due: []store.AccountEvent{sampleEvent(5, time.Now())}}
+		if err := NewDeliverer(out, srv.URL, "s").RunOnce(context.Background(), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		if len(out.failed) != 1 || out.failed[0].giveUp != wantGiveUp {
+			t.Errorf("status %d: failed = %+v, want giveUp=%v", code, out.failed, wantGiveUp)
+		}
+	}
+}
+
+// TestDeliveryReleasesLeasesWhenStopped: a stop that cuts a send off records
+// no attempt and hands that row and every unsent one back, rather than leaving
+// them leased past a restart.
+func TestDeliveryReleasesLeasesWhenStopped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	unblock := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		cancel()
+		select {
+		case <-r.Context().Done():
+		case <-unblock:
+		}
+	}))
+	defer srv.Close()
+	defer close(unblock)
+	now := time.Now()
+	out := &fakeOutbox{due: []store.AccountEvent{sampleEvent(1, now), sampleEvent(2, now), sampleEvent(3, now)}}
+	err := NewDeliverer(out, srv.URL, "s").RunOnce(ctx, now)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunOnce = %v, want the cancellation", err)
+	}
+	if len(out.failed) != 0 || len(out.delivered) != 0 {
+		t.Fatalf("failed %+v delivered %v, want nothing recorded for a cut-off send", out.failed, out.delivered)
+	}
+	if len(out.released) != 3 {
+		t.Fatalf("released = %v, want all three claimed rows", out.released)
+	}
+}
+
+// TestDelivererWithoutURLOnlyPrunes: with the feed off the retention sweep
+// still runs, and nothing is claimed or sent.
+func TestDelivererWithoutURLOnlyPrunes(t *testing.T) {
+	out := &fakeOutbox{due: []store.AccountEvent{sampleEvent(1, time.Now())}}
+	if err := NewDeliverer(out, "", "").RunOnce(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if out.pruned != 1 || len(out.due) != 1 || len(out.failed) != 0 {
+		t.Fatalf("pruned %d due %d failed %+v, want a prune and no claim", out.pruned, len(out.due), out.failed)
 	}
 }

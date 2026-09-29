@@ -192,8 +192,22 @@ func (s *Store) MarkAccountEventFailed(ctx context.Context, id, now, retryAt int
 		failedAt = now
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE account_events
-		SET lease_until = NULL, next_attempt_at = $2, failed_at = $3, last_error = $4
-		WHERE id = $1 AND delivered_at IS NULL`, id, retryAt, failedAt, truncateAccountEventError(message))
+		SET lease_until = NULL, next_attempt_at = $2, failed_at = $3, last_error = $4, last_failed_at = $5
+		WHERE id = $1 AND delivered_at IS NULL`, id, retryAt, failedAt, truncateAccountEventError(message), now)
+	return err
+}
+
+// ReleaseAccountEventLeases hands claimed rows back without recording an
+// attempt: the deliverer was stopped before it could send them, which says
+// nothing about the receiver. Without it a shutdown mid-batch leaves every
+// claimed row unavailable until its lease expires.
+func (s *Store) ReleaseAccountEventLeases(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE account_events
+		SET lease_until = NULL, attempts = GREATEST(attempts - 1, 0)
+		WHERE id = ANY($1::bigint[]) AND delivered_at IS NULL AND failed_at IS NULL`, ids)
 	return err
 }
 
@@ -222,7 +236,7 @@ func (s *Store) AccountEventStats(ctx context.Context) (AccountEventStats, error
 	var lastErr sql.NullString
 	err = s.db.QueryRowContext(ctx, `SELECT last_error FROM account_events
 		WHERE last_error IS NOT NULL AND delivered_at IS NULL
-		ORDER BY id DESC LIMIT 1`).Scan(&lastErr)
+		ORDER BY last_failed_at DESC NULLS LAST, id DESC LIMIT 1`).Scan(&lastErr)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return st, err
 	}
@@ -241,4 +255,64 @@ func (s *Store) PruneAccountEvents(ctx context.Context, deliveredBefore, failedB
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// DeletedAccountEmails returns emails the feed has reason to believe once had a
+// Chat account that no longer exists: an identity-provider desired-state row,
+// or an outbox row whose latest event for the email is not already a
+// deletion. `fleet account-events resync` republishes these as user.deleted,
+// so a deletion event that was lost (a crash before enqueue, a CLI that could
+// not open a database, a give-up) is repaired like any other. Delivered and
+// given-up outbox rows are pruned after 7 and 30 days, so the provider rows
+// are what make this durable for provider-managed accounts.
+func (s *Store) DeletedAccountEmails(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT email FROM (
+			SELECT email FROM external_access_state
+			UNION
+			SELECT email FROM (
+				SELECT DISTINCT ON (email) email, type
+				  FROM account_events
+				 ORDER BY email, id DESC
+			) latest WHERE type <> 'user.deleted'
+		) known
+		WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.email = known.email)
+		ORDER BY email`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		out = append(out, email)
+	}
+	return out, rows.Err()
+}
+
+// AdoptFleetAccessChange records a change made in Fleet itself (the admin UI,
+// the CLI, the boot seed) as the baseline of email's identity-provider
+// desired state, so the provider's own at-least-once redelivery of an older,
+// already-applied version cannot re-apply the roles it held before Fleet's
+// change: handleExternalAccess reconciles the Ops plane from this row even for
+// a version it has already seen. exists=false (the account was deleted in
+// Fleet) marks the row not allowed, keeping its roles so a newer grant from the
+// provider is non-destructive. Only the roles and allowed flag move — the
+// version stays the provider's, so its next real change still wins.
+// Emails with no provider row are untouched.
+func (s *Store) AdoptFleetAccessChange(ctx context.Context, email string, exists bool, chatRole, opsRole string) error {
+	email = normalizeEmail(email)
+	if !exists {
+		_, err := s.db.ExecContext(ctx, `UPDATE external_access_state SET allowed = FALSE WHERE email = $1`, email)
+		return err
+	}
+	if !ValidRole(chatRole) || !validOpsRole(opsRole) {
+		return fmt.Errorf("adopt fleet access change: invalid roles %q/%q", chatRole, opsRole)
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE external_access_state SET chat_role = $2, ops_role = $3 WHERE email = $1`,
+		email, chatRole, opsRole)
+	return err
 }

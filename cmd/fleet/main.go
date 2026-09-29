@@ -850,7 +850,7 @@ func run() error {
 	// carries, so no create path can drift.
 	h.SetBudgetGate(budgetEnforcer)
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
-	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr))
+	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr), accountEvents)
 
 	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
 	sch := scheduler.New(schedStorage, timezone())
@@ -1506,7 +1506,7 @@ func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle, pushEnabled
 
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
-func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc) http.Handler {
+func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc, accountEvents *accountevents.Recorder) http.Handler {
 	r := chi.NewRouter()
 	// ClientIPFromXFF replaces the deprecated, spoofable middleware.RealIP
 	// (GHSA-3fxj-6jh8-hvhx et al.): with no trusted prefixes it reads the
@@ -1562,7 +1562,9 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// restart. Admin-gated like the other sensitive mutations; returns a JSON
 		// summary of what changed. Equivalent to sending SIGHUP.
 		r.Post("/admin/mcp-servers/reload", reloadMCP)
-		r.Post("/users", h.CreateUser)
+		// An Ops identity named like a Chat account changes its effective
+		// ops_role, so the account-events feed hears about it (nil = off).
+		r.Post("/users", accountEventsCreateUser(h.CreateUser, accountEvents))
 		r.Post("/keys", h.CreateAPIKey)
 		r.Get("/keys", h.ListAPIKeys)
 		r.Get("/keys/audit", h.GetAuditLog)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/accountevents"
@@ -25,9 +26,25 @@ import (
 
 // accountEventsConfigured reports whether this box publishes account events
 // (FLEET_ACCOUNT_EVENTS_URL in the shell or the server env file).
+//
+// A server env file that exists but cannot be read (it is root-owned 0600 on a
+// provisioned box, and the CLI may run as someone else with --database-url)
+// makes the answer unknowable, and "off" would then be a silent miss: the
+// write happens, no event is queued, and nothing says so. That case warns, so
+// the operator knows to resync as a user who can read the file.
 func accountEventsConfigured() bool {
-	return strings.TrimSpace(envOrFile("FLEET_ACCOUNT_EVENTS_URL")) != ""
+	if strings.TrimSpace(envOrFile("FLEET_ACCOUNT_EVENTS_URL")) != "" {
+		return true
+	}
+	if err := envFileReadErr(); err != nil {
+		warnEnvFileUnreadable.Do(func() {
+			fmt.Fprintf(os.Stderr, "warning: cannot read the server env file (%v), so this command cannot tell whether the account-events feed is on; if it is, the change is not published — run `fleet account-events resync` as a user who can read it\n", err)
+		})
+	}
+	return false
 }
+
+var warnEnvFileUnreadable sync.Once
 
 // openAccountEvents returns a recorder over chat and sched, opening whichever
 // the command did not already hold (from otherDSN when the command has a flag
@@ -158,7 +175,11 @@ func accountEventsExport(argv []string) int {
 }
 
 // accountEventsResync queues one "resync" event per Chat account carrying its
-// current state, for the running server to deliver.
+// current state, for the running server to deliver — and one user.deleted per
+// email the feed knows once had an account that is gone now
+// (store.DeletedAccountEmails), so a lost deletion is repaired too: without it
+// a receiver that missed the deletion keeps the grant, and an identity
+// provider's next push would re-create the account.
 func accountEventsResync(argv []string) int {
 	if !accountEventsConfigured() {
 		return errf(1, "the account-events feed is off: set FLEET_ACCOUNT_EVENTS_URL and FLEET_ACCOUNT_EVENTS_SECRET first")
@@ -179,7 +200,22 @@ func accountEventsResync(argv []string) int {
 	if err != nil {
 		return errf(5, "resync (%d queued before the failure): %v", queued, err)
 	}
-	fmt.Printf("queued %d account event(s); the running fleet serve delivers them\n", queued)
+	ctx := context.Background()
+	gone, err := chat.DeletedAccountEmails(ctx)
+	if err != nil {
+		return errf(5, "resync (%d queued before the failure): list deleted accounts: %v", queued, err)
+	}
+	deleted := 0
+	for _, email := range gone {
+		ok, err := rec.PublishDeleted(ctx, email, store.AccountEventSourceResync, "")
+		if err != nil {
+			return errf(5, "resync (%d queued before the failure): %v", queued+deleted, err)
+		}
+		if ok {
+			deleted++
+		}
+	}
+	fmt.Printf("queued %d account event(s) (%d deletion(s)); the running fleet serve delivers them\n", queued+deleted, deleted)
 	return 0
 }
 

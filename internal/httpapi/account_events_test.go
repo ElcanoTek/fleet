@@ -168,3 +168,54 @@ func TestAccountEventsOffQueuesNothing(t *testing.T) {
 		t.Fatalf("stats = %+v, want an empty outbox with the feed off", stats)
 	}
 }
+
+// TestRedeliveredProviderPushDoesNotRevertAFleetChange is the convergence
+// case the feed exists for: the provider grants, an admin then changes the
+// account's Ops role in Fleet (published admin_ui, which the provider adopts),
+// and the provider redelivers its older, already-applied push — ordinary
+// at-least-once behaviour. The redelivery must not put the old Ops role back,
+// and must publish nothing: a silent revert tagged identity_provider is the
+// one event a provider is told it may ignore.
+func TestRedeliveredProviderPushDoesNotRevertAFleetChange(t *testing.T) {
+	s, ops, st := accountEventsFixture(t)
+	h := s.Routes()
+	grant := map[string]any{
+		"event_id": "grant-1", "issuer": "https://auth.example.com",
+		"subject": "account-7", "action": "grant", "version": 1, "issued_at": 1_000,
+		"settings": map[string]string{"chat_role": "member", "ops_role": "readonly"},
+	}
+	if w := do(t, h, http.MethodPost, "/auth/external-access", grant, "gia@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("grant: %d %s", w.Code, w.Body.String())
+	}
+	if w := do(t, h, http.MethodPatch, "/admin/users/gia@x.com",
+		map[string]any{"ops_role": "client"}, "boss@x.com"); w.Code != http.StatusOK {
+		t.Fatalf("admin patch: %d %s", w.Code, w.Body.String())
+	}
+	// Redelivery of the same, already-applied version.
+	if w := do(t, h, http.MethodPost, "/auth/external-access", grant, "gia@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("redelivery: %d %s", w.Code, w.Body.String())
+	}
+	roles, err := ops.Roles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roles["gia@x.com"] != "client" {
+		t.Fatalf("ops role after redelivery = %q, want the admin's client", roles["gia@x.com"])
+	}
+	evs := drainAccountEvents(t, st)
+	if len(evs) != 2 || evs[0].Source != "identity_provider" || evs[1].Source != "admin_ui" || evs[1].OpsRole != "client" {
+		t.Fatalf("events = %+v, want the grant and the admin change only", evs)
+	}
+
+	// A deletion in Fleet is adopted too: a redelivered grant does not
+	// re-enable the deleted account's Ops identity.
+	if w := do(t, h, http.MethodDelete, "/admin/users/gia@x.com", nil, "boss@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+	}
+	if w := do(t, h, http.MethodPost, "/auth/external-access", grant, "gia@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("redelivery after delete: %d %s", w.Code, w.Body.String())
+	}
+	if roles, _ := ops.Roles(context.Background()); roles["gia@x.com"] != "" {
+		t.Fatalf("ops role after a redelivered grant to a deleted account = %q, want none", roles["gia@x.com"])
+	}
+}

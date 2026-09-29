@@ -19,6 +19,9 @@ CREATE TABLE account_events (
     lease_until BIGINT,
     delivered_at BIGINT,
     failed_at BIGINT,
+    -- When last_error was written: `fleet account-events status` reports the
+    -- most recent failure by this, not by event id.
+    last_failed_at BIGINT,
     last_error TEXT
 );
 

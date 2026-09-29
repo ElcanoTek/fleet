@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -137,5 +138,92 @@ func TestAccountAccessIncludesDisabledRows(t *testing.T) {
 	all, err := st.ListAccountAccess(ctx)
 	if err != nil || len(all) != 1 || all[0].Email != "d@x.com" {
 		t.Fatalf("list = (%+v, %v)", all, err)
+	}
+}
+
+func TestAccountEventsReleaseLeasesAndLastErrorByFailureTime(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	older := enqueueTestEvent(t, st, "old@x.com", RoleMember)
+	newer := enqueueTestEvent(t, st, "new@x.com", RoleMember)
+	now := time.Now().Unix()
+	claimed, err := st.ClaimDueAccountEvents(ctx, now, 10, time.Hour)
+	if err != nil || len(claimed) != 2 {
+		t.Fatalf("claim = (%+v, %v)", claimed, err)
+	}
+	// A stopped deliverer hands both back: claimable again at once, with the
+	// cut-off attempt not counted.
+	if err := st.ReleaseAccountEventLeases(ctx, []int64{older.ID, newer.ID}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := st.ClaimDueAccountEvents(ctx, now, 10, time.Hour)
+	if err != nil || len(again) != 2 || again[0].Attempts != 1 {
+		t.Fatalf("reclaim after release = (%+v, %v), want both rows back at attempt 1", again, err)
+	}
+	// The newer-id event gave up long ago; the older-id one failed just now.
+	// status must report the fresh failure.
+	if err := st.MarkAccountEventFailed(ctx, newer.ID, now-86400, now, true, "receiver returned status 500"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkAccountEventFailed(ctx, older.ID, now, now+60, false, "receiver returned status 401"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := st.AccountEventStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.LastError != "receiver returned status 401" {
+		t.Fatalf("last error = %q, want the most recent failure", stats.LastError)
+	}
+}
+
+func TestDeletedAccountEmailsAndAdoptFleetAccessChange(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	for _, email := range []string{"kept@x.com", "idp@x.com"} {
+		if _, err := st.CreateUser(ctx, email, "pw-123456789"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := ExternalAccessState{
+		Issuer: "https://auth.example.com", Subject: "s1", Email: "idp@x.com", Version: 3, Allowed: true,
+		EventID: "e3", ChatRole: RoleMember, OpsRole: "readonly", IssuedAt: 1_000,
+	}
+	if _, _, err := st.ApplyExternalAccess(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	// A Fleet-side role change becomes the provider row's baseline; the version
+	// stays the provider's.
+	if err := st.AdoptFleetAccessChange(ctx, "IDP@x.com", true, RoleViewer, "client"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := st.ExternalAccessState(ctx, state.Issuer, state.Subject)
+	if err != nil || got.ChatRole != RoleViewer || got.OpsRole != "client" || got.Version != 3 || !got.Allowed {
+		t.Fatalf("state after adopt = (%+v, %v)", got, err)
+	}
+	// Outbox history: one account gone after an access event, one whose latest
+	// event is already a deletion, one that still exists.
+	enqueueTestEvent(t, st, "lost-delete@x.com", RoleMember)
+	enqueueTestEvent(t, st, "reported@x.com", RoleMember)
+	if _, err := st.EnqueueAccountEvent(ctx, AccountEvent{Type: AccountEventDeleted, Email: "reported@x.com", Source: AccountEventSourceCLI}); err != nil {
+		t.Fatal(err)
+	}
+	enqueueTestEvent(t, st, "kept@x.com", RoleMember)
+	if err := st.DeleteUser(ctx, "idp@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AdoptFleetAccessChange(ctx, "idp@x.com", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = st.ExternalAccessState(ctx, state.Issuer, state.Subject)
+	if got.Allowed || got.ChatRole != RoleViewer {
+		t.Fatalf("state after a Fleet deletion = %+v, want not allowed with its roles kept", got)
+	}
+	gone, err := st.DeletedAccountEmails(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(gone, ",") != "idp@x.com,lost-delete@x.com" {
+		t.Fatalf("deleted emails = %v, want the provider-known and the history-known gone accounts", gone)
 	}
 }

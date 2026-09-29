@@ -32,8 +32,26 @@ none.** Auth is one subscriber (docs/ACCOUNT-EVENTS.md).
   per account from a durable outbox, and retried for 7 days.
 - A change Fleet applied on the identity provider's word is published with
   `source: "identity_provider"`, so the provider can ignore its own echo.
-- The feed is off unless configured. A URL without a signing secret refuses
-  to boot.
+- The feed is off unless configured. A URL without a signing secret, or with
+  the same secret as the task webhook (`FLEET_WEBHOOK_SECRET` — the schemes
+  are identical, so one key would let a task-webhook body verify as an account
+  event), refuses to boot.
+- **Fleet holds its own side of "most recent wins".** A change made in Fleet
+  (the admin UI, the CLI, the boot seed — every source but
+  `identity_provider`) is also written into the provider's stored desired
+  state for that email (`external_access_state`: its roles, or `allowed =
+  false` for a deletion; never its version). The provisioning push reconciles
+  the Ops plane from that row even for a version it has already applied (so a
+  retried push can finish a failed Ops write), and without the adoption the
+  provider's ordinary at-least-once redelivery of an already-applied version
+  would silently put back the role Fleet's admin just changed — published as
+  `identity_provider`, the one source the provider may ignore. The provider's
+  next real change carries a newer version and still wins.
+- **Resync repairs deletions, not only live accounts.** `fleet account-events
+  resync` also queues `user.deleted` for every email the feed knows once had a
+  Chat account that is gone (a provider desired-state row, or an outbox row
+  whose latest event is not a deletion), so a lost deletion does not leave the
+  provider holding a grant its next push would turn back into an account.
 
 For centrally managed identities, the rule becomes: **the most recent change
 wins, whichever side made it.** Auth decides how to adopt reports (it mirrors
@@ -52,7 +70,13 @@ only the feed.
   hosts; that is acceptable for admin edits and is the receiver's concern.
 - The event is queued after the change commits, not in the same transaction
   (the two planes live in different databases), so a crash between them loses
-  one event until the next change or `fleet account-events resync`.
+  one event until the next change or `fleet account-events resync`. The same
+  window applies to the baseline adoption above: a crash between the change
+  and the adoption leaves a redelivered push able to revert that one change,
+  until the next change or a push with a newer version.
+- The adoption only happens with the feed on. With it off, Fleet has no way to
+  tell a provider about its own changes, and ADR-0074 holds unamended: the
+  provider's desired state is authoritative, redeliveries included.
 - ADR-0074's other decisions stand: Auth events are versioned and applied
   idempotently, revocation disables rather than deletes, and Fleet Admin is
   one coherent cross-plane role.

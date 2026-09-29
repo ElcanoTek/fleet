@@ -1881,7 +1881,7 @@ func Load(envFile string) (*Config, error) {
 
 	// The account-events feed fails closed at boot (and so in validate-config,
 	// which reports a Load error): never publish membership changes unsigned.
-	if err := cfg.validateAccountEvents(); err != nil {
+	if err := cfg.validateAccountEvents(strings.TrimSpace(os.Getenv("FLEET_WEBHOOK_SECRET"))); err != nil {
 		return nil, err
 	}
 
@@ -2000,7 +2000,13 @@ func (c *Config) Validate() error {
 // validateAccountEvents fails closed on the account-events feed: a URL without
 // a signing secret would publish membership changes unsigned, which a receiver
 // acting on them must never accept.
-func (c *Config) validateAccountEvents() error {
+//
+// The secret must also differ from the task webhook's (webhookSecret,
+// FLEET_WEBHOOK_SECRET). The two channels share the signing scheme byte for
+// byte and the signed string names no channel, so under one shared key a
+// signed task-notification body replayed inside the receiver's timestamp
+// window would verify at the account-events receiver as well.
+func (c *Config) validateAccountEvents(webhookSecret string) error {
 	if c.AccountEventsURL == "" {
 		return nil
 	}
@@ -2010,6 +2016,9 @@ func (c *Config) validateAccountEvents() error {
 	}
 	if c.AccountEventsSecret == "" {
 		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_URL is set but FLEET_ACCOUNT_EVENTS_SECRET is not: account events are always signed")
+	}
+	if c.AccountEventsSecret == webhookSecret {
+		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_SECRET must differ from FLEET_WEBHOOK_SECRET: the two feeds share a signing scheme, so one key would let a task-webhook body verify as an account event")
 	}
 	return nil
 }

@@ -17,10 +17,11 @@ func TestValidateAccountEvents(t *testing.T) {
 		{"url without secret", Config{AccountEventsURL: "https://auth.example.com/e"}, "FLEET_ACCOUNT_EVENTS_SECRET"},
 		{"relative url", Config{AccountEventsURL: "/events", AccountEventsSecret: "s"}, "absolute http(s)"},
 		{"other scheme", Config{AccountEventsURL: "ftp://x/e", AccountEventsSecret: "s"}, "absolute http(s)"},
+		{"secret shared with the task webhook", Config{AccountEventsURL: "https://auth.example.com/e", AccountEventsSecret: "webhook-key"}, "must differ from FLEET_WEBHOOK_SECRET"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.cfg.validateAccountEvents()
+			err := tc.cfg.validateAccountEvents("webhook-key")
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
