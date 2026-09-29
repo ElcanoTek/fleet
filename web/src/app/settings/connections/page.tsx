@@ -89,8 +89,8 @@ type RemoteServer = {
   // What the shipped directory entry of this name now says differently from
   // the row (F13): the row keeps the URL and auth it was added with, so a
   // corrected entry is surfaced here and taken by removing and re-adding the
-  // connection. Absent when the row matches, or was not added from the
-  // directory.
+  // connection. Absent when the row matches its entry, or no directory entry
+  // has its name — the join is the name, not where the row came from.
   catalog_drift?: { url?: string; auth?: string; key_sent_as?: string };
 };
 

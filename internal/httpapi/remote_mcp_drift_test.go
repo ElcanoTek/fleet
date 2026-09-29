@@ -25,6 +25,7 @@ func TestDriftFromCatalog(t *testing.T) {
 		{Name: "default-auth", URL: "https://mcp.default.example.com/mcp"},
 		{Name: "composio", URL: "https://backend.composio.dev/v3/mcp/{SERVER_ID}/mcp?user_id={USER_ID}", Auth: "api_key", APIKeyHeader: "x-api-key"},
 		{Name: "scrapfly", URL: "https://mcp.scrapfly.io/{project}/mcp", Auth: "open"},
+		{Name: " padded ", URL: " https://mcp.padded.example.com/v2 ", Auth: "api_key", APIKeyHeader: " X-Api-Key "},
 	}
 	row := func(name, url, auth, header, query string) store.RemoteMCPServer {
 		return store.RemoteMCPServer{Name: name, URL: url, AuthKind: auth, APIKeyHeader: header, APIKeyQuery: query}
@@ -46,6 +47,7 @@ func TestDriftFromCatalog(t *testing.T) {
 		{"URL and auth both differ", row("retyped", "https://old.retyped.example.com/mcp", "open", "", ""), &catalogDrift{URL: "https://mcp.retyped.example.com/mcp", Auth: "api_key"}},
 		{"a tenant entry is not compared", row("tenant", "https://acme.example.com/mcp", "oauth", "", ""), nil},
 		{"a pre-column row is an OAuth row", row("default-auth", "https://mcp.default.example.com/mcp", "", "", ""), nil},
+		{"a padded entry matches its trimmed row and compares trimmed fields", row("padded", "https://mcp.padded.example.com/v1", "api_key", "X-Api-Key", ""), &catalogDrift{URL: "https://mcp.padded.example.com/v2"}},
 		{"a hand-typed server is not a directory entry", row("mine", "https://mcp.mine.example.com", "oauth", "", ""), nil},
 	}
 	for _, tc := range cases {

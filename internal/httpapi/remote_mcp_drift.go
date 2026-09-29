@@ -57,10 +57,15 @@ type remoteServerView struct {
 // the name is the join; a hand-typed server under another name matches
 // nothing and reports nothing.
 func driftFromCatalog(row store.RemoteMCPServer, catalog []clientconfig.RemoteMCPCatalogEntry) *catalogDrift {
-	var entry *clientconfig.RemoteMCPCatalogEntry
+	// The entry is read the way the directory serves it: the catalog API
+	// trims each field once at the edge (thirdPartyCatalogEntry) and the add
+	// form saves those trimmed values, so a bundle's stray whitespace must
+	// neither hide a padded name's drift nor flag a padded key placement.
+	var entry *mcpCatalogThirdPartyEntry
 	for i := range catalog {
-		if catalog[i].Name == row.Name {
-			entry = &catalog[i]
+		if strings.TrimSpace(catalog[i].Name) == row.Name {
+			e := thirdPartyCatalogEntry(catalog[i])
+			entry = &e
 			break
 		}
 	}
