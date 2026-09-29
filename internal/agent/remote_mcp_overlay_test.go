@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -112,6 +113,11 @@ func TestBuildRemoteMCPOverlaySkipsAndReportsNeedsReauth(t *testing.T) {
 	}
 	if len(ov.Skipped) != 1 || ov.Skipped[0] != "dead" {
 		t.Errorf("Skipped = %v, want [dead]", ov.Skipped)
+	}
+	// A token failure that is not the store's needs-reauth sentinel says
+	// nothing either way: not "reconnect", and not "the login is fine".
+	if got := ov.SkipReason("dead"); got != SkipReasonUnknown {
+		t.Errorf("SkipReason(dead) = %q, want %q for a non-sentinel token error", got, SkipReasonUnknown)
 	}
 	if strings.Contains(logs.String(), sensitiveDetail) {
 		t.Fatal("token failure detail reached logs")
@@ -581,6 +587,13 @@ func TestBuildRemoteMCPOverlayRecordsRefusedMount(t *testing.T) {
 	if len(ov.Skipped) != 3 {
 		t.Errorf("Skipped = %v, want all three", ov.Skipped)
 	}
+	// The same line the marking draws decides the reason the prompt gets
+	// (F10): the two 401s need reconnecting, the 500 is "did not respond".
+	for name, want := range map[string]string{"github": SkipReasonNeedsReauth, "notion": SkipReasonNeedsReauth, "linear": SkipReasonUnreachable} {
+		if got := ov.SkipReason(name); got != want {
+			t.Errorf("SkipReason(%s) = %q, want %q", name, got, want)
+		}
+	}
 	if len(r.marked) != 2 {
 		t.Fatalf("marked = %v, want exactly the two 401s (the 500 must NOT be marked)", r.marked)
 	}
@@ -598,4 +611,53 @@ func TestBuildRemoteMCPOverlayRecordsRefusedMount(t *testing.T) {
 	if !strings.Contains(logs.String(), "HTTP 401") || strings.Contains(logs.String(), "invalid character") {
 		t.Errorf("skip log should name the 401, not a JSON decode error:\n%s", logs.String())
 	}
+}
+
+// needsReauthError stands in for store.ErrRemoteMCPNeedsReauth, which this
+// package cannot import: the sentinel is recognised by its method.
+type needsReauthError struct{}
+
+func (needsReauthError) Error() string     { return "needs re-authorization" }
+func (needsReauthError) NeedsReauth() bool { return true }
+
+// TestSkipReasonClassification pins the three classes the prompt notice is
+// built from (F10): only the vendor refusing the credential, or the store
+// saying the login is dead, is a re-auth matter; every other failure is the
+// vendor not answering, and a pinned seat that is not connected is its own
+// thing. An overlay without recorded reasons reads as unreachable.
+func TestSkipReasonClassification(t *testing.T) {
+	if got := connectSkipReason(fmt.Errorf("mount: %w", &mcp.HTTPStatusError{StatusCode: 401})); got != SkipReasonNeedsReauth {
+		t.Errorf("401 → %q, want needs_reauth", got)
+	}
+	for _, err := range []error{&mcp.HTTPStatusError{StatusCode: 500}, &mcp.HTTPStatusError{StatusCode: 404}, &mcp.RPCError{Code: -32600, Message: "App is not enabled"}, errors.New("dial tcp: i/o timeout"), context.DeadlineExceeded} {
+		if got := connectSkipReason(err); got != SkipReasonUnreachable {
+			t.Errorf("%v → %q, want unreachable", err, got)
+		}
+	}
+	if got := tokenSkipReason(fmt.Errorf("acquire: %w", needsReauthError{})); got != SkipReasonNeedsReauth {
+		t.Errorf("needs-reauth sentinel → %q, want needs_reauth", got)
+	}
+	if got := tokenSkipReason(errors.New("refresh: connection reset")); got != SkipReasonUnknown {
+		t.Errorf("transient refresh error → %q, want unknown (it says nothing about the login)", got)
+	}
+	var ov RemoteMCPOverlay
+	ov.skip("a", SkipReasonSeatNotConnected)
+	ov.skip("b", SkipReasonNeedsReauth)
+	ov.skip("c", "some-future-class")
+	if ov.SkipReason("a") != SkipReasonSeatNotConnected || ov.SkipReason("b") != SkipReasonNeedsReauth || ov.SkipReason("c") != SkipReasonUnknown || ov.SkipReason("never-recorded") != SkipReasonUnknown {
+		t.Errorf("SkipReasons = %v", ov.SkipReasons)
+	}
+	var nilOverlay *RemoteMCPOverlay
+	if nilOverlay.SkipReason("x") != SkipReasonUnknown {
+		t.Error("a nil overlay must read as unknown, not panic and not claim anything")
+	}
+}
+
+// skippedNamesOnly is the plain name list of a roster, for assertions.
+func (r hostedMCPRoster) skippedNamesOnly() []string {
+	out := make([]string, 0, len(r.skipped))
+	for _, s := range r.skipped {
+		out = append(out, s.name)
+	}
+	return out
 }

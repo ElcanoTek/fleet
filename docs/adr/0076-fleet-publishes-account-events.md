@@ -1,4 +1,4 @@
-# ADR-0075: Fleet publishes account events; the most recent change wins
+# ADR-0076: Fleet publishes account events; the most recent change wins
 
 - **Status:** Accepted
 - **Date:** 2026-09-28

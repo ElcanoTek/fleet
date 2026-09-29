@@ -206,3 +206,29 @@ func TestServiceControlPlaneAPIKeyAcquisitionsAreObserved(t *testing.T) {
 		}
 	}
 }
+
+// TestSecretSpellings: every wire spelling a vendor could echo a key in is
+// registered alongside the raw value, so an echoed "?api_key=ab%2Bcd" in a
+// 4xx body is redacted by literal, not only the raw "ab+cd".
+func TestSecretSpellings(t *testing.T) {
+	got := secretSpellings("ab+cd/e f\"g")
+	want := map[string]bool{
+		"ab+cd/e f\"g":        true,
+		"ab%2Bcd%2Fe+f%22g":   true,
+		"ab%2Bcd%2Fe%20f%22g": true,
+		"ab+cd%2Fe%20f%22g":   true,
+		"ab+cd/e f\\\"g":      true,
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Errorf("unexpected spelling %q", g)
+		}
+		delete(want, g)
+	}
+	for w := range want {
+		t.Errorf("missing spelling %q", w)
+	}
+	if plain := secretSpellings("plainkey"); len(plain) != 1 || plain[0] != "plainkey" {
+		t.Errorf("a key with no escapable characters should register once, got %v", plain)
+	}
+}

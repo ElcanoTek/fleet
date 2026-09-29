@@ -33,9 +33,10 @@ type Backend interface {
 // are available; older backends continue serving unscoped calls and receive a
 // clear error if a peer requests a scope.
 type ScopedBackend interface {
-	// OpenScope returns public discovery metadata only. skipped contains remote
-	// server names, never connection errors or credential-bearing details.
-	OpenScope(ctx context.Context, spec ScopeSpec) (scopeID string, tools []ToolDescriptor, skipped []string, err error)
+	// OpenScope returns public discovery metadata only. skipped carries remote
+	// server names and a reason class, never connection errors or
+	// credential-bearing details.
+	OpenScope(ctx context.Context, spec ScopeSpec) (scopeID string, tools []ToolDescriptor, skipped []SkippedServer, err error)
 	// CallMCPInScope must reject unknown scope IDs. CloseScope must coordinate
 	// with calls that reached the backend before it, because cancellation replies
 	// to the client before a connector necessarily observes its cancelled context.
@@ -178,11 +179,17 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				if err != nil {
 					// Operational errors can embed connector stderr, URLs, headers,
 					// or provider detail. Discard both the error and any partial text;
-					// only successful tool output may cross the credential boundary.
-					// The detail is logged host-side first (redacted) so the failure is
-					// diagnosable here instead of nowhere — see logMasked.
-					logMasked("tool call", req.Server+"."+req.Tool, err)
-					resp.Err = errBrokerCallFailed
+					// only successful tool output — and, since F8, a vendor's own
+					// bounded, scrubbed 4xx or JSON-RPC answer (describeCallError) —
+					// may cross the credential boundary. The full detail is logged
+					// host-side first (redacted) so the failure is diagnosable here
+					// instead of nowhere — see logMasked.
+					resp.Err = describeCallError(err)
+					if resp.Err == errBrokerCallFailed {
+						logMasked("tool call", req.Server+"."+req.Tool, err)
+					} else {
+						logPassed("tool call", req.Server+"."+req.Tool, err, resp.Err)
+					}
 				} else {
 					resp.Text = text
 					resp.IsError = isErr
@@ -346,7 +353,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	}
 }
 
-func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (string, []ToolDescriptor, []string, string) {
+func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (string, []ToolDescriptor, []SkippedServer, string) {
 	if err := validateScopeSpec(spec); err != nil {
 		return "", nil, nil, err.Error()
 	}

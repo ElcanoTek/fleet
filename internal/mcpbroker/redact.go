@@ -43,6 +43,17 @@ func logMasked(op, detail string, err error) {
 	log.Printf("mcpbroker: %s failed (masked to the caller): %s: %s", op, detail, scrubbed)
 }
 
+// logPassed is logMasked's sibling for the classes describeCallError lets
+// cross (F8): the full redacted detail still lands here, and the line says
+// what the peer was told, so an operator can tell the two apart.
+func logPassed(op, detail string, err error, told string) {
+	if err == nil {
+		return
+	}
+	scrubbed := brokerRedactor().Redact(err.Error())
+	log.Printf("mcpbroker: %s failed (passed to the caller as %q): %s: %s", op, told, detail, scrubbed)
+}
+
 // RegisterSecretLiteral adds a runtime-acquired secret — a per-user OAuth
 // bearer, a rotated refresh token, a sealed connector API key — to the
 // broker's literal redactor (#1124). Boot-time RegisterEnvLiterals can only

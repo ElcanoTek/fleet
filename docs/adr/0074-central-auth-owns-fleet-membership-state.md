@@ -1,6 +1,6 @@
 # ADR-0074: Central Auth owns Fleet membership desired state
 
-- **Status:** Accepted; amended by [ADR-0075](0075-fleet-publishes-account-events.md)
+- **Status:** Accepted; amended by [ADR-0076](0076-fleet-publishes-account-events.md)
 - **Date:** 2026-09-23
 - **Deciders:** Fleet maintainers, Elcano Auth owner
 
