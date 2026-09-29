@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -174,11 +175,12 @@ func TestBrokerBackend_RemoteScopeOwnsCredentialedClient(t *testing.T) {
 		if req.Header.Get("Authorization") == "Bearer "+token {
 			sawBearer.Store(true)
 		}
+		body, _ := io.ReadAll(req.Body)
 		var rpc struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 		}
-		if err := json.NewDecoder(req.Body).Decode(&rpc); err != nil {
+		if err := json.Unmarshal(body, &rpc); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -191,8 +193,19 @@ func TestBrokerBackend_RemoteScopeOwnsCredentialedClient(t *testing.T) {
 		case "initialize":
 			result = map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{}}}
 		case "tools/list":
-			result = map[string]any{"tools": []map[string]any{{"name": "echo", "inputSchema": map[string]any{"type": "object"}}}}
+			result = map[string]any{"tools": []map[string]any{{"name": "echo", "inputSchema": map[string]any{"type": "object"}}, {"name": "boom", "inputSchema": map[string]any{"type": "object"}}}}
 		case "tools/call":
+			var params struct {
+				Params struct {
+					Name string `json:"name"`
+				} `json:"params"`
+			}
+			_ = json.Unmarshal(body, &params)
+			if params.Params.Name == "boom" {
+				// A vendor refusing a call over its arguments, Stripe-style.
+				http.Error(w, `{"error":{"message":"Missing required parameter: stripe_context"}}`, http.StatusUnprocessableEntity)
+				return
+			}
 			result = map[string]any{"content": []map[string]any{{"type": "text", "text": "remote-ok"}}}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -213,15 +226,32 @@ func TestBrokerBackend_RemoteScopeOwnsCredentialedClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenScope: %v", err)
 	}
-	if len(tools) != 1 || tools[0].Server != "remote" || tools[0].Tool != "echo" {
-		t.Fatalf("tools = %+v, want remote.echo", tools)
+	names := map[string]bool{}
+	for _, tl := range tools {
+		if tl.Server == "remote" {
+			names[tl.Tool] = true
+		}
+	}
+	if len(tools) != 2 || !names["echo"] || !names["boom"] {
+		t.Fatalf("tools = %+v, want remote.echo and remote.boom", tools)
+	}
+	// A hosted vendor's 4xx answer is marked so the broker may pass it
+	// (ADR-0075); the vendor's wording survives inside the marker.
+	if _, _, cerr := b.CallMCPInScope(context.Background(), id, "remote", "boom", nil); cerr == nil {
+		t.Fatal("boom should fail")
+	} else {
+		var hosted *mcpbroker.HostedCallError
+		var hs *mcp.HTTPStatusError
+		if !errors.As(cerr, &hosted) || !errors.As(cerr, &hs) || hs.StatusCode != 422 || !strings.Contains(cerr.Error(), "stripe_context") {
+			t.Fatalf("remote-scope call error = %v (%T); want a HostedCallError wrapping the vendor's 422", cerr, cerr)
+		}
 	}
 	if len(skipped) != 0 {
 		t.Fatalf("skipped = %v", skipped)
 	}
 	publicMetadata, err := json.Marshal(struct {
 		Tools   []mcpbroker.ToolDescriptor
-		Skipped []string
+		Skipped []mcpbroker.SkippedServer
 	}{Tools: tools, Skipped: skipped})
 	if err != nil {
 		t.Fatalf("marshal public metadata: %v", err)
@@ -267,8 +297,13 @@ func TestBrokerBackend_RemoteScopePreservesFilterAndSkippedSemantics(t *testing.
 	_, tools, skipped, err = b.OpenScope(context.Background(), mcpbroker.ScopeSpec{
 		Remote: &mcpbroker.RemoteScopeSpec{UserEmail: "user@example.com"},
 	})
-	if err != nil || len(tools) != 0 || len(skipped) != 1 || skipped[0] != "dead" {
+	if err != nil || len(tools) != 0 || len(skipped) != 1 || skipped[0].Name != "dead" {
 		t.Fatalf("all-connected scope = (tools=%v skipped=%v err=%v)", tools, skipped, err)
+	}
+	// The reason class crosses with the name (F10): a token failure that is
+	// not the store's needs-reauth sentinel is "unreachable", never "reconnect".
+	if skipped[0].Reason != agent.SkipReasonUnknown {
+		t.Fatalf("skipped reason = %q, want %q (a non-sentinel token error says nothing about the login)", skipped[0].Reason, agent.SkipReasonUnknown)
 	}
 	if len(resolver.asked) != 1 || resolver.asked[0] != "dead-id" {
 		t.Fatalf("token attempts = %v, want [dead-id]", resolver.asked)

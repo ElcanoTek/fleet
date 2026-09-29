@@ -148,14 +148,24 @@ Read `fleet.log` first. The lines that matter:
   connection stays connected and the next call retries automatically.
 - `remote-mcp: skipping server "<name>" … — failed to connect: … HTTP 404` —
   the vendor rejected the tools handshake; usually a wrong URL (check the
-  vendor's documented MCP path), not a credential problem, although the
-  model is currently told the connector "needs re-authorization" either way.
-- `mcpbroker: tool call failed (masked to the caller): … HTTP 422 …` — the
-  vendor refused the tool arguments. The model sees only
+  vendor's documented MCP path), not a credential problem. The model is told
+  the connector "did not respond this turn" and not to ask for a reconnect;
+  only a 401 at mount, or a dead refresh token, is announced as needing one,
+  and a failure fleet cannot classify (a credential it could not read) is
+  announced as exactly that (F10). `RunTurn: remote MCP server(s) not
+  mounted for <user>: <name> (<reason>)` carries the class per connector.
+- `mcpbroker: tool call failed (passed to the caller as "…"): … HTTP 422 …`
+  — the vendor refused the tool arguments, and since F8 the model was told
+  the vendor's 4xx or JSON-RPC answer, bounded and scrubbed (`the server
+  answered HTTP 422 …: …`; a 403 is passed as what the vendor said, a 401
+  only as "the server rejected the stored credential"). The line quotes what
+  the model saw and carries the full redacted text.
+- `mcpbroker: tool call failed (masked to the caller): …` — a 5xx, a
+  transport failure, or any error of a bundle server: the model saw only
   `credential-owner call failed`; the real text is on this line.
 - `scheduled task <id>: wired N remote MCP server(s) for <user>` /
-  `skipped remote MCP server(s) needing re-auth or a missing pinned seat` —
-  what a scheduled run mounted and what it could not.
+  `skipped remote MCP server(s): […] (reasons map[…])` — what a scheduled run
+  mounted and what it could not, with the reason class per connector.
 - `Fantasy tools registered: … N MCP tools DEFERRED` — the run is in deferred
   mode.
 

@@ -518,17 +518,12 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	//    the wrong answer, so name them: the model sends the user to reconnect
 	//    rather than improvising a workaround (the scheduled runner prepends
 	//    the same notice, scheduledrun.withSkippedRemoteNotice).
-	if len(hosted.skipped) > 0 {
-		sb.WriteString("## Hosted connectors not mounted this turn\n\n")
-		sb.WriteString("Hosted connector(s) the user has set up that could NOT be mounted this turn — the login needs re-authorization or the server did not respond: ")
-		for i, n := range hosted.skipped {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			fmt.Fprintf(&sb, "`%s`", n)
-		}
-		sb.WriteString(". Their `mcp_*` tools are unavailable; if the user asks for them, say the connection needs reconnecting under Settings → Connections instead of working around it.\n\n")
-	}
+	//    The reason is named per connector (F10): "reconnect" is the right
+	//    advice only for a login the vendor refused; for a vendor that did not
+	//    answer, that advice sends the user to redo a working login for
+	//    nothing, so the model is told to say the connector is unavailable
+	//    right now instead.
+	writeHostedSkipNotice(&sb, hosted.skipped)
 
 	// 5. protocol listing — skip fastio-mcp.md when fast.io is off
 	// so the agent doesn't try to read it for tools it can't call.
@@ -632,4 +627,50 @@ func runtimeDateContext(now time.Time) string {
 		"- For \"today\", \"latest\", or \"check again\", search freshness_window unless the user asked for a narrower historical range.\n",
 		today, today, from, today,
 	)
+}
+
+// writeHostedSkipNotice appends the "hosted connectors not mounted" section
+// (see buildSystemPrompt step 6): every skipped connector named under the
+// advice its reason class earns, and never dropped — an unrecognised class
+// lands in the last group, which asserts nothing about the cause.
+func writeHostedSkipNotice(sb *strings.Builder, skipped []skippedConnector) {
+	if len(skipped) == 0 {
+		return
+	}
+	sb.WriteString("## Hosted connectors not mounted this turn\n\n")
+	sb.WriteString("Hosted connector(s) the user has set up that could NOT be mounted this turn. Their `mcp_*` tools are unavailable; if the user asks for them, say so plainly instead of working around it, with the reason below — do not tell the user to reconnect a connector listed as not responding.\n")
+	groups := []struct {
+		reason string
+		text   string
+	}{
+		{SkipReasonNeedsReauth, "need reconnecting (the login expired or the vendor rejected the stored credential) — tell the user to reconnect them under Settings → Connections"},
+		{SkipReasonUnreachable, "did not respond this turn (the vendor or the network, not the login) — tell the user they are unavailable right now and can be retried later"},
+		{SkipReasonSeatNotConnected, "are pinned to an account that is not connected — tell the user to connect that account under Settings → Connections"},
+		{SkipReasonUnknown, "could not be mounted for a reason fleet could not classify — tell the user they are unavailable this turn and to check them under Settings → Connections; do not assert whether the login is the cause"},
+	}
+	for _, g := range groups {
+		first := true
+		for _, sc := range skipped {
+			reason := sc.reason
+			switch reason {
+			case SkipReasonNeedsReauth, SkipReasonUnreachable, SkipReasonSeatNotConnected:
+			default:
+				reason = SkipReasonUnknown // anything else lands in the last group, never nowhere
+			}
+			if reason != g.reason {
+				continue
+			}
+			if first {
+				sb.WriteString("- ")
+				first = false
+			} else {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(sb, "`%s`", sc.name)
+		}
+		if !first {
+			sb.WriteString(": " + g.text + ".\n")
+		}
+	}
+	sb.WriteString("\n")
 }

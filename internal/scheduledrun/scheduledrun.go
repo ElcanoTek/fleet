@@ -1090,14 +1090,44 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	if overlay == nil || len(overlay.Skipped) == 0 {
 		return prompt
 	}
-	log.Printf("scheduled task %s: skipped remote MCP server(s) needing re-auth or a missing pinned seat: %v", task.ID, overlay.Skipped)
-	return fmt.Sprintf(
-		"[notice] These remote MCP connectors were unavailable this run because their "+
-			"login expired or the pinned account is not connected (the task owner must reconnect "+
-			"them in Settings → Connections): %s. "+
-			"Proceed without them; if the task depends on one, say so in your result rather than "+
-			"guessing.\n\n%s",
-		strings.Join(overlay.Skipped, ", "), prompt)
+	log.Printf("scheduled task %s: skipped remote MCP server(s): %v (reasons %v)", task.ID, overlay.Skipped, overlay.SkipReasons)
+	// The reason per connector decides the advice the result should carry
+	// (F10): a dead login is fixed by the owner reconnecting, a vendor that
+	// did not answer is not.
+	// Names are user-authored (and a shared connection's name is authored by
+	// someone else), so they are reduced to the tool-name grammar before they
+	// enter the prompt, as the chat path does.
+	var reauth, down, seats, unknown []string
+	for _, raw := range overlay.Skipped {
+		name := agentcore.PromptSafeName(raw)
+		switch overlay.SkipReason(raw) {
+		case agent.SkipReasonSeatNotConnected:
+			seats = append(seats, name)
+		case agent.SkipReasonNeedsReauth:
+			reauth = append(reauth, name)
+		case agent.SkipReasonUnreachable:
+			down = append(down, name)
+		default:
+			unknown = append(unknown, name)
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString("[notice] Remote MCP connectors unavailable this run — proceed without them; if the task depends on one, say so in your result rather than guessing.")
+	if len(reauth) > 0 {
+		sb.WriteString(" Login expired or rejected (the task owner must reconnect them in Settings → Connections): " + strings.Join(reauth, ", ") + ".")
+	}
+	if len(down) > 0 {
+		sb.WriteString(" Did not respond this run (the vendor or the network, not the login — a later run may succeed; do not ask for a reconnect): " + strings.Join(down, ", ") + ".")
+	}
+	if len(seats) > 0 {
+		sb.WriteString(" Pinned to an account that is not connected (the task owner must connect it in Settings → Connections): " + strings.Join(seats, ", ") + ".")
+	}
+	if len(unknown) > 0 {
+		sb.WriteString(" Could not be mounted for a reason fleet could not classify (the task owner should check them in Settings → Connections; do not assert whether the login is the cause): " + strings.Join(unknown, ", ") + ".")
+	}
+	sb.WriteString("\n\n")
+	sb.WriteString(prompt)
+	return sb.String()
 }
 
 // buildTaskRemoteOverlay resolves the task owner's email (creator UUID →
