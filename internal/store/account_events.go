@@ -65,8 +65,20 @@ type AccountEventStats struct {
 // centrally disabled rows (GetUser hides those). found=false means no Chat
 // account exists.
 func (s *Store) AccountAccess(ctx context.Context, email string) (AccountAccess, bool, error) {
+	return accountAccess(ctx, s.db, email)
+}
+
+// accountEventsDB is what the account-events statements run on: the pool, or
+// the one transaction an AccountEventsTx holds.
+type accountEventsDB interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func accountAccess(ctx context.Context, q accountEventsDB, email string) (AccountAccess, bool, error) {
 	a := AccountAccess{Email: normalizeEmail(email)}
-	err := s.db.QueryRowContext(ctx, `SELECT role, enabled FROM users WHERE email = $1`, a.Email).Scan(&a.Role, &a.Enabled)
+	err := q.QueryRowContext(ctx, `SELECT role, enabled FROM users WHERE email = $1`, a.Email).Scan(&a.Role, &a.Enabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AccountAccess{}, false, nil
 	}
@@ -99,6 +111,10 @@ func (s *Store) ListAccountAccess(ctx context.Context) ([]AccountAccess, error) 
 // OccurredAt and CreatedAt are filled in when empty. The stored row (with its
 // sequence ID) is returned.
 func (s *Store) EnqueueAccountEvent(ctx context.Context, ev AccountEvent) (AccountEvent, error) {
+	return enqueueAccountEvent(ctx, s.db, ev)
+}
+
+func enqueueAccountEvent(ctx context.Context, q accountEventsDB, ev AccountEvent) (AccountEvent, error) {
 	ev.Email = normalizeEmail(ev.Email)
 	ev.Actor = normalizeEmail(ev.Actor)
 	if ev.Email == "" {
@@ -118,7 +134,7 @@ func (s *Store) EnqueueAccountEvent(ctx context.Context, ev AccountEvent) (Accou
 	if ev.CreatedAt == 0 {
 		ev.CreatedAt = now
 	}
-	err := s.db.QueryRowContext(ctx, `INSERT INTO account_events(
+	err := q.QueryRowContext(ctx, `INSERT INTO account_events(
 		event_id, type, email, enabled, chat_role, ops_role, source, actor, occurred_at, created_at, next_attempt_at
 	) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) RETURNING id`,
 		ev.EventID, ev.Type, ev.Email, ev.Enabled, ev.ChatRole, ev.OpsRole, ev.Source, ev.Actor,
@@ -346,15 +362,25 @@ func providerStateToken(ctx context.Context, q queryer, email, lock string) (str
 // that version, is not touched. adopted=false reports that skip (or that the
 // provider holds no row for email).
 func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
-	email = normalizeEmail(email)
-	if exists && (!ValidRole(chatRole) || !validOpsRole(opsRole)) {
-		return false, fmt.Errorf("adopt fleet access change: invalid roles %q/%q", chatRole, opsRole)
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	adopted, err := adoptFleetAccessChange(ctx, tx, email, token, exists, enabled, chatRole, opsRole)
+	if err != nil || !adopted {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// adoptFleetAccessChange is AdoptFleetAccessChange's statements, on a
+// transaction the caller commits.
+func adoptFleetAccessChange(ctx context.Context, tx accountEventsDB, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
+	email = normalizeEmail(email)
+	if exists && (!ValidRole(chatRole) || !validOpsRole(opsRole)) {
+		return false, fmt.Errorf("adopt fleet access change: invalid roles %q/%q", chatRole, opsRole)
+	}
 	current, err := providerStateToken(ctx, tx, email, " FOR UPDATE")
 	if err != nil {
 		return false, err
@@ -375,7 +401,7 @@ func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string,
 	if err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	return true, nil
 }
 
 // accountEventsLockClass is the first key of the two-key advisory lock that
@@ -383,27 +409,67 @@ func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string,
 // the single-key migration lock).
 const accountEventsLockClass = 0x0ACC
 
-// LockAccountEvents takes a session advisory lock on email in the chat
-// database and returns its release. The Recorder holds it from the after-
-// snapshot through the enqueue (and the baseline adoption), across every
-// process that writes the feed — `fleet serve` and the CLI alike — so two
-// overlapping changes to one account enqueue in the order they read the
-// state: a mutation that snapshotted before another one's change can never be
-// enqueued after it, which would leave a receiver on the stale state for good.
-// The lock waits under ctx; release always runs on a short detached context.
-func (s *Store) LockAccountEvents(ctx context.Context, email string) (func(), error) {
-	conn, err := s.db.Conn(ctx)
+// AccountEventsTx is one account's feed work — reading its Chat state,
+// queuing the event, adopting the provider baseline — on a single chat
+// transaction that holds the account's advisory lock (InAccountEventsTx).
+type AccountEventsTx struct {
+	tx *sql.Tx
+}
+
+// AccountAccess is Store.AccountAccess on the transaction.
+func (t *AccountEventsTx) AccountAccess(ctx context.Context, email string) (AccountAccess, bool, error) {
+	return accountAccess(ctx, t.tx, email)
+}
+
+// EnqueueAccountEvent is Store.EnqueueAccountEvent on the transaction.
+func (t *AccountEventsTx) EnqueueAccountEvent(ctx context.Context, ev AccountEvent) (AccountEvent, error) {
+	return enqueueAccountEvent(ctx, t.tx, ev)
+}
+
+// AdoptFleetAccessChange is Store.AdoptFleetAccessChange on the transaction,
+// inside a savepoint: a failed adoption is rolled back alone, so it can never
+// take the event queued before it down with it.
+func (t *AccountEventsTx) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
+	if _, err := t.tx.ExecContext(ctx, `SAVEPOINT adopt_baseline`); err != nil {
+		return false, err
+	}
+	adopted, err := adoptFleetAccessChange(ctx, t.tx, email, token, exists, enabled, chatRole, opsRole)
 	if err != nil {
-		return nil, err
+		if _, rbErr := t.tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT adopt_baseline`); rbErr != nil {
+			return false, errors.Join(err, rbErr)
+		}
+		return false, err
 	}
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1, hashtext($2))`, accountEventsLockClass, normalizeEmail(email)); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("lock account events: %w", err)
+	_, err = t.tx.ExecContext(ctx, `RELEASE SAVEPOINT adopt_baseline`)
+	return adopted, err
+}
+
+// InAccountEventsTx runs fn on one chat transaction holding email's advisory
+// lock (pg_advisory_xact_lock), and commits what fn wrote even when fn returns
+// an error (an adoption failure must not un-queue the event before it).
+//
+// The Recorder does its after-snapshot, enqueue and adoption here, in the
+// server and the CLI alike, so two overlapping changes to one account enqueue
+// in the order they read the state: one that read before another's change can
+// never be queued after it, which would leave a receiver on the stale state
+// for good. Everything runs on the transaction's own connection — the lock
+// never holds one pool connection while asking the pool for another, so even
+// FLEET_CHAT_DB_MAX_CONNS=1 cannot starve it — and the lock is transaction
+// scoped, so it is released by the commit or rollback and can never outlive
+// the work on a pooled session. (The Ops-plane read in between goes to the
+// separate sched database.)
+func (s *Store) InAccountEventsTx(ctx context.Context, email string, fn func(*AccountEventsTx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
 	}
-	return func() {
-		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_, _ = conn.ExecContext(c, `SELECT pg_advisory_unlock($1, hashtext($2))`, accountEventsLockClass, normalizeEmail(email))
-		_ = conn.Close()
-	}, nil
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, accountEventsLockClass, normalizeEmail(email)); err != nil {
+		return fmt.Errorf("lock account events: %w", err)
+	}
+	fnErr := fn(&AccountEventsTx{tx: tx})
+	if err := tx.Commit(); err != nil {
+		return errors.Join(fnErr, err)
+	}
+	return fnErr
 }

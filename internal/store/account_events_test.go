@@ -303,37 +303,84 @@ func TestDeletedAccountEmails(t *testing.T) {
 	}
 }
 
-// TestLockAccountEventsSerializesOneAccount: a second holder of the same
-// account's lock waits for the first; another account's lock does not.
-func TestLockAccountEventsSerializesOneAccount(t *testing.T) {
+// TestInAccountEventsTxSerializesOneAccount: a second transaction on the same
+// account waits for the first to commit; another account's does not; and the
+// work runs on the transaction's own connection, so a one-connection pool
+// cannot starve it.
+func TestInAccountEventsTxSerializesOneAccount(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
-	unlock, err := st.LockAccountEvents(ctx, "Lock@x.com")
-	if err != nil {
-		t.Fatal(err)
+	release := make(chan struct{})
+	held := make(chan struct{})
+	go func() {
+		_ = st.InAccountEventsTx(ctx, "Lock@x.com", func(tx *AccountEventsTx) error {
+			close(held)
+			<-release
+			_, err := tx.EnqueueAccountEvent(ctx, AccountEvent{Type: AccountEventAccessChanged, Email: "lock@x.com",
+				Enabled: true, ChatRole: RoleMember, OpsRole: "none", Source: AccountEventSourceCLI})
+			return err
+		})
+	}()
+	<-held
+	if err := st.InAccountEventsTx(ctx, "other@x.com", func(*AccountEventsTx) error { return nil }); err != nil {
+		t.Fatalf("another account's tx: %v", err)
 	}
-	other, err := st.LockAccountEvents(ctx, "other@x.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	other()
 	got := make(chan struct{})
 	go func() {
-		release, err := st.LockAccountEvents(ctx, "lock@x.com")
-		if err == nil {
-			release()
-		}
+		_ = st.InAccountEventsTx(ctx, "lock@x.com", func(tx *AccountEventsTx) error {
+			_, _, err := tx.AccountAccess(ctx, "lock@x.com")
+			return err
+		})
 		close(got)
 	}()
 	select {
 	case <-got:
-		t.Fatal("a second holder took the account's lock while it was held")
+		t.Fatal("a second transaction took the account's lock while it was held")
 	case <-time.After(200 * time.Millisecond):
 	}
-	unlock()
+	close(release)
 	select {
 	case <-got:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the lock was not handed on after release")
+		t.Fatal("the lock was not handed on after commit")
+	}
+	stats, err := st.AccountEventStats(ctx)
+	if err != nil || stats.Pending != 1 {
+		t.Fatalf("stats = (%+v, %v), want the first transaction's event committed", stats, err)
+	}
+}
+
+// TestInAccountEventsTxRunsOnAOneConnectionPool: FLEET_CHAT_DB_MAX_CONNS=1 is
+// a valid setting, and the whole locked commit — read, enqueue, adoption —
+// must fit on that one connection instead of waiting on the pool it holds.
+func TestInAccountEventsTxRunsOnAOneConnectionPool(t *testing.T) {
+	newTestStore(t) // truncates; skips without a DSN
+	cfg := DefaultPoolConfig()
+	cfg.MaxOpenConns, cfg.MaxIdleConns = 1, 1
+	st, err := Open(testDSN(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	provisionedTestAccount(t, st)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	token, err := st.ProviderStateToken(ctx, "idp@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.InAccountEventsTx(ctx, "idp@x.com", func(tx *AccountEventsTx) error {
+		if _, _, err := tx.AccountAccess(ctx, "idp@x.com"); err != nil {
+			return err
+		}
+		if _, err := tx.EnqueueAccountEvent(ctx, AccountEvent{Type: AccountEventAccessChanged, Email: "idp@x.com",
+			Enabled: true, ChatRole: RoleMember, OpsRole: "client", Source: AccountEventSourceAdminUI}); err != nil {
+			return err
+		}
+		_, err := tx.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleMember, "client")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("locked commit on a one-connection pool: %v", err)
 	}
 }

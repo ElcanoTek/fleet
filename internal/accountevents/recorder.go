@@ -54,10 +54,39 @@ type BaselineAdopter interface {
 	AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error)
 }
 
-// AccountLocker serializes one account's snapshot-to-enqueue interval across
-// processes (store.LockAccountEvents).
-type AccountLocker interface {
-	LockAccountEvents(ctx context.Context, email string) (func(), error)
+// AccountTxRunner runs one account's after-snapshot, enqueue and adoption on
+// a single chat transaction holding that account's advisory lock
+// (store.InAccountEventsTx), so they are serialized per account across
+// processes and never hold one pool connection while asking for another.
+type AccountTxRunner interface {
+	InAccountEventsTx(ctx context.Context, email string, fn func(*store.AccountEventsTx) error) error
+}
+
+// chatSide is the Chat-database half of one commit: the transaction when the
+// queue offers one, else the Recorder's own readers (test fakes).
+type chatSide interface {
+	ChatReader
+	Queue
+	AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error)
+}
+
+// unlockedSide is chatSide over the Recorder's own planes, for a queue that
+// cannot run a locked transaction.
+type unlockedSide struct{ r *Recorder }
+
+func (u unlockedSide) AccountAccess(ctx context.Context, email string) (store.AccountAccess, bool, error) {
+	return u.r.chat.AccountAccess(ctx, email)
+}
+
+func (u unlockedSide) EnqueueAccountEvent(ctx context.Context, ev store.AccountEvent) (store.AccountEvent, error) {
+	return u.r.queue.EnqueueAccountEvent(ctx, ev)
+}
+
+func (u unlockedSide) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
+	if u.r.baseline == nil {
+		return false, nil
+	}
+	return u.r.baseline.AdoptFleetAccessChange(ctx, email, token, exists, enabled, chatRole, opsRole)
 }
 
 // Recorder turns before/after snapshots into outbox rows. A nil *Recorder is
@@ -68,7 +97,7 @@ type Recorder struct {
 	ops      OpsRoleReader
 	queue    Queue
 	baseline BaselineAdopter
-	locker   AccountLocker
+	txRunner AccountTxRunner
 }
 
 // NewRecorder wires a Recorder. ops may be nil (no Operations Center plane);
@@ -77,8 +106,8 @@ type Recorder struct {
 // chat store can), Commit does so — see Commit.
 func NewRecorder(chat ChatReader, ops OpsRoleReader, queue Queue) *Recorder {
 	baseline, _ := queue.(BaselineAdopter)
-	locker, _ := queue.(AccountLocker)
-	return &Recorder{chat: chat, ops: ops, queue: queue, baseline: baseline, locker: locker}
+	txRunner, _ := queue.(AccountTxRunner)
+	return &Recorder{chat: chat, ops: ops, queue: queue, baseline: baseline, txRunner: txRunner}
 }
 
 // Snapshot reads email's current state across both planes. The Ops plane is
@@ -90,7 +119,11 @@ func (r *Recorder) Snapshot(ctx context.Context, email string) (State, error) {
 	if r == nil {
 		return State{}, nil
 	}
-	access, found, err := r.chat.AccountAccess(ctx, email)
+	return r.snapshotOn(ctx, r.chat, email)
+}
+
+func (r *Recorder) snapshotOn(ctx context.Context, chat ChatReader, email string) (State, error) {
+	access, found, err := chat.AccountAccess(ctx, email)
 	if err != nil {
 		return State{}, fmt.Errorf("read chat account: %w", err)
 	}
@@ -168,12 +201,20 @@ func (c *Change) Commit(ctx context.Context, source, actor string) error {
 	if c.err != nil {
 		return fmt.Errorf("%w for %s: %w", ErrNotQueued, c.email, c.err)
 	}
-	unlock, err := c.r.lock(ctx, c.email)
-	if err != nil {
-		return fmt.Errorf("%w for %s: %w", ErrNotQueued, c.email, err)
+	var fnErr error
+	err := c.r.withAccount(ctx, c.email, func(side chatSide) error {
+		fnErr = c.commitOn(ctx, side, source, actor)
+		return fnErr
+	})
+	if err != nil && fnErr == nil {
+		// The lock or the commit itself failed: nothing reached the outbox.
+		err = fmt.Errorf("%w for %s: %w", ErrNotQueued, c.email, err)
 	}
-	defer unlock()
-	after, err := c.r.Snapshot(ctx, c.email)
+	return err
+}
+
+func (c *Change) commitOn(ctx context.Context, side chatSide, source, actor string) error {
+	after, err := c.r.snapshotOn(ctx, side, c.email)
 	if err != nil {
 		return fmt.Errorf("%w for %s: %w", ErrNotQueued, c.email, err)
 	}
@@ -192,19 +233,30 @@ func (c *Change) Commit(ctx context.Context, source, actor string) error {
 	case !after.Exists:
 		typ = store.AccountEventDeleted
 	}
-	err = c.r.enqueue(ctx, c.email, after, typ, source, actor)
+	err = enqueueOn(ctx, side, c.email, after, typ, source, actor)
 	if c.r.baseline != nil && source != store.AccountEventSourceIdentityProvider {
 		adoptErr := c.tokenErr
 		if adoptErr == nil {
 			// adopted=false is a provider push that landed meanwhile (the more
 			// recent change), or no provider row: nothing to adopt either way.
-			_, adoptErr = c.r.baseline.AdoptFleetAccessChange(ctx, c.email, c.token, after.Exists, after.Enabled, after.ChatRole, after.OpsRole)
+			_, adoptErr = side.AdoptFleetAccessChange(ctx, c.email, c.token, after.Exists, after.Enabled, after.ChatRole, after.OpsRole)
 		}
 		if adoptErr != nil {
+			// Not ErrNotQueued: the event is queued (the adoption runs in its own
+			// savepoint), only the baseline is behind.
 			err = errors.Join(err, fmt.Errorf("adopt the change for %s into the identity provider's desired state: %w", c.email, adoptErr))
 		}
 	}
 	return err
+}
+
+// withAccount runs fn on the account's locked chat transaction when the queue
+// offers one, else directly on the Recorder's planes.
+func (r *Recorder) withAccount(ctx context.Context, email string, fn func(chatSide) error) error {
+	if r.txRunner == nil {
+		return fn(unlockedSide{r})
+	}
+	return r.txRunner.InAccountEventsTx(ctx, email, func(tx *store.AccountEventsTx) error { return fn(tx) })
 }
 
 // CommitLogged is Commit for request paths: a failure is logged, not returned.
@@ -219,15 +271,6 @@ func (c *Change) CommitLogged(ctx context.Context, source, actor string) {
 
 func logSafe(s string) string {
 	return strings.NewReplacer("\n", " ", "\r", " ").Replace(s)
-}
-
-// lock takes the per-account lock when the queue offers one (the chat store
-// does; test fakes need not).
-func (r *Recorder) lock(ctx context.Context, email string) (func(), error) {
-	if r.locker == nil {
-		return func() {}, nil
-	}
-	return r.locker.LockAccountEvents(ctx, email)
 }
 
 // Publish queues email's current state unconditionally (resync). Accounts that
@@ -250,31 +293,29 @@ func (r *Recorder) publish(ctx context.Context, email, source, actor string, ado
 	if r == nil {
 		return false, nil
 	}
-	unlock, err := r.lock(ctx, email)
-	if err != nil {
-		return false, err
-	}
-	defer unlock()
 	var token string
 	if adopt && r.baseline != nil {
+		var err error
 		if token, err = r.baseline.ProviderStateToken(ctx, email); err != nil {
 			return false, err
 		}
 	}
-	st, err := r.Snapshot(ctx, email)
-	if err != nil {
-		return false, err
-	}
-	if !st.Exists {
-		return false, nil
-	}
-	err = r.enqueue(ctx, email, st, store.AccountEventAccessChanged, source, actor)
-	if adopt && r.baseline != nil {
-		if _, adoptErr := r.baseline.AdoptFleetAccessChange(ctx, email, token, true, st.Enabled, st.ChatRole, st.OpsRole); adoptErr != nil {
-			err = errors.Join(err, fmt.Errorf("adopt the change for %s into the identity provider's desired state: %w", email, adoptErr))
+	published := false
+	err := r.withAccount(ctx, email, func(side chatSide) error {
+		st, err := r.snapshotOn(ctx, side, email)
+		if err != nil || !st.Exists {
+			return err
 		}
-	}
-	return true, err
+		published = true
+		err = enqueueOn(ctx, side, email, st, store.AccountEventAccessChanged, source, actor)
+		if adopt && r.baseline != nil {
+			if _, adoptErr := side.AdoptFleetAccessChange(ctx, email, token, true, st.Enabled, st.ChatRole, st.OpsRole); adoptErr != nil {
+				err = errors.Join(err, fmt.Errorf("adopt the change for %s into the identity provider's desired state: %w", email, adoptErr))
+			}
+		}
+		return err
+	})
+	return published, err
 }
 
 // PublishDeleted queues a user.deleted event for email when it has no Chat
@@ -285,31 +326,28 @@ func (r *Recorder) PublishDeleted(ctx context.Context, email, source, actor stri
 	if r == nil {
 		return false, nil
 	}
-	unlock, err := r.lock(ctx, email)
-	if err != nil {
-		return false, err
-	}
-	defer unlock()
-	st, err := r.Snapshot(ctx, email)
-	if err != nil {
-		return false, err
-	}
-	if st.Exists {
-		return false, nil
-	}
-	typ := store.AccountEventDeleted
-	if residualOps(st) {
-		typ = store.AccountEventAccessChanged
-	}
-	return true, r.enqueue(ctx, email, st, typ, source, actor)
+	published := false
+	err := r.withAccount(ctx, email, func(side chatSide) error {
+		st, err := r.snapshotOn(ctx, side, email)
+		if err != nil || st.Exists {
+			return err
+		}
+		typ := store.AccountEventDeleted
+		if residualOps(st) {
+			typ = store.AccountEventAccessChanged
+		}
+		published = true
+		return enqueueOn(ctx, side, email, st, typ, source, actor)
+	})
+	return published, err
 }
 
-func (r *Recorder) enqueue(ctx context.Context, email string, st State, typ, source, actor string) error {
+func enqueueOn(ctx context.Context, q Queue, email string, st State, typ, source, actor string) error {
 	ev := store.AccountEvent{Type: typ, Email: email, Source: source, Actor: actor}
 	if typ == store.AccountEventAccessChanged {
 		ev.Enabled, ev.ChatRole, ev.OpsRole = st.Enabled, st.ChatRole, st.OpsRole
 	}
-	if _, err := r.queue.EnqueueAccountEvent(ctx, ev); err != nil {
+	if _, err := q.EnqueueAccountEvent(ctx, ev); err != nil {
 		return fmt.Errorf("%w for %s: %w", ErrNotQueued, email, err)
 	}
 	return nil
