@@ -132,7 +132,7 @@ func loadEnvFile() {
 		case err == nil:
 			envFileValues = vals
 		case !errors.Is(err, fs.ErrNotExist):
-			envFileErr = err
+			errEnvFileRead = err
 		}
 	})
 }
@@ -141,13 +141,13 @@ func loadEnvFile() {
 // was read or simply does not exist (a dev box, a shell-only deployment).
 func envFileReadErr() error {
 	loadEnvFile()
-	return envFileErr
+	return errEnvFileRead
 }
 
 var (
-	envFileOnce   sync.Once
-	envFileValues map[string]string
-	envFileErr    error
+	envFileOnce    sync.Once
+	envFileValues  map[string]string
+	errEnvFileRead error
 )
 
 // resetEnvFileCache re-arms envOrFile's once-per-process env-file read so
@@ -155,7 +155,7 @@ var (
 func resetEnvFileCache() {
 	envFileOnce = sync.Once{}
 	envFileValues = nil
-	envFileErr = nil
+	errEnvFileRead = nil
 }
 
 // errf prints to stderr and returns the given exit code.

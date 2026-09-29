@@ -482,7 +482,7 @@ func TestDeliveryGivesUpAtOnceOnARejectedBody(t *testing.T) {
 func TestDeliveryReleasesLeasesWhenStopped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	unblock := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		cancel()
 		select {
