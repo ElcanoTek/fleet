@@ -46,9 +46,12 @@ type State struct {
 }
 
 // BaselineAdopter records a change made in Fleet as the baseline of the
-// identity provider's stored desired state (store.AdoptFleetAccessChange).
+// identity provider's stored desired state (store.AdoptFleetAccessChange),
+// guarded by the provider state read before the change
+// (store.ProviderStateToken) so a provider push that lands in between wins.
 type BaselineAdopter interface {
-	AdoptFleetAccessChange(ctx context.Context, email string, exists bool, chatRole, opsRole string) error
+	ProviderStateToken(ctx context.Context, email string) (string, error)
+	AdoptFleetAccessChange(ctx context.Context, email, token string, exists bool, chatRole, opsRole string) (bool, error)
 }
 
 // Recorder turns before/after snapshots into outbox rows. A nil *Recorder is
@@ -70,7 +73,11 @@ func NewRecorder(chat ChatReader, ops OpsRoleReader, queue Queue) *Recorder {
 	return &Recorder{chat: chat, ops: ops, queue: queue, baseline: baseline}
 }
 
-// Snapshot reads email's current state across both planes.
+// Snapshot reads email's current state across both planes. The Ops plane is
+// read even when there is no Chat account: a Chat deletion whose best-effort
+// Ops removal failed leaves an enabled Ops identity behind, and a feed that
+// called that a deletion would tell a receiver access was fully revoked while
+// it is not (see residualOps).
 func (r *Recorder) Snapshot(ctx context.Context, email string) (State, error) {
 	if r == nil {
 		return State{}, nil
@@ -79,16 +86,24 @@ func (r *Recorder) Snapshot(ctx context.Context, email string) (State, error) {
 	if err != nil {
 		return State{}, fmt.Errorf("read chat account: %w", err)
 	}
-	if !found {
-		return State{}, nil
-	}
 	opsRole := "none"
 	if r.ops != nil {
 		if opsRole, err = r.ops.OpsRole(ctx, email); err != nil {
 			return State{}, fmt.Errorf("read ops role: %w", err)
 		}
 	}
+	if !found {
+		return State{OpsRole: opsRole}, nil
+	}
 	return State{Exists: true, Enabled: access.Enabled, ChatRole: access.Role, OpsRole: opsRole}, nil
+}
+
+// residualOps reports a state with no Chat account but an enabled Operations
+// Center identity: reported as user.access_changed with enabled false, an
+// empty chat_role and the ops_role still held — never as user.deleted, which
+// promises there is no access left.
+func residualOps(st State) bool {
+	return !st.Exists && st.OpsRole != "" && st.OpsRole != "none"
 }
 
 // Change is an operation in progress: the state captured before it ran.
@@ -97,6 +112,11 @@ type Change struct {
 	email  string
 	before State
 	err    error
+	// token is the provider's stored state before the change; tokenErr, when
+	// set, means it could not be read and the adoption is skipped (a guess
+	// could overwrite a provider push).
+	token    string
+	tokenErr error
 }
 
 // Begin snapshots email before a change. A failed snapshot is carried to
@@ -107,7 +127,11 @@ func (r *Recorder) Begin(ctx context.Context, email string) *Change {
 		return nil
 	}
 	before, err := r.Snapshot(ctx, email)
-	return &Change{r: r, email: email, before: before, err: err}
+	c := &Change{r: r, email: email, before: before, err: err}
+	if r.baseline != nil {
+		c.token, c.tokenErr = r.baseline.ProviderStateToken(ctx, email)
+	}
+	return c
 }
 
 // ErrNotQueued wraps every reason Commit could not queue an event, so callers
@@ -148,12 +172,22 @@ func (c *Change) Commit(ctx context.Context, source, actor string) error {
 		return nil
 	}
 	typ := store.AccountEventAccessChanged
-	if !after.Exists {
+	switch {
+	case residualOps(after):
+		log.Printf("account events: %s has no Chat account but still holds Operations Center role %q; published as access_changed, not deleted — remove the Ops identity, then run `fleet account-events resync`",
+			logSafe(c.email), after.OpsRole)
+	case !after.Exists:
 		typ = store.AccountEventDeleted
 	}
 	err = c.r.enqueue(ctx, c.email, after, typ, source, actor)
 	if c.r.baseline != nil && source != store.AccountEventSourceIdentityProvider {
-		if adoptErr := c.r.baseline.AdoptFleetAccessChange(ctx, c.email, after.Exists, after.ChatRole, after.OpsRole); adoptErr != nil {
+		adoptErr := c.tokenErr
+		if adoptErr == nil {
+			// adopted=false is a provider push that landed meanwhile (the more
+			// recent change), or no provider row: nothing to adopt either way.
+			_, adoptErr = c.r.baseline.AdoptFleetAccessChange(ctx, c.email, c.token, after.Exists, after.ChatRole, after.OpsRole)
+		}
+		if adoptErr != nil {
 			err = errors.Join(err, fmt.Errorf("adopt the change for %s into the identity provider's desired state: %w", c.email, adoptErr))
 		}
 	}
@@ -192,7 +226,8 @@ func (r *Recorder) Publish(ctx context.Context, email, source, actor string) (bo
 
 // PublishDeleted queues a user.deleted event for email when it has no Chat
 // account now (resync of a deletion whose event was lost). An email that
-// exists is skipped: Publish reports it.
+// exists is skipped: Publish reports it. One whose Ops identity outlived the
+// Chat account is published as that residual access, not as a deletion.
 func (r *Recorder) PublishDeleted(ctx context.Context, email, source, actor string) (bool, error) {
 	if r == nil {
 		return false, nil
@@ -204,7 +239,11 @@ func (r *Recorder) PublishDeleted(ctx context.Context, email, source, actor stri
 	if st.Exists {
 		return false, nil
 	}
-	return true, r.enqueue(ctx, email, st, store.AccountEventDeleted, source, actor)
+	typ := store.AccountEventDeleted
+	if residualOps(st) {
+		typ = store.AccountEventAccessChanged
+	}
+	return true, r.enqueue(ctx, email, st, typ, source, actor)
 }
 
 func (r *Recorder) enqueue(ctx context.Context, email string, st State, typ, source, actor string) error {

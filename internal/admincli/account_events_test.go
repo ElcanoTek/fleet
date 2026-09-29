@@ -99,17 +99,35 @@ func TestCLIRoleCommandsQueueAccountEvents(t *testing.T) {
 		t.Fatalf("chat user del: exit %d", code)
 	}
 
-	evs := drainCLIEvents(t, chat)
-	if len(evs) != 3 {
-		t.Fatalf("events = %+v, want chat role, ops role, delete", evs)
+	// `chat user del` removes the Chat account only; the Ops identity stays
+	// (ADR-0005), so the feed reports that remaining access rather than a
+	// deletion. `sched user del` then removes it, and resync reports the
+	// account gone.
+	if code := cmdSched([]string{"user", "del", email}); code != 0 {
+		t.Fatalf("sched user del: exit %d", code)
 	}
-	checks := []struct{ typ, chatRole, opsRole string }{
-		{store.AccountEventAccessChanged, "viewer", "readonly"},
-		{store.AccountEventAccessChanged, "viewer", "client"},
-		{store.AccountEventDeleted, "", ""},
+	captureStdout(t, func() {
+		if code := cmdAccountEvents([]string{"resync"}); code != 0 {
+			t.Errorf("resync: exit %d", code)
+		}
+	})
+
+	evs := drainCLIEvents(t, chat)
+	if len(evs) != 4 {
+		t.Fatalf("events = %+v, want chat role, ops role, residual ops, delete", evs)
+	}
+	checks := []struct {
+		typ, chatRole, opsRole, source string
+		enabled                        bool
+	}{
+		{store.AccountEventAccessChanged, "viewer", "readonly", "cli", true},
+		{store.AccountEventAccessChanged, "viewer", "client", "cli", true},
+		{store.AccountEventAccessChanged, "", "client", "cli", false},
+		{store.AccountEventDeleted, "", "", "resync", false},
 	}
 	for i, c := range checks {
-		if ev := evs[i]; ev.Type != c.typ || ev.ChatRole != c.chatRole || ev.OpsRole != c.opsRole || ev.Source != "cli" || ev.Email != email {
+		if ev := evs[i]; ev.Type != c.typ || ev.ChatRole != c.chatRole || ev.OpsRole != c.opsRole ||
+			ev.Source != c.source || ev.Enabled != c.enabled || ev.Email != email {
 			t.Errorf("event %d = %+v, want %+v", i, ev, c)
 		}
 	}
@@ -264,5 +282,12 @@ func TestCLIWarnsWhenTheServerEnvFileIsUnreadable(t *testing.T) {
 	}
 	if !strings.Contains(string(msg), "cannot tell whether the account-events feed is on") {
 		t.Fatalf("stderr = %q, want the unreadable-env-file warning", msg)
+	}
+	// resync refuses rather than queue rows a feed that may be off never drains.
+	if code := accountEventsResync(nil); code == 0 {
+		t.Fatal("resync ran with the feed state unknown")
+	}
+	if accountEventsFeed() != feedUnknown {
+		t.Fatal("feed state should be unknown")
 	}
 }

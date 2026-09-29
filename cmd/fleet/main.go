@@ -742,7 +742,7 @@ func run() error {
 	// admin Notifications panel. A persisted admin row hot-swaps the shared
 	// notifier's config at boot and after every edit; no row = the env-derived
 	// config already in taskNotifier keeps serving.
-	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier)
+	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier, cfg.AccountEventsSecret)
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 

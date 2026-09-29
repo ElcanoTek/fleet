@@ -74,6 +74,29 @@ type Service struct {
 	env      notify.Config // env-derived boot config (secrets included, host-side only)
 	notifier Swapper
 	mu       sync.Mutex
+	// reserved is a signing key another signed channel owns (the
+	// account-events feed's FLEET_ACCOUNT_EVENTS_SECRET), or "". See
+	// ReserveSigningSecret.
+	reserved string
+}
+
+// ErrReservedWebhookSecret refuses a task-webhook secret equal to the
+// account-events feed's. Both channels use the docs/WEBHOOK-SIGNING.md scheme
+// byte for byte and the signed string names neither, so under one key a
+// signed task-notification body would verify at the account-events receiver.
+// It wraps store.ErrInvalidNotifySettings, so the panel answers 400.
+var ErrReservedWebhookSecret = fmt.Errorf("%w: the webhook signing secret must differ from FLEET_ACCOUNT_EVENTS_SECRET (the account-events feed signs with the same scheme)", store.ErrInvalidNotifySettings)
+
+// ReserveSigningSecret names a key the task webhook must never sign with.
+// config.Load already refuses FLEET_WEBHOOK_SECRET equal to the account-events
+// secret; this closes the admin panel's path to the same collision: Save
+// refuses it, and a persisted row that carries it anyway (saved before the feed
+// was configured) has its webhook channel switched off rather than sign with
+// the other channel's key. Call before ApplyBoot.
+func (s *Service) ReserveSigningSecret(secret string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reserved = strings.TrimSpace(secret)
 }
 
 // NewService builds the service. env is the notify.Load() result captured at
@@ -97,7 +120,8 @@ func (s *Service) View(ctx context.Context) (View, error) {
 	}
 	// Probe decryptability so the panel never claims a config is in effect
 	// that the notifier could not actually load (e.g. after a key rotation).
-	if _, err := s.st.GetNotifySettingsConfig(ctx); errors.Is(err, store.ErrNotifySecretsUndecryptable) {
+	full, err := s.st.GetNotifySettingsConfig(ctx)
+	if errors.Is(err, store.ErrNotifySecretsUndecryptable) {
 		v.Degraded = "The saved secrets cannot be decrypted (encryption key changed?). The env-derived config is serving. Re-enter the secrets and save, or revert to env config."
 		v.EmailEnabled = s.env.EmailConfigured()
 		v.WebhookEnabled = s.env.WebhookConfigured()
@@ -105,7 +129,9 @@ func (s *Service) View(ctx context.Context) (View, error) {
 	} else if err != nil {
 		return View{}, err
 	}
-	cfg := s.rowConfig(&store.NotifySettingsConfig{NotifySettings: *row})
+	// The decrypted row, so a webhook switched off for signing with a reserved
+	// key (ReserveSigningSecret) is reported off, as it is.
+	cfg := s.rowConfig(full)
 	v.EmailEnabled = cfg.EmailConfigured()
 	v.WebhookEnabled = cfg.WebhookConfigured()
 	return v, nil
@@ -140,6 +166,9 @@ func (s *Service) envView() View {
 func (s *Service) Save(ctx context.Context, in store.NotifySettingsInput, updatedBy string) (View, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.reserved != "" && in.WebhookSecret != nil && strings.TrimSpace(*in.WebhookSecret) == s.reserved {
+		return View{}, ErrReservedWebhookSecret
+	}
 	if _, err := s.st.UpsertNotifySettings(ctx, in, updatedBy); err != nil {
 		return View{}, err
 	}
@@ -193,6 +222,9 @@ func (s *Service) ApplyBoot(ctx context.Context) error {
 		return err
 	}
 	s.notifier.SetConfig(s.rowConfig(row))
+	if s.reserved != "" && row.WebhookSecret == s.reserved {
+		log.Printf("notify settings: task webhook DISABLED — its saved signing secret equals FLEET_ACCOUNT_EVENTS_SECRET; save a different secret from the admin panel")
+	}
 	log.Printf("notify settings: admin config in effect (set by %s)", row.UpdatedBy)
 	return nil
 }
@@ -235,6 +267,12 @@ func (s *Service) rowConfig(row *store.NotifySettingsConfig) notify.Config {
 	cfg.WebhookMethod = row.WebhookMethod
 	cfg.WebhookBodyTemplate = row.WebhookBodyTemplate
 	cfg.WebhookSecret = row.WebhookSecret
+	if s.reserved != "" && cfg.WebhookSecret == s.reserved {
+		// Fail closed: no URL means the webhook channel does not fire, and the
+		// View reports it disabled. Signing unsigned instead would be a silent
+		// downgrade; signing with the key would be the collision itself.
+		cfg.WebhookURL = ""
+	}
 	return cfg
 }
 

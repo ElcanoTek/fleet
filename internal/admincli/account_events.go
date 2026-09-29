@@ -24,22 +24,44 @@ import (
 // the operator is told to run `fleet account-events resync`: an event built
 // from half the state would report a wrong role.
 
-// accountEventsConfigured reports whether this box publishes account events
-// (FLEET_ACCOUNT_EVENTS_URL in the shell or the server env file).
-//
-// A server env file that exists but cannot be read (it is root-owned 0600 on a
-// provisioned box, and the CLI may run as someone else with --database-url)
-// makes the answer unknowable, and "off" would then be a silent miss: the
-// write happens, no event is queued, and nothing says so. That case warns, so
-// the operator knows to resync as a user who can read the file.
-func accountEventsConfigured() bool {
+// feedState is whether this box publishes account events, as far as this
+// process can tell.
+type feedState int
+
+const (
+	feedOff feedState = iota
+	feedOn
+	// feedUnknown: the server env file exists but cannot be read (root-owned
+	// 0600 on a provisioned box, the CLI run as someone else with
+	// --database-url) and the shell names no URL, so the feed may well be on.
+	feedUnknown
+)
+
+// accountEventsFeed reads FLEET_ACCOUNT_EVENTS_URL from the shell or the
+// server env file.
+func accountEventsFeed() feedState {
 	if strings.TrimSpace(envOrFile("FLEET_ACCOUNT_EVENTS_URL")) != "" {
-		return true
+		return feedOn
 	}
-	if err := envFileReadErr(); err != nil {
+	if envFileReadErr() != nil {
+		return feedUnknown
+	}
+	return feedOff
+}
+
+// accountEventsConfigured reports whether a write should publish. An unknown
+// feed does not — nothing can be queued without knowing the feed is meant to
+// deliver it — but it warns, because "off" would then be a silent miss: the
+// write happens, no event is queued, and nothing says so.
+func accountEventsConfigured() bool {
+	switch accountEventsFeed() {
+	case feedOn:
+		return true
+	case feedUnknown:
 		warnEnvFileUnreadable.Do(func() {
-			fmt.Fprintf(os.Stderr, "warning: cannot read the server env file (%v), so this command cannot tell whether the account-events feed is on; if it is, the change is not published — run `fleet account-events resync` as a user who can read it\n", err)
+			fmt.Fprintf(os.Stderr, "warning: cannot read the server env file (%v), so this command cannot tell whether the account-events feed is on; if it is, the change is not published — run `fleet account-events resync` as a user who can read it\n", envFileReadErr())
 		})
+	case feedOff:
 	}
 	return false
 }
@@ -134,16 +156,19 @@ func accountEventsStatus(argv []string) int {
 	if err != nil {
 		return errf(5, "read account events: %v", err)
 	}
-	if accountEventsConfigured() {
+	switch accountEventsFeed() {
+	case feedOn:
 		fmt.Println("feed:      on (FLEET_ACCOUNT_EVENTS_URL is set)")
-	} else {
+	case feedUnknown:
+		fmt.Printf("feed:      unknown (cannot read the server env file: %v; run as a user who can read it)\n", envFileReadErr())
+	default:
 		fmt.Println("feed:      off (FLEET_ACCOUNT_EVENTS_URL is unset; nothing is queued)")
 	}
 	fmt.Printf("pending:   %d\n", stats.Pending)
 	if stats.OldestPendingAt > 0 {
 		fmt.Printf("oldest:    %s ago\n", time.Since(time.Unix(stats.OldestPendingAt, 0)).Round(time.Second))
 	}
-	fmt.Printf("failed:    %d (gave up after 7 days)\n", stats.Failed)
+	fmt.Printf("failed:    %d (rejected by the receiver, or gave up after 7 days)\n", stats.Failed)
 	fmt.Printf("delivered: %d (kept 7 days)\n", stats.Delivered)
 	if stats.LastError != "" {
 		fmt.Printf("last error: %s\n", stats.LastError)
@@ -181,8 +206,14 @@ func accountEventsExport(argv []string) int {
 // a receiver that missed the deletion keeps the grant, and an identity
 // provider's next push would re-create the account.
 func accountEventsResync(argv []string) int {
-	if !accountEventsConfigured() {
+	switch accountEventsFeed() {
+	case feedUnknown:
+		// Queued rows are never pruned while pending, so a resync into a feed
+		// that is really off would sit in the table for good.
+		return errf(1, "cannot tell whether the account-events feed is on (cannot read the server env file: %v); run resync as a user who can read it", envFileReadErr())
+	case feedOff:
 		return errf(1, "the account-events feed is off: set FLEET_ACCOUNT_EVENTS_URL and FLEET_ACCOUNT_EVENTS_SECRET first")
+	case feedOn:
 	}
 	chat, rec, closeAll, code := snapshotRecorder(argv, "account-events resync")
 	if rec == nil {

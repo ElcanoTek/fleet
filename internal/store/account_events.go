@@ -293,6 +293,33 @@ func (s *Store) DeletedAccountEmails(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
+// ProviderStateToken identifies the identity provider's stored desired state
+// for email as it is now — every row's issuer, subject and version — so a later
+// AdoptFleetAccessChange can tell whether a provider push landed in between.
+// "" means the provider holds no row for email.
+func (s *Store) ProviderStateToken(ctx context.Context, email string) (string, error) {
+	return providerStateToken(ctx, s.db, normalizeEmail(email), "")
+}
+
+func providerStateToken(ctx context.Context, q queryer, email, lock string) (string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT issuer, subject, version FROM external_access_state
+		WHERE email = $1 ORDER BY issuer, subject`+lock, email)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var issuer, subject string
+		var version int64
+		if err := rows.Scan(&issuer, &subject, &version); err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "%s\x00%s\x00%d\x00", issuer, subject, version)
+	}
+	return b.String(), rows.Err()
+}
+
 // AdoptFleetAccessChange records a change made in Fleet itself (the admin UI,
 // the CLI, the boot seed) as the baseline of email's identity-provider
 // desired state, so the provider's own at-least-once redelivery of an older,
@@ -302,17 +329,40 @@ func (s *Store) DeletedAccountEmails(ctx context.Context) ([]string, error) {
 // Fleet) marks the row not allowed, keeping its roles so a newer grant from the
 // provider is non-destructive. Only the roles and allowed flag move — the
 // version stays the provider's, so its next real change still wins.
-// Emails with no provider row are untouched.
-func (s *Store) AdoptFleetAccessChange(ctx context.Context, email string, exists bool, chatRole, opsRole string) error {
+//
+// token is ProviderStateToken as read before Fleet's change. The rows are
+// locked (FOR UPDATE, the lock ApplyExternalAccess takes) and the adoption
+// happens only when they still match it: a provider push that committed while
+// Fleet's change was in flight is the more recent change, and overwriting its
+// roles under its newer version would leave a redelivery of that version
+// reconciling Ops from roles the provider never sent while Chat, already at
+// that version, is not touched. adopted=false reports that skip (or that the
+// provider holds no row for email).
+func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string, exists bool, chatRole, opsRole string) (bool, error) {
 	email = normalizeEmail(email)
-	if !exists {
-		_, err := s.db.ExecContext(ctx, `UPDATE external_access_state SET allowed = FALSE WHERE email = $1`, email)
-		return err
+	if exists && (!ValidRole(chatRole) || !validOpsRole(opsRole)) {
+		return false, fmt.Errorf("adopt fleet access change: invalid roles %q/%q", chatRole, opsRole)
 	}
-	if !ValidRole(chatRole) || !validOpsRole(opsRole) {
-		return fmt.Errorf("adopt fleet access change: invalid roles %q/%q", chatRole, opsRole)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE external_access_state SET chat_role = $2, ops_role = $3 WHERE email = $1`,
-		email, chatRole, opsRole)
-	return err
+	defer func() { _ = tx.Rollback() }()
+	current, err := providerStateToken(ctx, tx, email, " FOR UPDATE")
+	if err != nil {
+		return false, err
+	}
+	if current == "" || current != token {
+		return false, nil
+	}
+	if exists {
+		_, err = tx.ExecContext(ctx, `UPDATE external_access_state SET chat_role = $2, ops_role = $3 WHERE email = $1`,
+			email, chatRole, opsRole)
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE external_access_state SET allowed = FALSE WHERE email = $1`, email)
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }

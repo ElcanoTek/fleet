@@ -35,7 +35,8 @@ none.** Auth is one subscriber (docs/ACCOUNT-EVENTS.md).
 - The feed is off unless configured. A URL without a signing secret, or with
   the same secret as the task webhook (`FLEET_WEBHOOK_SECRET` — the schemes
   are identical, so one key would let a task-webhook body verify as an account
-  event), refuses to boot.
+  event), refuses to boot; the notifications admin panel refuses to save that
+  collision, and switches off a task webhook whose saved secret has it.
 - **Fleet holds its own side of "most recent wins".** A change made in Fleet
   (the admin UI, the CLI, the boot seed — every source but
   `identity_provider`) is also written into the provider's stored desired
@@ -46,7 +47,14 @@ none.** Auth is one subscriber (docs/ACCOUNT-EVENTS.md).
   provider's ordinary at-least-once redelivery of an already-applied version
   would silently put back the role Fleet's admin just changed — published as
   `identity_provider`, the one source the provider may ignore. The provider's
-  next real change carries a newer version and still wins.
+  next real change carries a newer version and still wins, and one that
+  commits while Fleet's change is in flight wins too: the adoption locks the
+  provider's rows and applies only if they are unchanged since before Fleet's
+  change.
+- **A deletion is reported only when no access is left.** A Chat account gone
+  while its Operations Center identity remains is published as that remaining
+  access (`enabled: false`, empty `chat_role`, the Ops role held), never as
+  `user.deleted`.
 - **Resync repairs deletions, not only live accounts.** `fleet account-events
   resync` also queues `user.deleted` for every email the feed knows once had a
   Chat account that is gone (a provider desired-state row, or an outbox row

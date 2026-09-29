@@ -383,6 +383,7 @@ func TestBodyForDeletedEvent(t *testing.T) {
 // desired state, the way the chat store does.
 type adoptingPlanes struct {
 	*fakePlanes
+	token   string
 	adopted []adoption
 }
 
@@ -392,9 +393,16 @@ type adoption struct {
 	chatRole, opsRole string
 }
 
-func (a *adoptingPlanes) AdoptFleetAccessChange(_ context.Context, email string, exists bool, chatRole, opsRole string) error {
+func (a *adoptingPlanes) ProviderStateToken(context.Context, string) (string, error) {
+	return a.token, nil
+}
+
+func (a *adoptingPlanes) AdoptFleetAccessChange(_ context.Context, email, token string, exists bool, chatRole, opsRole string) (bool, error) {
+	if token != a.token {
+		return false, nil
+	}
 	a.adopted = append(a.adopted, adoption{email, exists, chatRole, opsRole})
-	return nil
+	return true, nil
 }
 
 // TestCommitAdoptsFleetChangesIntoTheProviderBaseline: a change made in Fleet
@@ -515,5 +523,54 @@ func TestDelivererWithoutURLOnlyPrunes(t *testing.T) {
 	}
 	if out.pruned != 1 || len(out.due) != 1 || len(out.failed) != 0 {
 		t.Fatalf("pruned %d due %d failed %+v, want a prune and no claim", out.pruned, len(out.due), out.failed)
+	}
+}
+
+// TestDeletionWithResidualOpsIsNotReportedAsDeleted: a Chat deletion whose Ops
+// removal failed leaves Operations Center access behind. The feed reports that
+// access (access_changed, enabled false, no chat role) instead of a deletion
+// that would tell a receiver everything was revoked; resync does the same, and
+// reports the deletion once the Ops identity is gone too. An identity that
+// never had a Chat account still never emits.
+func TestDeletionWithResidualOpsIsNotReportedAsDeleted(t *testing.T) {
+	ctx := context.Background()
+	p := newPlanes()
+	rec := NewRecorder(p, p, p)
+	const email = "hal@x.com"
+	p.chat[email] = store.AccountAccess{Email: email, Role: store.RoleMember, Enabled: true}
+	p.ops[email] = "client"
+
+	c := rec.Begin(ctx, email)
+	delete(p.chat, email) // the Ops removal "failed": p.ops keeps client
+	if err := c.Commit(ctx, store.AccountEventSourceAdminUI, "boss@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := rec.PublishDeleted(ctx, email, store.AccountEventSourceResync, ""); !ok || err != nil {
+		t.Fatalf("resync of the residual = (%v, %v)", ok, err)
+	}
+	delete(p.ops, email)
+	if ok, err := rec.PublishDeleted(ctx, email, store.AccountEventSourceResync, ""); !ok || err != nil {
+		t.Fatalf("resync after the Ops removal = (%v, %v)", ok, err)
+	}
+	if len(p.queued) != 3 {
+		t.Fatalf("queued %+v, want residual, residual, deleted", p.queued)
+	}
+	for i, ev := range p.queued[:2] {
+		if ev.Type != store.AccountEventAccessChanged || ev.Enabled || ev.ChatRole != "" || ev.OpsRole != "client" {
+			t.Errorf("event %d = %+v, want the residual Ops access", i, ev)
+		}
+	}
+	if p.queued[2].Type != store.AccountEventDeleted {
+		t.Fatalf("last event = %+v, want the deletion", p.queued[2])
+	}
+
+	// An Ops-only identity (never a Chat account) still publishes nothing.
+	c = rec.Begin(ctx, "bot@x.com")
+	p.ops["bot@x.com"] = "admin"
+	if err := c.Commit(ctx, store.AccountEventSourceCLI, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.queued) != 3 {
+		t.Fatalf("an Ops-only identity emitted: %+v", p.queued[3:])
 	}
 }

@@ -456,8 +456,11 @@ func errorAnalyzerFor(cfg *config.Config, mgr *agent.Manager) runner.ErrorAnalyz
 // as the Features panel — if the boot apply can't read the row, the endpoints
 // are NOT registered (501 panel, never a lying one) and the env-derived config
 // already in the notifier keeps serving.
-func appendNotifySettingsOption(opts []httpapi.Option, st *store.Store, notifier *notify.Notifier) []httpapi.Option {
+func appendNotifySettingsOption(opts []httpapi.Option, st *store.Store, notifier *notify.Notifier, accountEventsSecret string) []httpapi.Option {
 	svc := notifyadmin.NewService(st, notify.Load(), notifier)
+	// The task webhook must never sign with the account-events feed's key
+	// (docs/ACCOUNT-EVENTS.md); config.Load covers the env var, this the panel.
+	svc.ReserveSigningSecret(accountEventsSecret)
 	if err := svc.ApplyBoot(context.Background()); err != nil {
 		log.Printf("notify settings: DISABLED — boot apply failed, serving env-derived config (admin settings NOT in effect): %v", err)
 		return opts

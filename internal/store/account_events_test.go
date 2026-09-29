@@ -194,12 +194,31 @@ func TestDeletedAccountEmailsAndAdoptFleetAccessChange(t *testing.T) {
 	}
 	// A Fleet-side role change becomes the provider row's baseline; the version
 	// stays the provider's.
-	if err := st.AdoptFleetAccessChange(ctx, "IDP@x.com", true, RoleViewer, "client"); err != nil {
-		t.Fatal(err)
+	token, err := st.ProviderStateToken(ctx, "idp@x.com")
+	if err != nil || token == "" {
+		t.Fatalf("token = (%q, %v)", token, err)
+	}
+	if ok, err := st.AdoptFleetAccessChange(ctx, "IDP@x.com", token, true, RoleViewer, "client"); err != nil || !ok {
+		t.Fatalf("adopt = (%v, %v)", ok, err)
 	}
 	got, _, err := st.ExternalAccessState(ctx, state.Issuer, state.Subject)
 	if err != nil || got.ChatRole != RoleViewer || got.OpsRole != "client" || got.Version != 3 || !got.Allowed {
 		t.Fatalf("state after adopt = (%+v, %v)", got, err)
+	}
+	// A provider push that lands while a Fleet change is in flight is the more
+	// recent change: the adoption, guarded by the token read before it, skips.
+	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
+	newer := state
+	newer.Version, newer.EventID, newer.ChatRole, newer.OpsRole = 4, "e4", RoleAdmin, "admin"
+	if _, _, err := st.ApplyExternalAccess(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, RoleViewer, "readonly"); err != nil || ok {
+		t.Fatalf("adopt over a newer push = (%v, %v), want skipped", ok, err)
+	}
+	got, _, _ = st.ExternalAccessState(ctx, state.Issuer, state.Subject)
+	if got.Version != 4 || got.ChatRole != RoleAdmin || got.OpsRole != "admin" {
+		t.Fatalf("state after a skipped adopt = %+v, want the provider's v4 roles", got)
 	}
 	// Outbox history: one account gone after an access event, one whose latest
 	// event is already a deletion, one that still exists.
@@ -212,11 +231,12 @@ func TestDeletedAccountEmailsAndAdoptFleetAccessChange(t *testing.T) {
 	if err := st.DeleteUser(ctx, "idp@x.com"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AdoptFleetAccessChange(ctx, "idp@x.com", false, "", ""); err != nil {
-		t.Fatal(err)
+	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, false, "", ""); err != nil || !ok {
+		t.Fatalf("adopt deletion = (%v, %v)", ok, err)
 	}
 	got, _, _ = st.ExternalAccessState(ctx, state.Issuer, state.Subject)
-	if got.Allowed || got.ChatRole != RoleViewer {
+	if got.Allowed || got.ChatRole != RoleAdmin {
 		t.Fatalf("state after a Fleet deletion = %+v, want not allowed with its roles kept", got)
 	}
 	gone, err := st.DeletedAccountEmails(ctx)

@@ -18,7 +18,7 @@ then restart `fleet.service`:
 | Variable | Meaning |
 | --- | --- |
 | `FLEET_ACCOUNT_EVENTS_URL` | Where events are POSTed. Unset = the feed is off. Must be an absolute `http`/`https` URL. |
-| `FLEET_ACCOUNT_EVENTS_SECRET` | HMAC-SHA256 signing key shared with the receiver. **Required** when the URL is set: boot and `fleet validate-config` refuse a URL without it, so events are never sent unsigned. It must also **differ from `FLEET_WEBHOOK_SECRET`**: the two feeds use the same signing scheme and the signed string names neither, so under one key a task-webhook body would verify at the account-events receiver. Boot refuses a shared value. |
+| `FLEET_ACCOUNT_EVENTS_SECRET` | HMAC-SHA256 signing key shared with the receiver. **Required** when the URL is set: boot and `fleet validate-config` refuse a URL without it, so events are never sent unsigned. It must also **differ from the task webhook's secret**: the two feeds use the same signing scheme and the signed string names neither, so under one key a task-webhook body would verify at the account-events receiver. Boot refuses a shared `FLEET_WEBHOOK_SECRET`; the Settings → Admin → Notifications panel refuses to save a shared secret, and a secret saved there before the feed was configured switches the task webhook off (logged, and shown disabled in the panel) rather than sign with the feed's key. |
 
 The URL is operator-trusted, the same trust class as `FLEET_WEBHOOK_URL`:
 there is no SSRF guard, and a loopback receiver (for example an identity
@@ -104,7 +104,13 @@ would outlive its removal from the allowlist.
 - `user.ops_role`: `none`, `readonly`, `client` or `admin`. `none` means no
   enabled Operations Center identity (a centrally disabled identity keeps its
   row but reads as `none`).
-- For `user.deleted`: `enabled` is `false` and both roles are `""`.
+- For `user.deleted`: `enabled` is `false` and both roles are `""`. It is sent
+  only when **no** access is left in either plane.
+- A `user.access_changed` with `enabled: false`, `chat_role: ""` and a real
+  `ops_role` means the Chat account is gone but an Operations Center identity
+  still holds that role — `fleet chat user del` removes only the Chat account,
+  and the admin UI's Ops removal is best-effort. Fleet logs it; once the Ops
+  identity is removed too, `fleet account-events resync` reports the deletion.
 
 Headers:
 
@@ -161,7 +167,12 @@ receiver is not an identity provider — within that retention for one.
 
 `export` works with the feed off and changes nothing, so an operator can
 compare Fleet's state with a receiver before switching the feed on. `resync`
-refuses while the feed is off. Neither prints the URL or the secret.
+refuses while the feed is off. Neither prints the URL or the secret. When the
+CLI cannot read the server env file, `status` reports the feed as `unknown`
+and `resync` refuses (pending rows are never pruned, so a resync into a feed
+that is really off would stay queued for good); run them as a user who can read
+the file. `failed` counts rows the receiver rejected outright as well as rows
+that gave up after 7 days; the last error line says which.
 
 ## Loop safety with an identity provider
 
@@ -179,8 +190,11 @@ Fleet is also written into the provider's stored desired state for that
 account (its roles, or not-allowed for a deletion; never its version). So when
 the provider redelivers a push it already sent (at-least-once), Fleet
 re-applies the state it now holds instead of the one before its own change,
-and an `identity_provider` event is never a silent revert. This happens only
-with the feed on ([ADR-0076](adr/0076-fleet-publishes-account-events.md)).
+and an `identity_provider` event is never a silent revert. The adoption is
+guarded by the provider state read before Fleet's change: a provider push that
+commits while the change is in flight is the more recent change and is left as
+it is. This happens only with the feed on
+([ADR-0076](adr/0076-fleet-publishes-account-events.md)).
 
 ## Honest scope
 
