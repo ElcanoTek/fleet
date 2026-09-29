@@ -597,3 +597,26 @@ func TestDeliveryReleasesUnsentRowsAfterABookkeepingError(t *testing.T) {
 		t.Fatalf("released = %v, want the two unsent rows", out.released)
 	}
 }
+
+// TestPublishDeletedAdoptsTheDeletion: resync repairing a lost deletion also
+// repairs the lost adoption, so a redelivered push cannot re-enable the
+// deleted account's Ops identity from a still-allowed provider row.
+func TestPublishDeletedAdoptsTheDeletion(t *testing.T) {
+	ctx := context.Background()
+	p := &adoptingPlanes{fakePlanes: newPlanes(), token: "v3"}
+	rec := NewRecorder(p, p, p)
+	if ok, err := rec.PublishDeleted(ctx, "gone@x.com", store.AccountEventSourceResync, ""); !ok || err != nil {
+		t.Fatalf("PublishDeleted = (%v, %v)", ok, err)
+	}
+	if len(p.adopted) != 1 || p.adopted[0].exists || p.adopted[0].email != "gone@x.com" {
+		t.Fatalf("adopted = %+v, want the deletion adopted", p.adopted)
+	}
+	// Publish (a live account) still only reports.
+	p.chat["here@x.com"] = store.AccountAccess{Email: "here@x.com", Role: store.RoleMember, Enabled: true}
+	if _, err := rec.Publish(ctx, "here@x.com", store.AccountEventSourceResync, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.adopted) != 1 {
+		t.Fatalf("resync of a live account adopted: %+v", p.adopted)
+	}
+}

@@ -67,6 +67,7 @@ type AccountTxRunner interface {
 type chatSide interface {
 	ChatReader
 	Queue
+	ProviderStateToken(ctx context.Context, email string) (string, error)
 	AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error)
 }
 
@@ -80,6 +81,13 @@ func (u unlockedSide) AccountAccess(ctx context.Context, email string) (store.Ac
 
 func (u unlockedSide) EnqueueAccountEvent(ctx context.Context, ev store.AccountEvent) (store.AccountEvent, error) {
 	return u.r.queue.EnqueueAccountEvent(ctx, ev)
+}
+
+func (u unlockedSide) ProviderStateToken(ctx context.Context, email string) (string, error) {
+	if u.r.baseline == nil {
+		return "", nil
+	}
+	return u.r.baseline.ProviderStateToken(ctx, email)
 }
 
 func (u unlockedSide) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
@@ -322,6 +330,14 @@ func (r *Recorder) publish(ctx context.Context, email, source, actor string, ado
 // account now (resync of a deletion whose event was lost). An email that
 // exists is skipped: Publish reports it. One whose Ops identity outlived the
 // Chat account is published as that residual access, not as a deletion.
+//
+// Unlike Publish it also adopts the deletion (allowed=false) into the
+// provider's baseline: the crash that lost the event lost that adoption too,
+// and a still-allowed row would let a redelivered push re-enable the Ops
+// identity of an account Fleet deleted. That is safe to adopt here where a
+// live account's state is not: a provider push never deletes a Chat account
+// (a revoke disables it), so a gone account is Fleet's own change. The token
+// is read under the account's lock, so a push can only have landed before it.
 func (r *Recorder) PublishDeleted(ctx context.Context, email, source, actor string) (bool, error) {
 	if r == nil {
 		return false, nil
@@ -337,7 +353,15 @@ func (r *Recorder) PublishDeleted(ctx context.Context, email, source, actor stri
 			typ = store.AccountEventAccessChanged
 		}
 		published = true
-		return enqueueOn(ctx, side, email, st, typ, source, actor)
+		err = enqueueOn(ctx, side, email, st, typ, source, actor)
+		token, tokenErr := side.ProviderStateToken(ctx, email)
+		if tokenErr == nil && token != "" {
+			_, tokenErr = side.AdoptFleetAccessChange(ctx, email, token, false, false, "", "")
+		}
+		if tokenErr != nil {
+			err = errors.Join(err, fmt.Errorf("adopt the deletion of %s into the identity provider's desired state: %w", email, tokenErr))
+		}
+		return err
 	})
 	return published, err
 }

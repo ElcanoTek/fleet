@@ -59,7 +59,8 @@ none.** Auth is one subscriber (docs/ACCOUNT-EVENTS.md).
   resync` also queues `user.deleted` for every email the feed knows once had a
   Chat account that is gone (a provider desired-state row, or an outbox row
   whose latest event is not a deletion), so a lost deletion does not leave the
-  provider holding a grant its next push would turn back into an account.
+  provider holding a grant its next push would turn back into an account; it
+  adopts the deletion (`allowed = false`) as well.
 
 For centrally managed identities, the rule becomes: **the most recent change
 wins, whichever side made it.** Auth decides how to adopt reports (it mirrors

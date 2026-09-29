@@ -236,7 +236,8 @@ func TestAdoptFleetAccessChange(t *testing.T) {
 
 // TestAdoptFleetAccessChangeSkipsWhenTheRowMoved: the token read before a
 // Fleet change guards its adoption against a provider push that landed
-// meanwhile and against another Fleet change's adoption.
+// meanwhile; another Fleet change's adoption does not move it (those are
+// ordered by the per-account lock, and the later one must win).
 func TestAdoptFleetAccessChangeSkipsWhenTheRowMoved(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -259,11 +260,11 @@ func TestAdoptFleetAccessChangeSkipsWhenTheRowMoved(t *testing.T) {
 	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleMember, "client"); err != nil || !ok {
 		t.Fatalf("first overlapping adopt = (%v, %v)", ok, err)
 	}
-	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleViewer, "readonly"); err != nil || ok {
-		t.Fatalf("stale overlapping adopt = (%v, %v), want skipped", ok, err)
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleViewer, "readonly"); err != nil || !ok {
+		t.Fatalf("later Fleet adopt = (%v, %v), want it to supersede the earlier one", ok, err)
 	}
-	if got := providerState(t, st, state); got.ChatRole != RoleMember || got.OpsRole != "client" {
-		t.Fatalf("after overlapping adopts = %+v, want the first kept", got)
+	if got := providerState(t, st, state); got.ChatRole != RoleViewer || got.OpsRole != "readonly" {
+		t.Fatalf("after two Fleet adopts = %+v, want the later one", got)
 	}
 }
 

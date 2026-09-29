@@ -170,7 +170,10 @@ fleet account-events resync   # queue every Chat account's current state, and us
 desired state or from the outbox's own history (rows are kept 7 or 30 days),
 so an account deleted with no event queued — or whose deletion the receiver
 rejected or never acknowledged — is reported gone even when the receiver is
-not an identity provider, within that retention for one.
+not an identity provider, within that retention for one. Resync of a deletion
+also marks the provider's stored state not-allowed (the crash that lost the
+event lost that too), so a redelivered push cannot re-enable the deleted
+account's Ops identity; resync of a live account only reports.
 
 `export` works with the feed off and changes nothing, so an operator can
 compare Fleet's state with a receiver before switching the feed on. `resync`

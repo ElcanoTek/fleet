@@ -311,33 +311,33 @@ func (s *Store) DeletedAccountEmails(ctx context.Context) ([]string, error) {
 }
 
 // ProviderStateToken identifies the identity provider's stored desired state
-// for email as it is now — every row's issuer, subject and version, and the
-// fields a Fleet adoption writes (allowed, chat_role, ops_role) — so a later
-// AdoptFleetAccessChange can tell whether anything moved it in between: a
-// provider push, or another Fleet change's adoption (two overlapping Fleet
-// mutations of one account both read the same token; without the adopted
-// fields, the one adopting last could overwrite the final state with its
-// stale snapshot). "" means the provider holds no row for email.
+// for email as the provider last wrote it — every row's issuer, subject and
+// version — so a later AdoptFleetAccessChange can tell whether a provider push
+// landed in between. It deliberately leaves out the fields a Fleet adoption
+// writes: overlapping Fleet changes are ordered by the per-account lock
+// (InAccountEventsTx), each reading its state and adopting it inside the lock,
+// so the one that commits last adopts the latest state; a token that moved on
+// every Fleet adoption would instead make that last, correct adoption skip.
+// "" means the provider holds no row for email.
 func (s *Store) ProviderStateToken(ctx context.Context, email string) (string, error) {
 	return providerStateToken(ctx, s.db, normalizeEmail(email), "")
 }
 
 func providerStateToken(ctx context.Context, q queryer, email, lock string) (string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT issuer, subject, version, allowed, chat_role, ops_role
-		FROM external_access_state WHERE email = $1 ORDER BY issuer, subject`+lock, email)
+	rows, err := q.QueryContext(ctx, `SELECT issuer, subject, version FROM external_access_state
+		WHERE email = $1 ORDER BY issuer, subject`+lock, email)
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
 	var b strings.Builder
 	for rows.Next() {
-		var issuer, subject, chatRole, opsRole string
+		var issuer, subject string
 		var version int64
-		var allowed bool
-		if err := rows.Scan(&issuer, &subject, &version, &allowed, &chatRole, &opsRole); err != nil {
+		if err := rows.Scan(&issuer, &subject, &version); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "%s\x00%s\x00%d\x00%t\x00%s\x00%s\x00", issuer, subject, version, allowed, chatRole, opsRole)
+		fmt.Fprintf(&b, "%s\x00%s\x00%d\x00", issuer, subject, version)
 	}
 	return b.String(), rows.Err()
 }
@@ -424,6 +424,11 @@ func (t *AccountEventsTx) AccountAccess(ctx context.Context, email string) (Acco
 // EnqueueAccountEvent is Store.EnqueueAccountEvent on the transaction.
 func (t *AccountEventsTx) EnqueueAccountEvent(ctx context.Context, ev AccountEvent) (AccountEvent, error) {
 	return enqueueAccountEvent(ctx, t.tx, ev)
+}
+
+// ProviderStateToken is Store.ProviderStateToken on the transaction.
+func (t *AccountEventsTx) ProviderStateToken(ctx context.Context, email string) (string, error) {
+	return providerStateToken(ctx, t.tx, normalizeEmail(email), "")
 }
 
 // AdoptFleetAccessChange is Store.AdoptFleetAccessChange on the transaction,
