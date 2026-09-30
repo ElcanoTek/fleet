@@ -97,6 +97,34 @@ Exit codes: `0` all requested servers connected (and, with `--deep`, all
 deep checks passed) · `1` at least one failed (or a requested name is
 unknown/gated off) · `2` usage error.
 
+### Tool schema check
+
+Model providers validate every tool's input schema as JSON Schema draft
+2020-12, and Anthropic rejects the whole request when a single tool fails, so
+one connector tool with an outdated schema used to fail every Claude turn in
+any conversation that had the connector on (pages#111). Fleet now translates
+older-draft constructs (tuple `items: [...]`, boolean
+`exclusiveMinimum`/`exclusiveMaximum`, boolean `required`) and withholds a tool
+that is still invalid. `fleet mcp test` runs that same check on every listed
+tool and prints each finding under the server:
+
+```
+    schema ! update_page_data translated (older JSON Schema draft) — /properties/range: positional items array rewritten to prefixItems
+    schema ✗ broken WITHHELD from the model — at /properties/q: …
+```
+
+Findings never fail the run: the server is reachable and its other tools
+work. `--json` carries them as `schema_issues`.
+
+The running server keeps its own record, filled as turns build tool lists:
+`fleet mcp schema-issues` prints it (admin key, like `fleet mcp reload`),
+`fleet doctor` advises on each finding, and
+`fleet_mcp_tool_schema_issues_total{server,status}` on `/metrics` counts new
+findings. Each new finding is also logged once. A connector that ships a fixed
+schema clears from the record on its next turn. The nightly catalog smoke
+(`.github/workflows/mcp-catalog-smoke.yml`) fails a built-in directory entry
+whose tools include an invalid schema.
+
 ### What it needs (and deliberately does not)
 
 - **No Postgres, no running fleet server, no web tier, no Podman.** Bundle

@@ -1329,6 +1329,24 @@ func reloadMCPServers(ctx context.Context, mgr *agent.Manager) (*mcp.ReloadSumma
 	return mgr.ReloadMCPServers(ctx, specs)
 }
 
+// mcpSchemaIssuesResponse is the GET /admin/mcp-servers/schema-issues body.
+type mcpSchemaIssuesResponse struct {
+	// Since is when this process started recording; a connector no turn has
+	// used since then is not reflected.
+	Since  time.Time                   `json:"since"`
+	Issues []agentcore.ToolSchemaIssue `json:"issues"`
+}
+
+// mcpSchemaIssuesHandler serves GET /admin/mcp-servers/schema-issues from the
+// runtime record the model boundary keeps (agentcore.ToolSchemaIssues).
+func mcpSchemaIssuesHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(mcpSchemaIssuesResponse{
+		Since:  agentcore.ToolSchemaRecordSince(),
+		Issues: agentcore.ToolSchemaIssues(),
+	})
+}
+
 // mcpReloadHandler serves POST /admin/mcp-servers/reload (#218): it hot-reloads
 // the MCP catalog and returns a JSON ReloadSummary. mgr may be nil in
 // route-walking tests (the route only needs to exist there); a real request
@@ -1565,6 +1583,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// restart. Admin-gated like the other sensitive mutations; returns a JSON
 		// summary of what changed. Equivalent to sending SIGHUP.
 		r.Post("/admin/mcp-servers/reload", reloadMCP)
+		// MCP tool schema findings: tools whose input schema used older JSON
+		// Schema drafts (translated) or is invalid (withheld from the model),
+		// as recorded by the turns this process has run. Admin-gated read;
+		// `fleet mcp schema-issues` and `fleet doctor` consume it.
+		r.Get("/admin/mcp-servers/schema-issues", mcpSchemaIssuesHandler)
 		// An Ops identity named like a Chat account changes its effective
 		// ops_role, so the account-events feed hears about it (nil = off).
 		r.Post("/users", accountEventsCreateUser(h.CreateUser, accountEvents))

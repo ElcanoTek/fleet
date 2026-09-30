@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -461,7 +462,13 @@ func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, c
 	if err := client.AddHTTPServerWithOptions(hctx, "verify", url, s.keyClientOptions(headerName, queryName, credential)); err != nil {
 		return ProbeReport{}, err
 	}
-	report := ProbeReport{ToolCount: len(client.GetAllTools())}
+	tools := client.GetAllTools()
+	report := ProbeReport{ToolCount: len(tools)}
+	for _, st := range tools {
+		if issue, ok := agentcore.CheckMCPToolSchema(st.ServerName, st.Tool); ok {
+			report.SchemaIssues = append(report.SchemaIssues, issue)
+		}
+	}
 	if credential == "" {
 		return report, nil
 	}

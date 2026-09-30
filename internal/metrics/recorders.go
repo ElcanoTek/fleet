@@ -28,6 +28,7 @@ const (
 	nameToolOutputTruncations = "fleet_tool_output_truncations_total"
 	nameToolOutputArtifacts   = "fleet_tool_output_artifacts_total"
 	nameToolContextReductions = "fleet_tool_context_reductions_total"
+	nameToolSchemaIssues      = "fleet_mcp_tool_schema_issues_total"
 	nameToolContextTokens     = "fleet_tool_context_estimated_tokens"
 	nameToolContextPressure   = "fleet_tool_context_pressure_ratio"
 
@@ -106,6 +107,22 @@ func RecordToolOutputArtifact(result string) {
 	}
 	incCounter(nameToolOutputArtifacts, "Governed full tool-output artifact staging attempts by result.",
 		[]string{"result"}, []string{result}, 1)
+}
+
+// RecordToolSchemaIssue counts MCP tools found with a schema problem, by
+// server and status (rewritten = older-draft constructs translated; invalid =
+// withheld from the model). It is recorded once per new or changed finding,
+// not per turn, so a rising count means a connector shipped a new bad schema.
+// Server names are bounded by the bundle catalog plus the per-family cap.
+func RecordToolSchemaIssue(server, status string) {
+	if server == "" {
+		server = "unknown"
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	incCounter(nameToolSchemaIssues, "MCP tools found with an input schema problem, by server and status (rewritten or invalid).",
+		[]string{"server", "status"}, []string{server, status}, 1)
 }
 
 // RecordToolContextReduction counts payloads compacted or evicted by the

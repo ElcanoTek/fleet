@@ -266,7 +266,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
-  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active"
+  info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
   info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Source freshness + build identity: report commits behind upstream, the installed binary's stamped version vs what ${SRC_DIR} would build now (a release tag fetched after the last build), and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or rebuilds)"
@@ -1082,6 +1082,44 @@ if [[ -n "$caddy_domain" ]] && command -v systemctl >/dev/null 2>&1 && systemctl
     pass "https://${caddy_domain}/api-info answers through caddy — the /v1 API reaches the orchestrator"
   else
     fail "https://${caddy_domain}/api-info does not answer through caddy — API clients get the web tier's 404 (or there is no cert yet): journalctl -u caddy -n 50; curl -sv --resolve ${caddy_domain}:443:127.0.0.1 https://${caddy_domain}/api-info"
+  fi
+fi
+
+# ── MCP tool schemas (read from the running server) ──────────────────────────
+# Model providers validate every tool's input schema as JSON Schema draft
+# 2020-12, and Anthropic rejects the WHOLE request when one tool fails, so one
+# connector with an outdated schema used to break every Claude turn in any
+# conversation that had it on (pages#111). Fleet now translates older-draft
+# constructs and withholds a tool that is still invalid; both are recorded by
+# the running server as its turns build tool lists. Doctor READS that record
+# (fleet mcp schema-issues) instead of probing the connectors itself: probing
+# would spawn every stdio connector as root, and root-owned files in the
+# bundle break the sandbox relabel. Findings are advisories, not failures —
+# the box is healthy; a connector needs updating.
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+  fleet_cli="$INSTALL_DIR/fleet"
+  [[ -x "$fleet_cli" ]] || fleet_cli="$(command -v fleet 2>/dev/null || true)"
+  if [[ -z "$fleet_cli" ]] || ! command -v jq >/dev/null 2>&1; then
+    advise "MCP tool schema check skipped (needs the fleet binary and jq)"
+  elif [[ -z "$(env_get ADMIN_API_KEY)" && -z "${ADMIN_API_KEY:-}" ]]; then
+    advise "MCP tool schema check skipped: ADMIN_API_KEY unset in $ENV_FILE (fleet mcp schema-issues needs it)"
+  elif ! schema_json="$("$fleet_cli" mcp schema-issues --json 2>/dev/null)" || ! jq -e '.issues' >/dev/null 2>&1 <<<"$schema_json"; then
+    advise "could not read the MCP tool schema record — run: fleet mcp schema-issues"
+  else
+    schema_since="$(jq -r '.since' <<<"$schema_json")"
+    schema_total="$(jq '.issues | length' <<<"$schema_json")"
+    if [[ "$schema_total" == "0" ]]; then
+      pass "no MCP tool schema issues recorded by turns since ${schema_since}"
+    else
+      while IFS=$'\t' read -r s_status s_server s_tool s_detail; do
+        if [[ "$s_status" == "invalid" ]]; then
+          advise "MCP tool mcp_${s_server}_${s_tool} is WITHHELD from the model: its input schema is invalid JSON Schema draft 2020-12 (${s_detail}) — the ${s_server} connector must fix it"
+        else
+          advise "MCP tool mcp_${s_server}_${s_tool} uses older JSON Schema drafts; Fleet translates it and it works, but the ${s_server} connector should update (${s_detail})"
+        fi
+      done < <(jq -r '.issues[] | [.status, .server, .tool, (.detail | gsub("[\t\n]"; " "))] | @tsv' <<<"$schema_json")
+      info "details: fleet mcp schema-issues (record since ${schema_since})"
+    fi
   fi
 fi
 

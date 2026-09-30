@@ -281,6 +281,10 @@ Users, credentials, notes:
     (account names are canonicalized: hyphen/space fold to underscore and case
      is ignored, so client-a, client_a, and Client_A name ONE seat — use
      distinct base words, not separators, to keep seats apart)
+  fleet mcp schema-issues [--server <addr>] [--admin-key <key>] [--json]
+    (MCP tools whose input schema Fleet translated for the model or withheld
+     from it, as recorded by the running server's turns; fleet doctor reads
+     it. Uses ADMIN_API_KEY / FLEET_ORCHESTRATOR_ADDR by default.)
   fleet notes set <slug> --title "..."  (body via stdin)
   fleet notes get <slug>
   fleet notes list [--all]
