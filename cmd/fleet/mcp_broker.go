@@ -354,7 +354,8 @@ func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.Remo
 		// The name and its reason class cross the wire; the failure detail
 		// (which can quote a resolved URL or a vendor body) stays here.
 		for _, name := range overlay.Skipped {
-			skipped = append(skipped, mcpbroker.SkippedServer{Name: name, Reason: overlay.SkipReason(name)})
+			seat := overlay.SkippedSeats[name]
+			skipped = append(skipped, mcpbroker.SkippedServer{Name: name, Reason: overlay.SkipReason(name), Server: seat.Server, Account: seat.Account})
 		}
 	}
 	tools := describeTools(client)

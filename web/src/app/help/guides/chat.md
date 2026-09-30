@@ -318,9 +318,12 @@ Center.
 
 The picker also offers **All on** and **All off**, which switch every
 optional connector in the conversation at once; the count beside them says
-how many are on. Some connectors are marked **Always on**: they are part of
-the deployment and cannot be switched off per conversation, and the two
-buttons leave them alone. Each connector is also badged as
+how many are on. Fleet mounts at most eight of the connectors you signed into
+yourself in one turn (Bundled ones do not count); turn on more and, when you
+ask for one that was left out, the assistant says so, so keep a conversation
+to the connectors it needs. Some connectors are marked **Always
+on**: they are part of the deployment and cannot be switched off per
+conversation, and the two buttons leave them alone. Each connector is also badged as
 **Bundled**, shipped and operated with the deployment, or as a third-party
 service you have signed into yourself, so you always know whose system you are
 reaching. A **Beta** badge means it works but still has rough edges. A

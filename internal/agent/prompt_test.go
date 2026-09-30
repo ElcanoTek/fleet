@@ -492,3 +492,19 @@ func TestHostedRosterFromOverlay(t *testing.T) {
 		t.Errorf("hostile skipped name = %v, want one entry %q", got.skipped, want)
 	}
 }
+
+// The overlay-cap class (#1656) gets its own advice: the connection is fine,
+// the conversation simply has more turned on than fleet mounts per turn.
+func TestHostedSkipNoticeOverlayCapGroup(t *testing.T) {
+	var sb strings.Builder
+	writeHostedSkipNotice(&sb, []skippedConnector{{name: "stripe", reason: SkipReasonOverlayCap}, {name: "slack", reason: SkipReasonOverlayCap}})
+	got := sb.String()
+	for _, want := range []string{"`stripe`, `slack`: were left out because more hosted connectors are turned on than fleet mounts in one turn (at most 8", "the connection itself is fine", "turn off connectors this conversation does not need in the Connectors picker"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("notice lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "could not classify") {
+		t.Errorf("a cap skip fell into the unknown group:\n%s", got)
+	}
+}

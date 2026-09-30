@@ -175,6 +175,24 @@ func (s *Scope) Skipped() []string {
 	return names
 }
 
+// SkippedSeats returns, per skipped registration name, the public connection
+// and seat it stood for (see SkippedServer); nil when none carried one.
+func (s *Scope) SkippedSeats() map[string]agentcore.MCPChoice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var seats map[string]agentcore.MCPChoice
+	for _, sk := range s.skipped {
+		if sk.Server == "" {
+			continue
+		}
+		if seats == nil {
+			seats = map[string]agentcore.MCPChoice{}
+		}
+		seats[sk.Name] = agentcore.MCPChoice{Server: sk.Server, Account: sk.Account}
+	}
+	return seats
+}
+
 // SkipReasons returns the reason class per skipped name (see SkippedServer),
 // nil when nothing was skipped.
 func (s *Scope) SkipReasons() map[string]string {

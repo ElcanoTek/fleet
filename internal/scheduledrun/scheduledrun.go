@@ -1097,7 +1097,7 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	// Names are user-authored (and a shared connection's name is authored by
 	// someone else), so they are reduced to the tool-name grammar before they
 	// enter the prompt, as the chat path does.
-	var reauth, down, seats, unknown []string
+	var reauth, down, seats, capped, unknown []string
 	for _, raw := range overlay.Skipped {
 		name := agentcore.PromptSafeName(raw)
 		switch overlay.SkipReason(raw) {
@@ -1107,6 +1107,8 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 			reauth = append(reauth, name)
 		case agent.SkipReasonUnreachable:
 			down = append(down, name)
+		case agent.SkipReasonOverlayCap:
+			capped = append(capped, name)
 		default:
 			unknown = append(unknown, name)
 		}
@@ -1121,6 +1123,9 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	}
 	if len(seats) > 0 {
 		sb.WriteString(" Pinned to an account that is not connected (the task owner must connect it in Settings → Connections): " + strings.Join(seats, ", ") + ".")
+	}
+	if len(capped) > 0 {
+		fmt.Fprintf(&sb, " Left out because the task owner has more hosted connections than fleet mounts in one run (at most %d; connections the task names are mounted first, so name the ones it needs): %s.", agent.MaxOverlayServers, strings.Join(capped, ", "))
 	}
 	if len(unknown) > 0 {
 		sb.WriteString(" Could not be mounted for a reason fleet could not classify (the task owner should check them in Settings → Connections; do not assert whether the login is the cause): " + strings.Join(unknown, ", ") + ".")
@@ -1263,6 +1268,11 @@ func unresolvedPins(pins map[string]string, overlay *agent.RemoteMCPOverlay) map
 		}
 		for _, name := range overlay.Skipped {
 			known[name] = true
+		}
+		// A skipped connection whose default seat is labelled was recorded
+		// under "name_label"; the pin names the bare connection (#1656).
+		for _, seat := range overlay.SkippedSeats {
+			known[seat.Server] = true
 		}
 	}
 	var out map[string]string

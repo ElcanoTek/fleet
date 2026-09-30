@@ -241,11 +241,19 @@ type response struct {
 
 // SkippedServer is one remote server a scope could not mount. Reason is one
 // of the agent package's SkipReason* classes ("needs_reauth", "unreachable",
-// "seat_not_connected"), carried as a plain string because this package
-// cannot import agent; it is the only thing about the failure that crosses
-// the wire, and it is what lets the parent's prompt say "reconnect" only for
-// a login that needs it (F10). An empty Reason reads as unreachable.
+// "seat_not_connected", "overlay_cap"), carried as a plain string because
+// this package cannot import agent; it is the only thing about the failure
+// that crosses the wire, and it is what lets the parent's prompt say
+// "reconnect" only for a login that needs it (F10). An empty Reason reads as
+// unknown on the parent side. Server and Account are the public
+// {connection name, seat label} the registration Name stood for, so a
+// scheduled task's pin by bare connection name can be matched against a
+// connection skipped under a labelled default seat (#1656); empty for a
+// skip that had no connection behind it (a pinned seat that is not
+// connected).
 type SkippedServer struct {
-	Name   string `json:"name"`
-	Reason string `json:"reason,omitempty"`
+	Name    string `json:"name"`
+	Reason  string `json:"reason,omitempty"`
+	Server  string `json:"server,omitempty"`
+	Account string `json:"account,omitempty"`
 }

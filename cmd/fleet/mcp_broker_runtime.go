@@ -186,12 +186,13 @@ func (r *productionMCPRuntime) openRemoteOverlay(ctx context.Context, email stri
 		servers[tool.Server] = true
 	}
 	return &agent.RemoteMCPOverlay{
-		Broker:      scope,
-		Catalog:     brokerToolCatalog(tools),
-		Servers:     servers,
-		CloseScope:  scope.Close,
-		Skipped:     scope.Skipped(),
-		SkipReasons: scope.SkipReasons(),
+		Broker:       scope,
+		Catalog:      brokerToolCatalog(tools),
+		Servers:      servers,
+		CloseScope:   scope.Close,
+		Skipped:      scope.Skipped(),
+		SkipReasons:  scope.SkipReasons(),
+		SkippedSeats: scope.SkippedSeats(),
 	}, nil
 }
 

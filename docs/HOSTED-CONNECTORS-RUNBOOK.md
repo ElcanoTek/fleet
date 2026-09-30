@@ -109,12 +109,15 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   silently with no notice to the model. The overlay caps mounting at
   `maxOverlayServers = 8` connected servers per user (`maxOverlayServers` in
   `internal/agent/remote_mcp_overlay.go`), applied uniformly to chat,
-  scheduled runs, and the broker. Selection order follows connection list order
-  (`internal/remotemcp/resolver.go`'s `ConnectedServersForUser`: the owner's
-  own connections newest-first, then the ones shared with them); servers past the
-  8-server cap are skipped and logged. `mcp_selection` pins choose which seat
-  account mounts for a connector, but pins do **not** bypass the 8-server cap
-  or reorder servers ahead of it. A pin to a seat that is not connected skips
+  scheduled runs, and the broker. Servers the run **names** mount first — a
+  scheduled task's `mcp_selection` entries, a chat's seat pins — then the
+  rest in connection list order (`internal/remotemcp/resolver.go`'s
+  `ConnectedServersForUser`: the owner's own connections newest-first, then
+  the ones shared with them). Every server past the cap is recorded as
+  skipped with the `overlay_cap` reason and logged once, so the prompt notice
+  names it and a pinned name past the cap reads as "left out", never as
+  "misspelled" (#1656); only a task naming more than 8 connections can have a
+  named one cut. A pin to a seat that is not connected skips
   that connector and tells the model; a pin to a server the owner never
   connected dead-letters the task without a model call.
 - **Expired tokens refresh headlessly** in both chat and scheduled runs,
