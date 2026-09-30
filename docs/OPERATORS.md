@@ -203,8 +203,12 @@ sandbox image that was present all along.
 ## The client-config checkout
 
 fleet ships **no** client content; it loads a **client config bundle** from
-`FLEET_CLIENT_CONFIG_DIR` (default `config/default`, the generic bundle). A real
-deployment checks out a client repo and points the variable at it. `bootstrap
+`FLEET_CLIENT_CONFIG_DIR` (default `config/default`, the generic bundle; an
+`--enable-service` install with no client bundle runs on a service-owned copy
+of it staged at `/var/lib/fleet/bundle`, which `fleet update` refreshes — the
+sandbox's SELinux relabel needs a source the unit can write, and the checkout
+is not one). A real deployment checks out a client repo and points the
+variable at it. `bootstrap
 --client-config <git-url[#<sha-or-tag>]|path>` automates this: a **git URL** is
 cloned to a stable location (`/opt/fleet/client`, or `./.fleet-client` when
 `/opt` is not writable); a **path** is pointed at directly. Either way the

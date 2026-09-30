@@ -161,6 +161,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # cannot drift between the script that writes it and the ones that check it.
 # shellcheck source=lib/caddyfile.sh
 . "$SCRIPT_DIR/lib/caddyfile.sh"
+# shellcheck source=lib/bundle.sh
+. "$SCRIPT_DIR/lib/bundle.sh"
 
 POSTGRES_MODE="local"
 DRY_RUN=0
@@ -840,14 +842,14 @@ NODE_MAJOR="$(fleet_node_major_want "$REPO_ROOT" || true)"
 # nodejs${NODE_MAJOR}-npm, NOT bare `npm`: the unversioned npm package belongs
 # to the DEFAULT stream, so asking for it drags the older interpreter onto the
 # box and lets it own /usr/bin/npm — which is what would then build the app.
-FLEET_DEPS=(git curl jq golang "nodejs${NODE_MAJOR}" "nodejs${NODE_MAJOR}-npm" python3 python3-pip gcc podman slirp4netns)
+FLEET_DEPS=(git curl jq rsync golang "nodejs${NODE_MAJOR}" "nodejs${NODE_MAJOR}-npm" python3 python3-pip gcc podman slirp4netns)
 if command -v dnf >/dev/null 2>&1; then
   if ! run dnf install -y "${FLEET_DEPS[@]}"; then
     # A distro without a versioned stream (or one that names it differently)
     # should still get a working box; the floor is then doctor.sh's to report.
     warn "installing nodejs${NODE_MAJOR} failed — falling back to the unversioned nodejs package."
     warn "  the web tier needs node >= ${NODE_MAJOR}; \`sudo fleet doctor\` will report the shortfall."
-    FLEET_DEPS=(git curl jq golang nodejs npm python3 python3-pip gcc podman slirp4netns)  # unversioned fallback
+    FLEET_DEPS=(git curl jq rsync golang nodejs npm python3 python3-pip gcc podman slirp4netns)  # unversioned fallback
     run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
   fi
   [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
@@ -997,18 +999,45 @@ else
   warn "FLEET_CLIENT_CONFIG_DIR points at a valid bundle (a dir with manifest.yaml)."
 fi
 
+# ── bare install: stage the in-repo default bundle where the service can use it (#1655) ──
+# The sandbox relabels bundle dirs (:z) on mount, which needs a source the
+# service user owns AND can write under the unit's ProtectSystem=strict mount
+# namespace. The checkout is neither (root-owned, read-only there), so a bare
+# --enable-service install runs on a service-owned copy under the state dir,
+# refreshed by every bootstrap and update run. See scripts/lib/bundle.sh.
+if [[ "$ENABLE_SERVICE" == "1" ]] && bundle_is_default_in_checkout "$CLIENT_CONFIG_DIR" "$REPO_ROOT"; then
+  _stage="$(default_bundle_stage "$SERVICE_HOME")"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would stage ${CLIENT_CONFIG_DIR} → ${_stage} (owned by ${SERVICE_USER}; the sandbox's SELinux relabel needs a writable, service-owned source) and set FLEET_CLIENT_CONFIG_DIR to it"
+    CLIENT_CONFIG_DIR="$_stage" # so the rest of the plan names the path the real run would use
+  elif stage_default_bundle "$CLIENT_CONFIG_DIR" "$_stage" "$SERVICE_USER"; then
+    ok "default bundle staged: ${CLIENT_CONFIG_DIR} → ${_stage} (owned by ${SERVICE_USER}; FLEET_CLIENT_CONFIG_DIR will point here)"
+    CLIENT_CONFIG_DIR="$_stage"
+  else
+    _rc=$?
+    if [[ "$_rc" == "2" ]]; then
+      warn "${_stage} holds a bundle that is not a staged copy — leaving it alone; point FLEET_CLIENT_CONFIG_DIR at it or move it aside and re-run"
+    else
+      warn "could not stage the default bundle to ${_stage} — the sandbox's SELinux relabel of ${CLIENT_CONFIG_DIR} will fail (EROFS) on an enforcing host"
+    fi
+  fi
+elif [[ "$ENABLE_SERVICE" == "1" ]] && bundle_is_in_checkout "$CLIENT_CONFIG_DIR" "$REPO_ROOT"; then
+  warn "client bundle ${CLIENT_CONFIG_DIR} is inside the fleet checkout: root-owned and read-only to the unit, so the sandbox's SELinux relabel will fail (EROFS) on an enforcing host."
+  warn "  check it out outside the repo (--client-config <git-url>, which lands at /opt/fleet/client) — only the generic config/default is staged automatically."
+fi
+
 # ── bundle ownership for the rootless sandbox (--enable-service path) ──
 # The sandbox bind-mounts bundle dirs (protocols/ personas/ skills/ system_prompts/)
-# into the container with SELinux relabeling (:Z); the rootless service user can
+# into the container with SELinux relabeling (:z); the rootless service user can
 # only relabel files it OWNS. Chown the CHECKOUT to the service user — skip the
 # in-repo default bundle (chowning the repo would be wrong, and the service can't
 # read a bundle under /root anyway given ProtectHome).
 if [[ "$ENABLE_SERVICE" == "1" && "$DRY_RUN" != "1" && -d "$CLIENT_CONFIG_DIR" \
       && "$CLIENT_CONFIG_DIR" != "config/default" && "$CLIENT_CONFIG_DIR" != "$REPO_ROOT"/* ]]; then
   if chown -R "$SERVICE_USER":"$SERVICE_USER" "$CLIENT_CONFIG_DIR"; then
-    ok "bundle ${CLIENT_CONFIG_DIR} owned by ${SERVICE_USER} (so rootless :Z relabel is permitted)"
+    ok "bundle ${CLIENT_CONFIG_DIR} owned by ${SERVICE_USER} (so rootless :z relabel is permitted)"
   else
-    warn "could not chown ${CLIENT_CONFIG_DIR} to ${SERVICE_USER} — sandbox :Z relabel may fail (EPERM)."
+    warn "could not chown ${CLIENT_CONFIG_DIR} to ${SERVICE_USER} — sandbox :z relabel may fail (EPERM)."
   fi
 fi
 

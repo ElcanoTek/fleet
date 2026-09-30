@@ -4,6 +4,7 @@
 package admincli
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +85,10 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 		"pg_hba",                                 // the scram-sha-256 loopback rewrite step (#78)
 		"Building + installing the fleet binary", // the binary build+install step (#71)
 		"would install fleet",
+		// A bare --enable-service install stages the in-repo default bundle
+		// where the service can relabel it (#1655).
+		"would stage",
+		"/bundle (owned by fleet",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
@@ -1165,5 +1170,179 @@ func TestFleetUpgradeRestartsTheWebTier(t *testing.T) {
 	// And the banner must not claim health the run never measured.
 	if !strings.Contains(script, `HEALTH_VERIFIED="skipped"`) || !strings.Contains(script, "health NOT verified") {
 		t.Errorf("fleet-upgrade must track whether the readiness gate actually ran, and say so when it did not")
+	}
+}
+
+// bundleLib runs one scripts/lib/bundle.sh function with the given PATH (so a
+// test can take rsync away and exercise the rename fallback) and returns its
+// combined output and exit status.
+func bundleLib(t *testing.T, path, fn string, args ...string) (string, error) {
+	t.Helper()
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "bundle.sh")
+	cmd := exec.Command("bash", append([]string{"-c", ". " + lib + " && " + fn + ` "$@"`, "bundle"}, args...)...)
+	cmd.Env = append(os.Environ(), "PATH="+path)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// toolsOnlyPath builds a PATH holding only the named tools (symlinked from
+// wherever they live), so a function can be exercised with a tool missing.
+func toolsOnlyPath(t *testing.T, tools ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, tool := range tools {
+		resolved, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s not available", tool)
+		}
+		if err := os.Symlink(resolved, filepath.Join(dir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// TestStageDefaultBundle exercises scripts/lib/bundle.sh's staging as the
+// current user, on both copy paths: the copy is complete and carries the
+// marker naming its source; a re-stage drops a file gone upstream; a
+// destination holding a bundle that is not a staged copy is refused and left
+// intact; a source that is not a bundle, a relative destination and a
+// symlinked destination are refused.
+func TestStageDefaultBundle(t *testing.T) {
+	me, err := exec.Command("id", "-un").Output()
+	if err != nil {
+		t.Skip("id -un unavailable")
+	}
+	owner := strings.TrimSpace(string(me))
+	base := []string{"bash", "install", "cp", "mv", "rm", "mktemp", "chown", "ls", "basename", "dirname", "readlink", "grep", "id", "cat", "printf"}
+	paths := map[string]string{"rename fallback (no rsync)": toolsOnlyPath(t, base...)}
+	if _, err := exec.LookPath("rsync"); err == nil {
+		paths["rsync in place"] = toolsOnlyPath(t, append(base, "rsync")...)
+	}
+	for name, path := range paths {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			src := filepath.Join(root, "src")
+			dst := filepath.Join(root, "stage")
+			if err := os.MkdirAll(filepath.Join(src, "personas"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for f, body := range map[string]string{"manifest.yaml": "name: t\n", "personas/a.yaml": "a\n", "stale.txt": "old\n"} {
+				if err := os.WriteFile(filepath.Join(src, f), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if out, err := bundleLib(t, path, "stage_default_bundle", src, dst, owner); err != nil {
+				t.Fatalf("stage: %v\n%s", err, out)
+			}
+			if got, _ := os.ReadFile(filepath.Join(dst, "personas", "a.yaml")); string(got) != "a\n" {
+				t.Fatalf("copy incomplete: personas/a.yaml = %q", got)
+			}
+			if got, _ := os.ReadFile(filepath.Join(dst, ".fleet-staged-from")); strings.TrimSpace(string(got)) != src {
+				t.Fatalf("marker = %q, want %q", got, src)
+			}
+			// Upstream drops a file; a re-stage must not keep it.
+			if err := os.Remove(filepath.Join(src, "stale.txt")); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := bundleLib(t, path, "stage_default_bundle", src, dst, owner); err != nil {
+				t.Fatalf("re-stage: %v\n%s", err, out)
+			}
+			if _, err := os.Stat(filepath.Join(dst, "stale.txt")); !os.IsNotExist(err) {
+				t.Fatal("a file removed upstream lingered in the staged copy")
+			}
+			// A hand-placed bundle at the destination (no marker) is never deleted.
+			hand := filepath.Join(root, "hand")
+			if err := os.MkdirAll(hand, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(hand, "manifest.yaml"), []byte("name: theirs\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := bundleLib(t, path, "stage_default_bundle", src, hand, owner)
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+				t.Fatalf("staging over a hand-placed bundle: err=%v (want exit 2)\n%s", err, out)
+			}
+			if got, _ := os.ReadFile(filepath.Join(hand, "manifest.yaml")); string(got) != "name: theirs\n" {
+				t.Fatal("a hand-placed bundle was overwritten")
+			}
+			// Refused inputs, nothing written.
+			for _, c := range [][3]string{{root, filepath.Join(root, "never"), owner}, {src, "relative/stage", owner}} {
+				if out, err := bundleLib(t, path, "stage_default_bundle", c[0], c[1], c[2]); err == nil {
+					t.Fatalf("staging %v succeeded:\n%s", c, out)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(root, "never")); !os.IsNotExist(err) {
+				t.Fatal("a refused staging still created its destination")
+			}
+			link := filepath.Join(root, "link")
+			if err := os.Symlink(dst, link); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := bundleLib(t, path, "stage_default_bundle", src, link, owner); err == nil {
+				t.Fatalf("staging onto a symlink succeeded:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestBundlePathPredicates pins the two "where is this bundle" questions the
+// scripts ask: only REPO_ROOT/config/default is the generic bundle; anything
+// under the checkout is in it; and doctor's checkout-independent test keys on
+// the fleet module two levels up.
+func TestBundlePathPredicates(t *testing.T) {
+	root := repoRootFromTest(t)
+	path := os.Getenv("PATH")
+	def := filepath.Join(root, "config", "default")
+	for _, c := range []struct {
+		fn, dir, repo string
+		want          bool
+	}{
+		{"bundle_is_default_in_checkout", def, root, true},
+		{"bundle_is_default_in_checkout", def + "/", root, true},
+		{"bundle_is_default_in_checkout", filepath.Join(root, "config"), root, false},
+		{"bundle_is_default_in_checkout", "/var/lib/fleet/bundle", root, false},
+		{"bundle_is_default_in_checkout", def, "", false},
+		{"bundle_is_in_checkout", filepath.Join(root, "client"), root, true},
+		{"bundle_is_in_checkout", "/opt/fleet/client", root, false},
+		{"bundle_is_in_checkout", "/opt/fleet/client", "", false},
+		{"bundle_looks_like_fleet_default", def, "", true},
+		{"bundle_looks_like_fleet_default", "/var/lib/fleet/bundle", "", false},
+	} {
+		_, err := bundleLib(t, path, c.fn, c.dir, c.repo)
+		if got := err == nil; got != c.want {
+			t.Errorf("%s(%q, %q) = %v, want %v", c.fn, c.dir, c.repo, got, c.want)
+		}
+	}
+}
+
+// TestUpdateDryRunPlansBundleStagingForAPreStagingBox: a box installed before
+// #1655 has an env file pointing the service at the checkout's generic bundle;
+// `fleet update` must plan to stage it, and never for an explicit
+// --client-config.
+func TestUpdateDryRunPlansBundleStagingForAPreStagingBox(t *testing.T) {
+	root := repoRootFromTest(t)
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_CLIENT_CONFIG_DIR="+filepath.Join(root, "config", "default")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// runScript sets FLEET_CLIENT_CONFIG_DIR in the environment, which update.sh
+	// reads as an explicit operator choice; FLEET_CLIENT_CONFIG_EXPLICIT=0 is how
+	// the script's own re-exec says "that came from a fallback", and it is what
+	// an operator's plain `fleet update` amounts to.
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile, "FLEET_CLIENT_CONFIG_EXPLICIT=0"}, "update.sh", "--dry-run", "--no-pull")
+	if err != nil {
+		t.Fatalf("update --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "would stage") || !strings.Contains(out, "/bundle (owned by") {
+		t.Fatalf("update plan does not stage the generic bundle for a pre-staging box\n--- output ---\n%s", out)
+	}
+	out, err = runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "update.sh", "--dry-run", "--no-pull", "--client-config", filepath.Join(root, "config", "default"))
+	if err != nil {
+		t.Fatalf("update --dry-run --client-config exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if strings.Contains(out, "would stage") {
+		t.Fatalf("update planned to stage over an explicit --client-config\n--- output ---\n%s", out)
 	}
 }

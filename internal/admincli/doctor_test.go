@@ -35,6 +35,7 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		"free space on the data dir",
 		"Sandbox smoke",
 		"Source freshness",
+		"staged copy under", // the client bundle must be service-owned and outside the checkout (#1655)
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor --dry-run checklist missing %q\n--- output ---\n%s", want, out)
