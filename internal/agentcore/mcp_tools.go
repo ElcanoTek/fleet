@@ -307,6 +307,7 @@ func buildFantasyToolsWithRoster(
 	mcpSkippedOptional := 0
 	mcpSkippedAllowlist := 0
 	mcpSkippedPersona := 0
+	mcpSkippedSchema := 0
 	for _, st := range mcpServerTools {
 		// Gate 1: Optional servers only pass if the run opted in. Byte-identical
 		// between modes. The opt-in key is resolved through the ONE keying rule
@@ -360,6 +361,18 @@ func buildFantasyToolsWithRoster(
 				continue
 			}
 		}
+		// Gate 5 (schema validity): a tool whose input schema is still not valid
+		// JSON Schema draft 2020-12 after normalization is skipped, not sent.
+		// Anthropic rejects the whole request for one invalid tool schema, so
+		// advertising it would fail every turn of every conversation with this
+		// connector on, for every tool (tool_schema.go). Applied before deferral
+		// so direct and deferred rosters agree.
+		if problem := toolInputSchemaProblem(mt.Info()); problem != nil {
+			log.Printf("MCP tool %s skipped: input schema is not valid JSON Schema draft 2020-12 (%v)", mt.Name(), problem)
+			emitToolSchemaInvalid(cfg.observer, mt.Name(), problem.Error())
+			mcpSkippedSchema++
+			continue
+		}
 		// Install the final model-visible boundary before the tool enters the
 		// deferred registry. That makes direct and tool_call dispatch identical;
 		// wrapping only the advertised bridge would leave the hidden tool itself
@@ -404,8 +417,8 @@ func buildFantasyToolsWithRoster(
 			allTools = append(allTools, guarded)
 		}
 		allTools = append(allTools, confirmAudit...)
-		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona)",
-			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona)
+		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema)",
+			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema)
 		if len(allTools) > maxToolsPerRequest {
 			return nil, toolRoster{}, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
@@ -422,8 +435,8 @@ func buildFantasyToolsWithRoster(
 	allTools = append(allTools, mcpTools...)
 	allTools = append(allTools, confirmAudit...)
 
-	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona)",
-		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona)
+	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema)",
+		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema)
 
 	if len(allTools) > maxToolsPerRequest {
 		return nil, toolRoster{}, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
@@ -537,43 +550,6 @@ func governToolOutput(ctx context.Context, toolName, text string) (string, bool)
 	return text, piiBlocked || guardrailBlocked
 }
 
-// sanitizeSchemaProperties deep-copies a JSON-schema "properties" map and strips
-// any `pattern` entries using `\p{…}` Unicode property escapes, which OpenAI's
-// function-calling validator rejects (ECMA-262 only).
-func sanitizeSchemaProperties(props map[string]any) map[string]any {
-	out := make(map[string]any, len(props))
-	for k, v := range props {
-		out[k] = sanitizeSchemaValue(v)
-	}
-	return out
-}
-
-const jsonSchemaPatternKey = "pattern"
-
-func sanitizeSchemaValue(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		clone := make(map[string]any, len(t))
-		for k, vv := range t {
-			if k == jsonSchemaPatternKey {
-				if s, ok := vv.(string); ok && strings.Contains(s, `\p{`) {
-					continue
-				}
-			}
-			clone[k] = sanitizeSchemaValue(vv)
-		}
-		return clone
-	case []any:
-		clone := make([]any, len(t))
-		for i, vv := range t {
-			clone[i] = sanitizeSchemaValue(vv)
-		}
-		return clone
-	default:
-		return v
-	}
-}
-
 // mcpTool wraps an MCP server tool as a fantasy.AgentTool (crush pattern).
 // Named mcp_<server>_<tool> to avoid collisions across servers.
 //
@@ -603,16 +579,20 @@ func (m *mcpTool) Info() fantasy.ToolInfo {
 	parameters := make(map[string]any)
 	required := make([]string, 0)
 
-	if input, ok := m.tool.InputSchema["properties"].(map[string]any); ok {
-		parameters = sanitizeSchemaProperties(input)
+	// Normalize the WHOLE schema before taking properties/required apart: a
+	// draft-03 boolean `required` on a top-level property hoists into the
+	// top-level list (tool_schema.go).
+	schema := normalizeToolSchema(m.tool.InputSchema)
+	if input, ok := schema["properties"].(map[string]any); ok {
+		parameters = input
 	}
-	if req, ok := m.tool.InputSchema["required"].([]any); ok {
+	if req, ok := schema["required"].([]any); ok {
 		for _, v := range req {
 			if s, ok := v.(string); ok {
 				required = append(required, s)
 			}
 		}
-	} else if reqStr, ok := m.tool.InputSchema["required"].([]string); ok {
+	} else if reqStr, ok := schema["required"].([]string); ok {
 		required = reqStr
 	}
 
