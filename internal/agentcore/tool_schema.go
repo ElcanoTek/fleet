@@ -1,16 +1,22 @@
 package agentcore
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/fantasy"
 	fantasyschema "charm.land/fantasy/schema"
 	"github.com/santhosh-tekuri/jsonschema/v5"
+
+	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
 // MCP tool input schemas reach the model rebuilt as {type, properties,
@@ -68,14 +74,26 @@ var (
 //   - `pattern` values using `\p{…}` Unicode property escapes are dropped:
 //     OpenAI's function-calling validator accepts ECMA-262 only.
 func normalizeToolSchema(schema map[string]any) map[string]any {
-	out, _ := normalizeSchemaNode(schema).(map[string]any)
-	if out == nil {
-		out = map[string]any{}
-	}
+	out, _ := normalizeToolSchemaWithNotes(schema)
 	return out
 }
 
-func normalizeSchemaNode(node any) any {
+// normalizeToolSchemaWithNotes is normalizeToolSchema plus one note per
+// older-draft rewrite, each prefixed with the JSON Pointer of the schema it
+// changed ("/properties/expect/…: positional items array rewritten to
+// prefixItems"), so an operator can tell a connector's authors exactly what to
+// update. Stripping a `\p{` pattern is an OpenAI compatibility step, not an
+// outdated construct, and is not noted.
+func normalizeToolSchemaWithNotes(schema map[string]any) (map[string]any, []string) {
+	var notes []string
+	out, _ := normalizeSchemaNode(schema, "", &notes).(map[string]any)
+	if out == nil {
+		out = map[string]any{}
+	}
+	return out, notes
+}
+
+func normalizeSchemaNode(node any, path string, notes *[]string) any {
 	obj, ok := node.(map[string]any)
 	if !ok {
 		// A boolean schema, or a malformed value the validator will judge.
@@ -97,13 +115,13 @@ func normalizeSchemaNode(node any) any {
 			out[key] = copyJSONValue(value)
 		case schemaValuedKeywords[key]:
 			if items, isArray := value.([]any); isArray && key == "items" {
-				out[key] = normalizeSchemaArray(items) // rewritten below
+				out[key] = normalizeSchemaArray(items, path+"/items", notes) // rewritten below
 				continue
 			}
-			out[key] = normalizeSchemaNode(value)
+			out[key] = normalizeSchemaNode(value, path+"/"+key, notes)
 		case schemaArrayKeywords[key]:
 			if items, isArray := value.([]any); isArray {
-				out[key] = normalizeSchemaArray(items)
+				out[key] = normalizeSchemaArray(items, path+"/"+key, notes)
 			} else {
 				out[key] = copyJSONValue(value)
 			}
@@ -115,12 +133,14 @@ func normalizeSchemaNode(node any) any {
 			}
 			normalized := make(map[string]any, len(members))
 			for name, member := range members {
+				memberPath := path + "/" + key + "/" + jsonPointerToken(name)
 				if key == "properties" {
 					if child, ok := member.(map[string]any); ok && child["required"] == true {
 						hoisted = append(hoisted, name)
+						noteRewrite(notes, memberPath, "boolean required moved into the parent's required list")
 					}
 				}
-				normalized[name] = normalizeSchemaNode(member)
+				normalized[name] = normalizeSchemaNode(member, memberPath, notes)
 			}
 			out[key] = normalized
 		default:
@@ -133,12 +153,21 @@ func normalizeSchemaNode(node any) any {
 		delete(out, "items")
 		if rest, has := out["additionalItems"]; has {
 			out["items"] = rest
+			noteRewrite(notes, path, "positional items array rewritten to prefixItems (additionalItems moved to items)")
+		} else {
+			noteRewrite(notes, path, "positional items array rewritten to prefixItems")
 		}
+	} else if _, has := out["additionalItems"]; has {
+		noteRewrite(notes, path, "additionalItems beside a single items schema dropped (draft-07 ignored it)")
 	}
 	delete(out, "additionalItems")
 
-	foldExclusiveBound(out, "exclusiveMinimum", "minimum")
-	foldExclusiveBound(out, "exclusiveMaximum", "maximum")
+	if foldExclusiveBound(out, "exclusiveMinimum", "minimum") {
+		noteRewrite(notes, path, "boolean exclusiveMinimum rewritten to the numeric form")
+	}
+	if foldExclusiveBound(out, "exclusiveMaximum", "maximum") {
+		noteRewrite(notes, path, "boolean exclusiveMaximum rewritten to the numeric form")
+	}
 
 	if len(hoisted) > 0 {
 		out["required"] = mergeRequired(out["required"], hoisted)
@@ -146,26 +175,43 @@ func normalizeSchemaNode(node any) any {
 	return out
 }
 
-func normalizeSchemaArray(items []any) []any {
+func normalizeSchemaArray(items []any, path string, notes *[]string) []any {
 	out := make([]any, len(items))
 	for i, item := range items {
-		out[i] = normalizeSchemaNode(item)
+		out[i] = normalizeSchemaNode(item, fmt.Sprintf("%s/%d", path, i), notes)
 	}
 	return out
 }
 
-// foldExclusiveBound rewrites the draft-04 boolean exclusive bound. A numeric
-// value is already the 2020-12 form and is left alone.
-func foldExclusiveBound(node map[string]any, exclusiveKey, boundKey string) {
+func noteRewrite(notes *[]string, path, what string) {
+	if notes == nil {
+		return
+	}
+	if path == "" {
+		path = "/"
+	}
+	*notes = append(*notes, path+": "+what)
+}
+
+// jsonPointerToken escapes one JSON Pointer reference token (RFC 6901).
+func jsonPointerToken(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
+}
+
+// foldExclusiveBound rewrites the draft-04 boolean exclusive bound and reports
+// whether it did. A numeric value is already the 2020-12 form and is left
+// alone.
+func foldExclusiveBound(node map[string]any, exclusiveKey, boundKey string) bool {
 	flag, isBool := node[exclusiveKey].(bool)
 	if !isBool {
-		return
+		return false
 	}
 	delete(node, exclusiveKey)
 	if bound, has := node[boundKey]; flag && has {
 		node[exclusiveKey] = bound
 		delete(node, boundKey)
 	}
+	return true
 }
 
 func mergeRequired(existing any, hoisted []string) []any {
@@ -289,4 +335,190 @@ func emitToolSchemaInvalid(obs Observer, tool, reason string) {
 		"tool":   tool,
 		"reason": reason,
 	})
+}
+
+// Tool schema findings, as reported by CheckMCPToolSchema.
+const (
+	// ToolSchemaRewritten: the schema used older-draft constructs that Fleet
+	// translated. The tool works; its connector should still be updated.
+	ToolSchemaRewritten = "rewritten"
+	// ToolSchemaInvalid: the schema is not valid draft 2020-12 even after
+	// translation, so the tool is withheld from the model.
+	ToolSchemaInvalid = "invalid"
+)
+
+// ToolSchemaIssue is one MCP tool whose input schema needed attention.
+type ToolSchemaIssue struct {
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+	// Status is ToolSchemaRewritten or ToolSchemaInvalid.
+	Status string `json:"status"`
+	// Detail names what was rewritten, or why the schema is invalid, with the
+	// JSON Pointer of each location.
+	Detail string `json:"detail"`
+	// LastSeen is when a running turn last evaluated the tool with this
+	// finding. Zero outside the runtime record (ToolSchemaIssues).
+	LastSeen time.Time `json:"last_seen,omitempty"`
+}
+
+// CheckMCPToolSchema runs one MCP tool's input schema through exactly the
+// translation and validation the model boundary applies, for callers outside
+// a turn (`fleet mcp test`, the remote-connector probe). ok is false when the
+// schema needs nothing.
+func CheckMCPToolSchema(server string, tool mcp.Tool) (issue ToolSchemaIssue, ok bool) {
+	return checkMCPToolSchema(&mcpTool{serverName: server, tool: tool})
+}
+
+func checkMCPToolSchema(mt *mcpTool) (ToolSchemaIssue, bool) {
+	key, cacheable := toolSchemaCacheKey(mt)
+	if cacheable {
+		toolSchemaVerdicts.Lock()
+		verdict, hit := toolSchemaVerdicts.m[key]
+		toolSchemaVerdicts.Unlock()
+		if hit {
+			return verdict.issueFor(mt), verdict.ok
+		}
+	}
+	verdict := evaluateToolSchema(mt)
+	if cacheable {
+		toolSchemaVerdicts.Lock()
+		if len(toolSchemaVerdicts.m) >= toolSchemaVerdictCap {
+			toolSchemaVerdicts.m = map[[sha256.Size]byte]toolSchemaVerdict{}
+		}
+		toolSchemaVerdicts.m[key] = verdict
+		toolSchemaVerdicts.Unlock()
+	}
+	return verdict.issueFor(mt), verdict.ok
+}
+
+// toolSchemaVerdict is the schema-determined part of a finding. The verdict
+// depends only on the schema's content (and whether file references are
+// advertised), never on the tool's name, so it is cached by content hash.
+// Uncached, the check costs a few hundred microseconds per tool (about 10 ms
+// for Pages' 45 tools), and the catalog is re-listed as fresh maps on every
+// turn; cached, it is the key's encode + hash (about 13 µs per tool).
+type toolSchemaVerdict struct {
+	ok     bool
+	status string
+	detail string
+}
+
+func (v toolSchemaVerdict) issueFor(mt *mcpTool) ToolSchemaIssue {
+	if !v.ok {
+		return ToolSchemaIssue{}
+	}
+	return ToolSchemaIssue{Server: mt.serverName, Tool: mt.tool.Name, Status: v.status, Detail: v.detail}
+}
+
+// toolSchemaVerdictCap bounds the cache; past it the cache restarts empty
+// (a catalog churning through thousands of distinct schemas only loses
+// memoization, never correctness).
+const toolSchemaVerdictCap = 4096
+
+var toolSchemaVerdicts = struct {
+	sync.Mutex
+	m map[[sha256.Size]byte]toolSchemaVerdict
+}{m: map[[sha256.Size]byte]toolSchemaVerdict{}}
+
+// toolSchemaCacheKey hashes everything the verdict depends on. encoding/json
+// sorts map keys, so equal schemas hash equally. An unencodable schema is
+// simply not cached.
+func toolSchemaCacheKey(mt *mcpTool) ([sha256.Size]byte, bool) {
+	raw, err := json.Marshal(struct {
+		Schema   map[string]any `json:"s"`
+		FileRefs bool           `json:"f"`
+	}{mt.tool.InputSchema, mt.readWorkspaceFile != nil})
+	if err != nil {
+		return [sha256.Size]byte{}, false
+	}
+	return sha256.Sum256(raw), true
+}
+
+func evaluateToolSchema(mt *mcpTool) toolSchemaVerdict {
+	_, notes := normalizeToolSchemaWithNotes(mt.tool.InputSchema)
+	if problem := toolInputSchemaProblem(mt.Info()); problem != nil {
+		detail := problem.Error()
+		if len(notes) > 0 {
+			detail += " (after rewriting: " + strings.Join(notes, "; ") + ")"
+		}
+		return toolSchemaVerdict{ok: true, status: ToolSchemaInvalid, detail: detail}
+	}
+	if len(notes) > 0 {
+		return toolSchemaVerdict{ok: true, status: ToolSchemaRewritten, detail: strings.Join(notes, "; ")}
+	}
+	return toolSchemaVerdict{}
+}
+
+// The runtime record of schema findings, keyed by server and tool. Every turn
+// that builds a tool refreshes its entry and a clean tool clears it, so the
+// record follows a connector fix without a restart. A tool that disappears
+// from the catalog is never evaluated again and keeps its entry until restart;
+// LastSeen shows how stale it is. The record is bounded by the catalog size and
+// lives in process memory: after a restart it refills as turns run, which is
+// why the admin read reports ToolSchemaRecordSince alongside it.
+var toolSchemaRecord = struct {
+	sync.Mutex
+	issues map[string]ToolSchemaIssue
+}{issues: map[string]ToolSchemaIssue{}}
+
+// toolSchemaRecordSince is when this process's record started (process start).
+var toolSchemaRecordSince = time.Now().UTC()
+
+// ToolSchemaRecordSince reports when the runtime record started filling: a
+// finding older than a restart is not in it until a turn builds that tool.
+func ToolSchemaRecordSince() time.Time { return toolSchemaRecordSince }
+
+// noteToolSchemaIssue records (ok) or clears (!ok) the finding for one tool.
+// A new or changed finding is logged once and counted in
+// fleet_mcp_tool_schema_issues_total; repeats of the same finding, every turn,
+// are silent.
+func noteToolSchemaIssue(server, tool string, issue ToolSchemaIssue, ok bool) {
+	key := server + "\x00" + tool
+	toolSchemaRecord.Lock()
+	prev, had := toolSchemaRecord.issues[key]
+	if !ok {
+		delete(toolSchemaRecord.issues, key)
+		toolSchemaRecord.Unlock()
+		if had {
+			log.Printf("MCP tool mcp_%s_%s: schema issue cleared (%s before)", server, tool, prev.Status)
+		}
+		return
+	}
+	issue.LastSeen = time.Now().UTC()
+	toolSchemaRecord.issues[key] = issue
+	toolSchemaRecord.Unlock()
+	if had && prev.Status == issue.Status && prev.Detail == issue.Detail {
+		return
+	}
+	switch issue.Status {
+	case ToolSchemaInvalid:
+		log.Printf("MCP tool mcp_%s_%s skipped: input schema is not valid JSON Schema draft 2020-12: %s — the connector must fix its schema", server, tool, issue.Detail)
+	default:
+		log.Printf("MCP tool mcp_%s_%s: input schema uses older JSON Schema drafts, translated for the model: %s — the connector should update its schema", server, tool, issue.Detail)
+	}
+	metrics.RecordToolSchemaIssue(server, issue.Status)
+}
+
+// ToolSchemaIssues returns the runtime record, sorted by server then tool.
+func ToolSchemaIssues() []ToolSchemaIssue {
+	toolSchemaRecord.Lock()
+	out := make([]ToolSchemaIssue, 0, len(toolSchemaRecord.issues))
+	for _, issue := range toolSchemaRecord.issues {
+		out = append(out, issue)
+	}
+	toolSchemaRecord.Unlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Server != out[j].Server {
+			return out[i].Server < out[j].Server
+		}
+		return out[i].Tool < out[j].Tool
+	})
+	return out
+}
+
+// resetToolSchemaRecordForTest empties the process-wide record.
+func resetToolSchemaRecordForTest() {
+	toolSchemaRecord.Lock()
+	toolSchemaRecord.issues = map[string]ToolSchemaIssue{}
+	toolSchemaRecord.Unlock()
 }

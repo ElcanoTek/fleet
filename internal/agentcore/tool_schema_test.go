@@ -5,11 +5,13 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
 // jsonMap decodes a JSON literal the way the MCP client decodes a catalog.
@@ -269,5 +271,174 @@ func TestGate5SkipsOnlyTheInvalidTool(t *testing.T) {
 				t.Errorf("mcp_tool_schema_invalid events = %v, want [mcp_pages_broken]", obs.tools)
 			}
 		})
+	}
+}
+
+// TestNormalizeToolSchemaNotesNameEachRewrite: every rewrite is reported with
+// the JSON Pointer of the schema it changed, so an operator can tell the
+// connector's authors exactly what to update. The `\p{` strip (an OpenAI
+// compatibility step) and an already-valid schema produce no notes.
+func TestNormalizeToolSchemaNotesNameEachRewrite(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{
+			name: "pages date_range tuple (pages#111)",
+			in:   pagesDateRangeSchema,
+			want: []string{"/properties/expect/properties/date_range/additionalProperties: positional items array rewritten to prefixItems (additionalItems moved to items)"},
+		},
+		{
+			name: "exclusive bounds, hoisted required, ignored additionalItems",
+			in: `{"type":"object","properties":{
+			        "n":{"type":"number","minimum":0,"exclusiveMinimum":true,"maximum":9,"exclusiveMaximum":false},
+			        "a/b":{"type":"string","required":true},
+			        "l":{"type":"array","items":{"type":"string"},"additionalItems":false}}}`,
+			want: []string{
+				"/properties/a~1b: boolean required moved into the parent's required list",
+				"/properties/l: additionalItems beside a single items schema dropped (draft-07 ignored it)",
+				"/properties/n: boolean exclusiveMaximum rewritten to the numeric form",
+				"/properties/n: boolean exclusiveMinimum rewritten to the numeric form",
+			},
+		},
+		{
+			name: "unicode pattern strip and valid schema are silent",
+			in:   `{"type":"object","properties":{"s":{"type":"string","pattern":"^\\p{L}+$"},"p":{"type":"array","prefixItems":[{"type":"string"}]}}}`,
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, notes := normalizeToolSchemaWithNotes(jsonMap(t, tc.in))
+			slices.Sort(notes)
+			if !reflect.DeepEqual(notes, tc.want) {
+				t.Fatalf("notes:\n got  %q\n want %q", notes, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckMCPToolSchemaClassifies(t *testing.T) {
+	if issue, ok := CheckMCPToolSchema("srv", mcp.Tool{Name: "clean", InputSchema: jsonMap(t, `{"type":"object","properties":{"q":{"type":"string"}}}`)}); ok {
+		t.Fatalf("clean schema reported: %+v", issue)
+	}
+	issue, ok := CheckMCPToolSchema("pages", mcp.Tool{Name: "update_page_data", InputSchema: jsonMap(t, pagesDateRangeSchema)})
+	if !ok || issue.Status != ToolSchemaRewritten || issue.Server != "pages" || issue.Tool != "update_page_data" ||
+		!strings.Contains(issue.Detail, "/properties/expect/properties/date_range/additionalProperties") {
+		t.Fatalf("pages tuple = %+v, %v; want rewritten naming the location", issue, ok)
+	}
+	issue, ok = CheckMCPToolSchema("srv", mcp.Tool{Name: "broken", InputSchema: jsonMap(t, `{"type":"object","properties":{"q":{"type":42}}}`)})
+	if !ok || issue.Status != ToolSchemaInvalid || !strings.Contains(issue.Detail, "/properties/q") {
+		t.Fatalf("broken = %+v, %v; want invalid naming /properties/q", issue, ok)
+	}
+}
+
+// TestToolSchemaRecordFollowsTurns: the runtime record `fleet mcp
+// schema-issues` and `fleet doctor` read. Each turn refreshes it; the same
+// finding on a later turn is not re-counted (the metric moves once per new
+// finding); a connector that fixes its schema clears on its next turn.
+func TestToolSchemaRecordFollowsTurns(t *testing.T) {
+	resetToolSchemaRecordForTest()
+	t.Cleanup(resetToolSchemaRecordForTest)
+	build := func(catalog []mcp.ServerTool) {
+		t.Helper()
+		if _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, nil, nil, toolBuildConfig{}); err != nil {
+			t.Fatalf("buildFantasyTools: %v", err)
+		}
+	}
+	broken := schemaTool("recsrv_b", "broken", jsonMap(t, `{"type":"object","properties":{"q":{"type":42}}}`))
+	tuple := schemaTool("recsrv_a", "update_page_data", jsonMap(t, pagesDateRangeSchema))
+	clean := schemaTool("recsrv_a", "get_page", jsonMap(t, `{"type":"object","properties":{"slug":{"type":"string"}}}`))
+
+	build([]mcp.ServerTool{broken, tuple, clean})
+	build([]mcp.ServerTool{broken, tuple, clean}) // a second turn: same findings
+
+	issues := ToolSchemaIssues()
+	if len(issues) != 2 {
+		t.Fatalf("record = %+v, want 2 findings", issues)
+	}
+	if issues[0].Server != "recsrv_a" || issues[0].Status != ToolSchemaRewritten || issues[1].Server != "recsrv_b" || issues[1].Status != ToolSchemaInvalid {
+		t.Fatalf("record not sorted by server/tool with the right statuses: %+v", issues)
+	}
+	if issues[0].LastSeen.IsZero() {
+		t.Fatal("LastSeen not set")
+	}
+	rendered := metrics.Render()
+	for _, want := range []string{
+		`fleet_mcp_tool_schema_issues_total{server="recsrv_a",status="rewritten"} 1`,
+		`fleet_mcp_tool_schema_issues_total{server="recsrv_b",status="invalid"} 1`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("metrics missing %q (a repeat turn must not re-count)", want)
+		}
+	}
+
+	// The connector ships the fixed schema: its entry clears on the next turn.
+	fixed := schemaTool("recsrv_a", "update_page_data", jsonMap(t,
+		`{"type":"object","properties":{"expect":{"type":"object","properties":{"date_range":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":2}}}}}}`))
+	build([]mcp.ServerTool{broken, fixed, clean})
+	issues = ToolSchemaIssues()
+	if len(issues) != 1 || issues[0].Tool != "broken" {
+		t.Fatalf("after the fix, record = %+v, want only the still-broken tool", issues)
+	}
+	if ToolSchemaRecordSince().IsZero() {
+		t.Fatal("ToolSchemaRecordSince is zero")
+	}
+}
+
+// TestCheckMCPToolSchemaCacheKeepsEachToolsIdentity: the verdict cache is
+// keyed by schema content, so two tools with the same schema share one entry,
+// but each finding still names its own server and tool.
+func TestCheckMCPToolSchemaCacheKeepsEachToolsIdentity(t *testing.T) {
+	schema := `{"type":"object","properties":{"q":{"type":"string","minimum":0,"exclusiveMinimum":true},"cache_probe_unique":{"type":"string"}}}`
+	toolSchemaVerdicts.Lock()
+	before := len(toolSchemaVerdicts.m)
+	toolSchemaVerdicts.Unlock()
+	a, okA := CheckMCPToolSchema("srv_one", mcp.Tool{Name: "alpha", InputSchema: jsonMap(t, schema)})
+	b, okB := CheckMCPToolSchema("srv_two", mcp.Tool{Name: "beta", InputSchema: jsonMap(t, schema)})
+	toolSchemaVerdicts.Lock()
+	added := len(toolSchemaVerdicts.m) - before
+	toolSchemaVerdicts.Unlock()
+	if !okA || !okB || a.Status != ToolSchemaRewritten || b.Status != ToolSchemaRewritten {
+		t.Fatalf("findings = %+v %v / %+v %v", a, okA, b, okB)
+	}
+	if a.Server != "srv_one" || a.Tool != "alpha" || b.Server != "srv_two" || b.Tool != "beta" {
+		t.Fatalf("cached verdict leaked identity: %+v / %+v", a, b)
+	}
+	if a.Detail != b.Detail {
+		t.Fatalf("same schema, different detail: %q vs %q", a.Detail, b.Detail)
+	}
+	if added != 1 {
+		t.Fatalf("identical schemas added %d cache entries, want 1", added)
+	}
+}
+
+// TestToolSchemaRecordConcurrentTurns: concurrent turns share the verdict
+// cache and the runtime record; run under -race (CI's go-race job).
+func TestToolSchemaRecordConcurrentTurns(t *testing.T) {
+	resetToolSchemaRecordForTest()
+	t.Cleanup(resetToolSchemaRecordForTest)
+	catalog := []mcp.ServerTool{
+		schemaTool("concsrv", "tuple", jsonMap(t, pagesDateRangeSchema)),
+		schemaTool("concsrv", "broken", jsonMap(t, `{"type":"object","properties":{"q":{"type":42}}}`)),
+		schemaTool("concsrv", "clean", jsonMap(t, `{"type":"object","properties":{"s":{"type":"string"}}}`)),
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				if _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, nil, nil, toolBuildConfig{}); err != nil {
+					t.Errorf("buildFantasyTools: %v", err)
+				}
+				_ = ToolSchemaIssues()
+			}
+		}()
+	}
+	wg.Wait()
+	if got := ToolSchemaIssues(); len(got) != 2 {
+		t.Fatalf("record after concurrent turns = %+v, want tuple + broken", got)
 	}
 }

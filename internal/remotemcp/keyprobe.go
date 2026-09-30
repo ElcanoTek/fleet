@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -49,6 +50,10 @@ type ProbeReport struct {
 	// CheckedWith names the read-only tool the verification call used, or
 	// "" when the server offered none the probe could call blind.
 	CheckedWith string
+	// SchemaIssues lists tools whose input schema the model boundary would
+	// translate or withhold (agentcore.CheckMCPToolSchema). Informational: it
+	// never fails a probe, since the connection itself is sound.
+	SchemaIssues []agentcore.ToolSchemaIssue
 }
 
 // noProbe is the report for a connection that was not probed (an OAuth add,

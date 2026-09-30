@@ -32,7 +32,7 @@ import (
 // folded to underscore), so `client-a` and `client_a` write the SAME key and
 // never fork two seats. This is the same convention creds.ApplyClientSuffix
 // overlays at run time.
-const mcpUsage = "usage: fleet mcp account set|list|del  |  fleet mcp reload"
+const mcpUsage = "usage: fleet mcp account set|list|del  |  fleet mcp reload  |  fleet mcp schema-issues"
 
 func cmdMCP(argv []string) int {
 	if len(argv) < 1 {
@@ -43,6 +43,8 @@ func cmdMCP(argv []string) int {
 		return cmdMCPAccount(argv[1:])
 	case "reload":
 		return mcpReload(argv[1:])
+	case "schema-issues":
+		return mcpSchemaIssues(argv[1:])
 	default:
 		return errf(1, mcpUsage)
 	}
@@ -132,6 +134,81 @@ func resolveAdminKey(flagVal string) string {
 		return v
 	}
 	return strings.TrimSpace(envOrFile("ADMIN_API_KEY"))
+}
+
+// mcpSchemaIssue mirrors agentcore.ToolSchemaIssue on the wire (admincli
+// stays free of the agent runtime's imports).
+type mcpSchemaIssue struct {
+	Server   string    `json:"server"`
+	Tool     string    `json:"tool"`
+	Status   string    `json:"status"`
+	Detail   string    `json:"detail"`
+	LastSeen time.Time `json:"last_seen"`
+}
+
+// mcpSchemaIssues prints the running server's record of MCP tools whose input
+// schema needed translation (rewritten) or was withheld from the model
+// (invalid), from GET /admin/mcp-servers/schema-issues. Exit 0 whenever the
+// record was read, findings or not; `fleet doctor` grades them.
+func mcpSchemaIssues(argv []string) int {
+	fs := flag.NewFlagSet("mcp schema-issues", flag.ContinueOnError)
+	addr := fs.String("server", "", "orchestrator address (default FLEET_ORCHESTRATOR_ADDR or 127.0.0.1:8000)")
+	adminKey := fs.String("admin-key", "", "admin API key (default ADMIN_API_KEY env)")
+	asJSON := fs.Bool("json", false, "emit the raw JSON record")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	key := resolveAdminKey(*adminKey)
+	if key == "" {
+		return errf(1, "admin key required: pass --admin-key or set ADMIN_API_KEY (in the shell or in %s)", serverEnvFile(""))
+	}
+	url := resolveOrchestratorURL(*addr) + "/admin/mcp-servers/schema-issues"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return errf(1, "build request: %v", err)
+	}
+	req.Header.Set("X-API-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errf(5, "GET %s: %v", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return errf(5, "schema-issues failed (%s): %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	if *asJSON {
+		fmt.Println(strings.TrimSpace(string(body)))
+		return 0
+	}
+	var record struct {
+		Since  time.Time        `json:"since"`
+		Issues []mcpSchemaIssue `json:"issues"`
+	}
+	if err := json.Unmarshal(body, &record); err != nil {
+		return errf(5, "decode schema-issues: %v", err)
+	}
+	printSchemaIssues(os.Stdout, record.Since, record.Issues)
+	return 0
+}
+
+func printSchemaIssues(w io.Writer, since time.Time, issues []mcpSchemaIssue) {
+	sinceText := since.UTC().Format(time.RFC3339)
+	if len(issues) == 0 {
+		fmt.Fprintf(w, "No MCP tool schema issues recorded since %s (the record fills as turns use each connector).\n", sinceText)
+		return
+	}
+	fmt.Fprintf(w, "MCP tool schema issues recorded since %s:\n", sinceText)
+	for _, i := range issues {
+		mark, meaning := "!", "translated for the model; the connector should update its schema"
+		if i.Status == "invalid" {
+			mark, meaning = "✗", "WITHHELD from the model; the connector must fix its schema"
+		}
+		fmt.Fprintf(w, "  %s %-9s mcp_%s_%s (%s)\n      %s\n", mark, i.Status, i.Server, i.Tool, meaning, i.Detail)
+	}
 }
 
 func printReloadList(label string, names []string) {

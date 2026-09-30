@@ -366,10 +366,13 @@ func buildFantasyToolsWithRoster(
 		// Anthropic rejects the whole request for one invalid tool schema, so
 		// advertising it would fail every turn of every conversation with this
 		// connector on, for every tool (tool_schema.go). Applied before deferral
-		// so direct and deferred rosters agree.
-		if problem := toolInputSchemaProblem(mt.Info()); problem != nil {
-			log.Printf("MCP tool %s skipped: input schema is not valid JSON Schema draft 2020-12 (%v)", mt.Name(), problem)
-			emitToolSchemaInvalid(cfg.observer, mt.Name(), problem.Error())
+		// so direct and deferred rosters agree. Every finding, rewritten or
+		// invalid, goes to the runtime record that `fleet mcp schema-issues`
+		// and `fleet doctor` read; each new finding is logged once.
+		issue, hasIssue := checkMCPToolSchema(mt)
+		noteToolSchemaIssue(st.ServerName, st.Tool.Name, issue, hasIssue)
+		if hasIssue && issue.Status == ToolSchemaInvalid {
+			emitToolSchemaInvalid(cfg.observer, mt.Name(), issue.Detail)
 			mcpSkippedSchema++
 			continue
 		}
