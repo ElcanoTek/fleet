@@ -162,8 +162,8 @@ func TestCLIExportAndResync(t *testing.T) {
 	if err := sched.EnsureAdminUser(ctx, "a@acctev.test"); err != nil {
 		t.Fatal(err)
 	}
-	admin := "admin"
-	if _, err := chat.SetUserRoleTeam(ctx, "a@acctev.test", &admin, nil); err != nil {
+	admin, team := "admin", "Reklaim Internal"
+	if _, err := chat.SetUserRoleTeam(ctx, "a@acctev.test", &admin, &team); err != nil {
 		t.Fatal(err)
 	}
 
@@ -182,7 +182,7 @@ func TestCLIExportAndResync(t *testing.T) {
 		users = append(users, u)
 	}
 	want := []accountevents.PayloadUser{
-		{Email: "a@acctev.test", Enabled: true, ChatRole: "admin", OpsRole: "admin"},
+		{Email: "a@acctev.test", Enabled: true, ChatRole: "admin", OpsRole: "admin", Team: "Reklaim Internal"},
 		{Email: "b@acctev.test", Enabled: true, ChatRole: "member", OpsRole: "none"},
 	}
 	if len(users) != len(want) || users[0] != want[0] || users[1] != want[1] {

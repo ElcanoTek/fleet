@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/accountevents"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // WithAccountEvents injects the account-events recorder (docs/ACCOUNT-EVENTS.md).
@@ -30,6 +33,40 @@ const accountEventTimeout = 10 * time.Second
 // Commit decline to guess. The publish runs detached from the request's
 // cancellation — a client that hangs up after the write must not make the feed
 // miss it — but under its own timeout.
+// teamMemberLister is the store's view of who is in a team, for a rename.
+type teamMemberLister interface {
+	TeamMemberEmails(ctx context.Context, team string) ([]string, error)
+}
+
+// beginTeamRename is beginAccountChange for every member of team before a
+// rename: each member's change is snapshotted and published on its own, with
+// the admin as actor. A member list that cannot be read publishes nothing and
+// says so (a resync repairs it), rather than guessing at who moved.
+func (s *Server) beginTeamRename(r *http.Request, team string) func() {
+	lister, ok := s.store.(teamMemberLister)
+	if s.accountEvents == nil || !ok {
+		return func() {}
+	}
+	listCtx, cancel := context.WithTimeout(r.Context(), accountEventTimeout)
+	members, err := lister.TeamMemberEmails(listCtx, strings.TrimSpace(team))
+	cancel()
+	if err != nil {
+		log.Printf("account events: read the members of team %q before a rename: %s (run `fleet account-events resync` to republish)",
+			team, logSafe(err.Error()))
+		return func() {}
+	}
+	actor := userFromCtx(r.Context())
+	commits := make([]func(), 0, len(members))
+	for _, email := range members {
+		commits = append(commits, s.beginAccountChange(r, email, store.AccountEventSourceAdminUI, actor))
+	}
+	return func() {
+		for _, commit := range commits {
+			commit()
+		}
+	}
+}
+
 func (s *Server) beginAccountChange(r *http.Request, email, source, actor string) func() {
 	if s.accountEvents == nil {
 		return func() {}

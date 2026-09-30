@@ -255,7 +255,9 @@ func TestDeliverySignatureMatchesWebhookSigningDoc(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	out := &fakeOutbox{due: []store.AccountEvent{sampleEvent(42, time.Now())}}
+	ev := sampleEvent(42, time.Now())
+	ev.Team = "Growth Team"
+	out := &fakeOutbox{due: []store.AccountEvent{ev}}
 	d := NewDeliverer(out, srv.URL+"/apps/fleet/events", secret)
 	if err := d.RunOnce(context.Background(), time.Now()); err != nil {
 		t.Fatal(err)
@@ -273,7 +275,7 @@ func TestDeliverySignatureMatchesWebhookSigningDoc(t *testing.T) {
 		t.Fatalf("headers = %v", gotHeader)
 	}
 	const wantBody = `{"id":"evt_abc","type":"user.access_changed","occurred_at":1790000000,"sequence":42,` +
-		`"source":"admin_ui","actor":"boss@x.com","user":{"email":"p@x.com","enabled":true,"chat_role":"member","ops_role":"none"}}`
+		`"source":"admin_ui","actor":"boss@x.com","user":{"email":"p@x.com","enabled":true,"chat_role":"member","ops_role":"none","team":"Growth Team"}}`
 	if string(gotBody) != wantBody {
 		t.Fatalf("body\n got %s\nwant %s", gotBody, wantBody)
 	}
@@ -401,7 +403,7 @@ func (a *adoptingPlanes) ProviderStateToken(context.Context, string) (string, er
 	return a.token, nil
 }
 
-func (a *adoptingPlanes) AdoptFleetAccessChange(_ context.Context, email, token string, exists, _ bool, chatRole, opsRole string) (bool, error) {
+func (a *adoptingPlanes) AdoptFleetAccessChange(_ context.Context, email, token string, exists, _ bool, chatRole, opsRole, _ string) (bool, error) {
 	if token != a.token {
 		return false, nil
 	}
@@ -618,5 +620,45 @@ func TestPublishDeletedAdoptsTheDeletion(t *testing.T) {
 	}
 	if len(p.adopted) != 1 {
 		t.Fatalf("resync of a live account adopted: %+v", p.adopted)
+	}
+}
+
+// A team is part of the state: a team-only change emits, carrying the team,
+// and re-stating the team does not.
+func TestCommitQueuesTeamOnlyChange(t *testing.T) {
+	ctx := context.Background()
+	p := newPlanes()
+	rec := NewRecorder(p, p, p)
+	const email = "tess@x.com"
+	p.chat[email] = store.AccountAccess{Email: email, Role: store.RoleMember, Enabled: true}
+
+	c := rec.Begin(ctx, email)
+	p.chat[email] = store.AccountAccess{Email: email, Role: store.RoleMember, Team: "growth", Enabled: true}
+	if err := c.Commit(ctx, store.AccountEventSourceAdminUI, "boss@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	c = rec.Begin(ctx, email)
+	if err := c.Commit(ctx, store.AccountEventSourceAdminUI, "boss@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.queued) != 1 || p.queued[0].Team != "growth" || p.queued[0].Type != store.AccountEventAccessChanged {
+		t.Fatalf("queued = %+v, want one access_changed with team growth", p.queued)
+	}
+	body, err := Body(p.queued[0])
+	if err != nil || !strings.Contains(string(body), `"team":"growth"`) {
+		t.Fatalf("body = %s (%v), want the team on the wire", body, err)
+	}
+
+	// A deletion carries team "".
+	c = rec.Begin(ctx, email)
+	delete(p.chat, email)
+	if err := c.Commit(ctx, store.AccountEventSourceAdminUI, "boss@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if last := p.queued[len(p.queued)-1]; last.Type != store.AccountEventDeleted || last.Team != "" {
+		t.Fatalf("deletion = %+v, want user.deleted with no team", last)
+	}
+	if body, _ := Body(p.queued[len(p.queued)-1]); !strings.Contains(string(body), `"team":""`) {
+		t.Fatalf("deletion body = %s, want team \"\"", body)
 	}
 }

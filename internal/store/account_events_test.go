@@ -200,7 +200,7 @@ func adopt(t *testing.T, st *Store, exists, enabled bool, chatRole, opsRole stri
 	if err != nil || token == "" {
 		t.Fatalf("token = (%q, %v)", token, err)
 	}
-	if ok, err := st.AdoptFleetAccessChange(context.Background(), "IDP@x.com", token, exists, enabled, chatRole, opsRole); err != nil || !ok {
+	if ok, err := st.AdoptFleetAccessChange(context.Background(), "IDP@x.com", token, exists, enabled, chatRole, opsRole, ""); err != nil || !ok {
 		t.Fatalf("adopt = (%v, %v)", ok, err)
 	}
 }
@@ -249,7 +249,7 @@ func TestAdoptFleetAccessChangeSkipsWhenTheRowMoved(t *testing.T) {
 	if _, _, err := st.ApplyExternalAccess(ctx, newer); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleViewer, "readonly"); err != nil || ok {
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleViewer, "readonly", ""); err != nil || ok {
 		t.Fatalf("adopt over a newer push = (%v, %v), want skipped", ok, err)
 	}
 	if got := providerState(t, st, state); got.Version != 4 || got.OpsRole != "admin" {
@@ -257,10 +257,10 @@ func TestAdoptFleetAccessChangeSkipsWhenTheRowMoved(t *testing.T) {
 	}
 
 	token, _ = st.ProviderStateToken(ctx, "idp@x.com")
-	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleMember, "client"); err != nil || !ok {
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleMember, "client", ""); err != nil || !ok {
 		t.Fatalf("first overlapping adopt = (%v, %v)", ok, err)
 	}
-	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleViewer, "readonly"); err != nil || !ok {
+	if ok, err := st.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleViewer, "readonly", ""); err != nil || !ok {
 		t.Fatalf("later Fleet adopt = (%v, %v), want it to supersede the earlier one", ok, err)
 	}
 	if got := providerState(t, st, state); got.ChatRole != RoleViewer || got.OpsRole != "readonly" {
@@ -378,7 +378,7 @@ func TestInAccountEventsTxRunsOnAOneConnectionPool(t *testing.T) {
 			Enabled: true, ChatRole: RoleMember, OpsRole: "client", Source: AccountEventSourceAdminUI}); err != nil {
 			return err
 		}
-		_, err := tx.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleMember, "client")
+		_, err := tx.AdoptFleetAccessChange(ctx, "idp@x.com", token, true, true, RoleMember, "client", "")
 		return err
 	})
 	if err != nil {

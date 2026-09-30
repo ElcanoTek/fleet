@@ -1,5 +1,5 @@
 // Package accountevents publishes Fleet's signed account-events feed
-// (docs/ACCOUNT-EVENTS.md): whenever a Chat account's membership or roles
+// (docs/ACCOUNT-EVENTS.md): whenever a Chat account's membership, roles or team
 // change, the full resulting state is queued in a durable outbox and POSTed,
 // HMAC-signed, to one operator-configured URL. Fleet names no receiver: any
 // identity provider, audit sink or script can subscribe.
@@ -37,12 +37,15 @@ type Queue interface {
 	EnqueueAccountEvent(ctx context.Context, ev store.AccountEvent) (store.AccountEvent, error)
 }
 
-// State is one account's access as the feed reports it.
+// State is one account's access as the feed reports it. Team is the Chat
+// account's team ("" = none); it is part of the state, so a team-only change
+// is a change the feed reports.
 type State struct {
 	Exists   bool
 	Enabled  bool
 	ChatRole string
 	OpsRole  string
+	Team     string
 }
 
 // BaselineAdopter records a change made in Fleet as the baseline of the
@@ -51,7 +54,7 @@ type State struct {
 // (store.ProviderStateToken) so a provider push that lands in between wins.
 type BaselineAdopter interface {
 	ProviderStateToken(ctx context.Context, email string) (string, error)
-	AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error)
+	AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole, team string) (bool, error)
 }
 
 // AccountTxRunner runs one account's after-snapshot, enqueue and adoption on
@@ -68,7 +71,7 @@ type chatSide interface {
 	ChatReader
 	Queue
 	ProviderStateToken(ctx context.Context, email string) (string, error)
-	AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error)
+	AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole, team string) (bool, error)
 }
 
 // unlockedSide is chatSide over the Recorder's own planes, for a queue that
@@ -90,11 +93,11 @@ func (u unlockedSide) ProviderStateToken(ctx context.Context, email string) (str
 	return u.r.baseline.ProviderStateToken(ctx, email)
 }
 
-func (u unlockedSide) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
+func (u unlockedSide) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole, team string) (bool, error) {
 	if u.r.baseline == nil {
 		return false, nil
 	}
-	return u.r.baseline.AdoptFleetAccessChange(ctx, email, token, exists, enabled, chatRole, opsRole)
+	return u.r.baseline.AdoptFleetAccessChange(ctx, email, token, exists, enabled, chatRole, opsRole, team)
 }
 
 // Recorder turns before/after snapshots into outbox rows. A nil *Recorder is
@@ -144,7 +147,7 @@ func (r *Recorder) snapshotOn(ctx context.Context, chat ChatReader, email string
 	if !found {
 		return State{OpsRole: opsRole}, nil
 	}
-	return State{Exists: true, Enabled: access.Enabled, ChatRole: access.Role, OpsRole: opsRole}, nil
+	return State{Exists: true, Enabled: access.Enabled, ChatRole: access.Role, OpsRole: opsRole, Team: access.Team}, nil
 }
 
 // residualOps reports a state with no Chat account but an enabled Operations
@@ -247,7 +250,7 @@ func (c *Change) commitOn(ctx context.Context, side chatSide, source, actor stri
 		if adoptErr == nil {
 			// adopted=false is a provider push that landed meanwhile (the more
 			// recent change), or no provider row: nothing to adopt either way.
-			_, adoptErr = side.AdoptFleetAccessChange(ctx, c.email, c.token, after.Exists, after.Enabled, after.ChatRole, after.OpsRole)
+			_, adoptErr = side.AdoptFleetAccessChange(ctx, c.email, c.token, after.Exists, after.Enabled, after.ChatRole, after.OpsRole, after.Team)
 		}
 		if adoptErr != nil {
 			// Not ErrNotQueued: the event is queued (the adoption runs in its own
@@ -317,7 +320,7 @@ func (r *Recorder) publish(ctx context.Context, email, source, actor string, ado
 		published = true
 		err = enqueueOn(ctx, side, email, st, store.AccountEventAccessChanged, source, actor)
 		if adopt && r.baseline != nil {
-			if _, adoptErr := side.AdoptFleetAccessChange(ctx, email, token, true, st.Enabled, st.ChatRole, st.OpsRole); adoptErr != nil {
+			if _, adoptErr := side.AdoptFleetAccessChange(ctx, email, token, true, st.Enabled, st.ChatRole, st.OpsRole, st.Team); adoptErr != nil {
 				err = errors.Join(err, fmt.Errorf("adopt the change for %s into the identity provider's desired state: %w", email, adoptErr))
 			}
 		}
@@ -356,7 +359,7 @@ func (r *Recorder) PublishDeleted(ctx context.Context, email, source, actor stri
 		err = enqueueOn(ctx, side, email, st, typ, source, actor)
 		token, tokenErr := side.ProviderStateToken(ctx, email)
 		if tokenErr == nil && token != "" {
-			_, tokenErr = side.AdoptFleetAccessChange(ctx, email, token, false, false, "", "")
+			_, tokenErr = side.AdoptFleetAccessChange(ctx, email, token, false, false, "", "", "")
 		}
 		if tokenErr != nil {
 			err = errors.Join(err, fmt.Errorf("adopt the deletion of %s into the identity provider's desired state: %w", email, tokenErr))
@@ -369,7 +372,7 @@ func (r *Recorder) PublishDeleted(ctx context.Context, email, source, actor stri
 func enqueueOn(ctx context.Context, q Queue, email string, st State, typ, source, actor string) error {
 	ev := store.AccountEvent{Type: typ, Email: email, Source: source, Actor: actor}
 	if typ == store.AccountEventAccessChanged {
-		ev.Enabled, ev.ChatRole, ev.OpsRole = st.Enabled, st.ChatRole, st.OpsRole
+		ev.Enabled, ev.ChatRole, ev.OpsRole, ev.Team = st.Enabled, st.ChatRole, st.OpsRole, st.Team
 	}
 	if _, err := q.EnqueueAccountEvent(ctx, ev); err != nil {
 		return fmt.Errorf("%w for %s: %w", ErrNotQueued, email, err)

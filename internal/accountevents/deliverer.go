@@ -97,6 +97,8 @@ type PayloadUser struct {
 	Enabled  bool   `json:"enabled"`
 	ChatRole string `json:"chat_role"`
 	OpsRole  string `json:"ops_role"`
+	// Team is the account's team ("" = none; always "" on user.deleted).
+	Team string `json:"team"`
 }
 
 // Body renders ev as the exact bytes a delivery sends.
@@ -104,7 +106,7 @@ func Body(ev store.AccountEvent) ([]byte, error) {
 	return json.Marshal(Payload{
 		ID: ev.EventID, Type: ev.Type, OccurredAt: ev.OccurredAt, Sequence: ev.ID,
 		Source: ev.Source, Actor: ev.Actor,
-		User: PayloadUser{Email: ev.Email, Enabled: ev.Enabled, ChatRole: ev.ChatRole, OpsRole: ev.OpsRole},
+		User: PayloadUser{Email: ev.Email, Enabled: ev.Enabled, ChatRole: ev.ChatRole, OpsRole: ev.OpsRole, Team: ev.Team},
 	})
 }
 

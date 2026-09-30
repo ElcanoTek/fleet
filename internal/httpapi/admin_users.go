@@ -271,6 +271,9 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	// A rename changes every member's team, so it publishes one event per
+	// member through the same per-account path as any other change.
+	defer s.beginTeamRename(r, body.From)()
 	usersN, projectsN, err := s.store.RenameTeam(r.Context(), body.From, body.To)
 	if err != nil {
 		// Only the store's typed input failures (blank/equal names, an

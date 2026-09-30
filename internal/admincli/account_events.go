@@ -191,7 +191,7 @@ func accountEventsExport(argv []string) int {
 		if err != nil || !s.Exists {
 			return err
 		}
-		return enc.Encode(accountevents.PayloadUser{Email: email, Enabled: s.Enabled, ChatRole: s.ChatRole, OpsRole: s.OpsRole})
+		return enc.Encode(accountevents.PayloadUser{Email: email, Enabled: s.Enabled, ChatRole: s.ChatRole, OpsRole: s.OpsRole, Team: s.Team})
 	})
 	if err != nil {
 		return errf(5, "export: %v", err)

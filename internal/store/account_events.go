@@ -13,7 +13,8 @@ import (
 )
 
 // Account event types and sources (docs/ACCOUNT-EVENTS.md). Kept in sync with
-// the CHECK constraints in migrations/067_account_events.sql.
+// the CHECK constraints in migrations/067_account_events.sql (the team column
+// is migrations/068_account_events_team.sql).
 const (
 	AccountEventAccessChanged = "user.access_changed"
 	AccountEventDeleted       = "user.deleted"
@@ -28,13 +29,15 @@ const (
 // AccountEvent is one outbox row: the full resulting state of one Chat account
 // after a change, plus its delivery bookkeeping.
 type AccountEvent struct {
-	ID         int64
-	EventID    string
-	Type       string
-	Email      string
-	Enabled    bool
-	ChatRole   string
-	OpsRole    string
+	ID       int64
+	EventID  string
+	Type     string
+	Email    string
+	Enabled  bool
+	ChatRole string
+	OpsRole  string
+	// Team is the account's users.team_id ("" = no team).
+	Team       string
 	Source     string
 	Actor      string
 	OccurredAt int64
@@ -42,11 +45,13 @@ type AccountEvent struct {
 	Attempts   int
 }
 
-// AccountAccess is the Chat plane's membership view of one account: its role
-// and whether Central Auth (or an operator) left it enabled.
+// AccountAccess is the Chat plane's membership view of one account: its role,
+// its team ("" = none) and whether Central Auth (or an operator) left it
+// enabled.
 type AccountAccess struct {
 	Email   string
 	Role    string
+	Team    string
 	Enabled bool
 }
 
@@ -78,7 +83,7 @@ type accountEventsDB interface {
 
 func accountAccess(ctx context.Context, q accountEventsDB, email string) (AccountAccess, bool, error) {
 	a := AccountAccess{Email: normalizeEmail(email)}
-	err := q.QueryRowContext(ctx, `SELECT role, enabled FROM users WHERE email = $1`, a.Email).Scan(&a.Role, &a.Enabled)
+	err := q.QueryRowContext(ctx, `SELECT role, COALESCE(team_id, ''), enabled FROM users WHERE email = $1`, a.Email).Scan(&a.Role, &a.Team, &a.Enabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AccountAccess{}, false, nil
 	}
@@ -91,7 +96,7 @@ func accountAccess(ctx context.Context, q accountEventsDB, email string) (Accoun
 // ListAccountAccess returns every Chat account's membership view, disabled rows
 // included, ordered by email.
 func (s *Store) ListAccountAccess(ctx context.Context) ([]AccountAccess, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT email, role, enabled FROM users ORDER BY email ASC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT email, role, COALESCE(team_id, ''), enabled FROM users ORDER BY email ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -99,10 +104,30 @@ func (s *Store) ListAccountAccess(ctx context.Context) ([]AccountAccess, error) 
 	var out []AccountAccess
 	for rows.Next() {
 		var a AccountAccess
-		if err := rows.Scan(&a.Email, &a.Role, &a.Enabled); err != nil {
+		if err := rows.Scan(&a.Email, &a.Role, &a.Team, &a.Enabled); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// TeamMemberEmails returns the Chat accounts whose users.team_id is exactly
+// team, ordered by email: the accounts RenameTeam relabels, so a rename can
+// publish one event per member.
+func (s *Store) TeamMemberEmails(ctx context.Context, team string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT email FROM users WHERE team_id = $1 ORDER BY email ASC`, strings.TrimSpace(team))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		out = append(out, email)
 	}
 	return out, rows.Err()
 }
@@ -135,9 +160,9 @@ func enqueueAccountEvent(ctx context.Context, q accountEventsDB, ev AccountEvent
 		ev.CreatedAt = now
 	}
 	err := q.QueryRowContext(ctx, `INSERT INTO account_events(
-		event_id, type, email, enabled, chat_role, ops_role, source, actor, occurred_at, created_at, next_attempt_at
-	) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) RETURNING id`,
-		ev.EventID, ev.Type, ev.Email, ev.Enabled, ev.ChatRole, ev.OpsRole, ev.Source, ev.Actor,
+		event_id, type, email, enabled, chat_role, ops_role, team, source, actor, occurred_at, created_at, next_attempt_at
+	) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) RETURNING id`,
+		ev.EventID, ev.Type, ev.Email, ev.Enabled, ev.ChatRole, ev.OpsRole, ev.Team, ev.Source, ev.Actor,
 		ev.OccurredAt, ev.CreatedAt).Scan(&ev.ID)
 	if err != nil {
 		return AccountEvent{}, fmt.Errorf("enqueue account event: %w", err)
@@ -167,7 +192,7 @@ func (s *Store) ClaimDueAccountEvents(ctx context.Context, now int64, limit int,
 		   SET lease_until = $3, attempts = e.attempts + 1
 		  FROM due
 		 WHERE e.id = due.id AND (e.lease_until IS NULL OR e.lease_until <= $1)
-		RETURNING e.id, e.event_id, e.type, e.email, e.enabled, e.chat_role, e.ops_role,
+		RETURNING e.id, e.event_id, e.type, e.email, e.enabled, e.chat_role, e.ops_role, e.team,
 		          e.source, e.actor, e.occurred_at, e.created_at, e.attempts`,
 		now, limit, now+int64(lease/time.Second))
 	if err != nil {
@@ -177,7 +202,7 @@ func (s *Store) ClaimDueAccountEvents(ctx context.Context, now int64, limit int,
 	var out []AccountEvent
 	for rows.Next() {
 		var ev AccountEvent
-		if err := rows.Scan(&ev.ID, &ev.EventID, &ev.Type, &ev.Email, &ev.Enabled, &ev.ChatRole, &ev.OpsRole,
+		if err := rows.Scan(&ev.ID, &ev.EventID, &ev.Type, &ev.Email, &ev.Enabled, &ev.ChatRole, &ev.OpsRole, &ev.Team,
 			&ev.Source, &ev.Actor, &ev.OccurredAt, &ev.CreatedAt, &ev.Attempts); err != nil {
 			return nil, err
 		}
@@ -361,13 +386,19 @@ func providerStateToken(ctx context.Context, q queryer, email, lock string) (str
 // reconciling Ops from roles the provider never sent while Chat, already at
 // that version, is not touched. adopted=false reports that skip (or that the
 // provider holds no row for email).
-func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
+//
+// team is the account's resulting team. It is adopted only into a row whose
+// team the provider manages (team IS NOT NULL): a NULL team means the provider
+// never sends one, and adopting a value there would start managing a field the
+// provider does not know about. A deletion leaves the team alone, like a
+// revoke.
+func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole, team string) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	adopted, err := adoptFleetAccessChange(ctx, tx, email, token, exists, enabled, chatRole, opsRole)
+	adopted, err := adoptFleetAccessChange(ctx, tx, email, token, exists, enabled, chatRole, opsRole, team)
 	if err != nil || !adopted {
 		return false, err
 	}
@@ -376,7 +407,7 @@ func (s *Store) AdoptFleetAccessChange(ctx context.Context, email, token string,
 
 // adoptFleetAccessChange is AdoptFleetAccessChange's statements, on a
 // transaction the caller commits.
-func adoptFleetAccessChange(ctx context.Context, tx accountEventsDB, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
+func adoptFleetAccessChange(ctx context.Context, tx accountEventsDB, email, token string, exists, enabled bool, chatRole, opsRole, team string) (bool, error) {
 	email = normalizeEmail(email)
 	if exists && (!ValidRole(chatRole) || !validOpsRole(opsRole)) {
 		return false, fmt.Errorf("adopt fleet access change: invalid roles %q/%q", chatRole, opsRole)
@@ -393,8 +424,9 @@ func adoptFleetAccessChange(ctx context.Context, tx accountEventsDB, email, toke
 		// re-creates after deleting it is allowed again (its deletion had set
 		// allowed=false, and a redelivery would otherwise revoke the new Ops
 		// grant), while a change to a centrally disabled account keeps it off.
-		_, err = tx.ExecContext(ctx, `UPDATE external_access_state SET chat_role = $2, ops_role = $3, allowed = $4 WHERE email = $1`,
-			email, chatRole, opsRole, enabled)
+		_, err = tx.ExecContext(ctx, `UPDATE external_access_state SET chat_role = $2, ops_role = $3, allowed = $4,
+			team = CASE WHEN team IS NULL THEN NULL ELSE $5 END WHERE email = $1`,
+			email, chatRole, opsRole, enabled, strings.TrimSpace(team))
 	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE external_access_state SET allowed = FALSE WHERE email = $1`, email)
 	}
@@ -434,11 +466,11 @@ func (t *AccountEventsTx) ProviderStateToken(ctx context.Context, email string) 
 // AdoptFleetAccessChange is Store.AdoptFleetAccessChange on the transaction,
 // inside a savepoint: a failed adoption is rolled back alone, so it can never
 // take the event queued before it down with it.
-func (t *AccountEventsTx) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole string) (bool, error) {
+func (t *AccountEventsTx) AdoptFleetAccessChange(ctx context.Context, email, token string, exists, enabled bool, chatRole, opsRole, team string) (bool, error) {
 	if _, err := t.tx.ExecContext(ctx, `SAVEPOINT adopt_baseline`); err != nil {
 		return false, err
 	}
-	adopted, err := adoptFleetAccessChange(ctx, t.tx, email, token, exists, enabled, chatRole, opsRole)
+	adopted, err := adoptFleetAccessChange(ctx, t.tx, email, token, exists, enabled, chatRole, opsRole, team)
 	if err != nil {
 		if _, rbErr := t.tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT adopt_baseline`); rbErr != nil {
 			return false, errors.Join(err, rbErr)
