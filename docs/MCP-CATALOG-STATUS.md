@@ -58,6 +58,51 @@ Cross-cutting checks, all live:
   `tool_search`/`tool_describe`/`tool_call` for GitHub, Notion, Slack, Linear,
   Stripe, Grafana Cloud, Uptime Robot.
 
+### Real deploy (2026-09-30)
+
+The table above was measured on a development rig (a dev build on
+`localhost:3200`, a Cloudflare quick tunnel for the one vendor that refuses a
+loopback callback). #986's acceptance asks for the pack on a **real deploy**, so
+the same pack was run against fleet installed the documented way — the
+`install.sh` one-liner with `--enable-web --domain`, release build from `main`,
+systemd units, local Postgres, Caddy with a Let's Encrypt certificate — on a
+throwaway 4 vCPU / 8 GB Fedora 44 cloud box with a public sslip.io hostname
+(`https://fleet-oauth.<ip>.sslip.io/api/oauth/mcp/callback` as the callback).
+Everything the rig never exercised was exercised here: the release binary, the
+unit's hardening, Caddy/TLS, a stable public callback, the sealed key in
+`/etc/fleet/fleet.env`.
+
+| connector | add | sign-in | tools | tool call (chat) | scheduled task | refresh | sign-out → reconnect | remove | seats / sharing |
+|---|---|---|---|---|---|---|---|---|---|
+| GitHub | manual client ✓ | ✓ | ✓ | ✓ `get_me` | — | ✓ forced expiry, renewed (8 h) | ✓ | — | — |
+| Notion | dynamic registration ✓ | ✓ | ✓ | ✓ `notion-search` | — | — | ✓ | — | ✓ second seat `test` with its own client and token; a turn pinned to it calls `mcp_notion_test_*`, an unpinned turn the default seat |
+| Linear | dynamic registration ✓ | ✓ | ✓ | ✓ `list_issues` | ✓ task pinned to `linear`, wired 7 servers, called `list_issues`, 72 s | ✓ forced expiry, renewed (24 h) | ✓ | — | ✓ shared to a second user: grantee sees no secret material and calls `list_issues` under the owner's login |
+| Slack | manual client ✓ | ✓ | ✓ | ✓ `list_user_channels` | — | n/a | ✓ (no refresh token, so only a fresh authorization can reissue) | — | — |
+| Azure DevOps | tenant URL + Entra app ✓ | ✓ | ✓ | ✓ `core_list_projects` | — | — | ✓ | — | — |
+| Stripe | dynamic registration ✓ | ✓ | ✓ | ✓ `GetBalance` | — | — | ✓ | — | — |
+| Grafana Cloud | dynamic registration ✓ | ✓ | ✓ | ✓ `list_datasources` (deferred mode) | — | — | ✓ | — | — |
+| Uptime Robot | dynamic registration ✓ | ✓ | ✓ | ✓ `list-monitors` | — | — | ✓ | — | — |
+| Bugsnag | dynamic registration ✓ (after F12) | ✓ | ✓ | ✓ `bugsnag_list_projects` | — | — | ✓ | — | — |
+| Google Drive | manual client ✓ | ✓ | ✓ | ✗ vendor: "The caller does not have permission" (Workspace preview gating, as on the rig) | — | — | — | ✓ server and token rows both removed; the vendor revocation call failed and was logged | — |
+| Gmail | manual client ✓ | ✓ | ✓ | ✗ vendor: Gmail MCP API not enabled on the Google project | — | — | ✓ | — | — |
+| Cartesia | ✗ dynamic registration refused: `redirect_uris must be a native app URI scheme, loopback http, or an allowlisted https callback` (RD4) | | | | | | | | |
+| Plaid | ✗ refused at add (401 under its MCP path; the known decision) | | | | | | | | |
+
+— not re-run: the same mechanism passed on another vendor in this pass. The
+sign-out → reconnect column is a sweep the owner did across every connection;
+tool calls after it were re-verified on GitHub, Slack, Notion and Stripe.
+
+What the real deploy found that the rig could not (the catalog audit's F
+numbering continues as RD):
+
+| # | finding | state |
+|---|---|---|
+| RD1 | Fedora's `caddy` package ships `/etc/caddy/Caddyfile`; bootstrap's foreign-file check treats the untouched package default as someone else's config and aborts the web tier. The documented `--force-caddy` re-run recovers it, at the cost of a full second bootstrap. | open — #1657 (recognise the unmodified package default) |
+| RD2 | A **bare install cannot start a sandbox on an SELinux-enforcing host**: `fleet.service` runs with `ProtectSystem=strict` and `ReadWritePaths=/var/lib/fleet -/opt/fleet/client`, the bare install points `FLEET_CLIENT_CONFIG_DIR` at the root-owned checkout under `/opt/fleet/src`, and the sandbox's `:z` relabel of the bundle dirs fails with `lsetxattr … read-only file system` on every pool fill. bootstrap deliberately skips chowning the in-repo bundle. Worked around by staging a fleet-owned copy at `/opt/fleet/client`. | open — #1655 (bootstrap stages the default bundle under the writable path; `fleet doctor` checks it) |
+| RD3 | API chat callers must send `model`; bootstrap sets no default model. | minor — document; the UI picker is unaffected |
+| RD4 | Cartesia's authorization server accepts dynamic registration only for native or loopback redirect URIs; a hosted https callback is refused unless allowlisted. The rig's `localhost` callback is loopback, which is why the rig recorded it as self-registering. | open — #1658 (mark the entry `client_registration: manual` with a setup hint) |
+| RD5 | A **scheduled task pinned to a hosted connection dead-letters once the owner has more than 8 connections**: the run mounts all of the owner's connections newest-first up to `maxOverlayServers = 8`, the cap records nothing, so a pinned connection past it is neither mounted nor listed as skipped and the run fails as "misspelled or gated-off". Reproduced with 11 connections. The same cap silently drops the surplus in chat. | open — #1656 (mount pinned servers first, record cap skips with their own reason, name the cap in the error) |
+
 ## Fleet changes the pack produced
 
 | PR | what it fixed | found by |
