@@ -4,6 +4,9 @@
 package admincli
 
 import (
+	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,16 +24,11 @@ func renderCaddyfile(t *testing.T, fn string, args ...string) string {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available; skipping Caddyfile renderer test")
 	}
-	root := repoRootFromTest(t)
-	lib := filepath.Join(root, "scripts", "lib", "caddyfile.sh")
-	script := ". " + lib + "; " + fn + ` "$@"`
-	cmd := exec.Command("bash", append([]string{"-c", script, "caddyfile"}, args...)...)
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
+	out, err := runCaddyfileFn(t, nil, fn, args...)
 	if err != nil {
 		t.Fatalf("%s %v failed: %v\n--- output ---\n%s", fn, args, err, out)
 	}
-	return string(out)
+	return out
 }
 
 // functionalLines strips comments and blank lines — the same rule
@@ -256,5 +254,103 @@ func TestBootstrapDryRunPlansAPIRouting(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
 		}
+	}
+}
+
+// runCaddyfileFn is renderCaddyfile without the exit-status assertion, for
+// predicates whose "false" is a non-zero exit. env entries are appended to
+// the process environment (a PATH entry here shadows the real one).
+func runCaddyfileFn(t *testing.T, env []string, fn string, args ...string) (string, error) {
+	t.Helper()
+	root := repoRootFromTest(t)
+	lib := filepath.Join(root, "scripts", "lib", "caddyfile.sh")
+	cmd := exec.Command("bash", append([]string{"-c", ". " + lib + "; " + fn + ` "$@"`, "caddyfile"}, args...)...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// stubPackageManagers writes fake rpm, dpkg and dpkg-query binaries into a
+// temp dir and returns a PATH entry that shadows the real ones. rpmDigest is
+// what `rpm -q --dump caddy` reports for /etc/caddy/Caddyfile ("" = rpm owns
+// no such file); dpkgMD5 is what dpkg's Conffiles record says ("" = dpkg owns
+// no such file). The dump includes a directory row with a zero digest, as a
+// real dump does, so the awk match has something to skip.
+func stubPackageManagers(t *testing.T, rpmDigest, dpkgMD5 string) string {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rpm := "#!/usr/bin/env bash\ncase \"$1\" in\n"
+	if rpmDigest != "" {
+		rpm += "  -qf) echo caddy ;;\n" +
+			"  -q) [[ \"$2\" == --dump ]] && { echo '/etc/caddy/Caddyfile.d 4096 1700000000 0000000000000000000000000000000000000000000000000000000000000000 040755 root root 0 0 0 X'; echo '/etc/caddy/Caddyfile 215 1700000000 " + rpmDigest + " 0100644 root root 1 0 0 X'; } ;;\n"
+	} else {
+		rpm += "  -qf) exit 1 ;;\n"
+	}
+	rpm += "esac\n"
+	write("rpm", rpm)
+	if dpkgMD5 != "" {
+		write("dpkg", "#!/usr/bin/env bash\n[[ \"$1\" == -S ]] && echo 'caddy: /etc/caddy/Caddyfile'\n")
+		write("dpkg-query", "#!/usr/bin/env bash\nprintf ' /etc/caddy/Caddyfile "+dpkgMD5+"\\n /etc/caddy/Caddyfile.old deadbeefdeadbeefdeadbeefdeadbeef obsolete\\n'\n")
+	} else {
+		write("dpkg", "#!/usr/bin/env bash\nexit 1\n")
+		write("dpkg-query", "#!/usr/bin/env bash\nexit 1\n")
+	}
+	return "PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
+// TestCaddyfilePackageDefaultIsNotForeign is #1657: the caddy package's
+// untouched default Caddyfile — recognised by the digest the package manager
+// recorded for it — is not "someone else's config", while the same file with
+// one edit still is, and a file no package knows stays foreign as before.
+// rpm and dpkg are stubbed on PATH so both lookups actually run.
+func TestCaddyfilePackageDefaultIsNotForeign(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	stock := "# The Caddyfile is an easy way to configure your Caddy web server.\nhttp:// {\n\troot * /usr/share/caddy\n\tfile_server\n}\nimport Caddyfile.d/*.caddyfile\n"
+	f := filepath.Join(t.TempDir(), "Caddyfile")
+	if err := os.WriteFile(f, []byte(stock), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha := sha256.Sum256([]byte(stock))
+	md := md5.Sum([]byte(stock))
+	viaRPM := []string{stubPackageManagers(t, hex.EncodeToString(sha[:]), "")}
+	viaDpkg := []string{stubPackageManagers(t, "", hex.EncodeToString(md[:]))}
+	viaNone := []string{stubPackageManagers(t, "", "")}
+
+	for name, env := range map[string][]string{"rpm sha256": viaRPM, "dpkg md5": viaDpkg} {
+		if out, err := runCaddyfileFn(t, env, "caddyfile_is_package_default", f); err != nil {
+			t.Fatalf("%s: the packaged default was not recognised: %v\n%s", name, err, out)
+		}
+		if out, err := runCaddyfileFn(t, env, "caddyfile_is_foreign", f); err == nil {
+			t.Fatalf("%s: the packaged default was treated as foreign:\n%s", name, out)
+		}
+	}
+	// No package knows the file: the pre-#1657 rule — unmarked and non-empty
+	// means foreign.
+	if _, err := runCaddyfileFn(t, viaNone, "caddyfile_is_foreign", f); err != nil {
+		t.Fatal("an unmarked file no package knows was not treated as foreign")
+	}
+	// One operator edit and it is a real config again, whatever the package says.
+	if err := os.WriteFile(f, []byte(stock+"legacy.example.com {\n\treverse_proxy 127.0.0.1:3000\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, env := range map[string][]string{"rpm sha256": viaRPM, "dpkg md5": viaDpkg} {
+		if _, err := runCaddyfileFn(t, env, "caddyfile_is_foreign", f); err != nil {
+			t.Fatalf("%s: an edited Caddyfile was not treated as foreign", name)
+		}
+	}
+	// A marked (fleet-managed) file is never the package default.
+	if err := os.WriteFile(f, []byte("# Managed by fleet (scripts/bootstrap.sh) — re-runs overwrite this file.\n"+stock), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCaddyfileFn(t, viaRPM, "caddyfile_is_foreign", f); err == nil {
+		t.Fatal("a fleet-managed file was treated as foreign")
 	}
 }

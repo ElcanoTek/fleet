@@ -324,7 +324,10 @@ each piece yourself):
    > (another app's vhosts may live there — e.g. a legacy deploy); pass
    > `--force-caddy` to overwrite anyway, which keeps a timestamped backup at
    > `/etc/caddy/Caddyfile.fleet-backup.<timestamp>` and warns you to merge the
-   > old sites back in. The manual steps below are the by-hand equivalent.
+   > old sites back in. The one exception is the caddy package's own untouched
+   > default (Fedora's rpm ships one; it serves nothing): recognised by the
+   > digest the package recorded, it is replaced, with a copy kept at the same
+   > backup path. The manual steps below are the by-hand equivalent.
    >
    > **Login model.** The web app authenticates three ways, all minting the same
    > HMAC session cookie (signed with `APP_SESSION_SECRET`) so everything

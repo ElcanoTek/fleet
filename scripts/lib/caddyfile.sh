@@ -26,13 +26,17 @@
 #     HMAC-authenticated) go to the chat listener, likewise stripped.
 #
 # Every function is pure shell (no caddy binary needed) so doctor's --check and
-# the Go tests can run it anywhere.
+# the Go tests can run it anywhere — except caddyfile_is_package_default, which
+# asks the package manager (rpm/dpkg) and sha256sum/md5sum, and answers "no"
+# wherever they are absent.
 
 # shellcheck shell=bash
 
 # The marker bootstrap has always written as line 1. An existing Caddyfile
 # WITHOUT it belongs to someone else (a legacy chat/moc install, a hand-written
-# config) and is never overwritten without --force-caddy. Keep the text stable:
+# config) and is never overwritten without --force-caddy — with one exception,
+# the caddy package's own untouched default (caddyfile_is_package_default),
+# which bootstrap replaces with a copy kept beside it. Keep the text stable:
 # it is how every already-provisioned box is recognised as fleet-managed.
 CADDY_MARKER="# Managed by fleet (scripts/bootstrap.sh) — re-runs overwrite this file."
 
@@ -49,11 +53,45 @@ caddyfile_is_managed() {
   [[ -s "$f" ]] && grep -qF "$CADDY_MARKER" "$f"
 }
 
-# caddyfile_is_foreign [FILE] — true when FILE exists, is non-empty and was NOT
-# written by fleet (no marker). The bootstrap refusal keys on this.
+# caddyfile_is_package_default [FILE] — true when FILE is byte-for-byte the
+# Caddyfile the OS's caddy package installs: the stock `http:// { root *
+# /usr/share/caddy; file_server }` site that has never served anything. Fedora's
+# package ships one, so on a fresh box `dnf install caddy` (which bootstrap
+# runs) drops a file bootstrap then refused to overwrite as "someone else's
+# config" (#1657). The package manager knows the digest it installed (rpm
+# records one per file; dpkg records conffile md5s), so an unmodified default is
+# recognised by that digest and nothing else — a file with even one operator
+# edit still counts as foreign. Every edge fails toward "foreign" (the refusal):
+# a path two packages own takes the first (head -n1); two installed versions of
+# the package dump two rows and the first wins, so an upgraded-but-untouched
+# file may read as foreign until the old version is removed; a digest of any
+# length other than sha256's or md5's is not compared. Tests exercise the
+# rpm and dpkg branches with stub binaries on PATH, never through an
+# environment hook — this predicate decides whether root overwrites a file.
+caddyfile_is_package_default() {
+  local f="${1:-/etc/caddy/Caddyfile}" canon="/etc/caddy/Caddyfile" pkg="" digest=""
+  [[ -s "$f" ]] || return 1
+  if command -v rpm >/dev/null 2>&1 && pkg="$(rpm -qf --qf '%{NAME}\n' "$canon" 2>/dev/null | head -n1)" && [[ -n "$pkg" ]]; then
+    digest="$(rpm -q --dump "$pkg" 2>/dev/null | awk -v p="$canon" '$1==p {print $4; exit}')"
+  elif command -v dpkg-query >/dev/null 2>&1 && pkg="$(dpkg -S "$canon" 2>/dev/null | head -n1 | cut -d: -f1)" && [[ -n "$pkg" ]]; then
+    digest="$(dpkg-query -W -f='${Conffiles}\n' "$pkg" 2>/dev/null | awk -v p="$canon" '$1==p {print $2; exit}')"
+  fi
+  [[ -n "$digest" ]] || return 1
+  local have
+  case "${#digest}" in
+    64) have="$(sha256sum "$f" | awk '{print $1}')" ;;
+    32) have="$(md5sum "$f" | awk '{print $1}')" ;;
+    *)  return 1 ;;
+  esac
+  [[ "$have" == "$digest" ]]
+}
+
+# caddyfile_is_foreign [FILE] — true when FILE exists, is non-empty, carries no
+# fleet marker and is not the caddy package's untouched default: someone else's
+# config, which bootstrap must not overwrite.
 caddyfile_is_foreign() {
   local f="${1:-/etc/caddy/Caddyfile}"
-  [[ -s "$f" ]] && ! grep -qF "$CADDY_MARKER" "$f"
+  [[ -s "$f" ]] && ! grep -qF "$CADDY_MARKER" "$f" && ! caddyfile_is_package_default "$f"
 }
 
 # caddyfile_domain [FILE] — the site address of the fleet-managed block: the
