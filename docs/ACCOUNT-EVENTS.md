@@ -1,9 +1,10 @@
-# Account events: a signed feed of membership and role changes
+# Account events: a signed feed of membership, role and team changes
 
-Fleet can publish every change to a Chat account's membership or roles as a
-signed HTTP event. The feed is generic: Fleet names no receiver, so an identity
+Fleet can publish every change to a Chat account's membership, roles or team as
+a signed HTTP event. The feed is generic: Fleet names no receiver, so an identity
 provider, an audit sink or a script can subscribe. Elcano's Central Auth uses
-it to mirror role changes and removals made in Fleet back into its console
+it to mirror role changes, team changes and removals made in Fleet back into
+its console
 ([ADR-0076](adr/0076-fleet-publishes-account-events.md)), but nothing in Fleet
 depends on Auth.
 
@@ -40,14 +41,15 @@ An event carries the account's **full resulting state**, read back from both
 the Chat and Operations Center databases after the change, not the values the
 admin asked for. If the Ops write fails, the event reports the Ops role the
 database still holds. An event is queued **only when the resulting state
-differs** from the state before the operation, so re-asserting a role (or
-changing only a team, which is not part of the state) publishes nothing.
+differs** from the state before the operation, so re-asserting a role or a
+team publishes nothing. The team is part of the state, so a change to only the
+team publishes.
 
 Writers that publish:
 
 | Source | What |
 | --- | --- |
-| `admin_ui` | Settings → Admin → Users: create, role / Ops role change, delete |
+| `admin_ui` | Settings → Admin → Users: create, role / Ops role / team change, delete; renaming a team (one event per member, the admin as actor); a person moving themselves between teams from their own settings (themselves as actor) |
 | `cli` | `fleet admin add/rm`, `fleet chat user add/role/del`, `fleet sched user add/set-role/rename/del`, the orchestrator admin API's `POST /users` (`ADMIN_API_KEY`) when the username is a Chat account's email, and `fleet import` (each account it creates, published once after both sections with its resulting state) |
 | `system` | The `FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS` boot seed, when it actually changes a Chat account's Ops role |
 | `identity_provider` | A change Fleet applied because its identity provider told it to (the Central Auth provisioning push, [CENTRAL-AUTH-PROVISIONING.md](CENTRAL-AUTH-PROVISIONING.md)) |
@@ -88,7 +90,8 @@ would outlive its removal from the allowlist.
     "email": "person@example.com",
     "enabled": true,
     "chat_role": "member",
-    "ops_role": "none"
+    "ops_role": "none",
+    "team": "Growth"
   }
 }
 ```
@@ -106,7 +109,12 @@ would outlive its removal from the allowlist.
 - `user.ops_role`: `none`, `readonly`, `client` or `admin`. `none` means no
   enabled Operations Center identity (a centrally disabled identity keeps its
   row but reads as `none`).
-- For `user.deleted`: `enabled` is `false` and both roles are `""`. It is sent
+- `user.team`: the account's team, `""` for none. A team is a free-text label
+  of at most 64 bytes with no control characters, matched exactly (a team that
+  differs only in case is a different team). A receiver must tolerate a
+  missing `team` (a Fleet build from before team sync) and treat it as "no
+  information, leave your copy alone".
+- For `user.deleted`: `enabled` is `false`, both roles and `team` are `""`. It is sent
   only when **no** access is left in either plane.
 - A `user.access_changed` with `enabled: false`, `chat_role: ""` and a real
   `ops_role` means the Chat account is gone but an Operations Center identity
@@ -199,7 +207,8 @@ Auth), a change can travel both ways. Three rules stop it from looping:
 
 And one rule keeps the two sides from undoing each other: a change made in
 Fleet is also written into the provider's stored desired state for that
-account (its roles, or not-allowed for a deletion; never its version). So when
+account (its roles, its team when the provider manages the team, or
+not-allowed for a deletion; never its version). So when
 the provider redelivers a push it already sent (at-least-once), Fleet
 re-applies the state it now holds instead of the one before its own change,
 and an `identity_provider` event is never a silent revert. The adoption is
@@ -210,8 +219,10 @@ it is. This happens only with the feed on
 
 ## Honest scope
 
-- The feed reports Chat accounts only; Ops-only identities and team
-  assignments are not part of it.
+- The feed reports Chat accounts only; Ops-only identities are not part of it.
+- A team rename publishes one event per member it moved. A member whose list
+  entry cannot be read before the rename is not published; the server logs it
+  and `fleet account-events resync` republishes.
 - Delivery is at-least-once. Receivers must dedupe on `id`.
 - Under two overlapping writes to one account, the **state** is always right
   and the last event carries the final state, but `source` and `actor` are

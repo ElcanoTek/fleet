@@ -122,6 +122,9 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	// Users tab, and gating their own row differently would just push them
 	// there for no gain.
 	admin := s.isAdmin(caller) || roleFromCtx(r.Context()) == store.RoleAdmin
+	// A team is part of the account-events state, so a self-serve move is
+	// published like an admin's (the web UI's source, the caller as actor).
+	defer s.beginAccountChange(r, caller, store.AccountEventSourceAdminUI, caller)()
 	u, err := s.store.SetOwnTeam(r.Context(), caller, *body.TeamID, admin)
 	if err != nil {
 		if errors.Is(err, store.ErrTeamExists) {

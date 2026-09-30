@@ -82,10 +82,15 @@ func TestAdminUserChangesPublishAccountEvents(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("no-op patch: %d %s", w.Code, w.Body.String())
 	}
-	// A team change is not part of the feed's state either.
+	// A team-only change is part of the feed's state: it publishes.
 	w = do(t, h, http.MethodPatch, "/admin/users/dan@x.com", map[string]any{"team_id": "growth"}, "boss@x.com")
 	if w.Code != http.StatusOK {
 		t.Fatalf("team patch: %d %s", w.Code, w.Body.String())
+	}
+	// Re-stating the same team is not a change.
+	w = do(t, h, http.MethodPatch, "/admin/users/dan@x.com", map[string]any{"team_id": "growth"}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("same-team patch: %d %s", w.Code, w.Body.String())
 	}
 
 	// Chat viewer + Ops client requested, the Ops write fails: the event carries
@@ -104,20 +109,21 @@ func TestAdminUserChangesPublishAccountEvents(t *testing.T) {
 	}
 
 	evs := drainAccountEvents(t, st)
-	if len(evs) != 3 {
-		t.Fatalf("events = %+v, want create, patch, delete", evs)
+	if len(evs) != 4 {
+		t.Fatalf("events = %+v, want create, team, patch, delete", evs)
 	}
 	want := []struct {
-		typ, chat, ops string
-		enabled        bool
+		typ, chat, ops, team string
+		enabled              bool
 	}{
-		{store.AccountEventAccessChanged, "member", "readonly", true},
-		{store.AccountEventAccessChanged, "viewer", "readonly", true},
-		{store.AccountEventDeleted, "", "", false},
+		{store.AccountEventAccessChanged, "member", "readonly", "", true},
+		{store.AccountEventAccessChanged, "member", "readonly", "growth", true},
+		{store.AccountEventAccessChanged, "viewer", "readonly", "growth", true},
+		{store.AccountEventDeleted, "", "", "", false},
 	}
 	for i, w := range want {
 		ev := evs[i]
-		if ev.Type != w.typ || ev.ChatRole != w.chat || ev.OpsRole != w.ops || ev.Enabled != w.enabled ||
+		if ev.Type != w.typ || ev.ChatRole != w.chat || ev.OpsRole != w.ops || ev.Team != w.team || ev.Enabled != w.enabled ||
 			ev.Email != "dan@x.com" || ev.Source != "admin_ui" || ev.Actor != "boss@x.com" {
 			t.Errorf("event %d = %+v, want %+v", i, ev, w)
 		}

@@ -89,3 +89,33 @@ only the feed.
 - ADR-0074's other decisions stand: Auth events are versioned and applied
   idempotently, revocation disables rather than deletes, and Fleet Admin is
   one coherent cross-plane role.
+
+## Amendment: teams (2026-09-30)
+
+The team is now part of the synced state, in both directions, under the same
+rules as the roles:
+
+1. **The feed carries `user.team`.** It is part of the state, so a team-only
+   change publishes, a team rename publishes one event per member it moved,
+   and a person moving themselves between teams publishes with themselves as
+   actor.
+2. **The provider may send a team.** The provisioning payload may carry a
+   third settings key, `team`. Present, Fleet moves the account to it through
+   the same unsharing an admin move does (the person's shares with the old
+   team end, exactly as ADR-0057 describes for a leaver). Absent, the team is
+   left alone, so an older provider or one with team sync off never touches
+   it. A revoke never changes the team. Any key other than `chat_role`,
+   `ops_role` and `team` still fails closed.
+3. **Adoption covers the team only where the provider manages it.**
+   `external_access_state.team` is NULL when the provider never sent one; a
+   Fleet-side team change is adopted into a row whose team is set, and never
+   starts a provider managing a field it does not know about.
+4. **Case is not a change on the provider's word.** Team gates match exactly,
+   so a provider team that differs from Fleet's only in case is left as it
+   is; rewriting the case would silently detach the person from their team's
+   shared projects.
+
+Consequence: moving someone between teams in the provider now changes what
+that person shares in Fleet. That is the intended meaning of a team move, and
+the reason the provider's side (Central Auth) keeps team sync off until an
+operator has imported Fleet's teams into it.

@@ -152,10 +152,12 @@ Chat and Ops Center permissions and highlights the included Contributor choices.
 Selecting Fleet Admin again turns it off and safely defaults to Chat Contributor
 with no Ops access. Accounts created and granted Fleet in central Auth are added
 here automatically with the roles selected there. When your operator has turned
-on Fleet's account-events feed, role changes and removals you make here are sent
-to whatever it points at. If that is central Auth and it is set up to adopt
-them, central Auth shows your changes too, and the most recent change on either
-side wins.
+on Fleet's account-events feed, role changes, team changes and removals you
+make here are sent to whatever it points at. If that is central Auth and it is
+set up to adopt them, central Auth shows your changes too, and the most recent
+change on either side wins. With team sync on in central Auth, moving someone
+between teams there moves them here too, with the same effect as moving them
+yourself: what they shared with their old team stops being shared.
 
 ### The header
 
