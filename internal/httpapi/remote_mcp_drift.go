@@ -96,8 +96,8 @@ func driftFromCatalog(row store.RemoteMCPServer, catalog []clientconfig.RemoteMC
 		}
 	}
 	if entryAuth == store.RemoteMCPAuthAPIKey && rowAuth == store.RemoteMCPAuthAPIKey &&
-		keyPlacementKey(entry.APIKeyHeader, entry.APIKeyQuery) != keyPlacementKey(row.APIKeyHeader, row.APIKeyQuery) {
-		d.KeySentAs = keyPlacement(entry.APIKeyHeader, entry.APIKeyQuery)
+		keyPlacementKey(entry.APIKeyHeader, entry.APIKeyQuery, entry.APIKeyPrefix) != keyPlacementKey(row.APIKeyHeader, row.APIKeyQuery, row.APIKeyPrefix) {
+		d.KeySentAs = keyPlacement(entry.APIKeyHeader, entry.APIKeyQuery, entry.APIKeyPrefix)
 	}
 	if d == (catalogDrift{}) {
 		return nil
@@ -105,27 +105,30 @@ func driftFromCatalog(row store.RemoteMCPServer, catalog []clientconfig.RemoteMC
 	return &d
 }
 
-// keyPlacementKey is the comparable identity of where an api key is sent,
-// from the header or query-parameter NAME the directory or the row records
-// ("" for both = the Authorization: Bearer header). A header name is
-// case-insensitive on the wire and the service stores it as typed, so it is
-// folded; a query-parameter name is case-sensitive and compared exactly.
-func keyPlacementKey(header, query string) string {
+// keyPlacementKey is the comparable identity of where and how an api key is
+// sent, from the header or query-parameter NAME and the scheme prefix the
+// directory or the row records ("" for all = the Authorization: Bearer
+// header). A header name is case-insensitive on the wire and the service
+// stores it as typed, so it is folded; a query-parameter name and the prefix
+// are compared exactly.
+func keyPlacementKey(header, query, prefix string) string {
 	switch {
 	case query != "":
 		return "query:" + query
 	case header != "":
-		return "header:" + strings.ToLower(header)
+		return "header:" + strings.ToLower(header) + ":" + prefix
 	default:
 		return "bearer"
 	}
 }
 
 // keyPlacement words a key placement for the page's sub line.
-func keyPlacement(header, query string) string {
+func keyPlacement(header, query, prefix string) string {
 	switch {
 	case query != "":
 		return "the " + query + " query parameter"
+	case header != "" && prefix != "":
+		return "the " + header + " header as " + prefix + "<key>"
 	case header != "":
 		return "the " + header + " header"
 	default:

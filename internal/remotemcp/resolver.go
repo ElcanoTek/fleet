@@ -95,6 +95,7 @@ func connFor(srv store.RemoteMCPServer, owner string) agent.RemoteMCPConn {
 		Owner:      owner,
 		AuthHeader: srv.APIKeyHeader,
 		AuthQuery:  srv.APIKeyQuery,
+		AuthPrefix: srv.APIKeyPrefix,
 	}
 }
 

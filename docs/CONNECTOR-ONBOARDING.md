@@ -61,6 +61,9 @@ is the validation.
 - `setup_url` — the vendor page that actually walks through connecting
   (distinct from `docs_url`, which describes what the server does).
 - `api_key_header` — the header name the vendor expects (validated shape).
+- `api_key_prefix` — the scheme the vendor wants in front of the key under
+  that header (`Token token=` for PagerDuty); the entry carries it, the user
+  pastes only the key, and the key form says how it will be sent.
 - `client_registration: manual` — the vendor's authorization server has no
   RFC 7591 dynamic registration; the card collects a bring-your-own OAuth
   client ID (+ optional secret) up front and passes it to the existing manual
@@ -177,9 +180,10 @@ the operator or user must Remove the connector and re-add it.
 - **One credential per connection.** Vendors needing two headers (Firefly's
   access+secret pair, Zenhub's workspace header) or non-static schemes
   (Pipedream's client-credentials tokens) can't be fully expressed; their
-  hints say so plainly rather than pretending. Basic/Token schemes work by
-  pasting the full value (`Basic <base64>`, `Token <key>`) with
-  `api_key_header: Authorization` — the raw value is sent unprefixed.
+  hints say so plainly rather than pretending. A fixed scheme in front of a
+  single key (`Token token=<key>`) is `api_key_prefix` on the entry — the user
+  never types it; a value that is not "scheme + one key" (`Basic <base64>` of
+  a pair) is still pasted whole with `api_key_header: Authorization`.
 - **Validation is a point-in-time probe.** The add/rotate handshake proves
   the credential works at that moment; a key revoked later still surfaces at
   run time (the run skips the server and reports it). There is no periodic

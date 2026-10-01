@@ -55,11 +55,11 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 // probeForTest runs one add-time probe under the service's own timeout and
 // returns the tool count; a refused key (at the handshake or at the
 // read-only verification call) comes back as the error.
-func (s *Service) probeForTest(t *testing.T, url, header, query, credential string) (int, error) {
+func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credential string) (int, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPTimeout)
 	defer cancel()
-	report, err := s.probeServer(ctx, url, header, query, credential)
+	report, err := s.probeServer(ctx, url, header, query, prefix, credential)
 	if err == nil {
 		checkCatalogToolSchemas(t, url, report.SchemaIssues)
 	}
@@ -97,7 +97,7 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 		ran++
 		t.Run(e.Name, func(t *testing.T) {
 			t.Parallel()
-			tools, err := svc.probeForTest(t, e.URL, "", "", "")
+			tools, err := svc.probeForTest(t, e.URL, "", "", "", "")
 			if err != nil {
 				t.Fatalf("%s: unauthenticated handshake failed (docs: %s): %v", e.URL, e.DocsURL, err)
 			}
@@ -172,7 +172,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if key == "" {
 				t.Skipf("%s not set; skipping the %s fixture", envName, f.Entry)
 			}
-			tools, err := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, key)
+			tools, err := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
 				t.Fatalf("%s: handshake with the fixture key failed: %v", f.Entry, err)
 			}
@@ -183,7 +183,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if !f.RejectsBadKey {
 				return
 			}
-			badTools, badErr := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, "fleet-catalog-smoke-invalid-key")
+			badTools, badErr := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
 			if badErr == nil {
 				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", f.Entry, badTools)
 			}

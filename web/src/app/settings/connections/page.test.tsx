@@ -209,6 +209,50 @@ describe("ConnectionsPage ?connector= deep link", () => {
 });
 
 describe("ConnectionsPage guided api_key add", () => {
+  it("shows the entry's scheme prefix beside the key field and posts it, so the user pastes only the key", async () => {
+    const PAGERDUTY_LIKE = {
+      name: "pdlike",
+      display_name: "PD-like",
+      description: "A vendor that wants a scheme in front of the key.",
+      url: "https://mcp.pdlike.example.com/mcp",
+      provenance: "official",
+      auth: "api_key",
+      api_key_header: "Authorization",
+      api_key_prefix: "Token token=",
+      trust: "third_party",
+    };
+    let posted: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        (body) => {
+          posted = body;
+          return { status: 200, body: { id: "srv1", tool_count: 2 } };
+        },
+        { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+      ),
+    );
+    visit("?connector=pdlike");
+    await screen.findByTestId("dir-form-pdlike");
+    expect(screen.getByTestId("dir-form-key-note-pdlike")).toHaveTextContent(
+      "Sent as Authorization: Token token=<key> — paste only the key.",
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText("paste your key (stored encrypted, never shown again)"),
+      { target: { value: "u+abc123" } },
+    );
+    fireEvent.click(screen.getByTestId("dir-form-add-pdlike"));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "pdlike",
+      auth: "api_key",
+      api_key: "u+abc123",
+      api_key_header: "Authorization",
+      api_key_prefix: "Token token=",
+    });
+  });
+
+
   it("sends the manifest's api_key_query with the key", async () => {
     let posted: Record<string, unknown> | null = null;
     vi.stubGlobal(

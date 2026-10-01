@@ -330,7 +330,9 @@ on**: they are part of the deployment and cannot be switched off per
 conversation, and the two buttons leave them alone. Each connector is also badged as
 **Bundled**, shipped and operated with the deployment, or as a third-party
 service you have signed into yourself, so you always know whose system you are
-reaching. A **Beta** badge means it works but still has rough edges. A
+reaching. When a third-party connector takes an API key, the form says how
+the key is sent and whether fleet adds a scheme in front of it; paste only
+the key. A **Beta** badge means it works but still has rough edges. A
 **Directory changed** badge on a third-party connection in **Settings →
 Connections** means the directory entry of that name now lists a different
 address, sign-in method or key placement from the connection; the row says

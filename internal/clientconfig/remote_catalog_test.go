@@ -466,6 +466,9 @@ func TestBuiltinRemoteCatalogClientSecretRequired(t *testing.T) {
 	for _, e := range entries {
 		byName[e.Name] = e
 	}
+	if pd := byName["pagerduty"]; pd.APIKeyHeader != "Authorization" || pd.APIKeyPrefix != "Token token=" {
+		t.Errorf("pagerduty = header %q prefix %q, want Authorization + \"Token token=\" (the server's documented scheme; the user pastes only the token)", pd.APIKeyHeader, pd.APIKeyPrefix)
+	}
 	secretRequired := []string{
 		"alloydb", "asana", "azure-devops", "box", "cartesia", "docusign", "front", "github", "google-calendar", "google-chat",
 		"google-docs", "google-drive", "google-gemini-agent-platform", "google-gmail", "google-people",
@@ -511,6 +514,34 @@ remote_mcp_catalog:
 		}
 		_, err := Load(dir)
 		return err
+	}
+	// api_key_prefix: the scheme the entry sends in front of the key under a
+	// named header. It needs that header, api_key auth, and a printable value.
+	// (load's base entry is oauth, so the api_key cases carry their own entry.)
+	loadKey := func(t *testing.T, fields string) error {
+		t.Helper()
+		dir := t.TempDir()
+		body := "remote_mcp_catalog:\n  - name: acme\n    display_name: Acme\n    description: Acme's hosted MCP server.\n    url: \"https://mcp.acme.example/mcp\"\n    auth: api_key\n" + fields
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(dir)
+		return err
+	}
+	if err := loadKey(t, "    api_key_header: Authorization\n    api_key_prefix: \"Token token=\"\n"); err != nil {
+		t.Errorf("api_key_prefix with api_key_header: %v", err)
+	}
+	if err := loadKey(t, "    api_key_prefix: \"Token token=\"\n"); err == nil {
+		t.Error("api_key_prefix without api_key_header was accepted")
+	}
+	if err := loadKey(t, "    api_key_query: key\n    api_key_prefix: \"Token \"\n"); err == nil {
+		t.Error("api_key_prefix with api_key_query was accepted")
+	}
+	if err := load(t, "    api_key_header: Authorization\n    api_key_prefix: \"Token token=\"\n"); err == nil {
+		t.Error("api_key_prefix on an oauth entry was accepted")
+	}
+	if err := loadKey(t, "    api_key_header: Authorization\n    api_key_prefix: \"Token\\ttoken=\"\n"); err == nil {
+		t.Error("api_key_prefix with a control character was accepted")
 	}
 	if err := load(t, "    client_registration: manual\n    client_secret: required\n"); err != nil {
 		t.Errorf("manual + required should load, got %v", err)

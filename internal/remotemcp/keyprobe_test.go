@@ -468,3 +468,87 @@ func TestProbeReportsToolSchemaIssues(t *testing.T) {
 		t.Fatalf("schema issues = %+v, want fetch_range=rewritten, broken=invalid", report.SchemaIssues)
 	}
 }
+
+// TestAddServerSendsTheEntrySchemePrefix is the api_key_prefix seam: a vendor
+// that wants "Authorization: Token token=<key>" (PagerDuty) gets exactly that
+// from the add-time probe when the entry declares the prefix — the user
+// pasted only the key — and the control probe carries the same scheme, so
+// the vendor's refusal of the invalid key is a refusal of the key, not of a
+// missing scheme. Without the prefix the same key is refused.
+func TestAddServerSendsTheEntrySchemePrefix(t *testing.T) {
+	var seen []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Authorization"))
+		mu.Unlock()
+		if r.Header.Get("Authorization") != "Token token=u+good" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized","error_description":"No permission -- see authorization schemes"}`))
+			return
+		}
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		result := map[string]any{}
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}}
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{"name": "list_incidents", "description": "List incidents", "inputSchema": map[string]any{"type": "object"}, "annotations": map[string]any{"readOnlyHint": true}}}}
+		case "tools/call":
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "[]"}}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	defer srv.Close()
+
+	svc := newTestService(t, newFakeStore(), srv)
+	server, report, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "pagerduty", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "u+good", APIKeyHeader: "Authorization", APIKeyPrefix: "Token token=",
+	})
+	if err != nil {
+		t.Fatalf("AddServer with the prefix: %v", err)
+	}
+	if server.APIKeyPrefix != "Token token=" || server.APIKeyHeader != "Authorization" {
+		t.Fatalf("stored row = header %q prefix %q", server.APIKeyHeader, server.APIKeyPrefix)
+	}
+	if !report.KeyVerified {
+		t.Fatalf("key not verified: the vendor refuses the control probe's invalid key, so the real key's pass is a verification (report %+v)", report)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var sawInvalid bool
+	for _, v := range seen {
+		if v != "Token token=u+good" && v != "Token token="+invalidProbeKey {
+			t.Fatalf("a request carried %q, want the scheme in front of either key", v)
+		}
+		if v == "Token token="+invalidProbeKey {
+			sawInvalid = true
+		}
+	}
+	if !sawInvalid {
+		t.Fatal("the control probe did not carry the scheme prefix")
+	}
+
+	// The same key without the entry's prefix is what the old hint produced:
+	// the vendor refuses it, and the add fails as a refused key.
+	if _, _, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "pagerduty-raw", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "u+good", APIKeyHeader: "Authorization",
+	}); err == nil {
+		t.Fatal("the raw key without the scheme was accepted")
+	}
+
+	// A prefix needs a named header; the default bearer shape takes none.
+	if _, _, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "bad", URL: srv.URL, AuthMode: "api_key", APIKey: "u+good", APIKeyPrefix: "Token token=",
+	}); err == nil || !strings.Contains(err.Error(), "needs a header name") {
+		t.Fatalf("prefix without a header: err = %v", err)
+	}
+}

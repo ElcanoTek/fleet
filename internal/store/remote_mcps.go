@@ -116,9 +116,10 @@ type RemoteMCPServer struct {
 	Transport             string `json:"transport"`
 	Status                string `json:"status"`
 	StatusDetail          string `json:"status_detail,omitempty"`
-	AuthKind              string `json:"auth_kind,omitempty"` // oauth | open | api_key (non-secret; drives the UI's connect affordance)
-	APIKeyHeader          string `json:"-"`                   // header NAME the sealed key is sent under; "" = Authorization: Bearer
-	APIKeyQuery           string `json:"-"`                   // query-parameter NAME the sealed key is sent under; "" = not query-authenticated
+	AuthKind              string `json:"auth_kind,omitempty"`      // oauth | open | api_key (non-secret; drives the UI's connect affordance)
+	APIKeyHeader          string `json:"-"`                        // header NAME the sealed key is sent under; "" = Authorization: Bearer
+	APIKeyQuery           string `json:"-"`                        // query-parameter NAME the sealed key is sent under; "" = not query-authenticated
+	APIKeyPrefix          string `json:"api_key_prefix,omitempty"` // scheme sent in front of the key under APIKeyHeader ("Token token="); non-secret, shown by the key form
 	Issuer                string `json:"-"`
 	AuthorizationEndpoint string `json:"-"`
 	TokenEndpoint         string `json:"-"`
@@ -153,6 +154,7 @@ type RemoteMCPServerInput struct {
 	AuthKind              string // empty defaults to oauth
 	APIKeyHeader          string // api_key only: header NAME ("" = Authorization: Bearer)
 	APIKeyQuery           string // api_key only: query-parameter NAME ("" = header auth)
+	APIKeyPrefix          string // api_key only: scheme sent in front of the key under APIKeyHeader ("" = none)
 	APIKey                string // api_key only: plaintext; encrypted before insert
 }
 
@@ -264,17 +266,17 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 			id, user_email, name, url, resource, transport, status, status_detail,
 			issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
 			scopes, auth_methods, client_id, client_secret_enc, registration_access_token_enc,
-			auth_kind, api_key_header, api_key_query, api_key_enc,
+			auth_kind, api_key_header, api_key_query, api_key_prefix, api_key_enc,
 			account, is_default,
 			created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$23,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+		VALUES ($1,$2,$3,$4,$23,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$24,$20,
 			$22,
 			NOT EXISTS (SELECT 1 FROM remote_mcp_servers d WHERE d.user_email = $2 AND d.name = $3 AND d.is_default),
 			$21,$21)`,
 		id, email, in.Name, in.URL, in.Transport, status,
 		in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
 		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc,
-		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account, strings.TrimSpace(in.Resource))
+		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account, strings.TrimSpace(in.Resource), in.APIKeyPrefix)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			if account == "" {
@@ -289,13 +291,13 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 
 const remoteMCPColumns = `id, user_email, name, url, resource, transport, status, status_detail,
 	issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
-	scopes, auth_methods, client_id, auth_kind, api_key_header, api_key_query, account, is_default, created_at, updated_at`
+	scopes, auth_methods, client_id, auth_kind, api_key_header, api_key_query, api_key_prefix, account, is_default, created_at, updated_at`
 
 func scanRemoteMCPServer(row interface{ Scan(...any) error }) (*RemoteMCPServer, error) {
 	var m RemoteMCPServer
 	if err := row.Scan(&m.ID, &m.UserEmail, &m.Name, &m.URL, &m.Resource, &m.Transport, &m.Status, &m.StatusDetail,
 		&m.Issuer, &m.AuthorizationEndpoint, &m.TokenEndpoint, &m.RegistrationEndpoint, &m.RevocationEndpoint,
-		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.APIKeyQuery, &m.Account, &m.IsDefault, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.APIKeyQuery, &m.APIKeyPrefix, &m.Account, &m.IsDefault, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &m, nil

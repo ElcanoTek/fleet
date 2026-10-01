@@ -290,6 +290,10 @@ type AddServerInput struct {
 	// with APIKeyHeader; the transport attaches the key per-request so it
 	// never lands in the stored URL.
 	APIKeyQuery string
+	// APIKeyPrefix is the scheme sent in front of the key under APIKeyHeader
+	// ("Token token=" for PagerDuty), declared by the directory entry; the
+	// user pastes only the key. Needs APIKeyHeader; never with APIKeyQuery.
+	APIKeyPrefix string
 }
 
 // AddServer validates + canonicalizes the URL and persists the server. OAuth
@@ -320,7 +324,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		return nil, noProbe, err
 	}
 	if in.AuthMode == store.RemoteMCPAuthOpen {
-		report, perr := s.probeServer(ctx, canonURL, "", "", "")
+		report, perr := s.probeServer(ctx, canonURL, "", "", "", "")
 		if perr != nil {
 			return nil, noProbe, fmt.Errorf("could not connect to the MCP server: %w", perr)
 		}
@@ -346,6 +350,10 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 				return nil, noProbe, fmt.Errorf("invalid API key query-parameter name %q", query)
 			}
 		}
+		prefix, perr := validateAPIKeyPrefix(in.APIKeyPrefix, header)
+		if perr != nil {
+			return nil, noProbe, perr
+		}
 		// Control-plane acquisition (#1274): the add-time probe sends this key
 		// upstream and its failure text is returned to the caller (and logged),
 		// so the key is registered for literal redaction before the probe runs.
@@ -353,7 +361,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		// rotation per user cannot grow the literal set the way token refresh
 		// did. There is no row yet either.
 		s.noteSecrets(in.APIKey)
-		report, perr := s.probeServer(ctx, canonURL, header, query, in.APIKey)
+		report, perr := s.probeServer(ctx, canonURL, header, query, prefix, in.APIKey)
 		if perr != nil {
 			return nil, noProbe, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
 		}
@@ -365,6 +373,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 			APIKey:       in.APIKey,
 			APIKeyHeader: header,
 			APIKeyQuery:  query,
+			APIKeyPrefix: prefix,
 		})
 		return server, report, cerr
 	}
@@ -454,12 +463,12 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 // the handshake is followed by one read-only tool call, because many vendors
 // check the key only there (see ProbeReport). The ephemeral client is closed
 // before returning; nothing is registered.
-func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, credential string) (ProbeReport, error) {
+func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, prefix, credential string) (ProbeReport, error) {
 	client := mcp.NewClient()
 	defer func() { _ = client.Close() }()
 	hctx, cancel := probeTimeout(ctx, s.cfg.HTTPTimeout)
 	defer cancel()
-	if err := client.AddHTTPServerWithOptions(hctx, "verify", url, s.keyClientOptions(headerName, queryName, credential)); err != nil {
+	if err := client.AddHTTPServerWithOptions(hctx, "verify", url, s.keyClientOptions(headerName, queryName, prefix, credential)); err != nil {
 		return ProbeReport{}, err
 	}
 	tools := client.GetAllTools()
@@ -487,7 +496,7 @@ func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, c
 	// The control: the same probe with an invalid key. Only a vendor that
 	// answers it differently has shown it checks keys where fleet can see,
 	// and only then is the real key's pass a verification.
-	report.KeyVerified = s.controlProbe(ctx, url, headerName, queryName, tool, actual)
+	report.KeyVerified = s.controlProbe(ctx, url, headerName, queryName, prefix, tool, actual)
 	if !report.KeyVerified {
 		where := "and offers no read-only tool to try it on"
 		if tool != "" {
@@ -496,6 +505,28 @@ func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, c
 		log.Printf("remote-mcp: %s answered an invalid key the same as the real one at the handshake %s; the key could not be verified now and is checked on first use", url, where)
 	}
 	return report, nil
+}
+
+// validateAPIKeyPrefix vets the scheme a directory entry declares in front of
+// the key: it rides a header value, so printable ASCII only, and it needs a
+// named header (the default Authorization: Bearer shape already has its
+// scheme). Not trimmed — "Token " needs its space.
+func validateAPIKeyPrefix(prefix, header string) (string, error) {
+	if prefix == "" {
+		return "", nil
+	}
+	if header == "" {
+		return "", errors.New("an API key prefix needs a header name (the default Authorization: Bearer shape takes no prefix)")
+	}
+	if len(prefix) > 64 {
+		return "", errors.New("the API key prefix is too long")
+	}
+	for _, r := range prefix {
+		if r < 0x20 || r > 0x7e {
+			return "", errors.New("the API key prefix contains characters that cannot be sent in an HTTP header")
+		}
+	}
+	return prefix, nil
 }
 
 // validateAPIKeyAuth vets a user-supplied API key + header name before either
@@ -551,7 +582,7 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 	// Same registration as the add-time probe (#1274): the rotated key rides
 	// this request and the wrapped failure reaches the caller.
 	s.noteSecrets(apiKey)
-	report, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, apiKey)
+	report, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, server.APIKeyPrefix, apiKey)
 	if err != nil {
 		return ProbeReport{}, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
 	}

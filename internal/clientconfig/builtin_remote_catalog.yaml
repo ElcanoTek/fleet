@@ -3713,10 +3713,12 @@ servers:
     auth: api_key
     setup_hint: >-
       Create a User API token in PagerDuty (My Profile → User Settings →
-      Create API User Token) and paste it here as: Token <your token> —
-      this server uses the Token scheme, not Bearer.
+      Create API User Token) and paste just the token here; fleet sends it
+      as "Authorization: Token token=<token>". An account-level REST API key
+      is refused with "No permission".
     setup_url: "https://support.pagerduty.com/main/docs/pagerduty-mcp-server-integration-guide"
     api_key_header: Authorization
+    api_key_prefix: "Token token="
   - name: pydantic-logfire
     display_name: Pydantic Logfire
     description: >-

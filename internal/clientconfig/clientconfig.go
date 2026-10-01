@@ -1075,6 +1075,12 @@ type RemoteMCPCatalogEntry struct {
 	// servers that authenticate in the URL rather than a header. The runtime
 	// attaches the sealed key per-request; it is never persisted in a URL.
 	APIKeyQuery string `yaml:"api_key_query"`
+	// APIKeyPrefix (auth "api_key" with api_key_header only) is the scheme the
+	// vendor wants in front of the key under that header, sent verbatim:
+	// PagerDuty's "Token token=" yields "Authorization: Token token=<key>".
+	// The user pastes only the key; the entry carries the scheme, so no hint
+	// has to ask anyone to type it. Trailing spaces are significant ("Token ").
+	APIKeyPrefix string `yaml:"api_key_prefix"`
 	// ClientRegistration is "manual" when the vendor's authorization server
 	// does not support RFC 7591 dynamic client registration — the user must
 	// bring their own OAuth client (a GCP OAuth client, an Entra app
@@ -1898,6 +1904,11 @@ var remoteMCPAuths = map[string]bool{"oauth": true, "api_key": true, "open": tru
 // request that later replays it.
 var remoteMCPHeaderShape = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
+// remoteMCPKeyPrefixShape bounds api_key_prefix: printable ASCII only (it is
+// a header-value fragment; CR/LF or non-ASCII would be rejected or mangled by
+// the transport), spaces allowed and significant.
+var remoteMCPKeyPrefixShape = regexp.MustCompile(`^[\x20-\x7e]{1,64}$`)
+
 // remoteMCPCategoryShape bounds a category slug to lowercase kebab-case so the
 // UI's grouping/filter keys stay uniform. The set is open (a bundle may invent
 // its own grouping) but the shape is not — "CRM Sales" vs "crm-sales" silently
@@ -1952,6 +1963,17 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 		}
 		if !remoteMCPHeaderShape.MatchString(q) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_query is not a valid query-parameter name (supply the name, not a credential)", name)
+		}
+	}
+	if pfx := e.APIKeyPrefix; pfx != "" {
+		if e.Auth != "api_key" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_prefix is only meaningful with auth: api_key", name)
+		}
+		if strings.TrimSpace(e.APIKeyHeader) == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_prefix needs api_key_header (the default Authorization: Bearer shape takes no prefix)", name)
+		}
+		if !remoteMCPKeyPrefixShape.MatchString(pfx) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_prefix must be 1-64 printable ASCII characters (supply the scheme, not a credential)", name)
 		}
 	}
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {

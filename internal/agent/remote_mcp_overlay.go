@@ -62,6 +62,10 @@ type RemoteMCPConn struct {
 	// connections (e.g. "X-API-Key"). Empty means the default OAuth/bearer
 	// shape: "Authorization: Bearer <credential>".
 	AuthHeader string
+	// AuthPrefix is the scheme sent in front of the credential under
+	// AuthHeader ("Token token=" → "Authorization: Token token=<key>"), from
+	// the directory entry; empty for the raw-key and bearer shapes.
+	AuthPrefix string
 }
 
 // RemoteMCPResolver supplies a user's connected remote servers and mints fresh
@@ -864,9 +868,10 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 				// credential-free.
 				opts.HTTPClient = mcp.WithQueryParam(httpClient, conn.AuthQuery, bearer)
 			case conn.AuthHeader != "":
-				// api_key connection with a vendor-specific header: the raw key,
-				// no Bearer scheme.
-				opts.Headers = map[string]string{conn.AuthHeader: bearer}
+				// api_key connection with a vendor-specific header: the key
+				// under that header, behind the entry's scheme prefix when it
+				// declares one ("Token token="), else raw — never Bearer.
+				opts.Headers = map[string]string{conn.AuthHeader: conn.AuthPrefix + bearer}
 			default:
 				opts.Headers = map[string]string{"Authorization": "Bearer " + bearer}
 			}

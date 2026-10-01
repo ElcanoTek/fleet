@@ -56,6 +56,9 @@ type mcpCatalogThirdPartyEntry struct {
 	SetupURL     string `json:"setup_url,omitempty"`
 	APIKeyHeader string `json:"api_key_header,omitempty"`
 	APIKeyQuery  string `json:"api_key_query,omitempty"`
+	// The scheme sent in front of the key under api_key_header ("Token
+	// token="); the form shows it so the user pastes only the key.
+	APIKeyPrefix string `json:"api_key_prefix,omitempty"`
 	// "manual" = the vendor's AS has no dynamic client registration; the UI
 	// collects a bring-your-own OAuth client ID (+ optional secret) up front.
 	ClientRegistration string `json:"client_registration,omitempty"`
@@ -149,6 +152,7 @@ func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThir
 		SetupURL:           strings.TrimSpace(e.SetupURL),
 		APIKeyHeader:       strings.TrimSpace(e.APIKeyHeader),
 		APIKeyQuery:        strings.TrimSpace(e.APIKeyQuery),
+		APIKeyPrefix:       e.APIKeyPrefix,
 		ClientRegistration: strings.TrimSpace(e.ClientRegistration),
 		ClientSecret:       strings.TrimSpace(e.ClientSecret),
 		Featured:           e.Featured,

@@ -78,6 +78,9 @@ type RemoteServer = {
   // servers get Connect/Reconnect; api_key servers get Update key; open
   // servers need neither). Absent on pre-migration rows ⇒ treated as oauth.
   auth_kind?: string;
+  // The scheme fleet sends in front of an api_key under its header ("Token
+  // token="), from the directory entry at add time; the key forms show it.
+  api_key_prefix?: string;
   // Multi-login (#988): one row per seat (login) under a connection name.
   // `account` is the seat's label — "" is the unlabeled seat every
   // pre-existing connection is, rendered "primary". `is_default` marks the
@@ -127,6 +130,15 @@ const STATUS_VARIANTS: Record<string, BadgeVariant> = {
 
 function statusVariant(status: string): BadgeVariant {
   return STATUS_VARIANTS[status] ?? "neutral";
+}
+
+// keySentAsNote words how an api_key connection sends its key when the entry
+// declares a scheme prefix, so the user pastes only the key and can see that
+// the "Token token=" part is fleet's job (#986, PagerDuty). Null when the
+// key is sent raw or as a bearer, which needs no explanation.
+function keySentAsNote(header?: string, prefix?: string): string | null {
+  if (!prefix) return null;
+  return `Sent as ${header || "Authorization"}: ${prefix}<key> — paste only the key.`;
 }
 
 const AUTH_LABEL: Record<string, string> = {
@@ -726,6 +738,14 @@ function DirectoryCard({
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="paste your key (stored encrypted, never shown again)"
               />
+              {keySentAsNote(entry.api_key_header, entry.api_key_prefix) ? (
+                <span
+                  className="font-mono text-[0.66rem] text-[var(--color-text-muted)]"
+                  data-testid={`dir-form-key-note-${entry.name}`}
+                >
+                  {keySentAsNote(entry.api_key_header, entry.api_key_prefix)}
+                </span>
+              ) : null}
             </label>
           ) : null}
           {manualClient ? (
@@ -1272,6 +1292,7 @@ function ConnectionsPageInner() {
               api_key: addSeatKey.trim(),
               api_key_header: dir?.api_key_header,
               api_key_query: dir?.api_key_query,
+              api_key_prefix: dir?.api_key_prefix,
             }
           : {}),
       }),
@@ -1352,6 +1373,7 @@ function ConnectionsPageInner() {
               api_key: overrides.apiKey,
               api_key_header: entry.api_key_header,
               api_key_query: entry.api_key_query,
+              api_key_prefix: entry.api_key_prefix,
             }
           : {}),
         ...(overrides?.clientId
@@ -1979,6 +2001,11 @@ function ConnectionsPageInner() {
                                 >
                                   Save key
                                 </button>
+                                {keySentAsNote("Authorization", s.api_key_prefix) ? (
+                                  <span className="basis-full font-mono text-[0.66rem] text-[var(--color-text-muted)]">
+                                    {keySentAsNote("Authorization", s.api_key_prefix)}
+                                  </span>
+                                ) : null}
                               </div>
                             ) : shareOpenFor === s.id ? (
                               <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
