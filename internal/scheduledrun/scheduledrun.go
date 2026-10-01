@@ -1116,19 +1116,19 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	var sb strings.Builder
 	sb.WriteString("[notice] Remote MCP connectors unavailable this run — proceed without them; if the task depends on one, say so in your result rather than guessing.")
 	if len(reauth) > 0 {
-		sb.WriteString(" Login expired or rejected (the task owner must reconnect them in Settings → Connections): " + strings.Join(reauth, ", ") + ".")
+		sb.WriteString(" Login expired or rejected (the task owner must reconnect them in Settings → Connections): " + agent.JoinSkipNoticeNames(reauth) + ".")
 	}
 	if len(down) > 0 {
-		sb.WriteString(" Did not respond this run (the vendor or the network, not the login — a later run may succeed; do not ask for a reconnect): " + strings.Join(down, ", ") + ".")
+		sb.WriteString(" Did not respond this run (the vendor or the network, not the login — a later run may succeed; do not ask for a reconnect): " + agent.JoinSkipNoticeNames(down) + ".")
 	}
 	if len(seats) > 0 {
-		sb.WriteString(" Pinned to an account that is not connected (the task owner must connect it in Settings → Connections): " + strings.Join(seats, ", ") + ".")
+		sb.WriteString(" Pinned to an account that is not connected (the task owner must connect it in Settings → Connections): " + agent.JoinSkipNoticeNames(seats) + ".")
 	}
 	if len(capped) > 0 {
-		fmt.Fprintf(&sb, " Left out because the task owner has more hosted connections than fleet mounts in one run (at most %d; connections the task names are mounted first, so name the ones it needs): %s.", agent.MaxOverlayServers, strings.Join(capped, ", "))
+		fmt.Fprintf(&sb, " Left out because the task owner has more hosted connections than fleet mounts in one run (at most %d; connections the task names are mounted first, so name the ones it needs): %s.", agent.MaxOverlayServers, agent.JoinSkipNoticeNames(capped))
 	}
 	if len(unknown) > 0 {
-		sb.WriteString(" Could not be mounted for a reason fleet could not classify (the task owner should check them in Settings → Connections; do not assert whether the login is the cause): " + strings.Join(unknown, ", ") + ".")
+		sb.WriteString(" Could not be mounted for a reason fleet could not classify (the task owner should check them in Settings → Connections; do not assert whether the login is the cause): " + agent.JoinSkipNoticeNames(unknown) + ".")
 	}
 	sb.WriteString("\n\n")
 	sb.WriteString(prompt)

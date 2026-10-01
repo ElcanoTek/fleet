@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -506,5 +507,28 @@ func TestHostedSkipNoticeOverlayCapGroup(t *testing.T) {
 	}
 	if strings.Contains(got, "could not classify") {
 		t.Errorf("a cap skip fell into the unknown group:\n%s", got)
+	}
+}
+
+// TestHostedSkipNoticeIsBounded: every connection past the overlay cap is
+// recorded as skipped, and a user can own or be shared any number of them, so
+// the notice names at most MaxSkipNoticeNames per reason and counts the rest —
+// the prompt cannot grow with the size of the account.
+func TestHostedSkipNoticeIsBounded(t *testing.T) {
+	var skipped []skippedConnector
+	for i := 0; i < 30; i++ {
+		skipped = append(skipped, skippedConnector{name: fmt.Sprintf("conn_%02d", i), reason: SkipReasonOverlayCap})
+	}
+	var sb strings.Builder
+	writeHostedSkipNotice(&sb, skipped)
+	got := sb.String()
+	if n := strings.Count(got, "`conn_"); n != MaxSkipNoticeNames {
+		t.Errorf("notice names %d connectors, want %d:\n%s", n, MaxSkipNoticeNames, got)
+	}
+	if !strings.Contains(got, fmt.Sprintf("and %d more", 30-MaxSkipNoticeNames)) {
+		t.Errorf("notice does not count the connectors it leaves unnamed:\n%s", got)
+	}
+	if got := JoinSkipNoticeNames([]string{"a", "b"}); got != "a, b" {
+		t.Errorf("JoinSkipNoticeNames under the bound = %q, want %q", got, "a, b")
 	}
 }

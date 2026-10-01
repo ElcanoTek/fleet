@@ -277,6 +277,24 @@ const maxOverlayServers = 8
 // told is the one the overlay applies.
 const MaxOverlayServers = maxOverlayServers
 
+// MaxSkipNoticeNames bounds how many connector names one reason group of a
+// skip notice spells out before it says "and N more". Every connection past
+// the overlay cap is recorded as skipped, and a user can own or be shared any
+// number of connections, so an unbounded list would let one account grow the
+// system or task prompt without limit — the cost the cap exists to bound.
+// The overlay's Skipped list stays complete: only the prompt text is capped,
+// so a pinned name past the cap still resolves as "left out".
+const MaxSkipNoticeNames = 10
+
+// JoinSkipNoticeNames joins names for a skip notice, listing at most
+// MaxSkipNoticeNames of them and counting the rest.
+func JoinSkipNoticeNames(names []string) string {
+	if len(names) <= MaxSkipNoticeNames {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(names[:MaxSkipNoticeNames], ", "), len(names)-MaxSkipNoticeNames)
+}
+
 // RemoteMCPOverlay is the per-run wiring for a user's remote servers. Client is
 // retained for the in-process compatibility path; Broker and CloseScope allow
 // the same overlay to be owned across a process boundary. The caller MUST close

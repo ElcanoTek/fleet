@@ -3,6 +3,7 @@ package scheduledrun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -977,5 +978,28 @@ func TestUnresolvedPinsKnowsCapSkippedPin(t *testing.T) {
 	}
 	if unknown := unresolvedPins(map[string]string{"asana": ""}, ov); len(unknown) != 1 {
 		t.Fatalf("a name the overlay never saw must stay unknown: %v", unknown)
+	}
+}
+
+// TestWithSkippedRemoteNoticeIsBounded: the task-prompt notice lists at most
+// agent.MaxSkipNoticeNames connectors per reason, so an owner with many
+// connections past the cap cannot inflate the task prompt. The overlay keeps
+// the full list (unresolvedPins reads it), only the text is capped.
+func TestWithSkippedRemoteNoticeIsBounded(t *testing.T) {
+	ov := &agent.RemoteMCPOverlay{SkipReasons: map[string]string{}}
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("conn_%02d", i)
+		ov.Skipped = append(ov.Skipped, name)
+		ov.SkipReasons[name] = agent.SkipReasonOverlayCap
+	}
+	got := withSkippedRemoteNotice(&models.Task{ID: uuid.New()}, ov, "p")
+	if n := strings.Count(got, "conn_"); n != agent.MaxSkipNoticeNames {
+		t.Errorf("notice names %d connectors, want %d:\n%s", n, agent.MaxSkipNoticeNames, got)
+	}
+	if !strings.Contains(got, fmt.Sprintf("and %d more", 30-agent.MaxSkipNoticeNames)) {
+		t.Errorf("notice does not count the connectors it leaves unnamed:\n%s", got)
+	}
+	if len(ov.Skipped) != 30 {
+		t.Errorf("rendering the notice changed the overlay's skip list (%d entries)", len(ov.Skipped))
 	}
 }
