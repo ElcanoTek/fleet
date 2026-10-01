@@ -203,22 +203,22 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			}
 			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
-				t.Fatalf("%s: handshake with the fixture key failed: %v", f.Entry, err)
+				t.Fatalf("%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
 			}
 			if tools == 0 {
-				t.Fatalf("%s: handshake succeeded but the server lists no tools", f.Entry)
+				t.Fatalf("%s: handshake succeeded but the server lists no tools", fixtureName(f.Entry, f.Variant))
 			}
-			t.Logf("%s: %d tools", f.Entry, tools)
+			t.Logf("%s: %d tools", fixtureName(f.Entry, f.Variant), tools)
 			if !f.RejectsBadKey {
 				return
 			}
 			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
 			if badErr == nil {
-				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", f.Entry, badTools)
+				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", fixtureName(f.Entry, f.Variant), badTools)
 			}
 			var kr *keyRejectedError
 			if !handshakeRefused(badErr) && !errors.As(badErr, &kr) {
-				t.Fatalf("%s: the invalid-key probe failed, but not as the vendor refusing it: %v", f.Entry, badErr)
+				t.Fatalf("%s: the invalid-key probe failed, but not as the vendor refusing it: %v", fixtureName(f.Entry, f.Variant), badErr)
 			}
 		})
 	}
