@@ -35,7 +35,9 @@ scenario — do not work around them:
   yet — and fleet's migrations would run on the legacy database.
 - It **refuses** to overwrite an `/etc/caddy/Caddyfile` it did not write
   (`--force-caddy` overrides, keeping a timestamped backup and printing a
-  merge warning).
+  merge warning). The caddy package's own untouched default, with no
+  drop-in sites under `Caddyfile.d/`, is the one file it replaces without
+  asking, with a copy kept.
 
 ## 1. Back up the legacy state first
 
