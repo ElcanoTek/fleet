@@ -663,6 +663,16 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
     fail "client bundle $bundle_dir (FLEET_CLIENT_CONFIG_DIR) does not exist"
   elif [[ ! -f "$bundle_dir/manifest.yaml" ]]; then
     fail "client bundle $bundle_dir has no manifest.yaml — not a bundle; fix FLEET_CLIENT_CONFIG_DIR in $ENV_FILE"
+  elif ! bundle_writable_in_unit "$bundle_dir" "$SERVICE_NAME" "$SERVICE_HOME"; then
+    # Owned correctly or not, a path outside the unit's writable set is
+    # read-only to the service (ProtectSystem=strict), so the relabel fails.
+    # Only an enforcing SELinux host relabels at all, so elsewhere it is advice.
+    _msg="client bundle $bundle_dir is outside ${SERVICE_NAME}.service's writable paths (ReadWritePaths, StateDirectory) — read-only under ProtectSystem=strict, so the sandbox's :z relabel fails (lsetxattr EROFS) on an SELinux-enforcing host; fix: move it under /opt/fleet/client or ${SERVICE_HOME}, or add it to the unit's ReadWritePaths"
+    if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+      fail "$_msg"
+    else
+      advise "$_msg"
+    fi
   elif _not_owned="$(find "$bundle_dir" ! -user "$SERVICE_USER" -print -quit 2>/dev/null)" && [[ -n "$_not_owned" ]]; then
     # The whole tree, not just its top: one root-owned file (a root-run pull,
     # a hand edit) is enough for the rootless :z relabel to be refused.

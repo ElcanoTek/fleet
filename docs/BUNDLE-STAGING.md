@@ -25,22 +25,28 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
 - **update** refreshes the copy from the checkout it just pulled, and moves a
   box installed before staging existed onto it. The path comes from the
   unit's `StateDirectory`, not the account's passwd home (the unit runs with
-  `ProtectHome=yes`). An update whose bundle did not actually move says so in
-  its final summary instead of reporting a refresh.
+  `ProtectHome=yes`). A staged copy that has gone missing while the env file
+  still points at it is recreated. An update whose bundle did not actually
+  move says so instead of reporting a refresh.
 - **doctor** fails a service still pointed at a checkout's generic bundle and
-  names the repair. It checks ownership across the whole bundle tree, not just
-  its top directory.
+  names the repair. It checks that the bundle lies inside the unit's writable
+  paths (`ReadWritePaths` and the state dir; a failure on an SELinux-enforcing
+  host, advice elsewhere, since only there does the relabel run), and it
+  checks ownership across the whole bundle tree, not just its top directory.
 
 ## Safety properties
 
 - **No root writes into the service-owned tree.** That tree is controlled by
   the service account, so a root write there could be redirected by a planted
   symlink (the marker pointed at `/etc/fleet/fleet.env`, say). Root only
-  *reads* the source and streams it as a tar. Every write (unpack, sync,
+  *reads* the source, archiving it whole into a root-private temp file. Every
+  write (unpack, sync,
   marker) runs as the service user via `runuser`. The marker is replaced, never
   written through.
-- **A truncated copy never reaches `rsync --delete`.** The owner side checks
-  that `manifest.yaml` arrived before syncing.
+- **A partial copy never reaches `rsync --delete`.** The archive is unpacked
+  only after the tar that wrote it exited 0 (a stream could hand the owner a
+  well-formed partial archive before a read failure was known), and the owner
+  side also checks that `manifest.yaml` arrived before syncing.
 - **Mounts stay valid under running sandboxes.** The copy is synced in place
   with rsync (files replaced, directories kept). There is no rename-and-delete
   fallback, which would empty the directories mounted into running

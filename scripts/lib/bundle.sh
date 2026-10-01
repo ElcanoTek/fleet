@@ -72,6 +72,26 @@ _bundle_as() {
   fi
 }
 
+# bundle_writable_in_unit DIR UNIT STATE_DIR — true when DIR lies inside a path
+# the unit can write: its ReadWritePaths (as systemd reports them, else the
+# shipped unit's /var/lib/fleet and /opt/fleet/client) or its state dir. Under
+# ProtectSystem=strict everything else is read-only to the service, so the
+# sandbox's :z relabel of a bundle there fails with EROFS on an SELinux host,
+# however the files are owned.
+bundle_writable_in_unit() {
+  local dir="$1" unit="$2" state="$3" paths p d
+  paths="$(systemctl show -p ReadWritePaths --value "${unit}.service" 2>/dev/null || true)"
+  [[ -n "$paths" ]] || paths="/var/lib/fleet -/opt/fleet/client"
+  d="$(_bundle_norm "$dir")"
+  for p in $paths $state; do
+    p="${p#-}"
+    [[ -n "$p" ]] || continue
+    p="$(_bundle_norm "$p")"
+    [[ "$d" == "$p" || "$d" == "$p"/* ]] && return 0
+  done
+  return 1
+}
+
 # stage_default_bundle SRC DST OWNER — make DST a copy of SRC owned by OWNER,
 # with the marker recording SRC. Idempotent.
 #
@@ -84,8 +104,8 @@ _bundle_as() {
 # so that account controls every path component below it: a root process that
 # wrote there could be redirected by a planted symlink (the marker pointed at
 # /etc/fleet/fleet.env, say) into truncating a root-only file. Root only READS
-# the source here — streamed as a tar, because the checkout may sit somewhere
-# OWNER cannot read — and OWNER unpacks it into a scratch dir beside DST and
+# the source here — archived whole into a root-private temp file, because the
+# checkout may sit somewhere OWNER cannot read — and OWNER unpacks it into a scratch dir beside DST and
 # syncs it IN PLACE with rsync --delete (files replaced, directories kept), so
 # a running service's bind mounts of DST's subdirectories keep valid content
 # until its containers are recycled. There is no rename-and-delete fallback
@@ -108,8 +128,20 @@ stage_default_bundle() {
     echo "stage_default_bundle: $dst holds a bundle that is not a staged copy (no $(basename "$marker")) — not touching it" >&2
     return 2
   fi
+  # The archive is written in full, by root, into a root-private temp file
+  # before OWNER sees a byte: a reading tar that fails part-way (a source file
+  # vanishing mid-read) can still emit a well-formed partial archive, and a
+  # stream would hand that to the --delete sync below before the failure was
+  # known. Only an archive whose producer exited 0 is unpacked.
+  local archive
+  archive="$(mktemp)" || return 1
+  if ! tar -C "$src" --exclude="./$(basename "$marker")" -cf "$archive" .; then
+    rm -f -- "$archive"
+    echo "stage_default_bundle: could not read $src — not staging" >&2
+    return 1
+  fi
   # shellcheck disable=SC2016 # the script is single-quoted on purpose: it runs as OWNER with its own $1..$3
-  tar -C "$src" --exclude="./$(basename "$marker")" -cf - . | _bundle_as "$owner" bash -c '
+  _bundle_as "$owner" bash -c '
     set -euo pipefail
     src="$1" dst="$2" marker="$3"
     [[ -L "$dst" ]] && { echo "stage_default_bundle: $dst is a symlink — not staging onto it" >&2; exit 1; }
@@ -117,14 +149,14 @@ stage_default_bundle() {
     tmp="$(mktemp -d "${dst}.new.XXXXXX")"
     trap '"'"'rm -rf -- "$tmp"'"'"' EXIT
     tar -C "$tmp" --no-same-owner -xf -
-    # A truncated stream (the reading tar failed) must never reach the
-    # --delete sync below, which would empty the copy.
+    # Belt and braces: the archive is complete by construction, but a copy
+    # without a manifest must still never reach the --delete sync.
     [[ -f "$tmp/manifest.yaml" ]] || { echo "stage_default_bundle: incomplete copy of the source — not syncing" >&2; exit 1; }
     rsync -a --delete --no-owner --no-group --exclude "/$(basename "$marker")" "$tmp/" "$dst/"
     rm -f -- "$marker"
     printf "%s\n" "$src" > "$marker"
-  ' _ "$src" "$dst" "$marker"
-  local -a st=("${PIPESTATUS[@]}")
-  [[ "${st[0]}" == "0" && "${st[1]}" == "0" ]] || return 1
-  return 0
+  ' _ "$src" "$dst" "$marker" < "$archive"
+  local rc=$?
+  rm -f -- "$archive"
+  return "$(( rc == 0 ? 0 : 1 ))"
 }

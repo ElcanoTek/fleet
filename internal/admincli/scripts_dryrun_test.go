@@ -1292,6 +1292,25 @@ func TestStageDefaultBundle(t *testing.T) {
 			if fi, err := os.Lstat(markerPath); err != nil || fi.Mode()&os.ModeSymlink != 0 {
 				t.Fatalf("the marker is still a symlink after a re-stage (err=%v)", err)
 			}
+			// A source that cannot be read in full is refused before the owner
+			// sees anything, and the existing copy keeps its files: a partial
+			// archive must never reach the --delete sync. (Root reads past a
+			// 000 mode, so this case needs an unprivileged test run, as CI's.)
+			if os.Geteuid() != 0 {
+				locked := filepath.Join(src, "locked.yaml")
+				if err := os.WriteFile(locked, []byte("x\n"), 0o000); err != nil {
+					t.Fatal(err)
+				}
+				if out, err := bundleLib(t, path, "stage_default_bundle", src, dst, owner); err == nil {
+					t.Fatalf("staging from a partly unreadable source succeeded:\n%s", out)
+				}
+				if got, _ := os.ReadFile(filepath.Join(dst, "personas", "a.yaml")); string(got) != "a\n" {
+					t.Fatalf("a failed stage disturbed the existing copy: personas/a.yaml = %q", got)
+				}
+				if err := os.Remove(locked); err != nil {
+					t.Fatal(err)
+				}
+			}
 			// A hand-placed bundle at the destination (no marker) is never deleted.
 			hand := filepath.Join(root, "hand")
 			if err := os.MkdirAll(hand, 0o755); err != nil {
@@ -1355,6 +1374,44 @@ func TestBundlePathPredicates(t *testing.T) {
 		if got := err == nil; got != c.want {
 			t.Errorf("%s(%q, %q) = %v, want %v", c.fn, c.dir, c.repo, got, c.want)
 		}
+	}
+	// A unit systemd does not know reports no ReadWritePaths, so the shipped
+	// unit's set applies: the state dir and /opt/fleet/client are writable,
+	// a service-owned path elsewhere is still read-only to the service.
+	for dir, want := range map[string]bool{
+		"/var/lib/fleet/bundle":    true,
+		"/opt/fleet/client":        true,
+		"/opt/fleet/client/sub":    true,
+		"/srv/fleet-bundle":        false,
+		"/opt/fleet/src/config":    false,
+		"/opt/fleet/client-backup": false,
+	} {
+		_, err := bundleLib(t, path, "bundle_writable_in_unit", dir, "fleet-test-no-such-unit", "/var/lib/fleet")
+		if got := err == nil; got != want {
+			t.Errorf("bundle_writable_in_unit(%q) = %v, want %v", dir, got, want)
+		}
+	}
+}
+
+// TestUpdateDryRunRestagesAMissingStagedCopy: the env file still points the
+// service at the staging path but the copy is gone. update must plan to
+// recreate it rather than restart the service onto a bundle that does not
+// exist.
+func TestUpdateDryRunRestagesAMissingStagedCopy(t *testing.T) {
+	const stage = "/var/lib/fleet/bundle"
+	if _, err := os.Stat(stage); err == nil {
+		t.Skip(stage + " exists on this box; the case needs it absent")
+	}
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_CLIENT_CONFIG_DIR="+stage+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile, "FLEET_CLIENT_CONFIG_EXPLICIT=0"}, "update.sh", "--dry-run", "--no-pull")
+	if err != nil {
+		t.Fatalf("update --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "would stage") || !strings.Contains(out, stage) {
+		t.Fatalf("update did not plan to recreate the missing staged copy\n--- output ---\n%s", out)
 	}
 }
 

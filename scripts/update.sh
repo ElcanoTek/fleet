@@ -531,23 +531,28 @@ fi
 # that did not run: 1 = staged now, dry = planned under --dry-run, 0 = not.
 _restaged=0
 if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
+  _stage_owner="$(systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  [[ -n "$_stage_owner" ]] || _stage_owner="fleet"
+  # The unit's StateDirectory, not the account's passwd home: the shipped
+  # unit fixes HOME and StateDirectory at /var/lib/fleet and runs with
+  # ProtectHome=yes, so a pre-existing account whose passwd home is
+  # /home/fleet would otherwise be staged somewhere the service cannot read.
+  _state_dir="$(systemctl show -p StateDirectory --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  _state_dir="${_state_dir%% *}"
+  _stage="$(default_bundle_stage "/var/lib/${_state_dir:-fleet}")"
   _restage=0
   if bundle_is_default_in_checkout "$svc_client_dir" "$SRC_DIR"; then
     _restage=1 # pre-#1655 bare install: the service still loads the checkout
   elif [[ -f "$(bundle_staged_marker "$svc_client_dir")" ]] \
        && bundle_is_default_in_checkout "$(cat "$(bundle_staged_marker "$svc_client_dir")")" "$SRC_DIR"; then
     _restage=1 # a staged copy of THIS checkout's generic bundle: refresh it
+  elif [[ "$(norm_dir "$svc_client_dir")" == "$(norm_dir "$_stage")" && ! -e "$svc_client_dir" ]]; then
+    # The service points at the staging path but the copy is gone (deleted by
+    # hand, a wiped state dir): nothing there to protect, and leaving it would
+    # restart the service onto a bundle that does not exist.
+    _restage=1
   fi
   if [[ "$_restage" == "1" ]]; then
-    _stage_owner="$(systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-    [[ -n "$_stage_owner" ]] || _stage_owner="fleet"
-    # The unit's StateDirectory, not the account's passwd home: the shipped
-    # unit fixes HOME and StateDirectory at /var/lib/fleet and runs with
-    # ProtectHome=yes, so a pre-existing account whose passwd home is
-    # /home/fleet would otherwise be staged somewhere the service cannot read.
-    _state_dir="$(systemctl show -p StateDirectory --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
-    _state_dir="${_state_dir%% *}"
-    _stage="$(default_bundle_stage "/var/lib/${_state_dir:-fleet}")"
     if [[ "$DRY_RUN" == "1" ]]; then
       info "[dry-run] would stage ${SRC_DIR}/config/default → ${_stage} (owned by ${_stage_owner}) and point FLEET_CLIENT_CONFIG_DIR at it"
       _restaged=dry
