@@ -91,7 +91,8 @@ unit's hardening, Caddy/TLS, a stable public callback, the sealed key in
 | Plaid | ✗ refused at add (401 under its MCP path; the known decision) | | | | | | | | |
 
 — not re-run: the same mechanism passed on another vendor in this pass. The
-sign-out → reconnect column is a sweep the owner did across every connection;
+sign-out → reconnect column is a sweep the owner did across every connection
+except Google Drive, which was exercised by removal instead (its cell is —);
 tool calls after it were re-verified on GitHub, Slack, Notion and Stripe.
 
 What the real deploy found that the rig could not (the catalog audit's F
@@ -245,8 +246,8 @@ while public DNS is fine). A row is not re-verified by later releases.
 Counts — can CI hit?: yes 12 · key-fixture 54 · oauth-manual 183 · tenant 40 ·
 dead-suspect 0. Auth: oauth 183 · tenant 39 · api_key 53 · open 14.
 Provenance: official 281 · third_party 5 · community 3. Featured: 20. Last
-verified: live 11 · probe 2026-09-14 183 · probe 2026-09-16 50 · probe
-2026-09-25 10 · probe 2026-09-29 1 · not probeable 34. These totals are derived from the table
+verified: live 13 · probe 2026-09-14 182 · probe 2026-09-16 50 · probe
+2026-09-25 10 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
 | entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
@@ -285,7 +286,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | browserstack | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | buffer | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | bugcrowd | api_key | official | security |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
-| bugsnag | oauth | official | observability |  | oauth-manual | 2026-09-29 probe | discovery ✓ — the 401 names the metadata over plain http; raised to https (F12); registration ✓ | self-registering, confidential client (`client_secret_post`); scopes `api openid profile`; login not yet exercised |
+| bugsnag | oauth | official | observability |  | oauth-manual | 2026-09-30 live | live PASS on the real deploy (sign-in, `bugsnag_list_projects`, sign-out → reconnect); discovery ✓ — the 401 names the metadata over plain http; raised to https (F12); registration ✓ | self-registering, confidential client (`client_secret_post`); scopes `api openid profile` |
 | buildkite | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | cal-com | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
 | calendly | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
@@ -358,7 +359,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | google-docs | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
 | google-drive | oauth | official | productivity | ★ | oauth-manual | 2026-09-10 live | live — tool call BLOCKED by vendor (Developer Preview); discovery ✓ | manual client, secret |
 | google-gemini-agent-platform | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
-| google-gmail | oauth | official | communication | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-gmail | oauth | official | communication | ★ | oauth-manual | 2026-09-30 live | live on the real deploy — sign-in ✓, tool call BLOCKED by vendor (Gmail MCP API not enabled on the Google project); discovery ✓ | manual client, secret |
 | google-maps | api_key | official | travel-local |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (5 tools listed; the key is checked only at tools/call) (F14) |
 | google-people | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
 | google-sheets | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
