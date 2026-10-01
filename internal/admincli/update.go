@@ -3,6 +3,7 @@ package admincli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -137,13 +138,20 @@ func clientBundleCheck() bool {
 		return false
 	}
 	// A bare service install runs a staged copy of the generic bundle
-	// (scripts/lib/bundle.sh, #1655): not a git checkout, and refreshed by
-	// update.sh from the fleet checkout rather than pulled. Only the marker's
-	// presence is checked — its contents name a path in the service user's
-	// tree, and this runs as root, so it is never read (a planted symlink
-	// could point it at a root-only file).
-	if fi, err := os.Lstat(filepath.Join(dir, ".fleet-staged-from")); err == nil && fi.Mode().IsRegular() {
-		fmt.Printf("client bundle at %s is the staged copy of the generic bundle — `fleet update` refreshes it from the fleet checkout (and says so if it could not).\n", dir)
+	// (scripts/lib/bundle.sh, #1655): not a git checkout, refreshed by
+	// update.sh from the fleet checkout rather than pulled — but only when its
+	// marker names THIS checkout's config/default, so that is what is checked.
+	if src, ok := stagedBundleSource(dir); ok {
+		want := ""
+		if root := repoRoot(); root != "" {
+			want = filepath.Join(root, "config", "default")
+		}
+		if want != "" && filepath.Clean(src) != filepath.Clean(want) {
+			fmt.Printf("client bundle at %s is a staged copy of %s, not of this checkout's %s — `fleet update` will not refresh it.\n", dir, src, want)
+			fmt.Println("  restage it: re-run scripts/bootstrap.sh --enable-service from this checkout")
+			return true
+		}
+		fmt.Printf("client bundle at %s is the staged copy of %s — `fleet update` refreshes it from there (and says so if it could not).\n", dir, src)
 		return false
 	}
 	git := func(args ...string) (string, error) {
@@ -241,4 +249,27 @@ func repoRoot() string {
 		return filepath.Dir(filepath.Dir(script))
 	}
 	return ""
+}
+
+// stagedBundleSource reads a staged copy's marker: the source path it was
+// staged from (its first line). The marker sits in the service user's tree and
+// this runs as root, so it is opened with O_NOFOLLOW (a planted symlink to a
+// root-only file is refused at open, with no check-then-read window) and
+// O_NONBLOCK (a FIFO there cannot hang the check), must be a regular file, and
+// is read up to 4 KiB, which a path never exceeds.
+func stagedBundleSource(dir string) (string, bool) {
+	//nolint:gosec // G304: a fixed basename under the operator-configured bundle dir; opened no-follow, regular files only.
+	f, err := os.OpenFile(filepath.Join(dir, ".fleet-staged-from"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", false
+	}
+	buf := make([]byte, 4096)
+	n, _ := io.ReadFull(f, buf)
+	line, _, _ := strings.Cut(string(buf[:n]), "\n")
+	line = strings.TrimSpace(line)
+	return line, line != ""
 }

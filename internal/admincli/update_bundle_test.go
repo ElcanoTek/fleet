@@ -80,12 +80,21 @@ func TestClientBundleCheck(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+		t.Setenv("FLEET_ROOT", "/opt/fleet/src")
 		out, stale := capture(t, clientBundleCheck)
 		if stale {
-			t.Error("a staged copy is refreshed by update, not pulled; it is not stale by being a non-checkout")
+			t.Error("a staged copy of this checkout is refreshed by update, not pulled; it is not stale by being a non-checkout")
 		}
 		if !strings.Contains(out, "staged copy") || strings.Contains(out, "not a git checkout") {
 			t.Errorf("want the staged-copy note, got %q", out)
+		}
+		// The same copy seen from a checkout at another path (fleet re-cloned
+		// elsewhere): update refreshes only a copy of its own config/default,
+		// so the check must call this one stale rather than current.
+		t.Setenv("FLEET_ROOT", "/root/fleet")
+		out, stale = capture(t, clientBundleCheck)
+		if !stale || !strings.Contains(out, "not of this checkout") {
+			t.Errorf("a copy staged from another checkout read as current (stale=%v): %q", stale, out)
 		}
 	})
 

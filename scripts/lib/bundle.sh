@@ -73,15 +73,20 @@ _bundle_as() {
 }
 
 # bundle_marker_source DIR OWNER — the source a staged copy's marker names
-# (its first line), or failure when DIR carries no regular-file marker. Read AS
-# OWNER and never through a symlink: the marker sits in the service user's
-# tree, so a root read could be pointed (marker → /etc/fleet/fleet.env) at a
-# root-only file and print it. Bounded to 4 KiB, which a path never exceeds.
+# (its first line), or failure when DIR carries no regular-file marker. The
+# marker sits in the service user's tree, so a read through it could be
+# pointed at something secret: a root-only file (/etc/fleet/fleet.env) for a
+# root read, the running service's own /proc/<pid>/environ for a read as the
+# service user. It is therefore opened with O_NOFOLLOW (dd iflag=nofollow),
+# which refuses a symlink at open time — no check-then-read window — and read
+# AS OWNER, bounded to 4 KiB, which a path never exceeds.
 bundle_marker_source() {
-  local m
+  local m out
   m="$(bundle_staged_marker "$1")"
-  [[ -f "$m" && ! -L "$m" ]] || return 1
-  _bundle_as "$2" head -c 4096 -- "$m" 2>/dev/null | head -n1
+  out="$(_bundle_as "$2" dd if="$m" iflag=nofollow bs=4096 count=1 status=none 2>/dev/null)" || return 1
+  out="${out%%$'\n'*}"
+  [[ -n "$out" ]] || return 1
+  printf '%s\n' "$out"
 }
 
 # bundle_writable_in_unit DIR UNIT STATE_DIR — true when DIR lies inside a path
@@ -162,7 +167,8 @@ stage_default_bundle() {
     prev="$(mktemp -d "${dst}.prev.XXXXXX")"
     # chmod first: the kept copy carries the modes of the tree, and a read-only
     # directory in it would otherwise survive the cleanup.
-    trap '"'"'chmod -R u+w -- "$tmp" "$prev" 2>/dev/null; rm -rf -- "$tmp" "$prev"'"'"' EXIT
+    newmarker="${marker}.new"
+    trap '"'"'chmod -R u+w -- "$tmp" "$prev" 2>/dev/null; rm -rf -- "$tmp" "$prev"; rm -f -- "$newmarker"'"'"' EXIT
     tar -C "$tmp" --no-same-owner -xf -
     # Belt and braces: the archive is complete by construction, but a copy
     # without a manifest must still never reach the --delete sync.
@@ -181,14 +187,21 @@ stage_default_bundle() {
     # edit that keeps both would otherwise be skipped); --delete-after keeps
     # removals last.
     cp -a -- "$dst/." "$prev/"
-    sync_from() { rsync -a --checksum --delete --delete-after --no-owner --no-group --exclude "/$(basename "$marker")" "$1/" "$dst/"; }
+    # The new marker is written before anything in DST changes, so a full
+    # disk fails here rather than after the sync, which would leave a copy
+    # with no marker that neither bootstrap nor update would recognise.
+    rm -f -- "$newmarker"
+    printf "%s\n" "$src" > "$newmarker"
+    sync_from() { rsync -a --checksum --delete --delete-after --no-owner --no-group --exclude "/$(basename "$marker")" --exclude "/$(basename "$marker").new" "$1/" "$dst/"; }
     if ! sync_from "$tmp"; then
       echo "stage_default_bundle: sync into $dst failed — restoring the previous copy" >&2
       sync_from "$prev" || echo "stage_default_bundle: could not fully restore $dst" >&2
+      rm -f -- "$newmarker"
       exit 1
     fi
-    rm -f -- "$marker"
-    printf "%s\n" "$src" > "$marker"
+    # Swap the prepared marker in by rename: no space needed at this point,
+    # and a planted symlink at the marker path is replaced, not followed.
+    mv -f -- "$newmarker" "$marker"
   ' _ "$src" "$dst" "$marker" < "$archive"
   local rc=$?
   rm -f -- "$archive"

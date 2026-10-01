@@ -30,8 +30,9 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
   move says so instead of reporting a refresh.
 - **doctor** fails a service still pointed at a checkout's generic bundle and
   names the repair. It checks that the bundle lies inside the unit's writable
-  paths (`ReadWritePaths` and the state dir; a failure on an SELinux-enforcing
-  host, advice elsewhere, since only there does the relabel run), and it
+  paths (`ReadWritePaths` and the state dir; a failure on an SELinux host,
+  enforcing or permissive — permissive mode still relabels — and advice only
+  where SELinux is disabled), and it
   checks ownership across the whole bundle tree, not just its top directory.
 
 ## Safety properties
@@ -43,6 +44,11 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
   write (unpack, sync,
   marker) runs as the service user via `runuser`. The marker is replaced, never
   written through.
+- **The marker is never read through a link.** It sits in the service user's
+  tree, so doctor and update open it with `O_NOFOLLOW` (`dd iflag=nofollow`)
+  as the service user, and `fleet update --check` opens it with `O_NOFOLLOW`
+  and requires a regular file. A link to a root-only file or to the running
+  service's `/proc/<pid>/environ` is refused at open time.
 - **A partial copy never reaches `rsync --delete`.** The archive is unpacked
   only after the tar that wrote it exited 0 (a stream could hand the owner a
   well-formed partial archive before a read failure was known), and the owner
@@ -51,7 +57,9 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
   cannot fully rewrite (a root-owned file from a hand edit) is refused before
   anything moves. Otherwise the current copy is kept aside first, and if the
   in-place sync fails part-way (a full disk, an I/O error), the kept copy is
-  put back in place. rsync compares content (`--checksum`), so an edit that
+  put back in place. The new marker is written before anything changes and
+  renamed into place after the sync, so a full disk cannot leave a copy
+  without one. rsync compares content (`--checksum`), so an edit that
   keeps a file's size and mtime is still picked up.
 - **Mounts stay valid under running sandboxes.** The copy is synced in place
   with rsync (files replaced, directories kept). There is no rename-and-delete

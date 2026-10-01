@@ -1216,7 +1216,7 @@ func TestStageDefaultBundle(t *testing.T) {
 		t.Skip("id -un unavailable")
 	}
 	owner := strings.TrimSpace(string(me))
-	base := []string{"bash", "tar", "mkdir", "rm", "mktemp", "ls", "basename", "dirname", "readlink", "grep", "id", "cat", "printf", "cp", "find", "chmod"}
+	base := []string{"bash", "tar", "mkdir", "rm", "mktemp", "ls", "basename", "dirname", "readlink", "grep", "id", "cat", "printf", "cp", "find", "chmod", "mv", "dd"}
 	t.Run("no rsync is refused", func(t *testing.T) {
 		root := t.TempDir()
 		src := filepath.Join(root, "src")

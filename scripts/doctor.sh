@@ -652,7 +652,7 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
   # under $SERVICE_HOME/bundle; doctor reports, `fleet update` repairs.
   bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR "$ENV_FILE")"
   if [[ -z "$bundle_dir" ]]; then
-    advise "FLEET_CLIENT_CONFIG_DIR not set in $ENV_FILE — the service resolves the relative default config/default against its working directory (${SERVICE_HOME}) and fails at boot; fix: re-run scripts/bootstrap.sh --enable-service (it stages the generic bundle under ${SERVICE_HOME}/bundle), or set the variable to a bundle the service user owns"
+    fail "FLEET_CLIENT_CONFIG_DIR not set in $ENV_FILE — the service resolves the relative default config/default against its working directory (${SERVICE_HOME}) and fails at boot; fix: re-run scripts/bootstrap.sh --enable-service (it stages the generic bundle under ${SERVICE_HOME}/bundle), or set the variable to a bundle the service user owns"
   elif bundle_is_default_in_checkout "$bundle_dir" "$SRC_DIR" || bundle_looks_like_fleet_default "$bundle_dir"; then
     _fix="sudo fleet update"
     command -v rsync >/dev/null 2>&1 || _fix="sudo dnf install rsync (or apt-get install rsync), then sudo fleet update"
@@ -666,9 +666,11 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
   elif ! bundle_writable_in_unit "$bundle_dir" "$SERVICE_NAME" "$SERVICE_HOME"; then
     # Owned correctly or not, a path outside the unit's writable set is
     # read-only to the service (ProtectSystem=strict), so the relabel fails.
-    # Only an enforcing SELinux host relabels at all, so elsewhere it is advice.
-    _msg="client bundle $bundle_dir is outside ${SERVICE_NAME}.service's writable paths (ReadWritePaths, StateDirectory) — read-only under ProtectSystem=strict, so the sandbox's :z relabel fails (lsetxattr EROFS) on an SELinux-enforcing host; fix: move it under /opt/fleet/client or ${SERVICE_HOME}, or add it to the unit's ReadWritePaths"
-    if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+    # Podman relabels whenever SELinux is enabled — permissive mode suppresses
+    # policy denials, not the lsetxattr — so only a disabled (or absent)
+    # SELinux makes this advice rather than a failure.
+    _msg="client bundle $bundle_dir is outside ${SERVICE_NAME}.service's writable paths (ReadWritePaths, StateDirectory) — read-only under ProtectSystem=strict, so the sandbox's :z relabel fails (lsetxattr EROFS) on an SELinux host (enforcing or permissive); fix: move it under /opt/fleet/client or ${SERVICE_HOME}, or add it to the unit's ReadWritePaths"
+    if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" =~ ^(Enforcing|Permissive)$ ]]; then
       fail "$_msg"
     else
       advise "$_msg"
