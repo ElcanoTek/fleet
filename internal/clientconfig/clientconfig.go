@@ -1010,6 +1010,16 @@ type ProviderDef struct {
 	ContextWindowTokens int      `yaml:"context_window_tokens"` // provider-local context; OpenRouter uses authoritative per-model metadata
 }
 
+// RemoteMCPURLVariant is one alternative endpoint of a directory entry (see
+// RemoteMCPCatalogEntry.URLVariants): a short id (lowercase letters, digits,
+// hyphens — "eu") that names the variant in fixtures and secrets
+// (FLEET_CATALOG_KEY_<ENTRY>_<ID>), a label for the card, and the https URL.
+type RemoteMCPURLVariant struct {
+	ID    string `yaml:"id"`
+	Label string `yaml:"label"`
+	URL   string `yaml:"url"`
+}
+
 // RemoteMCPCatalogEntry is one curated third-party hosted MCP server from the
 // manifest's remote_mcp_catalog: section (#538). It is a DIRECTORY LISTING, not
 // a connection: fleet never talks to the URL until a user explicitly adds it
@@ -1023,16 +1033,6 @@ type ProviderDef struct {
 // governed by the vendor's own terms. The UI must label the two classes
 // distinctly so a user knows what they are opting into; the bundle author
 // curates the list but does not control the remote service.
-// RemoteMCPURLVariant is one alternative endpoint of a directory entry (see
-// RemoteMCPCatalogEntry.URLVariants): a short id (lowercase letters, digits,
-// hyphens — "eu") that names the variant in fixtures and secrets
-// (FLEET_CATALOG_KEY_<ENTRY>_<ID>), a label for the card, and the https URL.
-type RemoteMCPURLVariant struct {
-	ID    string `yaml:"id"`
-	Label string `yaml:"label"`
-	URL   string `yaml:"url"`
-}
-
 type RemoteMCPCatalogEntry struct {
 	Name        string   `yaml:"name"`         // stable identifier; unique within the manifest
 	DisplayName string   `yaml:"display_name"` // human-readable label ("GitHub")

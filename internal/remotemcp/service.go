@@ -367,7 +367,7 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 			// redacted, so an operator can see what the vendor answered when a
 			// user reports "it says 401" (an EU-region token on the US host and
 			// an account-level key read the same to the user).
-			log.Printf("remote-mcp: add-time probe of %s for %s refused: %s", canonURL, in.Email, agentcore.RedactSecrets(perr.Error()))
+			log.Print(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: add-time probe of %s for %s refused: %s", logSafeURL(canonURL), in.Email, perr.Error())))
 			return nil, noProbe, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
 		}
 		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
@@ -507,9 +507,27 @@ func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, p
 		if tool != "" {
 			where = "or at " + tool
 		}
-		log.Printf("remote-mcp: %s answered an invalid key the same as the real one at the handshake %s; the key could not be verified now and is checked on first use", url, where)
+		log.Printf("remote-mcp: %s answered an invalid key the same as the real one at the handshake %s; the key could not be verified now and is checked on first use", logSafeURL(url), where)
 	}
 	return report, nil
+}
+
+// logSafeURL names a server URL in a host log line without what may carry a
+// credential: a remote MCP URL keeps its query string (some vendors take a
+// token there, and a user may paste one into the URL itself), so the query,
+// any userinfo and the fragment are dropped, the query marked as elided.
+// RedactSecrets on the whole line is the second net, for a key the path holds.
+func logSafeURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "[unparseable url]"
+	}
+	elided := u.RawQuery != "" || u.ForceQuery
+	u.User, u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = nil, "", false, "", ""
+	if elided {
+		return u.String() + "?[query elided]"
+	}
+	return u.String()
 }
 
 // validateAPIKeyPrefix vets the scheme a directory entry declares in front of
@@ -589,7 +607,7 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 	s.noteSecrets(apiKey)
 	report, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, server.APIKeyPrefix, apiKey)
 	if err != nil {
-		log.Printf("remote-mcp: key rotation probe of %s for %s refused: %s", server.URL, email, agentcore.RedactSecrets(err.Error()))
+		log.Print(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: key rotation probe of %s for %s refused: %s", logSafeURL(server.URL), email, err.Error())))
 		return ProbeReport{}, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
 	}
 	return report, s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)

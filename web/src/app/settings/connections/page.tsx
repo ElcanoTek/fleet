@@ -525,12 +525,14 @@ function DirectoryCard({
   const [values, setValues] = useState<Record<string, string>>({});
   // Which of the entry's endpoints to add — the default, or one of its
   // url_variants (a regional host). The whole URL, so the add posts it as is.
-  // A second seat starts where the first one was added.
-  const [endpointURL, setEndpointURL] = useState(
-    added && addedURL && entry.url_variants?.some((v) => v.url === addedURL)
+  // A second seat starts where the first one was added — re-derived each
+  // time the "Add another account" form opens, because the saved seats can
+  // load after this card mounts and a mount-time initializer would miss them.
+  const seatEndpointURL =
+    added && addedURL && variants.some((v) => v.url === addedURL)
       ? addedURL
-      : entry.url,
-  );
+      : entry.url;
+  const [endpointURL, setEndpointURL] = useState(seatEndpointURL);
   const [apiKey, setApiKey] = useState("");
   // "Add another account" (#988): an already-added entry can take a second
   // login. The same guided form opens, plus a REQUIRED seat label — the
@@ -673,7 +675,10 @@ function DirectoryCard({
                 type="button"
                 data-testid={`dir-add-account-${entry.name}`}
                 aria-expanded={formOpen}
-                onClick={() => setFormOpen((o) => !o)}
+                onClick={() => {
+                  if (!formOpen) setEndpointURL(seatEndpointURL);
+                  setFormOpen((o) => !o);
+                }}
                 disabled={busy}
                 className={dirAddButtonClass(false)}
               >

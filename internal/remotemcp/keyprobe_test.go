@@ -4,12 +4,16 @@
 package remotemcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -469,16 +473,12 @@ func TestProbeReportsToolSchemaIssues(t *testing.T) {
 	}
 }
 
-// TestAddServerSendsTheEntrySchemePrefix is the api_key_prefix seam: a vendor
-// that wants "Authorization: Token token=<key>" (PagerDuty) gets exactly that
-// from the add-time probe when the entry declares the prefix — the user
-// pasted only the key — and the control probe carries the same scheme, so
-// the vendor's refusal of the invalid key is a refusal of the key, not of a
-// missing scheme. Without the prefix the same key is refused.
-// TestAddServerAndRotationSendTheEntrySchemePrefix: the add-time probe, its
-// invalid-key control probe, and a later key rotation all send
-// "<header>: <prefix><key>" against a vendor that accepts nothing else — the
-// rotation reading the prefix from the stored row, not from the form.
+// TestAddServerAndRotationSendTheEntrySchemePrefix is the api_key_prefix
+// seam: the add-time probe, its invalid-key control probe, and a later key
+// rotation all send "<header>: <prefix><key>" against a vendor that accepts
+// nothing else (PagerDuty's "Authorization: Token token=<key>") — the user
+// pasted only the key, and the rotation reads the prefix from the stored row,
+// not from the form. Without the prefix the same key is refused.
 func TestAddServerAndRotationSendTheEntrySchemePrefix(t *testing.T) {
 	var seen []string
 	var mu sync.Mutex
@@ -565,5 +565,55 @@ func TestAddServerAndRotationSendTheEntrySchemePrefix(t *testing.T) {
 		Email: "u@x.com", Name: "bad", URL: srv.URL, AuthMode: "api_key", APIKey: "u+good", APIKeyPrefix: "Token token=",
 	}); err == nil || !strings.Contains(err.Error(), "needs a header name") {
 		t.Fatalf("prefix without a header: err = %v", err)
+	}
+}
+
+// TestRefusedProbeLogKeepsTheKeyOutOfTheURL: a refused add-time probe and a
+// refused key rotation are logged host-side, and a remote MCP URL keeps its
+// query string — so a key the user pasted into the URL as well as the key
+// field must not reach the log through the URL the line names.
+func TestRefusedProbeLogKeepsTheKeyOutOfTheURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	const key = "u+leakcheck0123456789"
+	svc := newTestService(t, newFakeStore(), srv)
+	if _, _, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "vendor", URL: srv.URL + "/mcp?token=" + key, AuthMode: "api_key",
+		APIKey: key, APIKeyHeader: "Authorization", APIKeyPrefix: "Token token=",
+	}); err == nil {
+		t.Fatal("the vendor refused every key, yet the add succeeded")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "add-time probe of") {
+		t.Fatalf("the refused probe was not logged: %q", out)
+	}
+	if strings.Contains(out, key) || strings.Contains(out, url.QueryEscape(key)) {
+		t.Fatalf("the key reached the host log: %q", out)
+	}
+	if !strings.Contains(out, "?[query elided]") {
+		t.Fatalf("the log line does not mark the elided query: %q", out)
+	}
+}
+
+func TestLogSafeURL(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"https://mcp.example.com/mcp", "https://mcp.example.com/mcp"},
+		{"https://mcp.example.com/mcp?token=s3cret&x=1", "https://mcp.example.com/mcp?[query elided]"},
+		{"https://user:pw@mcp.example.com/mcp#frag", "https://mcp.example.com/mcp"},
+		{"https://mcp.example.com/mcp?", "https://mcp.example.com/mcp?[query elided]"},
+		{"://bad\x7f", "[unparseable url]"},
+	} {
+		if got := logSafeURL(tc.in); got != tc.want {
+			t.Errorf("logSafeURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

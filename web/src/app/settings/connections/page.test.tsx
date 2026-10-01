@@ -276,6 +276,40 @@ describe("ConnectionsPage guided api_key add", () => {
     const select = (await within(card).findByTestId("dir-form-endpoint-pdlike")) as HTMLSelectElement;
     expect(select.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
   });
+
+  it("starts a second seat on the first one's endpoint even when the connections load after the card", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inner = mockFetch(
+      undefined,
+      { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+      {
+        ...EMPTY_LIST,
+        servers: [
+          { ...BB_PRIMARY, id: "pd1", name: "pdlike", url: "https://mcp.eu.pdlike.example.com/mcp" },
+        ],
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/remote-mcp-servers") && (init?.method ?? "GET") === "GET") {
+          await gate;
+        }
+        return inner(url, init);
+      }),
+    );
+    visit("");
+    // The card mounts from the catalog alone, before the saved EU seat is known.
+    await screen.findAllByTestId("dir-card-pdlike");
+    release();
+    const card = (await screen.findAllByTestId("dir-card-pdlike"))[0];
+    fireEvent.click(await within(card).findByTestId("dir-add-account-pdlike"));
+    const select = (await within(card).findByTestId("dir-form-endpoint-pdlike")) as HTMLSelectElement;
+    expect(select.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
+  });
   it("shows the entry's scheme prefix beside the key field and posts it, so the user pastes only the key", async () => {
     let posted: Record<string, unknown> | null = null;
     vi.stubGlobal(
