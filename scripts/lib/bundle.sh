@@ -69,8 +69,9 @@ bundle_looks_like_fleet_default() {
 # The copy is synced IN PLACE with rsync (files replaced, directories kept) so
 # a running service's bind mounts of DST's subdirectories stay valid until its
 # containers are recycled; without rsync the copy is built beside DST and
-# swapped in by rename, which keeps the old tree's inodes alive for mounts
-# already holding them. Neither preserves the source's SELinux context: the
+# swapped in by rename, and the old tree is then deleted, so a running
+# container's mounts of it see empty directories until it is recycled (rsync
+# is in bootstrap's dependency list, so this is the rare path). Neither preserves the source's SELinux context: the
 # copy takes the state dir's label (and restorecon, where present, settles
 # it), and the sandbox's `:z` relabels the mounted dirs on first use.
 stage_default_bundle() {

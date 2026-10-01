@@ -525,6 +525,9 @@ fi
 # sandbox's relabel fails on an SELinux host — is moved onto a staged copy here,
 # which is what `fleet update` is for. Only the generic bundle is ever staged,
 # and never over an explicit --client-config (the operator's choice stands).
+# _restaged records what actually happened, so step 2 never reports a refresh
+# that did not run: 1 = staged now, dry = planned under --dry-run, 0 = not.
+_restaged=0
 if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
   _restage=0
   if bundle_is_default_in_checkout "$svc_client_dir" "$SRC_DIR"; then
@@ -543,6 +546,7 @@ if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
     _stage="$(default_bundle_stage "${_stage_home:-/var/lib/fleet}")"
     if [[ "$DRY_RUN" == "1" ]]; then
       info "[dry-run] would stage ${SRC_DIR}/config/default → ${_stage} (owned by ${_stage_owner}) and point FLEET_CLIENT_CONFIG_DIR at it"
+      _restaged=dry
     elif ! id -u "$_stage_owner" >/dev/null 2>&1; then
       warn "service user ${_stage_owner} does not exist on this box — cannot stage the default bundle; ${SERVICE_NAME} keeps loading ${svc_client_dir}"
     elif stage_default_bundle "$SRC_DIR/config/default" "$_stage" "$_stage_owner"; then
@@ -554,6 +558,7 @@ if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
       fi
       CLIENT_DIR="$_stage"
       svc_client_dir="$_stage"
+      _restaged=1
     else
       _rc=$?
       if [[ "$_rc" == "2" ]]; then
@@ -585,7 +590,18 @@ if [[ "$CLIENT_DIR" == "$SRC_DIR/config/default" || "$CLIENT_DIR" == "config/def
     BUNDLE_STALE_WHY="fell back to the generic bundle while ${SERVICE_NAME} loads ${svc_client_dir}"
   fi
 elif [[ -f "$(bundle_staged_marker "$CLIENT_DIR")" ]]; then
-  info "staged copy of the in-repo generic bundle — refreshed from ${SRC_DIR}/config/default above."
+  if [[ "$_restaged" == "1" ]]; then
+    info "staged copy of the in-repo generic bundle — refreshed from ${SRC_DIR}/config/default above."
+  elif [[ "$_restaged" == "dry" ]]; then
+    info "[dry-run] staged copy of the in-repo generic bundle — would be refreshed from ${SRC_DIR}/config/default above."
+  else
+    # The marker names another checkout (fleet was re-cloned elsewhere), or
+    # staging was refused or failed above: the copy did not move.
+    _staged_from="$(head -n1 "$(bundle_staged_marker "$CLIENT_DIR")" 2>/dev/null || true)"
+    info "staged copy of a generic bundle (staged from ${_staged_from:-an unknown checkout}) — NOT refreshed by this update."
+    BUNDLE_STALE=1
+    BUNDLE_STALE_WHY="${CLIENT_DIR} was staged from ${_staged_from:-an unknown checkout} and this update did not refresh it from ${SRC_DIR}/config/default (re-run bootstrap from this checkout to restage it)"
+  fi
 elif [[ ! -e "$CLIENT_DIR/.git" ]]; then
   info "client config at ${CLIENT_DIR} is not a git checkout — leaving as-is."
   BUNDLE_STALE=1

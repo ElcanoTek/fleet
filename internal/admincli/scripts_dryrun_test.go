@@ -1346,3 +1346,28 @@ func TestUpdateDryRunPlansBundleStagingForAPreStagingBox(t *testing.T) {
 		t.Fatalf("update planned to stage over an explicit --client-config\n--- output ---\n%s", out)
 	}
 }
+
+// TestUpdateDryRunDoesNotClaimAStaleStagedCopyWasRefreshed: a staged copy
+// whose marker names another checkout (fleet re-cloned at a new path) is not
+// restaged, so update must report it as not advanced rather than print
+// "refreshed … above" over a copy it never touched.
+func TestUpdateDryRunDoesNotClaimAStaleStagedCopyWasRefreshed(t *testing.T) {
+	stage := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stage, ".fleet-staged-from"), []byte("/old/fleet/config/default\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, []byte("FLEET_CLIENT_CONFIG_DIR="+stage+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile, "FLEET_CLIENT_CONFIG_EXPLICIT=0"}, "update.sh", "--dry-run", "--no-pull")
+	if err != nil {
+		t.Fatalf("update --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if strings.Contains(out, "refreshed from") {
+		t.Fatalf("update claimed a refresh of a staged copy it did not restage\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "NOT refreshed by this update") {
+		t.Fatalf("update did not report the staged copy as not refreshed\n--- output ---\n%s", out)
+	}
+}
