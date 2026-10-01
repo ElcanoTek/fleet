@@ -159,12 +159,34 @@ stage_default_bundle() {
     [[ -L "$dst" ]] && { echo "stage_default_bundle: $dst is a symlink — not staging onto it" >&2; exit 1; }
     mkdir -p -m 0755 -- "$dst"
     tmp="$(mktemp -d "${dst}.new.XXXXXX")"
-    trap '"'"'rm -rf -- "$tmp"'"'"' EXIT
+    prev="$(mktemp -d "${dst}.prev.XXXXXX")"
+    # chmod first: the kept copy carries the modes of the tree, and a read-only
+    # directory in it would otherwise survive the cleanup.
+    trap '"'"'chmod -R u+w -- "$tmp" "$prev" 2>/dev/null; rm -rf -- "$tmp" "$prev"'"'"' EXIT
     tar -C "$tmp" --no-same-owner -xf -
     # Belt and braces: the archive is complete by construction, but a copy
     # without a manifest must still never reach the --delete sync.
     [[ -f "$tmp/manifest.yaml" ]] || { echo "stage_default_bundle: incomplete copy of the source — not syncing" >&2; exit 1; }
-    rsync -a --delete --no-owner --no-group --exclude "/$(basename "$marker")" "$tmp/" "$dst/"
+    # A tree this account cannot fully rewrite (a root-owned subtree from a
+    # hand edit) would fail part-way, so it is refused before anything moves.
+    if [[ -n "$(find "$dst" ! -user "$(id -un)" -print -quit 2>/dev/null)" ]]; then
+      echo "stage_default_bundle: $dst holds files not owned by $(id -un) — not syncing (chown -R it, then re-run)" >&2
+      exit 1
+    fi
+    # An in-place rsync that fails part-way (a full disk, an I/O error) has
+    # already replaced and deleted some files, so the current copy is kept
+    # first and put back, in place, on failure: running sandboxes mount its
+    # directories, which a swap would empty under them. --checksum compares
+    # content, not size+mtime (the archive carries the source mtimes, so an
+    # edit that keeps both would otherwise be skipped); --delete-after keeps
+    # removals last.
+    cp -a -- "$dst/." "$prev/"
+    sync_from() { rsync -a --checksum --delete --delete-after --no-owner --no-group --exclude "/$(basename "$marker")" "$1/" "$dst/"; }
+    if ! sync_from "$tmp"; then
+      echo "stage_default_bundle: sync into $dst failed — restoring the previous copy" >&2
+      sync_from "$prev" || echo "stage_default_bundle: could not fully restore $dst" >&2
+      exit 1
+    fi
     rm -f -- "$marker"
     printf "%s\n" "$src" > "$marker"
   ' _ "$src" "$dst" "$marker" < "$archive"

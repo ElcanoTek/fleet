@@ -47,6 +47,12 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
   only after the tar that wrote it exited 0 (a stream could hand the owner a
   well-formed partial archive before a read failure was known), and the owner
   side also checks that `manifest.yaml` arrived before syncing.
+- **A failed refresh leaves the previous copy.** A tree the service user
+  cannot fully rewrite (a root-owned file from a hand edit) is refused before
+  anything moves. Otherwise the current copy is kept aside first, and if the
+  in-place sync fails part-way (a full disk, an I/O error), the kept copy is
+  put back in place. rsync compares content (`--checksum`), so an edit that
+  keeps a file's size and mtime is still picked up.
 - **Mounts stay valid under running sandboxes.** The copy is synced in place
   with rsync (files replaced, directories kept). There is no rename-and-delete
   fallback, which would empty the directories mounted into running

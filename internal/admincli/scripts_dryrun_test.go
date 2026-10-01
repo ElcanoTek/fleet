@@ -1216,7 +1216,7 @@ func TestStageDefaultBundle(t *testing.T) {
 		t.Skip("id -un unavailable")
 	}
 	owner := strings.TrimSpace(string(me))
-	base := []string{"bash", "tar", "mkdir", "rm", "mktemp", "ls", "basename", "dirname", "readlink", "grep", "id", "cat", "printf"}
+	base := []string{"bash", "tar", "mkdir", "rm", "mktemp", "ls", "basename", "dirname", "readlink", "grep", "id", "cat", "printf", "cp", "find", "chmod"}
 	t.Run("no rsync is refused", func(t *testing.T) {
 		root := t.TempDir()
 		src := filepath.Join(root, "src")
@@ -1271,6 +1271,7 @@ func TestStageDefaultBundle(t *testing.T) {
 			}
 			assertMarkerSymlinkNotFollowed(t, path, src, dst, owner, root)
 			assertPartialSourceRefused(t, path, src, dst, owner)
+			assertFailedSyncRestores(t, base, src, dst, owner)
 			// A hand-placed bundle at the destination (no marker) is never deleted.
 			hand := filepath.Join(root, "hand")
 			if err := os.MkdirAll(hand, 0o755); err != nil {
@@ -1331,6 +1332,40 @@ func assertMarkerSymlinkNotFollowed(t *testing.T, path, src, dst, owner, root st
 	}
 	if fi, err := os.Lstat(markerPath); err != nil || fi.Mode()&os.ModeSymlink != 0 {
 		t.Fatalf("the marker is still a symlink after a re-stage (err=%v)", err)
+	}
+}
+
+// assertFailedSyncRestores: an rsync that fails part-way has already
+// replaced and deleted files, so staging must put the previous copy back.
+// A stub rsync does the real sync and then reports failure, once — the shape
+// of a disk filling up mid-transfer — and the copy must read as it did before.
+func assertFailedSyncRestores(t *testing.T, base []string, src, dst, owner string) {
+	t.Helper()
+	realRsync, err := exec.LookPath("rsync")
+	if err != nil {
+		return
+	}
+	path := toolsOnlyPath(t, base...)
+	stubDir := t.TempDir()
+	once := filepath.Join(stubDir, "failed-once")
+	stub := "#!/usr/bin/env bash\n\"" + realRsync + "\" \"$@\"\nif [[ ! -e " + once + " ]]; then touch " + once + "; exit 23; fi\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "rsync"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(dst, "personas", "a.yaml"))
+	if err := os.WriteFile(filepath.Join(src, "personas", "a.yaml"), []byte("changed upstream\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.WriteFile(filepath.Join(src, "personas", "a.yaml"), before, 0o644) }()
+	out, err := bundleLib(t, stubDir+string(os.PathListSeparator)+path, "stage_default_bundle", src, dst, owner)
+	if err == nil || !strings.Contains(out, "restoring the previous copy") {
+		t.Fatalf("a failed sync was not reported and restored: err=%v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "personas", "a.yaml")); string(got) != string(before) {
+		t.Fatalf("after a failed sync personas/a.yaml = %q, want the previous %q", got, before)
+	}
+	if left, _ := filepath.Glob(dst + ".prev.*"); len(left) != 0 {
+		t.Fatalf("the kept copy was left behind: %v", left)
 	}
 }
 

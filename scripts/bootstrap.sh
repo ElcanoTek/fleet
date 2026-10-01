@@ -1009,7 +1009,9 @@ if [[ "$ENABLE_SERVICE" == "1" ]] && bundle_is_default_in_checkout "$CLIENT_CONF
   _stage="$(default_bundle_stage "$SERVICE_HOME")"
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would stage ${CLIENT_CONFIG_DIR} → ${_stage} (owned by ${SERVICE_USER}; the sandbox's SELinux relabel needs a writable, service-owned source) and set FLEET_CLIENT_CONFIG_DIR to it"
-    CLIENT_CONFIG_DIR="$_stage" # so the rest of the plan names the path the real run would use
+    # CLIENT_CONFIG_DIR stays on the source: the staged copy does not exist in
+    # a dry run, and the rest of the plan reads the bundle's manifest (sandbox
+    # image, host-side MCP requirements), whose content the copy would match.
   elif stage_default_bundle "$CLIENT_CONFIG_DIR" "$_stage" "$SERVICE_USER"; then
     ok "default bundle staged: ${CLIENT_CONFIG_DIR} → ${_stage} (owned by ${SERVICE_USER}; FLEET_CLIENT_CONFIG_DIR will point here)"
     CLIENT_CONFIG_DIR="$_stage"
