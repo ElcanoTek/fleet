@@ -72,6 +72,18 @@ _bundle_as() {
   fi
 }
 
+# bundle_marker_source DIR OWNER — the source a staged copy's marker names
+# (its first line), or failure when DIR carries no regular-file marker. Read AS
+# OWNER and never through a symlink: the marker sits in the service user's
+# tree, so a root read could be pointed (marker → /etc/fleet/fleet.env) at a
+# root-only file and print it. Bounded to 4 KiB, which a path never exceeds.
+bundle_marker_source() {
+  local m
+  m="$(bundle_staged_marker "$1")"
+  [[ -f "$m" && ! -L "$m" ]] || return 1
+  _bundle_as "$2" head -c 4096 -- "$m" 2>/dev/null | head -n1
+}
+
 # bundle_writable_in_unit DIR UNIT STATE_DIR — true when DIR lies inside a path
 # the unit can write: its ReadWritePaths (as systemd reports them, else the
 # shipped unit's /var/lib/fleet and /opt/fleet/client) or its state dir. Under

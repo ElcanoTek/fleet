@@ -543,8 +543,8 @@ if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
   _restage=0
   if bundle_is_default_in_checkout "$svc_client_dir" "$SRC_DIR"; then
     _restage=1 # pre-#1655 bare install: the service still loads the checkout
-  elif [[ -f "$(bundle_staged_marker "$svc_client_dir")" ]] \
-       && bundle_is_default_in_checkout "$(cat "$(bundle_staged_marker "$svc_client_dir")")" "$SRC_DIR"; then
+  elif _staged_src="$(bundle_marker_source "$svc_client_dir" "$_stage_owner")" \
+       && bundle_is_default_in_checkout "$_staged_src" "$SRC_DIR"; then
     _restage=1 # a staged copy of THIS checkout's generic bundle: refresh it
   elif [[ "$(norm_dir "$svc_client_dir")" == "$(norm_dir "$_stage")" && ! -e "$svc_client_dir" ]]; then
     # The service points at the staging path but the copy is gone (deleted by
@@ -574,6 +574,10 @@ if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
       CLIENT_DIR="$_stage"
       svc_client_dir="$_stage"
       _restaged=1
+      # Record it where `fleet update --check` and the next update's fallback
+      # resolution look, as bootstrap does.
+      _dir_state="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
+      mkdir -p "$_dir_state" && printf '%s\n' "$_stage" > "$_dir_state/client-config.dir" || true
     else
       _rc=$?
       if [[ "$_rc" == "2" ]]; then
@@ -612,7 +616,7 @@ elif [[ -f "$(bundle_staged_marker "$CLIENT_DIR")" ]]; then
   else
     # The marker names another checkout (fleet was re-cloned elsewhere), or
     # staging was refused or failed above: the copy did not move.
-    _staged_from="$(head -n1 "$(bundle_staged_marker "$CLIENT_DIR")" 2>/dev/null || true)"
+    _staged_from="$(bundle_marker_source "$CLIENT_DIR" "${_stage_owner:-fleet}" || true)"
     info "staged copy of a generic bundle (staged from ${_staged_from:-an unknown checkout}) — NOT refreshed by this update."
     BUNDLE_STALE=1
     BUNDLE_STALE_WHY="${CLIENT_DIR} was staged from ${_staged_from:-an unknown checkout} and this update did not refresh it from ${SRC_DIR}/config/default (re-run bootstrap from this checkout to restage it)"

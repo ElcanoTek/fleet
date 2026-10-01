@@ -74,6 +74,33 @@ func TestClientBundleCheck(t *testing.T) {
 		}
 	})
 
+	t.Run("staged copy of the generic bundle", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".fleet-staged-from"), []byte("/opt/fleet/src/config/default\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+		out, stale := capture(t, clientBundleCheck)
+		if stale {
+			t.Error("a staged copy is refreshed by update, not pulled; it is not stale by being a non-checkout")
+		}
+		if !strings.Contains(out, "staged copy") || strings.Contains(out, "not a git checkout") {
+			t.Errorf("want the staged-copy note, got %q", out)
+		}
+	})
+
+	t.Run("a symlinked marker is not taken for a staged copy", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Symlink(filepath.Join(t.TempDir(), "secret"), filepath.Join(dir, ".fleet-staged-from")); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+		out, _ := capture(t, clientBundleCheck)
+		if strings.Contains(out, "staged copy") {
+			t.Errorf("a symlinked marker was trusted: %q", out)
+		}
+	})
+
 	t.Run("checkout with no upstream is reported stale", func(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir)

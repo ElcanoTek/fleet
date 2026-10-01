@@ -136,6 +136,16 @@ func clientBundleCheck() bool {
 		fmt.Println("client bundle: none configured (running the in-repo generic bundle).")
 		return false
 	}
+	// A bare service install runs a staged copy of the generic bundle
+	// (scripts/lib/bundle.sh, #1655): not a git checkout, and refreshed by
+	// update.sh from the fleet checkout rather than pulled. Only the marker's
+	// presence is checked — its contents name a path in the service user's
+	// tree, and this runs as root, so it is never read (a planted symlink
+	// could point it at a root-only file).
+	if fi, err := os.Lstat(filepath.Join(dir, ".fleet-staged-from")); err == nil && fi.Mode().IsRegular() {
+		fmt.Printf("client bundle at %s is the staged copy of the generic bundle — `fleet update` refreshes it from the fleet checkout (and says so if it could not).\n", dir)
+		return false
+	}
 	git := func(args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()

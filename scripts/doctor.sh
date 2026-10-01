@@ -681,8 +681,8 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
     else
       chown -R "$SERVICE_USER": "$bundle_dir" && fixed "client bundle $bundle_dir chowned to $SERVICE_USER"
     fi
-  elif [[ -f "$(bundle_staged_marker "$bundle_dir")" ]]; then
-    pass "client bundle $bundle_dir is the staged copy of $(cat "$(bundle_staged_marker "$bundle_dir")"), owned by $SERVICE_USER"
+  elif _staged_src="$(bundle_marker_source "$bundle_dir" "$SERVICE_USER")" && [[ -n "$_staged_src" ]]; then
+    pass "client bundle $bundle_dir is the staged copy of ${_staged_src}, owned by $SERVICE_USER"
   else
     pass "client bundle $bundle_dir owned by $SERVICE_USER"
   fi

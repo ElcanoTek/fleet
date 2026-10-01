@@ -1402,6 +1402,40 @@ func TestBundlePathPredicates(t *testing.T) {
 	}
 }
 
+// TestBundleMarkerSourceNeverFollowsALink: the marker sits in the service
+// user's tree, so a root read through it could print a root-only file. A
+// regular marker yields its first line; a symlinked one yields nothing.
+func TestBundleMarkerSourceNeverFollowsALink(t *testing.T) {
+	me, err := exec.Command("id", "-un").Output()
+	if err != nil {
+		t.Skip("id -un unavailable")
+	}
+	owner := strings.TrimSpace(string(me))
+	path := os.Getenv("PATH")
+	dir := t.TempDir()
+	marker := filepath.Join(dir, ".fleet-staged-from")
+	if err := os.WriteFile(marker, []byte("/opt/fleet/src/config/default\nsecond line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := bundleLib(t, path, "bundle_marker_source", dir, owner); err != nil || strings.TrimSpace(out) != "/opt/fleet/src/config/default" {
+		t.Fatalf("regular marker: out=%q err=%v, want its first line", out, err)
+	}
+	secret := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(secret, []byte("ROOT_ONLY=do-not-print\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, marker); err != nil {
+		t.Fatal(err)
+	}
+	out, err := bundleLib(t, path, "bundle_marker_source", dir, owner)
+	if err == nil || strings.Contains(out, "do-not-print") {
+		t.Fatalf("a symlinked marker was read through: out=%q err=%v", out, err)
+	}
+}
+
 // TestUpdateDryRunRestagesAMissingStagedCopy: the env file still points the
 // service at the staging path but the copy is gone. update must plan to
 // recreate it rather than restart the service onto a bundle that does not

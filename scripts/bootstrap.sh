@@ -1013,6 +1013,11 @@ if [[ "$ENABLE_SERVICE" == "1" ]] && bundle_is_default_in_checkout "$CLIENT_CONF
   elif stage_default_bundle "$CLIENT_CONFIG_DIR" "$_stage" "$SERVICE_USER"; then
     ok "default bundle staged: ${CLIENT_CONFIG_DIR} → ${_stage} (owned by ${SERVICE_USER}; FLEET_CLIENT_CONFIG_DIR will point here)"
     CLIENT_CONFIG_DIR="$_stage"
+    # The state-file step above cleared client-config.dir for the generic
+    # bundle; the service now runs the staged copy, so record that instead —
+    # it is what `fleet update --check` and update's fallback resolution read.
+    _dir_state="${FLEET_STATE_DIR:-$REPO_ROOT/.fleet-state}"
+    mkdir -p "$_dir_state" && printf '%s\n' "$_stage" > "$_dir_state/client-config.dir" || warn "could not record ${_stage} in ${_dir_state}/client-config.dir"
   else
     # Fatal, before the env file or the unit is written: carrying on would
     # persist the checkout as the bundle and start a service whose sandbox
