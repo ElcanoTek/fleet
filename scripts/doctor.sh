@@ -85,6 +85,8 @@ MAINT_TIMER="fleet-maintenance.timer"
 # bootstrap.sh (which writes it) and update.sh (which offers to adopt it).
 # shellcheck source=lib/caddyfile.sh
 . "$SCRIPT_DIR/lib/caddyfile.sh"
+# shellcheck source=lib/bundle.sh
+. "$SCRIPT_DIR/lib/bundle.sh"
 NODE_FLOOR="$(fleet_node_major_want "$SRC_DIR" || true)"
 if [[ -z "$NODE_FLOOR" ]]; then
   # No silent default. A hardcoded fallback would point at whatever major was
@@ -263,7 +265,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   step "fleet doctor --dry-run (src=${SRC_DIR}, service=${SERVICE_NAME}, install=${INSTALL_DIR})"
   info "[dry-run] 1/9 Toolchain: node >= ${NODE_FLOOR:-<web/.nvmrc>} (dnf install nodejs${NODE_FLOOR} — the VERSIONED stream; \`dnf upgrade nodejs\` cannot cross a major), then point fleet-web at it via FLEET_NODE_BIN in ${WEB_ENV_FILE}; go/git/curl/jq/podman/psql/npm present (dnf install)"
   info "[dry-run] 2/9 Package currency: disable broken dnf repos; dnf upgrade fleet-critical packages (podman crun passt conmon containers-common golang nodejs nodejs${NODE_FLOOR} caddy)"
-  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
+  info "[dry-run] 3/9 Rootless podman: ${SERVICE_USER} user + subuid/subgid ranges, ${SERVICE_HOME} + ~/.config/containers ownership, the client bundle service-owned and outside the checkout (a bare install runs on the staged copy under ${SERVICE_HOME}/bundle), containers.conf (cgroupfs), /run/${SERVICE_USER}, podman info as ${SERVICE_USER} (a stale pause process is reported with what to do — doctor never runs podman system migrate, which deletes a live fleet's sandbox pool)"
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + fleet-web.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), /usr/local/bin/fleet-web-start.sh (fleet-web's ExecStart shim) and fleet-web.service.d/10-timeout-kill.conf, then assert the RESOLVED TimeoutStopFailureMode, /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, binaries present"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; ${WEB_ENV_FILE} 0600 when fleet-web is installed; ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload); an operator-managed Caddyfile only gets an advisory when it routes no /v1"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/fleet-web/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
@@ -641,6 +643,57 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
       fixed "$d created/chowned to $SERVICE_USER"
     fi
   done
+
+  # The client bundle the service loads must be one the rootless sandbox can
+  # relabel (:z) on mount: owned by the service user, and writable under the
+  # unit's ProtectSystem=strict namespace. The fleet checkout is neither, so a
+  # bare install pointed at config/default fails every Pool.fill with
+  # `lsetxattr … read-only file system` (#1655). bootstrap/update stage a copy
+  # under $SERVICE_HOME/bundle; doctor reports, `fleet update` repairs.
+  bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR "$ENV_FILE")"
+  # Podman relabels whenever SELinux is enabled — permissive mode suppresses
+  # policy denials, not the lsetxattr — so a read-only or root-owned bundle is
+  # a failure there, and only advice where SELinux is disabled or absent (no
+  # relabel is attempted, and a world-readable bundle mounts fine).
+  bundle_report=advise
+  if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" =~ ^(Enforcing|Permissive)$ ]]; then
+    bundle_report=fail
+  fi
+  if [[ -z "$bundle_dir" ]]; then
+    fail "FLEET_CLIENT_CONFIG_DIR not set in $ENV_FILE — the service resolves the relative default config/default against its working directory (${SERVICE_HOME}) and fails at boot; fix: re-run scripts/bootstrap.sh --enable-service (it stages the generic bundle under ${SERVICE_HOME}/bundle), or set the variable to a bundle the service user owns"
+  elif bundle_is_default_in_checkout "$bundle_dir" "$SRC_DIR" || bundle_looks_like_fleet_default "$bundle_dir"; then
+    _fix="sudo fleet update"
+    command -v rsync >/dev/null 2>&1 || _fix="sudo dnf install rsync (or apt-get install rsync), then sudo fleet update"
+    "$bundle_report" "client bundle $bundle_dir is the generic bundle inside a fleet checkout — root-owned and read-only to the unit, so the sandbox's SELinux relabel fails (podman exit 126, lsetxattr EROFS); fix: ${_fix} (stages it under ${SERVICE_HOME}/bundle)"
+  elif bundle_is_in_checkout "$bundle_dir" "$SRC_DIR"; then
+    "$bundle_report" "client bundle $bundle_dir is inside the fleet checkout — read-only to the unit, so the sandbox's SELinux relabel fails (EROFS); check it out outside the repo (scripts/bootstrap.sh --client-config <git-url> lands it at /opt/fleet/client)"
+  elif [[ ! -d "$bundle_dir" ]]; then
+    fail "client bundle $bundle_dir (FLEET_CLIENT_CONFIG_DIR) does not exist"
+  elif [[ ! -f "$bundle_dir/manifest.yaml" ]]; then
+    fail "client bundle $bundle_dir has no manifest.yaml — not a bundle; fix FLEET_CLIENT_CONFIG_DIR in $ENV_FILE"
+  elif ! bundle_writable_in_unit "$bundle_dir" "$SERVICE_NAME" "$SERVICE_HOME"; then
+    # Owned correctly or not, a path outside the unit's writable set is
+    # read-only to the service (ProtectSystem=strict), so the relabel fails.
+    "$bundle_report" "client bundle $bundle_dir is outside ${SERVICE_NAME}.service's writable paths (ReadWritePaths, StateDirectory) — read-only under ProtectSystem=strict, so the sandbox's :z relabel fails (lsetxattr EROFS) on an SELinux host (enforcing or permissive); fix: move it under /opt/fleet/client or ${SERVICE_HOME}, or add it to the unit's ReadWritePaths"
+  elif _not_owned="$(find "$bundle_dir" ! -user "$SERVICE_USER" -print -quit 2>/dev/null)" && [[ -n "$_not_owned" ]]; then
+    # The whole tree, not just its top: one root-owned file (a root-run pull,
+    # a hand edit) is enough for the rootless :z relabel to be refused.
+    if [[ "$CHECK_ONLY" == "1" ]]; then
+      "$bundle_report" "client bundle $bundle_dir has files not owned by $SERVICE_USER (first: ${_not_owned}) — rootless relabel is refused (EPERM); fix: chown -R ${SERVICE_USER}: $bundle_dir"
+    else
+      if chown -R "$SERVICE_USER": "$bundle_dir"; then
+        fixed "client bundle $bundle_dir chowned to $SERVICE_USER"
+      else
+        # An immutable entry, a root-squashed or read-only filesystem: the
+        # repair did not take, so the tree is still not fully owned.
+        "$bundle_report" "client bundle $bundle_dir could not be chowned to $SERVICE_USER (first foreign-owned: ${_not_owned}) — rootless relabel is refused (EPERM); fix the filesystem, then: chown -R ${SERVICE_USER}: $bundle_dir"
+      fi
+    fi
+  elif _staged_src="$(bundle_marker_source "$bundle_dir" "$SERVICE_USER")" && [[ -n "$_staged_src" ]]; then
+    pass "client bundle $bundle_dir is the staged copy of ${_staged_src}, owned by $SERVICE_USER"
+  else
+    pass "client bundle $bundle_dir owned by $SERVICE_USER"
+  fi
 
   # containers.conf: cgroupfs avoids needing a systemd user D-Bus session
   # (absent for a nologin system user); file events backend avoids journald

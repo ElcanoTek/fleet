@@ -35,6 +35,7 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		"free space on the data dir",
 		"Sandbox smoke",
 		"Source freshness",
+		"staged copy under", // the client bundle must be service-owned and outside the checkout (#1655)
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor --dry-run checklist missing %q\n--- output ---\n%s", want, out)
@@ -102,6 +103,16 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		"fixes applied that want a restart — held: the rootless store has a stale pause process",
 		"without sourcing it",
 		"--network=none",
+		// The bundle ownership check walks the whole tree (#1655): one
+		// root-owned file under a service-owned dir is enough for the
+		// rootless :z relabel to be refused.
+		`find "$bundle_dir" ! -user "$SERVICE_USER"`,
+		// A read-only or root-owned bundle only breaks the :z relabel, which
+		// podman attempts only where SELinux is enabled: a failure there,
+		// advice on a host without it, never a broken report of a healthy box.
+		`bundle_report=advise`,
+		`"$bundle_report" "client bundle $bundle_dir is the generic bundle inside a fleet checkout`,
+		`"$bundle_report" "client bundle $bundle_dir is inside the fleet checkout`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)

@@ -203,13 +203,15 @@ ProtectHome=yes
 PrivateTmp=yes
 # /var/lib/fleet: the StateDirectory (HOME + image store + data + workspace).
 # /opt/fleet/client: the sandbox mounts bundle dirs (protocols/ personas/ skills/
-# system_prompts/) with SELinux relabeling (:Z), so Podman must be able to write
+# system_prompts/) with SELinux relabeling (:z), so Podman must be able to write
 # their security.selinux xattr — which ProtectSystem=strict otherwise blocks
 # (EROFS). bootstrap chowns the bundle to fleet so rootless relabel is permitted.
-# The "-" prefix marks it ignore-if-missing: a bare deployment on the in-repo
-# config/default bundle has no /opt/fleet/client, and without the prefix systemd
-# fails namespace setup outright (status=226/NAMESPACE) — the service could
-# never start on a client-config-less box.
+# The "-" prefix marks it ignore-if-missing: a bare deployment has no
+# /opt/fleet/client (bootstrap stages the in-repo config/default bundle under
+# /var/lib/fleet/bundle instead — inside the StateDirectory, so no extra path is
+# needed; #1655), and without the prefix systemd fails namespace setup outright
+# (status=226/NAMESPACE) — the service could never start on a client-config-less
+# box.
 ReadWritePaths=/var/lib/fleet -/opt/fleet/client
 
 [Install]

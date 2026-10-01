@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -71,6 +72,108 @@ func TestClientBundleCheck(t *testing.T) {
 		}
 		if !strings.Contains(out, "not a git checkout") {
 			t.Errorf("want the non-checkout note, got %q", out)
+		}
+	})
+
+	t.Run("staged copy of the generic bundle", testStagedCopyCheck)
+
+	// The shell updater compares resolved paths, so this check must too: a
+	// relative FLEET_ROOT (repoRoot falls back to ".") or one reached through
+	// a symlink names the same checkout the marker does, not a different one.
+	t.Run("staged copy seen through a relative or symlinked root", func(t *testing.T) {
+		base, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := filepath.Join(base, "src")
+		if err := os.MkdirAll(filepath.Join(root, "config", "default"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(base, "current")
+		if err := os.Symlink(root, link); err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".fleet-staged-from"), []byte(filepath.Join(root, "config", "default")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+		t.Chdir(base)
+		for _, r := range []string{link, "src", "./current"} {
+			t.Setenv("FLEET_ROOT", r)
+			if out, stale := capture(t, clientBundleCheck); stale || strings.Contains(out, "not of this checkout") {
+				t.Errorf("FLEET_ROOT=%s: a copy of this very checkout read as stale: %q", r, out)
+			}
+		}
+	})
+
+	// A marker the service account replaced with a link, a FIFO or an empty
+	// file is not one update.sh recognises, so the copy will not be refreshed:
+	// stale, not a pass through the non-checkout branch.
+	t.Run("an invalid marker is stale, never trusted", func(t *testing.T) {
+		for name, plant := range map[string]func(string) error{
+			"symlink":  func(m string) error { return os.Symlink(filepath.Join(t.TempDir(), "secret"), m) },
+			"empty":    func(m string) error { return os.WriteFile(m, nil, 0o644) },
+			"escape":   func(m string) error { return os.WriteFile(m, []byte("/opt/fleet/src\x1b[2K\rall good\n"), 0o644) },
+			"relative": func(m string) error { return os.WriteFile(m, []byte("config/default\n"), 0o644) },
+			"fifo":     func(m string) error { return syscall.Mkfifo(m, 0o644) },
+		} {
+			dir := t.TempDir()
+			if err := plant(filepath.Join(dir, ".fleet-staged-from")); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+			out, stale := capture(t, clientBundleCheck)
+			if !stale || !strings.Contains(out, "not a readable regular file") || strings.Contains(out, "is the staged copy") || strings.ContainsRune(out, 0x1b) {
+				t.Errorf("%s marker: stale=%v %q", name, stale, out)
+			}
+		}
+	})
+
+	// A markerless bundle is a hand-placed one, except at the service's own
+	// staging path, where only bootstrap/update write: update.sh would refuse
+	// to refresh that copy, so --check must not pass it.
+	t.Run("a markerless copy at the staging path is stale", func(t *testing.T) {
+		stage := filepath.Join(t.TempDir(), "bundle")
+		if err := os.MkdirAll(stage, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		prev := expectedStagePath
+		expectedStagePath = func() string { return stage }
+		defer func() { expectedStagePath = prev }()
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", stage)
+		if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "carries no staging marker") {
+			t.Errorf("markerless staging path: stale=%v %q", stale, out)
+		}
+		// Anywhere else, no marker is a hand-placed bundle, checked as such.
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", t.TempDir())
+		if out, _ := capture(t, clientBundleCheck); !strings.Contains(out, "not a git checkout") {
+			t.Errorf("a hand-placed bundle was taken for a staging path: %q", out)
+		}
+	})
+
+	// The shipped unit keeps its state dir 0700, so a non-root --check cannot
+	// read a copy staged there; it must say so and fail, not pass unlooked.
+	t.Run("an unreadable staged copy is reported, not passed", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root reads past a 0700 directory")
+		}
+		state := t.TempDir()
+		dir := filepath.Join(state, "bundle")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".fleet-staged-from"), []byte("/x/config/default\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(state, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chmod(state, 0o755) }()
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+		out, stale := capture(t, clientBundleCheck)
+		if !stale || !strings.Contains(out, "sudo fleet update --check") {
+			t.Errorf("an unreadable staged copy: stale=%v %q", stale, out)
 		}
 	})
 
@@ -184,4 +287,112 @@ func seedBundleWithRemote(t *testing.T) string {
 	git(work, "fetch", "--quiet", "origin")
 	git(work, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	return work
+}
+
+// testStagedCopyCheck: a staged copy of this checkout's config/default is
+// current only while its content still matches the source; drift, an extra
+// file, a symlink in place of a file, or a marker naming another checkout
+// each make it stale.
+func testStagedCopyCheck(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "config", "default")
+	dir := t.TempDir()
+	for _, base := range []string{src, dir} {
+		if err := os.MkdirAll(filepath.Join(base, "personas"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, body := range map[string]string{"manifest.yaml": "servers: {}\n", "personas/default.md": "hello\n"} {
+			if err := os.WriteFile(filepath.Join(base, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".fleet-staged-from"), []byte(src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+	t.Setenv("FLEET_ROOT", root)
+	out, stale := capture(t, clientBundleCheck)
+	if stale {
+		t.Errorf("a staged copy of this checkout is refreshed by update, not pulled; it is not stale by being a non-checkout: %q", out)
+	}
+	if !strings.Contains(out, "staged copy") || strings.Contains(out, "not a git checkout") {
+		t.Errorf("want the staged-copy note, got %q", out)
+	}
+	// The source moved on outside `fleet update` (a hand fast-forward of
+	// the checkout): the marker still names the same path, but the bytes
+	// are old, so the copy is stale, whether a file changed or was added.
+	persona := filepath.Join(src, "personas", "default.md")
+	added := filepath.Join(src, "personas", "new.md")
+	for _, step := range []struct {
+		name           string
+		apply, restore func() error
+	}{
+		{"changed", func() error { return os.WriteFile(persona, []byte("hello, world\n"), 0o644) }, func() error { return os.WriteFile(persona, []byte("hello\n"), 0o644) }},
+		{"added", func() error { return os.WriteFile(added, []byte("x\n"), 0o644) }, func() error { return os.Remove(added) }},
+	} {
+		if err := step.apply(); err != nil {
+			t.Fatal(err)
+		}
+		if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "no longer matches") {
+			t.Errorf("%s in the source: the copy read as current (stale=%v): %q", step.name, stale, out)
+		}
+		if err := step.restore(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, stale := capture(t, clientBundleCheck); stale {
+		t.Fatal("restored source: the copy should match again")
+	}
+	// Owner permission bits the refresh would restore (a directory gone
+	// unreadable, a script that lost its executable bit) are drift too.
+	personas := filepath.Join(dir, "personas")
+	if err := os.Chmod(personas, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "personas") {
+		t.Errorf("a 000 directory in the copy read as current (stale=%v): %q", stale, out)
+	}
+	if err := os.Chmod(personas, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(src, "manifest.yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "manifest.yaml") {
+		t.Errorf("a lost executable bit read as current (stale=%v): %q", stale, out)
+	}
+	if err := os.Chmod(filepath.Join(src, "manifest.yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A copy holding a file its source dropped is stale too (rsync
+	// --delete would remove it).
+	if err := os.WriteFile(filepath.Join(dir, "extra.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "extra.md") {
+		t.Errorf("an extra file in the copy read as current (stale=%v): %q", stale, out)
+	}
+	// A symlink in the copy in place of a file is a difference, never a
+	// path the root-run comparison follows.
+	if err := os.Remove(filepath.Join(dir, "extra.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "manifest.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(src, "manifest.yaml"), filepath.Join(dir, "manifest.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "manifest.yaml") {
+		t.Errorf("a symlink in the copy read as the file it names (stale=%v): %q", stale, out)
+	}
+	// The same copy seen from a checkout at another path (fleet re-cloned
+	// elsewhere): update refreshes only a copy of its own config/default,
+	// so the check must call this one stale rather than current.
+	t.Setenv("FLEET_ROOT", "/root/fleet")
+	out, stale = capture(t, clientBundleCheck)
+	if !stale || !strings.Contains(out, "not of this checkout") {
+		t.Errorf("a copy staged from another checkout read as current (stale=%v): %q", stale, out)
+	}
 }

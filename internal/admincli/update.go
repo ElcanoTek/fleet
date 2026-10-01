@@ -2,7 +2,10 @@ package admincli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 // cmdUpdate wraps scripts/update.sh. It forwards every flag verbatim
@@ -136,6 +140,12 @@ func clientBundleCheck() bool {
 		fmt.Println("client bundle: none configured (running the in-repo generic bundle).")
 		return false
 	}
+	// A bare service install runs a staged copy of the generic bundle
+	// (scripts/lib/bundle.sh, #1655): not a git checkout, refreshed by
+	// update.sh from the fleet checkout rather than pulled.
+	if handled, stale := stagedCopyCheck(dir); handled {
+		return stale
+	}
 	git := func(args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -231,4 +241,70 @@ func repoRoot() string {
 		return filepath.Dir(filepath.Dir(script))
 	}
 	return ""
+}
+
+// stagedBundleSource reads a staged copy's marker: the source path it was
+// staged from (its first line). The marker sits in the service user's tree and
+// this runs as root, so it is opened with O_NOFOLLOW (a planted symlink to a
+// root-only file is refused at open, with no check-then-read window) and
+// O_NONBLOCK (a FIFO there cannot hang the check), must be a regular file, and
+// is read up to 4 KiB, which a path never exceeds.
+// canonicalPath is p made absolute with its symlinks resolved, as the shell
+// updater compares it (readlink -f / realpath), so a relative or symlinked
+// FLEET_ROOT names the same checkout as the marker does. A path that cannot be
+// resolved (gone, unreadable) stays merely absolute and cleaned.
+func canonicalPath(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return filepath.Clean(p)
+	}
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		return r
+	}
+	return abs
+}
+
+// markerState is what stagedBundleSource found at a bundle's staging marker.
+type markerState int
+
+const (
+	markerAbsent     markerState = iota // no marker: a hand-placed bundle or a checkout
+	markerOK                            // a regular file naming the source
+	markerInvalid                       // something is there, but not a usable marker
+	markerUnreadable                    // permission denied: the check cannot tell
+)
+
+func stagedBundleSource(dir string) (string, markerState) {
+	path := filepath.Join(dir, ".fleet-staged-from")
+	if _, err := os.Lstat(path); err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			return "", markerUnreadable
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", markerAbsent
+		}
+		return "", markerInvalid
+	}
+	//nolint:gosec // G304: a fixed basename under the operator-configured bundle dir; opened no-follow, regular files only.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			return "", markerUnreadable
+		}
+		return "", markerInvalid
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", markerInvalid
+	}
+	buf := make([]byte, 4096)
+	n, _ := io.ReadFull(f, buf)
+	line, _, _ := strings.Cut(string(buf[:n]), "\n")
+	// Printed to the operator's terminal: only an absolute path without
+	// control bytes, so an escape sequence planted by the service account
+	// cannot rewrite the report.
+	if line = strings.TrimSpace(line); !filepath.IsAbs(line) || strings.IndexFunc(line, unicode.IsControl) >= 0 {
+		return "", markerInvalid
+	}
+	return line, markerOK
 }
