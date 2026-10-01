@@ -1269,48 +1269,8 @@ func TestStageDefaultBundle(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(dst, "stale.txt")); !os.IsNotExist(err) {
 				t.Fatal("a file removed upstream lingered in the staged copy")
 			}
-			// The service user owns the staged tree, so it can swap the marker
-			// for a symlink to a file it wants overwritten; a re-stage replaces
-			// the link and leaves the target alone.
-			victim := filepath.Join(root, "victim")
-			if err := os.WriteFile(victim, []byte("keep\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			markerPath := filepath.Join(dst, ".fleet-staged-from")
-			if err := os.Remove(markerPath); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(victim, markerPath); err != nil {
-				t.Fatal(err)
-			}
-			if out, err := bundleLib(t, path, "stage_default_bundle", src, dst, owner); err != nil {
-				t.Fatalf("re-stage over a symlinked marker: %v\n%s", err, out)
-			}
-			if got, _ := os.ReadFile(victim); string(got) != "keep\n" {
-				t.Fatalf("staging wrote through a symlinked marker: victim = %q", got)
-			}
-			if fi, err := os.Lstat(markerPath); err != nil || fi.Mode()&os.ModeSymlink != 0 {
-				t.Fatalf("the marker is still a symlink after a re-stage (err=%v)", err)
-			}
-			// A source that cannot be read in full is refused before the owner
-			// sees anything, and the existing copy keeps its files: a partial
-			// archive must never reach the --delete sync. (Root reads past a
-			// 000 mode, so this case needs an unprivileged test run, as CI's.)
-			if os.Geteuid() != 0 {
-				locked := filepath.Join(src, "locked.yaml")
-				if err := os.WriteFile(locked, []byte("x\n"), 0o000); err != nil {
-					t.Fatal(err)
-				}
-				if out, err := bundleLib(t, path, "stage_default_bundle", src, dst, owner); err == nil {
-					t.Fatalf("staging from a partly unreadable source succeeded:\n%s", out)
-				}
-				if got, _ := os.ReadFile(filepath.Join(dst, "personas", "a.yaml")); string(got) != "a\n" {
-					t.Fatalf("a failed stage disturbed the existing copy: personas/a.yaml = %q", got)
-				}
-				if err := os.Remove(locked); err != nil {
-					t.Fatal(err)
-				}
-			}
+			assertMarkerSymlinkNotFollowed(t, path, src, dst, owner, root)
+			assertPartialSourceRefused(t, path, src, dst, owner)
 			// A hand-placed bundle at the destination (no marker) is never deleted.
 			hand := filepath.Join(root, "hand")
 			if err := os.MkdirAll(hand, 0o755); err != nil {
@@ -1344,6 +1304,55 @@ func TestStageDefaultBundle(t *testing.T) {
 				t.Fatalf("staging onto a symlink succeeded:\n%s", out)
 			}
 		})
+	}
+}
+
+// assertMarkerSymlinkNotFollowed: the service user owns the staged tree, so
+// it can swap the marker for a symlink to a file it wants overwritten; a
+// re-stage replaces the link and leaves the target alone.
+func assertMarkerSymlinkNotFollowed(t *testing.T, path, src, dst, owner, root string) {
+	t.Helper()
+	victim := filepath.Join(root, "victim")
+	if err := os.WriteFile(victim, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dst, ".fleet-staged-from")
+	if err := os.Remove(markerPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, markerPath); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := bundleLib(t, path, "stage_default_bundle", src, dst, owner); err != nil {
+		t.Fatalf("re-stage over a symlinked marker: %v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "keep\n" {
+		t.Fatalf("staging wrote through a symlinked marker: victim = %q", got)
+	}
+	if fi, err := os.Lstat(markerPath); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("the marker is still a symlink after a re-stage (err=%v)", err)
+	}
+}
+
+// assertPartialSourceRefused: a source that cannot be read in full is refused
+// before the owner sees anything, and the existing copy keeps its files — a
+// partial archive must never reach the --delete sync. Root reads past a 000
+// mode, so this needs an unprivileged test run, as CI's.
+func assertPartialSourceRefused(t *testing.T, path, src, dst, owner string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		return
+	}
+	locked := filepath.Join(src, "locked.yaml")
+	if err := os.WriteFile(locked, []byte("x\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(locked)
+	if out, err := bundleLib(t, path, "stage_default_bundle", src, dst, owner); err == nil {
+		t.Fatalf("staging from a partly unreadable source succeeded:\n%s", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "personas", "a.yaml")); string(got) != "a\n" {
+		t.Fatalf("a failed stage disturbed the existing copy: personas/a.yaml = %q", got)
 	}
 }
 
