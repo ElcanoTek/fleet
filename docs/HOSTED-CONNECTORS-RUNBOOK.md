@@ -33,11 +33,14 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   are required for recovery, so document where each lives.
 - **Three shapes of Connect.** *One-click* — the vendor registers fleet as a
   client itself (Notion, Linear, Stripe, Grafana Cloud, Uptime Robot, Plaid,
-  Cartesia, Globalping, …): the user clicks Connect and signs in. *Bring your
-  own client* — the vendor has no self-registration: an admin creates an OAuth
-  app at the vendor with fleet's callback URL and users paste the client ID
-  and, where the directory says **required**, the secret (GitHub, Slack, the
-  Google Workspace servers, Azure DevOps, Sage Intacct, …). *Tenant* — the
+  Globalping, …): the user clicks Connect and signs in. *Bring your
+  own client* — the vendor has no self-registration for a hosted callback: an
+  admin creates an OAuth app at the vendor with fleet's callback URL and
+  users paste the client ID and, where the directory says **required**, the
+  secret (GitHub, Slack, the Google Workspace servers, Azure DevOps, Sage
+  Intacct, Cartesia — whose server self-registers only a loopback or
+  native-app callback, so its entry is a manual client everywhere, a
+  developer box included, …). *Tenant* — the
   URL carries the customer's org or host; the form asks for it, then one of
   the two flows above follows.
 - **Why both a client secret and a login.** The secret identifies fleet, the

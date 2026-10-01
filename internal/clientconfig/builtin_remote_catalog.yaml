@@ -3991,11 +3991,20 @@ servers:
       provisioned for the hosted server to work.
     url: "https://mcp.cartesia.ai/mcp"
     vendor: Cartesia AI, Inc.
-    docs_url: "https://docs.cartesia.ai/integrations/mcp"
+    docs_url: "https://docs.cartesia.ai/tools/ai/mcp"
     category: ai-ml
     tags: [tts, stt, voice-cloning, speech, audio]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      Cartesia registers OAuth clients only for native-app or loopback
+      redirect URIs, so a hosted deploy's https callback is refused unless
+      Cartesia has allowlisted it: ask Cartesia for an OAuth client for the
+      callback URL shown in the add form (their docs offer no self-service
+      registration), then paste its client ID and secret here. Cartesia's
+      metadata advertises no public-client method, so the secret is needed.
+    client_registration: manual
+    client_secret: required
   - name: fal-ai
     display_name: fal.ai
     description: >-
