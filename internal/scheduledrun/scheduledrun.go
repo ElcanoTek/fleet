@@ -1090,14 +1090,14 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	if overlay == nil || len(overlay.Skipped) == 0 {
 		return prompt
 	}
-	log.Printf("scheduled task %s: skipped remote MCP server(s): %v (reasons %v)", task.ID, overlay.Skipped, overlay.SkipReasons)
+	log.Printf("scheduled task %s: skipped remote MCP server(s): %s", task.ID, agent.SkippedForLog(overlay))
 	// The reason per connector decides the advice the result should carry
 	// (F10): a dead login is fixed by the owner reconnecting, a vendor that
 	// did not answer is not.
 	// Names are user-authored (and a shared connection's name is authored by
 	// someone else), so they are reduced to the tool-name grammar before they
 	// enter the prompt, as the chat path does.
-	var reauth, down, seats, unknown []string
+	var reauth, down, seats, capped, unknown []string
 	for _, raw := range overlay.Skipped {
 		name := agentcore.PromptSafeName(raw)
 		switch overlay.SkipReason(raw) {
@@ -1107,6 +1107,8 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 			reauth = append(reauth, name)
 		case agent.SkipReasonUnreachable:
 			down = append(down, name)
+		case agent.SkipReasonOverlayCap:
+			capped = append(capped, name)
 		default:
 			unknown = append(unknown, name)
 		}
@@ -1114,16 +1116,19 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	var sb strings.Builder
 	sb.WriteString("[notice] Remote MCP connectors unavailable this run — proceed without them; if the task depends on one, say so in your result rather than guessing.")
 	if len(reauth) > 0 {
-		sb.WriteString(" Login expired or rejected (the task owner must reconnect them in Settings → Connections): " + strings.Join(reauth, ", ") + ".")
+		sb.WriteString(" Login expired or rejected (the task owner must reconnect them in Settings → Connections): " + agent.JoinSkipNoticeNames(reauth) + ".")
 	}
 	if len(down) > 0 {
-		sb.WriteString(" Did not respond this run (the vendor or the network, not the login — a later run may succeed; do not ask for a reconnect): " + strings.Join(down, ", ") + ".")
+		sb.WriteString(" Did not respond this run (the vendor or the network, not the login — a later run may succeed; do not ask for a reconnect): " + agent.JoinSkipNoticeNames(down) + ".")
 	}
 	if len(seats) > 0 {
-		sb.WriteString(" Pinned to an account that is not connected (the task owner must connect it in Settings → Connections): " + strings.Join(seats, ", ") + ".")
+		sb.WriteString(" Pinned to an account that is not connected (the task owner must connect it in Settings → Connections): " + agent.JoinSkipNoticeNames(seats) + ".")
+	}
+	if len(capped) > 0 {
+		fmt.Fprintf(&sb, " Left out because the task owner has more hosted connections than fleet mounts in one run (at most %d; connections the task names are mounted first, so name the ones it needs): %s.", agent.MaxOverlayServers, agent.JoinSkipNoticeNames(capped))
 	}
 	if len(unknown) > 0 {
-		sb.WriteString(" Could not be mounted for a reason fleet could not classify (the task owner should check them in Settings → Connections; do not assert whether the login is the cause): " + strings.Join(unknown, ", ") + ".")
+		sb.WriteString(" Could not be mounted for a reason fleet could not classify (the task owner should check them in Settings → Connections; do not assert whether the login is the cause): " + agent.JoinSkipNoticeNames(unknown) + ".")
 	}
 	sb.WriteString("\n\n")
 	sb.WriteString(prompt)
@@ -1263,6 +1268,11 @@ func unresolvedPins(pins map[string]string, overlay *agent.RemoteMCPOverlay) map
 		}
 		for _, name := range overlay.Skipped {
 			known[name] = true
+		}
+		// A skipped connection whose default seat is labelled was recorded
+		// under "name_label"; the pin names the bare connection (#1656).
+		for _, seat := range overlay.SkippedSeats {
+			known[seat.Server] = true
 		}
 	}
 	var out map[string]string

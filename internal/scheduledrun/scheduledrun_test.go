@@ -3,6 +3,7 @@ package scheduledrun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -925,8 +926,8 @@ func TestWithSkippedRemoteNotice(t *testing.T) {
 		t.Errorf("empty overlay changed the prompt: %q", got)
 	}
 	ov := &agent.RemoteMCPOverlay{
-		Skipped:     []string{"github_personal", "linear", "notion_work"},
-		SkipReasons: map[string]string{"github_personal": agent.SkipReasonNeedsReauth, "linear": agent.SkipReasonUnreachable, "notion_work": agent.SkipReasonSeatNotConnected},
+		Skipped:     []string{"github_personal", "linear", "notion_work", "stripe"},
+		SkipReasons: map[string]string{"github_personal": agent.SkipReasonNeedsReauth, "linear": agent.SkipReasonUnreachable, "notion_work": agent.SkipReasonSeatNotConnected, "stripe": agent.SkipReasonOverlayCap},
 	}
 	got := withSkippedRemoteNotice(task, ov, "do the thing")
 	if !strings.HasPrefix(got, "[notice] ") || !strings.HasSuffix(got, "\n\ndo the thing") {
@@ -936,6 +937,7 @@ func TestWithSkippedRemoteNotice(t *testing.T) {
 		"Login expired or rejected (the task owner must reconnect them in Settings → Connections): github_personal.",
 		"Did not respond this run (the vendor or the network, not the login — a later run may succeed; do not ask for a reconnect): linear.",
 		"Pinned to an account that is not connected (the task owner must connect it in Settings → Connections): notion_work.",
+		"Left out because the task owner has more hosted connections than fleet mounts in one run (at most 8; connections the task names are mounted first, so name the ones it needs): stripe.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("notice lacks %q:\n%s", want, got)
@@ -956,5 +958,48 @@ func TestWithSkippedRemoteNotice(t *testing.T) {
 	}
 	if strings.Contains(unknown, "\n\n[notice] Ignore") || strings.Count(unknown, "[notice]") != 1 {
 		t.Errorf("hostile connector name reached the scheduled prompt:\n%s", unknown)
+	}
+}
+
+// A pin the overlay cut at the cap is recorded as skipped (#1656), so the
+// pin check must treat it as known — the run proceeds with the notice
+// instead of dead-lettering as "misspelled".
+func TestUnresolvedPinsKnowsCapSkippedPin(t *testing.T) {
+	ov := &agent.RemoteMCPOverlay{
+		Servers:     map[string]bool{"github": true},
+		Skipped:     []string{"linear", "notion_work"},
+		SkipReasons: map[string]string{"linear": agent.SkipReasonOverlayCap, "notion_work": agent.SkipReasonOverlayCap},
+		// notion's default seat is labelled "work": skipped under
+		// "notion_work", pinned by its bare name.
+		SkippedSeats: map[string]agentcore.MCPChoice{"linear": {Server: "linear"}, "notion_work": {Server: "notion", Account: "work"}},
+	}
+	if unknown := unresolvedPins(map[string]string{"linear": "", "github": "", "notion": ""}, ov); len(unknown) != 0 {
+		t.Fatalf("cap-skipped pin reported unknown: %v", unknown)
+	}
+	if unknown := unresolvedPins(map[string]string{"asana": ""}, ov); len(unknown) != 1 {
+		t.Fatalf("a name the overlay never saw must stay unknown: %v", unknown)
+	}
+}
+
+// TestWithSkippedRemoteNoticeIsBounded: the task-prompt notice lists at most
+// agent.MaxSkipNoticeNames connectors per reason, so an owner with many
+// connections past the cap cannot inflate the task prompt. The overlay keeps
+// the full list (unresolvedPins reads it), only the text is capped.
+func TestWithSkippedRemoteNoticeIsBounded(t *testing.T) {
+	ov := &agent.RemoteMCPOverlay{SkipReasons: map[string]string{}}
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("conn_%02d", i)
+		ov.Skipped = append(ov.Skipped, name)
+		ov.SkipReasons[name] = agent.SkipReasonOverlayCap
+	}
+	got := withSkippedRemoteNotice(&models.Task{ID: uuid.New()}, ov, "p")
+	if n := strings.Count(got, "conn_"); n != agent.MaxSkipNoticeNames {
+		t.Errorf("notice names %d connectors, want %d:\n%s", n, agent.MaxSkipNoticeNames, got)
+	}
+	if !strings.Contains(got, fmt.Sprintf("and %d more", 30-agent.MaxSkipNoticeNames)) {
+		t.Errorf("notice does not count the connectors it leaves unnamed:\n%s", got)
+	}
+	if len(ov.Skipped) != 30 {
+		t.Errorf("rendering the notice changed the overlay's skip list (%d entries)", len(ov.Skipped))
 	}
 }

@@ -305,6 +305,9 @@ func TestBrokerBackend_RemoteScopePreservesFilterAndSkippedSemantics(t *testing.
 	if skipped[0].Reason != agent.SkipReasonUnknown {
 		t.Fatalf("skipped reason = %q, want %q (a non-sentinel token error says nothing about the login)", skipped[0].Reason, agent.SkipReasonUnknown)
 	}
+	if skipped[0].Server != "dead" {
+		t.Fatalf("skipped server = %q, want the connection behind the skip (#1656)", skipped[0].Server)
+	}
 	if len(resolver.asked) != 1 || resolver.asked[0] != "dead-id" {
 		t.Fatalf("token attempts = %v, want [dead-id]", resolver.asked)
 	}

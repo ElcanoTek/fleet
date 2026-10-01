@@ -746,7 +746,7 @@ func TestClientServer_RemoteScopeMetadata(t *testing.T) {
 		fakeBroker:   &fakeBroker{},
 		scopeID:      "remote-scope-1",
 		scopeTools:   []ToolDescriptor{{Server: "github", Tool: "search"}},
-		scopeSkipped: []SkippedServer{{Name: "linear", Reason: "needs_reauth"}},
+		scopeSkipped: []SkippedServer{{Name: "linear", Reason: "needs_reauth", Server: "linear"}, {Name: "stripe_work", Reason: "overlay_cap", Server: "stripe", Account: "work"}},
 	}
 	client := loopback(t, fake)
 	spec := ScopeSpec{Remote: &RemoteScopeSpec{
@@ -778,17 +778,22 @@ func TestClientServer_RemoteScopeMetadata(t *testing.T) {
 		t.Fatalf("remote seat pins did not cross the boundary: %+v", got.Remote)
 	}
 	skipped := scope.Skipped()
-	if len(skipped) != 1 || skipped[0] != "linear" {
-		t.Fatalf("Skipped = %v, want [linear]", skipped)
+	if len(skipped) != 2 || skipped[0] != "linear" || skipped[1] != "stripe_work" {
+		t.Fatalf("Skipped = %v, want [linear stripe_work]", skipped)
 	}
 	skipped[0] = "mutated"
-	if got := scope.Skipped(); len(got) != 1 || got[0] != "linear" {
+	if got := scope.Skipped(); len(got) != 2 || got[0] != "linear" {
 		t.Fatalf("Skipped returned mutable internal slice: %v", got)
 	}
 	// The reason class rides the wire with the name (F10): the parent's
 	// prompt can only say "reconnect" for the right connector if it knows.
-	if reasons := scope.SkipReasons(); reasons["linear"] != "needs_reauth" {
-		t.Fatalf("SkipReasons = %v, want linear → needs_reauth", reasons)
+	if reasons := scope.SkipReasons(); reasons["linear"] != "needs_reauth" || reasons["stripe_work"] != "overlay_cap" {
+		t.Fatalf("SkipReasons = %v, want linear → needs_reauth, stripe_work → overlay_cap", reasons)
+	}
+	// The seat behind a skip crosses too (#1656): the parent's pin check
+	// matches a bare connection name against a labelled registration name.
+	if seats := scope.SkippedSeats(); seats["stripe_work"].Server != "stripe" || seats["stripe_work"].Account != "work" || seats["linear"].Server != "linear" {
+		t.Fatalf("SkippedSeats = %v", seats)
 	}
 }
 

@@ -119,6 +119,9 @@ func TestBuildRemoteMCPOverlaySkipsAndReportsNeedsReauth(t *testing.T) {
 	if got := ov.SkipReason("dead"); got != SkipReasonUnknown {
 		t.Errorf("SkipReason(dead) = %q, want %q for a non-sentinel token error", got, SkipReasonUnknown)
 	}
+	if seat := ov.SkippedSeats["dead"]; seat.Server != "dead" {
+		t.Errorf("SkippedSeats[dead] = %+v, want the connection behind the skip", seat)
+	}
 	if strings.Contains(logs.String(), sensitiveDetail) {
 		t.Fatal("token failure detail reached logs")
 	}
@@ -660,4 +663,89 @@ func (r hostedMCPRoster) skippedNamesOnly() []string {
 		out = append(out, s.name)
 	}
 	return out
+}
+
+// TestBuildRemoteMCPOverlayCapMountsNamedFirstAndRecordsTheRest is #1656:
+// with more connected servers than the cap, the ones the selection names
+// mount first — a scheduled task's pin to the OLDEST connection still mounts
+// — and every server past the cap is recorded as skipped with its own reason,
+// so the pin check and the prompt notice see it instead of "misspelled".
+func TestBuildRemoteMCPOverlayCapMountsNamedFirstAndRecordsTheRest(t *testing.T) {
+	srv := mcpHTTPStub(t, "probe")
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+	// The store lists newest first; s01 is the oldest and would be cut by a
+	// cap applied in list order.
+	r := &fakeResolver{tokens: map[string]string{}}
+	for i := 10; i >= 1; i-- {
+		id := fmt.Sprintf("s%02d", i)
+		conn := RemoteMCPConn{ID: id, Name: id, URL: srv.URL + "/" + id}
+		if i == 2 {
+			// A labelled default seat: registered as "s02_work", pinned by
+			// its bare name — the case the seat map exists for.
+			conn.Account = "work"
+		}
+		r.conns = append(r.conns, conn)
+		r.tokens[id] = "tok-" + id
+	}
+	sel := RemoteMCPAllConnected
+	sel.Accounts = map[string]string{"s01": ""} // the task names s01 on its default seat
+	ov, err := BuildRemoteMCPOverlay(context.Background(), r, "u@x.com", nil, sel)
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov.Close()
+	if len(ov.Servers) != maxOverlayServers {
+		t.Fatalf("mounted %d servers, want the cap %d: %v", len(ov.Servers), maxOverlayServers, ov.Servers)
+	}
+	if !ov.Servers["s01"] {
+		t.Errorf("the named server s01 was not mounted: %v", ov.Servers)
+	}
+	// Named first, then list order: s10..s04 fill the cap; s03 and s02 are
+	// past it, s02 under its labelled registration name.
+	if len(ov.Skipped) != 2 || ov.Skipped[0] != "s03" || ov.Skipped[1] != "s02_work" {
+		t.Fatalf("Skipped = %v, want [s03 s02_work]", ov.Skipped)
+	}
+	for _, name := range ov.Skipped {
+		if got := ov.SkipReason(name); got != SkipReasonOverlayCap {
+			t.Errorf("SkipReason(%s) = %q, want %q", name, got, SkipReasonOverlayCap)
+		}
+	}
+	// The seat behind each skip is recorded, so a pin by the bare name
+	// "s02" resolves against the skip recorded as "s02_work".
+	if seat := ov.SkippedSeats["s02_work"]; seat.Server != "s02" || seat.Account != "work" {
+		t.Errorf("SkippedSeats[s02_work] = %+v, want {s02 work}", seat)
+	}
+	if seat := ov.SkippedSeats["s03"]; seat.Server != "s03" || seat.Account != "" {
+		t.Errorf("SkippedSeats[s03] = %+v, want {s03 \"\"}", seat)
+	}
+	if n := strings.Count(logs.String(), "overlay cap"); n != 1 {
+		t.Errorf("cap logged %d times, want once:\n%s", n, logs.String())
+	}
+	// No token was minted for a server past the cap (the cap check precedes
+	// AcquireTokenByID, and the dial comes after that).
+	for _, id := range r.asked {
+		if id == "s03" || id == "s02" {
+			t.Errorf("token acquired for a server past the cap: %s", id)
+		}
+	}
+}
+
+func TestNamedFirst(t *testing.T) {
+	conns := []RemoteMCPConn{{Name: "c"}, {Name: "B"}, {Name: "a"}, {Name: "d"}}
+	if got := namedFirst(conns, RemoteMCPAllConnected); len(got) != 4 || got[0].Name != "c" || got[3].Name != "d" {
+		t.Fatalf("no names: order changed: %v", got)
+	}
+	sel := RemoteMCPAllConnected
+	sel.Accounts = map[string]string{"d": "", "b": "work"} // "b" matches "B" case-insensitively
+	got := namedFirst(conns, sel)
+	order := make([]string, 0, len(got))
+	for _, c := range got {
+		order = append(order, c.Name)
+	}
+	if want := []string{"B", "d", "c", "a"}; strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("namedFirst = %v, want %v", order, want)
+	}
 }

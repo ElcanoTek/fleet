@@ -646,30 +646,25 @@ func writeHostedSkipNotice(sb *strings.Builder, skipped []skippedConnector) {
 		{SkipReasonNeedsReauth, "need reconnecting (the login expired or the vendor rejected the stored credential) — tell the user to reconnect them under Settings → Connections"},
 		{SkipReasonUnreachable, "did not respond this turn (the vendor or the network, not the login) — tell the user they are unavailable right now and can be retried later"},
 		{SkipReasonSeatNotConnected, "are pinned to an account that is not connected — tell the user to connect that account under Settings → Connections"},
+		{SkipReasonOverlayCap, fmt.Sprintf("were left out because more hosted connectors are turned on than fleet mounts in one turn (at most %d; the connection itself is fine) — tell the user to turn off connectors this conversation does not need in the Connectors picker", maxOverlayServers)},
 		{SkipReasonUnknown, "could not be mounted for a reason fleet could not classify — tell the user they are unavailable this turn and to check them under Settings → Connections; do not assert whether the login is the cause"},
 	}
 	for _, g := range groups {
-		first := true
+		var names []string
 		for _, sc := range skipped {
 			reason := sc.reason
 			switch reason {
-			case SkipReasonNeedsReauth, SkipReasonUnreachable, SkipReasonSeatNotConnected:
+			case SkipReasonNeedsReauth, SkipReasonUnreachable, SkipReasonSeatNotConnected, SkipReasonOverlayCap:
 			default:
 				reason = SkipReasonUnknown // anything else lands in the last group, never nowhere
 			}
-			if reason != g.reason {
-				continue
+			if reason == g.reason {
+				names = append(names, "`"+sc.name+"`")
 			}
-			if first {
-				sb.WriteString("- ")
-				first = false
-			} else {
-				sb.WriteString(", ")
-			}
-			fmt.Fprintf(sb, "`%s`", sc.name)
 		}
-		if !first {
-			sb.WriteString(": " + g.text + ".\n")
+		if len(names) > 0 {
+			// Bounded (MaxSkipNoticeNames): the overlay cap can skip any number.
+			sb.WriteString("- " + JoinSkipNoticeNames(names) + ": " + g.text + ".\n")
 		}
 	}
 	sb.WriteString("\n")

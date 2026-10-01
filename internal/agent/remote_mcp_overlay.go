@@ -264,9 +264,36 @@ type RemoteMCPOverlayOpener func(ctx context.Context, email string, shadowed map
 
 // maxOverlayServers caps how many remote servers one user can inject into a
 // single run, a guard against blowing the 128-tool ceiling (and against a
-// pathological number of per-turn handshakes). Excess servers are skipped with a
-// logged warning rather than silently dropped.
+// pathological number of per-turn handshakes). Servers the run named (a
+// scheduled task's mcp_selection, a chat's seat pins) are mounted first, so
+// the cap only ever cuts servers nobody asked for by name; every server it
+// cuts is recorded as skipped with SkipReasonOverlayCap, so the prompt notice
+// names it and a pinned name past the cap reads as "left out", never as
+// "misspelled" (#1656).
 const maxOverlayServers = 8
+
+// MaxOverlayServers is maxOverlayServers for the notices other packages
+// render (the scheduled runner's [notice] prefix), so the number a user is
+// told is the one the overlay applies.
+const MaxOverlayServers = maxOverlayServers
+
+// MaxSkipNoticeNames bounds how many connector names one reason group of a
+// skip notice spells out before it says "and N more". Every connection past
+// the overlay cap is recorded as skipped, and a user can own or be shared any
+// number of connections, so an unbounded list would let one account grow the
+// system or task prompt without limit — the cost the cap exists to bound.
+// The overlay's Skipped list stays complete: only the prompt text is capped,
+// so a pinned name past the cap still resolves as "left out".
+const MaxSkipNoticeNames = 10
+
+// JoinSkipNoticeNames joins names for a skip notice, listing at most
+// MaxSkipNoticeNames of them and counting the rest.
+func JoinSkipNoticeNames(names []string) string {
+	if len(names) <= MaxSkipNoticeNames {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(names[:MaxSkipNoticeNames], ", "), len(names)-MaxSkipNoticeNames)
+}
 
 // RemoteMCPOverlay is the per-run wiring for a user's remote servers. Client is
 // retained for the in-process compatibility path; Broker and CloseScope allow
@@ -292,8 +319,16 @@ type RemoteMCPOverlay struct {
 	// not — telling the user to reconnect a working connection was F10 (#1006).
 	Skipped []string
 	// SkipReasons maps a Skipped name to one of the SkipReason* classes. Nil
-	// when nothing was skipped; a name missing here reads as SkipReasonUnreachable.
+	// when nothing was skipped; a name missing here reads as SkipReasonUnknown.
 	SkipReasons map[string]string
+	// SkippedSeats maps a Skipped registration name to the public
+	// {connection name, account label} it stood for, the way Seats does for
+	// mounted ones. A scheduled task pins a bare connection name, and when
+	// that connection's default seat carries a label the registration name
+	// it was skipped under is "name_label" — without this map the pin check
+	// would read a skipped-but-known connection as one the owner never had
+	// (#1656). Nil when nothing was skipped by connection.
+	SkippedSeats map[string]agentcore.MCPChoice
 }
 
 // The classes a skipped hosted connection can fall into.
@@ -314,7 +349,23 @@ const (
 	// be read from the store, an overlay built without reasons. The notice
 	// then asserts nothing about the login or the vendor.
 	SkipReasonUnknown = "unknown"
+	// SkipReasonOverlayCap: the run had more connected servers than
+	// maxOverlayServers and this one was past the cap. Nothing is wrong with
+	// the connection; the user turns off connectors they do not need, or
+	// names the ones they do (named servers mount first).
+	SkipReasonOverlayCap = "overlay_cap"
 )
+
+// skipConn records a selected connection as skipped under its registration
+// name, with its reason class and the seat it stood for.
+func (o *RemoteMCPOverlay) skipConn(conn RemoteMCPConn, reason string) {
+	regName := agentcore.RegisteredMCPName(conn.Name, conn.Account)
+	o.skip(regName, reason)
+	if o.SkippedSeats == nil {
+		o.SkippedSeats = map[string]agentcore.MCPChoice{}
+	}
+	o.SkippedSeats[regName] = agentcore.MCPChoice{Server: conn.Name, Account: conn.Account}
+}
 
 // skip records a name in Skipped with its reason class.
 func (o *RemoteMCPOverlay) skip(name, reason string) {
@@ -325,14 +376,28 @@ func (o *RemoteMCPOverlay) skip(name, reason string) {
 	o.SkipReasons[name] = reason
 }
 
-// skippedWithReasons renders "name (reason), …" for a log line.
+// skippedWithReasons renders "name (reason), …" for a log line, bounded like
+// the prompt notices (MaxSkipNoticeNames, then "and N more"): every
+// connection past the overlay cap is skipped, so an unbounded line would grow
+// with the size of the account on every turn and run.
 func skippedWithReasons(o *RemoteMCPOverlay) string {
-	parts := make([]string, 0, len(o.Skipped))
-	for _, name := range o.Skipped {
+	n := len(o.Skipped)
+	if n > MaxSkipNoticeNames+1 {
+		n = MaxSkipNoticeNames + 1 // one past the bound is enough for "and N more"
+	}
+	parts := make([]string, 0, n)
+	for _, name := range o.Skipped[:n] {
 		parts = append(parts, name+" ("+o.SkipReason(name)+")")
+	}
+	if len(o.Skipped) > MaxSkipNoticeNames {
+		return fmt.Sprintf("%s, and %d more", strings.Join(parts[:MaxSkipNoticeNames], ", "), len(o.Skipped)-MaxSkipNoticeNames)
 	}
 	return strings.Join(parts, ", ")
 }
+
+// SkippedForLog is skippedWithReasons for callers outside this package (the
+// scheduled-run notice logs the same list).
+func SkippedForLog(o *RemoteMCPOverlay) string { return skippedWithReasons(o) }
 
 // SkipReason returns the class recorded for a skipped name. A name without a
 // recorded class — an overlay built without reasons, or a class this build
@@ -343,10 +408,45 @@ func (o *RemoteMCPOverlay) SkipReason(name string) string {
 		return SkipReasonUnknown
 	}
 	switch r := o.SkipReasons[name]; r {
-	case SkipReasonNeedsReauth, SkipReasonUnreachable, SkipReasonSeatNotConnected:
+	case SkipReasonNeedsReauth, SkipReasonUnreachable, SkipReasonSeatNotConnected, SkipReasonOverlayCap:
 		return r
 	}
 	return SkipReasonUnknown
+}
+
+// named reports whether the selection names the server at all — a scheduled
+// task's mcp_selection entry or a chat seat override — regardless of which
+// seat it asks for. pinned() is narrower (it answers "which seat"); this is
+// the question the overlay cap needs: was this server asked for by name?
+func (sel RemoteMCPSelection) named(name string) bool {
+	if _, ok := sel.Accounts[name]; ok {
+		return true
+	}
+	_, ok := sel.Accounts[strings.ToLower(name)]
+	return ok
+}
+
+// namedFirst orders the chosen connections so the ones the selection names
+// come first, in their original order, then the rest in theirs. With the
+// overlay cap applied in this order a named server is cut only when more
+// than maxOverlayServers are named, which is the one case the user must
+// resolve by hand.
+func namedFirst(chosen []RemoteMCPConn, sel RemoteMCPSelection) []RemoteMCPConn {
+	if len(sel.Accounts) == 0 {
+		return chosen
+	}
+	out := make([]RemoteMCPConn, 0, len(chosen))
+	for _, c := range chosen {
+		if sel.named(c.Name) {
+			out = append(out, c)
+		}
+	}
+	for _, c := range chosen {
+		if !sel.named(c.Name) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // connectSkipReason classifies a mount failure the way recordRefusedMount
@@ -593,8 +693,8 @@ func (o *RemoteMCPOverlay) Active() bool {
 // hostedMCPRoster is what the system prompt builder needs to know about this
 // turn's per-user hosted (remote) MCP overlay that the tool roster cannot tell
 // it: the registration names of the selected connections whose token could not
-// be acquired or that failed to connect (Skipped — a connection dropped by
-// maxOverlayServers is logged, not listed). The tools the overlay DID mount are
+// be acquired, that failed to connect, or that fell past maxOverlayServers
+// (Skipped, each with its reason class). The tools the overlay DID mount are
 // not carried here any more: the "MCP Tools (live registry)" section is
 // appended by agentcore.Run from the roster it actually registered
 // (agentcore/live_registry.go), which is the only source that also knows
@@ -722,14 +822,24 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		overlay.skip(name, SkipReasonSeatNotConnected)
 	}
 	registered := 0
-	for _, conn := range chosen {
+	capLogged := false
+	for _, conn := range namedFirst(chosen, sel) {
 		regName := agentcore.RegisteredMCPName(conn.Name, conn.Account)
-		if registered >= maxOverlayServers {
-			log.Printf("remote-mcp: skipping %q and further servers for %s — overlay cap %d reached", regName, email, maxOverlayServers)
-			break
-		}
 		if shadowed[conn.Name] || shadowed[regName] {
+			// A collision never takes a slot, so it is checked before the cap:
+			// past the cap it would otherwise be reported as a connector the
+			// user could free a slot for, which it can never use.
 			log.Printf("remote-mcp: skipping remote server %q — name collides with a built-in server", regName)
+			continue
+		}
+		if registered >= maxOverlayServers {
+			// Past the cap: record every one (the notice names them, and a
+			// pinned name here is "left out", not "unknown"), log once.
+			if !capLogged {
+				log.Printf("remote-mcp: overlay cap %d reached for %s — skipping %q and every further server", maxOverlayServers, email, regName)
+				capLogged = true
+			}
+			overlay.skipConn(conn, SkipReasonOverlayCap)
 			continue
 		}
 		if conn.Owner != "" {
@@ -742,7 +852,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// needs-reauth / refresh failure: skip this server, keep the rest, and
 			// record it so the caller can tell the owner.
 			log.Printf("remote-mcp: skipping server %q for %s — token unavailable", regName, email)
-			overlay.skip(regName, tokenSkipReason(terr))
+			overlay.skipConn(conn, tokenSkipReason(terr))
 			continue
 		}
 		opts := mcp.HTTPServerOptions{HTTPClient: httpClient}
@@ -769,7 +879,7 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// to which one it was. The wire to the parent still carries only the
 			// public name — this stays a host-side log line.
 			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(bearer, aerr))
-			overlay.skip(regName, connectSkipReason(aerr))
+			overlay.skipConn(conn, connectSkipReason(aerr))
 			recordRefusedMount(ctx, resolver, email, regName, conn, aerr)
 			continue
 		}
