@@ -1014,11 +1014,14 @@ if [[ "$ENABLE_SERVICE" == "1" ]] && bundle_is_default_in_checkout "$CLIENT_CONF
     ok "default bundle staged: ${CLIENT_CONFIG_DIR} → ${_stage} (owned by ${SERVICE_USER}; FLEET_CLIENT_CONFIG_DIR will point here)"
     CLIENT_CONFIG_DIR="$_stage"
   else
+    # Fatal, before the env file or the unit is written: carrying on would
+    # persist the checkout as the bundle and start a service whose sandbox
+    # cannot mount it on an enforcing host — the failure staging exists to end.
     _rc=$?
     if [[ "$_rc" == "2" ]]; then
-      warn "${_stage} holds a bundle that is not a staged copy — leaving it alone; point FLEET_CLIENT_CONFIG_DIR at it or move it aside and re-run"
+      die "${_stage} holds a bundle that is not a staged copy — leaving it alone. Point FLEET_CLIENT_CONFIG_DIR (or --client-config) at it, or move it aside and re-run."
     else
-      warn "could not stage the default bundle to ${_stage} — the sandbox's SELinux relabel of ${CLIENT_CONFIG_DIR} will fail (EROFS) on an enforcing host"
+      die "could not stage the default bundle to ${_stage} (see the error above) — without it the sandbox's SELinux relabel of ${CLIENT_CONFIG_DIR} fails (EROFS) on an enforcing host. Fix the cause and re-run."
     fi
   fi
 elif [[ "$ENABLE_SERVICE" == "1" ]] && bundle_is_in_checkout "$CLIENT_CONFIG_DIR" "$REPO_ROOT"; then

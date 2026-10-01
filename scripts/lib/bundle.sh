@@ -58,46 +58,73 @@ bundle_looks_like_fleet_default() {
   grep -qs '^module github.com/ElcanoTek/fleet$' "$1/../../go.mod"
 }
 
-# stage_default_bundle SRC DST OWNER — make DST a copy of SRC owned by OWNER
-# (OWNER's login group), with the marker recording SRC. Idempotent.
+# _bundle_as OWNER CMD... — run CMD as OWNER: directly when this shell already
+# is OWNER (the tests), through runuser when it is root (bootstrap, update).
+_bundle_as() {
+  local owner="$1"; shift
+  if [[ "$(id -u)" == "$(id -u "$owner" 2>/dev/null)" ]]; then
+    "$@"
+  elif [[ "$(id -u)" == "0" ]] && command -v runuser >/dev/null 2>&1; then
+    runuser -u "$owner" -- "$@"
+  else
+    echo "stage_default_bundle: cannot act as $owner (need root and runuser)" >&2
+    return 1
+  fi
+}
+
+# stage_default_bundle SRC DST OWNER — make DST a copy of SRC owned by OWNER,
+# with the marker recording SRC. Idempotent.
 #
 # Refuses (exit 1) a SRC without manifest.yaml, a DST that is not an absolute
-# path below /, a DST that is a symlink, and an OWNER that does not exist; and
-# (exit 2) a DST that exists, is non-empty and carries no marker — someone's
-# hand-placed bundle, never deleted here.
+# path below /, a DST that is a symlink, an OWNER that does not exist, and a
+# box without rsync; and (exit 2) a DST that exists, is non-empty and carries
+# no marker — someone's hand-placed bundle, never deleted here.
 #
-# The copy is synced IN PLACE with rsync (files replaced, directories kept) so
-# a running service's bind mounts of DST's subdirectories stay valid until its
-# containers are recycled; without rsync the copy is built beside DST and
-# swapped in by rename, and the old tree is then deleted, so a running
-# container's mounts of it see empty directories until it is recycled (rsync
-# is in bootstrap's dependency list, so this is the rare path). Neither preserves the source's SELinux context: the
-# copy takes the state dir's label (and restorecon, where present, settles
-# it), and the sandbox's `:z` relabels the mounted dirs on first use.
+# Every write happens AS OWNER. DST sits in the service user's own state dir,
+# so that account controls every path component below it: a root process that
+# wrote there could be redirected by a planted symlink (the marker pointed at
+# /etc/fleet/fleet.env, say) into truncating a root-only file. Root only READS
+# the source here — streamed as a tar, because the checkout may sit somewhere
+# OWNER cannot read — and OWNER unpacks it into a scratch dir beside DST and
+# syncs it IN PLACE with rsync --delete (files replaced, directories kept), so
+# a running service's bind mounts of DST's subdirectories keep valid content
+# until its containers are recycled. There is no rename-and-delete fallback
+# without rsync: deleting the old tree would empty those mounts under running
+# sandboxes, so a box without rsync is refused instead (bootstrap installs it).
+#
+# Labels are left alone: the copy takes the state dir's default context, and
+# the sandbox's `:z` relabels the mounted dirs on first use. A restorecon here
+# would reset an already-relabelled copy under running containers, which then
+# lose read access until they are recycled.
 stage_default_bundle() {
   local src="$1" dst="$2" owner="$3" marker
   [[ -f "$src/manifest.yaml" ]] || { echo "stage_default_bundle: no manifest.yaml at $src" >&2; return 1; }
   [[ "$dst" == /?* ]] || { echo "stage_default_bundle: refusing destination '$dst' (must be an absolute path below /)" >&2; return 1; }
   [[ -L "$dst" ]] && { echo "stage_default_bundle: $dst is a symlink — not staging onto it" >&2; return 1; }
   id -u "$owner" >/dev/null 2>&1 || { echo "stage_default_bundle: no such user $owner" >&2; return 1; }
+  command -v rsync >/dev/null 2>&1 || { echo "stage_default_bundle: rsync is required to refresh the copy in place (dnf/apt install rsync)" >&2; return 1; }
   marker="$(bundle_staged_marker "$dst")"
   if [[ -d "$dst" && -n "$(ls -A "$dst" 2>/dev/null)" && ! -f "$marker" ]]; then
     echo "stage_default_bundle: $dst holds a bundle that is not a staged copy (no $(basename "$marker")) — not touching it" >&2
     return 2
   fi
-  install -d -m 0755 -o "$owner" "$dst" || return 1
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete --no-owner --no-group --exclude "/$(basename "$marker")" "$src/" "$dst/" || return 1
-  else
-    local tmp old
-    tmp="$(mktemp -d "${dst}.new.XXXXXX")" || return 1
-    if ! cp -a --no-preserve=context,ownership "$src/." "$tmp/"; then rm -rf "$tmp"; return 1; fi
-    old="${dst}.old.$$"
-    if ! { mv -T "$dst" "$old" && mv -T "$tmp" "$dst"; }; then rm -rf "$tmp"; return 1; fi
-    rm -rf "$old"
-  fi
-  printf '%s\n' "$src" > "$marker" || return 1
-  chown -R "$owner": "$dst" || return 1
-  if command -v restorecon >/dev/null 2>&1; then restorecon -R "$dst" >/dev/null 2>&1 || true; fi
+  # shellcheck disable=SC2016 # the script is single-quoted on purpose: it runs as OWNER with its own $1..$3
+  tar -C "$src" --exclude="./$(basename "$marker")" -cf - . | _bundle_as "$owner" bash -c '
+    set -euo pipefail
+    src="$1" dst="$2" marker="$3"
+    [[ -L "$dst" ]] && { echo "stage_default_bundle: $dst is a symlink — not staging onto it" >&2; exit 1; }
+    mkdir -p -m 0755 -- "$dst"
+    tmp="$(mktemp -d "${dst}.new.XXXXXX")"
+    trap '"'"'rm -rf -- "$tmp"'"'"' EXIT
+    tar -C "$tmp" --no-same-owner -xf -
+    # A truncated stream (the reading tar failed) must never reach the
+    # --delete sync below, which would empty the copy.
+    [[ -f "$tmp/manifest.yaml" ]] || { echo "stage_default_bundle: incomplete copy of the source — not syncing" >&2; exit 1; }
+    rsync -a --delete --no-owner --no-group --exclude "/$(basename "$marker")" "$tmp/" "$dst/"
+    rm -f -- "$marker"
+    printf "%s\n" "$src" > "$marker"
+  ' _ "$src" "$dst" "$marker"
+  local -a st=("${PIPESTATUS[@]}")
+  [[ "${st[0]}" == "0" && "${st[1]}" == "0" ]] || return 1
   return 0
 }

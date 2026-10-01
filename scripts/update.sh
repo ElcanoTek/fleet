@@ -454,9 +454,11 @@ else
       # --dry-run, which never reaches here because it skips the fast-forward.
       # --src needs no forwarding: SRC_DIR re-derives from the script path the
       # exec below names. Env-only knobs — FLEET_ENV_FILE, FLEET_STATE_DIR —
-      # are inherited by `env` without being named.)
-      if ! git diff --quiet "$before_sha" "$after_sha" -- scripts/update.sh; then
-        warn "update.sh changed in this update — re-executing the new version"
+      # are inherited by `env` without being named.) The helpers under
+      # scripts/lib/ were sourced at the top from the OLD checkout too, so a
+      # change there (a staging fix in lib/bundle.sh, say) re-execs as well.
+      if ! git diff --quiet "$before_sha" "$after_sha" -- scripts/update.sh scripts/lib/; then
+        warn "update.sh or a helper it sources changed in this update — re-executing the new version"
         exec env FLEET_UPDATE_REEXEC=1 FLEET_UPDATE_YES=1 \
           FLEET_UPDATE_BASE_SHA="$before_sha" \
           FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" \

@@ -1203,23 +1203,41 @@ func toolsOnlyPath(t *testing.T, tools ...string) string {
 }
 
 // TestStageDefaultBundle exercises scripts/lib/bundle.sh's staging as the
-// current user, on both copy paths: the copy is complete and carries the
-// marker naming its source; a re-stage drops a file gone upstream; a
-// destination holding a bundle that is not a staged copy is refused and left
-// intact; a source that is not a bundle, a relative destination and a
-// symlinked destination are refused.
+// current user: the copy is complete and carries the marker naming its
+// source; a re-stage drops a file gone upstream; a marker replaced by a
+// symlink is replaced, never written through; a destination holding a bundle
+// that is not a staged copy is refused and left intact; a source that is not
+// a bundle, a relative destination and a symlinked destination are refused;
+// and a box without rsync is refused rather than swapped by rename (which
+// would empty the mounts of running sandboxes).
 func TestStageDefaultBundle(t *testing.T) {
 	me, err := exec.Command("id", "-un").Output()
 	if err != nil {
 		t.Skip("id -un unavailable")
 	}
 	owner := strings.TrimSpace(string(me))
-	base := []string{"bash", "install", "cp", "mv", "rm", "mktemp", "chown", "ls", "basename", "dirname", "readlink", "grep", "id", "cat", "printf"}
-	paths := map[string]string{"rename fallback (no rsync)": toolsOnlyPath(t, base...)}
-	if _, err := exec.LookPath("rsync"); err == nil {
-		paths["rsync in place"] = toolsOnlyPath(t, append(base, "rsync")...)
+	base := []string{"bash", "tar", "mkdir", "rm", "mktemp", "ls", "basename", "dirname", "readlink", "grep", "id", "cat", "printf"}
+	t.Run("no rsync is refused", func(t *testing.T) {
+		root := t.TempDir()
+		src := filepath.Join(root, "src")
+		if err := os.MkdirAll(src, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, "manifest.yaml"), []byte("name: t\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(root, "stage")
+		if out, err := bundleLib(t, toolsOnlyPath(t, base...), "stage_default_bundle", src, dst, owner); err == nil || !strings.Contains(out, "rsync is required") {
+			t.Fatalf("staging without rsync: err=%v (want a refusal naming rsync)\n%s", err, out)
+		}
+		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+			t.Fatal("a refused staging still created its destination")
+		}
+	})
+	if _, err := exec.LookPath("rsync"); err != nil {
+		t.Skip("rsync not installed; the staging path needs it")
 	}
-	for name, path := range paths {
+	for name, path := range map[string]string{"rsync in place": toolsOnlyPath(t, append(base, "rsync")...)} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			src := filepath.Join(root, "src")
@@ -1250,6 +1268,29 @@ func TestStageDefaultBundle(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(dst, "stale.txt")); !os.IsNotExist(err) {
 				t.Fatal("a file removed upstream lingered in the staged copy")
+			}
+			// The service user owns the staged tree, so it can swap the marker
+			// for a symlink to a file it wants overwritten; a re-stage replaces
+			// the link and leaves the target alone.
+			victim := filepath.Join(root, "victim")
+			if err := os.WriteFile(victim, []byte("keep\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			markerPath := filepath.Join(dst, ".fleet-staged-from")
+			if err := os.Remove(markerPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(victim, markerPath); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := bundleLib(t, path, "stage_default_bundle", src, dst, owner); err != nil {
+				t.Fatalf("re-stage over a symlinked marker: %v\n%s", err, out)
+			}
+			if got, _ := os.ReadFile(victim); string(got) != "keep\n" {
+				t.Fatalf("staging wrote through a symlinked marker: victim = %q", got)
+			}
+			if fi, err := os.Lstat(markerPath); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+				t.Fatalf("the marker is still a symlink after a re-stage (err=%v)", err)
 			}
 			// A hand-placed bundle at the destination (no marker) is never deleted.
 			hand := filepath.Join(root, "hand")
