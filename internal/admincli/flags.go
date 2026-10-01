@@ -1,8 +1,10 @@
 package admincli
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -119,17 +121,33 @@ func envOrFile(key string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
-	envFileOnce.Do(func() {
-		if vals, err := creds.ReadEnvValues(serverEnvFile("")); err == nil {
-			envFileValues = vals
-		}
-	})
+	loadEnvFile()
 	return envFileValues[key]
 }
 
+func loadEnvFile() {
+	envFileOnce.Do(func() {
+		vals, err := creds.ReadEnvValues(serverEnvFile(""))
+		switch {
+		case err == nil:
+			envFileValues = vals
+		case !errors.Is(err, fs.ErrNotExist):
+			errEnvFileRead = err
+		}
+	})
+}
+
+// envFileReadErr is why the server env file could not be read, or nil when it
+// was read or simply does not exist (a dev box, a shell-only deployment).
+func envFileReadErr() error {
+	loadEnvFile()
+	return errEnvFileRead
+}
+
 var (
-	envFileOnce   sync.Once
-	envFileValues map[string]string
+	envFileOnce    sync.Once
+	envFileValues  map[string]string
+	errEnvFileRead error
 )
 
 // resetEnvFileCache re-arms envOrFile's once-per-process env-file read so
@@ -137,6 +155,7 @@ var (
 func resetEnvFileCache() {
 	envFileOnce = sync.Once{}
 	envFileValues = nil
+	errEnvFileRead = nil
 }
 
 // errf prints to stderr and returns the given exit code.

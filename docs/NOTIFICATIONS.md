@@ -39,6 +39,12 @@ showing a warning with the two recovery paths — re-enter the secrets and
 save, or revert to env config. (A degraded state never takes the panel down;
 that would strand the admin with no UI path to fix it.)
 
+When the account-events feed is on ([ACCOUNT-EVENTS.md](ACCOUNT-EVENTS.md)),
+the webhook signing secret must differ from `FLEET_ACCOUNT_EVENTS_SECRET` (the
+two use the same signing scheme): the panel refuses to save it, and a saved
+secret that matches switches the task webhook off, reported disabled in the
+panel, until a different one is saved.
+
 ## Configuring from the env file (the deployment default)
 
 | Env var | Default | Meaning |

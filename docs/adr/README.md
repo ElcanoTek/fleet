@@ -82,5 +82,6 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0071](0071-critical-tool-aliases.md) | Bundle-declared critical tool aliases are one commitment (amends ADR-0034) | Accepted |
 | [0072](0072-deterministic-completion-predicate.md) | A declared completion predicate may replace the end-of-run verifier; a verifier outage does not dead-letter an audited run (amends ADR-0001) | Accepted |
 | [0073](0073-malformed-requirements-park-on-first-dead-letter.md) | A malformed EXECUTION REQUIREMENTS declaration is refused at save time and parks its chain on the first dead-letter (amends ADR-0070) | Accepted |
-| [0074](0074-central-auth-owns-fleet-membership-state.md) | Central Auth owns Fleet membership desired state | Accepted |
+| [0074](0074-central-auth-owns-fleet-membership-state.md) | Central Auth owns Fleet membership desired state | Accepted; amended by ADR-0076 |
 | [0075](0075-vendor-answers-cross-the-mcp-broker.md) | A hosted vendor's own answer to a failed tool call crosses the MCP broker, bounded and scrubbed (amends the error clause of ADR-0040) | Accepted |
+| [0076](0076-fleet-publishes-account-events.md) | Fleet publishes signed account events; for centrally managed identities the most recent change wins (amends ADR-0074; amended for teams 2026-09-30) | Accepted |

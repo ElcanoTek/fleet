@@ -2,6 +2,7 @@ package notifyadmin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -276,5 +277,40 @@ func TestUndecryptableRowDegradesButStaysRecoverable(t *testing.T) {
 	}
 	if rv.Source != SourceEnv || rv.Degraded != "" {
 		t.Errorf("revert should clear the degraded state: %+v", rv)
+	}
+}
+
+// TestReservedSigningSecret: the task webhook never signs with the
+// account-events feed's key. Save refuses it (a 400 on the panel), and a row
+// saved before the feed was configured has its webhook switched off, not
+// signed with the other channel's key.
+func TestReservedSigningSecret(t *testing.T) {
+	ctx := context.Background()
+	shared := "feed-key"
+	sw := &fakeSwapper{}
+	svc := NewService(&fakeStore{}, envConfig(), sw)
+	svc.ReserveSigningSecret(shared)
+	_, err := svc.Save(ctx, store.NotifySettingsInput{WebhookURL: "https://hooks.example/x", WebhookMethod: "POST", WebhookSecret: &shared}, "admin@x.com")
+	if !errors.Is(err, ErrReservedWebhookSecret) || !errors.Is(err, store.ErrInvalidNotifySettings) {
+		t.Fatalf("Save with the reserved secret = %v, want ErrReservedWebhookSecret (a validation error)", err)
+	}
+	if len(sw.applied) != 0 {
+		t.Fatal("a refused save must not swap the notifier")
+	}
+
+	st := &fakeStore{row: &store.NotifySettingsConfig{
+		NotifySettings: store.NotifySettings{WebhookURL: "https://hooks.example/x", WebhookMethod: "POST", UpdatedBy: "admin@x.com"},
+		WebhookSecret:  shared,
+	}}
+	svc = NewService(st, envConfig(), sw)
+	svc.ReserveSigningSecret(shared)
+	if err := svc.ApplyBoot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(sw.applied) != 1 || sw.applied[0].WebhookConfigured() {
+		t.Fatalf("applied = %+v, want the webhook channel off", sw.applied)
+	}
+	if v, err := svc.View(ctx); err != nil || v.WebhookEnabled {
+		t.Fatalf("view = (%+v, %v), want the webhook reported disabled", v, err)
 	}
 }

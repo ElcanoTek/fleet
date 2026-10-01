@@ -76,6 +76,12 @@ type mcpTestResult struct {
 	Optional bool `json:"optional"`
 	// DeepChecks holds --deep auth-status call outcomes (absent otherwise).
 	DeepChecks []mcpDeepCheck `json:"deep_checks,omitempty"`
+	// SchemaIssues lists tools whose input schema the model boundary would
+	// translate (rewritten) or withhold (invalid) — the same check a turn runs
+	// (agentcore.CheckMCPToolSchema). Reported, not failed: the server is
+	// reachable and its other tools work; an invalid tool is simply absent
+	// for the model until its connector fixes the schema.
+	SchemaIssues []agentcore.ToolSchemaIssue `json:"schema_issues,omitempty"`
 }
 
 // mcpDeepCheck is one --deep tool call's outcome — an auth-status call
@@ -292,8 +298,12 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		}
 		res.ToolCount++
 		res.Tools = append(res.Tools, st.Tool.Name)
+		if issue, ok := agentcore.CheckMCPToolSchema(name, st.Tool); ok {
+			res.SchemaIssues = append(res.SchemaIssues, issue)
+		}
 	}
 	sort.Strings(res.Tools)
+	sort.Slice(res.SchemaIssues, func(i, j int) bool { return res.SchemaIssues[i].Tool < res.SchemaIssues[j].Tool })
 
 	if deep {
 		res.DeepChecks = runDeepChecks(client, name, res.Tools, spec.Probe, timeout)
@@ -422,6 +432,13 @@ func emitMCPTestReport(w io.Writer, report mcpTestReport, jsonOutput bool) int {
 				fmt.Fprintln(w)
 				for _, t := range r.Tools {
 					fmt.Fprintf(w, "    - %s\n", t)
+				}
+				for _, i := range r.SchemaIssues {
+					if i.Status == agentcore.ToolSchemaInvalid {
+						fmt.Fprintf(w, "    schema ✗ %s WITHHELD from the model — %s\n", i.Tool, i.Detail)
+					} else {
+						fmt.Fprintf(w, "    schema ! %s translated (older JSON Schema draft) — %s\n", i.Tool, i.Detail)
+					}
 				}
 				for _, c := range r.DeepChecks {
 					label := "deep"

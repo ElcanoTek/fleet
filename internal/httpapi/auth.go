@@ -360,10 +360,26 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chatRole, opsRole := "", ""
+	// team is nil unless the provider manages the account's team: Auth sends a
+	// third settings key only with team sync on, and without it Fleet leaves
+	// users.team_id alone (an older Auth, a backfill, team sync off).
+	var team *string
 	switch {
 	case body.Settings != nil:
 		chatRole, opsRole = body.Settings["chat_role"], body.Settings["ops_role"]
-		if len(body.Settings) != 2 || !store.ValidRole(chatRole) ||
+		wantKeys := 2
+		if value, ok := body.Settings["team"]; ok {
+			wantKeys = 3
+			value = strings.TrimSpace(value)
+			if !store.ValidExternalTeam(value) {
+				http.Error(w, "invalid Fleet team", http.StatusBadRequest)
+				return
+			}
+			team = &value
+		}
+		// Exactly {chat_role, ops_role} or those two plus team: any other key
+		// still fails closed.
+		if len(body.Settings) != wantKeys || !store.ValidRole(chatRole) ||
 			(opsRole != "none" && opsRole != "readonly" && opsRole != "client" && opsRole != "admin") ||
 			((chatRole == "admin") != (opsRole == "admin")) {
 			http.Error(w, "invalid Fleet permissions", http.StatusBadRequest)
@@ -389,8 +405,11 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 	desired := store.ExternalAccessState{
 		Issuer: body.Issuer, Subject: body.Subject, Email: userFromCtx(r.Context()),
 		Version: body.Version, Allowed: allowed, EventID: body.EventID,
-		ChatRole: chatRole, OpsRole: opsRole, IssuedAt: body.IssuedAt,
+		ChatRole: chatRole, OpsRole: opsRole, Team: team, IssuedAt: body.IssuedAt,
 	}
+	// A change Fleet applies on the identity provider's word is still published
+	// (audit sinks want it), tagged so the provider itself can ignore its echo.
+	defer s.beginAccountChange(r, desired.Email, store.AccountEventSourceIdentityProvider, "")()
 	applied, _, err := accessStore.ApplyExternalAccess(r.Context(), desired)
 	if err != nil {
 		http.Error(w, "external access update failed", http.StatusInternalServerError)

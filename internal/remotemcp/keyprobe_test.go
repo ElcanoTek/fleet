@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -434,5 +435,36 @@ func TestAddAPIKeyScopeDeniedIsNotRejected(t *testing.T) {
 	}
 	if got := v.called(); len(got) != 2 {
 		t.Errorf("calls = %v; want the real call and the control call", got)
+	}
+}
+
+// TestProbeReportsToolSchemaIssues: the add-time probe runs the model
+// boundary's schema check on every listed tool and reports findings without
+// failing the add (the connection is sound). The nightly catalog smoke reads
+// the same field to flag a vendor that ships an invalid schema.
+func TestProbeReportsToolSchemaIssues(t *testing.T) {
+	tuple := tool("fetch_range", nil, nil)
+	tuple["inputSchema"] = map[string]any{"type": "object", "properties": map[string]any{
+		"range": map[string]any{"type": "array", "items": []any{map[string]any{"type": "string"}, map[string]any{"type": "string"}}},
+	}}
+	broken := tool("broken", nil, nil)
+	broken["inputSchema"] = map[string]any{"type": "object", "properties": map[string]any{"q": map[string]any{"type": 42}}}
+	v := &keyProbeVendor{t: t, refuse: refuseWith401, tools: []map[string]any{tool("list_docs", nil, nil), tuple, broken}}
+	srv := v.server()
+	defer srv.Close()
+	svc := newTestService(t, newFakeStore(), srv)
+	_, report, err := svc.AddServer(context.Background(), AddServerInput{Email: "u@x.com", Name: "docs", URL: srv.URL, AuthMode: "open"})
+	if err != nil {
+		t.Fatalf("AddServer(open): %v", err)
+	}
+	if report.ToolCount != 3 {
+		t.Fatalf("report = %+v, want 3 tools", report)
+	}
+	statuses := map[string]string{}
+	for _, issue := range report.SchemaIssues {
+		statuses[issue.Tool] = issue.Status
+	}
+	if len(statuses) != 2 || statuses["fetch_range"] != agentcore.ToolSchemaRewritten || statuses["broken"] != agentcore.ToolSchemaInvalid {
+		t.Fatalf("schema issues = %+v, want fetch_range=rewritten, broken=invalid", report.SchemaIssues)
 	}
 }

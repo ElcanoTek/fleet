@@ -30,6 +30,8 @@ func (f *fakeOpsAdmins) Ensure(_ context.Context, email string) error {
 
 func (f *fakeOpsAdmins) Remove(_ context.Context, email string) error {
 	f.removed = append(f.removed, email)
+	// The real service deletes the Ops row, whatever its role.
+	delete(f.roles, strings.ToLower(email))
 	out := f.admins[:0]
 	for _, a := range f.admins {
 		if !strings.EqualFold(a, email) {

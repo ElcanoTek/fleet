@@ -2167,6 +2167,43 @@ paths:
         "500": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
 
+  /admin/mcp-servers/schema-issues:
+    get:
+      summary: MCP tools whose input schema needed translation or was withheld.
+      description: >-
+        The runtime record the model boundary keeps while building tool lists.
+        Model providers validate every tool's input schema as JSON Schema draft
+        2020-12, and Anthropic rejects the whole request when one tool fails.
+        Fleet translates older-draft constructs (status rewritten: the tool
+        works, its connector should update) and withholds a tool that is still
+        invalid (status invalid). The record lives in process memory: since is
+        when this process started recording, and a connector no turn has used
+        since then is not reflected. A fixed connector clears on its next turn.
+        Admin-only; read-only. `fleet mcp schema-issues` and `fleet doctor`
+        read it.
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200":
+          description: The findings, sorted by server then tool.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [since, issues]
+                properties:
+                  since: { type: string, format: date-time }
+                  issues:
+                    type: array
+                    items:
+                      type: object
+                      required: [server, tool, status, detail]
+                      properties:
+                        server: { type: string }
+                        tool: { type: string }
+                        status: { type: string, enum: [rewritten, invalid] }
+                        detail: { type: string }
+                        last_seen: { type: string, format: date-time }
+
   /sla-report:
     get:
       summary: SLA report — per-task actual-duration p50/p95 + breach rate (#274).

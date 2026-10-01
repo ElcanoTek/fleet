@@ -57,6 +57,7 @@ import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
 import {
   droppedOptionalMcpServerNames,
+  setAllOptionalMcpServers,
   enabledOptionalMcpServerNames,
   reconcileMcpSelection,
 } from "./mcpSelection";
@@ -1894,6 +1895,26 @@ export function ChatExperience({
     const nextServers = prev.map((s) =>
       s.name === name ? { ...s, enabled: !s.enabled } : s,
     );
+    setMcpServers(nextServers);
+    if (!conversationId) return;
+    await postMcpServerState(conversationId, nextServers, prev);
+  };
+
+  // setAllMcpServers is the picker's "All on" / "All off": every optional
+  // row flipped in one optimistic update and one full-state POST, so a
+  // user with a dozen connectors is not clicking twelve rows and the server
+  // sees one selection change, not twelve. Always-on rows are untouched.
+  // Same pre-chat rule as the toggle: no conversation yet, no POST.
+  const setAllMcpServers = async (
+    conversationId: string | null,
+    enabled: boolean,
+  ) => {
+    const prev = mcpServers;
+    const nextServers = setAllOptionalMcpServers(prev, enabled);
+    // The helper keeps the identity of rows it does not change, so a flip
+    // that changes nothing (the bar marks the button aria-disabled, but a
+    // keyboard user can still activate it) neither re-renders nor POSTs.
+    if (nextServers.every((row, i) => row === prev[i])) return;
     setMcpServers(nextServers);
     if (!conversationId) return;
     await postMcpServerState(conversationId, nextServers, prev);
@@ -5954,6 +5975,7 @@ export function ChatExperience({
                 isLoadingMcpServers={isLoadingMcpServers}
                 loadMcpServerCatalog={loadMcpServerCatalog}
                 toggleMcpServer={toggleMcpServer}
+                setAllMcpServers={setAllMcpServers}
                 setMcpServerAccount={setMcpServerAccount}
                 activeConversationId={activeConversationId}
                 messages={messages}

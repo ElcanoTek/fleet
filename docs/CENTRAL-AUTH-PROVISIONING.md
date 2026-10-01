@@ -20,6 +20,22 @@ Auth's Fleet permission payload is deliberately small and strictly validated:
 | Ops Contributor | `client` |
 | Fleet Admin | Chat `admin` and Ops `admin` |
 
+With team sync switched on in Auth, the payload also carries the account's
+team as a third key, `team` (`""` for none). Fleet accepts exactly
+`{chat_role, ops_role}` or `{chat_role, ops_role, team}`; any other key fails
+closed. A team is at most 64 bytes with no control characters.
+
+- **`team` present:** Fleet moves the account to that team with the same
+  unsharing an admin move does. Chats the person shared with their old team
+  stop being shared, and they lose the old team's shared projects they do not
+  own. A label that differs from the current one only in case is left as it
+  is, because team gates match exactly.
+- **`team` absent** (an older Auth, a migration backfill, team sync off): the
+  team is left alone.
+- **A revoke** never changes the team.
+- Fleet stores the team the provider last sent (or nothing, when it does not
+  manage the team) with the rest of its desired state.
+
 Fleet Admin is one unified grant. In Settings → Admin → Users, selecting it
 shows Chat Contributor and Ops Contributor as the effective highlighted
 choices. Selecting the already-selected Fleet Admin control turns it off and
@@ -57,13 +73,24 @@ converges after recovery.
 - A newly provisioned central-only Chat account has an intentionally invalid
   password digest; a new Ops identity has a random unusable password hash.
 - Admin must be coherent across both planes. Split `admin` payloads are
-  rejected, and unknown settings or roles fail closed.
+  rejected, and unknown settings, roles or an invalid team fail closed.
 
 ## Deliberate scope
 
 Auth controls whether its account may enter Fleet and transports Fleet's
 chosen roles. Fleet remains the enforcement and data owner. Existing Fleet
 admin APIs and operator commands remain available, but a later Auth desired
-state for that identity is authoritative for enabled state and the two roles.
+state for that identity is authoritative for enabled state, the two roles and,
+when Auth sends one, the team.
 This change does not delete dormant accounts or migrate application data into
 Auth.
+
+## The other direction
+
+Role changes, team changes and removals made in Fleet reach Auth through
+Fleet's generic
+account-events feed ([ACCOUNT-EVENTS.md](ACCOUNT-EVENTS.md),
+[ADR-0076](adr/0076-fleet-publishes-account-events.md)) when the operator
+points it at Auth. Fleet does not know the receiver is Auth. With the feed
+configured, the most recent change on either side wins; without it, the
+paragraph above still describes the behavior.

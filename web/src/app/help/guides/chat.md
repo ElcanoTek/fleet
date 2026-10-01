@@ -151,7 +151,13 @@ defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants ful
 Chat and Ops Center permissions and highlights the included Contributor choices.
 Selecting Fleet Admin again turns it off and safely defaults to Chat Contributor
 with no Ops access. Accounts created and granted Fleet in central Auth are added
-here automatically with the roles selected there.
+here automatically with the roles selected there. When your operator has turned
+on Fleet's account-events feed, role changes, team changes and removals you
+make here are sent to whatever it points at. If that is central Auth and it is
+set up to adopt them, central Auth shows your changes too, and the most recent
+change on either side wins. With team sync on in central Auth, moving someone
+between teams there moves them here too, with the same effect as moving them
+yourself: what they shared with their old team stops being shared.
 
 ### The header
 
@@ -312,11 +318,21 @@ Center.
 | Selection | The **Connectors** picker in the composer | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; the assistant cannot reach what is not selected. |
 | Binding | The task form in the Operations Center | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
 
-Some connectors are marked **Always on**: they are part of the deployment and
-cannot be switched off per conversation. Each connector is also badged as
+The picker also offers **All on** and **All off**, which switch every
+optional connector in the conversation at once; the count beside them says
+how many are on. Some connectors are marked **Always on**: they are part of
+the deployment and cannot be switched off per conversation, and the two
+buttons leave them alone. Each connector is also badged as
 **Bundled**, shipped and operated with the deployment, or as a third-party
 service you have signed into yourself, so you always know whose system you are
-reaching. A **Beta** badge means it works but still has rough edges.
+reaching. A **Beta** badge means it works but still has rough edges. A
+**Directory changed** badge on a third-party connection in **Settings →
+Connections** means the directory entry of that name now lists a different
+address, sign-in method or key placement from the connection; the row says
+what differs. A connection keeps what it was added with, so remove it and add
+it again from the directory to take the change — an existing sign-in cannot be
+carried over. A connection you set up by hand under a directory name shows the
+badge too, and can be kept as it is.
 
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before

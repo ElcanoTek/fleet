@@ -589,6 +589,21 @@ func setSignatureHeader(req *http.Request, body []byte, secret string) {
 	}
 }
 
+// SanitizeTransportError is wrapWebhookTransportErr for other senders of
+// operator-configured webhooks: the error names the operation and host only,
+// never the URL's path or query.
+func SanitizeTransportError(err error) error {
+	return wrapWebhookTransportErr(err)
+}
+
+// SignRequest attaches the X-Fleet-Signature / X-Fleet-Timestamp pair to req
+// for body under secret, exactly as the task webhook does. It is the seam other
+// signed senders (the account-events feed) share so the scheme in
+// docs/WEBHOOK-SIGNING.md has one implementation.
+func SignRequest(req *http.Request, body []byte, secret string) {
+	setSignatureHeader(req, body, secret)
+}
+
 // joinErrs collapses a slice of channel errors into one (nil when empty).
 func joinErrs(errs []error) error {
 	switch len(errs) {

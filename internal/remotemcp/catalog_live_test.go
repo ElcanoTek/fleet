@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 )
@@ -59,7 +60,26 @@ func (s *Service) probeForTest(t *testing.T, url, header, query, credential stri
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPTimeout)
 	defer cancel()
 	report, err := s.probeServer(ctx, url, header, query, credential)
+	if err == nil {
+		checkCatalogToolSchemas(t, url, report.SchemaIssues)
+	}
 	return report.ToolCount, err
+}
+
+// checkCatalogToolSchemas holds a listed vendor's tools to the schema bar the
+// model boundary applies. An invalid schema fails the entry: Fleet withholds
+// that tool from the model, so the listing overstates what users get and the
+// vendor needs telling. A rewritten (older-draft) schema only logs: Fleet
+// translates it and the tool works.
+func checkCatalogToolSchemas(t *testing.T, url string, issues []agentcore.ToolSchemaIssue) {
+	t.Helper()
+	for _, issue := range issues {
+		if issue.Status == agentcore.ToolSchemaInvalid {
+			t.Errorf("%s: tool %s has an input schema that is invalid JSON Schema draft 2020-12, so Fleet withholds it from the model: %s", url, issue.Tool, issue.Detail)
+		} else {
+			t.Logf("%s: tool %s uses older JSON Schema drafts (Fleet translates them): %s", url, issue.Tool, issue.Detail)
+		}
+	}
 }
 
 // TestCatalogLiveOpenEntries: every built-in `open` entry whose URL carries no

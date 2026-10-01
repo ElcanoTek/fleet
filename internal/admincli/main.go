@@ -20,6 +20,7 @@
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
 //	fleet acp                                         (Agent Client Protocol agent on stdio, #984 — for ACP clients to launch)
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
+//	fleet account-events status|export|resync         (the signed membership/role feed, docs/ACCOUNT-EVENTS.md)
 //	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key|set-env|unset-env   (guided credential/env-file writes)
 //	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
 //	fleet chat user add|update|role|del|list
@@ -108,6 +109,8 @@ func Run(argv []string) int {
 		return cmdSched(argv[1:])
 	case "admin":
 		return cmdAdmin(argv[1:])
+	case "account-events":
+		return cmdAccountEvents(argv[1:])
 	case "config":
 		return cmdConfig(argv[1:])
 	case "env":
@@ -210,6 +213,10 @@ Users, credentials, notes:
   fleet admin add <email>                             (ONE step: web login + chat-admin + Operations Center admin; prompts for password)
   fleet admin list                                    (every chat login + whether it's an Operations Center admin)
   fleet admin rm <email>                              (remove from both planes)
+  fleet account-events status                         (signed membership/role feed: on/off, pending/failed/delivered counts,
+                                                       last error; see docs/ACCOUNT-EVENTS.md)
+  fleet account-events export                         (every chat account's current state as JSON Lines; read-only)
+  fleet account-events resync                         (queue every chat account's current state for delivery; needs the feed on)
   fleet config set-openrouter-key                     (hidden prompt; or --key -; upserts OPENROUTER_API_KEY into the server env file)
   fleet config set-browserbase-key                    (hidden prompt; or --key -; upserts BROWSERBASE_API_KEY into the server env file —
                                                        mints hosted-browser live views; see docs/BROWSERBASE.md)
@@ -274,6 +281,10 @@ Users, credentials, notes:
     (account names are canonicalized: hyphen/space fold to underscore and case
      is ignored, so client-a, client_a, and Client_A name ONE seat — use
      distinct base words, not separators, to keep seats apart)
+  fleet mcp schema-issues [--server <addr>] [--admin-key <key>] [--json]
+    (MCP tools whose input schema Fleet translated for the model or withheld
+     from it, as recorded by the running server's turns; fleet doctor reads
+     it. Uses ADMIN_API_KEY / FLEET_ORCHESTRATOR_ADDR by default.)
   fleet notes set <slug> --title "..."  (body via stdin)
   fleet notes get <slug>
   fleet notes list [--all]
