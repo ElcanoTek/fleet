@@ -98,6 +98,36 @@ func TestClientBundleCheck(t *testing.T) {
 		}
 	})
 
+	// The shell updater compares resolved paths, so this check must too: a
+	// relative FLEET_ROOT (repoRoot falls back to ".") or one reached through
+	// a symlink names the same checkout the marker does, not a different one.
+	t.Run("staged copy seen through a relative or symlinked root", func(t *testing.T) {
+		base, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := filepath.Join(base, "src")
+		if err := os.MkdirAll(filepath.Join(root, "config", "default"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(base, "current")
+		if err := os.Symlink(root, link); err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".fleet-staged-from"), []byte(filepath.Join(root, "config", "default")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+		t.Chdir(base)
+		for _, r := range []string{link, "src", "./current"} {
+			t.Setenv("FLEET_ROOT", r)
+			if out, stale := capture(t, clientBundleCheck); stale || strings.Contains(out, "not of this checkout") {
+				t.Errorf("FLEET_ROOT=%s: a copy of this very checkout read as stale: %q", r, out)
+			}
+		}
+	})
+
 	t.Run("a symlinked marker is not taken for a staged copy", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.Symlink(filepath.Join(t.TempDir(), "secret"), filepath.Join(dir, ".fleet-staged-from")); err != nil {

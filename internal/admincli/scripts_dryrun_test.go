@@ -4,13 +4,16 @@
 package admincli
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // repoRootFromTest walks up from the package dir to the repo root (the dir that
@@ -1468,6 +1471,26 @@ func TestBundleMarkerSourceNeverFollowsALink(t *testing.T) {
 	out, err := bundleLib(t, path, "bundle_marker_source", dir, owner)
 	if err == nil || strings.Contains(out, "do-not-print") {
 		t.Fatalf("a symlinked marker was read through: out=%q err=%v", out, err)
+	}
+	// A FIFO in the marker's place must be refused, not block the read
+	// forever (and update.sh or doctor.sh with it).
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(marker, 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "bundle.sh")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", ". "+lib+` && bundle_marker_source "$@"`, "bundle", dir, owner)
+	cmd.Env = append(os.Environ(), "PATH="+path)
+	err = cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatal("bundle_marker_source blocked on a FIFO marker")
+	}
+	if err == nil {
+		t.Fatal("a FIFO marker was taken for a staged copy")
 	}
 }
 

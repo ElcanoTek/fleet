@@ -146,7 +146,7 @@ func clientBundleCheck() bool {
 		if root := repoRoot(); root != "" {
 			want = filepath.Join(root, "config", "default")
 		}
-		if want != "" && filepath.Clean(src) != filepath.Clean(want) {
+		if want != "" && canonicalPath(src) != canonicalPath(want) {
 			fmt.Printf("client bundle at %s is a staged copy of %s, not of this checkout's %s — `fleet update` will not refresh it.\n", dir, src, want)
 			fmt.Println("  restage it: re-run scripts/bootstrap.sh --enable-service from this checkout")
 			return true
@@ -257,6 +257,21 @@ func repoRoot() string {
 // root-only file is refused at open, with no check-then-read window) and
 // O_NONBLOCK (a FIFO there cannot hang the check), must be a regular file, and
 // is read up to 4 KiB, which a path never exceeds.
+// canonicalPath is p made absolute with its symlinks resolved, as the shell
+// updater compares it (readlink -f / realpath), so a relative or symlinked
+// FLEET_ROOT names the same checkout as the marker does. A path that cannot be
+// resolved (gone, unreadable) stays merely absolute and cleaned.
+func canonicalPath(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return filepath.Clean(p)
+	}
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		return r
+	}
+	return abs
+}
+
 func stagedBundleSource(dir string) (string, bool) {
 	//nolint:gosec // G304: a fixed basename under the operator-configured bundle dir; opened no-follow, regular files only.
 	f, err := os.OpenFile(filepath.Join(dir, ".fleet-staged-from"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)

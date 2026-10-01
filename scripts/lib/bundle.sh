@@ -79,11 +79,15 @@ _bundle_as() {
 # root read, the running service's own /proc/<pid>/environ for a read as the
 # service user. It is therefore opened with O_NOFOLLOW (dd iflag=nofollow),
 # which refuses a symlink at open time — no check-then-read window — and read
-# AS OWNER, bounded to 4 KiB, which a path never exceeds.
+# AS OWNER, bounded to 4 KiB, which a path never exceeds. It is opened
+# non-blocking too (iflag=nonblock): a FIFO in its place then reads as empty
+# or fails instead of hanging update.sh or doctor.sh, and anything that is not
+# a regular file is refused outright.
 bundle_marker_source() {
   local m out
   m="$(bundle_staged_marker "$1")"
-  out="$(_bundle_as "$2" dd if="$m" iflag=nofollow bs=4096 count=1 status=none 2>/dev/null)" || return 1
+  [[ -f "$m" && ! -L "$m" ]] || return 1
+  out="$(_bundle_as "$2" dd if="$m" iflag=nofollow,nonblock bs=4096 count=1 status=none 2>/dev/null)" || return 1
   out="${out%%$'\n'*}"
   [[ -n "$out" ]] || return 1
   printf '%s\n' "$out"
