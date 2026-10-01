@@ -193,12 +193,14 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if e.Auth != "api_key" {
 				t.Fatalf("fixture %q has auth %q in the catalog, want api_key", f.Entry, e.Auth)
 			}
+			// Resolve the endpoint before the secret check: a fixture naming
+			// a variant the catalog no longer lists must fail, not skip forever.
+			url := fixtureURL(t, e, f.Variant)
 			envName := catalogKeyEnv(f.Entry, f.Variant)
 			key := strings.TrimSpace(os.Getenv(envName))
 			if key == "" {
-				t.Skipf("%s not set; skipping the %s fixture", envName, f.Entry)
+				t.Skipf("%s not set; skipping the %s fixture", envName, fixtureName(f.Entry, f.Variant))
 			}
-			url := fixtureURL(t, e, f.Variant)
 			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
 				t.Fatalf("%s: handshake with the fixture key failed: %v", f.Entry, err)

@@ -562,8 +562,11 @@ remote_mcp_catalog:
 	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"http://mcp.eu.acme.example/mcp\"\n"); err == nil {
 		t.Error("a plain-http url variant was accepted")
 	}
-	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.acme.example/mcp\"\n"); err == nil {
-		t.Error("a url variant repeating the entry's url was accepted")
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.acme.example/mcp/\"\n"); err == nil {
+		t.Error("a url variant repeating the entry's url (plus a trailing slash) was accepted")
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n      - id: eu2\n        label: Europe\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
+		t.Error("two url variants with the same url were accepted")
 	}
 	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://{region}.acme.example/mcp\"\n"); err == nil {
 		t.Error("a url variant with a placeholder was accepted")

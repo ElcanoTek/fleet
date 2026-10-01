@@ -22,7 +22,8 @@ func TestDriftFromCatalog(t *testing.T) {
 		{Name: "rehomed-key", URL: "https://mcp.rehomed.example.com/mcp", Auth: "api_key", APIKeyQuery: "api_key"},
 		{Name: "bearer-now", URL: "https://mcp.bearer.example.com/mcp", Auth: "api_key"},
 		{Name: "schemed", URL: "https://mcp.schemed.example.com/mcp", Auth: "api_key", APIKeyHeader: "Authorization", APIKeyPrefix: "Token token="},
-		{Name: "regional", URL: "https://mcp.regional.example.com/mcp", Auth: "api_key", URLVariants: []clientconfig.RemoteMCPURLVariant{{Label: "EU", URL: "https://mcp.eu.regional.example.com/mcp"}}},
+		{Name: "regional", URL: "https://mcp.regional.example.com/mcp", Auth: "api_key", URLVariants: []clientconfig.RemoteMCPURLVariant{{ID: "eu", Label: "EU", URL: "https://mcp.eu.regional.example.com/mcp"}}},
+		{Name: "hostless", URL: "https:///mcp", Auth: "oauth"}, // passes the loader's https:// check, fails canonicalisation
 		{Name: "tenant", URL: "https://{workspace}.example.com/mcp", Auth: "tenant"},
 		{Name: "default-auth", URL: "https://mcp.default.example.com/mcp"},
 		{Name: "composio", URL: "https://backend.composio.dev/v3/mcp/{SERVER_ID}/mcp?user_id={USER_ID}", Auth: "api_key", APIKeyHeader: "x-api-key"},
@@ -51,6 +52,7 @@ func TestDriftFromCatalog(t *testing.T) {
 		{"the directory grew a scheme prefix (PagerDuty)", row("schemed", "https://mcp.schemed.example.com/mcp", "api_key", "Authorization", ""), &catalogDrift{KeySentAs: "the Authorization header as Token token=<key>"}},
 		{"a row with the same prefix matches", schemed, nil},
 		{"a row on a regional variant of the entry is not drift", row("regional", "https://mcp.eu.regional.example.com/mcp", "api_key", "", ""), nil},
+		{"an entry whose url does not canonicalise reports no url drift", row("hostless", "https://mcp.hostless.example.com/mcp", "oauth", "", ""), nil},
 		{"a row on a host the entry no longer lists is drift", row("regional", "https://old.regional.example.com/mcp", "api_key", "", ""), &catalogDrift{URL: "https://mcp.regional.example.com/mcp"}},
 		{"URL and auth both differ", row("retyped", "https://old.retyped.example.com/mcp", "open", "", ""), &catalogDrift{URL: "https://mcp.retyped.example.com/mcp", Auth: "api_key"}},
 		{"a tenant entry is not compared", row("tenant", "https://acme.example.com/mcp", "oauth", "", ""), nil},

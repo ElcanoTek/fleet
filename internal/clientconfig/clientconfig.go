@@ -2034,6 +2034,8 @@ func validateRemoteMCPURLVariants(name string, e *RemoteMCPCatalogEntry) error {
 	}
 	seen := map[string]bool{}
 	ids := map[string]bool{}
+	urls := map[string]bool{}
+	entryURL := strings.TrimRight(strings.TrimSpace(e.URL), "/")
 	for i, v := range e.URLVariants {
 		if !remoteMCPVariantIDShape.MatchString(v.ID) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] needs an id of 1-16 lowercase letters, digits or hyphens (got %q)", name, i, v.ID)
@@ -2056,9 +2058,14 @@ func validateRemoteMCPURLVariants(name string, e *RemoteMCPCatalogEntry) error {
 		if strings.Contains(v.URL, "{") {
 			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url carries a {placeholder}", name, i)
 		}
-		if strings.TrimSpace(v.URL) == strings.TrimSpace(e.URL) {
+		u := strings.TrimRight(strings.TrimSpace(v.URL), "/")
+		if u == entryURL {
 			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] repeats the entry's own url", name, i)
 		}
+		if urls[u] {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] repeats another variant's url", name, i)
+		}
+		urls[u] = true
 	}
 	return nil
 }

@@ -475,14 +475,18 @@ func TestProbeReportsToolSchemaIssues(t *testing.T) {
 // pasted only the key — and the control probe carries the same scheme, so
 // the vendor's refusal of the invalid key is a refusal of the key, not of a
 // missing scheme. Without the prefix the same key is refused.
-func TestAddServerSendsTheEntrySchemePrefix(t *testing.T) {
+// TestAddServerAndRotationSendTheEntrySchemePrefix: the add-time probe, its
+// invalid-key control probe, and a later key rotation all send
+// "<header>: <prefix><key>" against a vendor that accepts nothing else — the
+// rotation reading the prefix from the stored row, not from the form.
+func TestAddServerAndRotationSendTheEntrySchemePrefix(t *testing.T) {
 	var seen []string
 	var mu sync.Mutex
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		seen = append(seen, r.Header.Get("Authorization"))
 		mu.Unlock()
-		if r.Header.Get("Authorization") != "Token token=u+good" {
+		if auth := r.Header.Get("Authorization"); auth != "Token token=u+good" && auth != "Token token=u+rotated" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"unauthorized","error_description":"No permission -- see authorization schemes"}`))
@@ -521,19 +525,30 @@ func TestAddServerSendsTheEntrySchemePrefix(t *testing.T) {
 	if !report.KeyVerified {
 		t.Fatalf("key not verified: the vendor refuses the control probe's invalid key, so the real key's pass is a verification (report %+v)", report)
 	}
+	// Rotate the key on the stored row: nothing re-sends the prefix, so the
+	// rotation probe must take it from the row.
+	if _, err := svc.SetAPIKey(context.Background(), "u@x.com", server.ID, "u+rotated"); err != nil {
+		t.Fatalf("SetAPIKey with the stored prefix: %v", err)
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	var sawInvalid bool
+	var sawInvalid, sawRotated bool
 	for _, v := range seen {
-		if v != "Token token=u+good" && v != "Token token="+invalidProbeKey {
-			t.Fatalf("a request carried %q, want the scheme in front of either key", v)
-		}
-		if v == "Token token="+invalidProbeKey {
+		switch v {
+		case "Token token=u+good":
+		case "Token token=u+rotated":
+			sawRotated = true
+		case "Token token=" + invalidProbeKey:
 			sawInvalid = true
+		default:
+			t.Fatalf("a request carried %q, want the scheme in front of every key", v)
 		}
 	}
 	if !sawInvalid {
 		t.Fatal("the control probe did not carry the scheme prefix")
+	}
+	if !sawRotated {
+		t.Fatal("the rotation probe did not reach the vendor with the scheme prefix")
 	}
 
 	// The same key without the entry's prefix is what the old hint produced:

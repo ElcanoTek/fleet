@@ -38,6 +38,7 @@ type mcpCatalogBundledEntry struct {
 }
 
 type mcpCatalogURLVariant struct {
+	ID    string `json:"id"`
 	Label string `json:"label"`
 	URL   string `json:"url"`
 }
@@ -175,7 +176,7 @@ func catalogURLVariants(in []clientconfig.RemoteMCPURLVariant) []mcpCatalogURLVa
 	}
 	out := make([]mcpCatalogURLVariant, 0, len(in))
 	for _, v := range in {
-		out = append(out, mcpCatalogURLVariant{Label: strings.TrimSpace(v.Label), URL: strings.TrimSpace(v.URL)})
+		out = append(out, mcpCatalogURLVariant{ID: v.ID, Label: strings.TrimSpace(v.Label), URL: strings.TrimSpace(v.URL)})
 	}
 	return out
 }

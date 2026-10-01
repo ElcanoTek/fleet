@@ -255,6 +255,27 @@ describe("ConnectionsPage guided api_key add", () => {
     });
   });
 
+
+  it("starts a second seat on the endpoint the first one was added on", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        undefined,
+        { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+        {
+          ...EMPTY_LIST,
+          servers: [
+            { ...BB_PRIMARY, id: "pd1", name: "pdlike", url: "https://mcp.eu.pdlike.example.com/mcp" },
+          ],
+        },
+      ),
+    );
+    visit("");
+    const card = (await screen.findAllByTestId("dir-card-pdlike"))[0];
+    fireEvent.click(within(card).getByTestId("dir-add-account-pdlike"));
+    const select = (await within(card).findByTestId("dir-form-endpoint-pdlike")) as HTMLSelectElement;
+    expect(select.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
+  });
   it("shows the entry's scheme prefix beside the key field and posts it, so the user pastes only the key", async () => {
     let posted: Record<string, unknown> | null = null;
     vi.stubGlobal(

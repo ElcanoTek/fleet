@@ -26,12 +26,19 @@ func TestCatalogSmokeFixturesMatchWorkflow(t *testing.T) {
 	workflow := readFile(t, root, filepath.Join(".github", "workflows", "mcp-catalog-smoke.yml"))
 
 	fixtures := map[string]bool{}
-	// A row is {Entry: "name"} or {Entry: "name", Variant: "id"}: the variant
-	// names a regional endpoint and its own secret, FLEET_CATALOG_KEY_<ENTRY>_<ID>.
-	for _, m := range regexp.MustCompile(`\{Entry:\s*"([a-z0-9-]+)"(?:,\s*Variant:\s*"([a-z0-9-]+)")?`).FindAllStringSubmatch(goSrc, -1) {
+	// A row is {Entry: "name", ...} with an optional Variant: "id" anywhere
+	// in it: the variant names a regional endpoint and its own secret,
+	// FLEET_CATALOG_KEY_<ENTRY>_<ID>. The whole row is captured so the field
+	// order does not matter.
+	variantField := regexp.MustCompile(`Variant:\s*"([a-z0-9-]+)"`)
+	for _, m := range regexp.MustCompile(`\{Entry:\s*"([a-z0-9-]+)"([^}]*)\}`).FindAllStringSubmatch(goSrc, -1) {
 		name := "FLEET_CATALOG_KEY_" + strings.ToUpper(strings.ReplaceAll(m[1], "-", "_"))
-		if m[2] != "" {
-			name += "_" + strings.ToUpper(strings.ReplaceAll(m[2], "-", "_"))
+		if v := variantField.FindStringSubmatch(m[2]); v != nil {
+			name += "_" + strings.ToUpper(strings.ReplaceAll(v[1], "-", "_"))
+		}
+		if fixtures[name] {
+			// "foo-eu" and "foo" + variant "eu" would both read FLEET_CATALOG_KEY_FOO_EU.
+			t.Errorf("two catalogKeyFixtures rows read the same secret %s", name)
 		}
 		fixtures[name] = true
 	}

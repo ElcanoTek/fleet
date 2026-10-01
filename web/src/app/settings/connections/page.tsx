@@ -146,9 +146,13 @@ function hostOf(url: string): string {
 // declares a scheme prefix, so the user pastes only the key and can see that
 // the "Token token=" part is fleet's job (#986, PagerDuty). Null when the
 // key is sent raw or as a bearer, which needs no explanation.
-function keySentAsNote(header?: string, prefix?: string): string | null {
+// The directory card knows the entry's header; a saved row does not carry
+// its header name, so its Update key form names only the scheme.
+function keySentAsNote(header: string | undefined, prefix?: string): string | null {
   if (!prefix) return null;
-  return `Sent as ${header || "Authorization"}: ${prefix}<key> — paste only the key.`;
+  return header
+    ? `Sent as ${header}: ${prefix}<key> — paste only the key.`
+    : `Sent as ${prefix}<key> — paste only the key.`;
 }
 
 const AUTH_LABEL: Record<string, string> = {
@@ -479,6 +483,7 @@ function dirAddButtonClass(added: boolean): string {
 function DirectoryCard({
   entry,
   added,
+  addedURL,
   busy,
   remoteEnabled,
   redirectUri,
@@ -487,6 +492,9 @@ function DirectoryCard({
 }: {
   entry: CatalogThirdParty;
   added: boolean;
+  // The URL the entry's first seat was added on, when added: a second seat
+  // starts on the same endpoint (the row-level "add another" copies it too).
+  addedURL?: string;
   busy: boolean;
   remoteEnabled: boolean;
   redirectUri?: string;
@@ -517,7 +525,12 @@ function DirectoryCard({
   const [values, setValues] = useState<Record<string, string>>({});
   // Which of the entry's endpoints to add — the default, or one of its
   // url_variants (a regional host). The whole URL, so the add posts it as is.
-  const [endpointURL, setEndpointURL] = useState(entry.url);
+  // A second seat starts where the first one was added.
+  const [endpointURL, setEndpointURL] = useState(
+    added && addedURL && entry.url_variants?.some((v) => v.url === addedURL)
+      ? addedURL
+      : entry.url,
+  );
   const [apiKey, setApiKey] = useState("");
   // "Add another account" (#988): an already-added entry can take a second
   // login. The same guided form opens, plus a REQUIRED seat label — the
@@ -729,7 +742,7 @@ function DirectoryCard({
               >
                 <option value={entry.url}>Default ({hostOf(entry.url)})</option>
                 {variants.map((v) => (
-                  <option key={v.url} value={v.url}>
+                  <option key={v.id} value={v.url}>
                     {v.label} — {hostOf(v.url)}
                   </option>
                 ))}
@@ -1614,6 +1627,9 @@ function ConnectionsPageInner() {
       added={(servers ?? []).some(
         (s) => s.url === tp.url || s.name === tp.name,
       )}
+      addedURL={
+        (servers ?? []).find((s) => s.url === tp.url || s.name === tp.name)?.url
+      }
       busy={busy}
       remoteEnabled={catalog?.remote_mcp_enabled ?? false}
       redirectUri={catalog?.oauth_redirect_uri}
@@ -2038,9 +2054,9 @@ function ConnectionsPageInner() {
                                 >
                                   Save key
                                 </button>
-                                {keySentAsNote("Authorization", s.api_key_prefix) ? (
+                                {keySentAsNote(undefined, s.api_key_prefix) ? (
                                   <span className="basis-full font-mono text-[0.66rem] text-[var(--color-text-muted)]">
-                                    {keySentAsNote("Authorization", s.api_key_prefix)}
+                                    {keySentAsNote(undefined, s.api_key_prefix)}
                                   </span>
                                 ) : null}
                               </div>

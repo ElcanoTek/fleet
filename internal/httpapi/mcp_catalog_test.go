@@ -94,6 +94,15 @@ func TestMCPCatalogProjectsAPIKeyOnboardingFields(t *testing.T) {
 					SetupURL:    "https://www.browserbase.com/overview",
 					Featured:    true,
 				},
+				{
+					Name:         "pagerduty",
+					DisplayName:  "PagerDuty",
+					URL:          "https://mcp.pagerduty.com/mcp",
+					Auth:         "api_key",
+					APIKeyHeader: "Authorization",
+					APIKeyPrefix: "Token ", // NOT trimmed: the trailing space is part of the scheme
+					URLVariants:  []clientconfig.RemoteMCPURLVariant{{ID: "eu", Label: " EU ", URL: " https://mcp.eu.pagerduty.com/mcp "}},
+				},
 			},
 		},
 	}
@@ -108,8 +117,8 @@ func TestMCPCatalogProjectsAPIKeyOnboardingFields(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("bad json: %v", err)
 	}
-	if len(resp.ThirdParty) != 1 {
-		t.Fatalf("want 1 third-party entry, got %d", len(resp.ThirdParty))
+	if len(resp.ThirdParty) != 2 {
+		t.Fatalf("want 2 third-party entries, got %d", len(resp.ThirdParty))
 	}
 	tp := resp.ThirdParty[0]
 	if tp.APIKeyQuery != "browserbaseApiKey" {
@@ -117,6 +126,15 @@ func TestMCPCatalogProjectsAPIKeyOnboardingFields(t *testing.T) {
 	}
 	if tp.Auth != "api_key" || tp.SetupHint == "" || tp.SetupURL == "" || !tp.Featured {
 		t.Errorf("onboarding fields dropped from the wire: %+v", tp)
+	}
+	// The scheme prefix crosses untrimmed (a trailing space is the scheme's),
+	// and the regional endpoints cross with their ids, trimmed.
+	pd := resp.ThirdParty[1]
+	if pd.APIKeyPrefix != "Token " {
+		t.Errorf("api_key_prefix = %q, want \"Token \" verbatim — trimmed, the key would be sent as \"Token<key>\"", pd.APIKeyPrefix)
+	}
+	if len(pd.URLVariants) != 1 || pd.URLVariants[0].ID != "eu" || pd.URLVariants[0].Label != "EU" || pd.URLVariants[0].URL != "https://mcp.eu.pagerduty.com/mcp" {
+		t.Errorf("url_variants = %+v, want [{eu EU https://mcp.eu.pagerduty.com/mcp}]", pd.URLVariants)
 	}
 }
 

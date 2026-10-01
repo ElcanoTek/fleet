@@ -40,8 +40,9 @@ type catalogDrift struct {
 	// Auth is the directory's current auth kind (oauth, api_key, open).
 	Auth string `json:"auth,omitempty"`
 	// KeySentAs is where the directory now says an api key goes ("the
-	// Authorization: Bearer header", "the X-Api-Key header", "the api_key
-	// query parameter"); set only when both sides are api_key connections.
+	// Authorization: Bearer header", "the X-Api-Key header", "the
+	// Authorization header as Token token=<key>", "the api_key query
+	// parameter"); set only when both sides are api_key connections.
 	KeySentAs string `json:"key_sent_as,omitempty"`
 }
 
@@ -91,20 +92,7 @@ func driftFromCatalog(row store.RemoteMCPServer, catalog []clientconfig.RemoteMC
 	// entry that does not canonicalise is not comparable: neither reports
 	// URL drift.
 	if !strings.Contains(entry.URL, "{") {
-		// A row on any of the entry's endpoints — the default or a regional
-		// variant — matches; only a URL the entry no longer lists is drift.
-		listed := false
-		urls := []string{entry.URL}
-		for _, v := range entry.URLVariants {
-			urls = append(urls, v.URL)
-		}
-		for _, u := range urls {
-			if canon, err := mcpoauth.CanonicalResourceURI(u); err == nil && canon == row.URL {
-				listed = true
-				break
-			}
-		}
-		if !listed {
+		if canon, err := mcpoauth.CanonicalResourceURI(entry.URL); err == nil && canon != row.URL && !onListedVariant(entry.URLVariants, row.URL) {
 			d.URL = entry.URL
 		}
 	}
@@ -147,4 +135,16 @@ func keyPlacement(header, query, prefix string) string {
 	default:
 		return "the Authorization: Bearer header"
 	}
+}
+
+// onListedVariant reports whether the row sits on one of the entry's regional
+// endpoints (url_variants): a row on any listed endpoint is not URL drift.
+// A variant that does not canonicalise cannot match, as with the entry's URL.
+func onListedVariant(variants []mcpCatalogURLVariant, rowURL string) bool {
+	for _, v := range variants {
+		if canon, err := mcpoauth.CanonicalResourceURI(v.URL); err == nil && canon == rowURL {
+			return true
+		}
+	}
+	return false
 }

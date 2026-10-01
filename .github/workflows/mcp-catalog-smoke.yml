@@ -13,8 +13,9 @@
 #            handshake (initialize + tools/list over the SSRF-safe client)
 #            against every `open` entry, and against a handful of `api_key`
 #            entries when their keys are present as repository secrets
-#            (FLEET_CATALOG_KEY_<ENTRY>; a missing secret skips that fixture,
-#            it never fails). OAuth entries need a browser consent step and are
+#            (FLEET_CATALOG_KEY_<ENTRY>, or FLEET_CATALOG_KEY_<ENTRY>_<ID> for
+#            one of an entry's url_variants; a missing secret skips that
+#            fixture, it never fails). OAuth entries need a browser consent step and are
 #            verified by hand — see docs/MCP-CATALOG-STATUS.md.
 #
 # It is NEVER a PR gate: it runs on a schedule and on manual dispatch only, and

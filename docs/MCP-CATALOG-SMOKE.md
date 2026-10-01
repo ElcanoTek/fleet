@@ -86,10 +86,12 @@ awk shows up in the PR gate, not as a silently smaller nightly.
   no `{placeholder}` (12 as of 2026-09-16) must complete an unauthenticated
   handshake and list at least one tool. One subtest per entry, so a single
   dead vendor names itself.
-- **`TestCatalogLiveAPIKeyFixtures`** — a table of five `api_key` entries,
-  each armed by a repository secret named `FLEET_CATALOG_KEY_<ENTRY>` (the
-  entry name upper-cased, `-` → `_`), which the workflow's `env:` block
-  forwards; `scripts/check_catalog_smoke_fixtures_test.go` fails CI if the
+- **`TestCatalogLiveAPIKeyFixtures`** — a table of six fixtures over five
+  `api_key` entries (an entry with `url_variants` gets one row per
+  endpoint), each armed by its own repository secret: `FLEET_CATALOG_KEY_<ENTRY>`
+  (the entry name upper-cased, `-` → `_`) for the entry's own URL, or
+  `FLEET_CATALOG_KEY_<ENTRY>_<ID>` for one of its `url_variants`, which the
+  workflow's `env:` block forwards; `scripts/check_catalog_smoke_fixtures_test.go` fails CI if the
   Go table and that block drift apart:
 
   | entry | secret | key shape it exercises | rejects a wrong key at the handshake |
