@@ -114,8 +114,10 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   rest in connection list order (`internal/remotemcp/resolver.go`'s
   `ConnectedServersForUser`: the owner's own connections newest-first, then
   the ones shared with them). Every server past the cap is recorded as
-  skipped with the `overlay_cap` reason and logged once, so the prompt notice
-  names it and a pinned name past the cap reads as "left out", never as
+  skipped with the `overlay_cap` reason and logged once. The prompt notice
+  names at most `MaxSkipNoticeNames` (10) per reason and counts the rest, so
+  the prompt stays bounded; the full list stays on the overlay, so a pinned
+  name past the cap reads as "left out", never as
   "misspelled" (#1656); only a task naming more than 8 connections can have a
   named one cut. A pin to a seat that is not connected skips
   that connector and tells the model; a pin to a server the owner never
