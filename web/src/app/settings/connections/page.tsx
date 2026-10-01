@@ -2222,6 +2222,27 @@ function ConnectionsPageInner() {
                         >
                           {groupAuth === "oauth" ? "Add and sign in" : "Add"}
                         </button>
+                        {groupAuth === "api_key"
+                          ? (() => {
+                              // The same directory entry addSeat posts the
+                              // prefix from, so the note says what is sent.
+                              const dir = (catalog?.third_party ?? []).find(
+                                (e) => e.name === group.name,
+                              );
+                              const note = keySentAsNote(
+                                dir?.api_key_header,
+                                dir?.api_key_prefix,
+                              );
+                              return note ? (
+                                <span
+                                  className="basis-full font-mono text-[0.66rem] text-[var(--color-text-muted)]"
+                                  data-testid={`add-seat-key-note-${group.name}`}
+                                >
+                                  {note}
+                                </span>
+                              ) : null;
+                            })()
+                          : null}
                         <span className="basis-full text-[0.7rem] text-[var(--color-text-muted)]">
                           A label is required for a second login — it tells the
                           seats apart in the Tools picker.

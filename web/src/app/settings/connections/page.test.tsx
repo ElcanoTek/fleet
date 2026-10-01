@@ -310,6 +310,53 @@ describe("ConnectionsPage guided api_key add", () => {
     const select = (await within(card).findByTestId("dir-form-endpoint-pdlike")) as HTMLSelectElement;
     expect(select.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
   });
+
+  it("shows the scheme on a connection row's Add another account form and posts the prefix", async () => {
+    let posted: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        (body) => {
+          posted = body;
+          return { status: 200, body: { id: "pd2", tool_count: 2 } };
+        },
+        { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+        {
+          ...EMPTY_LIST,
+          servers: [
+            {
+              ...BB_PRIMARY,
+              id: "pd1",
+              name: "pdlike",
+              url: "https://mcp.eu.pdlike.example.com/mcp",
+              api_key_prefix: "Token token=",
+            },
+          ],
+        },
+      ),
+    );
+    visit("");
+    const group = await screen.findByTestId("remote-group-pdlike");
+    fireEvent.click(within(group).getByTestId("add-seat-pdlike"));
+    expect(within(group).getByTestId("add-seat-key-note-pdlike")).toHaveTextContent(
+      "Sent as Authorization: Token token=<key> — paste only the key.",
+    );
+    fireEvent.change(within(group).getByLabelText("Account label for the new pdlike login"), {
+      target: { value: "work" },
+    });
+    fireEvent.change(within(group).getByLabelText("API key for the new pdlike login"), {
+      target: { value: "u+second" },
+    });
+    fireEvent.click(within(group).getByTestId("add-seat-submit-pdlike"));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "pdlike",
+      url: "https://mcp.eu.pdlike.example.com/mcp",
+      account: "work",
+      api_key: "u+second",
+      api_key_prefix: "Token token=",
+    });
+  });
   it("shows the entry's scheme prefix beside the key field and posts it, so the user pastes only the key", async () => {
     let posted: Record<string, unknown> | null = null;
     vi.stubGlobal(

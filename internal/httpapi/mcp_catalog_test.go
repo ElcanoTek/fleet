@@ -100,8 +100,8 @@ func TestMCPCatalogProjectsAPIKeyOnboardingFields(t *testing.T) {
 					URL:          "https://mcp.pagerduty.com/mcp",
 					Auth:         "api_key",
 					APIKeyHeader: "Authorization",
-					APIKeyPrefix: "Token ", // NOT trimmed: the trailing space is part of the scheme
-					URLVariants:  []clientconfig.RemoteMCPURLVariant{{ID: "eu", Label: " EU ", URL: " https://mcp.eu.pagerduty.com/mcp "}},
+					APIKeyPrefix: "Token ",                                                                                                     // NOT trimmed: the trailing space is part of the scheme
+					URLVariants:  []clientconfig.RemoteMCPURLVariant{{ID: "eu", Label: " EU ", URL: " https://MCP.EU.PagerDuty.com:443/mcp "}}, // served canonical: the form AddServer stores
 				},
 			},
 		},
