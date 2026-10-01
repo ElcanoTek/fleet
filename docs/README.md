@@ -296,6 +296,7 @@ above fails otherwise.
 - [`STRUCTURED-OUTPUT.md`](STRUCTURED-OUTPUT.md) — Structured output contracts
 - [`SUBAGENTS.md`](SUBAGENTS.md) — Sub-agents: default-on, parent decides, typed children (#1043)
 - [`TASK-SCHEDULE-UX.md`](TASK-SCHEDULE-UX.md) — Create Task schedule controls
+- [`TASK-SEARCH.md`](TASK-SEARCH.md) — Recent Tasks search (any-order words, tags, description, creator) and the one scheduled filter
 - [`TASK-SERIALIZATION.md`](TASK-SERIALIZATION.md) — Task serialization — opaque `serialization_key` mutual exclusion (#709)
 - [`TASK-TAGS.md`](TASK-TAGS.md) — Task tags on the board — chips, the tag filter, and the catalogue TTL
 - [`TASK-TITLES.md`](TASK-TITLES.md) — Task titles

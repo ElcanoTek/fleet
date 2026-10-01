@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -349,6 +350,72 @@ type TaskFilter struct {
 	StatusIn []string
 }
 
+// maxTaskSearchTerms bounds how many words one search ANDs together. Each term
+// is a scan of several text columns per row, so an unbounded paste (a whole
+// prompt dropped into the box) would multiply the cost of the query for no
+// gain in precision; words past the cap are ignored.
+const maxTaskSearchTerms = 8
+
+// taskSearchTerms splits a Recent Tasks search into the terms that must ALL
+// match. The search used to be one substring of the whole input, so "sales
+// weekly" never found "Weekly sales report", a doubled space found nothing, and
+// a user who remembered two words of a job's title in the wrong order was told
+// it did not exist. Words now match independently, in any order; a
+// double-quoted run ("daily deal") is kept as one phrase for when order
+// matters. An unterminated quote runs to the end of the input.
+func taskSearchTerms(query string) []string {
+	var terms []string
+	var cur strings.Builder
+	inQuote := false
+	flush := func() {
+		if t := strings.TrimSpace(cur.String()); t != "" && len(terms) < maxTaskSearchTerms {
+			terms = append(terms, t)
+		}
+		cur.Reset()
+	}
+	for _, r := range query {
+		switch {
+		case r == '"':
+			flush()
+			inQuote = !inQuote
+		case !inQuote && unicode.IsSpace(r):
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return terms
+}
+
+// escapeLikePattern makes term match literally inside an ILIKE ... ESCAPE '\'
+// pattern. Unescaped, a "%" or "_" a user types ("100% target",
+// "daily_report") is a wildcard that matches far more than they asked for.
+func escapeLikePattern(term string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(term)
+}
+
+// taskSearchTermClause is the predicate one search term must satisfy: it
+// appears in any field a person might remember a job by — the title and prompt
+// the board displays, the operator description (#281), the import/export name,
+// the ID, any of its tags (#212), or the username of whoever created it (the
+// board's Created By column). The tags guard is a CASE so jsonb_array_elements
+// never sees a non-array. Visibility filters AND with this, so matching on a
+// creator only ever narrows the rows the caller could already see.
+func taskSearchTermClause(argIndex int) string {
+	p := fmt.Sprintf("$%d", argIndex)
+	like := func(expr string) string { return expr + " ILIKE " + p + ` ESCAPE '\'` }
+	return "(" + strings.Join([]string{
+		like("title"),
+		like("prompt"),
+		like("COALESCE(description, '')"),
+		like("name"),
+		like("CAST(id AS TEXT)"),
+		"CASE WHEN jsonb_typeof(tags) = 'array' THEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) AS tag(v) WHERE " + like("tag.v") + ") ELSE false END",
+		"created_by IN (SELECT u.id FROM users u WHERE " + like("u.username") + ")",
+	}, " OR ") + ")"
+}
+
 // GetTasksFiltered gets tasks with optional filters and pagination.
 func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, limit, offset int) ([]*models.Task, int, error) {
 	whereClauses := []string{}
@@ -378,12 +445,11 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 			args = append(args, id)
 			argIndex++
 		} else {
-			// title is matched alongside prompt: once a job has a title, the
-			// title is what the operator remembers it by, and searching only the
-			// prompt would fail to find a task by the label the list displays.
-			whereClauses = append(whereClauses, fmt.Sprintf("(title ILIKE $%d OR prompt ILIKE $%d OR CAST(id AS TEXT) ILIKE $%d)", argIndex, argIndex, argIndex))
-			args = append(args, "%"+query+"%")
-			argIndex++
+			for _, term := range taskSearchTerms(query) {
+				whereClauses = append(whereClauses, taskSearchTermClause(argIndex))
+				args = append(args, "%"+escapeLikePattern(term)+"%")
+				argIndex++
+			}
 		}
 	}
 

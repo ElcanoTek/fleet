@@ -114,8 +114,20 @@ the wake, not a second copy started alongside it. Stop is offered on both.
 
 ### Finding things
 
-The board filters by **Status** and **Created by**, narrows to **Scheduled
-only**, and searches across title, prompt, and ID.
+The board filters by **Status** and **Created by**. To see the jobs waiting to
+run, pick **scheduled** under **Status**: one-off jobs set for later, the next
+run of each repeating job, and jobs waiting for a webhook or a condition rather
+than a time.
+
+The search box matches each word you type on its own, in any order, so
+`sales weekly` finds "Weekly sales report". A word can appear in the title,
+the prompt, the task's description, one of its tags, the creator's name, or
+the ID (the first few characters are enough); every word has to match
+somewhere. Up to eight words are used — anything after the eighth is
+ignored. Put words in double quotes, like `"daily deal"`, to match them as one
+phrase in that order. Search covers the tasks the board can show you, and it
+combines with the other filters, so if a task you expect is missing, check
+**Status** and the tags first or press **Clear filters**.
 
 It also filters by **tag**. A task's tags appear as small coloured chips on its
 row; clicking one narrows the board to that tag, and the **Tags** dropdown in

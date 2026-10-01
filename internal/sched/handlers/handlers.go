@@ -1254,8 +1254,12 @@ func parseCompletedStatuses(raw string) ([]string, error) {
 // Requires pagination with ?limit=N&offset=M query parameters.
 // Optional filter parameters:
 //   - status: Filter by task status (pending, running, success, error, cancelled)
-//   - q: Search in prompt or task ID (case-insensitive substring match)
+//   - q: Search (case-insensitive). A full task ID matches that task; otherwise
+//     every whitespace-separated word (or "quoted phrase") must appear in the
+//     title, prompt, description, name, ID, a tag, or the creator's username —
+//     see db.taskSearchTerms. % and _ match literally.
 //   - scheduled_only: If "true", only return tasks with scheduled_for or recurrence
+//     (API only; the Operations Center filters on status=scheduled instead)
 //   - completed_today: If "true", only return tasks completed today
 //   - completed_status: When completed_today=true, filter by terminal status.
 //     Accepts one status or a comma-separated list, e.g. "success" or

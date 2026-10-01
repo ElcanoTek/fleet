@@ -147,8 +147,8 @@ export function TasksTable({
   onStop,
   onDelete,
 }: TasksTableProps) {
-  // Debounce ONLY the search box. The status/createdBy selects, the
-  // scheduledOnly checkbox, and the stat-card quick filters all call onFilters
+  // Debounce ONLY the search box. The status/createdBy/tag selects and the
+  // stat-card quick filters all call onFilters
   // and must stay instant — so the search input is locally controlled and
   // propagates to onFilters ~300ms after typing settles. queryDraft is the
   // live input value; lastPropagated tracks the value we last pushed up so an
@@ -178,7 +178,6 @@ export function TasksTable({
   const anyFilter =
     filters.status !== "" ||
     filters.query !== "" ||
-    filters.scheduledOnly ||
     filters.completedToday ||
     filters.createdBy !== "" ||
     filters.tags.length > 0;
@@ -291,16 +290,6 @@ export function TasksTable({
             </div>
           </div>
         ) : null}
-        <label className="filter-checkbox-label" htmlFor="taskScheduledOnlyFilter">
-          <input
-            id="taskScheduledOnlyFilter"
-            type="checkbox"
-            aria-label="Scheduled only"
-            checked={filters.scheduledOnly}
-            onChange={(e) => onFilters({ scheduledOnly: e.target.checked })}
-          />
-          <span>Scheduled Only</span>
-        </label>
         <div className="filter-group filter-group-search">
           <label htmlFor="taskSearchFilter" className="filter-label">
             Search
@@ -309,7 +298,7 @@ export function TasksTable({
             id="taskSearchFilter"
             type="text"
             className="filter-input"
-            placeholder="Search title, prompt, or ID..."
+            placeholder="Search title, prompt, tag, creator or ID…"
             aria-label="Search tasks"
             value={queryDraft}
             onChange={(e) => setQueryDraft(e.target.value)}
