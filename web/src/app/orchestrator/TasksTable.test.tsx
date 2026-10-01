@@ -11,7 +11,6 @@ import type { Task } from "@/app/shared/lib/orchestratorApi";
 const FILTERS: TaskFilters = {
   status: "",
   query: "",
-  scheduledOnly: false,
   completedToday: false,
   completedStatus: "",
   createdBy: "",
@@ -60,6 +59,21 @@ describe("TasksTable search debounce", () => {
     fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "running" } });
     // Synchronous — the select is not debounced.
     expect(onFilters).toHaveBeenCalledWith({ status: "running" });
+  });
+});
+
+describe("TasksTable scheduled filter", () => {
+  // The board had two controls for "scheduled": a Scheduled Only checkbox
+  // (anything with a schedule or recurrence, past occurrences included) and
+  // the Status dropdown's scheduled option (waiting for its run). One filter
+  // now: the dropdown's, which is the jobs that will run next.
+  it("offers scheduled in the Status dropdown and no separate checkbox", () => {
+    const onFilters = vi.fn();
+    renderTable(onFilters);
+    expect(screen.queryByLabelText(/scheduled only/i)).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "scheduled" } });
+    expect(onFilters).toHaveBeenCalledWith({ status: "scheduled" });
   });
 });
 

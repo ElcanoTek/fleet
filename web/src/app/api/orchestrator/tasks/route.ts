@@ -10,7 +10,6 @@ export async function GET(request: NextRequest) {
     "offset",
     "status",
     "q",
-    "scheduled_only",
     "completed_today",
     "completed_status",
     "created_by",

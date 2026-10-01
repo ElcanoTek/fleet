@@ -14,7 +14,6 @@ import {
 export type TaskFilters = {
   status: string;
   query: string;
-  scheduledOnly: boolean;
   completedToday: boolean;
   completedStatus: string;
   createdBy: string;
@@ -30,7 +29,6 @@ const TAG_CATALOGUE_TTL_MS = 5 * 60 * 1000;
 const EMPTY_FILTERS: TaskFilters = {
   status: "",
   query: "",
-  scheduledOnly: false,
   completedToday: false,
   completedStatus: "",
   createdBy: "",
@@ -43,7 +41,6 @@ function buildTaskQuery(filters: TaskFilters, page: number, pageSize: number): s
   p.set("offset", String((page - 1) * pageSize));
   if (filters.status) p.set("status", filters.status);
   if (filters.query) p.set("q", filters.query);
-  if (filters.scheduledOnly) p.set("scheduled_only", "true");
   if (filters.completedToday) {
     p.set("completed_today", "true");
     if (filters.completedStatus) p.set("completed_status", filters.completedStatus);
