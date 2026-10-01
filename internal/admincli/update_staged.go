@@ -31,6 +31,8 @@ func stagedCopyCheck(dir string) (handled, stale bool) {
 		fmt.Printf("client bundle at %s has a staging marker that is not a readable regular file — `fleet update` will not recognise or refresh it.\n", dir)
 		fmt.Println("  restage it: move it aside and re-run scripts/bootstrap.sh --enable-service from this checkout")
 		return true, true
+	case markerOK:
+		// Checked against this checkout below.
 	}
 	want := ""
 	if root := repoRoot(); root != "" {
