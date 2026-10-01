@@ -38,10 +38,17 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
 - **`fleet update --check`** calls a staged copy current only when its marker
   names this checkout's `config/default` (both paths resolved, so a relative
   or symlinked `FLEET_ROOT` matches) *and* its content still matches that
-  source, file for file. A checkout fast-forwarded outside `fleet update`
+  source, file for file (bytes, entry types, link targets and the owner's
+  permission bits, which the refresh restores). A checkout fast-forwarded outside `fleet update`
   leaves the marker naming the same path over old bytes, so that copy is
   reported stale. The comparison reads the service-owned copy through an
   `os.Root`, so no symlink in it can lead the root-run check out of the tree.
+  A marker that is there but unusable (a link, a FIFO, empty) is reported
+  stale, since update.sh would not recognise the copy. A copy the invoking
+  user cannot read (the shipped unit's state dir is `0700`) is reported as
+  unknown and fails the check, with the `sudo` re-run to use. A bundle with no
+  marker at all is indistinguishable from a hand-placed one and is checked as
+  that (update leaves those alone too).
 
 ## Safety properties
 
@@ -65,7 +72,10 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
   cannot fully rewrite (a root-owned file from a hand edit) is refused before
   anything moves. Otherwise the current copy is kept aside first, and if the
   in-place sync fails part-way (a full disk, an I/O error), the kept copy is
-  put back in place. The new marker is written before anything changes and
+  put back in place. If putting it back fails too (the same full disk), the
+  copy is partly updated: the kept copy is then left on disk, its path is
+  printed, and update stops before restarting the service rather than
+  restarting onto a half-written bundle. The new marker is written before anything changes and
   renamed into place after the sync, so a full disk cannot leave a copy
   without one. rsync compares content (`--checksum`), so an edit that
   keeps a file's size and mtime is still picked up.

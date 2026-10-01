@@ -1351,7 +1351,7 @@ func assertFailedSyncRestores(t *testing.T, base []string, src, dst, owner strin
 	path := toolsOnlyPath(t, base...)
 	stubDir := t.TempDir()
 	once := filepath.Join(stubDir, "failed-once")
-	stub := "#!/usr/bin/env bash\n\"" + realRsync + "\" \"$@\"\nif [[ ! -e " + once + " ]]; then touch " + once + "; exit 23; fi\n"
+	stub := "#!/usr/bin/env bash\n\"" + realRsync + "\" \"$@\"\nif [[ ! -e " + once + " ]]; then : > " + once + "; exit 23; fi\n"
 	if err := os.WriteFile(filepath.Join(stubDir, "rsync"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1368,8 +1368,42 @@ func assertFailedSyncRestores(t *testing.T, base []string, src, dst, owner strin
 		t.Fatalf("after a failed sync personas/a.yaml = %q, want the previous %q", got, before)
 	}
 	if left, _ := filepath.Glob(dst + ".prev.*"); len(left) != 0 {
-		t.Fatalf("the kept copy was left behind: %v", left)
+		t.Fatalf("the kept copy was left behind: %v\n%s", left, out)
 	}
+	assertFailedRollbackKeepsBackup(t, realRsync, path, src, dst, owner)
+}
+
+// assertFailedRollbackKeepsBackup: when the rollback sync fails as well (the
+// same full disk), the kept copy is the only good one left — it must survive,
+// and the exit status (3) must tell the caller to stop.
+func assertFailedRollbackKeepsBackup(t *testing.T, realRsync, path, src, dst, owner string) {
+	t.Helper()
+	stubDir := t.TempDir()
+	stub := "#!/usr/bin/env bash\n\"" + realRsync + "\" \"$@\"\nexit 23\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "rsync"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(dst, "personas", "a.yaml"))
+	if err := os.WriteFile(filepath.Join(src, "personas", "a.yaml"), []byte("changed upstream\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.WriteFile(filepath.Join(src, "personas", "a.yaml"), before, 0o644) }()
+	out, err := bundleLib(t, stubDir+string(os.PathListSeparator)+path, "stage_default_bundle", src, dst, owner)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 || !strings.Contains(out, "previous copy is kept at") {
+		t.Fatalf("a failed rollback did not exit 3 naming the kept copy: err=%v\n%s", err, out)
+	}
+	kept, _ := filepath.Glob(dst + ".prev.*")
+	if len(kept) != 1 {
+		t.Fatalf("want exactly one kept copy after a failed rollback, got %v", kept)
+	}
+	if got, _ := os.ReadFile(filepath.Join(kept[0], "personas", "a.yaml")); string(got) != string(before) {
+		t.Fatalf("the kept copy holds %q, want the previous %q", got, before)
+	}
+	if left, _ := filepath.Glob(dst + ".new.*"); len(left) != 0 {
+		t.Fatalf("the scratch unpack was left behind: %v", left)
+	}
+	_ = os.RemoveAll(kept[0])
 }
 
 // assertPartialSourceRefused: a source that cannot be read in full is refused

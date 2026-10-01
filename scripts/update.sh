@@ -582,6 +582,10 @@ if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
       _rc=$?
       if [[ "$_rc" == "2" ]]; then
         warn "${_stage} holds a bundle that is not a staged copy — leaving it alone; ${SERVICE_NAME} keeps loading ${svc_client_dir}"
+      elif [[ "$_rc" == "3" ]]; then
+        # Neither the refresh nor the rollback completed: the copy the service
+        # loads is half-written. Restarting onto it is worse than stopping.
+        die "the staged bundle at ${_stage} is partly updated and could not be restored (see above) — not restarting ${SERVICE_NAME}; restore the kept copy, free the space, and re-run: sudo fleet update"
       else
         warn "could not stage the default bundle to ${_stage} — ${SERVICE_NAME} keeps loading ${svc_client_dir}"
       fi

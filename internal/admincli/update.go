@@ -2,8 +2,10 @@ package admincli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -139,30 +141,9 @@ func clientBundleCheck() bool {
 	}
 	// A bare service install runs a staged copy of the generic bundle
 	// (scripts/lib/bundle.sh, #1655): not a git checkout, refreshed by
-	// update.sh from the fleet checkout rather than pulled — but only when its
-	// marker names THIS checkout's config/default, so that is what is checked.
-	if src, ok := stagedBundleSource(dir); ok {
-		want := ""
-		if root := repoRoot(); root != "" {
-			want = filepath.Join(root, "config", "default")
-		}
-		if want != "" && canonicalPath(src) != canonicalPath(want) {
-			fmt.Printf("client bundle at %s is a staged copy of %s, not of this checkout's %s — `fleet update` will not refresh it.\n", dir, src, want)
-			fmt.Println("  restage it: re-run scripts/bootstrap.sh --enable-service from this checkout")
-			return true
-		}
-		if want != "" {
-			if rel, err := stagedCopyDiff(want, dir); err != nil || rel != "" {
-				what := rel
-				if err != nil {
-					what = err.Error()
-				}
-				fmt.Printf("client bundle at %s is the staged copy of %s, but it no longer matches it (first difference: %s) — `fleet update` restages it.\n", dir, src, what)
-				return true
-			}
-		}
-		fmt.Printf("client bundle at %s is the staged copy of %s — `fleet update` refreshes it from there (and says so if it could not).\n", dir, src)
-		return false
+	// update.sh from the fleet checkout rather than pulled.
+	if handled, stale := stagedCopyCheck(dir); handled {
+		return stale
 	}
 	git := func(args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -282,19 +263,44 @@ func canonicalPath(p string) string {
 	return abs
 }
 
-func stagedBundleSource(dir string) (string, bool) {
+// markerState is what stagedBundleSource found at a bundle's staging marker.
+type markerState int
+
+const (
+	markerAbsent     markerState = iota // no marker: a hand-placed bundle or a checkout
+	markerOK                            // a regular file naming the source
+	markerInvalid                       // something is there, but not a usable marker
+	markerUnreadable                    // permission denied: the check cannot tell
+)
+
+func stagedBundleSource(dir string) (string, markerState) {
+	path := filepath.Join(dir, ".fleet-staged-from")
+	if _, err := os.Lstat(path); err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			return "", markerUnreadable
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", markerAbsent
+		}
+		return "", markerInvalid
+	}
 	//nolint:gosec // G304: a fixed basename under the operator-configured bundle dir; opened no-follow, regular files only.
-	f, err := os.OpenFile(filepath.Join(dir, ".fleet-staged-from"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", false
+		if errors.Is(err, fs.ErrPermission) {
+			return "", markerUnreadable
+		}
+		return "", markerInvalid
 	}
 	defer f.Close()
 	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-		return "", false
+		return "", markerInvalid
 	}
 	buf := make([]byte, 4096)
 	n, _ := io.ReadFull(f, buf)
 	line, _, _ := strings.Cut(string(buf[:n]), "\n")
-	line = strings.TrimSpace(line)
-	return line, line != ""
+	if line = strings.TrimSpace(line); line == "" {
+		return "", markerInvalid
+	}
+	return line, markerOK
 }

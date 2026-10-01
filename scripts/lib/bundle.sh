@@ -119,7 +119,10 @@ bundle_writable_in_unit() {
 # Refuses (exit 1) a SRC without manifest.yaml, a DST that is not an absolute
 # path below /, a DST that is a symlink, an OWNER that does not exist, and a
 # box without rsync; and (exit 2) a DST that exists, is non-empty and carries
-# no marker — someone's hand-placed bundle, never deleted here.
+# no marker — someone's hand-placed bundle, never deleted here. Exit 3 is a
+# refresh that failed part-way AND whose rollback failed too: DST is partly
+# updated, the previous copy is kept beside it (the path is printed), and the
+# caller must stop rather than restart the service onto it.
 #
 # Every write happens AS OWNER. DST sits in the service user's own state dir,
 # so that account controls every path component below it: a root process that
@@ -199,8 +202,17 @@ stage_default_bundle() {
     sync_from() { rsync -a --checksum --delete --delete-after --no-owner --no-group --exclude "/$(basename "$marker")" --exclude "/$(basename "$marker").new" "$1/" "$dst/"; }
     if ! sync_from "$tmp"; then
       echo "stage_default_bundle: sync into $dst failed — restoring the previous copy" >&2
-      sync_from "$prev" || echo "stage_default_bundle: could not fully restore $dst" >&2
       rm -f -- "$newmarker"
+      if ! sync_from "$prev"; then
+        # The restore failed too (the same full disk, say): DST is part old,
+        # part new. The kept copy is the only good one left, so it is NOT
+        # cleaned up, and exit 3 tells the caller to stop rather than restart
+        # the service onto a half-written bundle.
+        trap - EXIT
+        chmod -R u+w -- "$tmp" 2>/dev/null; rm -rf -- "$tmp"
+        echo "stage_default_bundle: could not restore $dst either — it is partly updated; the previous copy is kept at $prev (restore it with: rsync -a --delete $prev/ $dst/)" >&2
+        exit 3
+      fi
       exit 1
     fi
     # Swap the prepared marker in by rename: no space needed at this point,
@@ -209,5 +221,5 @@ stage_default_bundle() {
   ' _ "$src" "$dst" "$marker" < "$archive"
   local rc=$?
   rm -f -- "$archive"
-  return "$(( rc == 0 ? 0 : 1 ))"
+  case "$rc" in 0 | 3) return "$rc" ;; *) return 1 ;; esac
 }
