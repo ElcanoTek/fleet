@@ -2,13 +2,17 @@ package admincli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 )
 
 // stagedCopyCheck is clientBundleCheck for a bundle dir that carries (or
@@ -20,6 +24,15 @@ func stagedCopyCheck(dir string) (handled, stale bool) {
 	src, state := stagedBundleSource(dir)
 	switch state {
 	case markerAbsent:
+		// No marker is a hand-placed bundle anywhere but the service's own
+		// staging path, which only bootstrap/update write to: a markerless
+		// copy there is one update.sh refuses to touch (exit 2), so it is
+		// stale, not a bundle someone chose to manage by hand.
+		if stage := expectedStagePath(); stage != "" && canonicalPath(dir) == canonicalPath(stage) {
+			fmt.Printf("client bundle at %s is the service's staging path but carries no staging marker — `fleet update` will not recognise or refresh it.\n", dir)
+			fmt.Println("  restage it: move it aside and re-run scripts/bootstrap.sh --enable-service from this checkout")
+			return true, true
+		}
 		return false, false
 	case markerUnreadable:
 		// The shipped unit keeps its state dir 0700, so an operator without
@@ -57,6 +70,27 @@ func stagedCopyCheck(dir string) (handled, stale bool) {
 	}
 	fmt.Printf("client bundle at %s is the staged copy of %s — `fleet update` refreshes it from there (and says so if it could not).\n", dir, src)
 	return true, false
+}
+
+// expectedStagePath is where bootstrap/update stage the generic bundle: the
+// service unit's StateDirectory (as update.sh reads it) plus /bundle, or the
+// shipped /var/lib/fleet/bundle when systemd cannot say. A var so tests can
+// point it at a temp dir.
+var expectedStagePath = func() string {
+	service := strings.TrimSpace(os.Getenv("FLEET_SERVICE_NAME"))
+	if service == "" {
+		service = "fleet"
+	}
+	state := "fleet"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	//nolint:gosec // G204: fixed "systemctl" binary; the unit name is operator config, never request input.
+	if out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "StateDirectory", "--value", service+".service").Output(); err == nil {
+		if f := strings.Fields(string(out)); len(f) > 0 {
+			state = f[0]
+		}
+	}
+	return filepath.Join("/var/lib", state, "bundle")
 }
 
 // stagedMarkers are the staging bookkeeping files update.sh keeps in a staged

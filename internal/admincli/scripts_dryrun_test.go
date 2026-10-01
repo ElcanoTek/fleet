@@ -1272,6 +1272,7 @@ func TestStageDefaultBundle(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(dst, "stale.txt")); !os.IsNotExist(err) {
 				t.Fatal("a file removed upstream lingered in the staged copy")
 			}
+			assertRelativeSourceMarkedAbsolute(t, path, root, dst, owner)
 			assertMarkerSymlinkNotFollowed(t, path, src, dst, owner, root)
 			assertPartialSourceRefused(t, path, src, dst, owner)
 			assertFailedSyncRestores(t, base, src, dst, owner)
@@ -1371,6 +1372,30 @@ func assertFailedSyncRestores(t *testing.T, base []string, src, dst, owner strin
 		t.Fatalf("the kept copy was left behind: %v\n%s", left, out)
 	}
 	assertFailedRollbackKeepsBackup(t, realRsync, path, src, dst, owner)
+}
+
+// assertRelativeSourceMarkedAbsolute: update.sh --src . hands a relative
+// source in; the marker's readers accept only an absolute path, so staging
+// must record the resolved one or no later run would recognise the copy.
+func assertRelativeSourceMarkedAbsolute(t *testing.T, path, root, dst, owner string) {
+	t.Helper()
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "bundle.sh")
+	cmd := exec.Command("bash", "-c", ". "+lib+` && stage_default_bundle "$@"`, "bundle", "./src", dst, owner)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "PATH="+path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("stage from a relative source: %v\n%s", err, out)
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(root, "src"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, ".fleet-staged-from")); strings.TrimSpace(string(got)) != want {
+		t.Fatalf("marker after a relative source = %q, want the absolute %q", got, want)
+	}
+	if out, err := bundleLib(t, path, "bundle_marker_source", dst, owner); err != nil || strings.TrimSpace(out) != want {
+		t.Fatalf("the marker written from a relative source is not readable back: out=%q err=%v", out, err)
+	}
 }
 
 // assertFailedRollbackKeepsBackup: when the rollback sync fails as well (the

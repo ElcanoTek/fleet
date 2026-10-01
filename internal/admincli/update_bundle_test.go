@@ -130,6 +130,28 @@ func TestClientBundleCheck(t *testing.T) {
 		}
 	})
 
+	// A markerless bundle is a hand-placed one, except at the service's own
+	// staging path, where only bootstrap/update write: update.sh would refuse
+	// to refresh that copy, so --check must not pass it.
+	t.Run("a markerless copy at the staging path is stale", func(t *testing.T) {
+		stage := filepath.Join(t.TempDir(), "bundle")
+		if err := os.MkdirAll(stage, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		prev := expectedStagePath
+		expectedStagePath = func() string { return stage }
+		defer func() { expectedStagePath = prev }()
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", stage)
+		if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "carries no staging marker") {
+			t.Errorf("markerless staging path: stale=%v %q", stale, out)
+		}
+		// Anywhere else, no marker is a hand-placed bundle, checked as such.
+		t.Setenv("FLEET_CLIENT_CONFIG_DIR", t.TempDir())
+		if out, _ := capture(t, clientBundleCheck); !strings.Contains(out, "not a git checkout") {
+			t.Errorf("a hand-placed bundle was taken for a staging path: %q", out)
+		}
+	})
+
 	// The shipped unit keeps its state dir 0700, so a non-root --check cannot
 	// read a copy staged there; it must say so and fail, not pass unlooked.
 	t.Run("an unreadable staged copy is reported, not passed", func(t *testing.T) {

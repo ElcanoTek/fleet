@@ -147,6 +147,9 @@ bundle_writable_in_unit() {
 stage_default_bundle() {
   local src="$1" dst="$2" owner="$3" marker
   [[ -f "$src/manifest.yaml" ]] || { echo "stage_default_bundle: no manifest.yaml at $src" >&2; return 1; }
+  # The marker records SRC, and its readers accept only an absolute path, so
+  # a relative SRC (update.sh --src .) is resolved here, symlinks included.
+  src="$(cd -P -- "$src" && pwd -P)" || { echo "stage_default_bundle: cannot resolve $1" >&2; return 1; }
   [[ "$dst" == /?* ]] || { echo "stage_default_bundle: refusing destination '$dst' (must be an absolute path below /)" >&2; return 1; }
   [[ -L "$dst" ]] && { echo "stage_default_bundle: $dst is a symlink — not staging onto it" >&2; return 1; }
   id -u "$owner" >/dev/null 2>&1 || { echo "stage_default_bundle: no such user $owner" >&2; return 1; }

@@ -49,8 +49,11 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
   stale, since update.sh would not recognise the copy. A copy the invoking
   user cannot read (the shipped unit's state dir is `0700`) is reported as
   unknown and fails the check, with the `sudo` re-run to use. A bundle with no
-  marker at all is indistinguishable from a hand-placed one and is checked as
-  that (update leaves those alone too).
+  marker is checked as a hand-placed one (update leaves those alone too),
+  except at the service's own staging path (the unit's `StateDirectory` plus
+  `/bundle`), where only bootstrap and update write: a markerless copy there
+  is one update will not refresh, so it is reported stale. The marker always
+  records an absolute path, a relative `--src` included.
 
 ## Safety properties
 

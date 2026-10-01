@@ -681,7 +681,13 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
     if [[ "$CHECK_ONLY" == "1" ]]; then
       "$bundle_report" "client bundle $bundle_dir has files not owned by $SERVICE_USER (first: ${_not_owned}) — rootless relabel is refused (EPERM); fix: chown -R ${SERVICE_USER}: $bundle_dir"
     else
-      chown -R "$SERVICE_USER": "$bundle_dir" && fixed "client bundle $bundle_dir chowned to $SERVICE_USER"
+      if chown -R "$SERVICE_USER": "$bundle_dir"; then
+        fixed "client bundle $bundle_dir chowned to $SERVICE_USER"
+      else
+        # An immutable entry, a root-squashed or read-only filesystem: the
+        # repair did not take, so the tree is still not fully owned.
+        "$bundle_report" "client bundle $bundle_dir could not be chowned to $SERVICE_USER (first foreign-owned: ${_not_owned}) — rootless relabel is refused (EPERM); fix the filesystem, then: chown -R ${SERVICE_USER}: $bundle_dir"
+      fi
     fi
   elif _staged_src="$(bundle_marker_source "$bundle_dir" "$SERVICE_USER")" && [[ -n "$_staged_src" ]]; then
     pass "client bundle $bundle_dir is the staged copy of ${_staged_src}, owned by $SERVICE_USER"
