@@ -139,8 +139,9 @@ releases.
                                   # in front of the key; the user pastes only
                                   # the key (PagerDuty)
   url_variants:                   # alternative endpoints for the SAME server
-    - label: "EU service region"  # (regional hosts); the card offers them as
-      url: "https://mcp.eu...."   # a select and posts the chosen URL
+    - id: eu                      # (regional hosts); the card offers them as
+      label: "EU service region"  # a select and posts the chosen URL; the id
+      url: "https://mcp.eu...."   # names the nightly fixture's secret
   client_registration: manual     # the vendor's AS has no dynamic client
                                   # registration; the card collects a
                                   # bring-your-own OAuth client ID (+ secret)

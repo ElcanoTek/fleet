@@ -214,7 +214,7 @@ describe("ConnectionsPage guided api_key add", () => {
     display_name: "PD-like",
     description: "A vendor that wants a scheme in front of the key and has an EU host.",
     url: "https://mcp.pdlike.example.com/mcp",
-    url_variants: [{ label: "EU service region", url: "https://mcp.eu.pdlike.example.com/mcp" }],
+    url_variants: [{ id: "eu", label: "EU service region", url: "https://mcp.eu.pdlike.example.com/mcp" }],
     provenance: "official",
     auth: "api_key",
     api_key_header: "Authorization",

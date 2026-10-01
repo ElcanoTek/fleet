@@ -95,7 +95,8 @@ awk shows up in the PR gate, not as a silently smaller nightly.
   | entry | secret | key shape it exercises | rejects a wrong key at the handshake |
   |---|---|---|---|
   | tavily | `FLEET_CATALOG_KEY_TAVILY` | `Authorization: Bearer` (the default) | yes |
-  | pagerduty | `FLEET_CATALOG_KEY_PAGERDUTY` | the bare User API token of an EU-region account, probed against the entry's EU `url_variants` host; the entry's `api_key_prefix` makes it `Authorization: Token token=<key>` | yes |
+  | pagerduty | `FLEET_CATALOG_KEY_PAGERDUTY` | the bare User API token of a US-region account; the entry's `api_key_prefix` makes it `Authorization: Token token=<key>` | yes |
+  | pagerduty (EU endpoint) | `FLEET_CATALOG_KEY_PAGERDUTY_EU` | the bare User API token of an EU-region account, probed against the entry's `eu` url variant — one fixture per listed endpoint, each armed by its own secret | yes |
   | exa | `FLEET_CATALOG_KEY_EXA` | `x-api-key` header | no |
   | browserbase | `FLEET_CATALOG_KEY_BROWSERBASE` | `browserbaseApiKey` query parameter | no |
   | firecrawl | `FLEET_CATALOG_KEY_FIRECRAWL` | `Authorization: Bearer`, versioned path | no |

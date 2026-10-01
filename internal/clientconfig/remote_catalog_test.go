@@ -468,7 +468,7 @@ func TestBuiltinRemoteCatalogClientSecretRequired(t *testing.T) {
 	}
 	if pd := byName["pagerduty"]; pd.APIKeyHeader != "Authorization" || pd.APIKeyPrefix != "Token token=" {
 		t.Errorf("pagerduty = header %q prefix %q, want Authorization + \"Token token=\" (the server's documented scheme; the user pastes only the token)", pd.APIKeyHeader, pd.APIKeyPrefix)
-	} else if len(pd.URLVariants) != 1 || pd.URLVariants[0].URL != "https://mcp.eu.pagerduty.com/mcp" || !strings.Contains(pd.URLVariants[0].Label, "EU") {
+	} else if len(pd.URLVariants) != 1 || pd.URLVariants[0].ID != "eu" || pd.URLVariants[0].URL != "https://mcp.eu.pagerduty.com/mcp" || !strings.Contains(pd.URLVariants[0].Label, "EU") {
 		t.Errorf("pagerduty url_variants = %+v, want the EU service-region host PagerDuty's guide names for EU accounts", pd.URLVariants)
 	}
 	secretRequired := []string{
@@ -547,23 +547,29 @@ remote_mcp_catalog:
 	}
 	// url_variants: labelled https alternatives to the entry's url, never a
 	// placeholder, never the entry's own url twice.
-	if err := load(t, "    url_variants:\n      - label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err != nil {
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err != nil {
 		t.Errorf("url_variants: %v", err)
 	}
-	if err := load(t, "    url_variants:\n      - label: \"\"\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
+	if err := load(t, "    url_variants:\n      - label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
+		t.Error("a url variant without an id was accepted")
+	}
+	if err := load(t, "    url_variants:\n      - id: EU\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
+		t.Error("a url variant with an upper-case id was accepted (it names an env var)")
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: \"\"\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
 		t.Error("a url variant without a label was accepted")
 	}
-	if err := load(t, "    url_variants:\n      - label: EU\n        url: \"http://mcp.eu.acme.example/mcp\"\n"); err == nil {
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"http://mcp.eu.acme.example/mcp\"\n"); err == nil {
 		t.Error("a plain-http url variant was accepted")
 	}
-	if err := load(t, "    url_variants:\n      - label: EU\n        url: \"https://mcp.acme.example/mcp\"\n"); err == nil {
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.acme.example/mcp\"\n"); err == nil {
 		t.Error("a url variant repeating the entry's url was accepted")
 	}
-	if err := load(t, "    url_variants:\n      - label: EU\n        url: \"https://{region}.acme.example/mcp\"\n"); err == nil {
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://{region}.acme.example/mcp\"\n"); err == nil {
 		t.Error("a url variant with a placeholder was accepted")
 	}
-	if err := load(t, "    url_variants:\n      - label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n      - label: eu\n        url: \"https://mcp.eu2.acme.example/mcp\"\n"); err == nil {
-		t.Error("two url variants with the same label were accepted")
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n      - id: eu\n        label: Europe\n        url: \"https://mcp.eu2.acme.example/mcp\"\n"); err == nil {
+		t.Error("two url variants with the same id were accepted")
 	}
 	if err := load(t, "    client_registration: manual\n    client_secret: required\n"); err != nil {
 		t.Errorf("manual + required should load, got %v", err)

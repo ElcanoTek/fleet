@@ -33,7 +33,7 @@ export type CatalogThirdParty = {
   api_key_prefix?: string;
   // Alternative endpoints for the same server (a vendor's regional hosts),
   // offered as a select on the card; the chosen URL is what the add posts.
-  url_variants?: { label: string; url: string }[];
+  url_variants?: { id: string; label: string; url: string }[];
   // "manual" = the vendor's authorization server has no dynamic client
   // registration; the guided form collects a bring-your-own OAuth client ID
   // (+ optional secret) up front.

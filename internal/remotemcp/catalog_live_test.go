@@ -131,27 +131,30 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 // fails CI when the two drift.
 var catalogKeyFixtures = []struct {
 	Entry string
-	// Variant picks one of the entry's url_variants by label ("" = the
-	// entry's own url) — the key on hand decides, as it does for a user.
+	// Variant is one of the entry's url_variants ids ("" = the entry's own
+	// url). An entry with regional endpoints gets one fixture per endpoint,
+	// each armed by its own secret (FLEET_CATALOG_KEY_<ENTRY>_<VARIANT>), so
+	// a key for either region tests that region and the other skips.
 	Variant       string
 	RejectsBadKey bool
 }{
-	{Entry: "tavily", RejectsBadKey: true},                           // Authorization: Bearer
-	{Entry: "pagerduty", Variant: "EU service", RejectsBadKey: true}, // "Token token=" prefix under a named Authorization header; the key on hand is an EU-region token
+	{Entry: "tavily", RejectsBadKey: true},                   // Authorization: Bearer
+	{Entry: "pagerduty", RejectsBadKey: true},                // "Token token=" prefix under a named Authorization header, US host
+	{Entry: "pagerduty", Variant: "eu", RejectsBadKey: true}, // the same, EU service region
 	{Entry: "exa"},         // x-api-key header
 	{Entry: "browserbase"}, // browserbaseApiKey query parameter
 	{Entry: "firecrawl"},   // Authorization: Bearer, versioned path
 }
 
 // fixtureURL resolves a fixture's endpoint: the entry's url, or the variant
-// whose label starts with Variant.
+// with the given id.
 func fixtureURL(t *testing.T, e clientconfig.RemoteMCPCatalogEntry, variant string) string {
 	t.Helper()
 	if variant == "" {
 		return e.URL
 	}
 	for _, v := range e.URLVariants {
-		if strings.HasPrefix(v.Label, variant) {
+		if v.ID == variant {
 			return v.URL
 		}
 	}
@@ -160,8 +163,12 @@ func fixtureURL(t *testing.T, e clientconfig.RemoteMCPCatalogEntry, variant stri
 }
 
 // catalogKeyEnv is the environment variable that arms a fixture.
-func catalogKeyEnv(entry string) string {
-	return "FLEET_CATALOG_KEY_" + strings.ToUpper(strings.ReplaceAll(entry, "-", "_"))
+func catalogKeyEnv(entry, variant string) string {
+	name := "FLEET_CATALOG_KEY_" + strings.ToUpper(strings.ReplaceAll(entry, "-", "_"))
+	if variant != "" {
+		name += "_" + strings.ToUpper(strings.ReplaceAll(variant, "-", "_"))
+	}
+	return name
 }
 
 // TestCatalogLiveAPIKeyFixtures runs fleet's add-time key validation for each
@@ -177,7 +184,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 		byName[e.Name] = e
 	}
 	for _, f := range catalogKeyFixtures {
-		t.Run(f.Entry, func(t *testing.T) {
+		t.Run(fixtureName(f.Entry, f.Variant), func(t *testing.T) {
 			t.Parallel()
 			e, ok := byName[f.Entry]
 			if !ok {
@@ -186,7 +193,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if e.Auth != "api_key" {
 				t.Fatalf("fixture %q has auth %q in the catalog, want api_key", f.Entry, e.Auth)
 			}
-			envName := catalogKeyEnv(f.Entry)
+			envName := catalogKeyEnv(f.Entry, f.Variant)
 			key := strings.TrimSpace(os.Getenv(envName))
 			if key == "" {
 				t.Skipf("%s not set; skipping the %s fixture", envName, f.Entry)
@@ -213,4 +220,13 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fixtureName is the subtest name: the entry, plus the variant id when the
+// fixture targets one of the entry's regional endpoints.
+func fixtureName(entry, variant string) string {
+	if variant == "" {
+		return entry
+	}
+	return entry + "/" + variant
 }

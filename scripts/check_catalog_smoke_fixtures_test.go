@@ -26,8 +26,14 @@ func TestCatalogSmokeFixturesMatchWorkflow(t *testing.T) {
 	workflow := readFile(t, root, filepath.Join(".github", "workflows", "mcp-catalog-smoke.yml"))
 
 	fixtures := map[string]bool{}
-	for _, m := range regexp.MustCompile(`\{Entry:\s*"([a-z0-9-]+)"`).FindAllStringSubmatch(goSrc, -1) {
-		fixtures["FLEET_CATALOG_KEY_"+strings.ToUpper(strings.ReplaceAll(m[1], "-", "_"))] = true
+	// A row is {Entry: "name"} or {Entry: "name", Variant: "id"}: the variant
+	// names a regional endpoint and its own secret, FLEET_CATALOG_KEY_<ENTRY>_<ID>.
+	for _, m := range regexp.MustCompile(`\{Entry:\s*"([a-z0-9-]+)"(?:,\s*Variant:\s*"([a-z0-9-]+)")?`).FindAllStringSubmatch(goSrc, -1) {
+		name := "FLEET_CATALOG_KEY_" + strings.ToUpper(strings.ReplaceAll(m[1], "-", "_"))
+		if m[2] != "" {
+			name += "_" + strings.ToUpper(strings.ReplaceAll(m[2], "-", "_"))
+		}
+		fixtures[name] = true
 	}
 	if len(fixtures) == 0 {
 		t.Fatal("no catalogKeyFixtures rows found; the regexp or the table moved")

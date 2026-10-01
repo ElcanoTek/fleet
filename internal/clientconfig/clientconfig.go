@@ -1024,8 +1024,11 @@ type ProviderDef struct {
 // distinctly so a user knows what they are opting into; the bundle author
 // curates the list but does not control the remote service.
 // RemoteMCPURLVariant is one alternative endpoint of a directory entry (see
-// RemoteMCPCatalogEntry.URLVariants): a label for the card and the https URL.
+// RemoteMCPCatalogEntry.URLVariants): a short id (lowercase letters, digits,
+// hyphens — "eu") that names the variant in fixtures and secrets
+// (FLEET_CATALOG_KEY_<ENTRY>_<ID>), a label for the card, and the https URL.
 type RemoteMCPURLVariant struct {
+	ID    string `yaml:"id"`
 	Label string `yaml:"label"`
 	URL   string `yaml:"url"`
 }
@@ -1923,6 +1926,10 @@ var remoteMCPHeaderShape = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 // the transport), spaces allowed and significant.
 var remoteMCPKeyPrefixShape = regexp.MustCompile(`^[\x20-\x7e]{1,64}$`)
 
+// remoteMCPVariantIDShape bounds a url_variants id: it becomes part of an
+// environment-variable name (FLEET_CATALOG_KEY_<ENTRY>_<ID>) and a test name.
+var remoteMCPVariantIDShape = regexp.MustCompile(`^[a-z0-9-]{1,16}$`)
+
 // remoteMCPCategoryShape bounds a category slug to lowercase kebab-case so the
 // UI's grouping/filter keys stay uniform. The set is open (a bundle may invent
 // its own grouping) but the shape is not — "CRM Sales" vs "crm-sales" silently
@@ -1990,30 +1997,8 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_prefix must be 1-64 printable ASCII characters (supply the scheme, not a credential)", name)
 		}
 	}
-	if len(e.URLVariants) > 0 {
-		if strings.Contains(e.URL, "{") {
-			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants cannot be combined with a {placeholder} url", name)
-		}
-		seen := map[string]bool{}
-		for i, v := range e.URLVariants {
-			label := strings.TrimSpace(v.Label)
-			if label == "" {
-				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] needs a label", name, i)
-			}
-			if seen[strings.ToLower(label)] {
-				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants label %q is listed twice", name, label)
-			}
-			seen[strings.ToLower(label)] = true
-			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(v.URL)), "https://") {
-				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url must be https:// (got %q)", name, i, v.URL)
-			}
-			if strings.Contains(v.URL, "{") {
-				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url carries a {placeholder}", name, i)
-			}
-			if strings.TrimSpace(v.URL) == strings.TrimSpace(e.URL) {
-				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] repeats the entry's own url", name, i)
-			}
-		}
+	if err := validateRemoteMCPURLVariants(name, e); err != nil {
+		return err
 	}
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {
 		return fmt.Errorf("remote_mcp_catalog[%q]: unknown client_registration %q (want manual or empty)", name, e.ClientRegistration)
@@ -2032,6 +2017,47 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 		}
 		if tag != strings.ToLower(tag) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: tag %q must be lowercase", name, tag)
+		}
+	}
+	return nil
+}
+
+// validateRemoteMCPURLVariants checks an entry's url_variants: each needs a
+// unique id (it names the nightly fixture's secret and a test), a unique
+// label, and an https url that is neither a placeholder nor the entry's own.
+func validateRemoteMCPURLVariants(name string, e *RemoteMCPCatalogEntry) error {
+	if len(e.URLVariants) == 0 {
+		return nil
+	}
+	if strings.Contains(e.URL, "{") {
+		return fmt.Errorf("remote_mcp_catalog[%q]: url_variants cannot be combined with a {placeholder} url", name)
+	}
+	seen := map[string]bool{}
+	ids := map[string]bool{}
+	for i, v := range e.URLVariants {
+		if !remoteMCPVariantIDShape.MatchString(v.ID) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] needs an id of 1-16 lowercase letters, digits or hyphens (got %q)", name, i, v.ID)
+		}
+		if ids[v.ID] {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants id %q is listed twice", name, v.ID)
+		}
+		ids[v.ID] = true
+		label := strings.TrimSpace(v.Label)
+		if label == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] needs a label", name, i)
+		}
+		if seen[strings.ToLower(label)] {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants label %q is listed twice", name, label)
+		}
+		seen[strings.ToLower(label)] = true
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(v.URL)), "https://") {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url must be https:// (got %q)", name, i, v.URL)
+		}
+		if strings.Contains(v.URL, "{") {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url carries a {placeholder}", name, i)
+		}
+		if strings.TrimSpace(v.URL) == strings.TrimSpace(e.URL) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] repeats the entry's own url", name, i)
 		}
 	}
 	return nil
