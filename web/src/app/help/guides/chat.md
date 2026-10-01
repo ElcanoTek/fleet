@@ -332,6 +332,15 @@ it again from the directory to take the change — an existing sign-in cannot be
 carried over. A connection you set up by hand under a directory name shows the
 badge too, and can be kept as it is.
 
+Most directory entries add with one click and then ask you to sign in at the
+vendor. Some vendors do not let Fleet register itself, so their entry opens a
+short form instead: it shows the **Authorization callback URL** to give the
+vendor, then asks for an **OAuth client ID** and, where the vendor needs one,
+an **OAuth client secret** (the form says when the secret is required). The
+client comes from an app registered at the vendor for that callback URL —
+usually by your administrator, and the entry's setup note says how. After the
+form, you sign in at the vendor as usual.
+
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before
 questioning the arithmetic.

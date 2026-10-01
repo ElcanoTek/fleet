@@ -38,8 +38,9 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   admin creates an OAuth app at the vendor with fleet's callback URL and
   users paste the client ID and, where the directory says **required**, the
   secret (GitHub, Slack, the Google Workspace servers, Azure DevOps, Sage
-  Intacct, Cartesia — which self-registers only a loopback callback, so a
-  developer box is one-click and a deploy is not, …). *Tenant* — the
+  Intacct, Cartesia — whose server self-registers only a loopback or
+  native-app callback, so its entry is a manual client everywhere, a
+  developer box included, …). *Tenant* — the
   URL carries the customer's org or host; the form asks for it, then one of
   the two flows above follows.
 - **Why both a client secret and a login.** The secret identifies fleet, the
