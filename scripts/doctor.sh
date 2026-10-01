@@ -980,7 +980,7 @@ if [[ -f "$CADDYFILE" ]]; then
   elif caddyfile_routes_api "$CADDYFILE" "$(env_get FLEET_ORCHESTRATOR_ADDR)"; then
     pass "$CADDYFILE is operator-managed and routes /v1 to the orchestrator"
   elif caddyfile_is_package_default "$CADDYFILE"; then
-    advise "$CADDYFILE is the caddy package's untouched default (serves no site) — bootstrap --enable-web --domain <host> replaces it with fleet's TLS front (#1657)"
+    advise "$CADDYFILE is the caddy package's untouched default with no drop-in sites — bootstrap --enable-web --domain <host> replaces it with fleet's TLS front (#1657)"
   else
     advise "$CADDYFILE is not fleet-managed and does not appear to route the API — /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* belong on the orchestrator (127.0.0.1:8000) and /webhooks/* on chat (127.0.0.1:8080); see deploy/Caddyfile"
   fi

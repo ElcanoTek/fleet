@@ -337,6 +337,45 @@ func TestCaddyfilePackageDefaultIsNotForeign(t *testing.T) {
 	if _, err := runCaddyfileFn(t, viaNone, "caddyfile_is_foreign", f); err != nil {
 		t.Fatal("an unmarked file no package knows was not treated as foreign")
 	}
+	// rpm installed on a dpkg box: for a file it does not own, real rpm
+	// prints "is not owned by any package" to stdout and exits 1. The Go
+	// harness runs bash without pipefail, so this pins that the rpm branch
+	// reads rpm's own exit status and falls through to dpkg.
+	rpmNotOwned := filepath.Join(t.TempDir(), "rpm")
+	if err := os.WriteFile(rpmNotOwned, []byte("#!/usr/bin/env bash\necho \"file $3 is not owned by any package\"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	viaDpkgWithRPM := []string{"PATH=" + filepath.Dir(rpmNotOwned) + string(os.PathListSeparator) + strings.TrimPrefix(viaDpkg[0], "PATH=")}
+	if out, err := runCaddyfileFn(t, viaDpkgWithRPM, "caddyfile_is_package_default", f); err != nil {
+		t.Fatalf("dpkg box with an rpm that owns nothing: the packaged default was not recognised: %v\n%s", err, out)
+	}
+	// Untouched is not empty: the stock file imports Caddyfile.d/*.caddyfile,
+	// where Fedora tells operators to put their sites. An empty drop-in dir
+	// leaves it replaceable; one drop-in site makes it foreign, because
+	// fleet's rendered file has no import and replacing it would drop that site.
+	dropins := filepath.Join(filepath.Dir(f), "Caddyfile.d")
+	if err := os.MkdirAll(dropins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, env := range map[string][]string{"rpm sha256": viaRPM, "dpkg md5": viaDpkg} {
+		if out, err := runCaddyfileFn(t, env, "caddyfile_is_foreign", f); err == nil {
+			t.Fatalf("%s: the packaged default with an empty Caddyfile.d was treated as foreign:\n%s", name, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dropins, "legacy.caddyfile"), []byte("legacy.example.com {\n\treverse_proxy 127.0.0.1:3000\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, env := range map[string][]string{"rpm sha256": viaRPM, "dpkg md5": viaDpkg} {
+		if _, err := runCaddyfileFn(t, env, "caddyfile_is_package_default", f); err == nil {
+			t.Fatalf("%s: a packaged default importing a drop-in site was recognised as replaceable", name)
+		}
+		if _, err := runCaddyfileFn(t, env, "caddyfile_is_foreign", f); err != nil {
+			t.Fatalf("%s: a packaged default importing a drop-in site was not treated as foreign", name)
+		}
+	}
+	if err := os.RemoveAll(dropins); err != nil {
+		t.Fatal(err)
+	}
 	// One operator edit and it is a real config again, whatever the package says.
 	if err := os.WriteFile(f, []byte(stock+"legacy.example.com {\n\treverse_proxy 127.0.0.1:3000\n}\n"), 0o644); err != nil {
 		t.Fatal(err)

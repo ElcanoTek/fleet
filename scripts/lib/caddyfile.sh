@@ -54,8 +54,9 @@ caddyfile_is_managed() {
 }
 
 # caddyfile_is_package_default [FILE] — true when FILE is byte-for-byte the
-# Caddyfile the OS's caddy package installs: the stock `http:// { root *
-# /usr/share/caddy; file_server }` site that has never served anything. Fedora's
+# Caddyfile the OS's caddy package installs (the stock `http:// { root *
+# /usr/share/caddy; file_server }` welcome page) AND none of its `import`
+# lines match a file, so replacing it drops no operator site. Fedora's
 # package ships one, so on a fresh box `dnf install caddy` (which bootstrap
 # runs) drops a file bootstrap then refused to overwrite as "someone else's
 # config" (#1657). The package manager knows the digest it installed (rpm
@@ -71,7 +72,11 @@ caddyfile_is_managed() {
 caddyfile_is_package_default() {
   local f="${1:-/etc/caddy/Caddyfile}" canon="/etc/caddy/Caddyfile" pkg="" digest=""
   [[ -s "$f" ]] || return 1
-  if command -v rpm >/dev/null 2>&1 && pkg="$(rpm -qf --qf '%{NAME}\n' "$canon" 2>/dev/null | head -n1)" && [[ -n "$pkg" ]]; then
+  # rpm's exit status is read directly, not through `| head`: for a file it
+  # does not own, rpm prints "file … is not owned by any package" to stdout
+  # and exits 1, and without pipefail head's 0 would take that sentence as
+  # a package name and skip the dpkg branch on a Debian box with rpm installed.
+  if command -v rpm >/dev/null 2>&1 && pkg="$(rpm -qf --qf '%{NAME}\n' "$canon" 2>/dev/null)" && pkg="${pkg%%$'\n'*}" && [[ -n "$pkg" ]]; then
     digest="$(rpm -q --dump "$pkg" 2>/dev/null | awk -v p="$canon" '$1==p {print $4; exit}')"
   elif command -v dpkg-query >/dev/null 2>&1 && pkg="$(dpkg -S "$canon" 2>/dev/null | head -n1 | cut -d: -f1)" && [[ -n "$pkg" ]]; then
     digest="$(dpkg-query -W -f='${Conffiles}\n' "$pkg" 2>/dev/null | awk -v p="$canon" '$1==p {print $2; exit}')"
@@ -83,7 +88,30 @@ caddyfile_is_package_default() {
     32) have="$(md5sum "$f" | awk '{print $1}')" ;;
     *)  return 1 ;;
   esac
-  [[ "$have" == "$digest" ]]
+  [[ "$have" == "$digest" ]] || return 1
+  # Untouched is not the same as serving nothing: Fedora's stock file ends in
+  # `import Caddyfile.d/*.caddyfile`, and its own comment tells operators to
+  # add sites as drop-ins there rather than edit the Caddyfile. fleet's
+  # rendered file has no import, so replacing a default whose imports match
+  # any file would silently take those sites down. Any import that resolves
+  # to at least one file therefore makes the default foreign (the refusal,
+  # with --force-caddy and its backup as the way through).
+  # A relative import resolves against the importing file's directory, as
+  # caddy resolves it (/etc/caddy for the real file).
+  local dir line target
+  dir="$(dirname "$f")"
+  while IFS= read -r line; do
+    target="${line#"${line%%[![:space:]]*}"}"
+    target="${target#import}"
+    target="${target#"${target%%[![:space:]]*}"}"
+    target="${target%%[[:space:]]*}"
+    [[ -n "$target" ]] || continue
+    [[ "$target" == /* ]] || target="$dir/$target"
+    if compgen -G "$target" >/dev/null 2>&1; then
+      return 1
+    fi
+  done < <(grep -E '^[[:space:]]*import[[:space:]]+' "$f" 2>/dev/null || true)
+  return 0
 }
 
 # caddyfile_is_foreign [FILE] — true when FILE exists, is non-empty, carries no

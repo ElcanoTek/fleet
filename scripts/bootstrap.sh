@@ -758,11 +758,12 @@ deploy_web_tier() {
     warn "any other sites/vhosts it served are DOWN until you merge them back in and reload caddy."
   elif caddyfile_is_package_default; then
     # The caddy package's stock file (Fedora ships one; `dnf install caddy`
-    # above drops it): untouched and never a site, so it is replaced, with a
-    # copy kept beside it out of habit rather than need (#1657).
+    # above drops it): untouched, and its imports (Fedora's Caddyfile.d
+    # drop-ins) match no file, so it carries only the package's welcome
+    # page. It is replaced, with a copy kept beside it (#1657).
     caddy_backup="/etc/caddy/Caddyfile.fleet-backup.$(date -u +%Y%m%dT%H%M%SZ)"
     cp -p /etc/caddy/Caddyfile "$caddy_backup" || die "could not back up /etc/caddy/Caddyfile to ${caddy_backup}"
-    info "replacing the caddy package's stock Caddyfile (unmodified default, served no site) — copy kept at ${caddy_backup}"
+    info "replacing the caddy package's stock Caddyfile (unmodified default, no drop-in sites) — copy kept at ${caddy_backup}"
   fi
   # One renderer (scripts/lib/caddyfile.sh) writes the whole file: the web
   # tier as the default upstream, the public API (/v1/*, /api-info, the A2A
@@ -1609,7 +1610,7 @@ if [[ "$ENABLE_WEB" == "1" ]]; then
       info "[dry-run] would build web/ for https://${WEB_DOMAIN} → /opt/fleet/web, write fleet-web.env, enable fleet-web, install Caddy + open 80/443."
       info "[dry-run] would write /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh: https://${WEB_DOMAIN} → web tier (127.0.0.1:3000); /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* → orchestrator (127.0.0.1:8000); /webhooks/* → chat (127.0.0.1:8080); then reload caddy (an already-running caddy is reloaded, not just enabled)."
       if caddyfile_is_package_default; then
-        info "[dry-run] would replace the caddy package's stock /etc/caddy/Caddyfile (unmodified default, served no site) — a copy kept beside it"
+        info "[dry-run] would replace the caddy package's stock /etc/caddy/Caddyfile (unmodified default, no drop-in sites) — a copy kept beside it"
       fi
     else
       info "[dry-run] would build web/ for http://localhost:3000 → /opt/fleet/web, write fleet-web.env, enable fleet-web (loopback only; no --domain → no Caddy)."
