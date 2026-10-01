@@ -10,6 +10,10 @@ export async function GET(request: NextRequest) {
     "offset",
     "status",
     "q",
+    // Not sent by the board any more (Status → scheduled replaced its
+    // checkbox), but API clients reach /tasks through this proxy
+    // (docs/CUTOVER.md), so the parameter keeps working for them.
+    "scheduled_only",
     "completed_today",
     "completed_status",
     "created_by",

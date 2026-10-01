@@ -31,7 +31,7 @@ anything containing `100`.
 - `%`, `_` and `\` match literally (`ILIKE … ESCAPE '\'`).
 - At most 8 terms are used. Each term scans several text columns per row, so
   a pasted paragraph is capped rather than multiplying the query's cost; words
-  past the eighth are ignored.
+  past the eighth are ignored, and the user guide says so.
 - Search ANDs with every other filter. It covers exactly the rows the caller
   may see: the own-rows visibility filter (#1082) still applies, so matching on
   a creator's name only narrows what the board could already show.
@@ -48,13 +48,18 @@ a repeating job (each occurrence is its own row); the dropdown keeps jobs in
 the `scheduled` status, waiting for their run. Two controls with overlapping
 names read as a duplicate, and the checkbox mostly showed history. The
 checkbox is gone; **Status → scheduled** is the one filter, and shows one-off
-jobs set for later plus the next occurrence of each repeating job.
+jobs set for later, the next occurrence of each repeating job, and the jobs
+`DeriveDispatchState` also parks in `scheduled`: webhook-triggered tasks
+(waiting for their webhook, with no `scheduled_for`) and conditional `run_if`
+tasks. Those wait to run as much as a timed job does, so they stay in the
+filter, and the guide says so.
 
 ## Deliberately not changed
 
 - The API's `scheduled_only=true` parameter on `GET /tasks` still works for API
-  callers. Only the board's checkbox (and the web proxy's pass-through of the
-  parameter) was removed.
+  callers, including through the web tier's `/api/orchestrator/tasks` proxy
+  (which `docs/CUTOVER.md` points API clients at). Only the board's checkbox
+  was removed.
 - No index. Search was already a leading-wildcard scan; adding a `pg_trgm` GIN
   index would need `CREATE EXTENSION` on every deployment (the reasoning in
   migration 060). Matching more columns makes each row's check a little more
