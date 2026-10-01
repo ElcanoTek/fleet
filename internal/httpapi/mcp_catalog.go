@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 )
 
 // GET /mcp-catalog (#538) — the trust-labeled MCP directory the settings UI
@@ -37,6 +38,12 @@ type mcpCatalogBundledEntry struct {
 	Trust            string   `json:"trust"` // always "bundled"
 }
 
+type mcpCatalogURLVariant struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
 type mcpCatalogThirdPartyEntry struct {
 	Name        string   `json:"name"`
 	DisplayName string   `json:"display_name"`
@@ -56,6 +63,12 @@ type mcpCatalogThirdPartyEntry struct {
 	SetupURL     string `json:"setup_url,omitempty"`
 	APIKeyHeader string `json:"api_key_header,omitempty"`
 	APIKeyQuery  string `json:"api_key_query,omitempty"`
+	// The scheme sent in front of the key under api_key_header ("Token
+	// token="); the form shows it so the user pastes only the key.
+	APIKeyPrefix string `json:"api_key_prefix,omitempty"`
+	// Alternative endpoints (regional hosts) the card offers as a select; the
+	// chosen URL is what the add posts.
+	URLVariants []mcpCatalogURLVariant `json:"url_variants,omitempty"`
 	// "manual" = the vendor's AS has no dynamic client registration; the UI
 	// collects a bring-your-own OAuth client ID (+ optional secret) up front.
 	ClientRegistration string `json:"client_registration,omitempty"`
@@ -149,9 +162,34 @@ func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThir
 		SetupURL:           strings.TrimSpace(e.SetupURL),
 		APIKeyHeader:       strings.TrimSpace(e.APIKeyHeader),
 		APIKeyQuery:        strings.TrimSpace(e.APIKeyQuery),
+		APIKeyPrefix:       e.APIKeyPrefix,
+		URLVariants:        catalogURLVariants(e.URLVariants),
 		ClientRegistration: strings.TrimSpace(e.ClientRegistration),
 		ClientSecret:       strings.TrimSpace(e.ClientSecret),
 		Featured:           e.Featured,
 		Trust:              "third_party",
 	}
+}
+
+// catalogURLVariants projects an entry's url_variants for the card, each URL
+// in the canonical form AddServer stores (lowercased host, default port
+// dropped). The card posts the variant URL as is and later recognises a saved
+// seat's endpoint by comparing the stored URL to it, so a bundle spelling such
+// as an uppercase host or an explicit :443 must not reach the page unmatched —
+// a regional key would then be offered the default host. A URL that does not
+// canonicalise is passed through trimmed (the loader has already required
+// https).
+func catalogURLVariants(in []clientconfig.RemoteMCPURLVariant) []mcpCatalogURLVariant {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]mcpCatalogURLVariant, 0, len(in))
+	for _, v := range in {
+		u := strings.TrimSpace(v.URL)
+		if canon, err := mcpoauth.CanonicalResourceURI(u); err == nil {
+			u = canon
+		}
+		out = append(out, mcpCatalogURLVariant{ID: v.ID, Label: strings.TrimSpace(v.Label), URL: u})
+	}
+	return out
 }

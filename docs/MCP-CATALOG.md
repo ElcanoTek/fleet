@@ -135,6 +135,13 @@ releases.
   setup_url: "https://..."        # the vendor page that walks through connecting
   api_key_header: X-API-Key       # api_key only: header NAME the key is sent
                                   # under ("" = Authorization: Bearer <key>)
+  api_key_prefix: "Token token="  # api_key + api_key_header only: scheme sent
+                                  # in front of the key; the user pastes only
+                                  # the key (PagerDuty)
+  url_variants:                   # alternative endpoints for the SAME server
+    - id: eu                      # (regional hosts); the card offers them as
+      label: "EU service region"  # a select and posts the chosen URL; the id
+      url: "https://mcp.eu...."   # names the nightly fixture's secret
   client_registration: manual     # the vendor's AS has no dynamic client
                                   # registration; the card collects a
                                   # bring-your-own OAuth client ID (+ secret)
@@ -203,7 +210,8 @@ explicit trust tags plus the directory metadata:
 ```
 
 Entries also carry the onboarding fields when present: `setup_hint`,
-`setup_url`, `api_key_header`, `client_registration`, `client_secret`.
+`setup_url`, `api_key_header`, `api_key_query`, `api_key_prefix`,
+`url_variants`, `client_registration`, `client_secret`.
 
 `bundled` is the Optional-server catalog snapshot (the same source as
 `/mcp-servers`; always-on servers need no opt-in decision so they are not
@@ -268,7 +276,9 @@ whose key/account id rides in the URL itself) connect immediately.
 write-only field. The key is sealed at rest with the same AES-256-GCM cipher
 as OAuth tokens (AAD bound to purpose + user + canonical URL) and replayed
 host-side on every MCP request — under `Authorization: Bearer <key>` by
-default, or the entry's `api_key_header` name. It never enters the sandbox,
+default, the entry's `api_key_header` name (raw, or behind the entry's
+`api_key_prefix` scheme: PagerDuty's `Authorization: Token token=<key>`), or
+its `api_key_query` parameter. It never enters the sandbox,
 the model context, a log line, or any HTTP response; rotation is
 `PUT /remote-mcp-servers/{id}/key` ("Update key" on the connection row).
 

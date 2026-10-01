@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -747,5 +748,54 @@ func TestNamedFirst(t *testing.T) {
 	}
 	if want := []string{"B", "d", "c", "a"}; strings.Join(order, ",") != strings.Join(want, ",") {
 		t.Fatalf("namedFirst = %v, want %v", order, want)
+	}
+}
+
+// TestBuildRemoteMCPOverlaySendsTheSchemePrefix: an api_key connection whose
+// directory entry declares a scheme prefix mounts with "<header>: <prefix><key>"
+// — the same shape the add-time probe verified — while a raw-header and a
+// bearer connection are unchanged.
+func TestBuildRemoteMCPOverlaySendsTheSchemePrefix(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.URL.Path] = r.Header.Get("Authorization") + "|" + r.Header.Get("X-API-Key")
+		mu.Unlock()
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		result := map[string]any{}
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}}
+		case "tools/list":
+			result = map[string]any{"tools": []any{}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	t.Cleanup(srv.Close)
+	r := &fakeResolver{
+		conns: []RemoteMCPConn{
+			{ID: "pd", Name: "pagerduty", URL: srv.URL + "/pd", AuthHeader: "Authorization", AuthPrefix: "Token token="},
+			{ID: "exa", Name: "exa", URL: srv.URL + "/exa", AuthHeader: "X-API-Key"},
+			{ID: "tav", Name: "tavily", URL: srv.URL + "/tav"},
+		},
+		tokens: map[string]string{"pd": "u+good", "exa": "ex-key", "tav": "tv-key"},
+	}
+	ov, err := BuildRemoteMCPOverlay(context.Background(), r, "u@x.com", nil, RemoteMCPAllConnected)
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	for path, want := range map[string]string{"/pd": "Token token=u+good|", "/exa": "|ex-key", "/tav": "Bearer tv-key|"} {
+		if seen[path] != want {
+			t.Errorf("%s sent %q, want %q", path, seen[path], want)
+		}
 	}
 }

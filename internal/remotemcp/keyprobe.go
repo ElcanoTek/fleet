@@ -320,8 +320,11 @@ func probeTool(client *mcp.Client) string {
 // vendor's format check could accept it as one of theirs.
 const invalidProbeKey = "fleet-invalid-key-probe-0000" // gitleaks:allow — a deliberately INVALID credential the control probe sends; not a secret (generic-api-key false positive)
 
-// keyClientOptions attaches a credential the way probeServer does.
-func (s *Service) keyClientOptions(headerName, queryName, credential string) mcp.HTTPServerOptions {
+// keyClientOptions attaches a credential the way probeServer does: under the
+// named header with the entry's scheme prefix in front ("Token token=<key>"),
+// under the default Authorization: Bearer when no header is named, or as a
+// query parameter — the same three shapes the per-run overlay mounts.
+func (s *Service) keyClientOptions(headerName, queryName, prefix, credential string) mcp.HTTPServerOptions {
 	opts := mcp.HTTPServerOptions{HTTPClient: s.httpClient}
 	switch {
 	case credential != "" && queryName != "":
@@ -329,7 +332,7 @@ func (s *Service) keyClientOptions(headerName, queryName, credential string) mcp
 	case credential != "":
 		header, value := "Authorization", "Bearer "+credential
 		if headerName != "" {
-			header, value = headerName, credential
+			header, value = headerName, prefix+credential
 		}
 		opts.Headers = map[string]string{header: value}
 	}
@@ -350,12 +353,12 @@ func (s *Service) blindCall(ctx context.Context, client *mcp.Client, serverName,
 // reports whether the vendor told the two keys apart. It runs under its own
 // timeout so a slow vendor cannot eat the real probe's budget, and one
 // invalid attempt per add or rotation is all it ever sends.
-func (s *Service) controlProbe(ctx context.Context, url, headerName, queryName, tool string, actual callOutcome) bool {
+func (s *Service) controlProbe(ctx context.Context, url, headerName, queryName, prefix, tool string, actual callOutcome) bool {
 	cctx, cancel := context.WithTimeout(ctx, s.cfg.HTTPTimeout)
 	defer cancel()
 	client := mcp.NewClient()
 	defer func() { _ = client.Close() }()
-	if err := client.AddHTTPServerWithOptions(cctx, "control", url, s.keyClientOptions(headerName, queryName, invalidProbeKey)); err != nil {
+	if err := client.AddHTTPServerWithOptions(cctx, "control", url, s.keyClientOptions(headerName, queryName, prefix, invalidProbeKey)); err != nil {
 		return handshakeRefused(err)
 	}
 	if tool == "" {

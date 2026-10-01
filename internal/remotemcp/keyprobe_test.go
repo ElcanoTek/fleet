@@ -4,12 +4,16 @@
 package remotemcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -466,5 +470,203 @@ func TestProbeReportsToolSchemaIssues(t *testing.T) {
 	}
 	if len(statuses) != 2 || statuses["fetch_range"] != agentcore.ToolSchemaRewritten || statuses["broken"] != agentcore.ToolSchemaInvalid {
 		t.Fatalf("schema issues = %+v, want fetch_range=rewritten, broken=invalid", report.SchemaIssues)
+	}
+}
+
+// TestAddServerAndRotationSendTheEntrySchemePrefix is the api_key_prefix
+// seam: the add-time probe, its invalid-key control probe, and a later key
+// rotation all send "<header>: <prefix><key>" against a vendor that accepts
+// nothing else (PagerDuty's "Authorization: Token token=<key>") — the user
+// pasted only the key, and the rotation reads the prefix from the stored row,
+// not from the form. Without the prefix the same key is refused.
+func TestAddServerAndRotationSendTheEntrySchemePrefix(t *testing.T) {
+	var seen []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Authorization"))
+		mu.Unlock()
+		if auth := r.Header.Get("Authorization"); auth != "Token token=u+good" && auth != "Token token=u+rotated" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized","error_description":"No permission -- see authorization schemes"}`))
+			return
+		}
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		result := map[string]any{}
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}}
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{"name": "list_incidents", "description": "List incidents", "inputSchema": map[string]any{"type": "object"}, "annotations": map[string]any{"readOnlyHint": true}}}}
+		case "tools/call":
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "[]"}}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	defer srv.Close()
+
+	svc := newTestService(t, newFakeStore(), srv)
+	server, report, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "pagerduty", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "u+good", APIKeyHeader: "Authorization", APIKeyPrefix: "Token token=",
+	})
+	if err != nil {
+		t.Fatalf("AddServer with the prefix: %v", err)
+	}
+	if server.APIKeyPrefix != "Token token=" || server.APIKeyHeader != "Authorization" {
+		t.Fatalf("stored row = header %q prefix %q", server.APIKeyHeader, server.APIKeyPrefix)
+	}
+	if !report.KeyVerified {
+		t.Fatalf("key not verified: the vendor refuses the control probe's invalid key, so the real key's pass is a verification (report %+v)", report)
+	}
+	// Rotate the key on the stored row: nothing re-sends the prefix, so the
+	// rotation probe must take it from the row.
+	if _, err := svc.SetAPIKey(context.Background(), "u@x.com", server.ID, "u+rotated"); err != nil {
+		t.Fatalf("SetAPIKey with the stored prefix: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var sawInvalid, sawRotated bool
+	for _, v := range seen {
+		switch v {
+		case "Token token=u+good":
+		case "Token token=u+rotated":
+			sawRotated = true
+		case "Token token=" + invalidProbeKey:
+			sawInvalid = true
+		default:
+			t.Fatalf("a request carried %q, want the scheme in front of every key", v)
+		}
+	}
+	if !sawInvalid {
+		t.Fatal("the control probe did not carry the scheme prefix")
+	}
+	if !sawRotated {
+		t.Fatal("the rotation probe did not reach the vendor with the scheme prefix")
+	}
+
+	// The same key without the entry's prefix is what the old hint produced:
+	// the vendor refuses it, and the add fails as a refused key.
+	if _, _, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "pagerduty-raw", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "u+good", APIKeyHeader: "Authorization",
+	}); err == nil {
+		t.Fatal("the raw key without the scheme was accepted")
+	}
+
+	// A prefix needs a named header; the default bearer shape takes none.
+	if _, _, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "bad", URL: srv.URL, AuthMode: "api_key", APIKey: "u+good", APIKeyPrefix: "Token token=",
+	}); err == nil || !strings.Contains(err.Error(), "needs a header name") {
+		t.Fatalf("prefix without a header: err = %v", err)
+	}
+}
+
+// TestRefusedProbeLogKeepsTheKeyOutOfTheURL: a refused add-time probe and a
+// refused key rotation are logged host-side, and a remote MCP URL keeps its
+// query string — so a key the user pasted into the URL as well as the key
+// field must not reach the log through the URL the line names.
+func TestRefusedProbeLogKeepsTheKeyOutOfTheURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	const key = "u+leakcheck0123456789"
+	svc := newTestService(t, newFakeStore(), srv)
+	if _, _, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "vendor", URL: srv.URL + "/mcp?token=" + key, AuthMode: "api_key",
+		APIKey: key, APIKeyHeader: "Authorization", APIKeyPrefix: "Token token=",
+	}); err == nil {
+		t.Fatal("the vendor refused every key, yet the add succeeded")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "add-time probe of") {
+		t.Fatalf("the refused probe was not logged: %q", out)
+	}
+	if strings.Contains(out, key) || strings.Contains(out, url.QueryEscape(key)) {
+		t.Fatalf("the key reached the host log: %q", out)
+	}
+	if !strings.Contains(out, "?[query elided]") {
+		t.Fatalf("the log line does not mark the elided query: %q", out)
+	}
+}
+
+func TestLogSafeURL(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"https://mcp.example.com/mcp", "https://mcp.example.com/mcp"},
+		{"https://mcp.example.com/mcp?token=s3cret&x=1", "https://mcp.example.com/mcp?[query elided]"},
+		{"https://user:pw@mcp.example.com/mcp#frag", "https://mcp.example.com/mcp"},
+		{"https://mcp.example.com/mcp?", "https://mcp.example.com/mcp?[query elided]"},
+		{"://bad\x7f", "[unparseable url]"},
+	} {
+		if got := logSafeURL(tc.in); got != tc.want {
+			t.Errorf("logSafeURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestUnverifiedProbeLogKeepsAPathKeyOut: a vendor that accepts the control
+// probe's invalid key as readily as the real one leaves the key unverified,
+// and that notice is logged. logSafeURL keeps the path, so a key the URL
+// carries there is scrubbed from the whole line by RedactSecrets.
+func TestUnverifiedProbeLogKeepsAPathKeyOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		result := map[string]any{}
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}}
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{"name": "list_things", "description": "List things", "inputSchema": map[string]any{"type": "object"}, "annotations": map[string]any{"readOnlyHint": true}}}}
+		case "tools/call":
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "[]"}}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	const key = "u+pathleak0123456789"
+	svc := newTestService(t, newFakeStore(), srv)
+	// As cmd/fleet wires it: the key the add registers is a literal the
+	// host-log redactor then scrubs.
+	svc.SetSecretObserver(agentcore.RegisterSecretLiterals)
+	_, report, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "vendor", URL: srv.URL + "/k/" + key + "/mcp", AuthMode: "api_key",
+		APIKey: key, APIKeyHeader: "X-Api-Key",
+	})
+	if err != nil {
+		t.Fatalf("AddServer: %v", err)
+	}
+	if report.KeyVerified {
+		t.Fatal("a vendor that accepts any key verified this one; the unverified branch did not run")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "answered an invalid key the same") {
+		t.Fatalf("the unverified notice was not logged: %q", out)
+	}
+	if strings.Contains(out, key) {
+		t.Fatalf("the key reached the host log: %q", out)
 	}
 }

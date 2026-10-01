@@ -47,7 +47,7 @@ func TestAPIKeyProbeRefusesBogusKeyLive(t *testing.T) {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
-		report, perr := svc.probeServer(ctx, e.URL, e.APIKeyHeader, e.APIKeyQuery, "fleet-live-probe-invalid-key")
+		report, perr := svc.probeServer(ctx, e.URL, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-live-probe-invalid-key")
 		cancel()
 		var kr *keyRejectedError
 		switch {

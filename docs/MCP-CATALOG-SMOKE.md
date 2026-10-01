@@ -86,16 +86,19 @@ awk shows up in the PR gate, not as a silently smaller nightly.
   no `{placeholder}` (12 as of 2026-09-16) must complete an unauthenticated
   handshake and list at least one tool. One subtest per entry, so a single
   dead vendor names itself.
-- **`TestCatalogLiveAPIKeyFixtures`** — a table of five `api_key` entries,
-  each armed by a repository secret named `FLEET_CATALOG_KEY_<ENTRY>` (the
-  entry name upper-cased, `-` → `_`), which the workflow's `env:` block
-  forwards; `scripts/check_catalog_smoke_fixtures_test.go` fails CI if the
+- **`TestCatalogLiveAPIKeyFixtures`** — a table of six fixtures over five
+  `api_key` entries (an entry with `url_variants` gets one row per
+  endpoint), each armed by its own repository secret: `FLEET_CATALOG_KEY_<ENTRY>`
+  (the entry name upper-cased, `-` → `_`) for the entry's own URL, or
+  `FLEET_CATALOG_KEY_<ENTRY>_<ID>` for one of its `url_variants`, which the
+  workflow's `env:` block forwards; `scripts/check_catalog_smoke_fixtures_test.go` fails CI if the
   Go table and that block drift apart:
 
   | entry | secret | key shape it exercises | rejects a wrong key at the handshake |
   |---|---|---|---|
   | tavily | `FLEET_CATALOG_KEY_TAVILY` | `Authorization: Bearer` (the default) | yes |
-  | pagerduty | `FLEET_CATALOG_KEY_PAGERDUTY` | raw key under a named `Authorization` header | yes |
+  | pagerduty | `FLEET_CATALOG_KEY_PAGERDUTY` | the bare User API token of a US-region account; the entry's `api_key_prefix` makes it `Authorization: Token token=<key>` | yes |
+  | pagerduty (EU endpoint) | `FLEET_CATALOG_KEY_PAGERDUTY_EU` | the bare User API token of an EU-region account, probed against the entry's `eu` url variant — one fixture per listed endpoint, each armed by its own secret | yes |
   | exa | `FLEET_CATALOG_KEY_EXA` | `x-api-key` header | no |
   | browserbase | `FLEET_CATALOG_KEY_BROWSERBASE` | `browserbaseApiKey` query parameter | no |
   | firecrawl | `FLEET_CATALOG_KEY_FIRECRAWL` | `Authorization: Bearer`, versioned path | no |

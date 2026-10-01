@@ -78,6 +78,9 @@ type RemoteServer = {
   // servers get Connect/Reconnect; api_key servers get Update key; open
   // servers need neither). Absent on pre-migration rows ⇒ treated as oauth.
   auth_kind?: string;
+  // The scheme fleet sends in front of an api_key under its header ("Token
+  // token="), from the directory entry at add time; the key forms show it.
+  api_key_prefix?: string;
   // Multi-login (#988): one row per seat (login) under a connection name.
   // `account` is the seat's label — "" is the unlabeled seat every
   // pre-existing connection is, rendered "primary". `is_default` marks the
@@ -127,6 +130,29 @@ const STATUS_VARIANTS: Record<string, BadgeVariant> = {
 
 function statusVariant(status: string): BadgeVariant {
   return STATUS_VARIANTS[status] ?? "neutral";
+}
+
+// hostOf shows an endpoint by its host in the card's endpoint select, where a
+// full URL would be noise and the host is what distinguishes regions.
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+// keySentAsNote words how an api_key connection sends its key when the entry
+// declares a scheme prefix, so the user pastes only the key and can see that
+// the "Token token=" part is fleet's job (#986, PagerDuty). Null when the
+// key is sent raw or as a bearer, which needs no explanation.
+// The directory card knows the entry's header; a saved row does not carry
+// its header name, so its Update key form names only the scheme.
+function keySentAsNote(header: string | undefined, prefix?: string): string | null {
+  if (!prefix) return null;
+  return header
+    ? `Sent as ${header}: ${prefix}<key> — paste only the key.`
+    : `Sent as ${prefix}<key> — paste only the key.`;
 }
 
 const AUTH_LABEL: Record<string, string> = {
@@ -457,6 +483,7 @@ function dirAddButtonClass(added: boolean): string {
 function DirectoryCard({
   entry,
   added,
+  addedURL,
   busy,
   remoteEnabled,
   redirectUri,
@@ -465,6 +492,9 @@ function DirectoryCard({
 }: {
   entry: CatalogThirdParty;
   added: boolean;
+  // The URL the entry's first seat was added on, when added: a second seat
+  // starts on the same endpoint (the row-level "add another" copies it too).
+  addedURL?: string;
   busy: boolean;
   remoteEnabled: boolean;
   redirectUri?: string;
@@ -486,12 +516,23 @@ function DirectoryCard({
   // through the consent screen into a token exchange the vendor refuses, so
   // the secret is mandatory here rather than "optional" (GitHub, #1006).
   const secretRequired = manualClient && entry.client_secret === "required";
+  const variants = entry.url_variants ?? [];
   const needsForm =
-    placeholders.length > 0 || entry.auth === "api_key" || manualClient;
+    placeholders.length > 0 || entry.auth === "api_key" || manualClient || variants.length > 0;
   const [formOpen, setFormOpen] = useState(
     (autoOpenForm ?? false) && needsForm && !added,
   );
   const [values, setValues] = useState<Record<string, string>>({});
+  // Which of the entry's endpoints to add — the default, or one of its
+  // url_variants (a regional host). The whole URL, so the add posts it as is.
+  // A second seat starts where the first one was added — re-derived each
+  // time the "Add another account" form opens, because the saved seats can
+  // load after this card mounts and a mount-time initializer would miss them.
+  const seatEndpointURL =
+    added && addedURL && variants.some((v) => v.url === addedURL)
+      ? addedURL
+      : entry.url;
+  const [endpointURL, setEndpointURL] = useState(seatEndpointURL);
   const [apiKey, setApiKey] = useState("");
   // "Add another account" (#988): an already-added entry can take a second
   // login. The same guided form opens, plus a REQUIRED seat label — the
@@ -523,6 +564,7 @@ function DirectoryCard({
   const submit = async () => {
     const ok = await onAdd({
       ...(placeholders.length > 0 ? { url: filledURL } : {}),
+      ...(variants.length > 0 && endpointURL !== entry.url ? { url: endpointURL } : {}),
       ...(anotherAccount ? { account: account.trim() } : {}),
       ...(entry.auth === "api_key" ? { apiKey: apiKey.trim() } : {}),
       ...(manualClient
@@ -633,7 +675,10 @@ function DirectoryCard({
                 type="button"
                 data-testid={`dir-add-account-${entry.name}`}
                 aria-expanded={formOpen}
-                onClick={() => setFormOpen((o) => !o)}
+                onClick={() => {
+                  if (!formOpen) setEndpointURL(seatEndpointURL);
+                  setFormOpen((o) => !o);
+                }}
                 disabled={busy}
                 className={dirAddButtonClass(false)}
               >
@@ -687,6 +732,28 @@ function DirectoryCard({
               </span>
             </label>
           ) : null}
+          {variants.length > 0 ? (
+            <label
+              htmlFor={`dirFormEndpoint-${entry.name}`}
+              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+            >
+              <span className="font-medium">Endpoint</span>
+              <select
+                id={`dirFormEndpoint-${entry.name}`}
+                className={SETTINGS_INPUT}
+                value={endpointURL}
+                onChange={(e) => setEndpointURL(e.target.value)}
+                data-testid={`dir-form-endpoint-${entry.name}`}
+              >
+                <option value={entry.url}>Default ({hostOf(entry.url)})</option>
+                {variants.map((v) => (
+                  <option key={v.id} value={v.url}>
+                    {v.label} — {hostOf(v.url)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {placeholders.map((ph) => (
             <label
               key={ph}
@@ -726,6 +793,14 @@ function DirectoryCard({
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="paste your key (stored encrypted, never shown again)"
               />
+              {keySentAsNote(entry.api_key_header, entry.api_key_prefix) ? (
+                <span
+                  className="font-mono text-[0.66rem] text-[var(--color-text-muted)]"
+                  data-testid={`dir-form-key-note-${entry.name}`}
+                >
+                  {keySentAsNote(entry.api_key_header, entry.api_key_prefix)}
+                </span>
+              ) : null}
             </label>
           ) : null}
           {manualClient ? (
@@ -925,6 +1000,10 @@ function ConnectionsPageInner() {
   const [addSeatFor, setAddSeatFor] = useState<string | null>(null);
   const [addSeatLabel, setAddSeatLabel] = useState("");
   const [addSeatKey, setAddSeatKey] = useState("");
+  // The endpoint the new seat is added on, for an entry with url_variants
+  // (regional hosts): it starts on the first seat's URL, and the form offers
+  // the entry's endpoints, since a second account can live in another region.
+  const [addSeatURL, setAddSeatURL] = useState("");
   // Explicit per-user availability choices (unified connector UX); absence of
   // an entry means the operator default.
   const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
@@ -1264,7 +1343,7 @@ function ConnectionsPageInner() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: group.name,
-        url: template.url,
+        url: addSeatURL || template.url,
         ...(authKind === "oauth" ? {} : { auth: authKind }),
         account: label,
         ...(authKind === "api_key"
@@ -1272,6 +1351,7 @@ function ConnectionsPageInner() {
               api_key: addSeatKey.trim(),
               api_key_header: dir?.api_key_header,
               api_key_query: dir?.api_key_query,
+              api_key_prefix: dir?.api_key_prefix,
             }
           : {}),
       }),
@@ -1289,6 +1369,7 @@ function ConnectionsPageInner() {
         setAddSeatFor(null);
         setAddSeatLabel("");
         setAddSeatKey("");
+        setAddSeatURL("");
         if (authKind === "oauth") {
           setNotice(`${shown} added. Click Connect to sign in.`);
           if (data.id) setConnectPromptFor({ id: data.id, name: shown });
@@ -1352,6 +1433,7 @@ function ConnectionsPageInner() {
               api_key: overrides.apiKey,
               api_key_header: entry.api_key_header,
               api_key_query: entry.api_key_query,
+              api_key_prefix: entry.api_key_prefix,
             }
           : {}),
         ...(overrides?.clientId
@@ -1555,6 +1637,9 @@ function ConnectionsPageInner() {
       added={(servers ?? []).some(
         (s) => s.url === tp.url || s.name === tp.name,
       )}
+      addedURL={
+        (servers ?? []).find((s) => s.url === tp.url || s.name === tp.name)?.url
+      }
       busy={busy}
       remoteEnabled={catalog?.remote_mcp_enabled ?? false}
       redirectUri={catalog?.oauth_redirect_uri}
@@ -1979,6 +2064,11 @@ function ConnectionsPageInner() {
                                 >
                                   Save key
                                 </button>
+                                {keySentAsNote(undefined, s.api_key_prefix) ? (
+                                  <span className="basis-full font-mono text-[0.66rem] text-[var(--color-text-muted)]">
+                                    {keySentAsNote(undefined, s.api_key_prefix)}
+                                  </span>
+                                ) : null}
                               </div>
                             ) : shareOpenFor === s.id ? (
                               <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
@@ -2071,6 +2161,7 @@ function ConnectionsPageInner() {
                         onClick={() => {
                           setAddSeatLabel("");
                           setAddSeatKey("");
+                          setAddSeatURL(group.seats[0]?.url ?? "");
                           setAddSeatFor((cur) =>
                             cur === group.name ? null : group.name,
                           );
@@ -2112,6 +2203,42 @@ function ConnectionsPageInner() {
                           aria-label={`Account label for the new ${group.name} login`}
                           className="min-w-0 flex-1 basis-[10rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
                         />
+                        {(() => {
+                          const dir = (catalog?.third_party ?? []).find(
+                            (e) => e.name === group.name,
+                          );
+                          const variants = dir?.url_variants ?? [];
+                          if (!dir || variants.length === 0) return null;
+                          const current = group.seats[0]?.url ?? "";
+                          const options = [
+                            { url: dir.url, label: `Default (${hostOf(dir.url)})` },
+                            ...variants.map((v) => ({
+                              url: v.url,
+                              label: `${v.label} — ${hostOf(v.url)}`,
+                            })),
+                          ];
+                          if (current && !options.some((o) => o.url === current)) {
+                            options.unshift({
+                              url: current,
+                              label: `This connection's endpoint (${hostOf(current)})`,
+                            });
+                          }
+                          return (
+                            <select
+                              value={addSeatURL || current}
+                              onChange={(e) => setAddSeatURL(e.target.value)}
+                              aria-label={`Endpoint for the new ${group.name} login`}
+                              data-testid={`add-seat-endpoint-${group.name}`}
+                              className="min-w-0 flex-1 basis-[12rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                            >
+                              {options.map((o) => (
+                                <option key={o.url} value={o.url}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          );
+                        })()}
                         {groupAuth === "api_key" ? (
                           <input
                             id={`addSeatKey-${group.name}`}
@@ -2137,6 +2264,27 @@ function ConnectionsPageInner() {
                         >
                           {groupAuth === "oauth" ? "Add and sign in" : "Add"}
                         </button>
+                        {groupAuth === "api_key"
+                          ? (() => {
+                              // The same directory entry addSeat posts the
+                              // prefix from, so the note says what is sent.
+                              const dir = (catalog?.third_party ?? []).find(
+                                (e) => e.name === group.name,
+                              );
+                              const note = keySentAsNote(
+                                dir?.api_key_header,
+                                dir?.api_key_prefix,
+                              );
+                              return note ? (
+                                <span
+                                  className="basis-full font-mono text-[0.66rem] text-[var(--color-text-muted)]"
+                                  data-testid={`add-seat-key-note-${group.name}`}
+                                >
+                                  {note}
+                                </span>
+                              ) : null;
+                            })()
+                          : null}
                         <span className="basis-full text-[0.7rem] text-[var(--color-text-muted)]">
                           A label is required for a second login — it tells the
                           seats apart in the Tools picker.

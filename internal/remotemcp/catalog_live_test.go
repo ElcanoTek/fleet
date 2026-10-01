@@ -55,11 +55,11 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 // probeForTest runs one add-time probe under the service's own timeout and
 // returns the tool count; a refused key (at the handshake or at the
 // read-only verification call) comes back as the error.
-func (s *Service) probeForTest(t *testing.T, url, header, query, credential string) (int, error) {
+func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credential string) (int, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HTTPTimeout)
 	defer cancel()
-	report, err := s.probeServer(ctx, url, header, query, credential)
+	report, err := s.probeServer(ctx, url, header, query, prefix, credential)
 	if err == nil {
 		checkCatalogToolSchemas(t, url, report.SchemaIssues)
 	}
@@ -97,7 +97,7 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 		ran++
 		t.Run(e.Name, func(t *testing.T) {
 			t.Parallel()
-			tools, err := svc.probeForTest(t, e.URL, "", "", "")
+			tools, err := svc.probeForTest(t, e.URL, "", "", "", "")
 			if err != nil {
 				t.Fatalf("%s: unauthenticated handshake failed (docs: %s): %v", e.URL, e.DocsURL, err)
 			}
@@ -130,19 +130,45 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 // secret of the same name; scripts/check_catalog_smoke_fixtures_test.go
 // fails CI when the two drift.
 var catalogKeyFixtures = []struct {
-	Entry         string
+	Entry string
+	// Variant is one of the entry's url_variants ids ("" = the entry's own
+	// url). An entry with regional endpoints gets one fixture per endpoint,
+	// each armed by its own secret (FLEET_CATALOG_KEY_<ENTRY>_<VARIANT>), so
+	// a key for either region tests that region and the other skips.
+	Variant       string
 	RejectsBadKey bool
 }{
-	{Entry: "tavily", RejectsBadKey: true},    // Authorization: Bearer
-	{Entry: "pagerduty", RejectsBadKey: true}, // raw key under a named Authorization header
+	{Entry: "tavily", RejectsBadKey: true},                   // Authorization: Bearer
+	{Entry: "pagerduty", RejectsBadKey: true},                // "Token token=" prefix under a named Authorization header, US host
+	{Entry: "pagerduty", Variant: "eu", RejectsBadKey: true}, // the same, EU service region
 	{Entry: "exa"},         // x-api-key header
 	{Entry: "browserbase"}, // browserbaseApiKey query parameter
 	{Entry: "firecrawl"},   // Authorization: Bearer, versioned path
 }
 
+// fixtureURL resolves a fixture's endpoint: the entry's url, or the variant
+// with the given id.
+func fixtureURL(t *testing.T, e clientconfig.RemoteMCPCatalogEntry, variant string) string {
+	t.Helper()
+	if variant == "" {
+		return e.URL
+	}
+	for _, v := range e.URLVariants {
+		if v.ID == variant {
+			return v.URL
+		}
+	}
+	t.Fatalf("fixture %q names variant %q, which the entry does not list", e.Name, variant)
+	return ""
+}
+
 // catalogKeyEnv is the environment variable that arms a fixture.
-func catalogKeyEnv(entry string) string {
-	return "FLEET_CATALOG_KEY_" + strings.ToUpper(strings.ReplaceAll(entry, "-", "_"))
+func catalogKeyEnv(entry, variant string) string {
+	name := "FLEET_CATALOG_KEY_" + strings.ToUpper(strings.ReplaceAll(entry, "-", "_"))
+	if variant != "" {
+		name += "_" + strings.ToUpper(strings.ReplaceAll(variant, "-", "_"))
+	}
+	return name
 }
 
 // TestCatalogLiveAPIKeyFixtures runs fleet's add-time key validation for each
@@ -158,7 +184,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 		byName[e.Name] = e
 	}
 	for _, f := range catalogKeyFixtures {
-		t.Run(f.Entry, func(t *testing.T) {
+		t.Run(fixtureName(f.Entry, f.Variant), func(t *testing.T) {
 			t.Parallel()
 			e, ok := byName[f.Entry]
 			if !ok {
@@ -167,30 +193,42 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if e.Auth != "api_key" {
 				t.Fatalf("fixture %q has auth %q in the catalog, want api_key", f.Entry, e.Auth)
 			}
-			envName := catalogKeyEnv(f.Entry)
+			// Resolve the endpoint before the secret check: a fixture naming
+			// a variant the catalog no longer lists must fail, not skip forever.
+			url := fixtureURL(t, e, f.Variant)
+			envName := catalogKeyEnv(f.Entry, f.Variant)
 			key := strings.TrimSpace(os.Getenv(envName))
 			if key == "" {
-				t.Skipf("%s not set; skipping the %s fixture", envName, f.Entry)
+				t.Skipf("%s not set; skipping the %s fixture", envName, fixtureName(f.Entry, f.Variant))
 			}
-			tools, err := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, key)
+			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
-				t.Fatalf("%s: handshake with the fixture key failed: %v", f.Entry, err)
+				t.Fatalf("%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
 			}
 			if tools == 0 {
-				t.Fatalf("%s: handshake succeeded but the server lists no tools", f.Entry)
+				t.Fatalf("%s: handshake succeeded but the server lists no tools", fixtureName(f.Entry, f.Variant))
 			}
-			t.Logf("%s: %d tools", f.Entry, tools)
+			t.Logf("%s: %d tools", fixtureName(f.Entry, f.Variant), tools)
 			if !f.RejectsBadKey {
 				return
 			}
-			badTools, badErr := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, "fleet-catalog-smoke-invalid-key")
+			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
 			if badErr == nil {
-				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", f.Entry, badTools)
+				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", fixtureName(f.Entry, f.Variant), badTools)
 			}
 			var kr *keyRejectedError
 			if !handshakeRefused(badErr) && !errors.As(badErr, &kr) {
-				t.Fatalf("%s: the invalid-key probe failed, but not as the vendor refusing it: %v", f.Entry, badErr)
+				t.Fatalf("%s: the invalid-key probe failed, but not as the vendor refusing it: %v", fixtureName(f.Entry, f.Variant), badErr)
 			}
 		})
 	}
+}
+
+// fixtureName is the subtest name: the entry, plus the variant id when the
+// fixture targets one of the entry's regional endpoints.
+func fixtureName(entry, variant string) string {
+	if variant == "" {
+		return entry
+	}
+	return entry + "/" + variant
 }

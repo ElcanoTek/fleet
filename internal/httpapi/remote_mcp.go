@@ -44,6 +44,9 @@ type addRemoteMCPRequest struct {
 	APIKey       string `json:"api_key,omitempty"`
 	APIKeyHeader string `json:"api_key_header,omitempty"`
 	APIKeyQuery  string `json:"api_key_query,omitempty"`
+	// APIKeyPrefix is the scheme the directory entry declares in front of the
+	// key under api_key_header; the form forwards it, the user never types it.
+	APIKeyPrefix string `json:"api_key_prefix,omitempty"`
 }
 
 // probedServerResponse is the add reply for a connection the service
@@ -129,6 +132,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 			APIKey:       req.APIKey,
 			APIKeyHeader: req.APIKeyHeader,
 			APIKeyQuery:  req.APIKeyQuery,
+			APIKeyPrefix: req.APIKeyPrefix,
 		})
 		if err != nil {
 			s.remoteMCPError(w, err)

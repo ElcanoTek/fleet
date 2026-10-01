@@ -74,7 +74,7 @@ func (f *fakeStore) CreateRemoteMCPServer(_ context.Context, in store.RemoteMCPS
 		Issuer: in.Issuer, AuthorizationEndpoint: in.AuthorizationEndpoint, TokenEndpoint: in.TokenEndpoint,
 		RegistrationEndpoint: in.RegistrationEndpoint, RevocationEndpoint: in.RevocationEndpoint,
 		Scopes: in.Scopes, AuthMethods: in.AuthMethods, ClientID: in.ClientID,
-		AuthKind: in.AuthKind, APIKeyHeader: in.APIKeyHeader, APIKeyQuery: in.APIKeyQuery,
+		AuthKind: in.AuthKind, APIKeyHeader: in.APIKeyHeader, APIKeyQuery: in.APIKeyQuery, APIKeyPrefix: in.APIKeyPrefix,
 	}
 	if srv.Status == "" {
 		srv.Status = store.RemoteMCPStatusLoginRequired

@@ -466,6 +466,11 @@ func TestBuiltinRemoteCatalogClientSecretRequired(t *testing.T) {
 	for _, e := range entries {
 		byName[e.Name] = e
 	}
+	if pd := byName["pagerduty"]; pd.APIKeyHeader != "Authorization" || pd.APIKeyPrefix != "Token token=" {
+		t.Errorf("pagerduty = header %q prefix %q, want Authorization + \"Token token=\" (the server's documented scheme; the user pastes only the token)", pd.APIKeyHeader, pd.APIKeyPrefix)
+	} else if len(pd.URLVariants) != 1 || pd.URLVariants[0].ID != "eu" || pd.URLVariants[0].URL != "https://mcp.eu.pagerduty.com/mcp" || !strings.Contains(pd.URLVariants[0].Label, "EU") {
+		t.Errorf("pagerduty url_variants = %+v, want the EU service-region host PagerDuty's guide names for EU accounts", pd.URLVariants)
+	}
 	secretRequired := []string{
 		"alloydb", "asana", "azure-devops", "box", "cartesia", "docusign", "front", "github", "google-calendar", "google-chat",
 		"google-docs", "google-drive", "google-gemini-agent-platform", "google-gmail", "google-people",
@@ -511,6 +516,74 @@ remote_mcp_catalog:
 		}
 		_, err := Load(dir)
 		return err
+	}
+	// api_key_prefix: the scheme the entry sends in front of the key under a
+	// named header. It needs that header, api_key auth, and a printable value.
+	// (load's base entry is oauth, so the api_key cases carry their own entry.)
+	loadKey := func(t *testing.T, fields string) error {
+		t.Helper()
+		dir := t.TempDir()
+		body := "remote_mcp_catalog:\n  - name: acme\n    display_name: Acme\n    description: Acme's hosted MCP server.\n    url: \"https://mcp.acme.example/mcp\"\n    auth: api_key\n" + fields
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(dir)
+		return err
+	}
+	if err := loadKey(t, "    api_key_header: Authorization\n    api_key_prefix: \"Token token=\"\n"); err != nil {
+		t.Errorf("api_key_prefix with api_key_header: %v", err)
+	}
+	if err := loadKey(t, "    api_key_prefix: \"Token token=\"\n"); err == nil {
+		t.Error("api_key_prefix without api_key_header was accepted")
+	}
+	if err := loadKey(t, "    api_key_query: key\n    api_key_prefix: \"Token \"\n"); err == nil {
+		t.Error("api_key_prefix with api_key_query was accepted")
+	}
+	if err := load(t, "    api_key_header: Authorization\n    api_key_prefix: \"Token token=\"\n"); err == nil {
+		t.Error("api_key_prefix on an oauth entry was accepted")
+	}
+	if err := loadKey(t, "    api_key_header: Authorization\n    api_key_prefix: \"Token\\ttoken=\"\n"); err == nil {
+		t.Error("api_key_prefix with a control character was accepted")
+	}
+	// url_variants: labelled https alternatives to the entry's url, never a
+	// placeholder, never the entry's own url twice.
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err != nil {
+		t.Errorf("url_variants: %v", err)
+	}
+	if err := load(t, "    url_variants:\n      - label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
+		t.Error("a url variant without an id was accepted")
+	}
+	if err := load(t, "    url_variants:\n      - id: EU\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
+		t.Error("a url variant with an upper-case id was accepted (it names an env var)")
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: \"\"\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
+		t.Error("a url variant without a label was accepted")
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"http://mcp.eu.acme.example/mcp\"\n"); err == nil {
+		t.Error("a plain-http url variant was accepted")
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.acme.example/mcp/\"\n"); err == nil {
+		t.Error("a url variant repeating the entry's url (plus a trailing slash) was accepted")
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n      - id: eu2\n        label: Europe\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
+		t.Error("two url variants with the same url were accepted")
+	}
+	// A variant the server-URL parser refuses would load and then fail every
+	// add from the card, so it fails the bundle load; a repeat is caught in
+	// any spelling the parser folds (host case, the default port).
+	for _, bad := range []string{"https://", "https://mcp.eu.acme.example:bad/mcp"} {
+		if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \""+bad+"\"\n"); err == nil {
+			t.Errorf("a url variant %q that does not parse as a server URL was accepted", bad)
+		}
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://MCP.acme.example:443/mcp\"\n"); err == nil {
+		t.Error("a url variant repeating the entry's url (other host case, explicit :443) was accepted")
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://{region}.acme.example/mcp\"\n"); err == nil {
+		t.Error("a url variant with a placeholder was accepted")
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n      - id: eu\n        label: Europe\n        url: \"https://mcp.eu2.acme.example/mcp\"\n"); err == nil {
+		t.Error("two url variants with the same id were accepted")
 	}
 	if err := load(t, "    client_registration: manual\n    client_secret: required\n"); err != nil {
 		t.Errorf("manual + required should load, got %v", err)

@@ -61,6 +61,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 )
 
 // HTTPToolServerName is the synthetic MCP-server name inline http_tools are
@@ -1010,6 +1011,16 @@ type ProviderDef struct {
 	ContextWindowTokens int      `yaml:"context_window_tokens"` // provider-local context; OpenRouter uses authoritative per-model metadata
 }
 
+// RemoteMCPURLVariant is one alternative endpoint of a directory entry (see
+// RemoteMCPCatalogEntry.URLVariants): a short id (lowercase letters, digits,
+// hyphens — "eu") that names the variant in fixtures and secrets
+// (FLEET_CATALOG_KEY_<ENTRY>_<ID>), a label for the card, and the https URL.
+type RemoteMCPURLVariant struct {
+	ID    string `yaml:"id"`
+	Label string `yaml:"label"`
+	URL   string `yaml:"url"`
+}
+
 // RemoteMCPCatalogEntry is one curated third-party hosted MCP server from the
 // manifest's remote_mcp_catalog: section (#538). It is a DIRECTORY LISTING, not
 // a connection: fleet never talks to the URL until a user explicitly adds it
@@ -1075,6 +1086,19 @@ type RemoteMCPCatalogEntry struct {
 	// servers that authenticate in the URL rather than a header. The runtime
 	// attaches the sealed key per-request; it is never persisted in a URL.
 	APIKeyQuery string `yaml:"api_key_query"`
+	// APIKeyPrefix (auth "api_key" with api_key_header only) is the scheme the
+	// vendor wants in front of the key under that header, sent verbatim:
+	// PagerDuty's "Token token=" yields "Authorization: Token token=<key>".
+	// The user pastes only the key; the entry carries the scheme, so no hint
+	// has to ask anyone to type it. Trailing spaces are significant ("Token ").
+	APIKeyPrefix string `yaml:"api_key_prefix"`
+	// URLVariants lists alternative hosts for the same server — a vendor's
+	// regional endpoints (PagerDuty's EU service region beside the US default
+	// in URL) — each with a label the card shows. The card offers the choice
+	// as a select; the chosen URL is what the connection stores, and nothing
+	// else about the entry (auth, header, prefix) changes with it. One entry
+	// per server, not one per region.
+	URLVariants []RemoteMCPURLVariant `yaml:"url_variants"`
 	// ClientRegistration is "manual" when the vendor's authorization server
 	// does not support RFC 7591 dynamic client registration — the user must
 	// bring their own OAuth client (a GCP OAuth client, an Entra app
@@ -1898,6 +1922,15 @@ var remoteMCPAuths = map[string]bool{"oauth": true, "api_key": true, "open": tru
 // request that later replays it.
 var remoteMCPHeaderShape = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 
+// remoteMCPKeyPrefixShape bounds api_key_prefix: printable ASCII only (it is
+// a header-value fragment; CR/LF or non-ASCII would be rejected or mangled by
+// the transport), spaces allowed and significant.
+var remoteMCPKeyPrefixShape = regexp.MustCompile(`^[\x20-\x7e]{1,64}$`)
+
+// remoteMCPVariantIDShape bounds a url_variants id: it becomes part of an
+// environment-variable name (FLEET_CATALOG_KEY_<ENTRY>_<ID>) and a test name.
+var remoteMCPVariantIDShape = regexp.MustCompile(`^[a-z0-9-]{1,16}$`)
+
 // remoteMCPCategoryShape bounds a category slug to lowercase kebab-case so the
 // UI's grouping/filter keys stay uniform. The set is open (a bundle may invent
 // its own grouping) but the shape is not — "CRM Sales" vs "crm-sales" silently
@@ -1954,6 +1987,20 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_query is not a valid query-parameter name (supply the name, not a credential)", name)
 		}
 	}
+	if pfx := e.APIKeyPrefix; pfx != "" {
+		if e.Auth != "api_key" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_prefix is only meaningful with auth: api_key", name)
+		}
+		if strings.TrimSpace(e.APIKeyHeader) == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_prefix needs api_key_header (the default Authorization: Bearer shape takes no prefix)", name)
+		}
+		if !remoteMCPKeyPrefixShape.MatchString(pfx) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_prefix must be 1-64 printable ASCII characters (supply the scheme, not a credential)", name)
+		}
+	}
+	if err := validateRemoteMCPURLVariants(name, e); err != nil {
+		return err
+	}
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {
 		return fmt.Errorf("remote_mcp_catalog[%q]: unknown client_registration %q (want manual or empty)", name, e.ClientRegistration)
 	}
@@ -1972,6 +2019,66 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 		if tag != strings.ToLower(tag) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: tag %q must be lowercase", name, tag)
 		}
+	}
+	return nil
+}
+
+// validateRemoteMCPURLVariants checks an entry's url_variants: each needs a
+// unique id (it names the nightly fixture's secret and a test), a unique
+// label, and an https url that is neither a placeholder nor the entry's own.
+func validateRemoteMCPURLVariants(name string, e *RemoteMCPCatalogEntry) error {
+	if len(e.URLVariants) == 0 {
+		return nil
+	}
+	if strings.Contains(e.URL, "{") {
+		return fmt.Errorf("remote_mcp_catalog[%q]: url_variants cannot be combined with a {placeholder} url", name)
+	}
+	seen := map[string]bool{}
+	ids := map[string]bool{}
+	urls := map[string]bool{}
+	entryURL := strings.TrimRight(strings.TrimSpace(e.URL), "/")
+	if canon, err := mcpoauth.CanonicalResourceURI(e.URL); err == nil {
+		entryURL = strings.TrimRight(canon, "/")
+	}
+	for i, v := range e.URLVariants {
+		if !remoteMCPVariantIDShape.MatchString(v.ID) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] needs an id of 1-16 lowercase letters, digits or hyphens (got %q)", name, i, v.ID)
+		}
+		if ids[v.ID] {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants id %q is listed twice", name, v.ID)
+		}
+		ids[v.ID] = true
+		label := strings.TrimSpace(v.Label)
+		if label == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] needs a label", name, i)
+		}
+		if seen[strings.ToLower(label)] {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants label %q is listed twice", name, label)
+		}
+		seen[strings.ToLower(label)] = true
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(v.URL)), "https://") {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url must be https:// (got %q)", name, i, v.URL)
+		}
+		if strings.Contains(v.URL, "{") {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url carries a {placeholder}", name, i)
+		}
+		// The parser AddServer stores a URL through: a variant it refuses
+		// ("https://", a non-numeric port) would load, show on the card,
+		// and fail every add — so it fails the bundle load instead.
+		u, err := mcpoauth.CanonicalResourceURI(v.URL)
+		if err != nil {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url is not a valid server URL: %w", name, i, err)
+		}
+		// Repeats are compared canonical (case, default port, trailing slash),
+		// the identity the stored connection and the drift check use.
+		u = strings.TrimRight(u, "/")
+		if u == entryURL {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] repeats the entry's own url", name, i)
+		}
+		if urls[u] {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] repeats another variant's url", name, i)
+		}
+		urls[u] = true
 	}
 	return nil
 }

@@ -247,7 +247,7 @@ while public DNS is fine). A row is not re-verified by later releases.
 Counts — can CI hit?: yes 12 · key-fixture 54 · oauth-manual 183 · tenant 40 ·
 dead-suspect 0. Auth: oauth 183 · tenant 39 · api_key 53 · open 14.
 Provenance: official 281 · third_party 5 · community 3. Featured: 20. Last
-verified: live 13 · probe 2026-09-14 182 · probe 2026-09-16 50 · probe
+verified: live 14 · probe 2026-09-14 182 · probe 2026-09-16 49 · probe
 2026-09-25 10 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
@@ -443,7 +443,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | outreach | oauth | official | crm-sales |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
 | ovhcloud | oauth | official | cloud-infrastructure |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
 | paddle | api_key | official | commerce-payments |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
-| pagerduty | api_key | official | observability |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| pagerduty | api_key | official | observability |  | key-fixture | 2026-10-01 live | live ✓ on a real deploy — added from the card with the EU endpoint and a bare User API token; `browse_services` returned the account's service through the broker-mounted connection (prefix applied at mount) | US host by default, EU service region as a `url_variants` endpoint on the card (added 2026-10-01 after an EU-region User API token was refused by the US host); add-time check rejects a bogus key (HTTP 401); the entry carries `api_key_prefix: "Token token="` since 2026-10-01, so the user pastes only a **User** API token; the US host answers an EU-region token, an account-level REST key and an account without Advanced Permissions alike with `unauthorized` "No permission -- see authorization schemes", and a bare token without the scheme with `invalid_token` "Authentication required"; also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | parallel-search | open | official | web-search |  | yes | 2026-09-14 probe | open ✓ (initialize 200) |  |
 | parallel-task | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 200 with a bogus key | **add-time check passes a bogus key** (4 tools listed; the key is checked only at tools/call) (F14); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | paypal | oauth | official | commerce-payments | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |

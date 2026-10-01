@@ -209,6 +209,192 @@ describe("ConnectionsPage ?connector= deep link", () => {
 });
 
 describe("ConnectionsPage guided api_key add", () => {
+  const PAGERDUTY_LIKE = {
+    name: "pdlike",
+    display_name: "PD-like",
+    description: "A vendor that wants a scheme in front of the key and has an EU host.",
+    url: "https://mcp.pdlike.example.com/mcp",
+    url_variants: [{ id: "eu", label: "EU service region", url: "https://mcp.eu.pdlike.example.com/mcp" }],
+    provenance: "official",
+    auth: "api_key",
+    api_key_header: "Authorization",
+    api_key_prefix: "Token token=",
+    trust: "third_party",
+  };
+
+  it("offers the entry's endpoints as a select and posts the chosen one", async () => {
+    let posted: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        (body) => {
+          posted = body;
+          return { status: 200, body: { id: "srv1", tool_count: 2 } };
+        },
+        { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+      ),
+    );
+    visit("?connector=pdlike");
+    await screen.findByTestId("dir-form-pdlike");
+    const select = screen.getByTestId("dir-form-endpoint-pdlike") as HTMLSelectElement;
+    expect(select.value).toBe("https://mcp.pdlike.example.com/mcp");
+    expect(screen.getByRole("option", { name: /EU service region — mcp\.eu\.pdlike\.example\.com/ })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "https://mcp.eu.pdlike.example.com/mcp" } });
+    fireEvent.change(
+      screen.getByPlaceholderText("paste your key (stored encrypted, never shown again)"),
+      { target: { value: "u+eu123" } },
+    );
+    fireEvent.click(screen.getByTestId("dir-form-add-pdlike"));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "pdlike",
+      url: "https://mcp.eu.pdlike.example.com/mcp",
+      auth: "api_key",
+      api_key: "u+eu123",
+      api_key_prefix: "Token token=",
+    });
+  });
+
+
+  it("starts a second seat on the endpoint the first one was added on", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        undefined,
+        { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+        {
+          ...EMPTY_LIST,
+          servers: [
+            { ...BB_PRIMARY, id: "pd1", name: "pdlike", url: "https://mcp.eu.pdlike.example.com/mcp" },
+          ],
+        },
+      ),
+    );
+    visit("");
+    const card = (await screen.findAllByTestId("dir-card-pdlike"))[0];
+    fireEvent.click(within(card).getByTestId("dir-add-account-pdlike"));
+    const select = (await within(card).findByTestId("dir-form-endpoint-pdlike")) as HTMLSelectElement;
+    expect(select.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
+  });
+
+  it("starts a second seat on the first one's endpoint even when the connections load after the card", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inner = mockFetch(
+      undefined,
+      { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+      {
+        ...EMPTY_LIST,
+        servers: [
+          { ...BB_PRIMARY, id: "pd1", name: "pdlike", url: "https://mcp.eu.pdlike.example.com/mcp" },
+        ],
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/remote-mcp-servers") && (init?.method ?? "GET") === "GET") {
+          await gate;
+        }
+        return inner(url, init);
+      }),
+    );
+    visit("");
+    // The card mounts from the catalog alone, before the saved EU seat is known.
+    await screen.findAllByTestId("dir-card-pdlike");
+    release();
+    const card = (await screen.findAllByTestId("dir-card-pdlike"))[0];
+    fireEvent.click(await within(card).findByTestId("dir-add-account-pdlike"));
+    const select = (await within(card).findByTestId("dir-form-endpoint-pdlike")) as HTMLSelectElement;
+    expect(select.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
+  });
+
+  it("a connection row's Add another account form shows the scheme, offers the entry's endpoints, and posts both", async () => {
+    let posted: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        (body) => {
+          posted = body;
+          return { status: 200, body: { id: "pd2", tool_count: 2 } };
+        },
+        { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+        {
+          ...EMPTY_LIST,
+          servers: [
+            {
+              ...BB_PRIMARY,
+              id: "pd1",
+              name: "pdlike",
+              url: "https://mcp.eu.pdlike.example.com/mcp",
+              api_key_prefix: "Token token=",
+            },
+          ],
+        },
+      ),
+    );
+    visit("");
+    const group = await screen.findByTestId("remote-group-pdlike");
+    fireEvent.click(within(group).getByTestId("add-seat-pdlike"));
+    expect(within(group).getByTestId("add-seat-key-note-pdlike")).toHaveTextContent(
+      "Sent as Authorization: Token token=<key> — paste only the key.",
+    );
+    fireEvent.change(within(group).getByLabelText("Account label for the new pdlike login"), {
+      target: { value: "work" },
+    });
+    fireEvent.change(within(group).getByLabelText("API key for the new pdlike login"), {
+      target: { value: "u+second" },
+    });
+    // The new account may live in another region: the form starts on the
+    // first seat's EU endpoint and offers the entry's default beside it.
+    const endpoint = within(group).getByTestId("add-seat-endpoint-pdlike") as HTMLSelectElement;
+    expect(endpoint.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
+    fireEvent.change(endpoint, { target: { value: "https://mcp.pdlike.example.com/mcp" } });
+    fireEvent.click(within(group).getByTestId("add-seat-submit-pdlike"));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "pdlike",
+      url: "https://mcp.pdlike.example.com/mcp",
+      account: "work",
+      api_key: "u+second",
+      api_key_prefix: "Token token=",
+    });
+  });
+  it("shows the entry's scheme prefix beside the key field and posts it, so the user pastes only the key", async () => {
+    let posted: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        (body) => {
+          posted = body;
+          return { status: 200, body: { id: "srv1", tool_count: 2 } };
+        },
+        { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+      ),
+    );
+    visit("?connector=pdlike");
+    await screen.findByTestId("dir-form-pdlike");
+    expect(screen.getByTestId("dir-form-key-note-pdlike")).toHaveTextContent(
+      "Sent as Authorization: Token token=<key> — paste only the key.",
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText("paste your key (stored encrypted, never shown again)"),
+      { target: { value: "u+abc123" } },
+    );
+    fireEvent.click(screen.getByTestId("dir-form-add-pdlike"));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      name: "pdlike",
+      auth: "api_key",
+      api_key: "u+abc123",
+      api_key_header: "Authorization",
+      api_key_prefix: "Token token=",
+    });
+  });
+
+
   it("sends the manifest's api_key_query with the key", async () => {
     let posted: Record<string, unknown> | null = null;
     vi.stubGlobal(
