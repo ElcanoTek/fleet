@@ -363,6 +363,11 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		s.noteSecrets(in.APIKey)
 		report, perr := s.probeServer(ctx, canonURL, header, query, prefix, in.APIKey)
 		if perr != nil {
+			// The refusal goes back to the form; it also goes to the host log,
+			// redacted, so an operator can see what the vendor answered when a
+			// user reports "it says 401" (an EU-region token on the US host and
+			// an account-level key read the same to the user).
+			log.Printf("remote-mcp: add-time probe of %s for %s refused: %s", canonURL, in.Email, agentcore.RedactSecrets(perr.Error()))
 			return nil, noProbe, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
 		}
 		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
@@ -584,6 +589,7 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 	s.noteSecrets(apiKey)
 	report, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, server.APIKeyPrefix, apiKey)
 	if err != nil {
+		log.Printf("remote-mcp: key rotation probe of %s for %s refused: %s", server.URL, email, agentcore.RedactSecrets(err.Error()))
 		return ProbeReport{}, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
 	}
 	return report, s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)

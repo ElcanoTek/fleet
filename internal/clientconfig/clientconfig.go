@@ -1023,6 +1023,13 @@ type ProviderDef struct {
 // governed by the vendor's own terms. The UI must label the two classes
 // distinctly so a user knows what they are opting into; the bundle author
 // curates the list but does not control the remote service.
+// RemoteMCPURLVariant is one alternative endpoint of a directory entry (see
+// RemoteMCPCatalogEntry.URLVariants): a label for the card and the https URL.
+type RemoteMCPURLVariant struct {
+	Label string `yaml:"label"`
+	URL   string `yaml:"url"`
+}
+
 type RemoteMCPCatalogEntry struct {
 	Name        string   `yaml:"name"`         // stable identifier; unique within the manifest
 	DisplayName string   `yaml:"display_name"` // human-readable label ("GitHub")
@@ -1081,6 +1088,13 @@ type RemoteMCPCatalogEntry struct {
 	// The user pastes only the key; the entry carries the scheme, so no hint
 	// has to ask anyone to type it. Trailing spaces are significant ("Token ").
 	APIKeyPrefix string `yaml:"api_key_prefix"`
+	// URLVariants lists alternative hosts for the same server — a vendor's
+	// regional endpoints (PagerDuty's EU service region beside the US default
+	// in URL) — each with a label the card shows. The card offers the choice
+	// as a select; the chosen URL is what the connection stores, and nothing
+	// else about the entry (auth, header, prefix) changes with it. One entry
+	// per server, not one per region.
+	URLVariants []RemoteMCPURLVariant `yaml:"url_variants"`
 	// ClientRegistration is "manual" when the vendor's authorization server
 	// does not support RFC 7591 dynamic client registration — the user must
 	// bring their own OAuth client (a GCP OAuth client, an Entra app
@@ -1974,6 +1988,31 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 		}
 		if !remoteMCPKeyPrefixShape.MatchString(pfx) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_prefix must be 1-64 printable ASCII characters (supply the scheme, not a credential)", name)
+		}
+	}
+	if len(e.URLVariants) > 0 {
+		if strings.Contains(e.URL, "{") {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants cannot be combined with a {placeholder} url", name)
+		}
+		seen := map[string]bool{}
+		for i, v := range e.URLVariants {
+			label := strings.TrimSpace(v.Label)
+			if label == "" {
+				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] needs a label", name, i)
+			}
+			if seen[strings.ToLower(label)] {
+				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants label %q is listed twice", name, label)
+			}
+			seen[strings.ToLower(label)] = true
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(v.URL)), "https://") {
+				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url must be https:// (got %q)", name, i, v.URL)
+			}
+			if strings.Contains(v.URL, "{") {
+				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url carries a {placeholder}", name, i)
+			}
+			if strings.TrimSpace(v.URL) == strings.TrimSpace(e.URL) {
+				return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] repeats the entry's own url", name, i)
+			}
 		}
 	}
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {

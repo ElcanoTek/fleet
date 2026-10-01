@@ -3701,10 +3701,15 @@ servers:
     description: >-
       Hosted remote MCP server covering incident lifecycle
       (retrieve/ack/resolve), services, on-call schedules, escalation policies,
-      orchestration, and status pages. Auth via "Authorization: Token <api-
-      token>" header (not Bearer) or OAuth; EU endpoint at
-      https://mcp.eu.pagerduty.com/mcp. Distinct from the stdio-only OSS server.
+      orchestration, and status pages. Auth via "Authorization: Token
+      token=<User API token>" (fleet adds the scheme) or OAuth. Served from
+      the US host by default and from mcp.eu.pagerduty.com for accounts in
+      the EU service region — pick the endpoint on the card. Distinct from
+      the stdio-only OSS server.
     url: "https://mcp.pagerduty.com/mcp"
+    url_variants:
+      - label: "EU service region (addresses under eu.pagerduty.com)"
+        url: "https://mcp.eu.pagerduty.com/mcp"
     vendor: PagerDuty, Inc.
     docs_url: "https://support.pagerduty.com/main/docs/pagerduty-mcp-server-integration-guide"
     category: observability
@@ -3712,10 +3717,13 @@ servers:
     provenance: official
     auth: api_key
     setup_hint: >-
-      Create a User API token in PagerDuty (My Profile → User Settings →
-      Create API User Token) and paste just the token here; fleet sends it
-      as "Authorization: Token token=<token>". An account-level REST API key
-      is refused with "No permission".
+      Pick your endpoint first: the US host, or the EU one if your PagerDuty
+      address contains ".eu." (the US host answers an EU token "No
+      permission"). Then create a User API token (My Profile → User Settings
+      → Create API User Token) and paste just the token here; fleet sends it
+      as "Authorization: Token token=<token>". An account-level REST API key,
+      or an account without Advanced Permissions, is refused with "No
+      permission".
     setup_url: "https://support.pagerduty.com/main/docs/pagerduty-mcp-server-integration-guide"
     api_key_header: Authorization
     api_key_prefix: "Token token="

@@ -31,6 +31,9 @@ export type CatalogThirdParty = {
   // The scheme fleet sends in front of the key under api_key_header ("Token
   // token="); shown beside the key field so the user pastes only the key.
   api_key_prefix?: string;
+  // Alternative endpoints for the same server (a vendor's regional hosts),
+  // offered as a select on the card; the chosen URL is what the add posts.
+  url_variants?: { label: string; url: string }[];
   // "manual" = the vendor's authorization server has no dynamic client
   // registration; the guided form collects a bring-your-own OAuth client ID
   // (+ optional secret) up front.

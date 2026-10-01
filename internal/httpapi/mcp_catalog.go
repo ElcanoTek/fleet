@@ -37,6 +37,11 @@ type mcpCatalogBundledEntry struct {
 	Trust            string   `json:"trust"` // always "bundled"
 }
 
+type mcpCatalogURLVariant struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
 type mcpCatalogThirdPartyEntry struct {
 	Name        string   `json:"name"`
 	DisplayName string   `json:"display_name"`
@@ -59,6 +64,9 @@ type mcpCatalogThirdPartyEntry struct {
 	// The scheme sent in front of the key under api_key_header ("Token
 	// token="); the form shows it so the user pastes only the key.
 	APIKeyPrefix string `json:"api_key_prefix,omitempty"`
+	// Alternative endpoints (regional hosts) the card offers as a select; the
+	// chosen URL is what the add posts.
+	URLVariants []mcpCatalogURLVariant `json:"url_variants,omitempty"`
 	// "manual" = the vendor's AS has no dynamic client registration; the UI
 	// collects a bring-your-own OAuth client ID (+ optional secret) up front.
 	ClientRegistration string `json:"client_registration,omitempty"`
@@ -153,9 +161,21 @@ func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThir
 		APIKeyHeader:       strings.TrimSpace(e.APIKeyHeader),
 		APIKeyQuery:        strings.TrimSpace(e.APIKeyQuery),
 		APIKeyPrefix:       e.APIKeyPrefix,
+		URLVariants:        catalogURLVariants(e.URLVariants),
 		ClientRegistration: strings.TrimSpace(e.ClientRegistration),
 		ClientSecret:       strings.TrimSpace(e.ClientSecret),
 		Featured:           e.Featured,
 		Trust:              "third_party",
 	}
+}
+
+func catalogURLVariants(in []clientconfig.RemoteMCPURLVariant) []mcpCatalogURLVariant {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]mcpCatalogURLVariant, 0, len(in))
+	for _, v := range in {
+		out = append(out, mcpCatalogURLVariant{Label: strings.TrimSpace(v.Label), URL: strings.TrimSpace(v.URL)})
+	}
+	return out
 }

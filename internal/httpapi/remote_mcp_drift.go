@@ -91,7 +91,20 @@ func driftFromCatalog(row store.RemoteMCPServer, catalog []clientconfig.RemoteMC
 	// entry that does not canonicalise is not comparable: neither reports
 	// URL drift.
 	if !strings.Contains(entry.URL, "{") {
-		if canon, err := mcpoauth.CanonicalResourceURI(entry.URL); err == nil && canon != row.URL {
+		// A row on any of the entry's endpoints — the default or a regional
+		// variant — matches; only a URL the entry no longer lists is drift.
+		listed := false
+		urls := []string{entry.URL}
+		for _, v := range entry.URLVariants {
+			urls = append(urls, v.URL)
+		}
+		for _, u := range urls {
+			if canon, err := mcpoauth.CanonicalResourceURI(u); err == nil && canon == row.URL {
+				listed = true
+				break
+			}
+		}
+		if !listed {
 			d.URL = entry.URL
 		}
 	}

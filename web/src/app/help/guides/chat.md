@@ -332,7 +332,8 @@ conversation, and the two buttons leave them alone. Each connector is also badge
 service you have signed into yourself, so you always know whose system you are
 reaching. When a third-party connector takes an API key, the form says how
 the key is sent and whether fleet adds a scheme in front of it; paste only
-the key. A **Beta** badge means it works but still has rough edges. A
+the key. A connector served from more than one host, such as a vendor's EU
+region, shows an **Endpoint** choice on its card; pick yours before adding. A **Beta** badge means it works but still has rough edges. A
 **Directory changed** badge on a third-party connection in **Settings →
 Connections** means the directory entry of that name now lists a different
 address, sign-in method or key placement from the connection; the row says

@@ -64,6 +64,10 @@ is the validation.
 - `api_key_prefix` — the scheme the vendor wants in front of the key under
   that header (`Token token=` for PagerDuty); the entry carries it, the user
   pastes only the key, and the key form says how it will be sent.
+- `url_variants` — alternative endpoints for the same server, each with a
+  label (PagerDuty's EU service region beside the US default); the card
+  offers them as an Endpoint select and the chosen URL is what is added. One
+  entry per server, not one per region.
 - `client_registration: manual` — the vendor's authorization server has no
   RFC 7591 dynamic registration; the card collects a bring-your-own OAuth
   client ID (+ optional secret) up front and passes it to the existing manual

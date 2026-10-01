@@ -130,14 +130,33 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 // secret of the same name; scripts/check_catalog_smoke_fixtures_test.go
 // fails CI when the two drift.
 var catalogKeyFixtures = []struct {
-	Entry         string
+	Entry string
+	// Variant picks one of the entry's url_variants by label ("" = the
+	// entry's own url) — the key on hand decides, as it does for a user.
+	Variant       string
 	RejectsBadKey bool
 }{
-	{Entry: "tavily", RejectsBadKey: true},    // Authorization: Bearer
-	{Entry: "pagerduty", RejectsBadKey: true}, // raw key under a named Authorization header
+	{Entry: "tavily", RejectsBadKey: true},                           // Authorization: Bearer
+	{Entry: "pagerduty", Variant: "EU service", RejectsBadKey: true}, // "Token token=" prefix under a named Authorization header; the key on hand is an EU-region token
 	{Entry: "exa"},         // x-api-key header
 	{Entry: "browserbase"}, // browserbaseApiKey query parameter
 	{Entry: "firecrawl"},   // Authorization: Bearer, versioned path
+}
+
+// fixtureURL resolves a fixture's endpoint: the entry's url, or the variant
+// whose label starts with Variant.
+func fixtureURL(t *testing.T, e clientconfig.RemoteMCPCatalogEntry, variant string) string {
+	t.Helper()
+	if variant == "" {
+		return e.URL
+	}
+	for _, v := range e.URLVariants {
+		if strings.HasPrefix(v.Label, variant) {
+			return v.URL
+		}
+	}
+	t.Fatalf("fixture %q names variant %q, which the entry does not list", e.Name, variant)
+	return ""
 }
 
 // catalogKeyEnv is the environment variable that arms a fixture.
@@ -172,7 +191,8 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if key == "" {
 				t.Skipf("%s not set; skipping the %s fixture", envName, f.Entry)
 			}
-			tools, err := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
+			url := fixtureURL(t, e, f.Variant)
+			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
 				t.Fatalf("%s: handshake with the fixture key failed: %v", f.Entry, err)
 			}
@@ -183,7 +203,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if !f.RejectsBadKey {
 				return
 			}
-			badTools, badErr := svc.probeForTest(t, e.URL, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
+			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
 			if badErr == nil {
 				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", f.Entry, badTools)
 			}

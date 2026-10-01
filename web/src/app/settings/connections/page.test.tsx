@@ -209,18 +209,53 @@ describe("ConnectionsPage ?connector= deep link", () => {
 });
 
 describe("ConnectionsPage guided api_key add", () => {
-  it("shows the entry's scheme prefix beside the key field and posts it, so the user pastes only the key", async () => {
-    const PAGERDUTY_LIKE = {
+  const PAGERDUTY_LIKE = {
+    name: "pdlike",
+    display_name: "PD-like",
+    description: "A vendor that wants a scheme in front of the key and has an EU host.",
+    url: "https://mcp.pdlike.example.com/mcp",
+    url_variants: [{ label: "EU service region", url: "https://mcp.eu.pdlike.example.com/mcp" }],
+    provenance: "official",
+    auth: "api_key",
+    api_key_header: "Authorization",
+    api_key_prefix: "Token token=",
+    trust: "third_party",
+  };
+
+  it("offers the entry's endpoints as a select and posts the chosen one", async () => {
+    let posted: Record<string, unknown> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(
+        (body) => {
+          posted = body;
+          return { status: 200, body: { id: "srv1", tool_count: 2 } };
+        },
+        { ...CATALOG, third_party: [BROWSERBASE, PAGERDUTY_LIKE] },
+      ),
+    );
+    visit("?connector=pdlike");
+    await screen.findByTestId("dir-form-pdlike");
+    const select = screen.getByTestId("dir-form-endpoint-pdlike") as HTMLSelectElement;
+    expect(select.value).toBe("https://mcp.pdlike.example.com/mcp");
+    expect(screen.getByRole("option", { name: /EU service region — mcp\.eu\.pdlike\.example\.com/ })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "https://mcp.eu.pdlike.example.com/mcp" } });
+    fireEvent.change(
+      screen.getByPlaceholderText("paste your key (stored encrypted, never shown again)"),
+      { target: { value: "u+eu123" } },
+    );
+    fireEvent.click(screen.getByTestId("dir-form-add-pdlike"));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
       name: "pdlike",
-      display_name: "PD-like",
-      description: "A vendor that wants a scheme in front of the key.",
-      url: "https://mcp.pdlike.example.com/mcp",
-      provenance: "official",
+      url: "https://mcp.eu.pdlike.example.com/mcp",
       auth: "api_key",
-      api_key_header: "Authorization",
+      api_key: "u+eu123",
       api_key_prefix: "Token token=",
-      trust: "third_party",
-    };
+    });
+  });
+
+  it("shows the entry's scheme prefix beside the key field and posts it, so the user pastes only the key", async () => {
     let posted: Record<string, unknown> | null = null;
     vi.stubGlobal(
       "fetch",

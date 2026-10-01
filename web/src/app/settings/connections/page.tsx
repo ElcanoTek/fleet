@@ -132,6 +132,16 @@ function statusVariant(status: string): BadgeVariant {
   return STATUS_VARIANTS[status] ?? "neutral";
 }
 
+// hostOf shows an endpoint by its host in the card's endpoint select, where a
+// full URL would be noise and the host is what distinguishes regions.
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 // keySentAsNote words how an api_key connection sends its key when the entry
 // declares a scheme prefix, so the user pastes only the key and can see that
 // the "Token token=" part is fleet's job (#986, PagerDuty). Null when the
@@ -498,12 +508,16 @@ function DirectoryCard({
   // through the consent screen into a token exchange the vendor refuses, so
   // the secret is mandatory here rather than "optional" (GitHub, #1006).
   const secretRequired = manualClient && entry.client_secret === "required";
+  const variants = entry.url_variants ?? [];
   const needsForm =
-    placeholders.length > 0 || entry.auth === "api_key" || manualClient;
+    placeholders.length > 0 || entry.auth === "api_key" || manualClient || variants.length > 0;
   const [formOpen, setFormOpen] = useState(
     (autoOpenForm ?? false) && needsForm && !added,
   );
   const [values, setValues] = useState<Record<string, string>>({});
+  // Which of the entry's endpoints to add — the default, or one of its
+  // url_variants (a regional host). The whole URL, so the add posts it as is.
+  const [endpointURL, setEndpointURL] = useState(entry.url);
   const [apiKey, setApiKey] = useState("");
   // "Add another account" (#988): an already-added entry can take a second
   // login. The same guided form opens, plus a REQUIRED seat label — the
@@ -535,6 +549,7 @@ function DirectoryCard({
   const submit = async () => {
     const ok = await onAdd({
       ...(placeholders.length > 0 ? { url: filledURL } : {}),
+      ...(variants.length > 0 && endpointURL !== entry.url ? { url: endpointURL } : {}),
       ...(anotherAccount ? { account: account.trim() } : {}),
       ...(entry.auth === "api_key" ? { apiKey: apiKey.trim() } : {}),
       ...(manualClient
@@ -697,6 +712,28 @@ function DirectoryCard({
                 Tells the seats apart in the Tools picker. Letters, digits and
                 underscores.
               </span>
+            </label>
+          ) : null}
+          {variants.length > 0 ? (
+            <label
+              htmlFor={`dirFormEndpoint-${entry.name}`}
+              className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]"
+            >
+              <span className="font-medium">Endpoint</span>
+              <select
+                id={`dirFormEndpoint-${entry.name}`}
+                className={SETTINGS_INPUT}
+                value={endpointURL}
+                onChange={(e) => setEndpointURL(e.target.value)}
+                data-testid={`dir-form-endpoint-${entry.name}`}
+              >
+                <option value={entry.url}>Default ({hostOf(entry.url)})</option>
+                {variants.map((v) => (
+                  <option key={v.url} value={v.url}>
+                    {v.label} — {hostOf(v.url)}
+                  </option>
+                ))}
+              </select>
             </label>
           ) : null}
           {placeholders.map((ph) => (

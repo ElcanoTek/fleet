@@ -138,6 +138,9 @@ releases.
   api_key_prefix: "Token token="  # api_key + api_key_header only: scheme sent
                                   # in front of the key; the user pastes only
                                   # the key (PagerDuty)
+  url_variants:                   # alternative endpoints for the SAME server
+    - label: "EU service region"  # (regional hosts); the card offers them as
+      url: "https://mcp.eu...."   # a select and posts the chosen URL
   client_registration: manual     # the vendor's AS has no dynamic client
                                   # registration; the card collects a
                                   # bring-your-own OAuth client ID (+ secret)
@@ -207,7 +210,7 @@ explicit trust tags plus the directory metadata:
 
 Entries also carry the onboarding fields when present: `setup_hint`,
 `setup_url`, `api_key_header`, `api_key_query`, `api_key_prefix`,
-`client_registration`, `client_secret`.
+`url_variants`, `client_registration`, `client_secret`.
 
 `bundled` is the Optional-server catalog snapshot (the same source as
 `/mcp-servers`; always-on servers need no opt-in decision so they are not
