@@ -1090,7 +1090,7 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 	if overlay == nil || len(overlay.Skipped) == 0 {
 		return prompt
 	}
-	log.Printf("scheduled task %s: skipped remote MCP server(s): %v (reasons %v)", task.ID, overlay.Skipped, overlay.SkipReasons)
+	log.Printf("scheduled task %s: skipped remote MCP server(s): %s", task.ID, agent.SkippedForLog(overlay))
 	// The reason per connector decides the advice the result should carry
 	// (F10): a dead login is fixed by the owner reconnecting, a vendor that
 	// did not answer is not.

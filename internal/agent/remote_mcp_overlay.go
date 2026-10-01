@@ -376,14 +376,28 @@ func (o *RemoteMCPOverlay) skip(name, reason string) {
 	o.SkipReasons[name] = reason
 }
 
-// skippedWithReasons renders "name (reason), …" for a log line.
+// skippedWithReasons renders "name (reason), …" for a log line, bounded like
+// the prompt notices (MaxSkipNoticeNames, then "and N more"): every
+// connection past the overlay cap is skipped, so an unbounded line would grow
+// with the size of the account on every turn and run.
 func skippedWithReasons(o *RemoteMCPOverlay) string {
-	parts := make([]string, 0, len(o.Skipped))
-	for _, name := range o.Skipped {
+	n := len(o.Skipped)
+	if n > MaxSkipNoticeNames+1 {
+		n = MaxSkipNoticeNames + 1 // one past the bound is enough for "and N more"
+	}
+	parts := make([]string, 0, n)
+	for _, name := range o.Skipped[:n] {
 		parts = append(parts, name+" ("+o.SkipReason(name)+")")
+	}
+	if len(o.Skipped) > MaxSkipNoticeNames {
+		return fmt.Sprintf("%s, and %d more", strings.Join(parts[:MaxSkipNoticeNames], ", "), len(o.Skipped)-MaxSkipNoticeNames)
 	}
 	return strings.Join(parts, ", ")
 }
+
+// SkippedForLog is skippedWithReasons for callers outside this package (the
+// scheduled-run notice logs the same list).
+func SkippedForLog(o *RemoteMCPOverlay) string { return skippedWithReasons(o) }
 
 // SkipReason returns the class recorded for a skipped name. A name without a
 // recorded class — an overlay built without reasons, or a class this build

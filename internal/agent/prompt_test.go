@@ -532,3 +532,22 @@ func TestHostedSkipNoticeIsBounded(t *testing.T) {
 		t.Errorf("JoinSkipNoticeNames under the bound = %q, want %q", got, "a, b")
 	}
 }
+
+// TestSkippedWithReasonsIsBounded: the log line for skipped connectors is
+// bounded like the prompt notices, so it cannot grow with the account.
+func TestSkippedWithReasonsIsBounded(t *testing.T) {
+	o := &RemoteMCPOverlay{}
+	for i := 0; i < 30; i++ {
+		o.skip(fmt.Sprintf("conn_%02d", i), SkipReasonOverlayCap)
+	}
+	got := skippedWithReasons(o)
+	if n := strings.Count(got, "conn_"); n != MaxSkipNoticeNames {
+		t.Errorf("log names %d connectors, want %d: %s", n, MaxSkipNoticeNames, got)
+	}
+	if !strings.HasSuffix(got, fmt.Sprintf("and %d more", 30-MaxSkipNoticeNames)) {
+		t.Errorf("log does not count the rest: %s", got)
+	}
+	if len(o.Skipped) != 30 {
+		t.Errorf("formatting changed the skip list (%d entries)", len(o.Skipped))
+	}
+}
