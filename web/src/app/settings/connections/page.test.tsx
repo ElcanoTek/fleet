@@ -311,7 +311,7 @@ describe("ConnectionsPage guided api_key add", () => {
     expect(select.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
   });
 
-  it("shows the scheme on a connection row's Add another account form and posts the prefix", async () => {
+  it("a connection row's Add another account form shows the scheme, offers the entry's endpoints, and posts both", async () => {
     let posted: Record<string, unknown> | null = null;
     vi.stubGlobal(
       "fetch",
@@ -347,11 +347,16 @@ describe("ConnectionsPage guided api_key add", () => {
     fireEvent.change(within(group).getByLabelText("API key for the new pdlike login"), {
       target: { value: "u+second" },
     });
+    // The new account may live in another region: the form starts on the
+    // first seat's EU endpoint and offers the entry's default beside it.
+    const endpoint = within(group).getByTestId("add-seat-endpoint-pdlike") as HTMLSelectElement;
+    expect(endpoint.value).toBe("https://mcp.eu.pdlike.example.com/mcp");
+    fireEvent.change(endpoint, { target: { value: "https://mcp.pdlike.example.com/mcp" } });
     fireEvent.click(within(group).getByTestId("add-seat-submit-pdlike"));
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted).toMatchObject({
       name: "pdlike",
-      url: "https://mcp.eu.pdlike.example.com/mcp",
+      url: "https://mcp.pdlike.example.com/mcp",
       account: "work",
       api_key: "u+second",
       api_key_prefix: "Token token=",

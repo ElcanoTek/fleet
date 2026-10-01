@@ -61,6 +61,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 )
 
 // HTTPToolServerName is the synthetic MCP-server name inline http_tools are
@@ -2036,6 +2037,9 @@ func validateRemoteMCPURLVariants(name string, e *RemoteMCPCatalogEntry) error {
 	ids := map[string]bool{}
 	urls := map[string]bool{}
 	entryURL := strings.TrimRight(strings.TrimSpace(e.URL), "/")
+	if canon, err := mcpoauth.CanonicalResourceURI(e.URL); err == nil {
+		entryURL = strings.TrimRight(canon, "/")
+	}
 	for i, v := range e.URLVariants {
 		if !remoteMCPVariantIDShape.MatchString(v.ID) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] needs an id of 1-16 lowercase letters, digits or hyphens (got %q)", name, i, v.ID)
@@ -2058,7 +2062,16 @@ func validateRemoteMCPURLVariants(name string, e *RemoteMCPCatalogEntry) error {
 		if strings.Contains(v.URL, "{") {
 			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url carries a {placeholder}", name, i)
 		}
-		u := strings.TrimRight(strings.TrimSpace(v.URL), "/")
+		// The parser AddServer stores a URL through: a variant it refuses
+		// ("https://", a non-numeric port) would load, show on the card,
+		// and fail every add — so it fails the bundle load instead.
+		u, err := mcpoauth.CanonicalResourceURI(v.URL)
+		if err != nil {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] url is not a valid server URL: %w", name, i, err)
+		}
+		// Repeats are compared canonical (case, default port, trailing slash),
+		// the identity the stored connection and the drift check use.
+		u = strings.TrimRight(u, "/")
 		if u == entryURL {
 			return fmt.Errorf("remote_mcp_catalog[%q]: url_variants[%d] repeats the entry's own url", name, i)
 		}

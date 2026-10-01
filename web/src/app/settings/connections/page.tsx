@@ -1000,6 +1000,10 @@ function ConnectionsPageInner() {
   const [addSeatFor, setAddSeatFor] = useState<string | null>(null);
   const [addSeatLabel, setAddSeatLabel] = useState("");
   const [addSeatKey, setAddSeatKey] = useState("");
+  // The endpoint the new seat is added on, for an entry with url_variants
+  // (regional hosts): it starts on the first seat's URL, and the form offers
+  // the entry's endpoints, since a second account can live in another region.
+  const [addSeatURL, setAddSeatURL] = useState("");
   // Explicit per-user availability choices (unified connector UX); absence of
   // an entry means the operator default.
   const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
@@ -1339,7 +1343,7 @@ function ConnectionsPageInner() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: group.name,
-        url: template.url,
+        url: addSeatURL || template.url,
         ...(authKind === "oauth" ? {} : { auth: authKind }),
         account: label,
         ...(authKind === "api_key"
@@ -1365,6 +1369,7 @@ function ConnectionsPageInner() {
         setAddSeatFor(null);
         setAddSeatLabel("");
         setAddSeatKey("");
+        setAddSeatURL("");
         if (authKind === "oauth") {
           setNotice(`${shown} added. Click Connect to sign in.`);
           if (data.id) setConnectPromptFor({ id: data.id, name: shown });
@@ -2156,6 +2161,7 @@ function ConnectionsPageInner() {
                         onClick={() => {
                           setAddSeatLabel("");
                           setAddSeatKey("");
+                          setAddSeatURL(group.seats[0]?.url ?? "");
                           setAddSeatFor((cur) =>
                             cur === group.name ? null : group.name,
                           );
@@ -2197,6 +2203,42 @@ function ConnectionsPageInner() {
                           aria-label={`Account label for the new ${group.name} login`}
                           className="min-w-0 flex-1 basis-[10rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
                         />
+                        {(() => {
+                          const dir = (catalog?.third_party ?? []).find(
+                            (e) => e.name === group.name,
+                          );
+                          const variants = dir?.url_variants ?? [];
+                          if (!dir || variants.length === 0) return null;
+                          const current = group.seats[0]?.url ?? "";
+                          const options = [
+                            { url: dir.url, label: `Default (${hostOf(dir.url)})` },
+                            ...variants.map((v) => ({
+                              url: v.url,
+                              label: `${v.label} — ${hostOf(v.url)}`,
+                            })),
+                          ];
+                          if (current && !options.some((o) => o.url === current)) {
+                            options.unshift({
+                              url: current,
+                              label: `This connection's endpoint (${hostOf(current)})`,
+                            });
+                          }
+                          return (
+                            <select
+                              value={addSeatURL || current}
+                              onChange={(e) => setAddSeatURL(e.target.value)}
+                              aria-label={`Endpoint for the new ${group.name} login`}
+                              data-testid={`add-seat-endpoint-${group.name}`}
+                              className="min-w-0 flex-1 basis-[12rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                            >
+                              {options.map((o) => (
+                                <option key={o.url} value={o.url}>
+                                  {o.label}
+                                </option>
+                              ))}
+                            </select>
+                          );
+                        })()}
                         {groupAuth === "api_key" ? (
                           <input
                             id={`addSeatKey-${group.name}`}

@@ -617,3 +617,56 @@ func TestLogSafeURL(t *testing.T) {
 		}
 	}
 }
+
+// TestUnverifiedProbeLogKeepsAPathKeyOut: a vendor that accepts the control
+// probe's invalid key as readily as the real one leaves the key unverified,
+// and that notice is logged. logSafeURL keeps the path, so a key the URL
+// carries there is scrubbed from the whole line by RedactSecrets.
+func TestUnverifiedProbeLogKeepsAPathKeyOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		result := map[string]any{}
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}}
+		case "tools/list":
+			result = map[string]any{"tools": []any{map[string]any{"name": "list_things", "description": "List things", "inputSchema": map[string]any{"type": "object"}, "annotations": map[string]any{"readOnlyHint": true}}}}
+		case "tools/call":
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": "[]"}}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	const key = "u+pathleak0123456789"
+	svc := newTestService(t, newFakeStore(), srv)
+	// As cmd/fleet wires it: the key the add registers is a literal the
+	// host-log redactor then scrubs.
+	svc.SetSecretObserver(agentcore.RegisterSecretLiterals)
+	_, report, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "vendor", URL: srv.URL + "/k/" + key + "/mcp", AuthMode: "api_key",
+		APIKey: key, APIKeyHeader: "X-Api-Key",
+	})
+	if err != nil {
+		t.Fatalf("AddServer: %v", err)
+	}
+	if report.KeyVerified {
+		t.Fatal("a vendor that accepts any key verified this one; the unverified branch did not run")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "answered an invalid key the same") {
+		t.Fatalf("the unverified notice was not logged: %q", out)
+	}
+	if strings.Contains(out, key) {
+		t.Fatalf("the key reached the host log: %q", out)
+	}
+}

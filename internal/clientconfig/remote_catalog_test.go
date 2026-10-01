@@ -568,6 +568,17 @@ remote_mcp_catalog:
 	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://mcp.eu.acme.example/mcp\"\n      - id: eu2\n        label: Europe\n        url: \"https://mcp.eu.acme.example/mcp\"\n"); err == nil {
 		t.Error("two url variants with the same url were accepted")
 	}
+	// A variant the server-URL parser refuses would load and then fail every
+	// add from the card, so it fails the bundle load; a repeat is caught in
+	// any spelling the parser folds (host case, the default port).
+	for _, bad := range []string{"https://", "https://mcp.eu.acme.example:bad/mcp"} {
+		if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \""+bad+"\"\n"); err == nil {
+			t.Errorf("a url variant %q that does not parse as a server URL was accepted", bad)
+		}
+	}
+	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://MCP.acme.example:443/mcp\"\n"); err == nil {
+		t.Error("a url variant repeating the entry's url (other host case, explicit :443) was accepted")
+	}
 	if err := load(t, "    url_variants:\n      - id: eu\n        label: EU\n        url: \"https://{region}.acme.example/mcp\"\n"); err == nil {
 		t.Error("a url variant with a placeholder was accepted")
 	}
