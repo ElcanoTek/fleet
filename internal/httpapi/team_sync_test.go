@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -137,5 +138,44 @@ func TestSelfServeTeamChangePublishes(t *testing.T) {
 	evs := drainAccountEvents(t, st)
 	if len(evs) != 1 || evs[0].Team != "fresh-team" || evs[0].Actor != "sam@x.com" || evs[0].Source != "admin_ui" {
 		t.Fatalf("events = %+v, want sam's own move", evs)
+	}
+}
+
+// Every admin write enforces the shared team rule, so Fleet never stores a
+// label its identity provider would refuse to mirror.
+func TestAdminTeamWritesEnforceTheTeamRule(t *testing.T) {
+	s, _, st := accountEventsFixture(t)
+	h := s.Routes()
+	astral := strings.Repeat("\U0001F600", 17) // 68 bytes, 34 UTF-16 units: under a browser maxlength of 64
+	if w := do(t, h, http.MethodPost, "/admin/users", map[string]any{"email": "neo@x.com", "password": "long-enough-pw", "team_id": astral}, "boss@x.com"); w.Code != http.StatusBadRequest {
+		t.Fatalf("create with an over-long team: %d %s, want 400", w.Code, w.Body.String())
+	}
+	if _, err := st.GetUser(context.Background(), "neo@x.com"); err == nil {
+		t.Fatal("a create refused for its team still created the account")
+	}
+	if w := do(t, h, http.MethodPost, "/admin/users", map[string]any{"email": "neo@x.com", "password": "long-enough-pw"}, "boss@x.com"); w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	for name, team := range map[string]string{"over-long": astral, "control char": "ops\x07"} {
+		if w := do(t, h, http.MethodPatch, "/admin/users/neo@x.com", map[string]any{"team_id": team}, "boss@x.com"); w.Code != http.StatusBadRequest {
+			t.Errorf("patch %s: %d %s, want 400", name, w.Code, w.Body.String())
+		}
+	}
+	if w := do(t, h, http.MethodPatch, "/admin/users/neo@x.com", map[string]any{"team_id": "  quant  "}, "boss@x.com"); w.Code != http.StatusOK {
+		t.Fatalf("valid patch: %d %s", w.Code, w.Body.String())
+	}
+	if got := accountTeam(t, st, "neo@x.com"); got != "quant" {
+		t.Fatalf("team = %q, want quant", got)
+	}
+	for name, team := range map[string]string{"over-long": astral, "control char": "ops\x07"} {
+		if w := do(t, h, http.MethodPut, "/me/team", map[string]any{"team_id": team}, "neo@x.com"); w.Code != http.StatusBadRequest {
+			t.Errorf("self-serve %s: %d %s, want 400", name, w.Code, w.Body.String())
+		}
+	}
+	if w := do(t, h, http.MethodPost, "/admin/teams/rename", map[string]any{"from": "quant", "to": astral}, "boss@x.com"); w.Code != http.StatusBadRequest {
+		t.Errorf("rename onto an over-long name: %d %s, want 400", w.Code, w.Body.String())
+	}
+	if _, _, err := st.RenameTeam(context.Background(), "quant", astral); !store.IsInputError(err) {
+		t.Fatalf("rename onto an over-long name: err = %v, want an input error", err)
 	}
 }

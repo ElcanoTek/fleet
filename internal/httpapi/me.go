@@ -145,7 +145,7 @@ func (s *Server) writeUserLookupError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrUserNotFound):
 		http.Error(w, "user not found", http.StatusNotFound)
-	case strings.Contains(err.Error(), "too long"):
+	case store.IsInputError(err), strings.Contains(err.Error(), "too long"):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)

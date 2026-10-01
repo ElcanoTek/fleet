@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 )
 
 // ExternalAccessState is Fleet's last accepted desired membership from Auth.
@@ -30,15 +29,7 @@ type ExternalAccessState struct {
 // identity provider may set: at most maxTeamNameLen bytes, the bound every
 // Fleet team write uses, with no control characters. "" (no team) is valid.
 func ValidExternalTeam(team string) bool {
-	if len(team) > maxTeamNameLen || team != strings.TrimSpace(team) {
-		return false
-	}
-	for _, r := range team {
-		if unicode.IsControl(r) {
-			return false
-		}
-	}
-	return true
+	return team == strings.TrimSpace(team) && ValidateTeamName(team) == nil
 }
 
 func scanExternalAccessState(row interface{ Scan(...any) error }, state *ExternalAccessState) error {

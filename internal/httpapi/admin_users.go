@@ -85,6 +85,14 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Checked before the account exists: a team refused after CreateUser would
+	// leave a created account and a 500 behind.
+	if body.TeamID != nil {
+		if err := store.ValidateTeamName(*body.TeamID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 
 	defer s.beginAccountChange(r, email, store.AccountEventSourceAdminUI, userFromCtx(r.Context()))()
 	u, err := s.store.CreateUser(r.Context(), email, body.Password)
