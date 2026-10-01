@@ -115,7 +115,9 @@
 #                              /etc/caddy/Caddyfile this script did not write.
 #                              A timestamped backup is kept and a merge warning
 #                              printed. Without it the script refuses rather
-#                              than truncating an existing Caddy config.
+#                              than truncating an existing Caddy config — except
+#                              the caddy package's untouched stock file, which
+#                              is replaced with a copy kept beside it (#1657).
 #   --dry-run                  print the plan; touch nothing.
 #
 # Env knobs (all optional; sensible local defaults):
@@ -372,8 +374,11 @@ gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24;
 # existing /etc/caddy/Caddyfile WITHOUT it belongs to someone else (a legacy
 # chat/moc deploy, a hand-rolled config) — overwriting it would silently
 # destroy their vhosts, so we refuse unless --force-caddy, and even then keep a
-# timestamped backup. Checked fail-fast here (before any provisioning work) and
-# again at write time inside deploy_web_tier.
+# timestamped backup. The one file that is not "someone else's" is the caddy
+# package's own untouched default, dropped by `dnf install caddy`: recognised
+# by the digest the package recorded (caddyfile_is_package_default) and
+# replaced, with a copy kept (#1657). Checked fail-fast here (before any
+# provisioning work) and again at write time inside deploy_web_tier.
 # CADDY_MARKER + caddyfile_is_foreign come from scripts/lib/caddyfile.sh
 # (sourced above); the marker text is stable so every box bootstrap ever
 # provisioned keeps being recognised as fleet-managed.
@@ -742,15 +747,23 @@ deploy_web_tier() {
   # Never truncate a Caddyfile this script did not write (the fail-fast check
   # at the top already covers the common path; this write-time guard also
   # covers a file that appeared mid-run, e.g. dropped by `dnf install caddy`).
+  local caddy_backup
   if caddyfile_is_foreign; then
     if [[ "$FORCE_CADDY" != "1" ]]; then
       die "refusing to overwrite /etc/caddy/Caddyfile (not written by this script) — merge manually or re-run with --force-caddy"
     fi
-    local caddy_backup
     caddy_backup="/etc/caddy/Caddyfile.fleet-backup.$(date -u +%Y%m%dT%H%M%SZ)"
     cp -p /etc/caddy/Caddyfile "$caddy_backup" || die "could not back up /etc/caddy/Caddyfile to ${caddy_backup}"
     warn "--force-caddy: OVERWRITING /etc/caddy/Caddyfile — previous config saved to ${caddy_backup}"
     warn "any other sites/vhosts it served are DOWN until you merge them back in and reload caddy."
+  elif caddyfile_is_package_default; then
+    # The caddy package's stock file (Fedora ships one; `dnf install caddy`
+    # above drops it): untouched, and its imports (Fedora's Caddyfile.d
+    # drop-ins) match no file, so it carries only the package's welcome
+    # page. It is replaced, with a copy kept beside it (#1657).
+    caddy_backup="/etc/caddy/Caddyfile.fleet-backup.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p /etc/caddy/Caddyfile "$caddy_backup" || die "could not back up /etc/caddy/Caddyfile to ${caddy_backup}"
+    info "replacing the caddy package's stock Caddyfile (unmodified default, no drop-in sites) — copy kept at ${caddy_backup}"
   fi
   # One renderer (scripts/lib/caddyfile.sh) writes the whole file: the web
   # tier as the default upstream, the public API (/v1/*, /api-info, the A2A
@@ -1596,6 +1609,9 @@ if [[ "$ENABLE_WEB" == "1" ]]; then
     if [[ -n "$WEB_DOMAIN" ]]; then
       info "[dry-run] would build web/ for https://${WEB_DOMAIN} → /opt/fleet/web, write fleet-web.env, enable fleet-web, install Caddy + open 80/443."
       info "[dry-run] would write /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh: https://${WEB_DOMAIN} → web tier (127.0.0.1:3000); /v1/*, /api-info, /.well-known/agent-card.json, /a2a, /triggers/* → orchestrator (127.0.0.1:8000); /webhooks/* → chat (127.0.0.1:8080); then reload caddy (an already-running caddy is reloaded, not just enabled)."
+      if caddyfile_is_package_default; then
+        info "[dry-run] would replace the caddy package's stock /etc/caddy/Caddyfile (unmodified default, no drop-in sites) — a copy kept beside it"
+      fi
     else
       info "[dry-run] would build web/ for http://localhost:3000 → /opt/fleet/web, write fleet-web.env, enable fleet-web (loopback only; no --domain → no Caddy)."
     fi
