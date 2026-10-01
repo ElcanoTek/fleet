@@ -12,7 +12,9 @@ re-verified by later releases. The appendix is the #986 Phase 1 inventory:
 every one of the 288 built-in entries with its auth, provenance, category,
 Featured flag, whether CI could exercise it, and when it was last verified.
 
-Everything below was run against a local rig: one fleet process with the
+Unless a section says otherwise — the **Real deploy (2026-09-30)** section
+below was run on an installed box — everything here was run against a local
+rig: one fleet process with the
 Postgres pair, the web tier on `http://localhost:3200`, real OpenRouter
 models, real vendor accounts. Vendors that need an HTTPS callback (Slack)
 were reached through a temporary Cloudflare quick tunnel.
@@ -58,6 +60,52 @@ Cross-cutting checks, all live:
   `tool_search`/`tool_describe`/`tool_call` for GitHub, Notion, Slack, Linear,
   Stripe, Grafana Cloud, Uptime Robot.
 
+### Real deploy (2026-09-30)
+
+The table above was measured on a development rig (a dev build on
+`localhost:3200`, a Cloudflare quick tunnel for the one vendor that refuses a
+loopback callback). #986's acceptance asks for the pack on a **real deploy**, so
+the same pack was run against fleet installed the documented way — the
+`install.sh` one-liner with `--enable-web --domain`, release build from `main`,
+systemd units, local Postgres, Caddy with a Let's Encrypt certificate — on a
+throwaway 4 vCPU / 8 GB Fedora 44 cloud box with a public sslip.io hostname
+(`https://fleet-oauth.<ip>.sslip.io/api/oauth/mcp/callback` as the callback).
+Everything the rig never exercised was exercised here: the release binary, the
+unit's hardening, Caddy/TLS, a stable public callback, the sealed key in
+`/etc/fleet/fleet.env`.
+
+| connector | add | sign-in | tools | tool call (chat) | scheduled task | refresh | sign-out → reconnect | remove | seats / sharing |
+|---|---|---|---|---|---|---|---|---|---|
+| GitHub | manual client ✓ | ✓ | ✓ | ✓ `get_me` | — | ✓ forced expiry, renewed (8 h) | ✓ | — | — |
+| Notion | dynamic registration ✓ | ✓ | ✓ | ✓ `notion-search` | — | — | ✓ | — | ✓ second seat `test` with its own client and token; a turn pinned to it calls `mcp_notion_test_*`, an unpinned turn the default seat |
+| Linear | dynamic registration ✓ | ✓ | ✓ | ✓ `list_issues` | ✓ task pinned to `linear`, wired 7 servers, called `list_issues`, 72 s — with four of the owner's 11 connections switched off for the run and restored after; with all 11 on, the pinned task dead-letters (RD5) | ✓ forced expiry, renewed (24 h) | ✓ | — | ✓ shared to a second user: grantee sees no secret material and calls `list_issues` under the owner's login |
+| Slack | manual client ✓ | ✓ | ✓ | ✓ `list_user_channels` | — | n/a | ✓ (no refresh token, so only a fresh authorization can reissue) | — | — |
+| Azure DevOps | tenant URL + Entra app ✓ | ✓ | ✓ | ✓ `core_list_projects` | — | — | ✓ | — | — |
+| Stripe | dynamic registration ✓ | ✓ | ✓ | ✓ `GetBalance` | — | — | ✓ | — | — |
+| Grafana Cloud | dynamic registration ✓ | ✓ | ✓ | ✓ `list_datasources` (deferred mode) | — | — | ✓ | — | — |
+| Uptime Robot | dynamic registration ✓ | ✓ | ✓ | ✓ `list-monitors` | — | — | ✓ | — | — |
+| Bugsnag | dynamic registration ✓ (after F12) | ✓ | ✓ | ✓ `bugsnag_list_projects` | — | — | ✓ | — | — |
+| Google Drive | manual client ✓ | ✓ | ✓ | ✗ vendor: "The caller does not have permission" (Workspace preview gating, as on the rig) | — | — | — | ✓ server and token rows both removed; the vendor revocation call failed and was logged | — |
+| Gmail | manual client ✓ | ✓ | ✓ | ✗ not completed: the Gmail MCP API was not enabled on the Google project, a setup prerequisite the catalog entry names (not a vendor block) | — | — | ✓ | — | — |
+| Cartesia | ✗ dynamic registration refused: `redirect_uris must be a native app URI scheme, loopback http, or an allowlisted https callback` (RD4) | | | | | | | | |
+| Plaid | ✗ refused at add (401 under its MCP path; the known decision) | | | | | | | | |
+
+— not re-run: the same mechanism passed on another vendor in this pass. The
+sign-out → reconnect column is a sweep the owner did across every connection
+except Google Drive, which was exercised by removal instead (its cell is —);
+tool calls after it were re-verified on GitHub, Slack, Notion and Stripe.
+
+What the real deploy found that the rig could not (the catalog audit's F
+numbering continues as RD):
+
+| # | finding | state |
+|---|---|---|
+| RD1 | Fedora's `caddy` package ships `/etc/caddy/Caddyfile`; bootstrap's foreign-file check treats the untouched package default as someone else's config and aborts the web tier. The documented `--force-caddy` re-run recovers it, at the cost of a full second bootstrap. | fix in #1663 (issue #1657): the package manager's recorded digest identifies the caddy package's untouched default, which is replaced with a copy kept — unless its `Caddyfile.d/` drop-ins carry sites, when it is refused like any foreign file |
+| RD2 | A **bare install cannot start a sandbox on an SELinux-enforcing host**: `fleet.service` runs with `ProtectSystem=strict` and `ReadWritePaths=/var/lib/fleet -/opt/fleet/client`, the bare install points `FLEET_CLIENT_CONFIG_DIR` at the root-owned checkout under `/opt/fleet/src`, and the sandbox's `:z` relabel of the bundle dirs fails with `lsetxattr … read-only file system` on every pool fill. bootstrap deliberately skips chowning the in-repo bundle. Worked around by staging a fleet-owned copy at `/opt/fleet/client`. | fix in #1662 (issue #1655): bootstrap stages a service-owned copy of the generic bundle at `/var/lib/fleet/bundle`, update refreshes it, doctor reports the broken shape with the repair |
+| RD3 | An API chat request that creates a conversation (no `conversation_id`) must send `model`; a follow-up on an existing conversation may omit it and keeps the conversation's stored model. A model-less creating `POST /chat` stores the conversation with an empty model and the turn is refused at model-route resolution; it does not fall back to the workspace default model, which exists (bootstrap leaves `FLEET_DEFAULT_MODEL` unset and the compiled-in default applies). | minor — document, or have the API apply the workspace default; the UI picker always sends a model and is unaffected |
+| RD4 | Cartesia's authorization server accepts dynamic registration only for native or loopback redirect URIs; a hosted https callback is refused unless allowlisted. The rig's `localhost` callback is loopback, which is why the rig recorded it as self-registering. | fix in #1665 (issue #1658): the entry is a manual client with the secret required and a setup hint |
+| RD5 | A **scheduled task pinned to a hosted connection dead-letters once the owner has more than 8 connections**: the run mounts all of the owner's connections newest-first up to `maxOverlayServers = 8`, the cap records nothing, so a pinned connection past it is neither mounted nor listed as skipped and the run fails as "misspelled or gated-off". Reproduced with 11 connections. The same cap silently drops the surplus in chat. | fix in #1664 (issue #1656): named connections mount first, every cap cut is recorded with its own class and the seat behind it, both notices say so |
+
 ## Fleet changes the pack produced
 
 | PR | what it fixed | found by |
@@ -97,7 +145,7 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | F10 | a connect failure was announced to the model as "needs re-authorization" | **fixed** — the hosted overlay records a reason class per skipped connector (a 401 at mount or a dead refresh token → reconnect; a vendor that did not answer → "did not respond this turn, do not ask for a reconnect"; a pinned seat not connected → connect that account; a failure fleet cannot classify → said so, asserting nothing about the login), carries it over the broker wire, and both the chat prompt notice and the scheduled-run notice group the names by it |
 | F11 | fleet has no legacy HTTP+SSE transport; Square and Smartlead document SSE-only endpoints (Smartlead's `/sse` confirmed live and SSE-only on 2026-09-25; Square answers 403 to everything from the audit network) | **resolved in Phase 4 — both entries removed** from the shipped directory: a listing fleet cannot connect to is advertising, not onboarding. Re-add either when it offers streamable HTTP |
 | C1–C9 | seven catalog data errors (Expensify, Cartesia, Octagon, Globalping, Zerodha Kite (its `login` tool session is per-turn only; no scheduled-run auth), Sage Intacct, OpenRouter); Square, Smartlead untouched | landed in #1501 (superseded #1495) |
-| F12 | Bugsnag's 401 points at its metadata over plain `http://`; the vendor redirects to https, fleet's client refuses redirects, and since #1485 a failed advertised pointer is fatal (it fell through to the well-known locations before) | **fixed** — a pointer that names the server's own host over plain `http://` is raised to `https://` before the fetch (`upgradeAdvertisedPointer`; the server must be https, the pointer plain http on the same host; another host is fetched as spelled). Verified by a credential-less probe on the rig 2026-09-29 (no account login yet, so the row stays a `probe`): Bugsnag adds and lands in `login_required` with `oauth.bugsnag.com` as the issuer and a registered client |
+| F12 | Bugsnag's 401 points at its metadata over plain `http://`; the vendor redirects to https, fleet's client refuses redirects, and since #1485 a failed advertised pointer is fatal (it fell through to the well-known locations before) | **fixed** — a pointer that names the server's own host over plain `http://` is raised to `https://` before the fetch (`upgradeAdvertisedPointer`; the server must be https, the pointer plain http on the same host; another host is fetched as spelled). Verified by a credential-less probe on the rig 2026-09-29 (Bugsnag adds and lands in `login_required` with `oauth.bugsnag.com` as the issuer and a registered client), then by a real-account sign-in and tool call on the 2026-09-30 real deploy, which is what the inventory row now records |
 | F13 | Saved connections retain their original URL and auth across catalog corrections until removed and re-added. | **surfaced** — a row keeps what it was added with by design (a user may have typed their own URL under a directory name; an OAuth login is bound to the old resource and a key to the old header, so nothing can be carried over silently), and the connection list now reports `catalog_drift` (the directory's current URL, auth kind or key placement, only the fields that differ; a `tenant` entry is not compared, and an entry whose URL carries a `{placeholder}` has only its auth compared — so a pre-Phase-4 Composio row is told the entry is now an api key one) and the Connections page badges the row **Directory changed** with the new value and the re-add instruction; the join is the name, so a hand-typed server under a directory name shows the badge too, and the wording says so |
 | V1 | 25 entries publish no scopes anywhere | live add needed per vendor |
 | V2 | GoCardless answers 403 to every unauthenticated request from the audit network (so did Square, which left the directory in Phase 4 — F11); Adobe and Wrike did so on 2026-09-14 and passed discovery on 2026-09-25 | re-probe from another network before calling it broken |
@@ -185,8 +233,9 @@ it needs a vendor key held as a CI secret (every api_key entry, plus the three
 open entries that carry the key in the URL) — no such fixture exists yet;
 `oauth-manual` the browser consent step cannot run in CI; `tenant` the URL has
 a `{placeholder}` only a customer can fill; `dead-suspect` the endpoint does
-not speak MCP. **last verified** is `live` for a real account on the rig (the
-table at the top), `probe` for a credential-less check — the 2026-09-14
+not speak MCP. **last verified** is `live` for a real account — on the rig
+(the table at the top) or, dated 2026-09-30, on the real deploy (its own
+section) — `probe` for a credential-less check — the 2026-09-14
 discovery probe (fleet's `mcpoauth.Discover` plus the add-time guards, run on
 `main` plus #1488 and #1495; "discovery ✓" means Connect would reach the
 vendor's consent screen and says nothing about tool calls) or the 2026-09-16
@@ -198,8 +247,8 @@ while public DNS is fine). A row is not re-verified by later releases.
 Counts — can CI hit?: yes 12 · key-fixture 54 · oauth-manual 183 · tenant 40 ·
 dead-suspect 0. Auth: oauth 183 · tenant 39 · api_key 53 · open 14.
 Provenance: official 281 · third_party 5 · community 3. Featured: 20. Last
-verified: live 12 · probe 2026-09-14 183 · probe 2026-09-16 49 · probe
-2026-09-25 10 · probe 2026-09-29 1 · not probeable 34. These totals are derived from the table
+verified: live 14 · probe 2026-09-14 182 · probe 2026-09-16 49 · probe
+2026-09-25 10 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
 | entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
@@ -238,7 +287,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | browserstack | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | buffer | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
 | bugcrowd | api_key | official | security |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
-| bugsnag | oauth | official | observability |  | oauth-manual | 2026-09-29 probe | discovery ✓ — the 401 names the metadata over plain http; raised to https (F12); registration ✓ | self-registering, confidential client (`client_secret_post`); scopes `api openid profile`; login not yet exercised |
+| bugsnag | oauth | official | observability |  | oauth-manual | 2026-09-30 live | live PASS on the real deploy (sign-in, `bugsnag_list_projects`, sign-out → reconnect); discovery ✓ — the 401 names the metadata over plain http; raised to https (F12); registration ✓ | self-registering, confidential client (`client_secret_post`); scopes `api openid profile` |
 | buildkite | oauth | official | development |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | cal-com | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok; no scopes published (V1) |
 | calendly | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
@@ -311,7 +360,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | google-docs | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
 | google-drive | oauth | official | productivity | ★ | oauth-manual | 2026-09-10 live | live — tool call BLOCKED by vendor (Developer Preview); discovery ✓ | manual client, secret |
 | google-gemini-agent-platform | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
-| google-gmail | oauth | official | communication | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
+| google-gmail | oauth | official | communication | ★ | oauth-manual | 2026-09-30 live | live on the real deploy — sign-in ✓; tool call not completed (the Gmail MCP API was not enabled on the Google project, a setup prerequisite); discovery ✓ | manual client, secret |
 | google-maps | api_key | official | travel-local |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (5 tools listed; the key is checked only at tools/call) (F14) |
 | google-people | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
 | google-sheets | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |

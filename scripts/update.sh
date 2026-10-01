@@ -96,6 +96,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/caddyfile.sh
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/bundle.sh
+. "$SCRIPT_DIR/lib/bundle.sh"
 
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
 # Client bundle dir: env/flag wins; else the dir bootstrap persisted under the
@@ -452,9 +454,11 @@ else
       # --dry-run, which never reaches here because it skips the fast-forward.
       # --src needs no forwarding: SRC_DIR re-derives from the script path the
       # exec below names. Env-only knobs — FLEET_ENV_FILE, FLEET_STATE_DIR —
-      # are inherited by `env` without being named.)
-      if ! git diff --quiet "$before_sha" "$after_sha" -- scripts/update.sh; then
-        warn "update.sh changed in this update — re-executing the new version"
+      # are inherited by `env` without being named.) The helpers under
+      # scripts/lib/ were sourced at the top from the OLD checkout too, so a
+      # change there (a staging fix in lib/bundle.sh, say) re-execs as well.
+      if ! git diff --quiet "$before_sha" "$after_sha" -- scripts/update.sh scripts/lib/; then
+        warn "update.sh or a helper it sources changed in this update — re-executing the new version"
         exec env FLEET_UPDATE_REEXEC=1 FLEET_UPDATE_YES=1 \
           FLEET_UPDATE_BASE_SHA="$before_sha" \
           FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" \
@@ -516,6 +520,79 @@ if [[ -n "$svc_client_dir" && "$(norm_dir "$svc_client_dir")" != "$(norm_dir "$C
   fi
 fi
 
+# A bare install runs on a staged, service-owned copy of the in-repo default
+# bundle (scripts/lib/bundle.sh, #1655). Refresh it from the checkout as step 1
+# left it (under --no-pull that is the unpulled checkout); and a box installed
+# before staging existed — its service still pointed at the checkout, where the
+# sandbox's relabel fails on an SELinux host — is moved onto a staged copy here,
+# which is what `fleet update` is for. Only the generic bundle is ever staged,
+# and never over an explicit --client-config (the operator's choice stands).
+# _restaged records what actually happened, so step 2 never reports a refresh
+# that did not run: 1 = staged now, dry = planned under --dry-run, 0 = not.
+_restaged=0
+if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
+  _stage_owner="$(systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  [[ -n "$_stage_owner" ]] || _stage_owner="fleet"
+  # The unit's StateDirectory, not the account's passwd home: the shipped
+  # unit fixes HOME and StateDirectory at /var/lib/fleet and runs with
+  # ProtectHome=yes, so a pre-existing account whose passwd home is
+  # /home/fleet would otherwise be staged somewhere the service cannot read.
+  _state_dir="$(systemctl show -p StateDirectory --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  _state_dir="${_state_dir%% *}"
+  _stage="$(default_bundle_stage "/var/lib/${_state_dir:-fleet}")"
+  _restage=0
+  if bundle_is_default_in_checkout "$svc_client_dir" "$SRC_DIR"; then
+    _restage=1 # pre-#1655 bare install: the service still loads the checkout
+  elif _staged_src="$(bundle_marker_source "$svc_client_dir" "$_stage_owner")" \
+       && bundle_is_default_in_checkout "$_staged_src" "$SRC_DIR"; then
+    _restage=1 # a staged copy of THIS checkout's generic bundle: refresh it
+  elif [[ "$(norm_dir "$svc_client_dir")" == "$(norm_dir "$_stage")" && ! -e "$svc_client_dir" ]]; then
+    # The service points at the staging path but the copy is gone (deleted by
+    # hand, a wiped state dir): nothing there to protect, and leaving it would
+    # restart the service onto a bundle that does not exist.
+    _restage=1
+  fi
+  if [[ "$_restage" == "1" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would stage ${SRC_DIR}/config/default → ${_stage} (owned by ${_stage_owner}) and point FLEET_CLIENT_CONFIG_DIR at it"
+      _restaged=dry
+    elif ! id -u "$_stage_owner" >/dev/null 2>&1; then
+      warn "service user ${_stage_owner} does not exist on this box — cannot stage the default bundle; ${SERVICE_NAME} keeps loading ${svc_client_dir}"
+    elif ! command -v rsync >/dev/null 2>&1; then
+      # Boxes bootstrapped before staging existed may lack rsync, which the
+      # in-place refresh needs. update.sh is an updater, not a provisioner, so
+      # it names the package rather than installing it.
+      warn "rsync is not installed, so the default bundle cannot be staged — ${SERVICE_NAME} keeps loading ${svc_client_dir}, where the sandbox's SELinux relabel fails on an enforcing host."
+      warn "  fix it:  sudo dnf install rsync   (or: sudo apt-get install rsync), then re-run: sudo fleet update"
+    elif stage_default_bundle "$SRC_DIR/config/default" "$_stage" "$_stage_owner"; then
+      if [[ "$(norm_dir "$svc_client_dir")" != "$(norm_dir "$_stage")" ]]; then
+        upsert_env_file "$backend_env_file" FLEET_CLIENT_CONFIG_DIR "$_stage"
+        ok "default bundle staged: ${SRC_DIR}/config/default → ${_stage}; ${SERVICE_NAME} now loads it (was ${svc_client_dir}, where the sandbox's SELinux relabel fails)"
+      else
+        ok "default bundle refreshed: ${SRC_DIR}/config/default → ${_stage}"
+      fi
+      CLIENT_DIR="$_stage"
+      svc_client_dir="$_stage"
+      _restaged=1
+      # Record it where `fleet update --check` and the next update's fallback
+      # resolution look, as bootstrap does.
+      _dir_state="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
+      mkdir -p "$_dir_state" && printf '%s\n' "$_stage" > "$_dir_state/client-config.dir" || true
+    else
+      _rc=$?
+      if [[ "$_rc" == "2" ]]; then
+        warn "${_stage} holds a bundle that is not a staged copy — leaving it alone; ${SERVICE_NAME} keeps loading ${svc_client_dir}"
+      elif [[ "$_rc" == "3" ]]; then
+        # Neither the refresh nor the rollback completed: the copy the service
+        # loads is half-written. Restarting onto it is worse than stopping.
+        die "the staged bundle at ${_stage} is partly updated and could not be restored (see above) — not restarting ${SERVICE_NAME}; restore the kept copy, free the space, and re-run: sudo fleet update"
+      else
+        warn "could not stage the default bundle to ${_stage} — ${SERVICE_NAME} keeps loading ${svc_client_dir}"
+      fi
+    fi
+  fi
+fi
+
 # Bundle freshness is reported at the END alongside fleet's own SHA. A stale
 # bundle is not a build failure, so it must not abort the update — but it is the
 # difference between "fleet updated" and "your deployment updated", and burying
@@ -534,6 +611,19 @@ if [[ "$CLIENT_DIR" == "$SRC_DIR/config/default" || "$CLIENT_DIR" == "config/def
   if [[ -n "$svc_client_dir" ]]; then
     BUNDLE_STALE=1
     BUNDLE_STALE_WHY="fell back to the generic bundle while ${SERVICE_NAME} loads ${svc_client_dir}"
+  fi
+elif [[ -f "$(bundle_staged_marker "$CLIENT_DIR")" ]]; then
+  if [[ "$_restaged" == "1" ]]; then
+    info "staged copy of the in-repo generic bundle — refreshed from ${SRC_DIR}/config/default above."
+  elif [[ "$_restaged" == "dry" ]]; then
+    info "[dry-run] staged copy of the in-repo generic bundle — would be refreshed from ${SRC_DIR}/config/default above."
+  else
+    # The marker names another checkout (fleet was re-cloned elsewhere), or
+    # staging was refused or failed above: the copy did not move.
+    _staged_from="$(bundle_marker_source "$CLIENT_DIR" "${_stage_owner:-fleet}" || true)"
+    info "staged copy of a generic bundle (staged from ${_staged_from:-an unknown checkout}) — NOT refreshed by this update."
+    BUNDLE_STALE=1
+    BUNDLE_STALE_WHY="${CLIENT_DIR} was staged from ${_staged_from:-an unknown checkout} and this update did not refresh it from ${SRC_DIR}/config/default (re-run bootstrap from this checkout to restage it)"
   fi
 elif [[ ! -e "$CLIENT_DIR/.git" ]]; then
   info "client config at ${CLIENT_DIR} is not a git checkout — leaving as-is."

@@ -175,7 +175,11 @@ sudo git config --global credential.helper store   # then `sudo git clone` your 
 sudo git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
 
 # 3. Bootstrap. Point --client-config at your bundle (a git URL or a path);
-#    omit it to run bare on config/default, or use the public template
+#    omit it to run bare on config/default (under --enable-service the script
+#    stages a service-owned copy at /var/lib/fleet/bundle and points the env
+#    file at it — the sandbox's SELinux relabel needs a source the unit can
+#    write, which the root-owned checkout is not; `fleet update` refreshes the
+#    copy), or use the public template
 #    https://github.com/ElcanoTek/example-config to start from.
 #    Under --enable-service the script writes credentials to /etc/fleet/fleet.env
 #    (the path the systemd unit reads) by default, and installs + enables the
@@ -301,7 +305,10 @@ each piece yourself):
    `EnvironmentFile`s the 0600 env file, `Restart=always`, drains the worker
    pool on `SIGTERM`). Check out the client config bundle and point
    `FLEET_CLIENT_CONFIG_DIR` at it (fleet itself ships only the generic
-   `config/default` bundle):
+   `config/default` bundle; to run bare by hand, copy `config/default`
+   somewhere the service user owns and the unit can write — bootstrap uses
+   `/var/lib/fleet/bundle` — because the sandbox's SELinux relabel cannot
+   touch the root-owned checkout under `ProtectSystem=strict`):
 
    ```
    install -D -m 0755 fleet            /opt/fleet/fleet
