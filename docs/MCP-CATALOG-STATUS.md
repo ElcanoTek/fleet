@@ -12,7 +12,9 @@ re-verified by later releases. The appendix is the #986 Phase 1 inventory:
 every one of the 288 built-in entries with its auth, provenance, category,
 Featured flag, whether CI could exercise it, and when it was last verified.
 
-Everything below was run against a local rig: one fleet process with the
+Unless a section says otherwise — the **Real deploy (2026-09-30)** section
+below was run on an installed box — everything here was run against a local
+rig: one fleet process with the
 Postgres pair, the web tier on `http://localhost:3200`, real OpenRouter
 models, real vendor accounts. Vendors that need an HTTPS callback (Slack)
 were reached through a temporary Cloudflare quick tunnel.
@@ -76,7 +78,7 @@ unit's hardening, Caddy/TLS, a stable public callback, the sealed key in
 |---|---|---|---|---|---|---|---|---|---|
 | GitHub | manual client ✓ | ✓ | ✓ | ✓ `get_me` | — | ✓ forced expiry, renewed (8 h) | ✓ | — | — |
 | Notion | dynamic registration ✓ | ✓ | ✓ | ✓ `notion-search` | — | — | ✓ | — | ✓ second seat `test` with its own client and token; a turn pinned to it calls `mcp_notion_test_*`, an unpinned turn the default seat |
-| Linear | dynamic registration ✓ | ✓ | ✓ | ✓ `list_issues` | ✓ task pinned to `linear`, wired 7 servers, called `list_issues`, 72 s | ✓ forced expiry, renewed (24 h) | ✓ | — | ✓ shared to a second user: grantee sees no secret material and calls `list_issues` under the owner's login |
+| Linear | dynamic registration ✓ | ✓ | ✓ | ✓ `list_issues` | ✓ task pinned to `linear`, wired 7 servers, called `list_issues`, 72 s — with four of the owner's 11 connections switched off for the run and restored after; with all 11 on, the pinned task dead-letters (RD5) | ✓ forced expiry, renewed (24 h) | ✓ | — | ✓ shared to a second user: grantee sees no secret material and calls `list_issues` under the owner's login |
 | Slack | manual client ✓ | ✓ | ✓ | ✓ `list_user_channels` | — | n/a | ✓ (no refresh token, so only a fresh authorization can reissue) | — | — |
 | Azure DevOps | tenant URL + Entra app ✓ | ✓ | ✓ | ✓ `core_list_projects` | — | — | ✓ | — | — |
 | Stripe | dynamic registration ✓ | ✓ | ✓ | ✓ `GetBalance` | — | — | ✓ | — | — |
@@ -97,7 +99,7 @@ numbering continues as RD):
 
 | # | finding | state |
 |---|---|---|
-| RD1 | Fedora's `caddy` package ships `/etc/caddy/Caddyfile`; bootstrap's foreign-file check treats the untouched package default as someone else's config and aborts the web tier. The documented `--force-caddy` re-run recovers it, at the cost of a full second bootstrap. | fix in #1663 (issue #1657): the package manager's recorded digest identifies the untouched default, which is replaced with a copy kept |
+| RD1 | Fedora's `caddy` package ships `/etc/caddy/Caddyfile`; bootstrap's foreign-file check treats the untouched package default as someone else's config and aborts the web tier. The documented `--force-caddy` re-run recovers it, at the cost of a full second bootstrap. | fix in #1663 (issue #1657): the package manager's recorded digest identifies the caddy package's untouched default, which is replaced with a copy kept — unless its `Caddyfile.d/` drop-ins carry sites, when it is refused like any foreign file |
 | RD2 | A **bare install cannot start a sandbox on an SELinux-enforcing host**: `fleet.service` runs with `ProtectSystem=strict` and `ReadWritePaths=/var/lib/fleet -/opt/fleet/client`, the bare install points `FLEET_CLIENT_CONFIG_DIR` at the root-owned checkout under `/opt/fleet/src`, and the sandbox's `:z` relabel of the bundle dirs fails with `lsetxattr … read-only file system` on every pool fill. bootstrap deliberately skips chowning the in-repo bundle. Worked around by staging a fleet-owned copy at `/opt/fleet/client`. | fix in #1662 (issue #1655): bootstrap stages a service-owned copy of the generic bundle at `/var/lib/fleet/bundle`, update refreshes it, doctor reports the broken shape with the repair |
 | RD3 | API chat callers must send `model`; bootstrap sets no default model. | minor — document; the UI picker is unaffected |
 | RD4 | Cartesia's authorization server accepts dynamic registration only for native or loopback redirect URIs; a hosted https callback is refused unless allowlisted. The rig's `localhost` callback is loopback, which is why the rig recorded it as self-registering. | fix in #1665 (issue #1658): the entry is a manual client with the secret required and a setup hint |
