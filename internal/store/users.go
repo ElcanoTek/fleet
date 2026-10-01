@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
@@ -347,6 +348,23 @@ var ErrTeamExists = errors.New("team already exists")
 // this is the one place a user (rather than an admin) writes it.
 const maxTeamNameLen = 64
 
+// ValidateTeamName applies the one team-label rule every Fleet write enforces,
+// self-serve, admin, CLI, rename and identity-provider alike: at most
+// maxTeamNameLen bytes once trimmed, with no control characters. "" (no team)
+// is valid. An identity provider mirrors these labels and refuses anything
+// outside the rule, so a write that skipped it would leave the two sides
+// holding different teams for good.
+func ValidateTeamName(team string) error {
+	team = strings.TrimSpace(team)
+	if len(team) > maxTeamNameLen {
+		return errInput(fmt.Sprintf("team name is too long (max %d bytes)", maxTeamNameLen))
+	}
+	if strings.IndexFunc(team, unicode.IsControl) >= 0 {
+		return errInput("team name must not contain control characters")
+	}
+	return nil
+}
+
 // SetOwnTeam is the self-serve half of team assignment: a caller sets its OWN
 // users.team_id, so a fresh box can form a team without an admin round-trip
 // (#1157). The privacy gate lives here:
@@ -371,8 +389,8 @@ func (s *Store) SetOwnTeam(ctx context.Context, email, teamID string, allowExist
 		empty := ""
 		return s.SetUserRoleTeam(ctx, email, nil, &empty)
 	}
-	if len(team) > maxTeamNameLen {
-		return nil, fmt.Errorf("team name is too long (max %d characters)", maxTeamNameLen)
+	if err := ValidateTeamName(team); err != nil {
+		return nil, err
 	}
 	cur, err := s.GetUser(ctx, email)
 	if err != nil {
@@ -492,6 +510,11 @@ func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID 
 	email = normalizeEmail(email)
 	if role != nil && !ValidRole(*role) {
 		return nil, fmt.Errorf("invalid role %q (want member|viewer|admin)", *role)
+	}
+	if teamID != nil {
+		if err := ValidateTeamName(*teamID); err != nil {
+			return nil, err
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -805,6 +828,11 @@ func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, 
 	}
 	if from == to {
 		return 0, 0, errInput("new team name equals the current name")
+	}
+	// Only the new name is checked: renaming is how an admin moves a team off
+	// a label written before the rule existed.
+	if err := ValidateTeamName(to); err != nil {
+		return 0, 0, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

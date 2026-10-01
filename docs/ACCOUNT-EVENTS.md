@@ -111,9 +111,16 @@ would outlive its removal from the allowlist.
   row but reads as `none`).
 - `user.team`: the account's team, `""` for none. A team is a free-text label
   of at most 64 bytes with no control characters, matched exactly (a team that
-  differs only in case is a different team). A receiver must tolerate a
-  missing `team` (a Fleet build from before team sync) and treat it as "no
-  information, leave your copy alone".
+  differs only in case is a different team). Every Fleet write enforces that
+  rule (the admin UI and API, the CLI, a team rename, the self-serve move and
+  an identity-provider push), so a team assigned through any of them is one a
+  receiver following the rule accepts. Labels stored before the rule covered
+  every write are not rewritten; a deployment can list them with `SELECT
+  DISTINCT team_id FROM users WHERE octet_length(team_id) > 64 OR team_id ~
+  '[[:cntrl:]]' OR team_id ~ '^[[:space:]]|[[:space:]]$'` (a starting point:
+  Fleet trims Go's wider Unicode whitespace set) and rename them. A receiver
+  must tolerate a missing `team` (a Fleet build from before team sync) and
+  treat it as "no information, leave your copy alone".
 - For `user.deleted`: `enabled` is `false`, both roles and `team` are `""`. It is sent
   only when **no** access is left in either plane.
 - A `user.access_changed` with `enabled: false`, `chat_role: ""` and a real
