@@ -654,16 +654,20 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
   if [[ -z "$bundle_dir" ]]; then
     advise "FLEET_CLIENT_CONFIG_DIR not set in $ENV_FILE — the service resolves the relative default config/default against its working directory (${SERVICE_HOME}) and fails at boot; fix: re-run scripts/bootstrap.sh --enable-service (it stages the generic bundle under ${SERVICE_HOME}/bundle), or set the variable to a bundle the service user owns"
   elif bundle_is_default_in_checkout "$bundle_dir" "$SRC_DIR" || bundle_looks_like_fleet_default "$bundle_dir"; then
-    fail "client bundle $bundle_dir is the generic bundle inside a fleet checkout — root-owned and read-only to the unit, so the sandbox's SELinux relabel fails (podman exit 126, lsetxattr EROFS); fix: sudo fleet update (stages it under ${SERVICE_HOME}/bundle)"
+    _fix="sudo fleet update"
+    command -v rsync >/dev/null 2>&1 || _fix="sudo dnf install rsync (or apt-get install rsync), then sudo fleet update"
+    fail "client bundle $bundle_dir is the generic bundle inside a fleet checkout — root-owned and read-only to the unit, so the sandbox's SELinux relabel fails (podman exit 126, lsetxattr EROFS); fix: ${_fix} (stages it under ${SERVICE_HOME}/bundle)"
   elif bundle_is_in_checkout "$bundle_dir" "$SRC_DIR"; then
     fail "client bundle $bundle_dir is inside the fleet checkout — read-only to the unit, so the sandbox's SELinux relabel fails (EROFS); check it out outside the repo (scripts/bootstrap.sh --client-config <git-url> lands it at /opt/fleet/client)"
   elif [[ ! -d "$bundle_dir" ]]; then
     fail "client bundle $bundle_dir (FLEET_CLIENT_CONFIG_DIR) does not exist"
   elif [[ ! -f "$bundle_dir/manifest.yaml" ]]; then
     fail "client bundle $bundle_dir has no manifest.yaml — not a bundle; fix FLEET_CLIENT_CONFIG_DIR in $ENV_FILE"
-  elif [[ "$(stat -c '%U' "$bundle_dir")" != "$SERVICE_USER" ]]; then
+  elif _not_owned="$(find "$bundle_dir" ! -user "$SERVICE_USER" -print -quit 2>/dev/null)" && [[ -n "$_not_owned" ]]; then
+    # The whole tree, not just its top: one root-owned file (a root-run pull,
+    # a hand edit) is enough for the rootless :z relabel to be refused.
     if [[ "$CHECK_ONLY" == "1" ]]; then
-      fail "client bundle $bundle_dir not owned by $SERVICE_USER — rootless relabel is refused (EPERM); fix: chown -R ${SERVICE_USER}: $bundle_dir"
+      fail "client bundle $bundle_dir has files not owned by $SERVICE_USER (first: ${_not_owned}) — rootless relabel is refused (EPERM); fix: chown -R ${SERVICE_USER}: $bundle_dir"
     else
       chown -R "$SERVICE_USER": "$bundle_dir" && fixed "client bundle $bundle_dir chowned to $SERVICE_USER"
     fi

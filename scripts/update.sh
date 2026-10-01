@@ -541,16 +541,24 @@ if [[ -n "$svc_client_dir" && "$CLIENT_DIR_EXPLICIT" != "1" ]]; then
   if [[ "$_restage" == "1" ]]; then
     _stage_owner="$(systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
     [[ -n "$_stage_owner" ]] || _stage_owner="fleet"
-    _stage_home=""
-    if id -u "$_stage_owner" >/dev/null 2>&1; then
-      _stage_home="$(getent passwd "$_stage_owner" 2>/dev/null | cut -d: -f6 || true)"
-    fi
-    _stage="$(default_bundle_stage "${_stage_home:-/var/lib/fleet}")"
+    # The unit's StateDirectory, not the account's passwd home: the shipped
+    # unit fixes HOME and StateDirectory at /var/lib/fleet and runs with
+    # ProtectHome=yes, so a pre-existing account whose passwd home is
+    # /home/fleet would otherwise be staged somewhere the service cannot read.
+    _state_dir="$(systemctl show -p StateDirectory --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+    _state_dir="${_state_dir%% *}"
+    _stage="$(default_bundle_stage "/var/lib/${_state_dir:-fleet}")"
     if [[ "$DRY_RUN" == "1" ]]; then
       info "[dry-run] would stage ${SRC_DIR}/config/default → ${_stage} (owned by ${_stage_owner}) and point FLEET_CLIENT_CONFIG_DIR at it"
       _restaged=dry
     elif ! id -u "$_stage_owner" >/dev/null 2>&1; then
       warn "service user ${_stage_owner} does not exist on this box — cannot stage the default bundle; ${SERVICE_NAME} keeps loading ${svc_client_dir}"
+    elif ! command -v rsync >/dev/null 2>&1; then
+      # Boxes bootstrapped before staging existed may lack rsync, which the
+      # in-place refresh needs. update.sh is an updater, not a provisioner, so
+      # it names the package rather than installing it.
+      warn "rsync is not installed, so the default bundle cannot be staged — ${SERVICE_NAME} keeps loading ${svc_client_dir}, where the sandbox's SELinux relabel fails on an enforcing host."
+      warn "  fix it:  sudo dnf install rsync   (or: sudo apt-get install rsync), then re-run: sudo fleet update"
     elif stage_default_bundle "$SRC_DIR/config/default" "$_stage" "$_stage_owner"; then
       if [[ "$(norm_dir "$svc_client_dir")" != "$(norm_dir "$_stage")" ]]; then
         upsert_env_file "$backend_env_file" FLEET_CLIENT_CONFIG_DIR "$_stage"

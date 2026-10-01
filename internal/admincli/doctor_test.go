@@ -103,6 +103,10 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		"fixes applied that want a restart — held: the rootless store has a stale pause process",
 		"without sourcing it",
 		"--network=none",
+		// The bundle ownership check walks the whole tree (#1655): one
+		// root-owned file under a service-owned dir is enough for the
+		// rootless :z relabel to be refused.
+		`find "$bundle_dir" ! -user "$SERVICE_USER"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)
