@@ -74,29 +74,7 @@ func TestClientBundleCheck(t *testing.T) {
 		}
 	})
 
-	t.Run("staged copy of the generic bundle", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, ".fleet-staged-from"), []byte("/opt/fleet/src/config/default\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
-		t.Setenv("FLEET_ROOT", "/opt/fleet/src")
-		out, stale := capture(t, clientBundleCheck)
-		if stale {
-			t.Error("a staged copy of this checkout is refreshed by update, not pulled; it is not stale by being a non-checkout")
-		}
-		if !strings.Contains(out, "staged copy") || strings.Contains(out, "not a git checkout") {
-			t.Errorf("want the staged-copy note, got %q", out)
-		}
-		// The same copy seen from a checkout at another path (fleet re-cloned
-		// elsewhere): update refreshes only a copy of its own config/default,
-		// so the check must call this one stale rather than current.
-		t.Setenv("FLEET_ROOT", "/root/fleet")
-		out, stale = capture(t, clientBundleCheck)
-		if !stale || !strings.Contains(out, "not of this checkout") {
-			t.Errorf("a copy staged from another checkout read as current (stale=%v): %q", stale, out)
-		}
-	})
+	t.Run("staged copy of the generic bundle", testStagedCopyCheck)
 
 	// The shell updater compares resolved paths, so this check must too: a
 	// relative FLEET_ROOT (repoRoot falls back to ".") or one reached through
@@ -250,4 +228,91 @@ func seedBundleWithRemote(t *testing.T) string {
 	git(work, "fetch", "--quiet", "origin")
 	git(work, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	return work
+}
+
+// testStagedCopyCheck: a staged copy of this checkout's config/default is
+// current only while its content still matches the source; drift, an extra
+// file, a symlink in place of a file, or a marker naming another checkout
+// each make it stale.
+func testStagedCopyCheck(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "config", "default")
+	dir := t.TempDir()
+	for _, base := range []string{src, dir} {
+		if err := os.MkdirAll(filepath.Join(base, "personas"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, body := range map[string]string{"manifest.yaml": "servers: {}\n", "personas/default.md": "hello\n"} {
+			if err := os.WriteFile(filepath.Join(base, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".fleet-staged-from"), []byte(src+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
+	t.Setenv("FLEET_ROOT", root)
+	out, stale := capture(t, clientBundleCheck)
+	if stale {
+		t.Errorf("a staged copy of this checkout is refreshed by update, not pulled; it is not stale by being a non-checkout: %q", out)
+	}
+	if !strings.Contains(out, "staged copy") || strings.Contains(out, "not a git checkout") {
+		t.Errorf("want the staged-copy note, got %q", out)
+	}
+	// The source moved on outside `fleet update` (a hand fast-forward of
+	// the checkout): the marker still names the same path, but the bytes
+	// are old, so the copy is stale, whether a file changed or was added.
+	persona := filepath.Join(src, "personas", "default.md")
+	added := filepath.Join(src, "personas", "new.md")
+	for _, step := range []struct {
+		name           string
+		apply, restore func() error
+	}{
+		{"changed", func() error { return os.WriteFile(persona, []byte("hello, world\n"), 0o644) }, func() error { return os.WriteFile(persona, []byte("hello\n"), 0o644) }},
+		{"added", func() error { return os.WriteFile(added, []byte("x\n"), 0o644) }, func() error { return os.Remove(added) }},
+	} {
+		if err := step.apply(); err != nil {
+			t.Fatal(err)
+		}
+		if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "no longer matches") {
+			t.Errorf("%s in the source: the copy read as current (stale=%v): %q", step.name, stale, out)
+		}
+		if err := step.restore(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, stale := capture(t, clientBundleCheck); stale {
+		t.Fatal("restored source: the copy should match again")
+	}
+	// A copy holding a file its source dropped is stale too (rsync
+	// --delete would remove it).
+	if err := os.WriteFile(filepath.Join(dir, "extra.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "extra.md") {
+		t.Errorf("an extra file in the copy read as current (stale=%v): %q", stale, out)
+	}
+	// A symlink in the copy in place of a file is a difference, never a
+	// path the root-run comparison follows.
+	if err := os.Remove(filepath.Join(dir, "extra.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "manifest.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(src, "manifest.yaml"), filepath.Join(dir, "manifest.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if out, stale := capture(t, clientBundleCheck); !stale || !strings.Contains(out, "manifest.yaml") {
+		t.Errorf("a symlink in the copy read as the file it names (stale=%v): %q", stale, out)
+	}
+	// The same copy seen from a checkout at another path (fleet re-cloned
+	// elsewhere): update refreshes only a copy of its own config/default,
+	// so the check must call this one stale rather than current.
+	t.Setenv("FLEET_ROOT", "/root/fleet")
+	out, stale = capture(t, clientBundleCheck)
+	if !stale || !strings.Contains(out, "not of this checkout") {
+		t.Errorf("a copy staged from another checkout read as current (stale=%v): %q", stale, out)
+	}
 }

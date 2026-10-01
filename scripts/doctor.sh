@@ -651,14 +651,22 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
   # `lsetxattr … read-only file system` (#1655). bootstrap/update stage a copy
   # under $SERVICE_HOME/bundle; doctor reports, `fleet update` repairs.
   bundle_dir="$(env_get FLEET_CLIENT_CONFIG_DIR "$ENV_FILE")"
+  # Podman relabels whenever SELinux is enabled — permissive mode suppresses
+  # policy denials, not the lsetxattr — so a read-only or root-owned bundle is
+  # a failure there, and only advice where SELinux is disabled or absent (no
+  # relabel is attempted, and a world-readable bundle mounts fine).
+  bundle_report=advise
+  if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" =~ ^(Enforcing|Permissive)$ ]]; then
+    bundle_report=fail
+  fi
   if [[ -z "$bundle_dir" ]]; then
     fail "FLEET_CLIENT_CONFIG_DIR not set in $ENV_FILE — the service resolves the relative default config/default against its working directory (${SERVICE_HOME}) and fails at boot; fix: re-run scripts/bootstrap.sh --enable-service (it stages the generic bundle under ${SERVICE_HOME}/bundle), or set the variable to a bundle the service user owns"
   elif bundle_is_default_in_checkout "$bundle_dir" "$SRC_DIR" || bundle_looks_like_fleet_default "$bundle_dir"; then
     _fix="sudo fleet update"
     command -v rsync >/dev/null 2>&1 || _fix="sudo dnf install rsync (or apt-get install rsync), then sudo fleet update"
-    fail "client bundle $bundle_dir is the generic bundle inside a fleet checkout — root-owned and read-only to the unit, so the sandbox's SELinux relabel fails (podman exit 126, lsetxattr EROFS); fix: ${_fix} (stages it under ${SERVICE_HOME}/bundle)"
+    "$bundle_report" "client bundle $bundle_dir is the generic bundle inside a fleet checkout — root-owned and read-only to the unit, so the sandbox's SELinux relabel fails (podman exit 126, lsetxattr EROFS); fix: ${_fix} (stages it under ${SERVICE_HOME}/bundle)"
   elif bundle_is_in_checkout "$bundle_dir" "$SRC_DIR"; then
-    fail "client bundle $bundle_dir is inside the fleet checkout — read-only to the unit, so the sandbox's SELinux relabel fails (EROFS); check it out outside the repo (scripts/bootstrap.sh --client-config <git-url> lands it at /opt/fleet/client)"
+    "$bundle_report" "client bundle $bundle_dir is inside the fleet checkout — read-only to the unit, so the sandbox's SELinux relabel fails (EROFS); check it out outside the repo (scripts/bootstrap.sh --client-config <git-url> lands it at /opt/fleet/client)"
   elif [[ ! -d "$bundle_dir" ]]; then
     fail "client bundle $bundle_dir (FLEET_CLIENT_CONFIG_DIR) does not exist"
   elif [[ ! -f "$bundle_dir/manifest.yaml" ]]; then
@@ -666,20 +674,12 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
   elif ! bundle_writable_in_unit "$bundle_dir" "$SERVICE_NAME" "$SERVICE_HOME"; then
     # Owned correctly or not, a path outside the unit's writable set is
     # read-only to the service (ProtectSystem=strict), so the relabel fails.
-    # Podman relabels whenever SELinux is enabled — permissive mode suppresses
-    # policy denials, not the lsetxattr — so only a disabled (or absent)
-    # SELinux makes this advice rather than a failure.
-    _msg="client bundle $bundle_dir is outside ${SERVICE_NAME}.service's writable paths (ReadWritePaths, StateDirectory) — read-only under ProtectSystem=strict, so the sandbox's :z relabel fails (lsetxattr EROFS) on an SELinux host (enforcing or permissive); fix: move it under /opt/fleet/client or ${SERVICE_HOME}, or add it to the unit's ReadWritePaths"
-    if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" =~ ^(Enforcing|Permissive)$ ]]; then
-      fail "$_msg"
-    else
-      advise "$_msg"
-    fi
+    "$bundle_report" "client bundle $bundle_dir is outside ${SERVICE_NAME}.service's writable paths (ReadWritePaths, StateDirectory) — read-only under ProtectSystem=strict, so the sandbox's :z relabel fails (lsetxattr EROFS) on an SELinux host (enforcing or permissive); fix: move it under /opt/fleet/client or ${SERVICE_HOME}, or add it to the unit's ReadWritePaths"
   elif _not_owned="$(find "$bundle_dir" ! -user "$SERVICE_USER" -print -quit 2>/dev/null)" && [[ -n "$_not_owned" ]]; then
     # The whole tree, not just its top: one root-owned file (a root-run pull,
     # a hand edit) is enough for the rootless :z relabel to be refused.
     if [[ "$CHECK_ONLY" == "1" ]]; then
-      fail "client bundle $bundle_dir has files not owned by $SERVICE_USER (first: ${_not_owned}) — rootless relabel is refused (EPERM); fix: chown -R ${SERVICE_USER}: $bundle_dir"
+      "$bundle_report" "client bundle $bundle_dir has files not owned by $SERVICE_USER (first: ${_not_owned}) — rootless relabel is refused (EPERM); fix: chown -R ${SERVICE_USER}: $bundle_dir"
     else
       chown -R "$SERVICE_USER": "$bundle_dir" && fixed "client bundle $bundle_dir chowned to $SERVICE_USER"
     fi

@@ -107,6 +107,12 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		// root-owned file under a service-owned dir is enough for the
 		// rootless :z relabel to be refused.
 		`find "$bundle_dir" ! -user "$SERVICE_USER"`,
+		// A read-only or root-owned bundle only breaks the :z relabel, which
+		// podman attempts only where SELinux is enabled: a failure there,
+		// advice on a host without it, never a broken report of a healthy box.
+		`bundle_report=advise`,
+		`"$bundle_report" "client bundle $bundle_dir is the generic bundle inside a fleet checkout`,
+		`"$bundle_report" "client bundle $bundle_dir is inside the fleet checkout`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("doctor.sh must contain %q", want)

@@ -28,12 +28,20 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
   `ProtectHome=yes`). A staged copy that has gone missing while the env file
   still points at it is recreated. An update whose bundle did not actually
   move says so instead of reporting a refresh.
-- **doctor** fails a service still pointed at a checkout's generic bundle and
-  names the repair. It checks that the bundle lies inside the unit's writable
-  paths (`ReadWritePaths` and the state dir; a failure on an SELinux host,
-  enforcing or permissive — permissive mode still relabels — and advice only
-  where SELinux is disabled), and it
-  checks ownership across the whole bundle tree, not just its top directory.
+- **doctor** reports a service still pointed at a checkout's generic bundle
+  and names the repair. It checks that the bundle lies inside the unit's
+  writable paths (`ReadWritePaths` and the state dir), and it checks ownership
+  across the whole bundle tree, not just its top directory. Each of these is
+  a failure on an SELinux host, enforcing or permissive (permissive mode still
+  relabels), and advice only where SELinux is disabled or absent, where no
+  relabel is attempted and a world-readable bundle mounts fine.
+- **`fleet update --check`** calls a staged copy current only when its marker
+  names this checkout's `config/default` (both paths resolved, so a relative
+  or symlinked `FLEET_ROOT` matches) *and* its content still matches that
+  source, file for file. A checkout fast-forwarded outside `fleet update`
+  leaves the marker naming the same path over old bytes, so that copy is
+  reported stale. The comparison reads the service-owned copy through an
+  `os.Root`, so no symlink in it can lead the root-run check out of the tree.
 
 ## Safety properties
 

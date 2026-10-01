@@ -151,6 +151,16 @@ func clientBundleCheck() bool {
 			fmt.Println("  restage it: re-run scripts/bootstrap.sh --enable-service from this checkout")
 			return true
 		}
+		if want != "" {
+			if rel, err := stagedCopyDiff(want, dir); err != nil || rel != "" {
+				what := rel
+				if err != nil {
+					what = err.Error()
+				}
+				fmt.Printf("client bundle at %s is the staged copy of %s, but it no longer matches it (first difference: %s) — `fleet update` restages it.\n", dir, src, what)
+				return true
+			}
+		}
 		fmt.Printf("client bundle at %s is the staged copy of %s — `fleet update` refreshes it from there (and says so if it could not).\n", dir, src)
 		return false
 	}
