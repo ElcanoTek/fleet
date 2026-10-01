@@ -82,14 +82,18 @@ _bundle_as() {
 # AS OWNER, bounded to 4 KiB, which a path never exceeds. It is opened
 # non-blocking too (iflag=nonblock): a FIFO in its place then reads as empty
 # or fails instead of hanging update.sh or doctor.sh, and anything that is not
-# a regular file is refused outright.
+# a regular file is refused outright. Only an absolute path without control
+# bytes is returned (see below).
 bundle_marker_source() {
   local m out
   m="$(bundle_staged_marker "$1")"
   [[ -f "$m" && ! -L "$m" ]] || return 1
   out="$(_bundle_as "$2" dd if="$m" iflag=nofollow,nonblock bs=4096 count=1 status=none 2>/dev/null)" || return 1
   out="${out%%$'\n'*}"
-  [[ -n "$out" ]] || return 1
+  # The value is printed by root-run update and doctor, so only an absolute
+  # path free of control bytes is accepted: an escape sequence planted in the
+  # marker must not erase or spoof their status lines.
+  [[ "$out" == /* && "$out" != *[[:cntrl:]]* ]] || return 1
   printf '%s\n' "$out"
 }
 

@@ -43,7 +43,9 @@ system` (podman exit 126). Found on the 2026-09-30 real deploy (RD2 in
   leaves the marker naming the same path over old bytes, so that copy is
   reported stale. The comparison reads the service-owned copy through an
   `os.Root`, so no symlink in it can lead the root-run check out of the tree.
-  A marker that is there but unusable (a link, a FIFO, empty) is reported
+  A marker that is there but unusable (a link, a FIFO, empty, a relative
+  path, or a line carrying control bytes, which root-run update and doctor
+  would otherwise print to the terminal) is reported
   stale, since update.sh would not recognise the copy. A copy the invoking
   user cannot read (the shipped unit's state dir is `0700`) is reported as
   unknown and fails the check, with the `sudo` re-run to use. A bundle with no

@@ -112,9 +112,11 @@ func TestClientBundleCheck(t *testing.T) {
 	// stale, not a pass through the non-checkout branch.
 	t.Run("an invalid marker is stale, never trusted", func(t *testing.T) {
 		for name, plant := range map[string]func(string) error{
-			"symlink": func(m string) error { return os.Symlink(filepath.Join(t.TempDir(), "secret"), m) },
-			"empty":   func(m string) error { return os.WriteFile(m, nil, 0o644) },
-			"fifo":    func(m string) error { return syscall.Mkfifo(m, 0o644) },
+			"symlink":  func(m string) error { return os.Symlink(filepath.Join(t.TempDir(), "secret"), m) },
+			"empty":    func(m string) error { return os.WriteFile(m, nil, 0o644) },
+			"escape":   func(m string) error { return os.WriteFile(m, []byte("/opt/fleet/src\x1b[2K\rall good\n"), 0o644) },
+			"relative": func(m string) error { return os.WriteFile(m, []byte("config/default\n"), 0o644) },
+			"fifo":     func(m string) error { return syscall.Mkfifo(m, 0o644) },
 		} {
 			dir := t.TempDir()
 			if err := plant(filepath.Join(dir, ".fleet-staged-from")); err != nil {
@@ -122,7 +124,7 @@ func TestClientBundleCheck(t *testing.T) {
 			}
 			t.Setenv("FLEET_CLIENT_CONFIG_DIR", dir)
 			out, stale := capture(t, clientBundleCheck)
-			if !stale || !strings.Contains(out, "not a readable regular file") || strings.Contains(out, "is the staged copy") {
+			if !stale || !strings.Contains(out, "not a readable regular file") || strings.Contains(out, "is the staged copy") || strings.ContainsRune(out, 0x1b) {
 				t.Errorf("%s marker: stale=%v %q", name, stale, out)
 			}
 		}

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 // cmdUpdate wraps scripts/update.sh. It forwards every flag verbatim
@@ -299,7 +300,10 @@ func stagedBundleSource(dir string) (string, markerState) {
 	buf := make([]byte, 4096)
 	n, _ := io.ReadFull(f, buf)
 	line, _, _ := strings.Cut(string(buf[:n]), "\n")
-	if line = strings.TrimSpace(line); line == "" {
+	// Printed to the operator's terminal: only an absolute path without
+	// control bytes, so an escape sequence planted by the service account
+	// cannot rewrite the report.
+	if line = strings.TrimSpace(line); !filepath.IsAbs(line) || strings.IndexFunc(line, unicode.IsControl) >= 0 {
 		return "", markerInvalid
 	}
 	return line, markerOK

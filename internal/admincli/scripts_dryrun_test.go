@@ -1506,6 +1506,19 @@ func TestBundleMarkerSourceNeverFollowsALink(t *testing.T) {
 	if err == nil || strings.Contains(out, "do-not-print") {
 		t.Fatalf("a symlinked marker was read through: out=%q err=%v", out, err)
 	}
+	// A first line carrying a terminal escape (or not an absolute path) is
+	// refused: root-run update and doctor print what this returns.
+	for _, bad := range []string{"/opt/fleet/src\x1b[2K\rall good\n", "config/default\n"} {
+		if err := os.Remove(marker); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(marker, []byte(bad), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := bundleLib(t, path, "bundle_marker_source", dir, owner); err == nil || strings.ContainsRune(out, 0x1b) {
+			t.Fatalf("marker %q was accepted: out=%q err=%v", bad, out, err)
+		}
+	}
 	// A FIFO in the marker's place must be refused, not block the read
 	// forever (and update.sh or doctor.sh with it).
 	if err := os.Remove(marker); err != nil {

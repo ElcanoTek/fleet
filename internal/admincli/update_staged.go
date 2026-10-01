@@ -28,7 +28,7 @@ func stagedCopyCheck(dir string) (handled, stale bool) {
 		fmt.Printf("client bundle at %s cannot be read as this user, so whether it is current is unknown — re-run as root: sudo fleet update --check\n", dir)
 		return true, true
 	case markerInvalid:
-		fmt.Printf("client bundle at %s has a staging marker that is not a readable regular file — `fleet update` will not recognise or refresh it.\n", dir)
+		fmt.Printf("client bundle at %s has a staging marker that is not a readable regular file naming an absolute path — `fleet update` will not recognise or refresh it.\n", dir)
 		fmt.Println("  restage it: move it aside and re-run scripts/bootstrap.sh --enable-service from this checkout")
 		return true, true
 	case markerOK:
