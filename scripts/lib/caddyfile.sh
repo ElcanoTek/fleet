@@ -54,7 +54,7 @@ caddyfile_is_managed() {
 }
 
 # caddyfile_is_package_default [FILE] — true when FILE is byte-for-byte the
-# Caddyfile the OS's caddy package installs (the stock `http:// { root *
+# Caddyfile the OS's caddy package (by that name) installs (the stock `http:// { root *
 # /usr/share/caddy; file_server }` welcome page) AND none of its `import`
 # lines match a file, so replacing it drops no operator site. Fedora's
 # package ships one, so on a fresh box `dnf install caddy` (which bootstrap
@@ -82,6 +82,10 @@ caddyfile_is_package_default() {
     digest="$(dpkg-query -W -f='${Conffiles}\n' "$pkg" 2>/dev/null | awk -v p="$canon" '$1==p {print $2; exit}')"
   fi
   [[ -n "$digest" ]] || return 1
+  # Only the caddy package's own file qualifies. A site-specific config
+  # package that owns /etc/caddy/Caddyfile also has a recorded digest, and
+  # its untouched file is exactly the operator config this guard protects.
+  [[ "$pkg" == "caddy" ]] || return 1
   local have
   case "${#digest}" in
     64) have="$(sha256sum "$f" | awk '{print $1}')" ;;

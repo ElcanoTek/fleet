@@ -376,6 +376,16 @@ func TestCaddyfilePackageDefaultIsNotForeign(t *testing.T) {
 	if err := os.RemoveAll(dropins); err != nil {
 		t.Fatal(err)
 	}
+	// A site config package owning the path is not the caddy package: its
+	// untouched file is the operator's config, so it stays foreign.
+	otherPkg := filepath.Join(t.TempDir(), "rpm")
+	if err := os.WriteFile(otherPkg, []byte("#!/usr/bin/env bash\ncase \"$1\" in\n  -qf) echo acme-caddy-sites ;;\n  -q) echo '/etc/caddy/Caddyfile 215 1700000000 "+hex.EncodeToString(sha[:])+" 0100644 root root 1 0 0 X' ;;\nesac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	viaOtherPkg := []string{"PATH=" + filepath.Dir(otherPkg) + string(os.PathListSeparator) + os.Getenv("PATH")}
+	if _, err := runCaddyfileFn(t, viaOtherPkg, "caddyfile_is_foreign", f); err != nil {
+		t.Fatal("an untouched Caddyfile owned by a non-caddy package was not treated as foreign")
+	}
 	// One operator edit and it is a real config again, whatever the package says.
 	if err := os.WriteFile(f, []byte(stock+"legacy.example.com {\n\treverse_proxy 127.0.0.1:3000\n}\n"), 0o644); err != nil {
 		t.Fatal(err)
