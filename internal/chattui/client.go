@@ -241,16 +241,13 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		return convID, fmt.Errorf("server accepted the request (%d) but its acknowledgement was unreadable: %v", resp.StatusCode, orDefault(errString(derr), "not a queue acknowledgement"))
 	}
 	if resp.StatusCode != http.StatusOK {
-		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		const excerptCap = 512
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, excerptCap))
 		// The excerpt is quoted to the user, and `fleet acp` hands it to an ACP
 		// client that may write it to a log. fleet never echoes the token, but a
 		// proxy in between might (a debug page dumping request headers), so
-		// redact it once here, before any branch quotes the body. An empty
-		// token is skipped: ReplaceAll with an empty old value would insert the
-		// placeholder between every byte.
-		if c.cfg.Token != "" {
-			excerpt = bytes.ReplaceAll(excerpt, []byte(c.cfg.Token), []byte("[redacted]"))
-		}
+		// redact it once here, before any branch quotes the body.
+		excerpt = redactToken(excerpt, c.cfg.Token, len(excerpt) == excerptCap)
 		msg := strings.TrimSpace(string(excerpt))
 		switch resp.StatusCode {
 		case http.StatusForbidden:
@@ -370,6 +367,28 @@ func forbiddenMessage(email string, body []byte) string {
 	default:
 		return prefix + ": " + shortExcerpt(text, 160)
 	}
+}
+
+// redactToken replaces every whole occurrence of token in a quoted response
+// body with "[redacted]". When the read filled its cap (truncated), a token can
+// also be cut off at the end, where the whole-token match cannot see it, so the
+// longest suffix that is a proper prefix of the token is dropped too; trimming
+// a few legitimate bytes from an already-cut excerpt costs nothing. An empty
+// token is skipped: ReplaceAll with an empty old value would insert the
+// placeholder between every byte.
+func redactToken(excerpt []byte, token string, truncated bool) []byte {
+	if token == "" {
+		return excerpt
+	}
+	excerpt = bytes.ReplaceAll(excerpt, []byte(token), []byte("[redacted]"))
+	if truncated {
+		for n := len(token) - 1; n > 0; n-- {
+			if bytes.HasSuffix(excerpt, []byte(token[:n])) {
+				return excerpt[:len(excerpt)-n]
+			}
+		}
+	}
+	return excerpt
 }
 
 // shortExcerpt collapses whitespace to single spaces and caps the result at
