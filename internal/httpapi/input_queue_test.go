@@ -927,7 +927,7 @@ func TestQueue_IdempotentSubmission(t *testing.T) {
 
 // The queue ack reports the input's place in line as "ahead" (still-queued
 // inputs that drain first), not as position — the ordering key, allocated
-// over every row the conversation ever held. The live repro: one completed
+// over every row the conversation still retains. The live repro: one completed
 // earlier queued input, then a follow-up queued behind a running turn with
 // nothing else queued was told "position 2" although it was next. A replay
 // reports the place the input holds now; a running input has none.

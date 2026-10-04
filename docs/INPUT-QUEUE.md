@@ -27,14 +27,19 @@ retention guarantee: after a terminal row is purged, reusing its
 - `POST /chat` gains `input_id` and `mode` (`queue` default, `steer`). While a
   turn runs it returns **202** `{queued:true, input:{...}}` (200 on idempotent
   replay) instead of an SSE stream. `input.position` is the ordering key
-  (allocated over every row the conversation ever held, and `MIN-1` on
-  send-now, so it can be large, zero or negative), never a place in line;
+  (allocated as `MAX+1` over every row the conversation still retains,
+  including terminal rows kept for the retention window above, and `MIN-1`
+  on send-now, so it can be large, zero or negative), never a place in line;
   `input.ahead` is the place in line — how many still-queued inputs drain
   before this one, `0` meaning next — counted at acknowledgement time, also
-  on a replay. It is present only while the input is `queued`, and omitted if
-  the count fails (the ack is not withheld over it); the ACP agent and
-  `fleet chat` name the place from it and name none without it. A steer
-  submission with attachments
+  on a replay. For a `steer` input it is the place in the queue if the
+  running turn does not take it first: a steer is also offered to the running
+  turn, which may inject it before every input counted ahead of it. `ahead`
+  is present only while the input is in line: it is omitted once the input
+  is running, injected or finished, when a Stop by key has marked it (the
+  next drain cancels it rather than running it), and if the count fails (the
+  ack is not withheld over it). The ACP agent and `fleet chat` name the place
+  from it and name none without it. A steer submission with attachments
   downgrades to `queue` (steering is text-only). `input_id` and
   `submission_id` are limited to 256 bytes (400 beyond); the key is indexed.
 - `GET /conversations/{id}/queue` — authoritative pending snapshot.

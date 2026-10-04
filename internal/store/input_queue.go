@@ -298,27 +298,41 @@ func (s *Store) CountPendingInputs(ctx context.Context, convID string) (int, err
 	return n, err
 }
 
-// InputsAhead returns how many of the conversation's still-queued inputs will
-// drain before the row id — its place in line, 0 meaning next. position is
-// an ordering key, not a rank: it is allocated as MAX+1 over every row the
-// conversation ever held (terminal ones included) and send-now promotion
-// takes MIN-1, so it can be 40 for an input with nothing ahead of it, or
-// zero or negative. The rank is therefore counted, over exactly the rows
-// ClaimNextQueuedInput would claim first (queued, not stamped by a Stop by
-// key, same position/created_at/id order) and against the row's CURRENT
-// stored order, so a send-now since its acceptance is reflected. The count
-// is only meaningful while the row itself is queued; callers ask for none
-// otherwise.
-func (s *Store) InputsAhead(ctx context.Context, id string) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT count(*) FROM chat_input_queue q
-		   JOIN chat_input_queue me ON me.conversation_id = q.conversation_id
+// InputsAhead reports the row id's place in line: how many of the
+// conversation's still-queued inputs will drain before it, 0 meaning next.
+// position is an ordering key, not a rank: it is allocated as MAX+1 over
+// every row the conversation still retains (terminal rows are kept for the
+// retention window, so they count) and send-now promotion takes MIN-1, so it
+// can be 40 for an input with nothing ahead of it, or zero or negative. The
+// rank is therefore counted, over exactly the rows ClaimNextQueuedInput would
+// claim first (queued, not direct, not stamped by a Stop by key, same
+// position/created_at/id order) and against the row's CURRENT stored order,
+// so a send-now since its acceptance is reflected.
+//
+// inLine is false — with no error — when the row itself is not one the drain
+// would ever claim: unknown, no longer queued (a drain claimed it, it was
+// injected, it finished or was cancelled), a direct claim, or a queued row a
+// Stop by key stamped (the next claim cancels it rather than running it). A
+// caller then names no place: any count would describe an input that is not
+// waiting to run. The row is checked in the same statement as the count, so
+// the answer is never assembled from two different moments.
+func (s *Store) InputsAhead(ctx context.Context, id string) (ahead int, inLine bool, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT (SELECT count(*) FROM chat_input_queue q
+		          WHERE q.conversation_id = me.conversation_id
+		            AND q.state = 'queued' AND q.mode <> 'direct' AND q.stop_requested_at IS NULL
+		            AND (q.position, q.created_at, q.id) < (me.position, me.created_at, me.id))
+		   FROM chat_input_queue me
 		  WHERE me.id = $1
-		    AND q.state = 'queued' AND q.mode <> 'direct' AND q.stop_requested_at IS NULL
-		    AND (q.position, q.created_at, q.id) < (me.position, me.created_at, me.id)`,
-		id).Scan(&n)
-	return n, err
+		    AND me.state = 'queued' AND me.mode <> 'direct' AND me.stop_requested_at IS NULL`,
+		id).Scan(&ahead)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return ahead, true, nil
 }
 
 // ClaimNextQueuedInput atomically claims the head of the conversation's

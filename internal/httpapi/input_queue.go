@@ -141,13 +141,20 @@ const maxPendingInputs = 20
 // replayed (200) queue row.
 //
 // position is the row's ordering key, never a place in line: it is allocated
-// over every row the conversation ever held and send-now takes MIN-1, so it
-// says nothing a person can use ("queued (position 40)" with nothing ahead).
-// The place in line is "ahead" — how many still-queued inputs will drain
-// before this one, 0 meaning next — counted against the stored row, so a
-// replay reports where the input is now. It is sent only while the row is
-// queued (a running, completed or cancelled input is not in line), and left
-// out if the count fails: the input is already durably accepted, so the ack
+// over every row the conversation still retains (terminal rows included, for
+// the retention window) and send-now takes MIN-1, so it says nothing a person
+// can use ("queued (position 40)" with nothing ahead). The place in line is
+// "ahead" — how many still-queued inputs will drain before this one, 0
+// meaning next — counted against the stored row when the ack is written, so
+// a replay reports where the input is now. For a steer input it is the place
+// in the queue if the running turn does not take it first: a steer row is
+// also offered to the running turn, which may inject it ahead of every row
+// counted. It is sent only while the row is in line. The ack's row may be a
+// moment stale (a drain may have claimed it since, or a Stop by key stamped
+// it), so the store re-checks the row in the count's own statement and
+// reports "not in line" for anything the drain will not run; that is an
+// expected answer, not a failure, and simply leaves ahead out. A failed
+// count leaves it out too: the input is already durably accepted, so the ack
 // is not withheld over its rank, and a client then names no place at all
 // rather than a wrong one.
 func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
@@ -155,11 +162,15 @@ func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, statu
 		"id": row.ID, "client_input_id": row.ClientInputID,
 		"mode": row.Mode, "state": row.State, "position": row.Position,
 	}
-	if row.State == store.InputStateQueued && row.Mode != store.InputModeDirect {
-		if n, err := s.store.InputsAhead(ctx, row.ID); err == nil {
-			input["ahead"] = n
-		} else {
+	// A row the ack already reports as not queued is not in line; only a
+	// queued one is worth the count (whose own check is authoritative).
+	if row.State == store.InputStateQueued {
+		n, inLine, err := s.store.InputsAhead(ctx, row.ID)
+		switch {
+		case err != nil:
 			log.Printf("queue ack: count inputs ahead (conv=%s): %v", convID, err)
+		case inLine:
+			input["ahead"] = n
 		}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
