@@ -325,27 +325,53 @@ func attachFrozenArgsRaw(m map[string]any, raw []byte) {
 	m["frozen_args"] = fa
 }
 
-// forbiddenMessage turns a 403 from POST /chat into fix-it text. The server
-// refuses with 403 for three distinct reasons and only one is the shared token:
-// membershipMiddleware answers {"error":"not_a_member"} for an X-User-Email that
-// is not a provisioned user, rejectViewerWrites answers {"error":"read_only"}
-// for a viewer, and the token check answers a plain-text "forbidden". Telling a
-// non-member to check FLEET_SERVER_TOKEN sends them after the one setting that
-// is already right, so the JSON code picks the message; any other body keeps
-// the token advice. No branch ever includes the token value.
+// forbiddenMessage turns a 403 from POST /chat into fix-it text, keyed on the
+// body each fleet refusal writes: the shared-token check answers a plain-text
+// "forbidden", membershipMiddleware {"error":"not_a_member"} for an
+// X-User-Email that is not a provisioned user, rejectViewerWrites
+// {"error":"read_only"} for a viewer, and the IP filter a plain-text "Access
+// denied" (it is the outermost middleware and /healthz skips it, so Ping passes
+// and only the turn fails). Advice is given only for a body that names its
+// cause: the token is blamed only for the token check's own body, because
+// sending a non-member or a filtered address after FLEET_SERVER_TOKEN chases
+// the one setting that is already right. Anything else — a reverse proxy's
+// page, a refusal added later — is quoted as a short excerpt rather than
+// guessed at. The IP-filter text keeps that filter's uniformity: it does not
+// say which list matched, because the server deliberately does not say either.
+// No branch ever includes the token value.
 func forbiddenMessage(email string, body []byte) string {
+	const prefix = "server rejected the request (403)"
 	var refusal struct {
 		Error string `json:"error"`
 	}
 	_ = json.Unmarshal(body, &refusal)
 	switch refusal.Error {
 	case "not_a_member":
-		return fmt.Sprintf("server rejected the request (403): %s is not a fleet user; an admin can add it with `fleet chat user add %s --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user", email, email)
+		return fmt.Sprintf("%s: %s is not a fleet user; an admin can add it with `fleet chat user add %s --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user", prefix, email, email)
 	case "read_only":
-		return fmt.Sprintf("server rejected the request (403): %s has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role %s --role member`", email, email)
-	default:
-		return "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server"
+		return fmt.Sprintf("%s: %s has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role %s --role member`", prefix, email, email)
 	}
+	switch text := strings.TrimSpace(string(body)); text {
+	case "forbidden":
+		return prefix + ": check FLEET_SERVER_TOKEN matches the server"
+	case "Access denied":
+		return prefix + ": the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one"
+	case "":
+		return prefix
+	default:
+		return prefix + ": " + shortExcerpt(text, 160)
+	}
+}
+
+// shortExcerpt collapses whitespace to single spaces and caps the result at
+// limit runes, so a refusal body quoted into an error (a proxy's HTML error
+// page, say) stays one short line instead of flooding the terminal.
+func shortExcerpt(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > limit {
+		return string(r[:limit]) + "…"
+	}
+	return s
 }
 
 // parseSSE reads a text/event-stream and calls fn for each complete frame. It
