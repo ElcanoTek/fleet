@@ -72,6 +72,72 @@ server, only this flag is trusted, since an ambient public URL may belong to
 another deployment), and `--timeout` (default 30m, `0` = no bound; a negative value is refused). stdout carries protocol frames only, and every
 diagnostic goes to stderr.
 
+### Neovim (CodeCompanion.nvim)
+
+Tested on 2026-10-04 with Neovim 0.12.5 and CodeCompanion.nvim at commit
+`3dd1ef7`: connect, multi-turn, streamed thinking and tool calls, cancel,
+`--timeout`, the approval pointer, queueing behind a running turn, and the
+daemon-down and missing-email errors all worked. The adapter below extends
+CodeCompanion's `goose` preset only as a convenient base for a plain ACP
+command:
+
+```lua
+require("codecompanion").setup({
+  adapters = {
+    acp = {
+      fleet = function()
+        return require("codecompanion.adapters").extend("goose", {
+          name = "fleet",
+          formatted_name = "fleet",
+          opts = { vision = false },
+          commands = {
+            default = { "fleet", "acp", "--email", "acp-bot@example.com" },
+          },
+          defaults = { mcpServers = {}, timeout = 20000 },
+          handlers = {
+            -- fleet runs tools in its own sandbox and never reads the client's
+            -- files, so send buffer/file context as embedded resources (ACP
+            -- promptCapabilities.embeddedContext) instead of a bare path.
+            form_messages = function(self, messages, capabilities)
+              local tags = require("codecompanion.interactions.shared.tags")
+              local out = {}
+              for _, msg in ipairs(messages) do
+                if msg.role == self.roles.user and msg._meta and not msg._meta.sent and msg.content and msg.content ~= "" then
+                  local tag = msg._meta.tag
+                  if (tag == tags.FILE or tag == tags.BUFFER) and msg.context and msg.context.path then
+                    table.insert(out, { type = "resource", resource = {
+                      uri = vim.uri_from_fname(msg.context.path), mimeType = "text/plain", text = msg.content } })
+                  elseif tag ~= tags.IMAGE then
+                    table.insert(out, { type = "text", text = msg.content })
+                  end
+                end
+              end
+              return out
+            end,
+          },
+        })
+      end,
+    },
+  },
+  interactions = { chat = { adapter = "fleet" } },
+})
+```
+
+The `form_messages` override is what makes `#{buffer}` context work (`#{file}`
+takes the same path through it; the live check used `#{buffer}`).
+CodeCompanion's stock ACP helper always sends file and buffer context as a bare
+text line (`Sharing the following file as context: <path>`), whatever the
+agent's `promptCapabilities.embeddedContext` says, because it assumes the agent
+shares the client's filesystem. fleet does not (see below), so without the
+override the model sees only a path and asks for the file to be pasted. The
+override sends the buffer's content as an embedded `resource` block instead,
+which fleet inlines under its URI; with it, the model answered from the buffer
+content. The token is resolved as above, never from argv: the tested setup
+also set `env = { FLEET_ENV_FILE = "<server env file>" }` on the adapter.
+With `opts = { log_level = "DEBUG" }`, CodeCompanion writes the raw ACP
+JSON-RPC transcript to a log file whose path it prints at INFO, which is the
+useful attachment for an adapter bug report.
+
 ## Protocol mapping
 
 | ACP | fleet |
@@ -130,6 +196,9 @@ What shipped:
   daemon-down, and missing email. The Stop endpoint was checked with a
   hand-made request of the same shape (token, email, `{"scope":"turn"}`),
   because a mock turn finishes too fast to cancel mid-flight.
+- Checked live with Neovim 0.12.5 and CodeCompanion.nvim (`3dd1ef7`) on
+  2026-10-04, as described under "Using it", including buffer context sent as
+  an embedded resource.
 
 Deviations and limits:
 
@@ -151,7 +220,10 @@ Deviations and limits:
 - **Tool detail stays in the run log.** Tool calls appear as titled
   `tool_call` updates with a status. Inputs and outputs are not forwarded.
 - **The client's filesystem and terminal are not used.** Tool calls run in
-  fleet's sandbox workspace. The session `cwd` is recorded, not mounted.
+  fleet's sandbox workspace. The session `cwd` is recorded, not mounted. A
+  client that shares a file by sending only its path, rather than an embedded
+  resource, loses that context: fleet cannot read the path. CodeCompanion.nvim
+  does this by default; the configuration under "Using it" works around it.
 - **No `session/load`.** A session lives as long as the `fleet acp` process.
   The conversation itself persists in fleet, but resuming it over ACP is
   deferred until the session id can round-trip honestly.
