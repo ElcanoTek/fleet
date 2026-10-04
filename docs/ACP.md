@@ -104,7 +104,8 @@ advertises.
 | Failure | What the ACP client sees |
 | --- | --- |
 | No email / no token configured | `initialize` still succeeds; `session/new` answers `auth_required` (-32000) with the same fix-it text `fleet chat` prints. `fleet acp` keeps running, so the client shows the reason instead of "agent exited". |
-| Wrong token (403) / user not authorized (401) | `auth_required`: the 403 text names `FLEET_SERVER_TOKEN`, and the 401 text names the user. The token value is never included. |
+| Refused by the server (403) | `auth_required`, with text naming the reason the server gave: a wrong or missing shared token names `FLEET_SERVER_TOKEN`; an email that is not a provisioned fleet user (`not_a_member`) names the user and `fleet chat user add <email> --password -`; a viewer-role user (`read_only`) names the user and the read-only role. The token value is never included. |
+| User not authorized (401) | `auth_required`, with text naming the user. |
 | Daemon down | Internal error (-32603) naming the unreachable server URL |
 | `turn.error` / `turn.model_required` | Internal error carrying the server's message |
 | `--timeout` exceeded | The turn is stopped server-side, then an internal error names the timeout and the flag. If the Stop fails, the error says so and that the turn may still be running. |

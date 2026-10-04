@@ -245,7 +245,7 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		msg := strings.TrimSpace(string(excerpt))
 		switch resp.StatusCode {
 		case http.StatusForbidden:
-			return convID, &StatusError{Code: resp.StatusCode, msg: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server"}
+			return convID, &StatusError{Code: resp.StatusCode, msg: forbiddenMessage(c.cfg.Email, excerpt)}
 		case http.StatusUnauthorized, http.StatusBadRequest:
 			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
 		default:
@@ -323,6 +323,29 @@ func attachFrozenArgsRaw(m map[string]any, raw []byte) {
 		return
 	}
 	m["frozen_args"] = fa
+}
+
+// forbiddenMessage turns a 403 from POST /chat into fix-it text. The server
+// refuses with 403 for three distinct reasons and only one is the shared token:
+// membershipMiddleware answers {"error":"not_a_member"} for an X-User-Email that
+// is not a provisioned user, rejectViewerWrites answers {"error":"read_only"}
+// for a viewer, and the token check answers a plain-text "forbidden". Telling a
+// non-member to check FLEET_SERVER_TOKEN sends them after the one setting that
+// is already right, so the JSON code picks the message; any other body keeps
+// the token advice. No branch ever includes the token value.
+func forbiddenMessage(email string, body []byte) string {
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &refusal)
+	switch refusal.Error {
+	case "not_a_member":
+		return fmt.Sprintf("server rejected the request (403): %s is not a fleet user; an admin can add it with `fleet chat user add %s --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user", email, email)
+	case "read_only":
+		return fmt.Sprintf("server rejected the request (403): %s has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role %s --role member`", email, email)
+	default:
+		return "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server"
+	}
 }
 
 // parseSSE reads a text/event-stream and calls fn for each complete frame. It

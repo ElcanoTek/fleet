@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -156,6 +157,64 @@ func TestStreamReturnsTypedStatusError(t *testing.T) {
 	}
 	if se.Error() != "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server" {
 		t.Errorf("message changed: %q", se.Error())
+	}
+}
+
+// POST /chat answers 403 for three reasons; each gets its own fix-it text, and
+// every one stays a 403 StatusError so `fleet acp` still maps it to
+// auth_required. Only a token refusal may point at FLEET_SERVER_TOKEN.
+func TestStream403NamesTheRefusalReason(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+		want        string
+	}{
+		{
+			name:        "wrong token",
+			contentType: "text/plain; charset=utf-8",
+			body:        "forbidden\n",
+			want:        "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+		},
+		{
+			name:        "not a member",
+			contentType: "application/json",
+			body:        `{"error":"not_a_member"}`,
+			want:        "server rejected the request (403): nobody@example.com is not a fleet user; an admin can add it with `fleet chat user add nobody@example.com --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user",
+		},
+		{
+			name:        "viewer",
+			contentType: "application/json",
+			body:        `{"error":"read_only"}`,
+			want:        "server rejected the request (403): nobody@example.com has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role nobody@example.com --role member`",
+		},
+		{
+			name:        "unknown json code",
+			contentType: "application/json",
+			body:        `{"error":"something_else"}`,
+			want:        "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tt.contentType)
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			_, err := NewClient(Config{ServerURL: srv.URL, Email: "nobody@example.com", Token: "super-secret-token"}).Stream(context.Background(), "hi", "", func(Event) {})
+			var se *StatusError
+			if !errors.As(err, &se) || se.Code != http.StatusForbidden {
+				t.Fatalf("err = %#v, want *StatusError 403", err)
+			}
+			if se.Error() != tt.want {
+				t.Errorf("message = %q\nwant      %q", se.Error(), tt.want)
+			}
+			if strings.Contains(se.Error(), "super-secret-token") {
+				t.Errorf("error must NOT leak the token: %v", se)
+			}
+		})
 	}
 }
 

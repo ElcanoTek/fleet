@@ -451,6 +451,20 @@ func TestFailuresBecomeClearErrors(t *testing.T) {
 			t.Fatal("the token value leaked into an error")
 		}
 	})
+	t.Run("unprovisioned user 403 is auth_required naming the user", func(t *testing.T) {
+		h := newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+			w.w.Header().Set("Content-Type", "application/json")
+			w.w.WriteHeader(http.StatusForbidden)
+			_, _ = w.w.Write([]byte(`{"error":"not_a_member"}`))
+		}})
+		_, err := h.prompt(h.newSession(t), "x")
+		if rpcCode(err) != -32000 || !strings.Contains(err.Error(), "is not a fleet user") {
+			t.Fatalf("err = %v, want auth_required naming the unprovisioned user", err)
+		}
+		if strings.Contains(err.Error(), "FLEET_SERVER_TOKEN") || strings.Contains(err.Error(), "test-token") {
+			t.Fatalf("a membership refusal must not blame (or leak) the token: %v", err)
+		}
+	})
 	t.Run("daemon down", func(t *testing.T) {
 		h := newHarness(t, harnessOpts{serverURL: "http://127.0.0.1:1"})
 		_, err := h.prompt(h.newSession(t), "x")
