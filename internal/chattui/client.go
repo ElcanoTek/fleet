@@ -242,6 +242,15 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 	}
 	if resp.StatusCode != http.StatusOK {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		// The excerpt is quoted to the user, and `fleet acp` hands it to an ACP
+		// client that may write it to a log. fleet never echoes the token, but a
+		// proxy in between might (a debug page dumping request headers), so
+		// redact it once here, before any branch quotes the body. An empty
+		// token is skipped: ReplaceAll with an empty old value would insert the
+		// placeholder between every byte.
+		if c.cfg.Token != "" {
+			excerpt = bytes.ReplaceAll(excerpt, []byte(c.cfg.Token), []byte("[redacted]"))
+		}
 		msg := strings.TrimSpace(string(excerpt))
 		switch resp.StatusCode {
 		case http.StatusForbidden:

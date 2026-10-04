@@ -154,6 +154,55 @@ func TestClientStream_403ErrorRedactsToken(t *testing.T) {
 	}
 }
 
+// A refusal body is quoted into the error (and `fleet acp` hands that to a
+// client that may log it), so a proxy page echoing the request headers must
+// not carry the token through. Every non-200 branch quotes the same redacted
+// excerpt.
+func TestClientStream_ErrorBodyRedactsEchoedToken(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{
+			name:   "403 proxy debug page",
+			status: http.StatusForbidden,
+			body:   "<html><body><h1>403 Forbidden</h1><pre>X-Chat-Server-Token: super-secret-token\nAuthorization: Bearer super-secret-token</pre></body></html>",
+		},
+		{
+			name:   "401 echoing the header",
+			status: http.StatusUnauthorized,
+			body:   "unauthorized: X-Chat-Server-Token: super-secret-token",
+		},
+		{
+			name:   "502 echoing the header",
+			status: http.StatusBadGateway,
+			body:   "upstream refused; request had X-Chat-Server-Token: super-secret-token",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "super-secret-token"})
+			_, err := c.Stream(context.Background(), "hi", "", func(Event) {})
+			var se *StatusError
+			if !errors.As(err, &se) || se.Code != tt.status {
+				t.Fatalf("err = %#v, want *StatusError %d", err, tt.status)
+			}
+			if strings.Contains(err.Error(), "super-secret-token") || strings.Contains(err.Error(), "Bearer super-secret") {
+				t.Errorf("error must NOT leak the token: %v", err)
+			}
+			if !strings.Contains(err.Error(), "X-Chat-Server-Token: [redacted]") {
+				t.Errorf("error should quote the body with the token redacted: %v", err)
+			}
+		})
+	}
+}
+
 func TestClientStream_RequiresSuccessfulTerminalEvent(t *testing.T) {
 	tests := []struct {
 		name      string
