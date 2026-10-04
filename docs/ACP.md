@@ -74,10 +74,11 @@ diagnostic goes to stderr.
 
 ### Neovim (CodeCompanion.nvim)
 
-Tested on 2026-10-04 with Neovim 0.12.5 and CodeCompanion.nvim at commit
-`3dd1ef7`: connect, multi-turn, streamed thinking and tool calls, cancel,
-`--timeout`, the approval pointer, queueing behind a running turn, and the
-daemon-down and missing-email errors all worked. The adapter below extends
+Tested against a real `fleet serve` with a live model, from Neovim 0.12.5 and
+CodeCompanion.nvim at commit `3dd1ef7` (2026-10-02). On 2026-10-04, connect,
+multi-turn, streamed thinking and tool calls, cancel, `--timeout`, the approval
+pointer, queueing behind a running turn, and the daemon-down and missing-email
+errors all worked through CodeCompanion. The adapter below extends
 CodeCompanion's `goose` preset only as a convenient base for a plain ACP
 command:
 
@@ -93,7 +94,10 @@ require("codecompanion").setup({
           commands = {
             default = { "fleet", "acp", "--email", "acp-bot@example.com" },
           },
-          defaults = { mcpServers = {}, timeout = 20000 },
+          defaults = {
+            mcpServers = {}, -- fleet refuses client-supplied MCP servers: keep this, not "inherit_from_config"
+            timeout = 20000, -- CodeCompanion's wait for initialize/session/new; prompts are bounded by `fleet acp --timeout`
+          },
           handlers = {
             -- fleet runs tools in its own sandbox and never reads the client's
             -- files, so send buffer/file context as embedded resources (ACP
@@ -104,9 +108,10 @@ require("codecompanion").setup({
               for _, msg in ipairs(messages) do
                 if msg.role == self.roles.user and msg._meta and not msg._meta.sent and msg.content and msg.content ~= "" then
                   local tag = msg._meta.tag
-                  if (tag == tags.FILE or tag == tags.BUFFER) and msg.context and msg.context.path then
+                  local p = msg.context and msg.context.path
+                  if (tag == tags.FILE or tag == tags.BUFFER) and p and p ~= "" then
                     table.insert(out, { type = "resource", resource = {
-                      uri = vim.uri_from_fname(msg.context.path), mimeType = "text/plain", text = msg.content } })
+                      uri = vim.uri_from_fname(vim.fn.fnamemodify(p, ":p")), mimeType = "text/plain", text = msg.content } })
                   elseif tag ~= tags.IMAGE then
                     table.insert(out, { type = "text", text = msg.content })
                   end
@@ -123,20 +128,52 @@ require("codecompanion").setup({
 })
 ```
 
-The `form_messages` override is what makes `#{buffer}` context work (`#{file}`
-takes the same path through it; the live check used `#{buffer}`).
-CodeCompanion's stock ACP helper always sends file and buffer context as a bare
-text line (`Sharing the following file as context: <path>`), whatever the
-agent's `promptCapabilities.embeddedContext` says, because it assumes the agent
-shares the client's filesystem. fleet does not (see below), so without the
+The `form_messages` override is what makes file and buffer context work:
+`#{buffer}`, `#{buffers}`, `/buffer` and `/file` all go through it (the live
+check used `#{buffer}`). The `goose` preset advertises `clientCapabilities.fs`
+read and write, and CodeCompanion's stock ACP helper sends file and buffer
+context as a bare text line (`Sharing the following file as context: <path>`),
+whatever the agent's `promptCapabilities.embeddedContext` says. It expects the
+agent to read the path itself, from a shared filesystem or back over ACP with
+`fs/read_text_file`. fleet does neither (see the limits below), so without the
 override the model sees only a path and asks for the file to be pasted. The
-override sends the buffer's content as an embedded `resource` block instead,
-which fleet inlines under its URI; with it, the model answered from the buffer
-content. The token is resolved as above, never from argv: the tested setup
-also set `env = { FLEET_ENV_FILE = "<server env file>" }` on the adapter.
-With `opts = { log_level = "DEBUG" }`, CodeCompanion writes the raw ACP
-JSON-RPC transcript to a log file whose path it prints at INFO, which is the
-useful attachment for an adapter bug report.
+override sends CodeCompanion's rendering of the buffer (line-numbered, in its
+`<attachment>` wrapper) as an embedded `resource` block, which fleet inlines
+under its URI; with it, the model answered from the buffer content. It relies
+on CodeCompanion internals (the `handlers.form_messages(self, messages,
+capabilities)` hook, `_meta.tag` and `_meta.sent`, and the
+`codecompanion.interactions.shared.tags` module path), so recheck it after
+upgrading CodeCompanion.
+
+CodeCompanion starts `fleet acp` in Neovim's current directory, with Neovim's
+environment plus the adapter's `env`, and fleet resolves the token as above,
+never from argv. Because the `.env.local` fallback is relative to that
+directory, which is the project you are editing, set `FLEET_ENV_FILE` to the
+server env file's absolute path, either in the environment Neovim starts with
+or on the adapter (`env = { FLEET_ENV_FILE = "/etc/fleet/fleet.env" }`). Never
+put the token itself in `env`: Neovim configs are often published as dotfiles.
+Both forms were checked live (adapter `env` on 2026-10-04, the inherited
+environment on 2026-10-05).
+
+CodeCompanion's rules feature also sends project rule files. With its default
+rules settings (`autoload = "default"`), the first prompt of a new chat carries
+each file of its `default` rules group that exists as an extra text block
+(``Sharing `AGENTS.md`: …``): `.clinerules`, `.cursorrules`, `.goosehints`,
+`.rules`, `.windsurfrules`, `.github/copilot-instructions.md`, `AGENT.md`,
+`AGENTS.md`, `CLAUDE.md` and `CLAUDE.local.md` in the working directory, and
+`~/.claude/CLAUDE.md`. They become part of the persisted fleet conversation
+(checked live with `AGENTS.md` on 2026-10-05). CodeCompanion's `rules` settings
+control this; its defaults include a `rules.opts.chat.enabled` switch, which
+was not live-tested with fleet.
+
+For an adapter bug report, attach CodeCompanion's raw JSON-RPC transcript.
+CodeCompanion writes one for every `fleet acp` process it starts, at any log
+level, to a file in Neovim's temp directory that is deleted when Neovim exits.
+With `opts = { log_level = "INFO" }` at the top level of `setup()` (not in the
+adapter's `opts`), it records that file's path as `[acp] RPC log: <path>` in
+`codecompanion.log` under `stdpath("log")`. Copy the file before quitting
+Neovim, and read it first: it holds every prompt and the full text of each
+buffer you shared.
 
 ## Protocol mapping
 
@@ -196,9 +233,11 @@ What shipped:
   daemon-down, and missing email. The Stop endpoint was checked with a
   hand-made request of the same shape (token, email, `{"scope":"turn"}`),
   because a mock turn finishes too fast to cancel mid-flight.
-- Checked live with Neovim 0.12.5 and CodeCompanion.nvim (`3dd1ef7`) on
-  2026-10-04, as described under "Using it", including buffer context sent as
-  an embedded resource.
+- Checked live against a real `fleet serve` with a live model from Neovim
+  0.12.5 and CodeCompanion.nvim (`3dd1ef7`): the features listed under "Neovim
+  (CodeCompanion.nvim)", including buffer context sent as an embedded resource,
+  on 2026-10-04; the snippet as published there and the rules-file behaviour on
+  2026-10-05.
 
 Deviations and limits:
 
@@ -223,7 +262,8 @@ Deviations and limits:
   fleet's sandbox workspace. The session `cwd` is recorded, not mounted. A
   client that shares a file by sending only its path, rather than an embedded
   resource, loses that context: fleet cannot read the path. CodeCompanion.nvim
-  does this by default; the configuration under "Using it" works around it.
+  does this by default; the configuration under "Neovim (CodeCompanion.nvim)"
+  works around it.
 - **No `session/load`.** A session lives as long as the `fleet acp` process.
   The conversation itself persists in fleet, but resuming it over ACP is
   deferred until the session id can round-trip honestly.
