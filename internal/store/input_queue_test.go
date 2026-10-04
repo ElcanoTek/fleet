@@ -230,6 +230,70 @@ func TestClaimNextQueuedInput_FIFOAndExactlyOnce(t *testing.T) {
 	}
 }
 
+// InputsAhead is a place in line, not the position key: terminal rows the
+// position allocator still counts (MAX+1 over every row) are not ahead of
+// anyone, a send-now (MIN-1, so zero or negative) moves a row to the front,
+// and a row a Stop by key stamped will never run ahead of it.
+func TestInputsAhead_CountsOnlyRowsThatDrainFirst(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	ahead := func(id string) int {
+		t.Helper()
+		n, err := s.InputsAhead(ctx, id)
+		if err != nil {
+			t.Fatalf("InputsAhead(%s): %v", id, err)
+		}
+		return n
+	}
+
+	// A completed earlier input still holds position 1, so the next one is
+	// allocated position 2 — yet nothing is ahead of it (the live repro).
+	done := enqueue(t, s, convID, "cli-done", "earlier", InputModeQueued)
+	if err := s.MarkInputTerminal(ctx, done.ID, InputStateCompleted); err != nil {
+		t.Fatal(err)
+	}
+	first := enqueue(t, s, convID, "cli-1", "first", InputModeQueued)
+	if first.Position != 2 {
+		t.Fatalf("position = %d, want 2 (allocated over the terminal row)", first.Position)
+	}
+	if got := ahead(first.ID); got != 0 {
+		t.Fatalf("ahead of the only queued input = %d, want 0", got)
+	}
+	second := enqueue(t, s, convID, "cli-2", "second", InputModeSteer)
+	third := enqueue(t, s, convID, "cli-3", "third", InputModeQueued)
+	if got := ahead(third.ID); got != 2 {
+		t.Fatalf("ahead of third = %d, want 2", got)
+	}
+
+	// Send-now puts third at the front (position MIN-1 = 1, then 0 or below
+	// on a further promotion) — it now has nothing ahead and pushes the
+	// others back.
+	if ok, err := s.PromoteQueuedInput(ctx, "u@example.com", convID, third.ID); err != nil || !ok {
+		t.Fatalf("promote: ok=%v err=%v", ok, err)
+	}
+	if got := ahead(third.ID); got != 0 {
+		t.Fatalf("ahead of the promoted input = %d, want 0", got)
+	}
+	if got := ahead(second.ID); got != 2 {
+		t.Fatalf("ahead of second after promotion = %d, want 2", got)
+	}
+
+	// A claimed (running) row and a Stop-stamped row are not in line.
+	if row, err := s.ClaimNextQueuedInput(ctx, convID, "turn-x"); err != nil || row == nil || row.ID != third.ID {
+		t.Fatalf("claim = %+v, %v; want the promoted head", row, err)
+	}
+	if err := s.MarkInputStopRequested(ctx, convID, "cli-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ahead(second.ID); got != 0 {
+		t.Fatalf("ahead of second past a running and a stamped row = %d, want 0", got)
+	}
+	if got := ahead("no-such-row"); got != 0 {
+		t.Fatalf("ahead of an unknown row = %d, want 0", got)
+	}
+}
+
 func TestQueueLifecycleGuards(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

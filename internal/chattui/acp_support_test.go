@@ -192,13 +192,34 @@ func TestStreamReportsAQueuedSubmission(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(status)
-			_, _ = io.WriteString(w, `{"queued":true,"input":{"id":"in-1","position":3},"conversation_id":"conv-q"}`)
+			_, _ = io.WriteString(w, `{"queued":true,"input":{"id":"in-1","position":3,"ahead":1},"conversation_id":"conv-q"}`)
 		}))
 		id, err := NewClient(Config{ServerURL: srv.URL, Email: "a@b.c", Token: "tok"}).StreamInput(context.Background(), "hi", "conv-q", "key-1", func(Event) {})
 		srv.Close()
 		var q *QueuedError
-		if !errors.As(err, &q) || q.Position != 3 || q.InputID != "in-1" || id != "conv-q" {
-			t.Errorf("status %d: id=%q err=%#v, want *QueuedError position 3", status, id, err)
+		if !errors.As(err, &q) || q.Position != 3 || q.Ahead == nil || *q.Ahead != 1 || q.InputID != "in-1" || id != "conv-q" {
+			t.Errorf("status %d: id=%q err=%#v, want *QueuedError position 3, 1 ahead", status, id, err)
+		}
+	}
+}
+
+// A queued submission's message names its place in line (the server's
+// "ahead" count), never the position ordering key; with no count it names
+// no place.
+func TestQueuedErrorNamesThePlaceInLine(t *testing.T) {
+	ahead := func(n int) *int { return &n }
+	const base = "a turn is already running in this conversation, so the message was queued and will run after it"
+	for _, tc := range []struct {
+		q    QueuedError
+		want string
+	}{
+		{QueuedError{Position: 2, Ahead: ahead(0)}, base + " (next in line)"},
+		{QueuedError{Position: 0, Ahead: ahead(1)}, base + " (1 queued message ahead of it)"},
+		{QueuedError{Position: 40, Ahead: ahead(3)}, base + " (3 queued messages ahead of it)"},
+		{QueuedError{Position: 40}, base},
+	} {
+		if got := tc.q.Error(); got != tc.want {
+			t.Errorf("Error() = %q, want %q", got, tc.want)
 		}
 	}
 }

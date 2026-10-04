@@ -298,6 +298,29 @@ func (s *Store) CountPendingInputs(ctx context.Context, convID string) (int, err
 	return n, err
 }
 
+// InputsAhead returns how many of the conversation's still-queued inputs will
+// drain before the row id — its place in line, 0 meaning next. position is
+// an ordering key, not a rank: it is allocated as MAX+1 over every row the
+// conversation ever held (terminal ones included) and send-now promotion
+// takes MIN-1, so it can be 40 for an input with nothing ahead of it, or
+// zero or negative. The rank is therefore counted, over exactly the rows
+// ClaimNextQueuedInput would claim first (queued, not stamped by a Stop by
+// key, same position/created_at/id order) and against the row's CURRENT
+// stored order, so a send-now since its acceptance is reflected. The count
+// is only meaningful while the row itself is queued; callers ask for none
+// otherwise.
+func (s *Store) InputsAhead(ctx context.Context, id string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM chat_input_queue q
+		   JOIN chat_input_queue me ON me.conversation_id = q.conversation_id
+		  WHERE me.id = $1
+		    AND q.state = 'queued' AND q.mode <> 'direct' AND q.stop_requested_at IS NULL
+		    AND (q.position, q.created_at, q.id) < (me.position, me.created_at, me.id)`,
+		id).Scan(&n)
+	return n, err
+}
+
 // ClaimNextQueuedInput atomically claims the head of the conversation's
 // pending queue for turnID (queued -> running). SKIP LOCKED makes concurrent
 // drainers safe without process-level coordination; nil means the queue is

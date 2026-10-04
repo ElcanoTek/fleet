@@ -925,6 +925,79 @@ func TestQueue_IdempotentSubmission(t *testing.T) {
 	eng.release <- struct{}{}
 }
 
+// The queue ack reports the input's place in line as "ahead" (still-queued
+// inputs that drain first), not as position — the ordering key, allocated
+// over every row the conversation ever held. The live repro: one completed
+// earlier queued input, then a follow-up queued behind a running turn with
+// nothing else queued was told "position 2" although it was next. A replay
+// reports the place the input holds now; a running input has none.
+func TestQueue_AckReportsPlaceInLine(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _, err := s.store.EnqueueInput(t.Context(), store.InputQueueRow{
+		ID: "iq-old", ConversationID: conv.ID, UserEmail: user, ClientInputID: "cli-old",
+		Message: "earlier", Attachments: "[]", Mode: store.InputModeQueued,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.MarkInputTerminal(t.Context(), old.ID, store.InputStateCompleted); err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
+	s.agent = eng
+	defer func() {
+		for range 3 {
+			eng.release <- struct{}{}
+		}
+	}()
+
+	go postChatJSON(t, s, user, map[string]any{"message": "task", "conversation_id": conv.ID, "input_id": "cli-direct"})
+	<-eng.started
+
+	type ackInput struct {
+		State    string `json:"state"`
+		Position int64  `json:"position"`
+		Ahead    *int   `json:"ahead"`
+	}
+	submit := func(key string, wantCode int) ackInput {
+		t.Helper()
+		w := postChatJSON(t, s, user, map[string]any{"message": "follow-up " + key, "conversation_id": conv.ID, "input_id": key})
+		if w.Code != wantCode {
+			t.Fatalf("%s: status=%d body=%s, want %d", key, w.Code, w.Body.String(), wantCode)
+		}
+		var ack struct {
+			Input ackInput `json:"input"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil {
+			t.Fatalf("%s: %v (%s)", key, err, w.Body.String())
+		}
+		return ack.Input
+	}
+
+	first := submit("cli-1", http.StatusAccepted)
+	// Position 3: the key is allocated over the completed earlier input AND
+	// the running turn's direct claim — neither of which is in line.
+	if first.Position != 3 || first.Ahead == nil || *first.Ahead != 0 {
+		t.Fatalf("first queued ack = %+v, want position 3 (the key) with 0 ahead", first)
+	}
+	second := submit("cli-2", http.StatusAccepted)
+	if second.Ahead == nil || *second.Ahead != 1 {
+		t.Fatalf("second queued ack = %+v, want 1 ahead", second)
+	}
+	if replay := submit("cli-2", http.StatusOK); replay.Ahead == nil || *replay.Ahead != 1 {
+		t.Fatalf("replayed ack = %+v, want the same 1 ahead", replay)
+	}
+	// The input running the current turn is not in line.
+	if running := submit("cli-direct", http.StatusOK); running.State != store.InputStateRunning || running.Ahead != nil {
+		t.Fatalf("replay of the running input = %+v, want state running and no ahead", running)
+	}
+}
+
 // A directly started turn records its input_id (migration 064): a resend of
 // the same key while the turn runs, or after it ends, is answered with the
 // original input instead of starting a second turn.

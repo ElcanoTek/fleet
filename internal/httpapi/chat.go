@@ -522,7 +522,7 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 	if existing == nil {
 		return false
 	}
-	writeQueueAck(w, http.StatusOK, existing.ConversationID, *existing)
+	s.writeQueueAck(r.Context(), w, http.StatusOK, existing.ConversationID, *existing)
 	return true
 }
 
@@ -564,7 +564,7 @@ func (s *Server) recoverFirstSubmission(w http.ResponseWriter, r *http.Request, 
 	}
 	if existing != nil {
 		unlock()
-		writeQueueAck(w, http.StatusOK, existing.ConversationID, *existing)
+		s.writeQueueAck(r.Context(), w, http.StatusOK, existing.ConversationID, *existing)
 		return func() {}, true
 	}
 	return unlock, false
@@ -596,7 +596,7 @@ func (s *Server) claimDirectInput(w http.ResponseWriter, r *http.Request, user s
 	}
 	if !created {
 		releaseSlot()
-		writeQueueAck(w, http.StatusOK, conv.ID, row)
+		s.writeQueueAck(r.Context(), w, http.StatusOK, conv.ID, row)
 		return nil, true
 	}
 	// The claim is an accepted input, so a Stop scope=all that begins

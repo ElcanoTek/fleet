@@ -139,14 +139,33 @@ const maxPendingInputs = 20
 
 // writeQueueAck writes the JSON acknowledgement for an accepted (202) or
 // replayed (200) queue row.
-func writeQueueAck(w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
+//
+// position is the row's ordering key, never a place in line: it is allocated
+// over every row the conversation ever held and send-now takes MIN-1, so it
+// says nothing a person can use ("queued (position 40)" with nothing ahead).
+// The place in line is "ahead" — how many still-queued inputs will drain
+// before this one, 0 meaning next — counted against the stored row, so a
+// replay reports where the input is now. It is sent only while the row is
+// queued (a running, completed or cancelled input is not in line), and left
+// out if the count fails: the input is already durably accepted, so the ack
+// is not withheld over its rank, and a client then names no place at all
+// rather than a wrong one.
+func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
+	input := map[string]any{
+		"id": row.ID, "client_input_id": row.ClientInputID,
+		"mode": row.Mode, "state": row.State, "position": row.Position,
+	}
+	if row.State == store.InputStateQueued && row.Mode != store.InputModeDirect {
+		if n, err := s.store.InputsAhead(ctx, row.ID); err == nil {
+			input["ahead"] = n
+		} else {
+			log.Printf("queue ack: count inputs ahead (conv=%s): %v", convID, err)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writeJSONStatus(w, status, map[string]any{
-		"queued": true,
-		"input": map[string]any{
-			"id": row.ID, "client_input_id": row.ClientInputID,
-			"mode": row.Mode, "state": row.State, "position": row.Position,
-		},
+		"queued":          true,
+		"input":           input,
 		"conversation_id": convID,
 	})
 }
@@ -212,7 +231,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 			return false
 		}
 		if existing != nil {
-			writeQueueAck(w, http.StatusOK, conv.ID, *existing)
+			s.writeQueueAck(r.Context(), w, http.StatusOK, conv.ID, *existing)
 			return true
 		}
 		http.Error(w, fmt.Sprintf("input queue is full (%d pending); wait for the queue to drain or remove queued inputs", maxPendingInputs), http.StatusTooManyRequests)
@@ -267,7 +286,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	if !created {
 		status = http.StatusOK
 	}
-	writeQueueAck(w, status, conv.ID, row)
+	s.writeQueueAck(r.Context(), w, status, conv.ID, row)
 	return true
 }
 

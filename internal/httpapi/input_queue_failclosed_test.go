@@ -7,6 +7,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -122,5 +123,48 @@ func TestQueueSubmit_LookupErrorAtCapIs500Not429(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "input lookup failed") {
 		t.Fatalf("body = %q, want the lookup failure surfaced", w.Body.String())
+	}
+}
+
+// aheadFailStore fails only the place-in-line count behind the queue ack.
+type aheadFailStore struct{ *fakeChatStore }
+
+func (s *aheadFailStore) InputsAhead(context.Context, string) (int, error) {
+	return 0, errors.New("db down")
+}
+
+// The place-in-line count is not a gate: the input is already durably
+// queued when it runs, so a failed count still answers 202 — without
+// "ahead", so a client names no place rather than a wrong one.
+func TestQueueSubmit_AheadCountErrorStillAcknowledges(t *testing.T) {
+	eng := &gatedEngine{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
+	st := &aheadFailStore{fakeChatStore: newFakeChatStore()}
+	srv := newDefaultChatServer(t, eng, st)
+	conv, err := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "m", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go postChatJSON(t, srv, "u@x.com", map[string]any{"message": "long turn", "conversation_id": conv.ID})
+	<-eng.started
+	defer func() { eng.release <- struct{}{} }()
+
+	w := postChatJSON(t, srv, "u@x.com", map[string]any{
+		"message": "queued", "conversation_id": conv.ID, "input_id": "q-1",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status=%d, want 202: %s", w.Code, w.Body.String())
+	}
+	var ack struct {
+		Input map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ack.Input["ahead"]; ok {
+		t.Fatalf("ack = %s, want no ahead when the count failed", w.Body.String())
+	}
+	if ack.Input["state"] != store.InputStateQueued {
+		t.Fatalf("ack = %s, want the queued row", w.Body.String())
 	}
 }
