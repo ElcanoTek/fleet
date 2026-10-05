@@ -78,7 +78,11 @@ Tested against a real `fleet serve` with a live model, from Neovim 0.12.5 and
 CodeCompanion.nvim at commit `3dd1ef7` (2026-10-02). On 2026-10-04, connect,
 multi-turn, streamed thinking and tool calls, cancel, `--timeout`, the approval
 pointer, queueing behind a running turn, and the daemon-down and missing-email
-errors all worked through CodeCompanion. The adapter below extends
+errors all worked through CodeCompanion. On 2026-10-05, so did streamed answer
+text (with `--model anthropic/claude-haiku-4.5`; some models send the whole
+answer as one chunk), queueing behind a turn running in the web chat, approving
+through the link in the reply, and a cancel that arrived just after the turn
+finished (see the note on stopping below). The adapter below extends
 CodeCompanion's `goose` preset only as a convenient base for a plain ACP
 command:
 
@@ -129,8 +133,8 @@ require("codecompanion").setup({
 ```
 
 The `form_messages` override is what makes file and buffer context work:
-`#{buffer}`, `#{buffers}`, `/buffer` and `/file` all go through it (the live
-check used `#{buffer}`). The `goose` preset advertises `clientCapabilities.fs`
+`#{buffer}`, `#{buffers}`, `/buffer` and `/file` all go through it (all four
+were checked live). The `goose` preset advertises `clientCapabilities.fs`
 read and write, and CodeCompanion's stock ACP helper sends file and buffer
 context as a bare text line (`Sharing the following file as context: <path>`),
 whatever the agent's `promptCapabilities.embeddedContext` says. It expects the
@@ -162,9 +166,27 @@ each file of its `default` rules group that exists as an extra text block
 `.rules`, `.windsurfrules`, `.github/copilot-instructions.md`, `AGENT.md`,
 `AGENTS.md`, `CLAUDE.md` and `CLAUDE.local.md` in the working directory, and
 `~/.claude/CLAUDE.md`. They become part of the persisted fleet conversation
-(checked live with `AGENTS.md` on 2026-10-05). CodeCompanion's `rules` settings
-control this; its defaults include a `rules.opts.chat.enabled` switch, which
-was not live-tested with fleet.
+(checked live with `AGENTS.md` on 2026-10-05). To keep them out, set
+`rules = { opts = { chat = { enabled = false } } }` at the top level of
+`setup()`; with that, no rule file was sent (checked live on 2026-10-05).
+
+Keep `vision = false`. fleet accepts text only (`initialize` advertises no image
+support), and with `vision = false` CodeCompanion does not offer `/image` for
+this adapter. With `vision = true`, an attached image does not reach fleet as an
+image either way: the override above drops it without a word, and
+CodeCompanion's stock helper warns that the agent does not support images and
+then sends the image's base64 as plain text, which for a real image is a very
+large, costly prompt (both checked live on 2026-10-05).
+
+Stopping a request in CodeCompanion (`q`) sends `session/cancel`, and fleet
+stops the turn server-side as described under "Protocol mapping". But
+CodeCompanion stops listening the moment you stop: its cancel drops the active
+prompt right after sending `session/cancel`, so text fleet sends after that is
+not shown in Neovim. That includes the note that the turn had already finished
+before the Stop arrived, so nothing was stopped (checked live on 2026-10-05),
+and would equally include the note that a stop could not be confirmed (not
+observed live). After stopping, check the conversation in the web chat for how
+the turn ended.
 
 For an adapter bug report, attach CodeCompanion's raw JSON-RPC transcript.
 CodeCompanion writes one for every `fleet acp` process it starts, at any log
@@ -240,8 +262,11 @@ What shipped:
 - Checked live against a real `fleet serve` with a live model from Neovim
   0.12.5 and CodeCompanion.nvim (`3dd1ef7`): the features listed under "Neovim
   (CodeCompanion.nvim)", including buffer context sent as an embedded resource,
-  on 2026-10-04; the snippet as published there and the rules-file behaviour on
-  2026-10-05.
+  on 2026-10-04; on 2026-10-05, the snippet as published there, `#{buffers}`,
+  `/buffer` and `/file`, the rule files and the switch that keeps them out,
+  images with `vision` off and on, streamed answer text with a second model,
+  queueing behind a turn running in the web chat, approving through the link in
+  the reply, and a cancel that arrived just after the turn finished.
 
 Deviations and limits:
 
