@@ -22,6 +22,7 @@ import {
   type ModelRequiredEventPayload,
   type TurnSummary,
 } from "./history";
+import { showsEmptyReplyNotice } from "./transcriptRows";
 
 // Small helper so test fixtures read like a transcript.
 const user = (text: string): HistoryEntry => ({
@@ -294,6 +295,138 @@ describe("historyToMessages", () => {
     expect(msgs[1].kind).not.toBe("summary");
     expect(msgs[1].content).toBe("partial");
     expect(msgs[2].kind).toBe("summary");
+  });
+});
+
+// A stopped turn has to read as stopped after a reload, the way it did live.
+// Live, `turn.cancelled` marks the message cancelled ("Turn stopped. Retry").
+// What Postgres keeps of that turn is below — identical for the web's Stop and
+// for `POST /conversations/{id}/cancel` — and the ONLY durable trace of the
+// stop is the summary's `cancelled`: no assistant text, no error row. Replay
+// used to copy that flag onto the summary alone, so the reloaded message looked
+// completed and the transcript said "The assistant finished without a written
+// reply." about a turn the user had stopped.
+describe("historyToMessages — a stopped turn replayed from history", () => {
+  const prompt: HistoryEntry = {
+    id: 41,
+    role: "user",
+    type: "text",
+    content: { text: "Use run_python to sleep for 60 seconds, then say done." },
+  };
+  const sleepCall: HistoryEntry = {
+    id: 42,
+    role: "assistant",
+    type: "tool_call",
+    content: { id: "call_1", name: "run_python", input: '{"code":"import time; time.sleep(60)"}' },
+  };
+  const cancelledResult: HistoryEntry = {
+    id: 43,
+    role: "tool",
+    type: "tool_result",
+    content: {
+      id: "call_1",
+      name: "run_python",
+      text: "python execution cancelled (context canceled); sandbox retired: run aborted",
+      is_err: true,
+    },
+  };
+  const summary = (extra: Record<string, unknown> = {}): HistoryEntry => ({
+    id: 44,
+    role: "assistant",
+    type: "turn_summary",
+    content: {
+      cost_usd: 0.0012,
+      prompt_tokens: 5100,
+      completion_tokens: 40,
+      duration_ms: 4200,
+      model: "anthropic/claude-sonnet-4.6",
+      ...extra,
+    },
+  });
+
+  it("marks the message cancelled, as the live turn.cancelled does", () => {
+    const msgs = historyToMessages([
+      prompt,
+      sleepCall,
+      cancelledResult,
+      summary({ cancelled: true }),
+    ]);
+    expect(msgs).toHaveLength(2);
+    const stopped = msgs[1];
+    expect(stopped).toMatchObject({
+      role: "assistant",
+      content: "",
+      state: "done",
+      cancelled: true,
+      dbId: 44,
+    });
+    // The "stopped ·" chip (Show details) keys on the summary's own flag.
+    expect(stopped.summary?.cancelled).toBe(true);
+    expect(stopped.failed).toBeUndefined();
+    expect(stopped.toolCalls?.[0]).toMatchObject({ id: "call_1", state: "error" });
+    // "Turn stopped." renders; the completed-turn safety net does not.
+    expect(showsEmptyReplyNotice(stopped)).toBe(false);
+  });
+
+  it("does the same when the stopped turn also persisted reasoning", () => {
+    const msgs = historyToMessages([
+      prompt,
+      { id: 42, role: "assistant", type: "reasoning", content: { text: "I'll sleep first." } },
+      { ...sleepCall, id: 43 },
+      { ...cancelledResult, id: 44 },
+      { ...summary({ cancelled: true }), id: 45 },
+    ]);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1].reasoning).toBe("I'll sleep first.");
+    expect(msgs[1].cancelled).toBe(true);
+    expect(showsEmptyReplyNotice(msgs[1])).toBe(false);
+  });
+
+  it("keeps text that streamed before the stop and still reads as stopped", () => {
+    const msgs = historyToMessages([
+      prompt,
+      asText("Starting the sleep now. "),
+      sleepCall,
+      cancelledResult,
+      summary({ cancelled: true }),
+    ]);
+    const stopped = msgs[1];
+    expect(stopped.content).toBe("Starting the sleep now. ");
+    expect(stopped.cancelled).toBe(true);
+    expect(stopped.summary?.cancelled).toBe(true);
+    expect(showsEmptyReplyNotice(stopped)).toBe(false);
+  });
+
+  it("leaves a completed turn with no written reply to the safety net", () => {
+    // Same rows, but the turn ran to completion without writing an answer.
+    for (const completed of [summary(), summary({ cancelled: false })]) {
+      const msgs = historyToMessages([
+        prompt,
+        sleepCall,
+        { ...cancelledResult, content: { id: "call_1", name: "run_python", text: '{"stdout":""}', is_err: false } },
+        completed,
+      ]);
+      const done = msgs[1];
+      expect(done.cancelled).toBeUndefined();
+      expect(done.summary?.cancelled).toBeFalsy();
+      expect(showsEmptyReplyNotice(done)).toBe(true);
+    }
+  });
+
+  it("keeps the stop on its own turn — the next turn is not cancelled", () => {
+    const msgs = historyToMessages([
+      prompt,
+      sleepCall,
+      cancelledResult,
+      summary({ cancelled: true }),
+      { id: 50, role: "user", type: "text", content: { text: "try again, 1 second" } },
+      { id: 51, role: "assistant", type: "text", content: { text: "done" } },
+      { ...summary(), id: 52 },
+    ]);
+    expect(msgs).toHaveLength(4);
+    expect(msgs[1].cancelled).toBe(true);
+    expect(msgs[3].cancelled).toBeUndefined();
+    expect(msgs[3].content).toBe("done");
   });
 });
 

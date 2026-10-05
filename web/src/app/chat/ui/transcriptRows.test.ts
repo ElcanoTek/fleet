@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildTranscriptRows,
   messageHasRenderableContent,
+  showsEmptyReplyNotice,
   type BuildTranscriptRowsInput,
 } from "./transcriptRows";
 import type { Message } from "./history";
@@ -125,5 +126,57 @@ describe("buildTranscriptRows", () => {
     ];
     const rows = build(messages, { summaryIndex: 1, summaryExpanded: false });
     expect(rows.map((r) => r.kind)).toEqual(["expander", "summary"]);
+  });
+});
+
+// The empty-reply safety net says the turn COMPLETED without an answer. Every
+// other terminal state with its own banner has to silence it, or the transcript
+// tells two contradictory stories about one turn — which is what a stopped turn
+// did after a reload, when replay forgot to mark it cancelled.
+describe("showsEmptyReplyNotice", () => {
+  it("shows for a finished assistant turn with no written reply", () => {
+    expect(showsEmptyReplyNotice(assistantMsg(1, ""))).toBe(true);
+    expect(showsEmptyReplyNotice(assistantMsg(1, "  \n "))).toBe(true);
+  });
+
+  it("stays quiet when there is an answer, or the turn is still running", () => {
+    expect(showsEmptyReplyNotice(assistantMsg(1, "the answer"))).toBe(false);
+    expect(showsEmptyReplyNotice(assistantMsg(1, "", "thinking"))).toBe(false);
+    expect(showsEmptyReplyNotice(assistantMsg(1, "", "streaming"))).toBe(false);
+  });
+
+  it("defers to a stopped turn's own banner", () => {
+    expect(showsEmptyReplyNotice({ ...assistantMsg(1, ""), cancelled: true })).toBe(false);
+  });
+
+  it("defers to the failed, model-required and retrying banners", () => {
+    expect(showsEmptyReplyNotice({ ...assistantMsg(1, ""), failed: true })).toBe(false);
+    expect(
+      showsEmptyReplyNotice({
+        ...assistantMsg(1, ""),
+        modelRequired: { reason: "fatal", failedModel: "m", statusCode: 0, message: "x" },
+      }),
+    ).toBe(false);
+    expect(
+      showsEmptyReplyNotice({
+        ...assistantMsg(1, ""),
+        retrying: { statusCode: 429, title: "", message: "", delayMs: 0 },
+      }),
+    ).toBe(false);
+  });
+
+  it("defers to approval and memory cards, which own the turn", () => {
+    expect(
+      showsEmptyReplyNotice({
+        ...assistantMsg(1, ""),
+        approvals: [{ id: "a1", tool: "bash", summary: {}, status: "pending" }],
+      }),
+    ).toBe(false);
+    expect(
+      showsEmptyReplyNotice({
+        ...assistantMsg(1, ""),
+        memoryProposals: [{ id: "p1", content: "fact", status: "pending" }],
+      }),
+    ).toBe(false);
   });
 });

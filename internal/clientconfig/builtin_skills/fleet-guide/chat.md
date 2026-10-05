@@ -581,7 +581,9 @@ is not something the platform does.
 
 ### While a turn is running
 
-**Stop** halts the current turn; the partial reply stays in the transcript.
+**Stop** halts the current turn; the partial reply stays in the transcript,
+marked **Turn stopped.** with **Retry**, and it still reads that way after a
+reload.
 Typing and sending while a turn is running does not interrupt it: your message
 waits in a small queue under the composer, with **Send now** to move it to the
 front and a control to remove it. Queued messages run in order once the current

@@ -928,6 +928,9 @@ export type HistoryEntry = {
  *     does NOT create one retroactively (keeps parity with the live stream).
  *   - run_python results additionally become a pythonStreams entry so the
  *     UI renders them in a monospace block.
+ *   - A `turn_summary` with `cancelled` marks its Message cancelled, exactly
+ *     as the live `turn.cancelled` event does, so a stopped turn reads as
+ *     stopped after a reload.
  */
 export function historyToMessages(entries: HistoryEntry[]): Message[] {
   const messages: Message[] = [];
@@ -1062,6 +1065,18 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
         cancelled: c.cancelled,
         model: c.model,
       };
+      // The summary's flag is the only durable record that the turn was
+      // stopped: nothing else in history marks a stop (no error row, often no
+      // text at all), and turn_events is not part of history. The live
+      // `turn.cancelled` handler marks BOTH the summary and the message, so
+      // replay must too. Marking only the summary left the message looking
+      // like a completed turn, and the transcript then said "The assistant
+      // finished without a written reply." about a turn the user had stopped.
+      // Text that streamed before the stop is kept, as it is live. (Startup
+      // recovery writes the same summary under a turn a server restart cut
+      // short, after its own "interrupted" note — so that one reads as
+      // stopped too, which it was.)
+      if (c.cancelled === true) current.cancelled = true;
       continue;
     }
 

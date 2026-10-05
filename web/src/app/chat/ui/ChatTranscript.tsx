@@ -62,7 +62,11 @@ function MessageMarkdown({
 }
 import { humanToolLabel, liveSubagentLabel, shortModelName, type Message } from "./history";
 import { InjectedContextNote } from "./InjectedContextNote";
-import { buildTranscriptRows, type TranscriptRow } from "./transcriptRows";
+import {
+  buildTranscriptRows,
+  showsEmptyReplyNotice,
+  type TranscriptRow,
+} from "./transcriptRows";
 import { useStickToBottom } from "./stickToBottom";
 
 export type ChatTranscriptProps = {
@@ -908,15 +912,10 @@ export function ChatTranscript({
                                 another affordance already explains the state
                                 (cancelled/failed/model-required/retrying) or
                                 owns the turn (approval / memory cards).
+                                The predicate lives in transcriptRows.ts so
+                                it is unit-testable without jsdom.
                               */}
-                              {message.state === "done" &&
-                              !message.content.trim() &&
-                              !message.cancelled &&
-                              !message.failed &&
-                              !message.modelRequired &&
-                              !message.retrying &&
-                              !(message.approvals && message.approvals.length) &&
-                              !(message.memoryProposals && message.memoryProposals.length) ? (
+                              {showsEmptyReplyNotice(message) ? (
                                 <div className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
                                   <span className="inline-block size-1.5 rounded-full bg-[var(--color-text-muted)]" />
                                   The assistant finished without a written reply.{" "}

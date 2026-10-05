@@ -224,6 +224,110 @@ test("a delegation streams live sub-agent activity, then settles into a child ca
   await expect(page.getByText("Here is the summary of your last 3 emails.")).toBeVisible();
 });
 
+// A stopped turn must read the same after a reload as it did live. The live
+// stream ends in turn.cancelled; what Postgres keeps of the turn is the call,
+// its cancelled result and a turn_summary carrying `cancelled: true` — no
+// assistant text. Replay once copied that flag onto the summary alone, so the
+// reloaded turn said "The assistant finished without a written reply."
+// instead of "Turn stopped.", claiming a stopped turn had completed.
+test("a stopped turn still reads as stopped after a reload", async ({ page, context }) => {
+  // The summary chip ("stopped · …") renders only with Show details on.
+  await context.addInitScript(() => window.localStorage.setItem("chat-show-stats", "1"));
+  await mockChatBoot(page);
+
+  const conversation = {
+    id: "conv-stop",
+    title: "Sleep for a minute",
+    persona: "default",
+    model: "test-model",
+    pinned: false,
+    archived_at: null,
+    updated_at: 1_700_000_000,
+    created_at: 1_700_000_000,
+    labels: [],
+    folder: null,
+  };
+  const cancelledText = "python execution cancelled (context canceled); sandbox retired: run aborted";
+  const summary = {
+    cost_usd: 0.0012,
+    prompt_tokens: 5100,
+    completion_tokens: 40,
+    duration_ms: 4200,
+    model: "anthropic/claude-sonnet-4.6",
+  };
+  // The conversation exists server-side only once the prompt was sent, so the
+  // first load lands on the empty composer and the reload restores it.
+  let sent = false;
+  await page.route("**/api/conversations", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({ json: { conversations: sent ? [conversation] : [] } });
+  });
+  await page.route("**/api/conversations/conv-stop", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation,
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "Use run_python to sleep for 60 seconds" } },
+          {
+            id: 2,
+            role: "assistant",
+            type: "tool_call",
+            content: { id: "call-sleep", name: "run_python", input: JSON.stringify({ code: "import time; time.sleep(60)" }) },
+          },
+          {
+            id: 3,
+            role: "tool",
+            type: "tool_result",
+            content: { id: "call-sleep", name: "run_python", text: cancelledText, is_err: true },
+          },
+          { id: 4, role: "assistant", type: "turn_summary", content: { ...summary, cancelled: true } },
+        ],
+        pending_approvals: [],
+        resolved_approvals: [],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  await page.route("**/api/chat", (r: Route) => {
+    sent = true;
+    return fulfillSse(r, [
+      { event: "conversation", id: 1, data: { id: "conv-stop", title: conversation.title, persona: "default" } },
+      {
+        event: "tool.call",
+        id: 2,
+        data: { id: "call-sleep", name: "run_python", input: JSON.stringify({ code: "import time; time.sleep(60)" }) },
+      },
+      { event: "tool.result", id: 3, data: { id: "call-sleep", name: "run_python", text: cancelledText, is_err: true } },
+      { event: "turn.cancelled", id: 4, data: { ...summary, reason: "context canceled" } },
+    ]);
+  });
+
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  const composer = page.getByRole("textbox").first();
+  await composer.fill("Use run_python to sleep for 60 seconds");
+  await composer.press("Enter");
+
+  const stopped = page.getByText("Turn stopped.");
+  const emptyReply = page.getByText("The assistant finished without a written reply.");
+  const stoppedChip = page.getByText(/^stopped · /);
+
+  // Live: the stop is what the turn says about itself.
+  await expect(stopped).toBeVisible({ timeout: 15_000 });
+  await expect(stoppedChip).toBeVisible();
+  await expect(emptyReply).toHaveCount(0);
+
+  // Reloaded from history: the same turn, the same story.
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Conversation" }).getByText("Use run_python to sleep for 60 seconds"),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(stopped).toBeVisible();
+  await expect(stoppedChip).toBeVisible();
+  await expect(emptyReply).toHaveCount(0);
+});
+
 test("config-driven empty-state cards render from a stubbed /api/client-config", async ({ page }) => {
   // The protocol-pill empty-state cards render whenever the client config
   // supplies any (persona-AGNOSTIC — regression guard for #80, where the gate
