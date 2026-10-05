@@ -114,9 +114,13 @@ retention guarantee: after a terminal row is purged, reusing its
   listing, drain, Stop sweeps, remove and promote skip them. At turn end (and
   at boot recovery) they settle `completed` when the turn's user entry
   committed and `cancelled` otherwise (nothing ran, so a fresh key may be
-  sent). Settlement at turn end runs on its own bounded context and is retried
-  in the background if it fails, so a finished claim does not keep answering
-  "running". A claim whose turn fails before it launches is settled
+  sent). Settlement comes a moment after the turn's final frame, not with it:
+  it runs once the turn's remaining work is done (such as a new
+  conversation's title), its stream is sealed and its events persisted, and
+  its queue rows are settled, so a resend in that short window is still
+  answered `running` for a turn whose stream has already ended. Settlement at
+  turn end runs on its own bounded context and is retried in the background
+  if it fails, so a finished claim does not keep answering "running". A claim whose turn fails before it launches is settled
   `cancelled` (a resend is told it did not run, so a fresh key may be sent),
   never deleted: a concurrent resend may already have been told it is running.
   A claim that loses the race to another surface's turn is released, so its

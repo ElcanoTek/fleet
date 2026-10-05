@@ -710,8 +710,9 @@ func acceptedNote(q *chattui.QueuedError, where string) string {
 	case q.Replayed() && (q.State == "running" || q.State == "injected"):
 		// The input's row settles a moment after its turn's stream ends, so a
 		// resend that waited for that turn can be answered "running" when the
-		// turn has just finished: the note allows for either.
-		return "fleet already has this message from an earlier attempt, which is running or has just finished (it is not run twice). Follow it at " + where
+		// turn has just finished — and how it ended is not known yet: the
+		// note allows for either, and points to where the outcome shows.
+		return "fleet already has this message from an earlier attempt; its turn is running or has just finished (it is not run twice). See it, and how it ended, at " + where
 	case q.Replayed() && q.State == "completed":
 		// "completed" means the input's user entry committed, not that its
 		// turn succeeded: the turn may have failed or been stopped after.

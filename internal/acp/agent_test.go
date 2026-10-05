@@ -1230,10 +1230,10 @@ func TestAcceptedNoteNamesThePlaceInLine(t *testing.T) {
 	}
 }
 
-// A resend answered with an earlier attempt says where that attempt is. A
-// direct input's row settles a moment after its turn's stream ends, so
-// "running" may be a turn that has just finished, and the note says so
-// rather than claiming it is still running.
+// A resend answered with an earlier attempt says what became of that attempt
+// and where to see it. A direct input's row settles a moment after its turn's
+// stream ends, so "running" may be a turn that has just finished, and the note
+// says so rather than claiming it is still running.
 func TestAcceptedNoteForAReplay(t *testing.T) {
 	const where = "the fleet web chat"
 	for _, tc := range []struct {
@@ -1242,9 +1242,9 @@ func TestAcceptedNoteForAReplay(t *testing.T) {
 		want string
 	}{
 		{"running", chattui.QueuedError{Mode: "direct", State: "running", Replay: true},
-			"fleet already has this message from an earlier attempt, which is running or has just finished (it is not run twice). Follow it at " + where},
+			"fleet already has this message from an earlier attempt; its turn is running or has just finished (it is not run twice). See it, and how it ended, at " + where},
 		{"injected", chattui.QueuedError{State: "injected", Replay: true},
-			"fleet already has this message from an earlier attempt, which is running or has just finished (it is not run twice). Follow it at " + where},
+			"fleet already has this message from an earlier attempt; its turn is running or has just finished (it is not run twice). See it, and how it ended, at " + where},
 		{"completed", chattui.QueuedError{Mode: "direct", State: "completed", Replay: true},
 			"fleet already took this message from an earlier attempt (it is not run twice). How that turn ended — its reply, or an error — is in " + where},
 		{"cancelled", chattui.QueuedError{Mode: "direct", State: "cancelled", Replay: true},
@@ -1307,7 +1307,7 @@ func TestReplayOfAnAcceptedInput(t *testing.T) {
 		}
 	}
 	for state, want := range map[string]string{
-		"running":   "already has this message from an earlier attempt, which is running or has just finished (it is not run twice). Follow it at",
+		"running":   "already has this message from an earlier attempt; its turn is running or has just finished (it is not run twice). See it, and how it ended, at",
 		"completed": "already took this message from an earlier attempt (it is not run twice). How that turn ended — its reply, or an error — is in",
 	} {
 		t.Run(state, func(t *testing.T) {
