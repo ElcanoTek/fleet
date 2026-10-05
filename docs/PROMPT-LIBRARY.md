@@ -204,10 +204,10 @@ the manifest) already use, and is drawn by the same components:
 | `label` | Required. The field's label. |
 | `type` | Required. `text`, `textarea`, `select`, `number`, `daterange` or `toggle`. |
 | `required` | `true` disables **Use prompt** until the field is filled (a daterange needs both dates). Not allowed on a toggle, or together with `advanced`. |
-| `placeholder` | Example text shown in an empty text, textarea or number input. |
-| `hint` | Help text under the input. |
-| `default` | The starting value: a string for text and textarea, one of `options` for a select (otherwise the first option is preselected), a number for a number (otherwise `min`, or 0), `true`/`false` for a toggle (otherwise off), and `{from, to}` YYYY-MM-DD dates for a daterange. |
-| `options` | A select's choices (strings or numbers). Required on a select, not allowed elsewhere. |
+| `placeholder` | Example text shown in an empty text or textarea box. Not allowed on other types, which do not draw one. |
+| `hint` | Help text under the input. Not allowed on a toggle, which does not show one. |
+| `default` | The starting value: a string for text and textarea, one of `options` for a select (otherwise the first option is preselected), a finite number for a number (otherwise the field starts empty), `true`/`false` for a toggle (otherwise off), and `{from, to}` YYYY-MM-DD dates for a daterange. |
+| `options` | A select's choices (strings or numbers, trimmed, each listed once). Required on a select, not allowed elsewhere. |
 | `advanced` | `true` tucks the field under a collapsed **More options** toggle, which summarises the current values while closed. Use it for optional fields. |
 | `min` | A number field's minimum. |
 
@@ -220,7 +220,12 @@ line whose tokens were all left blank is dropped**. An optional field the user
 skipped therefore vanishes instead of leaving `Deals: {deals}` behind. A line
 with at least one answered token, or with no token at all, is kept, and a blank
 token on a kept line stays as written. So put each optional field on a line of
-its own. A toggle always has a value, so its line is always kept.
+its own. Only a text, textarea, number or daterange field can be left blank: a
+select always has one of its options chosen and a toggle is always yes or no, so
+their lines are always kept. (Unlike a card, a library form starts a number with
+no `default` empty rather than at 0, so an untouched optional number is dropped
+too.) If every line of a template holds only optional fields, the form renders
+nothing until one is filled in, and says so under **Use prompt**.
 
 The form shows a live **Prompt preview** of exactly what **Use prompt** will
 insert. **Insert raw prompt** inserts `promptTemplate` itself, tokens intact,

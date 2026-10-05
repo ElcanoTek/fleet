@@ -629,11 +629,12 @@ Operations Center the same action fills the task's instructions and seeds the
 task's title from the prompt's name.
 
 Some deployment prompts are **forms**, marked **Form** in the list. Selecting one
-shows its questions instead of its text. Fill in the fields marked `*`; optional
-ones sit under **More options**. **Use prompt** stays unavailable until every
-required field has an answer, and the **Prompt preview** under the form shows
-exactly what it will insert. Any optional line you left empty is left out, so
-there are no placeholders to hunt down afterwards. The finished prompt lands in
+shows its questions instead of its text. Fill in the fields marked `*`; some
+forms keep extra settings under **More options**. **Use prompt** stays
+unavailable until every required field has an answer, and the **Prompt preview**
+under the form shows exactly what it will insert. An optional text, number or
+date field you leave empty is left out of the prompt, so there are no
+placeholders to hunt down afterwards. The finished prompt lands in
 your draft like any other, ready to read, change or attach files to before you
 send it. **Insert raw prompt** inserts the template with its `{placeholders}`
 instead, if you would rather fill it in by hand.

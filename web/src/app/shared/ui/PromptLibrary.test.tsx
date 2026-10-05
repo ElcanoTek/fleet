@@ -179,6 +179,41 @@ describe("PromptLibrary — form prompts", () => {
     expect(onInsert).toHaveBeenCalledWith(gitPrompt.content, gitPrompt.name);
   });
 
+  it("leaves an untouched optional number out instead of inserting 0", async () => {
+    vi.mocked(orchestratorApi.prompts).mockResolvedValue([
+      {
+        ...formPrompt,
+        fields: [
+          { key: "campaign", label: "Campaign name", type: "text" as const, required: true },
+          { key: "budget", label: "Budget", type: "number" as const, min: 100 },
+        ],
+        prompt_template: "Campaign: {campaign}\nBudget: {budget}",
+      },
+    ]);
+    const onInsert = await openOnForm();
+    expect(screen.getByLabelText(/^Budget/)).toHaveValue(null);
+    fireEvent.change(screen.getByLabelText(/^Campaign name/), { target: { value: "Spring" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use prompt" }));
+    expect(onInsert).toHaveBeenCalledWith("Campaign: Spring", "New campaign page");
+  });
+
+  it("explains a disabled Use prompt when a form of optional fields renders nothing yet", async () => {
+    vi.mocked(orchestratorApi.prompts).mockResolvedValue([
+      {
+        ...formPrompt,
+        fields: [{ key: "notes", label: "Notes", type: "textarea" as const }],
+        prompt_template: "Notes: {notes}",
+      },
+    ]);
+    await openOnForm();
+    const use = screen.getByRole("button", { name: "Use prompt" });
+    expect(use).toBeDisabled();
+    expect(screen.getByText("Fill in at least one field to use this prompt.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^Notes/), { target: { value: "hello" } });
+    expect(use).toBeEnabled();
+    expect(screen.getByText("Tracked in prompts/new-campaign.yaml")).toBeInTheDocument();
+  });
+
   it("starts each form from its own defaults when switching entries", async () => {
     await openOnForm();
     fireEvent.change(screen.getByLabelText(/^Campaign name/), { target: { value: "Typed" } });

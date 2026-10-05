@@ -2,6 +2,7 @@ package clientconfig
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
@@ -55,15 +56,19 @@ import (
 //     form, a non-empty label, and a known type.
 //   - Type-specific properties are where they mean something: `options` only on
 //     a select, which must have at least one option, unique and non-empty;
-//     `min` only on a number; `required` never on a toggle, which always has a
+//     `min` only on a number; `placeholder` only on text and textarea (the
+//     only inputs that draw one); no `hint` on a toggle (it shows none);
+//     numbers are finite (a `.inf` or `.nan` would make the whole catalog
+//     unserializable as JSON); `required` never on a toggle, which always has a
 //     value (true or false) and so would block the form forever in the web,
 //     whose readiness check treats a boolean as blank; and `required` never
 //     together with `advanced`, which starts collapsed, so a required advanced
 //     field would disable the form with nothing visible to fill in.
 //   - A `default`, when given, has the type's shape: a string (or number) for
-//     text, textarea and select — and for a select one of its options — a
-//     number not below `min` for a number, true/false for a toggle, and a
-//     `{from, to}` mapping of YYYY-MM-DD dates for a daterange.
+//     text, textarea and select — and for a select one of its options, both
+//     compared trimmed — a finite number not below `min` for a number,
+//     true/false for a toggle, and a `{from, to}` mapping of YYYY-MM-DD dates
+//     for a daterange.
 //   - Every `{token}` in the template names a declared field, and every field
 //     is used by at least one token.
 //
@@ -238,6 +243,33 @@ func (r *promptFieldReader) str(prop string) string {
 	return s
 }
 
+// text is str for display text (label, placeholder, hint), which also takes a
+// bare number: `label: 2026` means the label "2026".
+func (r *promptFieldReader) text(prop string) string {
+	v, ok := r.value(prop)
+	if !ok {
+		return ""
+	}
+	s, isText := yamlScalarText(v)
+	if !isText {
+		r.reportf("%s must be text", prop)
+	}
+	return s
+}
+
+// required reports a property that is absent or blank. A present value of the
+// wrong type is not reported again: str/text already said what is wrong.
+func (r *promptFieldReader) required(prop, value, hint string) {
+	v, present := r.value(prop)
+	if !present {
+		r.reportf("%s is required%s", prop, hint)
+		return
+	}
+	if _, isString := v.(string); isString && strings.TrimSpace(value) == "" {
+		r.reportf("%s is required%s", prop, hint)
+	}
+}
+
 func (r *promptFieldReader) flag(prop string) bool {
 	v, ok := r.value(prop)
 	if !ok {
@@ -265,29 +297,32 @@ func parsePromptField(m map[string]any) (PromptField, []string) {
 
 	f := PromptField{
 		Key:         strings.TrimSpace(r.str("key")),
-		Label:       strings.TrimSpace(r.str("label")),
+		Label:       strings.TrimSpace(r.text("label")),
 		Type:        strings.TrimSpace(r.str("type")),
 		Required:    r.flag("required"),
 		Advanced:    r.flag("advanced"),
-		Placeholder: r.str("placeholder"),
-		Hint:        r.str("hint"),
+		Placeholder: r.text("placeholder"),
+		Hint:        r.text("hint"),
 	}
-	switch {
-	case f.Key == "":
-		r.reportf("key is required")
-	case !promptFieldKeyPattern.MatchString(f.Key):
+	r.required("key", f.Key, "")
+	if f.Key != "" && !promptFieldKeyPattern.MatchString(f.Key) {
 		r.reportf("key %q must be letters, digits or underscores so a {token} can name it", f.Key)
 		f.Key = ""
 	}
-	if f.Label == "" {
-		r.reportf("label is required")
-	}
+	r.required("label", f.Label, "")
+	r.required("type", f.Type, " (one of "+strings.Join(promptFieldTypes, ", ")+")")
 	knownType := slices.Contains(promptFieldTypes, f.Type)
-	switch {
-	case f.Type == "":
-		r.reportf("type is required (one of %s)", strings.Join(promptFieldTypes, ", "))
-	case !knownType:
+	if f.Type != "" && !knownType {
 		r.reportf("type %q is not one of %s", f.Type, strings.Join(promptFieldTypes, ", "))
+	}
+	// The web draws a placeholder only inside a text or textarea box, and a
+	// toggle shows no hint. Accepting them elsewhere would be the same silent
+	// no-op the unknown-property check exists to catch.
+	if f.Placeholder != "" && knownType && f.Type != "text" && f.Type != "textarea" {
+		r.reportf("placeholder only applies to a text or textarea field")
+	}
+	if f.Hint != "" && f.Type == "toggle" {
+		r.reportf("a toggle does not show a hint; put the explanation in its label")
 	}
 
 	f.Options = r.options(f.Type)
@@ -334,6 +369,9 @@ func (r *promptFieldReader) options(fieldType string) []string {
 	seen := map[string]bool{}
 	for _, o := range list {
 		s, ok := yamlScalarText(o)
+		// Trimmed because the web compares a select's value trimmed; " TWC"
+		// and "TWC" would otherwise be two options that select as one.
+		s = strings.TrimSpace(s)
 		switch {
 		case !ok:
 			r.reportf("options must be strings or numbers")
@@ -383,6 +421,7 @@ func promptFieldDefault(f PromptField, v any) (any, string) {
 		if !ok {
 			return nil, "default must be one of the options"
 		}
+		s = strings.TrimSpace(s)
 		for _, o := range f.Options {
 			if o == s {
 				return s, ""
@@ -477,18 +516,29 @@ func yamlScalarText(v any) (string, bool) {
 	return "", false
 }
 
+// yamlNumber accepts a finite YAML number. YAML spells infinity and NaN as
+// plain scalars (`.inf`, `.nan`), and they must be refused here rather than
+// passed on: encoding/json cannot marshal a non-finite float, so a single
+// `min: .inf` would make GET /prompts fail for every entry in the library —
+// the opposite of the degrade-to-plain contract.
 func yamlNumber(v any) (float64, bool) {
+	var n float64
 	switch x := v.(type) {
 	case int:
-		return float64(x), true
+		n = float64(x)
 	case int64:
-		return float64(x), true
+		n = float64(x)
 	case uint64:
-		return float64(x), true
+		n = float64(x)
 	case float64:
-		return x, true
+		n = x
+	default:
+		return 0, false
 	}
-	return 0, false
+	if math.IsNaN(n) || math.IsInf(n, 0) {
+		return 0, false
+	}
+	return n, true
 }
 
 func formatNumber(n float64) string {

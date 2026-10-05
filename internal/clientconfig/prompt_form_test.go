@@ -205,6 +205,22 @@ promptTemplate: "{a}"`, "min only applies to a number field"},
 promptTemplate: "{a}"`, "default 2 is below min 5"},
 		{"required toggle", `fields: [{key: a, label: A, type: toggle, required: true}]
 promptTemplate: "{a}"`, "cannot be required"},
+		{"infinite min", `fields: [{key: a, label: A, type: number, min: .inf}]
+promptTemplate: "{a}"`, "min must be a number"},
+		{"NaN default", `fields: [{key: a, label: A, type: number, default: .nan}]
+promptTemplate: "{a}"`, "default must be a number"},
+		{"negative infinite default", `fields: [{key: a, label: A, type: number, default: -.inf}]
+promptTemplate: "{a}"`, "default must be a number"},
+		{"placeholder on a select", `fields: [{key: a, label: A, type: select, options: [x], placeholder: pick}]
+promptTemplate: "{a}"`, "placeholder only applies to a text or textarea field"},
+		{"placeholder on a number", `fields: [{key: a, label: A, type: number, placeholder: "10"}]
+promptTemplate: "{a}"`, "placeholder only applies to a text or textarea field"},
+		{"hint on a toggle", `fields: [{key: a, label: A, type: toggle, hint: why}]
+promptTemplate: "{a}"`, "a toggle does not show a hint"},
+		{"blank label", `fields: [{key: a, label: "  ", type: text}]
+promptTemplate: "{a}"`, "label is required"},
+		{"options equal once trimmed", `fields: [{key: a, label: A, type: select, options: [TWC, " TWC"]}]
+promptTemplate: "{a}"`, `option "TWC" is listed twice`},
 		{"required advanced field", `fields: [{key: a, label: A, type: text, required: true, advanced: true}]
 promptTemplate: "{a}"`, "a required field cannot be advanced"},
 		{"toggle default not a bool", `fields: [{key: a, label: A, type: toggle, default: "yes"}]
@@ -277,6 +293,41 @@ promptTemplate: "{a} {c}"
 		if !strings.Contains(joined, want) {
 			t.Errorf("issues missing %q:\n%s", want, joined)
 		}
+	}
+}
+
+// TestPromptFormNonFiniteNumbersKeepCatalogServable is the regression for a
+// form that passed validation with `min: .inf`: the entry carried +Inf, and
+// encoding/json refuses a non-finite float, so marshalling the catalog — and
+// with it GET /prompts for every entry — failed.
+func TestPromptFormNonFiniteNumbersKeepCatalogServable(t *testing.T) {
+	dir := t.TempDir()
+	writePromptFile(t, dir, "inf.yaml", "name: Inf\nfields: [{key: a, label: A, type: number, min: .inf, default: .nan}]\npromptTemplate: \"{a}\"\n")
+	writePromptFile(t, dir, "ok.yaml", campaignFormPrompt)
+	got, problems := ReadPrompts(dir)
+	if len(problems) != 1 || len(got) != 2 {
+		t.Fatalf("got %d prompts, problems %v", len(got), problems)
+	}
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("the catalog must stay JSON-serializable: %v", err)
+	}
+}
+
+func TestPromptFormDisplayTextAndTrimming(t *testing.T) {
+	fields, _, issues := parsePromptForm([]byte(`fields:
+  - {key: year, label: 2026, type: select, options: [" TWC ", Other], default: "TWC "}
+promptTemplate: "{year}"
+`))
+	if len(issues) != 0 {
+		t.Fatalf("issues = %v", issues)
+	}
+	if fields[0].Label != "2026" || !reflect.DeepEqual(fields[0].Options, []string{"TWC", "Other"}) || fields[0].Default != "TWC" {
+		t.Errorf("field = %#v", fields[0])
+	}
+	// A label of the wrong type is reported once, not also as missing.
+	_, _, issues = parsePromptForm([]byte("fields: [{key: a, label: [x], type: text}]\npromptTemplate: \"{a}\"\n"))
+	if len(issues) != 1 || !strings.Contains(issues[0], "label must be text") {
+		t.Errorf("issues = %v, want exactly the label type error", issues)
 	}
 }
 

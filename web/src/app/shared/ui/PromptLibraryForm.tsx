@@ -51,6 +51,21 @@ export function isFormPrompt(p: PromptLibraryItem): p is FormPromptItem {
   );
 }
 
+/** Starting values for a library form. The same as a card's, with one
+ *  difference: a number field with no `default` starts BLANK rather than at
+ *  its `min` (or 0). On a card that 0 is harmless, but here an untouched
+ *  optional number would put "Budget: 0" into the prompt instead of letting
+ *  its line drop like any other unanswered optional field. A required number
+ *  with no default therefore has to be typed, which is the point of
+ *  `required`. */
+export function libraryFormInitialValues(shape: PillFormShape): PillValues {
+  const values = formInitialValues(shape);
+  for (const f of shape.fields ?? []) {
+    if (f.type === "number" && f.default === undefined) values[f.key] = "";
+  }
+  return values;
+}
+
 export function PromptLibraryForm({
   prompt,
   note,
@@ -67,12 +82,17 @@ export function PromptLibraryForm({
     fields: prompt.fields,
     promptTemplate: prompt.prompt_template,
   };
-  const [values, setValues] = useState<PillValues>(() => formInitialValues(shape));
+  const [values, setValues] = useState<PillValues>(() => libraryFormInitialValues(shape));
   const set = (key: string, value: PillFieldValue) =>
     setValues((prev) => ({ ...prev, [key]: value }));
 
   const rendered = pillToPrompt(shape, values, { dropBlankLines: true });
-  const ready = isPillReady(shape, values) && rendered.trim() !== "";
+  const requiredFilled = isPillReady(shape, values);
+  // A template made only of optional-token lines renders to nothing until one
+  // of them is answered; say so, since no field carries a * to explain why
+  // Use prompt is unavailable.
+  const empty = rendered.trim() === "";
+  const ready = requiredFilled && !empty;
 
   return (
     <section
@@ -104,7 +124,9 @@ export function PromptLibraryForm({
         </pre>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-xs text-[var(--color-text-muted)]">{note}</span>
+        <span className="text-xs text-[var(--color-text-muted)]">
+          {requiredFilled && empty ? "Fill in at least one field to use this prompt." : note}
+        </span>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
