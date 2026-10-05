@@ -34,6 +34,9 @@ type fakeFleet struct {
 	turn func(w *sseWriter, r *http.Request)
 	// cancelStatus is what the Stop endpoint answers (0 = 204).
 	cancelStatus int
+	// cancelHold, when set, holds every Stop, once recorded, until it is
+	// closed: a slow or hung server. A Stop whose caller gives up ends.
+	cancelHold chan struct{}
 
 	mu      sync.Mutex
 	chats   []chatReq
@@ -92,6 +95,13 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.cancels = append(f.cancels, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/conversations/"), "/cancel")+" "+string(b))
 		f.mu.Unlock()
+		if f.cancelHold != nil {
+			select {
+			case <-f.cancelHold:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if f.cancelStatus != 0 {
 			w.WriteHeader(f.cancelStatus)
 			return
@@ -1499,6 +1509,23 @@ func (f *fakeFleet) cancelsSnapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.cancels)
+}
+
+// awaitStop waits (bounded) until the fake has received a Stop, and returns
+// the Stops received so far.
+func (f *fakeFleet) awaitStop(t *testing.T) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got := f.cancelsSnapshot()
+		if len(got) > 0 {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the fake never received a Stop")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // A bare `$/cancel_request` naming a prompt (an unstable ACP notification)
