@@ -101,6 +101,9 @@ type Agent struct {
 	// completionAnySucceeded is Options.CompletionAnySucceeded as a set; empty
 	// means no deterministic completion predicate.
 	completionAnySucceeded map[string]bool
+	// completionBlocked is Options.CompletionBlockedWhen as sets; nil means no
+	// blocked rule (completion_blocked.go).
+	completionBlocked *completionBlockedRule
 
 	// ── sub-agents (#175, part b) ──
 	// subagent carries the spawn_subagent feature gate, recursion/fan-out caps,
@@ -276,6 +279,12 @@ type Options struct {
 	// end-of-run verifier or phone-a-friend. nil = no predicate: every finish
 	// is verified exactly as before.
 	CompletionAnySucceeded []string
+	// CompletionBlockedWhen is the completion clause's optional blocked rule
+	// (EXECUTION REQUIREMENTS completion.blocked_when), resolved by the driver:
+	// a predicate-completed run whose recording call carried a declared
+	// blocked value finishes as success with run outcome "blocked". nil = no
+	// rule.
+	CompletionBlockedWhen *CompletionBlockedWhen
 
 	// ── sub-agents (#175 part b, #1043) ──
 	// Subagent configures the spawn_subagent native tool. The DRIVERS compose
@@ -393,6 +402,7 @@ func NewAgent(opts Options) *Agent {
 		for _, name := range opts.CompletionAnySucceeded {
 			a.completionAnySucceeded[name] = true
 		}
+		a.completionBlocked = newCompletionBlockedRule(opts.CompletionBlockedWhen)
 	}
 	// The parent task id labels any sub-agent this run spawns (#264 traceability).
 	// A child inherits this same value (buildChild), so every descendant's session
@@ -547,6 +557,11 @@ type scheduledPolicy struct {
 	// actually succeeded. A later verdict (a re-verification after a
 	// phone-a-friend repair) clears it.
 	verifierWarning string
+	// blockedDetail is set when the completion predicate completed the run and
+	// the task's blocked rule matched the recording call
+	// (evaluateBlockedOutcome): the detail persisted as run outcome "blocked"
+	// once the run has actually succeeded.
+	blockedDetail string
 }
 
 // verifierRetryDelay is the pause before the one retry of a verifier call that
@@ -658,6 +673,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		// finished: the predicate, not an unverified pass, completed it.
 		p.verifierWarning = ""
 		p.recordCompletionPredicate(tool)
+		p.evaluateBlockedOutcome()
 		return true, nil
 	}
 
@@ -1296,6 +1312,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		return err
 	}
 	policy.persistVerifierWarning()
+	policy.persistBlockedOutcome()
 	return nil
 }
 

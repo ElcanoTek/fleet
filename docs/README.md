@@ -287,6 +287,7 @@ above fails otherwise.
 - [`SANDBOX-RUNTIMES.md`](SANDBOX-RUNTIMES.md) — Sandbox OCI runtimes — runc · Kata · libkrun
 - [`SANDBOX-START-TIMEOUT.md`](SANDBOX-START-TIMEOUT.md) — Sandbox start timeout & the keep-id image pre-warm (#1358)
 - [`SCANNING.md`](SCANNING.md) — The scanning stack: who checks what, and what actually gates
+- [`SCHEDULED-REFRESH-RELIABILITY.md`](SCHEDULED-REFRESH-RELIABILITY.md) — Scheduled refresh reliability: the answer the verifier judges, connector outages, blocked runs, staged-task cards, declared serialization keys
 - [`SCHEDULER-UX.md`](SCHEDULER-UX.md) — Scheduler UX 2.0 — upcoming runs + recurring context carry (#504)
 - [`SELF-IMPROVING-MEMORY.md`](SELF-IMPROVING-MEMORY.md) — Self-improving memory: feedback → learned instructions
 - [`SELF-WAKE.md`](SELF-WAKE.md) — Self-wake: sleep / wake_on_event

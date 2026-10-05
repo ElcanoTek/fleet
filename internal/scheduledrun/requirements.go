@@ -30,6 +30,25 @@ type executionRequirements struct {
 	// actual tool roster (full mcp_<server>_<tool> and native names), filled by
 	// buildTaskRemoteOverlayChecked once the roster is known.
 	completionRoster []string
+	// blockedRoster is Completion.BlockedWhen.Tool resolved the same way (the
+	// parser guarantees any_succeeded lists it, so checkTools has already
+	// proved it resolves).
+	blockedRoster []string
+}
+
+// completionBlockedWhen returns the resolved blocked rule for the agent, nil
+// when the run declared none.
+func (r *executionRequirements) completionBlockedWhen() *agent.CompletionBlockedWhen {
+	if r == nil || r.Completion == nil || r.Completion.BlockedWhen == nil || len(r.blockedRoster) == 0 {
+		return nil
+	}
+	bw := r.Completion.BlockedWhen
+	return &agent.CompletionBlockedWhen{
+		Tools:          append([]string(nil), r.blockedRoster...),
+		Argument:       bw.Argument,
+		In:             append([]string(nil), bw.In...),
+		DetailArgument: bw.DetailArgument,
+	}
 }
 
 // completionRequirement is the producer's deterministic completion predicate
@@ -94,10 +113,24 @@ func (r *executionRequirements) resolveCompletion(catalog []mcp.ServerTool, nati
 	if r == nil || r.Completion == nil || len(r.Completion.AnySucceeded) == 0 {
 		return nil
 	}
+	return resolveRosterNames(r.Completion.AnySucceeded, catalog, native)
+}
+
+// resolveBlockedWhen resolves the blocked rule's tool against the roster.
+func (r *executionRequirements) resolveBlockedWhen(catalog []mcp.ServerTool, native []fantasy.AgentTool) []string {
+	if r == nil || r.Completion == nil || r.Completion.BlockedWhen == nil {
+		return nil
+	}
+	return resolveRosterNames([]string{r.Completion.BlockedWhen.Tool}, catalog, native)
+}
+
+// resolveRosterNames maps declared names (bare or full) to the deduplicated,
+// sorted full roster names they denote.
+func resolveRosterNames(names []string, catalog []mcp.ServerTool, native []fantasy.AgentTool) []string {
 	_, tools := rosterNames(catalog, native)
 	seen := make(map[string]bool)
 	var out []string
-	for _, name := range r.Completion.AnySucceeded {
+	for _, name := range names {
 		for _, full := range tools[name] {
 			if !seen[full] {
 				seen[full] = true
@@ -303,6 +336,7 @@ func (r *Runner) buildTaskRemoteOverlayChecked(ctx context.Context, task *models
 			return nil, err
 		}
 		req.completionRoster = req.resolveCompletion(catalog, native)
+		req.blockedRoster = req.resolveBlockedWhen(catalog, native)
 	}
 	return overlay, nil
 }

@@ -24,6 +24,14 @@ this is the fleet port of that proven design.
   exclusive with same-key tasks. Re-run/clone and the task-definition
   export/import (#238) carry it too. The key is immutable after creation (the
   task-edit path does not touch it).
+- **A prompt may declare the key.** A task created without an explicit key
+  takes the `serialization_key` its prompt's `EXECUTION REQUIREMENTS` line
+  declares ([CONDITIONAL-TASK-COMPLETION.md](CONDITIONAL-TASK-COMPLETION.md)),
+  on every create path (`models.NewTask`): the API, chat `schedule_task`, the
+  Operations Center form, imports and recurrence spawns. An explicit key always
+  wins. Because the key is immutable, an edit that adds the declaration takes
+  effect from the next occurrence. The declared value must match
+  `^[A-Za-z0-9_.:/-]{1,200}$`; an explicit key keeps its opaque contract.
 - `paused_awaiting_input` does **not** hold the key: a paused run has stopped
   executing and its resume re-queues the task as pending, which re-passes the
   claim gate before it can run again.

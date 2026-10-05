@@ -994,6 +994,10 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this
 		// run's roster at dispatch. nil = none declared, verifier as before.
 		CompletionAnySucceeded: requirements.completionTools(),
+		// Its optional blocked rule (completion.blocked_when): a run the
+		// predicate completed whose recording call declared a blocked outcome
+		// finishes as success with run outcome "blocked".
+		CompletionBlockedWhen: requirements.completionBlockedWhen(),
 		// Governed sub-agents / delegation (#175, #264, #1043): ON by default —
 		// registered whenever the fleet-wide flag AND this task's allow_delegation
 		// are both true (each defaults true; each is an independent kill switch,

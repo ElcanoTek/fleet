@@ -138,6 +138,11 @@
   --color-status-warning-fg: #ffd2a1;
   --color-status-warning-bg: rgba(255, 136, 71, 0.2);
   --color-status-warning-border: rgba(255, 136, 71, 0.62);
+  /* Blocked: a success that decided not to publish — amber-gold, brighter and
+     yellower than scheduled's amber so the two read apart. */
+  --color-status-blocked-fg: #ffeaa0;
+  --color-status-blocked-bg: rgba(245, 197, 24, 0.2);
+  --color-status-blocked-border: rgba(245, 197, 24, 0.7);
   --color-status-error-fg: #ffd2d2;
   --color-status-error-bg: rgba(255, 85, 85, 0.14);
   --color-status-error-border: rgba(255, 85, 85, 0.6);
@@ -448,6 +453,9 @@
   --color-status-warning-fg: #8f3e10;
   --color-status-warning-bg: rgba(255, 136, 71, 0.24);
   --color-status-warning-border: rgba(255, 136, 71, 0.48);
+  --color-status-blocked-fg: #6b5200;
+  --color-status-blocked-bg: rgba(245, 197, 24, 0.26);
+  --color-status-blocked-border: rgba(196, 150, 0, 0.6);
   --color-status-error-fg: #7c1f1f;
   --color-status-error-bg: rgba(255, 85, 85, 0.18);
   --color-status-error-border: rgba(255, 85, 85, 0.44);
@@ -2064,6 +2072,14 @@ tr.clickable:hover td {
   color: var(--color-status-warning-fg);
   background: var(--color-status-warning-bg);
   border-color: var(--color-status-warning-border);
+}
+/* A success whose declared completion clause recorded a blocked outcome
+   (run_outcome "blocked"): it did its job and decided not to publish, which
+   must not read as the same green as a run that did. */
+.status-blocked {
+  color: var(--color-status-blocked-fg);
+  background: var(--color-status-blocked-bg);
+  border-color: var(--color-status-blocked-border);
 }
 .status-cancelled {
   color: var(--color-status-cancelled-fg);

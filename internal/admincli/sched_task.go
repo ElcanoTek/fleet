@@ -151,7 +151,7 @@ func listTasks(st taskListStore, w, errW io.Writer, status string, limit int, as
 	}
 	rows := make([][]string, 0, len(tasks))
 	for _, t := range tasks {
-		rows = append(rows, []string{shortID(t.ID), taskLabel(t), string(t.Status), fmt.Sprint(t.Priority), taskSchedule(t), taskModel(t)})
+		rows = append(rows, []string{shortID(t.ID), taskLabel(t), taskStatus(t), fmt.Sprint(t.Priority), taskSchedule(t), taskModel(t)})
 	}
 	if err := renderTable(w, []string{"ID", "LABEL", "STATUS", "PRI", "SCHEDULE", "MODEL"}, rows); err != nil {
 		return err
@@ -160,6 +160,18 @@ func listTasks(st taskListStore, w, errW io.Writer, status string, limit int, as
 		fmt.Fprintf(errW, "showing %d of %d task(s); raise --limit or add --status to narrow\n", len(tasks), total)
 	}
 	return nil
+}
+
+// taskStatus renders the status column: the lifecycle status, qualified by
+// the run outcome when there is one (migration 074) — "success (blocked)" for
+// a run whose declared completion clause recorded a blocked outcome, so a
+// dashboard that stopped updating does not list as a plain success, and
+// "dead_lettered (connector_unavailable)" for a connector-outage dead-letter.
+func taskStatus(t *models.Task) string {
+	if t.RunOutcome != nil && *t.RunOutcome != "" {
+		return string(t.Status) + " (" + *t.RunOutcome + ")"
+	}
+	return string(t.Status)
 }
 
 // validTaskStatusFilter guards --status against typos so a misspelled filter

@@ -1083,7 +1083,8 @@ type TaskCreate struct {
 	// contents (coupling doctrine: the key's meaning is owned by the intake
 	// side, e.g. "client:<id>"). nil / empty / whitespace-only = unserialized,
 	// the historical behavior. Normalized (trimmed, empty → nil) in NewTask;
-	// immutable after creation.
+	// immutable after creation. When nil, NewTask takes the key the prompt's
+	// EXECUTION REQUIREMENTS declare (serialization_key), if any.
 	SerializationKey *string `json:"serialization_key,omitempty"`
 	// A2ADelegationDepth is set ONLY by the inbound A2A server (#1368) from the
 	// delegating peer's X-Fleet-A2A-Depth header; it is hidden from JSON so no
@@ -1525,6 +1526,19 @@ func NewTask(tc TaskCreate) *Task {
 	if tc.SerializationKey != nil {
 		if trimmed := strings.TrimSpace(*tc.SerializationKey); trimmed != "" {
 			serializationKey = &trimmed
+		}
+	}
+	// A task created without an explicit key takes the one its prompt's
+	// EXECUTION REQUIREMENTS declare, so every write path — the API, chat's
+	// schedule_task, the task form, an import, a recurrence spawn — serializes
+	// the same declaration the same way; production had two lineages for one
+	// dashboard overlap because only API-created tasks carried the key. An
+	// explicit key always wins. Creation only: the key stays immutable on an
+	// existing row (docs/TASK-SERIALIZATION.md), so a prompt edit that adds a
+	// declaration takes effect on the next occurrence, which is created here.
+	if serializationKey == nil {
+		if declared := DeclaredSerializationKey(tc.Prompt); declared != "" {
+			serializationKey = &declared
 		}
 	}
 

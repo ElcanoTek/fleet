@@ -309,6 +309,25 @@ func TestListTasks_TableOutput(t *testing.T) {
 	}
 }
 
+// TestListTasks_StatusQualifiedByRunOutcome: a Blocked run lists as
+// "success (blocked)", not a plain success.
+func TestListTasks_StatusQualifiedByRunOutcome(t *testing.T) {
+	st := &fakeTaskListStore{
+		tasks: []*models.Task{
+			{ID: uuid.New(), Name: "page-refresh", Status: models.TaskStatusSuccess, RunOutcome: ptr(models.RunOutcomeBlocked)},
+			{ID: uuid.New(), Name: "digest", Status: models.TaskStatusSuccess},
+		},
+		total: 2,
+	}
+	var buf, notes bytes.Buffer
+	if err := listTasks(st, &buf, &notes, "", 50, false); err != nil {
+		t.Fatal(err)
+	}
+	if out := buf.String(); !strings.Contains(out, "success (blocked)") || strings.Count(out, "success") != 2 {
+		t.Fatalf("status column:\n%s", out)
+	}
+}
+
 // TestTaskLabelPrecedence pins the label column's fallback chain: Name wins,
 // then Title — the rung that keeps recurrence occurrences, which clear Name
 // but carry Title, from listing as raw prompt blobs — then the prompt excerpt.
