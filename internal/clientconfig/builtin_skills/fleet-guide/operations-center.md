@@ -206,7 +206,7 @@ a daily job is about to be an expensive one.
 
 ## 4. Run states
 
-Every status badge means one of ten things. What each one means, and what to do:
+Every status badge means one of eleven things. What each one means, and what to do:
 
 | Status | What it means, and what to do |
 | --- | --- |
@@ -215,6 +215,7 @@ Every status badge means one of ten things. What each one means, and what to do:
 | `LEASED` | An agent has claimed it and is starting it now. A brief, normal step between pending and running. |
 | `RUNNING` | Executing now. Open it to watch live if you are curious. |
 | `SUCCESS` | The run completed. Its result is in the logs, and in the recipients' inboxes if the task has any — a task with no recipients succeeds quietly, so a green badge is not by itself proof that anyone was emailed. |
+| `BLOCKED` | An amber badge on a run that completed but decided not to publish — for example a dashboard refresh whose source was unreachable. It appears only when the task's prompt declares which recordings mean blocked (an EXECUTION REQUIREMENTS `completion.blocked_when` clause); the task summary's **Blocked** row says why. The run itself is a success and the schedule keeps going, but the thing it maintains did not change: fix the cause if it keeps happening. Three blocked runs in a row of the same schedule send a failure notification. |
 | `ERROR` | A failure the scheduler could not route anywhere else — the uncommon one. Treat it like the row below: read it, fix the cause, rerun. A run that failed and is going to be retried does not sit here; it goes back to `PENDING` until its next attempt. |
 | `DEAD_LETTERED` | Failed and set aside for review — the badge most failures end on. It means one of two things, and the row says which: retries were exhausted, or the failure was deterministic and was quarantined on its first attempt without retrying. This occurrence is done: read the failure, fix the cause, and replay it if you want this run again; see [When a run goes wrong](#6-when-a-run-goes-wrong). A recurring schedule still continues on its own — the next occurrence is queued unless the schedule has reached its configured end (its run count or end date). Two exceptions resume only on replay: chains parked by two consecutive dead-letters, and rows dead-lettered before that continuation shipped. A parked occurrence's schedule reads **⏹ Schedule stopped**, with the reason in its task summary. A chain whose prompt has a malformed EXECUTION REQUIREMENTS line stops on its first dead-letter; a plain replay is refused, so an administrator replays it with a corrected prompt (`fleet sched dlq replay --prompt-file`), which keeps its task memory. Editing the finished task only starts a one-off run. |
 | `CANCELLED` | A person stopped it. The record notes who. Deliberate stops never retry or alert. |
@@ -227,6 +228,15 @@ Every status badge means one of ten things. What each one means, and what to do:
 > would fail the same way until something changes. So a failure sitting in
 > `DEAD_LETTERED` has not necessarily burned through retries; it may never have
 > been retried at all, on purpose.
+>
+> One case sits in between: a run that could not start because a connector its
+> prompt requires was briefly unreachable goes back to `SCHEDULED` and runs
+> again a few minutes later, twice at most, without using up the task's own
+> retries. If the connector is still down after that it is dead-lettered, but
+> that dead-letter does not count toward stopping a recurring schedule — unless
+> it happens three runs in a row, which stops the schedule with a reason that
+> names the connector, because a connector that is down that long needs
+> fixing.
 
 ## 5. Everyday actions
 

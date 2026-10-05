@@ -93,6 +93,14 @@ type ScopeSpec struct {
 	// with the gates it re-derives from its own bundle, so a parent-side bug
 	// can restrict a scope but never widen one. nil = no parent narrowing.
 	Policy *ScopePolicy `json:"policy,omitempty"`
+	// ConnectRetryBudgetMs carries what is left of the run's connect-retry
+	// allowance (mcp.WithConnectRetry) across the process boundary: the
+	// scope's servers retry a fast, transient registration failure within it
+	// before they are skipped, and the response's ConnectRetrySpentMs reports
+	// what they used. Client.OpenScope fills it from the ctx; 0 (an
+	// interactive turn, or a spent allowance) means no retry, so a chat turn
+	// never waits on a server that is down.
+	ConnectRetryBudgetMs int64 `json:"connectRetryBudgetMs,omitempty"`
 }
 
 // ScopePolicy carries the parent's effective gates across the credential
@@ -235,6 +243,10 @@ type response struct {
 	// SkippedServer). Failure details stay in the credential-owning process
 	// because they may contain resolved URLs.
 	Skipped []SkippedServer `json:"skipped,omitempty"`
+	// ConnectRetrySpentMs answers methodOpenScope with how much of
+	// ScopeSpec.ConnectRetryBudgetMs the scope's connect retries used, so the
+	// parent charges it to the run's allowance.
+	ConnectRetrySpentMs int64 `json:"connectRetrySpentMs,omitempty"`
 	// Reload answers methodReload with the diff and refreshed public catalog.
 	Reload *ReloadResult `json:"reload,omitempty"`
 }
@@ -251,9 +263,18 @@ type response struct {
 // connection skipped under a labelled default seat (#1656); empty for a
 // skip that had no connection behind it (a pinned seat that is not
 // connected).
+//
+// A bundle scope reports here too: every selected server that failed to
+// register, with Reason "unreachable". Detail and Transient describe a
+// failed registration (agentcore.MCPConnectFailure): a credential-free
+// summary of the connect error — never a URL, header or body — and whether
+// it was transient. Both are empty for a skip that was not a connect failure
+// (a missing token, the overlay cap).
 type SkippedServer struct {
-	Name    string `json:"name"`
-	Reason  string `json:"reason,omitempty"`
-	Server  string `json:"server,omitempty"`
-	Account string `json:"account,omitempty"`
+	Name      string `json:"name"`
+	Reason    string `json:"reason,omitempty"`
+	Server    string `json:"server,omitempty"`
+	Account   string `json:"account,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	Transient bool   `json:"transient,omitempty"`
 }

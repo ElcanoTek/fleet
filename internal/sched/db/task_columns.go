@@ -132,6 +132,9 @@ type taskScanBuf struct {
 	previousOccurrenceID   sql.NullString
 	recurrenceParkedAt     sql.NullTime
 	recurrenceParkedReason sql.NullString
+	runOutcome             sql.NullString
+	runOutcomeDetail       sql.NullString
+	infraRetryCount        int
 }
 
 // taskColumn is one row of the task-column registry: one tasks-table column,
@@ -1112,6 +1115,53 @@ var taskColumnRegistry = []taskColumn{
 				t.RecurrenceParkedReason = &v
 			}
 		},
+	},
+	{
+		name: "run_outcome",
+		read: true, txUpdate: true,
+		// How a terminal run ended beyond its status (migration 074): written
+		// by the success / dead-letter transitions through UpdateTaskTx under
+		// the lease, cleared by replay.
+		noInsert: "terminal run outcome (migration 074): written by the terminal transition; a new row has not run",
+		noUpsert: "terminal run outcome (migration 074): a status write routed through the upsert must never fabricate or drop it",
+		noExport: "per-run result (migration 074), like result and error_message",
+		value:    func(t *models.Task) any { return t.RunOutcome },
+		dest:     func(b *taskScanBuf) any { return &b.runOutcome },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.runOutcome.Valid && b.runOutcome.String != "" {
+				v := b.runOutcome.String
+				t.RunOutcome = &v
+			}
+		},
+	},
+	{
+		name: "run_outcome_detail",
+		read: true, txUpdate: true,
+		noInsert: "terminal run outcome detail (migration 074): written with run_outcome",
+		noUpsert: "terminal run outcome detail (migration 074): written with run_outcome",
+		noExport: "per-run result (migration 074), like result and error_message",
+		value:    func(t *models.Task) any { return t.RunOutcomeDetail },
+		dest:     func(b *taskScanBuf) any { return &b.runOutcomeDetail },
+		assign: func(b *taskScanBuf, t *models.Task) {
+			if b.runOutcomeDetail.Valid && b.runOutcomeDetail.String != "" {
+				v := b.runOutcomeDetail.String
+				t.RunOutcomeDetail = &v
+			}
+		},
+	},
+	{
+		name: "infra_retry_count",
+		read: true, txUpdate: true,
+		// The runner's connector-outage re-runs of this occurrence (migration
+		// 074): incremented by RequeueTaskForInfraRetry under the lease,
+		// reset by replay. Kept apart from attempt_count so it never spends
+		// max_retries.
+		noInsert: "runtime re-run counter (migration 074): a new row starts at the column default 0",
+		noUpsert: "runtime re-run counter (migration 074): a status write routed through the upsert must never reset or raise it",
+		noExport: reasonRuntimeState,
+		value:    func(t *models.Task) any { return t.InfraRetryCount },
+		dest:     func(b *taskScanBuf) any { return &b.infraRetryCount },
+		assign:   func(b *taskScanBuf, t *models.Task) { t.InfraRetryCount = b.infraRetryCount },
 	},
 }
 

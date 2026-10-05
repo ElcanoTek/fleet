@@ -333,6 +333,13 @@ type RemoteMCPOverlay struct {
 	// would read a skipped-but-known connection as one the owner never had
 	// (#1656). Nil when nothing was skipped by connection.
 	SkippedSeats map[string]agentcore.MCPChoice
+	// ConnectFailures describes, per registration name, a Skipped connection
+	// whose MOUNT failed (not a missing or refused-to-refresh token, not the
+	// overlay cap): the credential-free detail and whether the failure was
+	// transient. A scheduled run's requirements check reads it to tell a
+	// connector outage the scheduler should re-run from a terminal roster
+	// error (agentcore.ErrConnectorUnavailable). Nil when no mount failed.
+	ConnectFailures []agentcore.MCPConnectFailure
 }
 
 // The classes a skipped hosted connection can fall into.
@@ -876,7 +883,13 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 				opts.Headers = map[string]string{"Authorization": "Bearer " + bearer}
 			}
 		}
-		if aerr := client.AddHTTPServerWithOptions(ctx, regName, conn.URL, opts); aerr != nil {
+		// A scheduled run (ctx marked mcp.WithConnectRetry) retries a fast,
+		// transient mount failure a few seconds apart, within the run's retry
+		// budget, before skipping the connection; an interactive turn attempts
+		// it once.
+		if aerr := mcp.RetryTransientConnect(ctx, regName, func(attemptCtx context.Context) error {
+			return client.AddHTTPServerWithOptions(attemptCtx, regName, conn.URL, opts)
+		}); aerr != nil {
 			// The reason matters: a 401 from the vendor (dead token, revoked
 			// grant, org approval pending), a TLS or DNS failure and a handshake
 			// timeout each want a different operator action, and a value-free
@@ -885,6 +898,12 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			// public name — this stays a host-side log line.
 			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %s", regName, email, connectFailureReason(bearer, aerr))
 			overlay.skipConn(conn, connectSkipReason(aerr))
+			failure := agentcore.NewMCPConnectFailure(regName, aerr)
+			// The summary never quotes a URL or body, but a vendor's own
+			// JSON-RPC message is quoted: mask the credential that rode the
+			// request in case the vendor echoed it.
+			failure.Detail = maskCredential(failure.Detail, bearer, 1024)
+			overlay.ConnectFailures = append(overlay.ConnectFailures, failure)
 			recordRefusedMount(ctx, resolver, email, regName, conn, aerr)
 			continue
 		}

@@ -273,9 +273,17 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	}
 
 	client := mcp.NewClient()
-	if _, err := agentcore.BindMCPSelection(ctx, client, selection, bases, spec.Workspace); err != nil {
+	_, failed, err := agentcore.BindMCPSelectionReport(ctx, client, selection, bases, spec.Workspace)
+	if err != nil {
 		_ = client.Close()
 		return "", nil, nil, err
+	}
+	// Failed registrations cross as public names plus a credential-free
+	// detail, so the parent's requirements check can tell a connector outage
+	// from a server that was never configured.
+	var skipped []mcpbroker.SkippedServer
+	for _, f := range failed {
+		skipped = append(skipped, mcpbroker.SkippedServer{Name: f.Server, Reason: agent.SkipReasonUnreachable, Detail: f.Detail, Transient: f.Transient})
 	}
 	var extraServers []string
 	if len(httpTools) > 0 {
@@ -314,7 +322,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	b.mu.Lock()
 	b.scopes[id] = scope
 	b.mu.Unlock()
-	return id, authz.filterTools(describeTools(client)), nil, nil
+	return id, authz.filterTools(describeTools(client)), skipped, nil
 }
 
 func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.RemoteScopeSpec, policy *mcpbroker.ScopePolicy) (string, []mcpbroker.ToolDescriptor, []mcpbroker.SkippedServer, error) {
@@ -353,9 +361,14 @@ func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.Remo
 		}
 		// The name and its reason class cross the wire; the failure detail
 		// (which can quote a resolved URL or a vendor body) stays here.
+		failures := make(map[string]agentcore.MCPConnectFailure, len(overlay.ConnectFailures))
+		for _, f := range overlay.ConnectFailures {
+			failures[f.Server] = f
+		}
 		for _, name := range overlay.Skipped {
 			seat := overlay.SkippedSeats[name]
-			skipped = append(skipped, mcpbroker.SkippedServer{Name: name, Reason: overlay.SkipReason(name), Server: seat.Server, Account: seat.Account})
+			f := failures[name]
+			skipped = append(skipped, mcpbroker.SkippedServer{Name: name, Reason: overlay.SkipReason(name), Server: seat.Server, Account: seat.Account, Detail: f.Detail, Transient: f.Transient})
 		}
 	}
 	tools := describeTools(client)

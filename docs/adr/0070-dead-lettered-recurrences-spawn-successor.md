@@ -1,6 +1,6 @@
 # ADR-0070: A dead-lettered recurring occurrence spawns its successor
 
-- **Status:** Accepted; amended by [ADR-0073](0073-malformed-requirements-park-on-first-dead-letter.md)
+- **Status:** Accepted; amended by [ADR-0073](0073-malformed-requirements-park-on-first-dead-letter.md) and [ADR-0077](0077-connector-outage-is-not-a-recurrence-strike.md)
 - **Date:** 2026-09-20
 - **Deciders:** fleet maintainers
 

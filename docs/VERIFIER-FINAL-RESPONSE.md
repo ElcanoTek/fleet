@@ -9,6 +9,17 @@ checks, the run dead-lettered as `ErrCompletionUnverified`, and fully-completed
 work (page published and verified live, outcome written in prose) sat in the
 DLQ. fleet.elcanotek.com hit exactly this on 2026-09-19 and 2026-09-21.
 
+> **Amended 2026-10-05.** The gates no longer judge the latest round's closing
+> text alone. A round a model gate (the verifier or the phone-a-friend
+> reviewer) sent back for repair stays part of the run's answer, the repair
+> round's text is appended to it, and the run persists that same composed
+> answer (`agentcore.RunAnswerProvider`). Judging the latest round alone saw
+> only the short supplement a repair produces, and dead-lettered runs whose
+> combined answer had every item. A textless repair round is therefore judged
+> on the answer it would persist, not on the no-response marker. See
+> [SCHEDULED-REFRESH-RELIABILITY.md](SCHEDULED-REFRESH-RELIABILITY.md#a-the-verifier-judges-the-answer-the-run-persists).
+> The rest of this note is the record of #1570 as it shipped.
+
 ## What shipped
 
 - `runEndOfRunVerifier(ctx, task, finalResponse, records)` takes the run's

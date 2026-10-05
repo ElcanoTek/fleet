@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
@@ -57,6 +58,7 @@ type fakeScopedBroker struct {
 	scopeID        string
 	scopeTools     []ToolDescriptor
 	scopeSkipped   []SkippedServer
+	retrySpend     time.Duration
 	openSpec       ScopeSpec
 	lastCallScope  string
 	closedScopes   []string
@@ -100,10 +102,12 @@ func (b *fakeScopedBroker) Reload(ctx context.Context) (*ReloadResult, error) {
 	return b.reloadResult, b.reloadErr
 }
 
-func (b *fakeScopedBroker) OpenScope(_ context.Context, spec ScopeSpec) (string, []ToolDescriptor, []SkippedServer, error) {
+func (b *fakeScopedBroker) OpenScope(ctx context.Context, spec ScopeSpec) (string, []ToolDescriptor, []SkippedServer, error) {
 	if b.panicOpen != nil {
 		panic(b.panicOpen)
 	}
+	// Stand-in for connect retries made inside the scope.
+	mcp.SpendConnectRetryBudget(ctx, b.retrySpend)
 	b.scopeMu.Lock()
 	b.openSpec = spec
 	b.scopeMu.Unlock()
@@ -668,6 +672,48 @@ func TestClientServer_CallRoundTrip(t *testing.T) {
 	}
 	if got := fake.lastArgs["record_id"]; got != json.Number("9007199254740993") {
 		t.Fatalf("broker changed reviewed numeric ID: %v (%T)", got, got)
+	}
+}
+
+// TestClientServer_ScopeCarriesTheRunConnectRetryBudget: the run's
+// connect-retry allowance crosses the boundary as what is left of it, the
+// child opens the scope under it, and what the child spent is charged back to
+// the run — so retries in several scopes add at most one allowance. Without
+// an allowance (an interactive turn) the scope opens with none.
+func TestClientServer_ScopeCarriesTheRunConnectRetryBudget(t *testing.T) {
+	fake := &fakeScopedBroker{fakeBroker: &fakeBroker{}, scopeID: "scope-1", retrySpend: 4 * time.Second}
+	client := loopback(t, fake)
+	ctx := mcp.WithConnectRetryBudget(context.Background(), 10*time.Second)
+	if _, err := client.OpenScope(ctx, ScopeSpec{Selection: []ScopeChoice{{Server: "pages"}}}); err != nil {
+		t.Fatal(err)
+	}
+	fake.scopeMu.Lock()
+	sent := fake.openSpec.ConnectRetryBudgetMs
+	fake.scopeMu.Unlock()
+	if sent != 10000 {
+		t.Fatalf("ConnectRetryBudgetMs = %d, want the run's 10000", sent)
+	}
+	if left := mcp.ConnectRetryBudgetLeft(ctx); left != 6*time.Second {
+		t.Fatalf("allowance left after the scope = %s, want 6s (the child's 4s charged back)", left)
+	}
+	if _, err := client.OpenScope(ctx, ScopeSpec{Selection: []ScopeChoice{{Server: "pages"}}}); err != nil {
+		t.Fatal(err)
+	}
+	fake.scopeMu.Lock()
+	sent = fake.openSpec.ConnectRetryBudgetMs
+	fake.scopeMu.Unlock()
+	if sent != 6000 || mcp.ConnectRetryBudgetLeft(ctx) != 2*time.Second {
+		t.Fatalf("second scope got %dms, left %s; want 6000ms and 2s", sent, mcp.ConnectRetryBudgetLeft(ctx))
+	}
+
+	if _, err := client.OpenScope(context.Background(), ScopeSpec{Selection: []ScopeChoice{{Server: "pages"}}}); err != nil {
+		t.Fatal(err)
+	}
+	fake.scopeMu.Lock()
+	sent = fake.openSpec.ConnectRetryBudgetMs
+	fake.scopeMu.Unlock()
+	if sent != 0 {
+		t.Fatalf("an interactive scope sent a retry allowance: %d", sent)
 	}
 }
 

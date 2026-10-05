@@ -93,3 +93,37 @@ func (n namedNativeTool) Run(context.Context, fantasy.ToolCall) (fantasy.ToolRes
 }
 func (n namedNativeTool) ProviderOptions() fantasy.ProviderOptions     { return nil }
 func (n namedNativeTool) SetProviderOptions(_ fantasy.ProviderOptions) {}
+
+// The blocked rule (completion.blocked_when) resolves its tool against the
+// roster like any_succeeded and reaches the agent whole; a run without one
+// passes nil.
+func TestExecutionRequirementsBlockedWhenResolves(t *testing.T) {
+	req, err := parseExecutionRequirements(models.ExecutionRequirementsMarker + "\n" +
+		`{"completion":{"any_succeeded":["record_refresh_check","mcp_pages_update_page_data"],` +
+		`"blocked_when":{"tool":"record_refresh_check","argument":"outcome","in":["blocked","source_unreachable"],"detail_argument":"detail"}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := []mcp.ServerTool{
+		{ServerName: "pages", Tool: mcp.Tool{Name: "record_refresh_check"}},
+		{ServerName: "pages", Tool: mcp.Tool{Name: "update_page_data"}},
+	}
+	if err := req.checkTools(catalog, nil); err != nil {
+		t.Fatal(err)
+	}
+	req.completionRoster = req.resolveCompletion(catalog, nil)
+	req.blockedRoster = req.resolveBlockedWhen(catalog, nil)
+	got := req.completionBlockedWhen()
+	if got == nil || fmt.Sprint(got.Tools) != "[mcp_pages_record_refresh_check]" || got.Argument != "outcome" ||
+		fmt.Sprint(got.In) != "[blocked source_unreachable]" || got.DetailArgument != "detail" {
+		t.Fatalf("resolved rule = %+v", got)
+	}
+	none, err := parseExecutionRequirements(models.ExecutionRequirementsMarker + "\n" + `{"completion":{"any_succeeded":["record_refresh_check"]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none.blockedRoster = none.resolveBlockedWhen(catalog, nil)
+	if none.completionBlockedWhen() != nil {
+		t.Fatal("no blocked_when must reach the agent as nil")
+	}
+}

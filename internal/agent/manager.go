@@ -267,6 +267,9 @@ type MCPScope struct {
 	Broker  agentcore.MCPBroker
 	Catalog []mcp.ServerTool
 	Close   func(context.Context) error
+	// ConnectFailures lists the selected servers that failed to register in
+	// this scope (agentcore.BindMCPSelectionReport), credential-free.
+	ConnectFailures []agentcore.MCPConnectFailure
 }
 
 // MCPScopePolicy is the parent's effective, already-decided gate snapshot for

@@ -47,15 +47,60 @@ func (p *Pool) notifyTerminal(task *models.Task, status notify.Status, session *
 		// its own per-attempt timeout + bounded retry within this budget.
 		ctx, cancel := context.WithTimeout(context.Background(), notifyFanoutBudget)
 		defer cancel()
-		// Resolve the owner email HERE, off-thread, so the terminal path never
-		// waits on the users lookup. Empty = no push audience (#292); the
-		// deployment-wide email/webhook channels ignore the field.
-		ev.Audience = p.ownerEmail(ctx, task)
-		// safe.Recover is not used here: notify.Notify does no panicky work, and a
-		// panic in a detached notify goroutine must not be silently swallowed in a
-		// way that hides a bug. Keep it simple — the runner's own recover guards the
-		// task goroutine, not this one.
-		_ = p.notifier.Notify(ctx, ev)
+		p.deliver(ctx, task, ev)
+	}()
+}
+
+// deliver sends one event from a detached notify goroutine.
+func (p *Pool) deliver(ctx context.Context, task *models.Task, ev notify.Event) {
+	// Resolve the owner email HERE, off-thread, so the terminal path never
+	// waits on the users lookup. Empty = no push audience (#292); the
+	// deployment-wide email/webhook channels ignore the field.
+	ev.Audience = p.ownerEmail(ctx, task)
+	// safe.Recover is not used here: notify.Notify does no panicky work, and a
+	// panic in a detached notify goroutine must not be silently swallowed in a
+	// way that hides a bug. Keep it simple — the runner's own recover guards the
+	// task goroutine, not this one.
+	_ = p.notifier.Notify(ctx, ev)
+}
+
+// blockedStreakAlert is how many consecutive blocked occurrences of one
+// recurring lineage raise the blocked-streak alert (notifyBlockedSuccess).
+const blockedStreakAlert = 3
+
+// notifyBlockedSuccess notifies for a success whose declared completion
+// clause recorded a blocked outcome (Task.RunOutcome "blocked"). An ordinary
+// blocked run is a success event whose message says "Blocked: <detail>". The
+// run that makes it EXACTLY blockedStreakAlert blocked occurrences in a row of
+// a recurring lineage is sent as a failure event instead — a dashboard that
+// has stopped updating is something its owner must hear about even when they
+// only subscribe to failures — once per streak. Nothing parks: the schedule
+// keeps running, and the next run that publishes ends the streak. The streak
+// lookup runs off-thread with the rest of the fan-out.
+func (p *Pool) notifyBlockedSuccess(task *models.Task, session *models.LogSession, dur time.Duration) {
+	if p.notifier == nil {
+		return
+	}
+	detail := ""
+	if task.RunOutcomeDetail != nil {
+		detail = strings.Join(strings.Fields(*task.RunOutcomeDetail), " ")
+	}
+	ev := p.buildEvent(task, notify.StatusSuccess, session, dur)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), notifyFanoutBudget)
+		defer cancel()
+		message := "Blocked: " + detail
+		if task.Recurrence != "" && p.store != nil {
+			streak, err := p.store.BlockedStreak(ctx, task.ID, blockedStreakAlert+1)
+			if err != nil {
+				log.Printf("runner: blocked-streak lookup for task %s failed: %v", task.ID, err)
+			} else if streak == blockedStreakAlert {
+				ev.Status = notify.StatusFailure
+				message = fmt.Sprintf("Blocked %d runs in a row — the schedule keeps running, but none of them published: %s", streak, detail)
+			}
+		}
+		ev.Message = truncate.Clamp(strings.TrimSpace(message), maxScheduleStoppedMessage, "…")
+		p.deliver(ctx, task, ev)
 	}()
 }
 

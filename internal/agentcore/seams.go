@@ -129,8 +129,11 @@ type TerminalPolicy interface {
 // accumulation, the completed response preferred), so the value is provably
 // tied to the round boundary. The transcript does not carry the round's text
 // yet (drivers persist the completed response only after Run returns), and a
-// textless round MUST yield "" — a policy that falls back to earlier rounds'
-// text would combine a rejected draft with the current round's evidence.
+// textless round MUST yield "" — the core never falls back to earlier rounds'
+// text, which could combine a rejected draft with the current round's
+// evidence. A policy that judges an answer spanning rounds composes it itself
+// and hands the same composition back through RunAnswerProvider, so the text
+// its gates read and the text the run persists cannot diverge.
 //
 // Scope note: for tasks with an output schema this is the round's free-form
 // closing text. The terminal structured-output phase (completeRun) runs AFTER
@@ -139,6 +142,28 @@ type TerminalPolicy interface {
 // against the schema, not re-judged by the gates.
 type RoundFinalTextReceiver interface {
 	SetRoundFinalText(text string)
+}
+
+// RunAnswerProvider is an optional Policy capability, paired with
+// RoundFinalTextReceiver, for a policy whose finish gates judge an answer that
+// can span rounds. When such a gate sends an ANSWERED round back for repair
+// (the scheduled end-of-run verifier's missing actions, the phone-a-friend
+// reviewer's issues), the repair round typically adds only what was missing;
+// judging that supplement alone re-demanded the whole report on every check,
+// and the run dead-lettered while the text it left behind contained every
+// requested item. Once CanFinish grants completion, Run asks the provider for
+// the run's answer given the final round's closing text and uses it as
+// Result.FinalText, so the answer the gates approved is the answer the driver
+// persists — never a different one.
+//
+// The composition is the policy's to own, and it must include an earlier
+// round's text only when the policy's own gates judged that round: a round the
+// audit/finish enforcement refused (a pre-audit draft) is superseded by the
+// next round's text, exactly as before. Called inside the same contained
+// policy boundary as CanFinish. Structured-output tasks still replace the
+// persisted FinalText with the schema-valid JSON afterwards (completeRun).
+type RunAnswerProvider interface {
+	RunAnswer(roundText string) string
 }
 
 // Note is the minimal injection shape for the admin-curated knowledge base
