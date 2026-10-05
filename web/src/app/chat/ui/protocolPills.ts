@@ -50,6 +50,27 @@ export interface PillField {
 
 export type PillValues = Record<string, PillFieldValue>;
 
+/** The part of a pill the form helpers below actually read. A Prompt Library
+ *  form prompt — a Git YAML prompt that declares `fields` and a
+ *  `promptTemplate` (docs/PROMPT-LIBRARY.md, "Form prompts") — has exactly
+ *  this shape too, which is what lets the library and the empty-state cards
+ *  share one field schema, one set of field components and one renderer
+ *  instead of growing a second, subtly different copy of each. */
+export type PillFormShape = Pick<ProtocolPill, "title" | "fields" | "promptTemplate">;
+
+/** Rendering options for `pillToPrompt`. The empty-state cards pass none, so
+ *  their output is exactly what it was before the option existed. */
+export interface PillPromptOptions {
+  /** Drop every template LINE whose `{tokens}` are all blank — optional
+   *  fields the user left empty — instead of leaving `Label: {token}` behind.
+   *  A line with at least one filled token, or with no token at all, is kept
+   *  (and a blank token on a kept line is still left in place). The Prompt
+   *  Library form uses this so an unanswered optional field simply vanishes
+   *  from the inserted prompt; a template author gets the behaviour by putting
+   *  each optional field on a line of its own. */
+  dropBlankLines?: boolean;
+}
+
 export interface ProtocolPill {
   id: string;
   /** Coarse grouping label. No longer rendered (the empty state is one flat
@@ -111,7 +132,7 @@ export function asRange(v: PillFieldValue | undefined): DateRangeValue {
 }
 
 /** Initial form values for a pill, honoring each field's `default`. */
-export function formInitialValues(pill: ProtocolPill): PillValues {
+export function formInitialValues(pill: PillFormShape): PillValues {
   const out: PillValues = {};
   for (const f of pill.fields ?? []) {
     if (f.default !== undefined) {
@@ -132,7 +153,7 @@ export function formInitialValues(pill: ProtocolPill): PillValues {
 }
 
 /** True when every required field on the pill has a usable value. */
-export function isPillReady(pill: ProtocolPill, values: PillValues): boolean {
+export function isPillReady(pill: PillFormShape, values: PillValues): boolean {
   for (const f of pill.fields ?? []) {
     if (!f.required) continue;
     const v = values[f.key];
@@ -180,26 +201,42 @@ function fieldValueText(field: PillField, value: PillFieldValue | undefined): st
  *   Any `{key}` tokens are interpolated from `values` (a token whose field is
  *   blank is left in place, so the agent can see what was intended). The
  *   template is otherwise returned verbatim — if it has no tokens, it's sent
- *   as-is.
+ *   as-is. With `options.dropBlankLines`, a line whose tokens are all blank is
+ *   removed first (see PillPromptOptions).
  * - When there is NO template, a neutral fallback is built from the pill title
  *   plus "Label: value" lines for every field the user actually filled.
  *
  * This replaces the per-pill function closures the catalog used to ship, so the
  * same renderer works for pills that arrive over JSON.
  */
-export function pillToPrompt(pill: ProtocolPill, values: PillValues): string {
+export function pillToPrompt(
+  pill: PillFormShape,
+  values: PillValues,
+  options: PillPromptOptions = {},
+): string {
   const template = pill.promptTemplate;
   if (typeof template === "string" && template.trim() !== "") {
     if (!template.includes("{")) return template;
-    return template.replace(/\{(\w+)\}/g, (whole, key: string) => {
+    const tokenText = (key: string): string => {
       const field = pill.fields?.find((f) => f.key === key);
-      const text = field
-        ? fieldValueText(field, values[key])
-        : asText(values[key]);
-      // Leave the token in place when there's no field value to fill it with,
-      // so the agent can still see what was intended.
-      return text || whole;
-    });
+      return field ? fieldValueText(field, values[key]) : asText(values[key]);
+    };
+    // Leave the token in place when there's no field value to fill it with,
+    // so the agent can still see what was intended.
+    const interpolate = (text: string) =>
+      text.replace(/\{(\w+)\}/g, (whole, key: string) => tokenText(key) || whole);
+    if (!options.dropBlankLines) return interpolate(template);
+    // Decide on the TEMPLATE line, before interpolation, so a value that
+    // itself contains "{x}" or spans several lines cannot change which lines
+    // survive. A toggle always renders yes/no, so its line is never dropped.
+    return template
+      .split("\n")
+      .filter((line) => {
+        const keys = Array.from(line.matchAll(/\{(\w+)\}/g), (m) => m[1]);
+        return keys.length === 0 || keys.some((key) => tokenText(key) !== "");
+      })
+      .map(interpolate)
+      .join("\n");
   }
 
   const parts: string[] = [];

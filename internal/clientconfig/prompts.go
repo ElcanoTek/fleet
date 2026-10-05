@@ -19,15 +19,23 @@ const (
 // Prompt is one read-only, bundle-owned prompt-library entry. Content is the
 // exact file body: structured YAML prompts stay structured when inserted into
 // chat or a scheduled task, rather than being flattened and losing intent.
+//
+// Fields and PromptTemplate are set only for a YAML prompt that declares a
+// valid form (see parsePromptForm and docs/PROMPT-LIBRARY.md "Form prompts").
+// They are derived from Content, never a replacement for it: Content stays the
+// raw file so an export or backup carries the prompt exactly as it is tracked
+// in Git, form definition included.
 type Prompt struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Content     string `json:"content"`
-	Source      string `json:"source"`
-	Visibility  string `json:"visibility"`
-	ReadOnly    bool   `json:"read_only"`
-	Path        string `json:"path,omitempty"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	Description    string        `json:"description,omitempty"`
+	Content        string        `json:"content"`
+	Source         string        `json:"source"`
+	Visibility     string        `json:"visibility"`
+	ReadOnly       bool          `json:"read_only"`
+	Path           string        `json:"path,omitempty"`
+	Fields         []PromptField `json:"fields,omitempty"`
+	PromptTemplate string        `json:"prompt_template,omitempty"`
 }
 
 // ReadPrompts loads the optional prompts/ content directory. Only regular
@@ -82,11 +90,25 @@ func ReadPrompts(dir string) (prompts []Prompt, problems []string) {
 			continue
 		}
 		displayName, description := promptMetadata(filename, ext, raw)
-		prompts = append(prompts, Prompt{
+		prompt := Prompt{
 			ID: "git:" + filename, Name: displayName, Description: description,
 			Content: string(raw), Source: "git", Visibility: "workspace",
 			ReadOnly: true, Path: "prompts/" + filename,
-		})
+		}
+		// Only YAML can declare a form. Markdown and text prompts are prose
+		// with no structure to hang a field list on, so they are always plain
+		// entries. A form that does not validate is reported and the entry is
+		// still served — as a plain prompt with its raw content — because one
+		// author's typo must not take a prompt away from everyone using it.
+		if ext == ".yaml" || ext == ".yml" {
+			fields, template, issues := parsePromptForm(raw)
+			if len(issues) > 0 {
+				problems = append(problems, fmt.Sprintf("prompt %s: invalid form, served as a plain prompt: %s", filename, strings.Join(issues, "; ")))
+			} else {
+				prompt.Fields, prompt.PromptTemplate = fields, template
+			}
+		}
+		prompts = append(prompts, prompt)
 	}
 
 	sort.Slice(prompts, func(i, j int) bool {

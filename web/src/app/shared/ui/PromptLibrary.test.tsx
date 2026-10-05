@@ -70,6 +70,124 @@ describe("PromptLibrary", () => {
   });
 });
 
+// A Git prompt that declares a form (docs/PROMPT-LIBRARY.md, "Form prompts"),
+// shaped as GET /prompts sends it: the raw YAML in `content`, plus the parsed
+// `fields` and `prompt_template`.
+const formPrompt = {
+  ...gitPrompt,
+  id: "git:new-campaign.yaml",
+  name: "New campaign page",
+  description: "A campaign dashboard from the partner's template.",
+  content: "name: New campaign page\nfields:\n  - key: partner\n# …the raw YAML file…\n",
+  path: "prompts/new-campaign.yaml",
+  fields: [
+    {
+      key: "partner",
+      label: "Partner",
+      type: "select" as const,
+      required: true,
+      default: "TWC",
+      options: ["TWC", "RainBarrel", "Other"],
+    },
+    { key: "campaign", label: "Campaign name", type: "text" as const, required: true, placeholder: "Go Raw CTV" },
+    { key: "kpis", label: "Channel(s) and KPI target", type: "textarea" as const, required: true },
+    { key: "deals", label: "Deals", type: "textarea" as const, advanced: true },
+    { key: "shareable", label: "Client-shareable", type: "toggle" as const, advanced: true, default: false },
+  ],
+  prompt_template:
+    "Create a new Pages dashboard (route A).\nPartner: {partner}\nCampaign: {campaign}\n" +
+    "Channels and KPI targets: {kpis}\nDeals: {deals}\nClient-shareable: {shareable}",
+};
+
+describe("PromptLibrary — form prompts", () => {
+  beforeEach(() => {
+    vi.mocked(orchestratorApi.prompts).mockResolvedValue([formPrompt, gitPrompt]);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function openOnForm(onInsert = vi.fn()) {
+    render(<PromptLibrary currentText="" onInsert={onInsert} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open prompt library" }));
+    // The form prompt sorts first, so it is the selected entry on open.
+    await screen.findByRole("region", { name: "New campaign page form" });
+    return onInsert;
+  }
+
+  it("shows a form instead of the raw file, with required fields gating Use prompt", async () => {
+    const onInsert = await openOnForm();
+    // The list marks it as a form; the pane shows fields, not the YAML.
+    expect(screen.getByText("· Form")).toBeInTheDocument();
+    expect(screen.queryByText(/the raw YAML file/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Partner/)).toHaveValue("TWC");
+
+    const use = screen.getByRole("button", { name: "Use prompt" });
+    expect(use).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/^Campaign name/), { target: { value: "Go Raw CTV" } });
+    expect(use).toBeDisabled(); // the KPI textarea is still required and blank
+    fireEvent.change(screen.getByLabelText(/^Channel\(s\) and KPI target/), { target: { value: "CTV, CPM $27" } });
+    expect(use).toBeEnabled();
+
+    fireEvent.click(use);
+    // Rendered text, not the YAML: the blank optional Deals line is dropped,
+    // the toggle renders as no, and the entry's name rides along as before.
+    expect(onInsert).toHaveBeenCalledWith(
+      "Create a new Pages dashboard (route A).\nPartner: TWC\nCampaign: Go Raw CTV\n" +
+        "Channels and KPI targets: CTV, CPM $27\nClient-shareable: no",
+      "New campaign page",
+    );
+    expect(screen.queryByRole("dialog", { name: "Prompt library" })).not.toBeInTheDocument();
+  });
+
+  it("tucks optional fields under More options, and keeps a filled one's line", async () => {
+    const onInsert = await openOnForm();
+    const more = screen.getByRole("button", { name: "More options" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText(/^Deals/)).not.toBeInTheDocument();
+
+    fireEvent.click(more);
+    fireEvent.change(screen.getByLabelText(/^Deals/), { target: { value: "PMP-1, PMP-2" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Client-shareable" }));
+    fireEvent.change(screen.getByLabelText(/^Partner/), { target: { value: "RainBarrel" } });
+    fireEvent.change(screen.getByLabelText(/^Campaign name/), { target: { value: "Spring" } });
+    fireEvent.change(screen.getByLabelText(/^Channel\(s\) and KPI target/), { target: { value: "Display" } });
+
+    const expected =
+      "Create a new Pages dashboard (route A).\nPartner: RainBarrel\nCampaign: Spring\n" +
+      "Channels and KPI targets: Display\nDeals: PMP-1, PMP-2\nClient-shareable: yes";
+    // The live preview shows exactly what Use prompt will insert.
+    expect(screen.getByTestId("prompt-form-preview")).toHaveTextContent(expected, { normalizeWhitespace: false });
+    fireEvent.click(screen.getByRole("button", { name: "Use prompt" }));
+    expect(onInsert).toHaveBeenCalledWith(expected, "New campaign page");
+  });
+
+  it("inserts the raw template, tokens intact, from Insert raw prompt", async () => {
+    const onInsert = await openOnForm();
+    // Available without filling anything in: it is the power-user escape hatch.
+    fireEvent.click(screen.getByRole("button", { name: "Insert raw prompt" }));
+    expect(onInsert).toHaveBeenCalledWith(formPrompt.prompt_template, "New campaign page");
+  });
+
+  it("still inserts a plain entry's exact content", async () => {
+    const onInsert = await openOnForm();
+    fireEvent.click(screen.getByRole("button", { name: /Daily scan/ }));
+    expect(screen.queryByRole("region", { name: /form$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Insert raw prompt" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Use prompt" }));
+    expect(onInsert).toHaveBeenCalledWith(gitPrompt.content, gitPrompt.name);
+  });
+
+  it("starts each form from its own defaults when switching entries", async () => {
+    await openOnForm();
+    fireEvent.change(screen.getByLabelText(/^Campaign name/), { target: { value: "Typed" } });
+    fireEvent.click(screen.getByRole("button", { name: /Daily scan/ }));
+    fireEvent.click(screen.getByRole("button", { name: /New campaign page/ }));
+    expect(screen.getByLabelText(/^Campaign name/)).toHaveValue("");
+  });
+});
+
 it("portals the dialog to <body> so transformed ancestors can't trap position:fixed", async () => {
   vi.mocked(orchestratorApi.prompts).mockResolvedValue([]);
   // The chat composer wraps this component in transform-animated containers;
