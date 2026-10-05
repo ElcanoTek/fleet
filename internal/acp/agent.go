@@ -185,9 +185,14 @@ func (s *session) setUnsettled(message, key string) {
 	s.unsettled[textKey(message)] = key
 }
 
-// markStopped records that fleet confirmed key's prompt stopped (stoppedKeys).
-// Under mu, like every read of stoppedKeys.
-func (s *session) markStopped(key string) {
+// recordStop records, after a prompt, a Stop fleet confirmed (stopped) of a
+// key that was its text's unresolved key when the prompt began
+// (textUnresolved): see stoppedKeys. Under mu, like every read of
+// stoppedKeys.
+func (s *session) recordStop(key string, textUnresolved, stopped bool) {
+	if !textUnresolved || !stopped {
+		return
+	}
 	if s.stoppedKeys == nil {
 		s.stoppedKeys = map[string]bool{}
 	}
@@ -505,9 +510,7 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		// stopped, and it is not an unconfirmed stop either.
 		stopErr, stop.alreadyEnded = nil, true
 	}
-	if textUnresolved && stoppedForGood(stop, stopErr) {
-		sess.markStopped(key)
-	}
+	sess.recordStop(key, textUnresolved, stoppedForGood(stop, stopErr))
 	sess.retainKey(textMsg, key, target, convID, keep && !stoppedForGood(stop, stopErr), stopErr, queued)
 	// A staged approval stays pending in fleet whatever ended the turn —
 	// cancelled, timed out or errored included — so its pointer goes out

@@ -1510,7 +1510,7 @@ func (f *fakeFleet) cancelsSnapshot() []string {
 func TestTextSentAgainDuringAConfirmedStopRuns(t *testing.T) {
 	started, settle := make(chan struct{}), make(chan struct{})
 	var h *harness
-	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
 		switch {
 		case h.fleet.nth() == 1:
 			w.w.WriteHeader(http.StatusOK) // the answer is lost; fleet never committed the input
