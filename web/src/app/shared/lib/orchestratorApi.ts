@@ -6,6 +6,7 @@
 // bearer token is stored or attached in the browser.
 
 import { parseSseChunk } from "@/app/lib/sse";
+import type { PillField } from "@/app/chat/ui/protocolPills";
 
 // MCPChoice mirrors agentcore.MCPChoice: which optional server is on + which
 // credential account backs it. Account === "" means the default/shared seat.
@@ -389,6 +390,13 @@ export type PromptLibraryItem = {
   path?: string;
   created_at?: string;
   updated_at?: string;
+  /** Present only on a Git entry whose YAML declares a valid form
+   *  (docs/PROMPT-LIBRARY.md, "Form prompts"): the picker collects these
+   *  inputs and inserts `prompt_template` rendered with them, instead of
+   *  inserting `content`. Same field schema as an empty-state card. */
+  fields?: PillField[];
+  /** The form's template; `{key}` tokens name entries of `fields`. */
+  prompt_template?: string;
 };
 
 export type PromptLibraryWrite = {

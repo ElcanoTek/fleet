@@ -46,7 +46,8 @@ func spriteSymbolIDs(t *testing.T) map[string]bool {
 //   - with every env var the manifest declares set, every gated or always-on
 //     MCP catalog entry resolves into MCPServerConfigs with its ${ENV_VAR}
 //     references fully interpolated;
-//   - the bundle's skills and MCP arg paths validate clean.
+//   - the bundle's skills, prompt library (including form prompts) and MCP arg
+//     paths validate clean.
 //
 // Run it locally with e.g.:
 //
@@ -127,6 +128,20 @@ func TestRealBundleSanity(t *testing.T) {
 				{"skills validate", func(t *testing.T) {
 					for _, problem := range b.ValidateSkills() {
 						t.Errorf("skill validation: %s", problem)
+					}
+				}},
+				{"prompt library validates", func(t *testing.T) {
+					// ReadPrompts degrades loud at runtime: an oversized,
+					// empty or non-UTF-8 file is skipped, entries past the
+					// catalog cap are dropped, and an invalid form is served
+					// as a plain prompt — each reported only as a server log
+					// line. Every one of those is a bundle defect that loses
+					// content a user expected, so all of them fail here, and
+					// a bundle's form prompts are checked before they ship
+					// rather than after nobody sees the form.
+					_, problems := b.Prompts()
+					for _, problem := range problems {
+						t.Errorf("prompt library: %s", problem)
 					}
 				}},
 				{"mcp arg paths validate", func(t *testing.T) {

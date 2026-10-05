@@ -234,6 +234,45 @@ describe("ProtocolPillForm — textarea field", () => {
   });
 });
 
+// The field components moved to shared/ui/FormFields when the Prompt Library
+// grew form prompts. These pin what the cards must keep doing after that move:
+// the disclosure is still called "Advanced" (the library's says "More
+// options"), it summarises the tucked-away values while closed, and the cards
+// still leave a blank optional token in place — the library's line-dropping
+// rule is opt-in and the cards never opt in.
+describe("ProtocolPillForm — advanced fields (shared FormFields)", () => {
+  const ADVANCED_PILL: ProtocolPill = {
+    ...TEXTAREA_PILL,
+    fields: [
+      { key: "client", label: "Client name", type: "text", required: true },
+      { key: "kpis", label: "KPIs and goals", type: "textarea", advanced: true },
+      { key: "deck", label: "Build a slide deck", type: "toggle", advanced: true, default: true },
+    ],
+    promptTemplate: "Wrap {client}.\nKPIs: {kpis}\nDeck: {deck}",
+  };
+
+  it("collapses advanced fields under an Advanced toggle that summarises their values", () => {
+    renderForm(ADVANCED_PILL);
+    const toggle = screen.getByRole("button", { name: "Advanced" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText(/kpis and goals/i)).not.toBeInTheDocument();
+    expect(screen.getByText("KPIs and goals: — · Build a slide deck: on")).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByLabelText(/kpis and goals/i).tagName).toBe("TEXTAREA");
+    expect(screen.getByRole("switch", { name: /build a slide deck/i })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("keeps a blank optional token in the prompt (no line dropping on cards)", () => {
+    const onRun = vi.fn();
+    renderForm(ADVANCED_PILL, { onRun });
+    fireEvent.change(screen.getByLabelText(/client name/i), { target: { value: "Acme" } });
+    fireEvent.click(screen.getByRole("button", { name: /build wrap/i }));
+    expect(onRun).toHaveBeenCalledWith("Wrap Acme.\nKPIs: {kpis}\nDeck: yes");
+  });
+});
+
 describe("ProtocolPillForm — conversation pill", () => {
   it("routes the skip link to the conversational starter", () => {
     const onStartChat = vi.fn();

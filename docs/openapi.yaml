@@ -93,6 +93,38 @@ components:
             path: { type: string }
             created_at: { type: string, format: date-time }
             updated_at: { type: string, format: date-time }
+            fields:
+              type: array
+              description: >
+                Present only on a Git entry whose YAML declares a valid form
+                (docs/PROMPT-LIBRARY.md, "Form prompts"). The picker collects
+                these inputs and inserts prompt_template rendered with them
+                instead of content. Workspace (database) prompts never carry it.
+              items: { $ref: "#/components/schemas/PromptField" }
+            prompt_template:
+              type: string
+              description: >
+                The form's template; each {key} token names one of fields.
+                Present exactly when fields is. content stays the raw file.
+    PromptField:
+      type: object
+      description: >
+        One input of a form prompt. The same shape as an empty-state card field.
+        default takes the type's value shape: a string for text, textarea and
+        select (one of options), a number for number, a boolean for toggle, and
+        an object with from/to YYYY-MM-DD strings for daterange.
+      required: [key, label, type]
+      properties:
+        key: { type: string, pattern: "^\\w+$" }
+        label: { type: string }
+        type: { type: string, enum: [text, textarea, select, number, daterange, toggle] }
+        required: { type: boolean }
+        placeholder: { type: string }
+        hint: { type: string }
+        default: {}
+        options: { type: array, items: { type: string } }
+        advanced: { type: boolean }
+        min: { type: number }
     TaskFeedback:
       type: object
       properties:
