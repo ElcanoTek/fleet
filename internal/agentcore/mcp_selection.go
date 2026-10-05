@@ -214,11 +214,42 @@ type MCPConnectFailure struct {
 // DNS blip, a vendor answering "temporarily unavailable"). The runner treats
 // it as infrastructure weather: it re-runs the same occurrence a few minutes
 // later without spending the task's own max_retries, and a dead-letter it
-// ends in does not count toward the recurrence park breaker. A server that is
+// ends in does not count toward the recurrence park breaker — until three in
+// a row, which park the chain on their own (ADR-0077). A server that is
 // not configured or not selected, a tool name that does not exist, or a
 // connect failure that is not transient (a refused credential) stays the
 // terminal roster error it always was.
 var ErrConnectorUnavailable = errors.New("required connector unavailable")
+
+// ConnectorUnavailableError is the dispatch error ErrConnectorUnavailable
+// classifies: Message is the full roster error (the missing requirements and
+// each failed server with its connect error), Failures the transient connect
+// failures that explain the miss. The runner records Connectors() on the
+// dead-letter so the recurrence breaker can name the connector when it parks
+// a chain the outage has kept dead-lettering.
+type ConnectorUnavailableError struct {
+	Message  string
+	Failures []MCPConnectFailure
+}
+
+func (e *ConnectorUnavailableError) Error() string { return e.Message }
+
+// Unwrap classifies the error as ErrConnectorUnavailable.
+func (e *ConnectorUnavailableError) Unwrap() error { return ErrConnectorUnavailable }
+
+// Connectors renders the failed connectors with their causes, e.g.
+// "pages (DNS lookup failed (no such host))", joined by "; ".
+func (e *ConnectorUnavailableError) Connectors() string {
+	parts := make([]string, 0, len(e.Failures))
+	for _, f := range e.Failures {
+		detail := f.Detail
+		if detail == "" {
+			detail = "failed to connect"
+		}
+		parts = append(parts, f.Server+" ("+detail+")")
+	}
+	return strings.Join(parts, "; ")
+}
 
 // NewMCPConnectFailure describes a failed registration of server.
 func NewMCPConnectFailure(server string, err error) MCPConnectFailure {
@@ -232,10 +263,11 @@ func NewMCPConnectFailure(server string, err error) MCPConnectFailure {
 // BindMCPSelectionReport is BindMCPSelection that also reports every
 // best-effort server it skipped because registration failed. Under a ctx
 // marked mcp.WithConnectRetry (scheduled runs), an HTTP server's registration
-// is retried while it fails transiently (mcp.RetryTransientConnect: three
-// attempts, a few seconds apart) before it is skipped — production lost whole
-// runs to a one-minute DNS blip and to a vendor's "temporarily unavailable"
-// handshake reply. A stdio server is started once, as before.
+// is retried while it fails fast and transiently (mcp.RetryTransientConnect:
+// up to three attempts, a few seconds apart, within the run's 15 s retry
+// budget; a timeout is not retried) before it is skipped — production lost
+// whole runs to a one-minute DNS blip and to a vendor's "temporarily
+// unavailable" handshake reply. A stdio server is started once, as before.
 func BindMCPSelectionReport(ctx context.Context, client *mcp.Client, selection MCPSelection, bases map[string]MCPServerBase, workdir string) (registered []string, failed []MCPConnectFailure, err error) {
 	for _, choice := range selection {
 		base, ok := bases[choice.Server]
@@ -260,8 +292,8 @@ func BindMCPSelectionReport(ctx context.Context, client *mcp.Client, selection M
 
 		// HTTP servers register via headers (no env overlay, no account variants).
 		if base.HTTPURL != "" {
-			if err := mcp.RetryTransientConnect(ctx, name, func() error {
-				return client.AddHTTPServerWithOptions(ctx, name, base.HTTPURL, mcp.HTTPServerOptions{Headers: base.HTTPHeaders, TLS: base.HTTPTLS})
+			if err := mcp.RetryTransientConnect(ctx, name, func(attemptCtx context.Context) error {
+				return client.AddHTTPServerWithOptions(attemptCtx, name, base.HTTPURL, mcp.HTTPServerOptions{Headers: base.HTTPHeaders, TLS: base.HTTPTLS})
 			}); err != nil {
 				if base.Required {
 					return registered, failed, fmt.Errorf("register http server %q: %w", name, err)

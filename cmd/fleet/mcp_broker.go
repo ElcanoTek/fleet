@@ -244,9 +244,6 @@ func (b *brokerBackend) ListAccounts(_ context.Context, _ string, baseVars []str
 }
 
 func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec) (string, []mcpbroker.ToolDescriptor, []mcpbroker.SkippedServer, error) {
-	if spec.RetryTransientConnect {
-		ctx = mcp.WithConnectRetry(ctx)
-	}
 	if spec.Remote != nil {
 		return b.openRemoteScope(ctx, *spec.Remote, spec.Policy)
 	}

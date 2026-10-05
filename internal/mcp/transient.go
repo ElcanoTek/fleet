@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -51,15 +52,22 @@ func (e *UnattributedResponseError) Error() string {
 // protocol problem that will fail the same way every time.
 //
 // Transient: a DNS lookup failure (no such host, temporary failure in name
-// resolution — production saw a one-minute resolver blip fail a whole run), a
-// timeout or deadline on the dial or the request, a refused, reset or
-// unreachable connection, an HTTP 5xx or 429, and a JSON-RPC error whose
-// message says it is temporary (fast.io answers "Auth validation temporarily
-// unavailable. Retry." with code -32000 while its auth backend is down).
+// resolution — production saw a one-minute "lookup pages.elcanotek.com: no
+// such host" blip fail a whole run), a timeout or deadline on the dial or the
+// request, a refused, reset or unreachable connection, an HTTP 500, 502, 503,
+// 504 or 429, and a JSON-RPC error whose message says the condition is
+// temporary (fast.io answers "Auth validation temporarily unavailable.
+// Retry." with code -32000 while its auth backend is down).
 //
-// Not transient: an HTTP 401/403 or any other 4xx (a credential or
-// permission the operator must fix), a malformed URL, a TLS or protocol
-// failure, and the caller's own cancellation.
+// Not transient: an HTTP 401/403 or any other 4xx, a 501 (the server does not
+// implement the request) and any other 5xx, a malformed URL, a TLS or
+// protocol failure, a JSON-RPC error that does not say it is temporary
+// ("Invalid API key. Do not retry.", "This tool is unavailable on your
+// plan"), and the caller's own cancellation.
+//
+// A DNS failure stays transient although a typo'd or decommissioned host
+// fails the same way forever: the recurrence park breaker bounds that case
+// (ADR-0077), not this classifier.
 func IsTransientConnectError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
@@ -82,12 +90,31 @@ func IsTransientConnectError(err error) bool {
 	}
 	var statusErr *HTTPStatusError
 	if errors.As(err, &statusErr) {
-		return statusErr.StatusCode >= http.StatusInternalServerError || statusErr.StatusCode == http.StatusTooManyRequests
+		switch statusErr.StatusCode {
+		case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable,
+			http.StatusGatewayTimeout, http.StatusTooManyRequests:
+			return true
+		}
+		return false
 	}
 	if rpcErr := connectRPCError(err); rpcErr != nil {
 		return rpcMessageSaysTransient(rpcErr.Message)
 	}
 	return false
+}
+
+// isRetryableConnectError reports whether a failed registration is worth
+// another attempt within the same run: transient AND fast-failing. A timeout
+// or deadline is transient, but it already spent the whole request timeout
+// (up to DefaultMCPHTTPTimeout); retrying a server that accepts the
+// connection and never answers would triple that cost on every scheduled
+// run. Such a failure is left to the occurrence-level re-run instead.
+func isRetryableConnectError(err error) bool {
+	if !IsTransientConnectError(err) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var netErr net.Error
+	return !errors.As(err, &netErr) || !netErr.Timeout()
 }
 
 // connectRPCError returns the JSON-RPC error a failed handshake carried —
@@ -105,12 +132,21 @@ func connectRPCError(err error) *RPCError {
 }
 
 // rpcMessageSaysTransient reads a JSON-RPC error message the way an operator
-// would: a server that says it is temporarily unavailable, or asks to be
-// retried, is.
+// would: a server that says the condition is temporary ("temporarily
+// unavailable", "temporary failure"), that its service is unavailable, or
+// to try again, is. Bare "retry" or "unavailable" are not enough — "Invalid
+// API key. Do not retry." and "This tool is unavailable on your plan" are
+// permanent — and an explicit "do not retry" / "do not try again" always
+// wins.
 func rpcMessageSaysTransient(message string) bool {
-	m := strings.ToLower(message)
-	for _, word := range []string{"temporar", "unavailable", "retry", "try again"} {
-		if strings.Contains(m, word) {
+	m := strings.Join(strings.Fields(strings.ToLower(message)), " ")
+	for _, negation := range []string{"do not retry", "don't retry", "do not try again", "don't try again"} {
+		if strings.Contains(m, negation) {
+			return false
+		}
+	}
+	for _, phrase := range []string{"temporar", "try again", "service unavailable", "server unavailable", "service is unavailable", "server is unavailable"} {
+		if strings.Contains(m, phrase) {
 			return true
 		}
 	}
@@ -175,44 +211,122 @@ func ConnectErrorSummary(err error) string {
 }
 
 // ConnectRetryDelays are the pauses before the second and the third attempt
-// to register a server whose previous attempt failed transiently: three
-// attempts in all, about seven seconds of waiting, so a short DNS or vendor
-// blip no longer takes a server out of a whole run. A variable so tests do
-// not sleep.
+// to register a server whose previous attempt failed with a retryable error:
+// three attempts in all, about seven seconds of waiting, so a short DNS or
+// vendor blip no longer takes a server out of a whole run. A variable so
+// tests do not sleep.
 var ConnectRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// MaxConnectRetryBudget bounds the time the connect retry may add to one run,
+// across every server it registers: the pauses plus the retried attempts.
+// Servers bind one after another, so without a run-wide cap a run whose
+// owner has many connections could wait the per-server pauses for each.
+const MaxConnectRetryBudget = 15 * time.Second
+
+// connectRetryBudget is the run's remaining retry allowance (see
+// WithConnectRetry). Shared by every registration under one ctx.
+type connectRetryBudget struct {
+	mu        sync.Mutex
+	remaining time.Duration
+	spent     time.Duration
+}
+
+func (b *connectRetryBudget) left() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.remaining
+}
+
+func (b *connectRetryBudget) spend(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.spent += d
+	b.remaining = max(b.remaining-d, 0)
+}
 
 type connectRetryKey struct{}
 
 // WithConnectRetry marks ctx so that server registrations made under it retry
-// a transient failure (RetryTransientConnect). Unattended scheduled runs opt
-// in: one skipped server can dead-letter a run nobody is watching. An
-// interactive chat turn does not, so a turn never waits seconds on a server
-// that is down — or whose host does not resolve at all — before it starts.
-// Across the broker boundary the mark travels as mcpbroker.ScopeSpec's
-// RetryTransientConnect.
+// a retryable failure (RetryTransientConnect), sharing one
+// MaxConnectRetryBudget. Unattended scheduled runs opt in, once per run: one
+// skipped server can dead-letter a run nobody is watching. An interactive
+// chat turn does not, so a turn never waits on a server that is down — or
+// whose host does not resolve at all — before it starts. Across the broker
+// boundary the remaining allowance travels as mcpbroker.ScopeSpec's
+// ConnectRetryBudgetMs and the child reports back what it spent.
 func WithConnectRetry(ctx context.Context) context.Context {
-	return context.WithValue(ctx, connectRetryKey{}, true)
+	return WithConnectRetryBudget(ctx, MaxConnectRetryBudget)
 }
 
-// ConnectRetryEnabled reports whether ctx carries WithConnectRetry.
-func ConnectRetryEnabled(ctx context.Context) bool {
-	on, _ := ctx.Value(connectRetryKey{}).(bool)
-	return on
+// WithConnectRetryBudget is WithConnectRetry with an explicit allowance (the
+// broker child receives what is left of the parent's). A non-positive
+// allowance leaves ctx unmarked: no retry.
+func WithConnectRetryBudget(ctx context.Context, budget time.Duration) context.Context {
+	if budget <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, connectRetryKey{}, &connectRetryBudget{remaining: min(budget, MaxConnectRetryBudget)})
+}
+
+func connectRetryBudgetFrom(ctx context.Context) *connectRetryBudget {
+	b, _ := ctx.Value(connectRetryKey{}).(*connectRetryBudget)
+	return b
+}
+
+// ConnectRetryBudgetLeft is the retry allowance ctx still carries; 0 when it
+// carries none (no WithConnectRetry, or spent).
+func ConnectRetryBudgetLeft(ctx context.Context) time.Duration {
+	if b := connectRetryBudgetFrom(ctx); b != nil {
+		return b.left()
+	}
+	return 0
+}
+
+// ConnectRetrySpent is how much of ctx's allowance the retry has used.
+func ConnectRetrySpent(ctx context.Context) time.Duration {
+	b := connectRetryBudgetFrom(ctx)
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.spent
+}
+
+// SpendConnectRetryBudget charges d against ctx's allowance — what a broker
+// child reported it spent on the run's behalf. No-op without one.
+func SpendConnectRetryBudget(ctx context.Context, d time.Duration) {
+	if b := connectRetryBudgetFrom(ctx); b != nil {
+		b.spend(d)
+	}
 }
 
 // RetryTransientConnect runs connect and, when ctx carries WithConnectRetry,
 // runs it again after each ConnectRetryDelays pause for as long as it fails
-// with a transient error (IsTransientConnectError) and ctx is live. A
-// non-transient failure returns at once — a refused credential or a bad URL
-// fails the same way on every attempt. Each retry is logged with the server
-// name and the error class; the returned error is the last attempt's.
-func RetryTransientConnect(ctx context.Context, server string, connect func() error) error {
-	err := connect()
-	if !ConnectRetryEnabled(ctx) {
+// with a retryable error (transient and fast-failing: not a timeout, see
+// isRetryableConnectError) and ctx is live. Every pause and every retried
+// attempt is charged to the run's allowance: a pause that does not fit stops
+// the retry, and a retried attempt runs under a deadline of what is left, so
+// the retry adds at most MaxConnectRetryBudget to a run however many servers
+// fail. A non-retryable failure returns at once — a refused credential or a
+// bad URL fails the same way on every attempt. Each retry is logged with the
+// server name and the error class; the returned error is the last attempt's.
+func RetryTransientConnect(ctx context.Context, server string, connect func(context.Context) error) error {
+	err := connect(ctx)
+	budget := connectRetryBudgetFrom(ctx)
+	if budget == nil {
 		return err
 	}
 	for i, delay := range ConnectRetryDelays {
-		if err == nil || !IsTransientConnectError(err) || ctx.Err() != nil {
+		if err == nil || !isRetryableConnectError(err) || ctx.Err() != nil {
+			return err
+		}
+		if delay >= budget.left() {
+			log.Printf("mcp: server %q failed to connect (%s); not retrying — the run's %s connect-retry budget is spent",
+				server, ConnectErrorSummary(err), MaxConnectRetryBudget)
 			return err
 		}
 		log.Printf("mcp: server %q failed to connect (%s); attempt %d of %d, retrying in %s",
@@ -224,7 +338,12 @@ func RetryTransientConnect(ctx context.Context, server string, connect func() er
 			return err
 		case <-timer.C:
 		}
-		err = connect()
+		budget.spend(delay)
+		attemptCtx, cancel := context.WithTimeout(ctx, budget.left())
+		started := time.Now()
+		err = connect(attemptCtx)
+		cancel()
+		budget.spend(time.Since(started))
 	}
 	return err
 }

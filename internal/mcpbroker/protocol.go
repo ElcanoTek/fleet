@@ -93,12 +93,14 @@ type ScopeSpec struct {
 	// with the gates it re-derives from its own bundle, so a parent-side bug
 	// can restrict a scope but never widen one. nil = no parent narrowing.
 	Policy *ScopePolicy `json:"policy,omitempty"`
-	// RetryTransientConnect carries mcp.WithConnectRetry across the process
-	// boundary: the scope's servers retry a transient registration failure a
-	// few seconds apart before they are skipped. The scheduled driver sets it;
-	// an interactive turn does not, so a chat turn never waits on a server
-	// that is down.
-	RetryTransientConnect bool `json:"retryTransientConnect,omitempty"`
+	// ConnectRetryBudgetMs carries what is left of the run's connect-retry
+	// allowance (mcp.WithConnectRetry) across the process boundary: the
+	// scope's servers retry a fast, transient registration failure within it
+	// before they are skipped, and the response's ConnectRetrySpentMs reports
+	// what they used. Client.OpenScope fills it from the ctx; 0 (an
+	// interactive turn, or a spent allowance) means no retry, so a chat turn
+	// never waits on a server that is down.
+	ConnectRetryBudgetMs int64 `json:"connectRetryBudgetMs,omitempty"`
 }
 
 // ScopePolicy carries the parent's effective gates across the credential
@@ -241,6 +243,10 @@ type response struct {
 	// SkippedServer). Failure details stay in the credential-owning process
 	// because they may contain resolved URLs.
 	Skipped []SkippedServer `json:"skipped,omitempty"`
+	// ConnectRetrySpentMs answers methodOpenScope with how much of
+	// ScopeSpec.ConnectRetryBudgetMs the scope's connect retries used, so the
+	// parent charges it to the run's allowance.
+	ConnectRetrySpentMs int64 `json:"connectRetrySpentMs,omitempty"`
 	// Reload answers methodReload with the diff and refreshed public catalog.
 	Reload *ReloadResult `json:"reload,omitempty"`
 }

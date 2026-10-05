@@ -7,7 +7,8 @@
 -- ...) finished as plain success, so the Operations Center showed green for
 -- days while a dashboard stopped updating. 'blocked' marks such a success;
 -- 'connector_unavailable' marks a dead-letter caused by a declared connector
--- that failed to connect, which the recurrence park breaker does not count.
+-- that failed to connect, which the recurrence park breaker exempts up to three
+-- in a row (ADR-0077); run_outcome_detail then names the failed connectors.
 -- Written with the terminal transition, cleared by replay. NULL = an ordinary
 -- run (and every run before this column).
 --

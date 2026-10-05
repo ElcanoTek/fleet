@@ -360,7 +360,8 @@ const (
 	// The runner re-runs the occurrence a few minutes later on its own infra
 	// budget (Task.InfraRetryCount), not max_retries; once that is spent the
 	// class follows the RetryPolicy like any other (default: no retry), and a
-	// dead-letter it ends in does not count toward the recurrence park breaker.
+	// dead-letter it ends in does not count toward the recurrence park breaker
+	// until three in a row, which park the chain on their own (ADR-0077).
 	FailureConnectorUnavailable = "connector_unavailable"
 )
 
@@ -1284,7 +1285,8 @@ type Task struct {
 	// clause recorded a blocked outcome (completion.blocked_when) — the run did
 	// its job and decided not to publish — and RunOutcomeConnectorUnavailable on
 	// a dead-letter caused by a connector outage, which the recurrence park
-	// breaker does not count. nil for every other run. Written with the
+	// breaker exempts up to three in a row (ADR-0077). nil for every other
+	// run. RunOutcomeDetail then names the failed connectors. Written with the
 	// terminal transition, cleared by replay; never exported; not settable by
 	// clients.
 	RunOutcome *string `json:"run_outcome,omitempty"`
@@ -2157,7 +2159,8 @@ const (
 	RunOutcomeBlocked = "blocked"
 	// RunOutcomeConnectorUnavailable: the run dead-lettered because a declared
 	// connector was unavailable after the runner's infra re-runs. The
-	// recurrence park breaker does not count it.
+	// recurrence park breaker does not count it, up to three in a row
+	// (ADR-0077).
 	RunOutcomeConnectorUnavailable = "connector_unavailable"
 )
 

@@ -50,11 +50,19 @@ func TestIsTransientConnectError(t *testing.T) {
 		{"http 503", &HTTPStatusError{StatusCode: 503, Body: "upstream down"}, true, "HTTP 503 Service Unavailable"},
 		{"http 429", &HTTPStatusError{StatusCode: 429}, true, "HTTP 429 Too Many Requests"},
 		{"unattributed temporary json-rpc error", unattributed, true, "JSON-RPC error -32000: Auth validation temporarily unavailable. Retry."},
-		{"json-rpc unavailable", &RPCError{Code: -32603, Message: "Service unavailable"}, true, "JSON-RPC error -32603: Service unavailable"},
+		{"json-rpc service unavailable", &RPCError{Code: -32603, Message: "Service unavailable"}, true, "JSON-RPC error -32603: Service unavailable"},
+		{"json-rpc try again", &RPCError{Code: -32000, Message: "Upstream busy, please try again later"}, true, "JSON-RPC error -32000: Upstream busy, please try again later"},
+		{"http 502", &HTTPStatusError{StatusCode: 502}, true, "HTTP 502 Bad Gateway"},
+		{"http 504", &HTTPStatusError{StatusCode: 504}, true, "HTTP 504 Gateway Timeout"},
 		{"http 401", &HTTPStatusError{StatusCode: 401, Body: "bad token"}, false, "HTTP 401 Unauthorized"},
 		{"http 403", &HTTPStatusError{StatusCode: 403}, false, "HTTP 403 Forbidden"},
 		{"http 404", &HTTPStatusError{StatusCode: 404}, false, "HTTP 404 Not Found"},
 		{"json-rpc invalid params", &RPCError{Code: -32602, Message: "invalid params"}, false, "JSON-RPC error -32602: invalid params"},
+		// Bare "retry" / "unavailable" are not a transient signal.
+		{"json-rpc do not retry", &RPCError{Code: -32001, Message: "Invalid API key. Do not retry."}, false, "JSON-RPC error -32001: Invalid API key. Do not retry."},
+		{"json-rpc unavailable on plan", &RPCError{Code: -32001, Message: "This tool is unavailable on your plan"}, false, "JSON-RPC error -32001: This tool is unavailable on your plan"},
+		{"json-rpc temporary but do not try again", &RPCError{Code: -32001, Message: "Account temporarily locked; do not try again"}, false, "JSON-RPC error -32001: Account temporarily locked; do not try again"},
+		{"http 501", &HTTPStatusError{StatusCode: 501}, false, "HTTP 501 Not Implemented"},
 		{"bad url", errors.New(`parse "::": missing protocol scheme`), false, "failed to connect"},
 		{"caller cancelled", &url.Error{Op: "Post", URL: "https://x/mcp", Err: context.Canceled}, false, "failed to connect"},
 	}
@@ -136,7 +144,7 @@ func TestRetryTransientConnectRegistersAfterAVendorBlip(t *testing.T) {
 	client := NewClient()
 	defer func() { _ = client.Close() }()
 	ctx := WithConnectRetry(context.Background())
-	err := RetryTransientConnect(ctx, "fast_io", func() error {
+	err := RetryTransientConnect(ctx, "fast_io", func(ctx context.Context) error {
 		return client.AddHTTPServerWithOptions(ctx, "fast_io", srv.URL, HTTPServerOptions{})
 	})
 	if err != nil {
@@ -156,7 +164,7 @@ func TestRetryTransientConnectGivesUpAfterThreeAttempts(t *testing.T) {
 	client := NewClient()
 	defer func() { _ = client.Close() }()
 	ctx := WithConnectRetry(context.Background())
-	err := RetryTransientConnect(ctx, "fast_io", func() error {
+	err := RetryTransientConnect(ctx, "fast_io", func(ctx context.Context) error {
 		return client.AddHTTPServerWithOptions(ctx, "fast_io", srv.URL, HTTPServerOptions{})
 	})
 	if err == nil || !IsTransientConnectError(err) {
@@ -176,7 +184,7 @@ func TestRetryTransientConnectDoesNotRetryARefusedCredential(t *testing.T) {
 	client := NewClient()
 	defer func() { _ = client.Close() }()
 	ctx := WithConnectRetry(context.Background())
-	err := RetryTransientConnect(ctx, "pages", func() error {
+	err := RetryTransientConnect(ctx, "pages", func(ctx context.Context) error {
 		return client.AddHTTPServerWithOptions(ctx, "pages", srv.URL, HTTPServerOptions{})
 	})
 	var statusErr *HTTPStatusError
@@ -195,7 +203,7 @@ func TestRetryTransientConnectStopsWhenTheContextEnds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(WithConnectRetry(context.Background()), 50*time.Millisecond)
 	defer cancel()
 	calls := 0
-	err := RetryTransientConnect(ctx, "pages", func() error {
+	err := RetryTransientConnect(ctx, "pages", func(context.Context) error {
 		calls++
 		return &HTTPStatusError{StatusCode: 503}
 	})
@@ -209,14 +217,84 @@ func TestRetryTransientConnectStopsWhenTheContextEnds(t *testing.T) {
 func TestRetryTransientConnectIsOptIn(t *testing.T) {
 	noConnectRetryDelay(t)
 	calls := 0
-	err := RetryTransientConnect(context.Background(), "pages", func() error {
+	err := RetryTransientConnect(context.Background(), "pages", func(context.Context) error {
 		calls++
 		return &HTTPStatusError{StatusCode: 503}
 	})
 	if err == nil || calls != 1 {
 		t.Fatalf("calls = %d, err = %v; want a single attempt without the opt-in", calls, err)
 	}
-	if !ConnectRetryEnabled(WithConnectRetry(context.Background())) || ConnectRetryEnabled(context.Background()) {
-		t.Fatal("the opt-in mark must round-trip and default off")
+	if ConnectRetryBudgetLeft(WithConnectRetry(context.Background())) != MaxConnectRetryBudget || ConnectRetryBudgetLeft(context.Background()) != 0 {
+		t.Fatal("the opt-in allowance must round-trip and default off")
+	}
+}
+
+// TestRetryTransientConnectDoesNotRetryATimeout: a server that accepts the
+// connection and never answers already cost the whole request timeout; the
+// retry must not triple that on every run.
+func TestRetryTransientConnectDoesNotRetryATimeout(t *testing.T) {
+	noConnectRetryDelay(t)
+	for _, timeout := range []error{
+		&url.Error{Op: "Post", URL: "https://x/mcp", Err: context.DeadlineExceeded},
+		&url.Error{Op: "Post", URL: "https://x/mcp", Err: &net.OpError{Op: "read", Net: "tcp", Err: timeoutError{}}},
+	} {
+		calls := 0
+		err := RetryTransientConnect(WithConnectRetry(context.Background()), "pages", func(context.Context) error {
+			calls++
+			return wrapAsInitialize(timeout)
+		})
+		if calls != 1 || !IsTransientConnectError(err) {
+			t.Fatalf("%v: calls = %d, transient = %t; want one attempt, still classified transient for the occurrence re-run", timeout, calls, IsTransientConnectError(err))
+		}
+	}
+}
+
+// timeoutError is a net.Error whose Timeout() is true (an i/o timeout).
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+// TestRetryTransientConnectSharesOneRunBudget: every registration under one
+// WithConnectRetry ctx draws on one allowance, so many failing servers add at
+// most MaxConnectRetryBudget to the run — a pause that does not fit stops the
+// retry — and a retried attempt runs under a deadline of what is left.
+func TestRetryTransientConnectSharesOneRunBudget(t *testing.T) {
+	saved := ConnectRetryDelays
+	ConnectRetryDelays = []time.Duration{50 * time.Millisecond, 50 * time.Millisecond}
+	t.Cleanup(func() { ConnectRetryDelays = saved })
+	// 140ms: both of the first server's 50ms pauses fit even if its attempts
+	// are slow (up to 40ms), and what is left after them (< 50ms) never fits
+	// another pause.
+	ctx := WithConnectRetryBudget(context.Background(), 140*time.Millisecond)
+	attempts := 0
+	var deadlines []time.Duration
+	for _, server := range []string{"a", "b", "c"} {
+		_ = RetryTransientConnect(ctx, server, func(ctx context.Context) error {
+			attempts++
+			if dl, ok := ctx.Deadline(); ok {
+				deadlines = append(deadlines, time.Until(dl))
+			}
+			return &HTTPStatusError{StatusCode: 503}
+		})
+	}
+	// a: first attempt, pause, retry, pause, retry (>= 100ms spent).
+	// b and c: first attempt only — the next pause no longer fits.
+	if attempts != 5 {
+		t.Fatalf("attempts = %d, want 5 (3 for the first server, then the allowance is spent)", attempts)
+	}
+	if spent := ConnectRetrySpent(ctx); spent < 100*time.Millisecond || spent > 140*time.Millisecond {
+		t.Fatalf("spent = %s, want within the 140ms allowance", spent)
+	}
+	if len(deadlines) != 2 || deadlines[0] > 90*time.Millisecond || deadlines[1] > 40*time.Millisecond {
+		t.Fatalf("retried attempts' deadlines = %v, want bounded by what was left of the allowance", deadlines)
+	}
+	if WithConnectRetryBudget(context.Background(), time.Hour) == nil || ConnectRetryBudgetLeft(WithConnectRetryBudget(context.Background(), time.Hour)) != MaxConnectRetryBudget {
+		t.Fatal("an allowance is capped at MaxConnectRetryBudget")
+	}
+	SpendConnectRetryBudget(ctx, time.Hour)
+	if ConnectRetryBudgetLeft(ctx) != 0 {
+		t.Fatal("a charge past the allowance leaves nothing")
 	}
 }

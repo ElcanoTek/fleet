@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestConnectorOutageDeadLettersDoNotParkTheChain(t *testing.T) {
 	if _, err := store.leaseTaskToOwner(first.ID, owner); err != nil {
 		t.Fatal(err)
 	}
-	dl, err := store.DeadLetterTaskWithOutcomeWithContext(ctx, first.ID, owner, "connector unavailable: server pages", 1, models.RunOutcomeConnectorUnavailable)
+	dl, err := store.DeadLetterTaskWithOutcomeWithContext(ctx, first.ID, owner, "connector unavailable: server pages", 1, models.RunOutcomeConnectorUnavailable, "pages (DNS lookup failed (no such host))")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestConnectorOutageDeadLettersDoNotParkTheChain(t *testing.T) {
 	if _, err := store.leaseTaskToOwner(third.ID, owner3); err != nil {
 		t.Fatal(err)
 	}
-	parked, err := store.DeadLetterTaskWithOutcomeWithContext(ctx, third.ID, owner3, "connector unavailable", 1, models.RunOutcomeConnectorUnavailable)
+	parked, err := store.DeadLetterTaskWithOutcomeWithContext(ctx, third.ID, owner3, "connector unavailable", 1, models.RunOutcomeConnectorUnavailable, "pages (connection refused)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +91,52 @@ func TestConnectorOutageDeadLettersDoNotParkTheChain(t *testing.T) {
 	}
 	if n := len(successorsOf(t, store, map[uuid.UUID]bool{first.ID: true, second.ID: true, third.ID: true})); n != 1 {
 		t.Fatalf("successors after dead-letter then outage = %d, want 1", n)
+	}
+}
+
+// TestConnectorOutageParksAfterThreeConsecutiveOccurrences: the exemption is
+// bounded. A connector that never comes back (a typo'd or decommissioned
+// host) dead-letters the first two occurrences without parking, and the third
+// consecutive outage dead-letter parks the chain with a reason that names the
+// connector and the streak (ADR-0077).
+func TestConnectorOutageParksAfterThreeConsecutiveOccurrences(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+	ctx := context.Background()
+	const detail = "pages (DNS lookup failed (no such host))"
+
+	current := newDailyTask(t, store)
+	seen := map[uuid.UUID]bool{}
+	for i := 1; i <= 3; i++ {
+		owner := uuid.New()
+		if _, err := store.leaseTaskToOwner(current.ID, owner); err != nil {
+			t.Fatal(err)
+		}
+		dl, err := store.DeadLetterTaskWithOutcomeWithContext(ctx, current.ID, owner, "connector unavailable", 1, models.RunOutcomeConnectorUnavailable, detail)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[current.ID] = true
+		succ := successorsOf(t, store, seen)
+		if i < 3 {
+			if dl.RecurrenceParkedReason != nil || len(succ) != 1 {
+				t.Fatalf("outage %d: parked=%v successors=%d, want no park and one successor", i, dl.RecurrenceParkedReason, len(succ))
+			}
+			current = succ[0]
+			continue
+		}
+		if len(succ) != 0 {
+			t.Fatalf("the third consecutive outage spawned %d successor(s), want the chain parked", len(succ))
+		}
+		if dl.RecurrenceParkedReason == nil ||
+			!strings.HasPrefix(*dl.RecurrenceParkedReason, "A required connector has been unreachable for 3 consecutive occurrences: "+detail+".") ||
+			!strings.Contains(*dl.RecurrenceParkedReason, "replay this occurrence to resume the schedule") {
+			t.Fatalf("park reason = %v, want the connector and the streak named", dl.RecurrenceParkedReason)
+		}
+		got, _ := store.GetTask(current.ID)
+		if got.RecurrenceParkedAt == nil || got.RecurrenceParkedReason == nil || *got.RecurrenceParkedReason != *dl.RecurrenceParkedReason {
+			t.Fatalf("the park must be persisted with its reason: %+v", got)
+		}
 	}
 }
 
@@ -121,7 +168,7 @@ func TestInfraRequeueKeepsTheRetryBudgetAndReplayResetsIt(t *testing.T) {
 	if _, err := store.leaseTaskToOwner(task.ID, owner2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DeadLetterTaskWithOutcomeWithContext(ctx, task.ID, owner2, "connector unavailable", 1, models.RunOutcomeConnectorUnavailable); err != nil {
+	if _, err := store.DeadLetterTaskWithOutcomeWithContext(ctx, task.ID, owner2, "connector unavailable", 1, models.RunOutcomeConnectorUnavailable, "pages (connection refused)"); err != nil {
 		t.Fatal(err)
 	}
 	replayed, err := store.ReplayDeadLetteredTask(ctx, task.ID)

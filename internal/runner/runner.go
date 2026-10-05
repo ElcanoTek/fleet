@@ -1385,11 +1385,16 @@ func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, r
 	if class == models.FailureConnectorUnavailable && p.requeueForConnectorOutage(task, session, runErr, leaseOwner) {
 		return
 	}
-	// The outage dead-letter is recorded as such so the recurrence park
-	// breaker does not count it (storage deadLetterParkReason).
-	outcome := ""
+	// The outage dead-letter is recorded as such, with the connectors that
+	// failed, so the recurrence park breaker exempts it — up to its bound,
+	// after which it parks naming them (storage deadLetterParkReason).
+	outcome, outcomeDetail := "", ""
 	if class == models.FailureConnectorUnavailable {
 		outcome = models.RunOutcomeConnectorUnavailable
+		var outage *agentcore.ConnectorUnavailableError
+		if errors.As(runErr, &outage) {
+			outcomeDetail = truncateRunes(outage.Connectors(), maxRunOutcomeDetailRunes)
+		}
 	}
 	if task.RetryPolicy.ShouldRetryClass(class) && task.AttemptCount < task.MaxRetries {
 		backoff := retryBackoff(task.AttemptCount, task.RetryPolicy)
@@ -1417,7 +1422,7 @@ func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, r
 	p.clearPendingQA(task, leaseOwner)
 	if task.RetryPolicy.ShouldRetryClass(class) {
 		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s) (%s): %v", task.AttemptCount+1, class, runErr)
-		if p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", outcome, leaseOwner, start) {
+		if p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", outcome, outcomeDetail, leaseOwner, start) {
 			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 			p.maybeAnalyzeFailure(task, session, runErr)
 		}
@@ -1428,7 +1433,7 @@ func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, r
 	if outcome != "" {
 		reason = fmt.Sprintf("connector unavailable after %d infra re-run(s) (%s): %v", task.InfraRetryCount, class, runErr)
 	}
-	if p.sendToDeadLetter(task, session, runErr, reason, class, outcome, leaseOwner, start) {
+	if p.sendToDeadLetter(task, session, runErr, reason, class, outcome, outcomeDetail, leaseOwner, start) {
 		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 		p.maybeAnalyzeFailure(task, session, runErr)
 	}
@@ -1481,9 +1486,9 @@ func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
 // gate the failure notification + diagnosis on it (#580): when even the
 // fallback is rejected the DB no longer records this run's outcome and no
 // external side effect may fire.
-func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass, outcome string, leaseOwner uuid.UUID, start time.Time) bool {
+func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass, outcome, outcomeDetail string, leaseOwner uuid.UUID, start time.Time) bool {
 	attempts := task.AttemptCount + 1
-	dl, err := p.store.DeadLetterTaskWithOutcomeWithContext(context.Background(), task.ID, leaseOwner, reason, attempts, outcome)
+	dl, err := p.store.DeadLetterTaskWithOutcomeWithContext(context.Background(), task.ID, leaseOwner, reason, attempts, outcome, outcomeDetail)
 	if err != nil {
 		log.Printf("runner: failed to dead-letter task %s: %v; falling back to error status", task.ID, err)
 		landed := true

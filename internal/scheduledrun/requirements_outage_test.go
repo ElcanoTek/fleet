@@ -26,6 +26,10 @@ func TestRequirementsMissExplainedByTransientConnectFailureIsAConnectorOutage(t 
 	if !errors.Is(err, agentcore.ErrConnectorUnavailable) {
 		t.Fatalf("err = %v, want ErrConnectorUnavailable", err)
 	}
+	var outage *agentcore.ConnectorUnavailableError
+	if !errors.As(err, &outage) || outage.Connectors() != "pages (DNS lookup failed (no such host))" {
+		t.Fatalf("the error must carry the failed connector for the dead-letter: %+v", outage)
+	}
 	for _, want := range []string{
 		"execution requirements: unavailable in the task's MCP/native tool roster: server pages, tool mcp_pages_update_page_data, completion tool mcp_pages_record_refresh_check",
 		"server pages failed to connect this run (DNS lookup failed (no such host))",

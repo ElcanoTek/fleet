@@ -883,11 +883,12 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 				opts.Headers = map[string]string{"Authorization": "Bearer " + bearer}
 			}
 		}
-		// A scheduled run (ctx marked mcp.WithConnectRetry) retries a transient
-		// mount failure a few seconds apart before skipping the connection; an
-		// interactive turn attempts it once.
-		if aerr := mcp.RetryTransientConnect(ctx, regName, func() error {
-			return client.AddHTTPServerWithOptions(ctx, regName, conn.URL, opts)
+		// A scheduled run (ctx marked mcp.WithConnectRetry) retries a fast,
+		// transient mount failure a few seconds apart, within the run's retry
+		// budget, before skipping the connection; an interactive turn attempts
+		// it once.
+		if aerr := mcp.RetryTransientConnect(ctx, regName, func(attemptCtx context.Context) error {
+			return client.AddHTTPServerWithOptions(attemptCtx, regName, conn.URL, opts)
 		}); aerr != nil {
 			// The reason matters: a 401 from the vendor (dead token, revoked
 			// grant, org approval pending), a TLS or DNS failure and a handshake

@@ -2,7 +2,6 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +17,11 @@ import (
 // connectorOutageErr is the dispatch error scheduledrun returns when a
 // declared server failed to connect transiently.
 func connectorOutageErr() error {
-	return fmt.Errorf("execution requirements: unavailable in the task's MCP/native tool roster: server pages; "+
-		"server pages failed to connect this run (DNS lookup failed (no such host)) — a transient connector outage: %w", agentcore.ErrConnectorUnavailable)
+	return &agentcore.ConnectorUnavailableError{
+		Message: "execution requirements: unavailable in the task's MCP/native tool roster: server pages; " +
+			"server pages failed to connect this run (DNS lookup failed (no such host)) — a transient connector outage, not a roster problem",
+		Failures: []agentcore.MCPConnectFailure{{Server: "pages", Detail: "DNS lookup failed (no such host)", Transient: true}},
+	}
 }
 
 func runPoolUntil(t *testing.T, store *storage.Storage, runner TaskRunner, notifier Notifier, until func() bool) {
@@ -87,6 +89,10 @@ func TestConnectorOutageDeadLettersAsSuchOnceTheInfraBudgetIsSpent(t *testing.T)
 	task := dl[0]
 	if !task.IsRunOutcome(models.RunOutcomeConnectorUnavailable) {
 		t.Fatalf("run outcome = %v, want connector_unavailable", task.RunOutcome)
+	}
+	// The failed connector is recorded for the bounded park breaker's reason.
+	if task.RunOutcomeDetail == nil || *task.RunOutcomeDetail != "pages (DNS lookup failed (no such host))" {
+		t.Fatalf("run_outcome_detail = %v, want the failed connector and its cause", task.RunOutcomeDetail)
 	}
 	if task.DeadLetterReason == nil || !strings.HasPrefix(*task.DeadLetterReason, "connector unavailable after 2 infra re-run(s) (connector_unavailable): ") ||
 		!strings.Contains(*task.DeadLetterReason, "server pages failed to connect this run") {

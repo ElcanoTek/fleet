@@ -205,7 +205,7 @@ func (r *executionRequirements) checkToolsAgainst(catalog []mcp.ServerTool, nati
 		msg += "; " + describeConnectFailures(explaining)
 	}
 	if outage {
-		return &connectorUnavailableError{msg: msg + " — a transient connector outage, not a roster problem"}
+		return &agentcore.ConnectorUnavailableError{Message: msg + " — a transient connector outage, not a roster problem", Failures: explaining}
 	}
 	return errors.New(msg + "; check selected servers, tool permissions and connected accounts")
 }
@@ -291,15 +291,6 @@ func describeConnectFailures(failures []agentcore.MCPConnectFailure) string {
 	}
 	return strings.Join(parts, "; ")
 }
-
-// connectorUnavailableError is the requirements miss a transient connector
-// outage explains: its text names the missing requirements and each failed
-// server with its connect error, and it unwraps to
-// agentcore.ErrConnectorUnavailable so the runner re-runs the occurrence.
-type connectorUnavailableError struct{ msg string }
-
-func (e *connectorUnavailableError) Error() string { return e.msg }
-func (e *connectorUnavailableError) Unwrap() error { return agentcore.ErrConnectorUnavailable }
 
 func (r *Runner) checkTaskRequirements(task *models.Task) (*executionRequirements, error) {
 	req, err := parseExecutionRequirements(task.Prompt)

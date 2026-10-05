@@ -176,7 +176,7 @@ func (r *productionMCPRuntime) openRemoteOverlay(ctx context.Context, email stri
 		Shadowed:      sortedEnabledNames(shadowed),
 		Accounts:      accounts,
 		Exact:         sel.Exact,
-	}, RetryTransientConnect: mcp.ConnectRetryEnabled(ctx)})
+	}})
 	if err != nil {
 		return nil, err
 	}
@@ -214,11 +214,10 @@ func (r *productionMCPRuntime) openScope(ctx context.Context, selection agentcor
 		choices = append(choices, mcpbroker.ScopeChoice{Server: choice.Server, Account: choice.Account})
 	}
 	scope, err := r.client.OpenScope(ctx, mcpbroker.ScopeSpec{
-		Selection:             choices,
-		TaskID:                taskID,
-		Workspace:             workspace,
-		Policy:                brokerScopePolicy(policy),
-		RetryTransientConnect: mcp.ConnectRetryEnabled(ctx),
+		Selection: choices,
+		TaskID:    taskID,
+		Workspace: workspace,
+		Policy:    brokerScopePolicy(policy),
 	})
 	if err != nil {
 		return nil, err

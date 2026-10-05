@@ -848,7 +848,14 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// Wire per-task MCP credential-account isolation. Broker mode opens one
 	// child-owned scope per run; the compatibility path builds the same dedicated
 	// always-on-plus-optional selection locally.
-	mcpBinding, err := r.bindTaskMCPRuntime(ctx, task)
+	//
+	// An unattended run retries a server's fast, transient registration
+	// failure (a DNS blip, a vendor's "temporarily unavailable") a few seconds
+	// apart before skipping it. mcpCtx carries ONE retry allowance
+	// (mcp.MaxConnectRetryBudget) shared by the bundle binding and the remote
+	// overlay below, so the retry never adds more than that to the run.
+	mcpCtx := mcp.WithConnectRetry(ctx)
+	mcpBinding, err := r.bindTaskMCPRuntime(mcpCtx, task)
 	if err != nil {
 		return nil, false, "", err
 	}
@@ -859,7 +866,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// so a headless run reaches them without mutating the shared/per-run client.
 	// Optional servers stay best-effort. An explicitly required server missing
 	// from the resulting roster fails preflight before model execution.
-	remoteOverlay, err := r.buildTaskRemoteOverlayChecked(ctx, task, mcpBinding, requirements, nativeTools)
+	remoteOverlay, err := r.buildTaskRemoteOverlayChecked(mcpCtx, task, mcpBinding, requirements, nativeTools)
 	if err != nil {
 		return nil, false, "", err
 	}
@@ -1151,8 +1158,6 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 // one of the owner's hosted connections — that is a misspelled or gated-off
 // server, and the run must not proceed as if the operator's pin were honored.
 func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, baseCatalog []mcp.ServerTool) (*agent.RemoteMCPOverlay, error) {
-	// Retry a transient mount failure, like the bundle binding does.
-	ctx = mcp.WithConnectRetry(ctx)
 	_, remotePins := r.splitTaskMCPSelection(task)
 	if (r.openRemoteMCPOverlay == nil && r.remoteMCP == nil) || r.ownerEmail == nil || task.CreatedBy == nil {
 		if len(remotePins) > 0 {
@@ -1339,10 +1344,6 @@ func (b taskMCPBinding) discoveryCatalog() []mcp.ServerTool {
 const taskMCPScopeCloseTimeout = 5 * time.Second
 
 func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (taskMCPBinding, error) {
-	// An unattended run retries a server's transient registration failure (a
-	// DNS blip, a vendor's "temporarily unavailable") a few seconds apart
-	// before skipping it; across the broker the mark rides the scope spec.
-	ctx = mcp.WithConnectRetry(ctx)
 	// "May call no MCP server" is wired as "has no MCP server" (#979). Gate-3
 	// already refuses every call at the broker seam, but the normal task binding
 	// always adds mandatory bundle servers. A deny-all run must not spawn or

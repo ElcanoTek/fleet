@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // errClientClosed is returned for calls made on, or outstanding when, a Client
@@ -110,6 +111,12 @@ var _ agentcore.MCPBroker = (*Scope)(nil)
 // public account/server names, task identity, or a remote user's email only;
 // connector credential values never cross this connection.
 func (c *Client) OpenScope(ctx context.Context, spec ScopeSpec) (*Scope, error) {
+	// The run's connect-retry allowance (mcp.WithConnectRetry) crosses as what
+	// is left of it, and what the child spent is charged back, so the retry
+	// adds at most mcp.MaxConnectRetryBudget to the run across every scope.
+	if spec.ConnectRetryBudgetMs == 0 {
+		spec.ConnectRetryBudgetMs = mcp.ConnectRetryBudgetLeft(ctx).Milliseconds()
+	}
 	resp, err := c.roundtrip(ctx, request{
 		ID:        c.nextID.Add(1),
 		Method:    methodOpenScope,
@@ -118,6 +125,7 @@ func (c *Client) OpenScope(ctx context.Context, spec ScopeSpec) (*Scope, error) 
 	if err != nil {
 		return nil, err
 	}
+	mcp.SpendConnectRetryBudget(ctx, time.Duration(resp.ConnectRetrySpentMs)*time.Millisecond)
 	if resp.Err != "" {
 		return nil, errors.New(resp.Err)
 	}
