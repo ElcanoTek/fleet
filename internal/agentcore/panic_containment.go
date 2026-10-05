@@ -402,8 +402,11 @@ func appendEnforcementMessages(
 // setter is policy code exactly like CanFinish, so a panic in either must be
 // attributed and contained identically — called outside the boundary, a
 // panicking setter would bypass the policy-finish recovery and the outer Run
-// recovery would drop the partial transcript and usage.
-func callPolicyCanFinish(policy Policy, round int, finalText string, attribution panicAttribution) (ok bool, messages []string, err error) {
+// recovery would drop the partial transcript and usage. The run-answer
+// composition (RunAnswerProvider) is policy code too and runs in the same
+// region once completion is granted; answer is the text the run finishes
+// with — finalText unchanged for a policy without that capability.
+func callPolicyCanFinish(policy Policy, round int, finalText string, attribution panicAttribution) (ok bool, messages []string, answer string, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			meta := attribution.metadata(panicLocationPolicy, panicPhasePolicyFinish)
@@ -415,8 +418,12 @@ func callPolicyCanFinish(policy Policy, round int, finalText string, attribution
 	ok, messages = policy.CanFinish(round)
 	if terminal, supported := policy.(TerminalPolicy); supported {
 		if err := terminal.TerminalError(); err != nil {
-			return false, nil, err
+			return false, nil, finalText, err
 		}
 	}
-	return ok, messages, nil
+	answer = finalText
+	if ok {
+		answer = runAnswer(policy, finalText)
+	}
+	return ok, messages, answer, nil
 }

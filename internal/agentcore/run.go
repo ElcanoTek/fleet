@@ -367,6 +367,17 @@ func handRoundFinalText(policy Policy, text string) {
 	}
 }
 
+// runAnswer returns the text a run that the policy just let finish completes
+// with: the policy's composed answer when it is a RunAnswerProvider, else the
+// final round's own closing text. Called only from inside callPolicyCanFinish's
+// panic boundary, like handRoundFinalText.
+func runAnswer(policy Policy, roundText string) string {
+	if provider, ok := policy.(RunAnswerProvider); ok {
+		return provider.RunAnswer(roundText)
+	}
+	return roundText
+}
+
 // Run drives a single agent run to completion. It is the shared body both modes
 // use; Mode + the seams are the only divergence axes.
 func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Result, err error) {
@@ -710,15 +721,20 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// just ended. It is not in the transcript yet — drivers persist the
 		// completed response only after Run returns — so it is handed over inside
 		// the finish-gate consultation below, including "" for a textless round:
-		// a stale earlier draft must never be combined with the current round's
-		// evidence.
-		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, finalText, panicAttribution)
+		// the core never combines an earlier round's draft with the current
+		// round's evidence on its own. A policy whose gates sent an answered
+		// round back for repair keeps that round's text in the answer it judged
+		// (RunAnswerProvider); the consultation returns that composed answer
+		// when it grants completion, so what the gates approved is exactly what
+		// the result carries, the driver persists and live clients are shown.
+		canFinish, enforcementMsgs, answer, policyErr := callPolicyCanFinish(deps.Policy, round, finalText, panicAttribution)
 		if policyErr != nil {
 			res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round+1)
 			res.Cancelled = false
 			return withAuditVerdict(res, usageOrch), policyErr
 		}
 		if canFinish {
+			finalText = answer
 			// Interactive-only finalize hook (leaked-tool-call / forced summary).
 			// Stubbed unless the driver supplies an impl. The hook streams its
 			// own follow-up text deltas through the Observer; recovered text
