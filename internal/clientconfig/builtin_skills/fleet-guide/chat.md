@@ -582,7 +582,12 @@ is not something the platform does.
 
 ### While a turn is running
 
-**Stop** halts the current turn; the partial reply stays in the transcript.
+**Stop** halts the current turn; the partial reply stays in the transcript,
+marked **Turn stopped.** with **Retry** on the latest turn, and it still reads
+that way after a reload. A turn the platform ends early is marked the same way:
+one that reaches the per-turn time limit (30 minutes by default) or cost or
+token ceiling, or one a server restart cut off partway, which also carries a
+note saying so.
 Typing and sending while a turn is running does not interrupt it: your message
 waits in a small queue under the composer, with **Send now** to move it to the
 front and a control to remove it. Queued messages run in order once the current
@@ -741,7 +746,7 @@ row below.
 | --- | --- |
 | **Retrying** | A connection or a service hiccupped, and the turn is retrying by itself with a short countdown. Wait. It usually clears on its own. |
 | Nothing at all for a while | A model that reasons before it writes can be silent for a minute or more, and that is not a fault. By default the platform gives a model about a minute and a quarter to start. If it still has not started, you will see **Retrying** while the platform tries again by itself, and your deployment may try a backup model after that — which usually just answers, with nothing more for you to do. If the last attempt also never starts, a card says the model did not start responding. Retry from the card, or pick a different model. |
-| **Turn failed** | The turn did not complete. The banner says why when it can. **Retry** resends your last message. If it fails the same way twice, change something: the model, the ask, or the attachment. |
+| **Turn failed** | The turn did not complete. The banner says why when it can. On the latest turn, **Retry** resends your last message. If it fails the same way twice, change something: the model, the ask, or the attachment. |
 | Reply seems to stop | On a phone that locked, or a laptop that slept, the screen can lose the connection while the assistant keeps working. Wait a few seconds after the connection is back: the page re-checks by itself and either resumes the live stream or drops in the finished reply. If the turn had already failed while you were away, the page says what went wrong and offers **Retry** — or **Pick a different model**, when that is what the turn needed. After a long outage those checks space themselves out, so clicking back into the tab prompts one straight away. Refresh only if it is still stuck after that. The work was never lost either way. |
 | Model unavailable | The banner offers **Pick a different model**. Choose one and resend; the conversation keeps its history. |
 | File refused | An attachment over the size limit is refused when you pick it, with the limit shown. Split the file, or trim it to the columns and dates you need. |

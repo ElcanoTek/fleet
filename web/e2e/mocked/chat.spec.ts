@@ -224,6 +224,172 @@ test("a delegation streams live sub-agent activity, then settles into a child ca
   await expect(page.getByText("Here is the summary of your last 3 emails.")).toBeVisible();
 });
 
+// A stopped turn must read the same after a reload as it did live. The live
+// stream ends in turn.cancelled; what Postgres keeps of the turn is the call,
+// its cancelled result and a turn_summary carrying `cancelled: true` — no
+// assistant text. Replay once copied that flag onto the summary alone, so the
+// reloaded turn said "The assistant finished without a written reply."
+// instead of "Turn stopped.", claiming a stopped turn had completed.
+test("a stopped turn still reads as stopped after a reload", async ({ page, context }) => {
+  // The summary chip ("stopped · …") renders only with Show details on.
+  await context.addInitScript(() => window.localStorage.setItem("chat-show-stats", "1"));
+  await mockChatBoot(page);
+
+  const conversation = {
+    id: "conv-stop",
+    title: "Sleep for a minute",
+    persona: "default",
+    model: "test-model",
+    pinned: false,
+    archived_at: null,
+    updated_at: 1_700_000_000,
+    created_at: 1_700_000_000,
+    labels: [],
+    folder: null,
+  };
+  const cancelledText = "python execution cancelled (context canceled); sandbox retired: run aborted";
+  const summary = {
+    cost_usd: 0.0012,
+    prompt_tokens: 5100,
+    completion_tokens: 40,
+    duration_ms: 4200,
+    model: "anthropic/claude-sonnet-4.6",
+  };
+  // The conversation exists server-side only once the prompt was sent, so the
+  // first load lands on the empty composer and the reload restores it.
+  let sent = false;
+  await page.route("**/api/conversations", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({ json: { conversations: sent ? [conversation] : [] } });
+  });
+  await page.route("**/api/conversations/conv-stop", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation,
+        history: [
+          { id: 1, role: "user", type: "text", content: { text: "Use run_python to sleep for 60 seconds" } },
+          {
+            id: 2,
+            role: "assistant",
+            type: "tool_call",
+            content: { id: "call-sleep", name: "run_python", input: JSON.stringify({ code: "import time; time.sleep(60)" }) },
+          },
+          {
+            id: 3,
+            role: "tool",
+            type: "tool_result",
+            content: { id: "call-sleep", name: "run_python", text: cancelledText, is_err: true },
+          },
+          { id: 4, role: "assistant", type: "turn_summary", content: { ...summary, cancelled: true } },
+        ],
+        pending_approvals: [],
+        resolved_approvals: [],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+  await page.route("**/api/chat", (r: Route) => {
+    sent = true;
+    return fulfillSse(r, [
+      { event: "conversation", id: 1, data: { id: "conv-stop", title: conversation.title, persona: "default" } },
+      {
+        event: "tool.call",
+        id: 2,
+        data: { id: "call-sleep", name: "run_python", input: JSON.stringify({ code: "import time; time.sleep(60)" }) },
+      },
+      { event: "tool.result", id: 3, data: { id: "call-sleep", name: "run_python", text: cancelledText, is_err: true } },
+      { event: "turn.cancelled", id: 4, data: { ...summary, reason: "context canceled" } },
+    ]);
+  });
+
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  const composer = page.getByRole("textbox").first();
+  await composer.fill("Use run_python to sleep for 60 seconds");
+  await composer.press("Enter");
+
+  const stopped = page.getByText("Turn stopped.");
+  const emptyReply = page.getByText("The assistant finished without a written reply.");
+  const stoppedChip = page.getByText(/^stopped · /);
+
+  // Not a check of the live render: fulfillSse hands over the whole stream in
+  // one chunk, so the stream's finalizer reads a transcript ref that has not
+  // caught up yet, reconciles, and adopts the persisted copy at once. This
+  // block is therefore already a replay check (on a build without the replay
+  // fix it fails right here, before any reload).
+  await expect(stopped).toBeVisible({ timeout: 15_000 });
+  await expect(stoppedChip).toBeVisible();
+  await expect(emptyReply).toHaveCount(0);
+
+  // The reload proves a cold load from history tells the same story, and the
+  // latest turn keeps its Retry.
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Conversation" }).getByText("Use run_python to sleep for 60 seconds"),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(stopped).toBeVisible();
+  await expect(stopped.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(stoppedChip).toBeVisible();
+  await expect(emptyReply).toHaveCount(0);
+});
+
+// Retry re-runs the conversation's LAST turn wherever it is clicked: it
+// truncates the newest turn server-side and re-sends the newest prompt. Under
+// an older stopped turn that deletes a later reply and re-runs a later prompt,
+// so only the latest turn offers it; an older one keeps its label alone.
+test("only the latest turn offers Retry; an older stopped turn keeps its label", async ({ page }) => {
+  const conversation = { id: "conv-mixed", title: "Stopped, then done, then stopped" };
+  await mockChatBoot(page, { conversations: [conversation] });
+  const stoppedTurn = (first: number, prompt: string): Array<Record<string, unknown>> => [
+    { id: first, role: "user", type: "text", content: { text: prompt } },
+    {
+      id: first + 1,
+      role: "assistant",
+      type: "tool_call",
+      content: { id: `call-${first}`, name: "run_python", input: "{}" },
+    },
+    {
+      id: first + 2,
+      role: "tool",
+      type: "tool_result",
+      content: { id: `call-${first}`, name: "run_python", text: "python execution cancelled", is_err: true },
+    },
+    { id: first + 3, role: "assistant", type: "turn_summary", content: { cost_usd: 0.001, cancelled: true } },
+  ];
+  await page.route("**/api/conversations/conv-mixed", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { ...conversation, persona: "default", model: "test-model", pinned: false },
+        history: [
+          ...stoppedTurn(1, "first: sleep for a minute"),
+          { id: 5, role: "user", type: "text", content: { text: "second: just say hi" } },
+          { id: 6, role: "assistant", type: "text", content: { text: "Hi there." } },
+          { id: 7, role: "assistant", type: "turn_summary", content: { cost_usd: 0.001 } },
+          ...stoppedTurn(8, "third: sleep again"),
+        ],
+        pending_approvals: [],
+        resolved_approvals: [],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+
+  await page.goto("/chat");
+  await expect(page.getByText("Hi there.")).toBeVisible({ timeout: 15_000 });
+
+  const stopped = page.getByText("Turn stopped.");
+  await expect(stopped).toHaveCount(2);
+  // The older stopped turn: the label, no button.
+  await expect(stopped.first().getByRole("button", { name: "Retry" })).toHaveCount(0);
+  // The latest turn is stopped too, and it still offers Retry.
+  await expect(stopped.last().getByRole("button", { name: "Retry" })).toBeVisible();
+  // One Retry in the whole transcript, and no empty-reply net.
+  await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(1);
+  await expect(page.getByText("The assistant finished without a written reply.")).toHaveCount(0);
+});
+
 test("config-driven empty-state cards render from a stubbed /api/client-config", async ({ page }) => {
   // The protocol-pill empty-state cards render whenever the client config
   // supplies any (persona-AGNOSTIC — regression guard for #80, where the gate

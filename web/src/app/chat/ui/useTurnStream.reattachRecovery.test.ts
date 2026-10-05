@@ -2754,3 +2754,80 @@ describe("a lost submission acknowledgment does not bind the bubble to a pre-exi
     expect(convSlot(h, CONV).some((m) => m.failed)).toBe(false);
   }, 20000);
 });
+
+// A turn the SERVER stops — `POST /conversations/{id}/cancel` (`fleet acp`), a
+// time or cost limit — ends its live stream with turn.cancelled while nothing
+// was aborted locally. The stream's finalizer used to stamp "No response
+// returned." into the empty slot, so the live turn showed that filler above
+// "Turn stopped." while a reload (which reads Postgres) showed the banner
+// alone. The banner is the explanation; the slot stays empty, as on reload.
+describe("a turn the server stops ends as stopped, not as an empty reply", () => {
+  const stoppedFrames = (text?: string) => [
+    sse(1, "turn.started", { turn_id: "t1" }),
+    ...(text ? [sse(2, "text.delta", { text })] : []),
+    sse(3, "tool.call", { id: "c1", name: "run_python", input: "{}" }),
+    sse(4, "tool.result", {
+      id: "c1",
+      name: "run_python",
+      text: "python execution cancelled (context canceled)",
+      is_err: true,
+    }),
+    sse(5, "turn.cancelled", { cost_usd: 0.001, duration_ms: 10, reason: "context canceled" }),
+  ];
+
+  it("leaves an empty stopped slot empty — no filler under the banner", async () => {
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      streamBodies: [() => truncatedStream(stoppedFrames())],
+      inflight: [{ inflight: false }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+
+    const last = lastOf(h);
+    expect(last.state).toBe("done");
+    expect(last.cancelled).toBe(true);
+    expect(last.summary?.cancelled).toBe(true);
+    expect(last.content).toBe("");
+    // The outcome was observed, so nothing re-reads the transcript.
+    expect(h.loadConversationCalls).toEqual([]);
+  });
+
+  it("keeps the text that streamed before the stop", async () => {
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      streamBodies: [() => truncatedStream(stoppedFrames("Sleeping now. "))],
+      inflight: [{ inflight: false }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+
+    expect(lastOf(h).content).toBe("Sleeping now. ");
+    expect(lastOf(h).cancelled).toBe(true);
+  });
+
+  it("still says so when a COMPLETED turn returned nothing", async () => {
+    const h = makeHarness({
+      initial: [],
+      persisted: unansweredHistory(),
+      streamBodies: [
+        () =>
+          truncatedStream([
+            sse(1, "turn.started", { turn_id: "t1" }),
+            sse(2, "turn.completed", { cost_usd: 0.001, duration_ms: 10 }),
+          ]),
+      ],
+      inflight: [{ inflight: false }],
+    });
+
+    const { result } = renderHook(() => useTurnStream(h.deps));
+    await result.current.submitPrompt("run the long job");
+
+    expect(lastOf(h).cancelled).toBeUndefined();
+    expect(lastOf(h).content).toBe("No response returned.");
+  });
+});
