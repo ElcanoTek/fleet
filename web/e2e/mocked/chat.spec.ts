@@ -69,6 +69,54 @@ test("a Git-backed library prompt can be selected into the chat composer", async
   await expect(page.getByRole("textbox").first()).toHaveValue(content);
 });
 
+// A Git prompt that declares a form (docs/PROMPT-LIBRARY.md, "Form prompts"):
+// picking it shows its fields, and Use prompt inserts the RENDERED template —
+// not the YAML file — into the same composer a plain entry fills, with the
+// optional line the user left blank dropped.
+test("a form prompt from the library is filled in and inserted rendered into the composer", async ({ page }) => {
+  await mockChatBoot(page);
+  await page.route("**/api/orchestrator/prompts", (r: Route) =>
+    r.fulfill({
+      json: [
+        {
+          id: "git:follow-up.yaml",
+          name: "Meeting follow-up",
+          description: "Draft a follow-up from your notes",
+          content: "name: Meeting follow-up\nfields: []\n# the raw YAML file\n",
+          source: "git",
+          visibility: "workspace",
+          read_only: true,
+          owned_by_caller: false,
+          path: "prompts/follow-up.yaml",
+          fields: [
+            { key: "meeting", label: "Meeting", type: "text", required: true },
+            { key: "tone", label: "Tone", type: "select", options: ["Neutral", "Formal"], default: "Neutral" },
+            { key: "extra", label: "Anything else", type: "textarea", advanced: true },
+          ],
+          prompt_template: "Draft a follow-up.\nMeeting: {meeting}\nTone: {tone}\nAlso: {extra}",
+        },
+      ],
+    }),
+  );
+
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Open prompt library" }).click();
+  await expect(page.getByRole("region", { name: "Meeting follow-up form" })).toBeVisible();
+
+  const use = page.getByRole("button", { name: "Use prompt" });
+  await expect(use).toBeDisabled();
+  await page.getByRole("textbox", { name: /^Meeting/ }).fill("Quarterly planning");
+  await page.getByRole("combobox", { name: /^Tone/ }).selectOption("Formal");
+  await expect(use).toBeEnabled();
+  await use.click();
+
+  await expect(page.getByRole("dialog", { name: "Prompt library" })).toBeHidden();
+  await expect(page.getByRole("textbox").first()).toHaveValue(
+    "Draft a follow-up.\nMeeting: Quarterly planning\nTone: Formal",
+  );
+});
+
 test("a sent turn streams text deltas and a final assistant message", async ({ page }) => {
   await mockChatBoot(page);
   await mockStreamingTurn(page);
