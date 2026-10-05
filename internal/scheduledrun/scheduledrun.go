@@ -1353,7 +1353,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 		if r.mgr != nil && r.mgr.MCPClient() == nil && r.mgr.MCPBroker() != nil {
 			return taskMCPBinding{}, errors.New("scheduled MCP broker requires a task scope opener")
 		}
-		client, cleanup, workdir, failed, err := r.bindTaskMCPReport(ctx, task, denyAll)
+		client, cleanup, workdir, failed, err := r.bindTaskMCP(ctx, task, denyAll)
 		if err != nil {
 			return taskMCPBinding{}, err
 		}
@@ -1502,14 +1502,10 @@ func (r *Runner) taskMCPToolAllowlist() agentcore.MCPAllowlist {
 // The third return is the resolved ${FLEET_WORKSPACE} directory used for this
 // task's connector ledger reconciliation ("" when no selected server references
 // the token).
-func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll bool) (*mcp.Client, func(), string, error) {
-	client, cleanup, workdir, _, err := r.bindTaskMCPReport(ctx, task, denyAll)
-	return client, cleanup, workdir, err
-}
-
-// bindTaskMCPReport is bindTaskMCP that also returns the selected servers that
-// failed to register (agentcore.BindMCPSelectionReport).
-func (r *Runner) bindTaskMCPReport(ctx context.Context, task *models.Task, denyAll bool) (*mcp.Client, func(), string, []agentcore.MCPConnectFailure, error) {
+//
+// The fourth return lists the selected servers that failed to register
+// (agentcore.BindMCPSelectionReport), for the requirements check.
+func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll bool) (*mcp.Client, func(), string, []agentcore.MCPConnectFailure, error) {
 	noop := func() {}
 	if denyAll {
 		// An empty per-run client, NOT the shared one: the shared client already
