@@ -154,6 +154,123 @@ func TestClientStream_403ErrorRedactsToken(t *testing.T) {
 	}
 }
 
+// A refusal body is quoted into the error (and `fleet acp` hands that to a
+// client that may log it), so a proxy page echoing the request headers must
+// not carry the token through. Every non-200 branch quotes the same redacted
+// excerpt.
+func TestClientStream_ErrorBodyRedactsEchoedToken(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{
+			name:   "403 proxy debug page",
+			status: http.StatusForbidden,
+			body:   "<html><body><h1>403 Forbidden</h1><pre>X-Chat-Server-Token: super-secret-token\nAuthorization: Bearer super-secret-token</pre></body></html>",
+		},
+		{
+			name:   "401 echoing the header",
+			status: http.StatusUnauthorized,
+			body:   "unauthorized: X-Chat-Server-Token: super-secret-token",
+		},
+		{
+			name:   "502 echoing the header",
+			status: http.StatusBadGateway,
+			body:   "upstream refused; request had X-Chat-Server-Token: super-secret-token",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			c := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: "super-secret-token"})
+			_, err := c.Stream(context.Background(), "hi", "", func(Event) {})
+			var se *StatusError
+			if !errors.As(err, &se) || se.Code != tt.status {
+				t.Fatalf("err = %#v, want *StatusError %d", err, tt.status)
+			}
+			if strings.Contains(err.Error(), "super-secret-token") || strings.Contains(err.Error(), "Bearer super-secret") {
+				t.Errorf("error must NOT leak the token: %v", err)
+			}
+			if !strings.Contains(err.Error(), "X-Chat-Server-Token: [redacted]") {
+				t.Errorf("error should quote the body with the token redacted: %v", err)
+			}
+		})
+	}
+}
+
+// The body read stops at 512 bytes, so an echoed token can be cut in half
+// there, where the whole-token match cannot see it. The token here starts at
+// byte 500, leaving its first 12 bytes in the excerpt. The padding is spaces
+// so the 403 branch's whitespace-collapsing excerpt pulls the cut token up
+// next to the header name instead of past its 160-rune cap. The assertion is
+// on token[:4]: every cut this body produces is at least that long, and "s",
+// "su" and "sup" are too short to tell a leak apart from ordinary text.
+func TestClientStream_ErrorBodyDropsTokenCutByReadCap(t *testing.T) {
+	const token = "super-secret-token"
+	header := "X-Chat-Server-Token:"
+	straddling := header + strings.Repeat(" ", 500-len(header)) + token + "\n</pre></body></html>"
+	tests := []struct {
+		name     string
+		status   int
+		body     string
+		want     string // a substring the error must still carry
+		wantLeak bool   // a body under the cap is not cut, so its tail is kept
+	}{
+		{name: "403 token straddles the cap", status: http.StatusForbidden, body: straddling, want: header},
+		{name: "502 token straddles the cap", status: http.StatusBadGateway, body: straddling, want: header},
+		{
+			name:     "short body ending in a token prefix is not trimmed",
+			status:   http.StatusForbidden,
+			body:     "request rejected for super-secret",
+			want:     "request rejected for super-secret",
+			wantLeak: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			_, err := NewClient(Config{ServerURL: srv.URL, Email: "u@x.co", Token: token}).Stream(context.Background(), "hi", "", func(Event) {})
+			var se *StatusError
+			if !errors.As(err, &se) || se.Code != tt.status {
+				t.Fatalf("err = %#v, want *StatusError %d", err, tt.status)
+			}
+			if got := strings.Contains(err.Error(), token[:4]); got != tt.wantLeak {
+				t.Errorf("error contains %q = %v, want %v: %v", token[:4], got, tt.wantLeak, err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should still quote %q: %v", tt.want, err)
+			}
+		})
+	}
+}
+
+// Every cut length, down to a single byte, is dropped when the excerpt was
+// truncated, and kept when it was not.
+func TestRedactTokenDropsEveryCutLength(t *testing.T) {
+	const token = "super-secret-token"
+	for n := 1; n < len(token); n++ {
+		in := "body: " + token[:n]
+		if got := string(redactToken([]byte(in), token, true)); got != "body: " {
+			t.Errorf("truncated, cut at %d: got %q, want %q", n, got, "body: ")
+		}
+		if got := string(redactToken([]byte(in), token, false)); got != in {
+			t.Errorf("not truncated, cut at %d: got %q, want it unchanged", n, got)
+		}
+	}
+	if got := string(redactToken([]byte("a "+token+" b"), "", true)); got != "a "+token+" b" {
+		t.Errorf("empty token must leave the excerpt alone, got %q", got)
+	}
+}
+
 func TestClientStream_RequiresSuccessfulTerminalEvent(t *testing.T) {
 	tests := []struct {
 		name      string

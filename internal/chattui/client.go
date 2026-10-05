@@ -241,11 +241,17 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		return convID, fmt.Errorf("server accepted the request (%d) but its acknowledgement was unreadable: %v", resp.StatusCode, orDefault(errString(derr), "not a queue acknowledgement"))
 	}
 	if resp.StatusCode != http.StatusOK {
-		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		const excerptCap = 512
+		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, excerptCap))
+		// The excerpt is quoted to the user, and `fleet acp` hands it to an ACP
+		// client that may write it to a log. fleet never echoes the token, but a
+		// proxy in between might (a debug page dumping request headers), so
+		// redact it once here, before any branch quotes the body.
+		excerpt = redactToken(excerpt, c.cfg.Token, len(excerpt) == excerptCap)
 		msg := strings.TrimSpace(string(excerpt))
 		switch resp.StatusCode {
 		case http.StatusForbidden:
-			return convID, &StatusError{Code: resp.StatusCode, msg: "server rejected the request (403): check FLEET_SERVER_TOKEN matches the server"}
+			return convID, &StatusError{Code: resp.StatusCode, msg: forbiddenMessage(c.cfg.Email, excerpt)}
 		case http.StatusUnauthorized, http.StatusBadRequest:
 			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
 		default:
@@ -323,6 +329,77 @@ func attachFrozenArgsRaw(m map[string]any, raw []byte) {
 		return
 	}
 	m["frozen_args"] = fa
+}
+
+// forbiddenMessage turns a 403 from POST /chat into fix-it text, keyed on the
+// body each fleet refusal writes: the shared-token check answers a plain-text
+// "forbidden", membershipMiddleware {"error":"not_a_member"} for an
+// X-User-Email that is not a provisioned user, rejectViewerWrites
+// {"error":"read_only"} for a viewer, and the IP filter a plain-text "Access
+// denied" (it is the outermost middleware and /healthz skips it, so Ping passes
+// and only the turn fails). Advice is given only for a body that names its
+// cause: the token is blamed only for the token check's own body, because
+// sending a non-member or a filtered address after FLEET_SERVER_TOKEN chases
+// the one setting that is already right. Anything else — a reverse proxy's
+// page, a refusal added later — is quoted as a short excerpt rather than
+// guessed at. The IP-filter text keeps that filter's uniformity: it does not
+// say which list matched, because the server deliberately does not say either.
+// No branch ever includes the token value.
+func forbiddenMessage(email string, body []byte) string {
+	const prefix = "server rejected the request (403)"
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &refusal)
+	switch refusal.Error {
+	case "not_a_member":
+		return fmt.Sprintf("%s: %s is not a fleet user; an admin can add it with `fleet chat user add %s --password -`, or use --email/FLEET_USER_EMAIL for a provisioned user", prefix, email, email)
+	case "read_only":
+		return fmt.Sprintf("%s: %s has the read-only viewer role and cannot send messages; an admin can change it with `fleet chat user role %s --role member`", prefix, email, email)
+	}
+	switch text := strings.TrimSpace(string(body)); text {
+	case "forbidden":
+		return prefix + ": check FLEET_SERVER_TOKEN matches the server"
+	case "Access denied":
+		return prefix + ": the server's IP access control (FLEET_IP_ALLOWLIST / FLEET_IP_DENYLIST) does not admit this client's address; connect from an admitted address, or ask an admin to admit this one"
+	case "":
+		return prefix
+	default:
+		return prefix + ": " + shortExcerpt(text, 160)
+	}
+}
+
+// redactToken replaces every whole occurrence of token in a quoted response
+// body with "[redacted]". When the read filled its cap (truncated), a token can
+// also be cut off at the end, where the whole-token match cannot see it, so the
+// longest suffix that is a proper prefix of the token is dropped too; trimming
+// a few legitimate bytes from an already-cut excerpt costs nothing. An empty
+// token is skipped: ReplaceAll with an empty old value would insert the
+// placeholder between every byte.
+func redactToken(excerpt []byte, token string, truncated bool) []byte {
+	if token == "" {
+		return excerpt
+	}
+	excerpt = bytes.ReplaceAll(excerpt, []byte(token), []byte("[redacted]"))
+	if truncated {
+		for n := len(token) - 1; n > 0; n-- {
+			if bytes.HasSuffix(excerpt, []byte(token[:n])) {
+				return excerpt[:len(excerpt)-n]
+			}
+		}
+	}
+	return excerpt
+}
+
+// shortExcerpt collapses whitespace to single spaces and caps the result at
+// limit runes, so a refusal body quoted into an error (a proxy's HTML error
+// page, say) stays one short line instead of flooding the terminal.
+func shortExcerpt(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > limit {
+		return string(r[:limit]) + "…"
+	}
+	return s
 }
 
 // parseSSE reads a text/event-stream and calls fn for each complete frame. It
