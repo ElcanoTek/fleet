@@ -183,10 +183,10 @@ stops the turn server-side as described under "Protocol mapping". But
 CodeCompanion stops listening the moment you stop: its cancel drops the active
 prompt right after sending `session/cancel`, so text fleet sends after that is
 not shown in Neovim. That includes the note that the turn had already finished
-before the Stop arrived, so nothing was stopped (checked live on 2026-10-05),
-and would equally include the note that a stop could not be confirmed (not
-observed live). After stopping, check the conversation in the web chat for how
-the turn ended.
+before the Stop arrived, so nothing was stopped, and the note that fleet could
+not confirm the stop, so the turn may still be running (both checked live on
+2026-10-05). After stopping, check the conversation in the web chat for how the
+turn ended.
 
 For an adapter bug report, attach CodeCompanion's raw JSON-RPC transcript.
 CodeCompanion writes one for every `fleet acp` process it starts, at any log
@@ -266,7 +266,9 @@ What shipped:
   `/buffer` and `/file`, the rule files and the switch that keeps them out,
   images with `vision` off and on, streamed answer text with a second model,
   queueing behind a turn running in the web chat, approving through the link in
-  the reply, and a cancel that arrived just after the turn finished.
+  the reply, a cancel that arrived just after the turn finished, and a stop
+  fleet could not confirm (the server was paused with `SIGSTOP` until
+  `fleet acp`'s 10-second Stop request timed out).
 
 Deviations and limits:
 
