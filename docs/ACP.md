@@ -95,10 +95,12 @@ Stream events map onto `session/update`:
 | `turn.policy_blocked` | Stop reason `refusal` |
 
 Prompt content: text blocks are joined. A `resource_link` becomes a Markdown
-link. An embedded text resource is inlined under its URI, in a code fence
-longer than any run of backticks in its text, so a fence inside the file
-cannot end it early. Images, audio and binary blobs are refused with invalid
-params, which matches what `initialize` advertises.
+link. An embedded text resource is inlined under its URI, in a code fence of
+at least four backticks and longer than any run of backticks in its text, so
+a fence inside the file cannot end it early. A line break in a URI is
+percent-encoded, and one in a link's name becomes a space, so neither can
+start Markdown of its own. Images, audio and binary blobs are refused with
+invalid params, which matches what `initialize` advertises.
 
 ## Errors
 
