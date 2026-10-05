@@ -93,6 +93,12 @@ type ScopeSpec struct {
 	// with the gates it re-derives from its own bundle, so a parent-side bug
 	// can restrict a scope but never widen one. nil = no parent narrowing.
 	Policy *ScopePolicy `json:"policy,omitempty"`
+	// RetryTransientConnect carries mcp.WithConnectRetry across the process
+	// boundary: the scope's servers retry a transient registration failure a
+	// few seconds apart before they are skipped. The scheduled driver sets it;
+	// an interactive turn does not, so a chat turn never waits on a server
+	// that is down.
+	RetryTransientConnect bool `json:"retryTransientConnect,omitempty"`
 }
 
 // ScopePolicy carries the parent's effective gates across the credential
@@ -251,9 +257,18 @@ type response struct {
 // connection skipped under a labelled default seat (#1656); empty for a
 // skip that had no connection behind it (a pinned seat that is not
 // connected).
+//
+// A bundle scope reports here too: every selected server that failed to
+// register, with Reason "unreachable". Detail and Transient describe a
+// failed registration (agentcore.MCPConnectFailure): a credential-free
+// summary of the connect error — never a URL, header or body — and whether
+// it was transient. Both are empty for a skip that was not a connect failure
+// (a missing token, the overlay cap).
 type SkippedServer struct {
-	Name    string `json:"name"`
-	Reason  string `json:"reason,omitempty"`
-	Server  string `json:"server,omitempty"`
-	Account string `json:"account,omitempty"`
+	Name      string `json:"name"`
+	Reason    string `json:"reason,omitempty"`
+	Server    string `json:"server,omitempty"`
+	Account   string `json:"account,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	Transient bool   `json:"transient,omitempty"`
 }

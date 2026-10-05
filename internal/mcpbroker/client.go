@@ -163,8 +163,25 @@ func (s *Scope) Tools() []ToolDescriptor {
 	return cloneToolDescriptors(s.tools)
 }
 
-// Skipped returns public remote-server names that were selected but unavailable
-// while the scope opened. It is empty for bundle scopes.
+// ConnectFailures returns the skipped servers whose registration failed while
+// the scope opened, with the credential-free detail and transient flag the
+// child reported (SkippedServer). Nil when every selected server connected.
+func (s *Scope) ConnectFailures() []agentcore.MCPConnectFailure {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []agentcore.MCPConnectFailure
+	for _, sk := range s.skipped {
+		if sk.Detail == "" {
+			continue
+		}
+		out = append(out, agentcore.MCPConnectFailure{Server: sk.Name, Detail: sk.Detail, Transient: sk.Transient})
+	}
+	return out
+}
+
+// Skipped returns public server names that were selected but unavailable
+// while the scope opened: remote servers that could not be mounted, and the
+// bundle servers of a bundle scope that failed to register.
 func (s *Scope) Skipped() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

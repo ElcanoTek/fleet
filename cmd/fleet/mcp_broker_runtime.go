@@ -176,7 +176,7 @@ func (r *productionMCPRuntime) openRemoteOverlay(ctx context.Context, email stri
 		Shadowed:      sortedEnabledNames(shadowed),
 		Accounts:      accounts,
 		Exact:         sel.Exact,
-	}})
+	}, RetryTransientConnect: mcp.ConnectRetryEnabled(ctx)})
 	if err != nil {
 		return nil, err
 	}
@@ -186,13 +186,14 @@ func (r *productionMCPRuntime) openRemoteOverlay(ctx context.Context, email stri
 		servers[tool.Server] = true
 	}
 	return &agent.RemoteMCPOverlay{
-		Broker:       scope,
-		Catalog:      brokerToolCatalog(tools),
-		Servers:      servers,
-		CloseScope:   scope.Close,
-		Skipped:      scope.Skipped(),
-		SkipReasons:  scope.SkipReasons(),
-		SkippedSeats: scope.SkippedSeats(),
+		Broker:          scope,
+		Catalog:         brokerToolCatalog(tools),
+		Servers:         servers,
+		CloseScope:      scope.Close,
+		Skipped:         scope.Skipped(),
+		SkipReasons:     scope.SkipReasons(),
+		SkippedSeats:    scope.SkippedSeats(),
+		ConnectFailures: scope.ConnectFailures(),
 	}, nil
 }
 
@@ -213,15 +214,16 @@ func (r *productionMCPRuntime) openScope(ctx context.Context, selection agentcor
 		choices = append(choices, mcpbroker.ScopeChoice{Server: choice.Server, Account: choice.Account})
 	}
 	scope, err := r.client.OpenScope(ctx, mcpbroker.ScopeSpec{
-		Selection: choices,
-		TaskID:    taskID,
-		Workspace: workspace,
-		Policy:    brokerScopePolicy(policy),
+		Selection:             choices,
+		TaskID:                taskID,
+		Workspace:             workspace,
+		Policy:                brokerScopePolicy(policy),
+		RetryTransientConnect: mcp.ConnectRetryEnabled(ctx),
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &agent.MCPScope{Broker: scope, Catalog: brokerToolCatalog(scope.Tools()), Close: scope.Close}, nil
+	return &agent.MCPScope{Broker: scope, Catalog: brokerToolCatalog(scope.Tools()), Close: scope.Close, ConnectFailures: scope.ConnectFailures()}, nil
 }
 
 // brokerScopePolicy serializes the parent's effective gates for the credential

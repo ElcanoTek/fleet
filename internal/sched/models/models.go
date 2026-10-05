@@ -355,12 +355,19 @@ const (
 	FailureOutputFormat  = "structured_output_format"      // model failed the declared machine-output contract
 	FailureOutputPersist = "structured_output_persistence" // validated output could not commit under lease
 	FailureTerminal      = "terminal"                      // unknown / deterministic — never retried
+	// FailureConnectorUnavailable: a server the task's EXECUTION REQUIREMENTS
+	// declare failed to connect transiently (agentcore.ErrConnectorUnavailable).
+	// The runner re-runs the occurrence a few minutes later on its own infra
+	// budget (Task.InfraRetryCount), not max_retries; once that is spent the
+	// class follows the RetryPolicy like any other (default: no retry), and a
+	// dead-letter it ends in does not count toward the recurrence park breaker.
+	FailureConnectorUnavailable = "connector_unavailable"
 )
 
 // retryFailureClasses is the set a retry_on/no_retry_on list may name.
 var retryFailureClasses = map[string]struct{}{
 	FailureTransient: {}, FailureCostCeiling: {}, FailureContextBudget: {}, FailureTerminal: {},
-	FailureOutputFormat: {}, FailureOutputPersist: {},
+	FailureOutputFormat: {}, FailureOutputPersist: {}, FailureConnectorUnavailable: {},
 }
 
 // Backoff strategies + defaults for RetryPolicy (#201).
@@ -408,7 +415,7 @@ func (rp *RetryPolicy) Validate() error {
 	for _, list := range [][]string{rp.RetryOn, rp.NoRetryOn} {
 		for _, c := range list {
 			if _, ok := retryFailureClasses[c]; !ok {
-				return fmt.Errorf("unknown failure class %q (allowed: transient, cost_ceiling, context_budget, structured_output_format, structured_output_persistence, terminal)", c)
+				return fmt.Errorf("unknown failure class %q (allowed: transient, cost_ceiling, context_budget, structured_output_format, structured_output_persistence, connector_unavailable, terminal)", c)
 			}
 		}
 	}
@@ -1264,6 +1271,26 @@ type Task struct {
 	// Persisted with RecurrenceParkedAt and cleared with it; never exported;
 	// not settable by clients.
 	RecurrenceParkedReason *string `json:"recurrence_parked_reason,omitempty"`
+	// InfraRetryCount is how many times the runner re-ran this occurrence
+	// because a declared connector was unavailable (FailureConnectorUnavailable,
+	// migration 074): infrastructure weather, counted apart from AttemptCount so
+	// it never spends the task's own max_retries. Bounded by the runner; reset
+	// by a dead-letter replay. Persisted; never exported; not settable by
+	// clients.
+	InfraRetryCount int `json:"infra_retry_count,omitempty"`
+	// RunOutcome qualifies how a terminal run ended, beyond its status
+	// (migration 074): RunOutcomeBlocked on a success whose declared completion
+	// clause recorded a blocked outcome (completion.blocked_when) — the run did
+	// its job and decided not to publish — and RunOutcomeConnectorUnavailable on
+	// a dead-letter caused by a connector outage, which the recurrence park
+	// breaker does not count. nil for every other run. Written with the
+	// terminal transition, cleared by replay; never exported; not settable by
+	// clients.
+	RunOutcome *string `json:"run_outcome,omitempty"`
+	// RunOutcomeDetail is the short reason that goes with RunOutcome — for a
+	// blocked run, the declared outcome value and the call's own detail. nil
+	// when RunOutcome is.
+	RunOutcomeDetail *string `json:"run_outcome_detail,omitempty"`
 	// LineageID is the key every run of one JOB shares — recurrence occurrences,
 	// re-runs and clones all carry the original task's id here — and so the name
 	// of the job's working directory under the workspace root
@@ -2097,7 +2124,32 @@ type StatusUpdate struct {
 	// artifacts column; empty leaves the existing value untouched. Set on a
 	// running-status update by the runner before terminal success, like OutputJSON.
 	Artifacts json.RawMessage `json:"artifacts,omitempty"`
-	Timestamp *time.Time      `json:"timestamp,omitempty"`
+	// RunOutcome / RunOutcomeDetail qualify a terminal success (migration
+	// 074): RunOutcomeBlocked when the run's declared completion clause
+	// recorded a blocked outcome. The storage layer writes them with every
+	// success or error transition, so a success without them clears a stale
+	// value rather than inheriting it.
+	RunOutcome       *string    `json:"run_outcome,omitempty"`
+	RunOutcomeDetail *string    `json:"run_outcome_detail,omitempty"`
+	Timestamp        *time.Time `json:"timestamp,omitempty"`
+}
+
+// Run outcomes (Task.RunOutcome, migration 074).
+const (
+	// RunOutcomeBlocked: the run succeeded through its declared completion
+	// predicate, and the call that completed it recorded a blocked outcome
+	// (EXECUTION REQUIREMENTS completion.blocked_when). Shown as "Blocked",
+	// not plain success.
+	RunOutcomeBlocked = "blocked"
+	// RunOutcomeConnectorUnavailable: the run dead-lettered because a declared
+	// connector was unavailable after the runner's infra re-runs. The
+	// recurrence park breaker does not count it.
+	RunOutcomeConnectorUnavailable = "connector_unavailable"
+)
+
+// IsRunOutcome reports whether t's recorded run outcome is outcome.
+func (t *Task) IsRunOutcome(outcome string) bool {
+	return t != nil && t.RunOutcome != nil && *t.RunOutcome == outcome
 }
 
 // TaskArtifact is one named output file a scheduled run's agent published via the
@@ -2166,6 +2218,11 @@ type LogSession struct {
 	// (#797) from the driver to the runner, redacted like every other session
 	// field before it leaves the process boundary.
 	OutputJSON string `json:"output_json,omitempty"`
+	// RunOutcome / RunOutcomeDetail hand a successful run's declared outcome
+	// (RunOutcomeBlocked, from completion.blocked_when) from the driver to the
+	// runner, which writes them onto the task with the success transition.
+	RunOutcome       string `json:"run_outcome,omitempty"`
+	RunOutcomeDetail string `json:"run_outcome_detail,omitempty"`
 	// AuxUsage mirrors agentcore.LogSession.AuxUsage (#1118): the labeled
 	// ledger of host-side auxiliary model calls made on behalf of the run
 	// (end-of-run verifier, phone-a-friend review, loop exit-condition

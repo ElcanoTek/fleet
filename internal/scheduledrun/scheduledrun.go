@@ -1147,6 +1147,8 @@ func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay,
 // one of the owner's hosted connections — that is a misspelled or gated-off
 // server, and the run must not proceed as if the operator's pin were honored.
 func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, baseCatalog []mcp.ServerTool) (*agent.RemoteMCPOverlay, error) {
+	// Retry a transient mount failure, like the bundle binding does.
+	ctx = mcp.WithConnectRetry(ctx)
 	_, remotePins := r.splitTaskMCPSelection(task)
 	if (r.openRemoteMCPOverlay == nil && r.remoteMCP == nil) || r.ownerEmail == nil || task.CreatedBy == nil {
 		if len(remotePins) > 0 {
@@ -1308,12 +1310,16 @@ func unknownMCPSelectionError(pins map[string]string) error {
 }
 
 // taskMCPBinding is the scheduled Agent's transport-neutral per-run MCP wiring.
+// connectFailures are the selected bundle servers that failed to register for
+// this run (credential-free), which the requirements check reads to tell a
+// connector outage from a roster that genuinely lacks a server.
 type taskMCPBinding struct {
-	client  *mcp.Client
-	broker  agentcore.MCPBroker
-	catalog []mcp.ServerTool
-	workdir string
-	cleanup func()
+	client          *mcp.Client
+	broker          agentcore.MCPBroker
+	catalog         []mcp.ServerTool
+	workdir         string
+	cleanup         func()
+	connectFailures []agentcore.MCPConnectFailure
 }
 
 func (b taskMCPBinding) discoveryCatalog() []mcp.ServerTool {
@@ -1329,6 +1335,10 @@ func (b taskMCPBinding) discoveryCatalog() []mcp.ServerTool {
 const taskMCPScopeCloseTimeout = 5 * time.Second
 
 func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (taskMCPBinding, error) {
+	// An unattended run retries a server's transient registration failure (a
+	// DNS blip, a vendor's "temporarily unavailable") a few seconds apart
+	// before skipping it; across the broker the mark rides the scope spec.
+	ctx = mcp.WithConnectRetry(ctx)
 	// "May call no MCP server" is wired as "has no MCP server" (#979). Gate-3
 	// already refuses every call at the broker seam, but the normal task binding
 	// always adds mandatory bundle servers. A deny-all run must not spawn or
@@ -1339,14 +1349,14 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 		if r.mgr != nil && r.mgr.MCPClient() == nil && r.mgr.MCPBroker() != nil {
 			return taskMCPBinding{}, errors.New("scheduled MCP broker requires a task scope opener")
 		}
-		client, cleanup, workdir, err := r.bindTaskMCP(ctx, task, denyAll)
+		client, cleanup, workdir, failed, err := r.bindTaskMCPReport(ctx, task, denyAll)
 		if err != nil {
 			return taskMCPBinding{}, err
 		}
 		// Keep catalog nil so agentcore re-discovers the mutable local client on
 		// every MCP-dirty rebuild after mcp_load_servers. discoveryCatalog still
 		// snapshots it for remote-server shadowing before the run starts.
-		return taskMCPBinding{client: client, workdir: workdir, cleanup: cleanup}, nil
+		return taskMCPBinding{client: client, workdir: workdir, cleanup: cleanup, connectFailures: failed}, nil
 	}
 
 	selection := agentcore.MCPSelection{}
@@ -1388,7 +1398,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 	if scope.Catalog != nil && catalog == nil {
 		catalog = []mcp.ServerTool{}
 	}
-	return taskMCPBinding{broker: scope.Broker, catalog: catalog, workdir: workdir, cleanup: cleanup}, nil
+	return taskMCPBinding{broker: scope.Broker, catalog: catalog, workdir: workdir, cleanup: cleanup, connectFailures: scope.ConnectFailures}, nil
 }
 
 func (r *Runner) taskMCPSelection(task *models.Task) agentcore.MCPSelection {
@@ -1489,6 +1499,13 @@ func (r *Runner) taskMCPToolAllowlist() agentcore.MCPAllowlist {
 // task's connector ledger reconciliation ("" when no selected server references
 // the token).
 func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll bool) (*mcp.Client, func(), string, error) {
+	client, cleanup, workdir, _, err := r.bindTaskMCPReport(ctx, task, denyAll)
+	return client, cleanup, workdir, err
+}
+
+// bindTaskMCPReport is bindTaskMCP that also returns the selected servers that
+// failed to register (agentcore.BindMCPSelectionReport).
+func (r *Runner) bindTaskMCPReport(ctx context.Context, task *models.Task, denyAll bool) (*mcp.Client, func(), string, []agentcore.MCPConnectFailure, error) {
 	noop := func() {}
 	if denyAll {
 		// An empty per-run client, NOT the shared one: the shared client already
@@ -1501,7 +1518,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 			if err := client.Close(); err != nil {
 				log.Printf("scheduled task %s: error closing empty per-run MCP client: %v", task.ID, err)
 			}
-		}, "", nil
+		}, "", nil, nil
 	}
 	selection := r.taskMCPSelection(task)
 
@@ -1524,13 +1541,13 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 	workdir, err := r.prepareTaskMCPWorkspace(task, selection)
 	if err != nil {
 		cleanup()
-		return nil, noop, "", err
+		return nil, noop, "", nil, err
 	}
 
-	registered, err := agentcore.BindMCPSelection(ctx, client, selection, bases, workdir)
+	registered, failed, err := agentcore.BindMCPSelectionReport(ctx, client, selection, bases, workdir)
 	if err != nil {
 		cleanup() // reap any subprocesses bound before the failure
-		return nil, noop, "", fmt.Errorf("bind task mcp selection: %w", err)
+		return nil, noop, "", nil, fmt.Errorf("bind task mcp selection: %w", err)
 	}
 	// Inline http_tools (issue #261) are global manifest tools with no per-task
 	// selection (like a non-optional server), so register them on this per-run
@@ -1543,7 +1560,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 		agent.RegisterA2APeers(client, r.cfg.A2APeers, task.A2ADelegationDepth)
 	}
 	log.Printf("scheduled task %s: bound %d MCP server(s) on per-run client: %v", task.ID, len(registered), registered)
-	return client, cleanup, workdir, nil
+	return client, cleanup, workdir, failed, nil
 }
 
 // stageTaskInputs copies collision-safe upload objects into the dedicated MCP
@@ -1653,6 +1670,12 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 		// bytes, the runner fails the contract loudly rather than committing
 		// corrupted-but-schema-shaped output.
 		OutputJSON: agentcore.RedactSecrets(ls.SnapshotOutputJSON()),
+	}
+	// The declared run outcome (completion.blocked_when) rides to the runner
+	// like output_json; the detail quotes a tool argument, so it is redacted.
+	if outcome, detail := ls.SnapshotRunOutcome(); outcome != "" {
+		out.RunOutcome = outcome
+		out.RunOutcomeDetail = agentcore.RedactSecrets(detail)
 	}
 	// Aux-usage ledger (#1118): carry the run's labeled host-side model-call
 	// records (verifier / phone-a-friend) into the persisted session.

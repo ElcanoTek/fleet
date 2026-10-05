@@ -2,6 +2,7 @@ package scheduledrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -108,20 +109,44 @@ func (r *executionRequirements) resolveCompletion(catalog []mcp.ServerTool, nati
 	return out
 }
 
+// checkTools is checkToolsAgainst a run in which every selected server
+// registered.
 func (r *executionRequirements) checkTools(catalog []mcp.ServerTool, native []fantasy.AgentTool) error {
+	return r.checkToolsAgainst(catalog, native, nil)
+}
+
+// missingRequirement is one declared name the roster lacks: kind is "server",
+// "tool" or "completion tool", name the declared identifier.
+type missingRequirement struct {
+	kind string
+	name string
+}
+
+func (m missingRequirement) String() string { return m.kind + " " + m.name }
+
+// checkToolsAgainst checks the declaration against the run's roster. failures
+// are the selected servers that failed to register in this run (bundle and
+// hosted). When every missing name is explained by a server that failed to
+// connect TRANSIENTLY, the error wraps agentcore.ErrConnectorUnavailable — a
+// connector outage the scheduler re-runs later instead of dead-lettering the
+// task on a DNS blip (production: "server pages" missing after
+// "lookup pages.elcanotek.com: no such host"). Anything else — a server that
+// is not configured or not selected, a tool name no server provides, a
+// connect failure that is not transient — stays the terminal roster error.
+func (r *executionRequirements) checkToolsAgainst(catalog []mcp.ServerTool, native []fantasy.AgentTool, failures []agentcore.MCPConnectFailure) error {
 	if r == nil {
 		return nil
 	}
 	servers, tools := rosterNames(catalog, native)
-	var missing []string
+	var missing []missingRequirement
 	for _, server := range r.Servers {
 		if !servers[server] {
-			missing = append(missing, "server "+server)
+			missing = append(missing, missingRequirement{"server", server})
 		}
 	}
 	for _, tool := range r.Tools {
 		if len(tools[tool]) == 0 {
-			missing = append(missing, "tool "+tool)
+			missing = append(missing, missingRequirement{"tool", tool})
 		}
 	}
 	// A completion tool the run cannot call would make the predicate
@@ -130,15 +155,118 @@ func (r *executionRequirements) checkTools(catalog []mcp.ServerTool, native []fa
 	if r.Completion != nil {
 		for _, tool := range r.Completion.AnySucceeded {
 			if len(tools[tool]) == 0 {
-				missing = append(missing, "completion tool "+tool)
+				missing = append(missing, missingRequirement{"completion tool", tool})
 			}
 		}
 	}
-	if len(missing) != 0 {
-		return fmt.Errorf("execution requirements: unavailable in the task's MCP/native tool roster: %s; check selected servers, tool permissions and connected accounts", strings.Join(missing, ", "))
+	if len(missing) == 0 {
+		return nil
 	}
-	return nil
+	names := make([]string, len(missing))
+	for i, m := range missing {
+		names[i] = m.String()
+	}
+	msg := "execution requirements: unavailable in the task's MCP/native tool roster: " + strings.Join(names, ", ")
+	explaining, outage := explainByConnectFailures(missing, failures)
+	if len(explaining) > 0 {
+		msg += "; " + describeConnectFailures(explaining)
+	}
+	if outage {
+		return &connectorUnavailableError{msg: msg + " — a transient connector outage, not a roster problem"}
+	}
+	return errors.New(msg + "; check selected servers, tool permissions and connected accounts")
 }
+
+// explainByConnectFailures attributes each missing name to a server that
+// failed to register in this run: a missing server by its name; a missing
+// tool by its full mcp_<server>_<tool> name (the longest failed server name
+// that prefixes it). A BARE tool name cannot be traced to a server whose
+// catalog was never fetched, so it is attributed to the run's transient
+// failures as a whole when there are any — the tool may live on a server
+// that never connected, and the re-run is bounded. It returns the failures
+// that explain at least one missing name, and whether EVERY missing name is
+// explained by a transient failure (the connector-outage verdict).
+func explainByConnectFailures(missing []missingRequirement, failures []agentcore.MCPConnectFailure) ([]agentcore.MCPConnectFailure, bool) {
+	if len(failures) == 0 {
+		return nil, false
+	}
+	byServer := make(map[string]agentcore.MCPConnectFailure, len(failures))
+	var transient []agentcore.MCPConnectFailure
+	for _, f := range failures {
+		byServer[f.Server] = f
+		if f.Transient {
+			transient = append(transient, f)
+		}
+	}
+	used := map[string]bool{}
+	var explaining []agentcore.MCPConnectFailure
+	use := func(f agentcore.MCPConnectFailure) {
+		if !used[f.Server] {
+			used[f.Server] = true
+			explaining = append(explaining, f)
+		}
+	}
+	outage := true
+	for _, m := range missing {
+		if m.kind == "server" {
+			f, ok := byServer[m.name]
+			if !ok {
+				outage = false
+				continue
+			}
+			use(f)
+			outage = outage && f.Transient
+			continue
+		}
+		if rest, full := strings.CutPrefix(m.name, "mcp_"); full {
+			var best agentcore.MCPConnectFailure
+			for _, f := range failures {
+				if strings.HasPrefix(rest, f.Server+"_") && len(f.Server) > len(best.Server) {
+					best = f
+				}
+			}
+			if best.Server == "" {
+				outage = false
+				continue
+			}
+			use(best)
+			outage = outage && best.Transient
+			continue
+		}
+		if len(transient) == 0 {
+			outage = false
+			continue
+		}
+		for _, f := range transient {
+			use(f)
+		}
+	}
+	sort.Slice(explaining, func(i, j int) bool { return explaining[i].Server < explaining[j].Server })
+	return explaining, outage
+}
+
+// describeConnectFailures renders "server pages failed to connect this run
+// (DNS lookup failed (no such host))", joined with "; ".
+func describeConnectFailures(failures []agentcore.MCPConnectFailure) string {
+	parts := make([]string, 0, len(failures))
+	for _, f := range failures {
+		detail := f.Detail
+		if detail == "" {
+			detail = "failed to connect"
+		}
+		parts = append(parts, fmt.Sprintf("server %s failed to connect this run (%s)", f.Server, detail))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// connectorUnavailableError is the requirements miss a transient connector
+// outage explains: its text names the missing requirements and each failed
+// server with its connect error, and it unwraps to
+// agentcore.ErrConnectorUnavailable so the runner re-runs the occurrence.
+type connectorUnavailableError struct{ msg string }
+
+func (e *connectorUnavailableError) Error() string { return e.msg }
+func (e *connectorUnavailableError) Unwrap() error { return agentcore.ErrConnectorUnavailable }
 
 func (r *Runner) checkTaskRequirements(task *models.Task) (*executionRequirements, error) {
 	req, err := parseExecutionRequirements(task.Prompt)
@@ -165,10 +293,12 @@ func (r *Runner) buildTaskRemoteOverlayChecked(ctx context.Context, task *models
 	}
 	if req != nil {
 		catalog = append([]mcp.ServerTool(nil), catalog...)
+		failures := append([]agentcore.MCPConnectFailure(nil), binding.connectFailures...)
 		if overlay != nil {
 			catalog = append(catalog, overlay.Catalog...)
+			failures = append(failures, overlay.ConnectFailures...)
 		}
-		if err := req.checkTools(catalog, native); err != nil {
+		if err := req.checkToolsAgainst(catalog, native, failures); err != nil {
 			overlay.Close()
 			return nil, err
 		}

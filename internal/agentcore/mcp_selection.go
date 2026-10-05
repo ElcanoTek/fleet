@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -185,7 +186,57 @@ func resolveMCPVariant(server string, base MCPServerBase, account string) (name 
 // Returns the list of registered server names (the keys the agent dispatches
 // against) so the caller can scope per-run cleanup.
 func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSelection, bases map[string]MCPServerBase, workdir string) ([]string, error) {
-	var registered []string
+	registered, _, err := BindMCPSelectionReport(ctx, client, selection, bases, workdir)
+	return registered, err
+}
+
+// MCPConnectFailure is one selected server that failed to register for this
+// run: it was configured and selected, and connecting to it (or starting it)
+// failed. Detail is a credential-free summary of why (mcp.ConnectErrorSummary,
+// redacted), safe to cross the broker boundary and to land in a task's error
+// message; Transient is mcp.IsTransientConnectError on the last attempt's
+// error — weather a later attempt can clear, not a credential or
+// configuration problem.
+//
+// A scheduled run's EXECUTION REQUIREMENTS check reads these: a declared
+// server or tool that is absent only because its server failed to connect
+// TRANSIENTLY is a connector outage the scheduler re-runs later
+// (ErrConnectorUnavailable), not a terminal roster error.
+type MCPConnectFailure struct {
+	Server    string
+	Detail    string
+	Transient bool
+}
+
+// ErrConnectorUnavailable classifies a scheduled run that could not start
+// because every requirement its EXECUTION REQUIREMENTS declare that the roster
+// lacks belongs to a server that failed to connect transiently in this run (a
+// DNS blip, a vendor answering "temporarily unavailable"). The runner treats
+// it as infrastructure weather: it re-runs the same occurrence a few minutes
+// later without spending the task's own max_retries, and a dead-letter it
+// ends in does not count toward the recurrence park breaker. A server that is
+// not configured or not selected, a tool name that does not exist, or a
+// connect failure that is not transient (a refused credential) stays the
+// terminal roster error it always was.
+var ErrConnectorUnavailable = errors.New("required connector unavailable")
+
+// NewMCPConnectFailure describes a failed registration of server.
+func NewMCPConnectFailure(server string, err error) MCPConnectFailure {
+	return MCPConnectFailure{
+		Server:    server,
+		Detail:    RedactSecrets(mcp.ConnectErrorSummary(err)),
+		Transient: mcp.IsTransientConnectError(err),
+	}
+}
+
+// BindMCPSelectionReport is BindMCPSelection that also reports every
+// best-effort server it skipped because registration failed. Under a ctx
+// marked mcp.WithConnectRetry (scheduled runs), an HTTP server's registration
+// is retried while it fails transiently (mcp.RetryTransientConnect: three
+// attempts, a few seconds apart) before it is skipped — production lost whole
+// runs to a one-minute DNS blip and to a vendor's "temporarily unavailable"
+// handshake reply. A stdio server is started once, as before.
+func BindMCPSelectionReport(ctx context.Context, client *mcp.Client, selection MCPSelection, bases map[string]MCPServerBase, workdir string) (registered []string, failed []MCPConnectFailure, err error) {
 	for _, choice := range selection {
 		base, ok := bases[choice.Server]
 		if !ok {
@@ -195,7 +246,7 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 			// — its <VAR>_<ACCOUNT> set but the bare <VAR> empty — is excluded by
 			// the enable gate). Surface both so the operator knows to check the
 			// default-seat env, not just the spelling.
-			return registered, fmt.Errorf(
+			return registered, failed, fmt.Errorf(
 				"mcp selection references server %q which is not in the active catalog — "+
 					"it is either misspelled or configured-but-gated-off (its default-seat "+
 					"credentials are unset; every connector needs its bare default-seat env "+
@@ -204,16 +255,19 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 
 		name, variantEnv, err := resolveMCPVariant(choice.Server, base, choice.Account)
 		if err != nil {
-			return registered, err
+			return registered, failed, err
 		}
 
 		// HTTP servers register via headers (no env overlay, no account variants).
 		if base.HTTPURL != "" {
-			if err := client.AddHTTPServerWithOptions(ctx, name, base.HTTPURL, mcp.HTTPServerOptions{Headers: base.HTTPHeaders, TLS: base.HTTPTLS}); err != nil {
+			if err := mcp.RetryTransientConnect(ctx, name, func() error {
+				return client.AddHTTPServerWithOptions(ctx, name, base.HTTPURL, mcp.HTTPServerOptions{Headers: base.HTTPHeaders, TLS: base.HTTPTLS})
+			}); err != nil {
 				if base.Required {
-					return registered, fmt.Errorf("register http server %q: %w", name, err)
+					return registered, failed, fmt.Errorf("register http server %q: %w", name, err)
 				}
 				log.Printf("mcp: skipping best-effort http server %q — failed to register: %v", name, err)
+				failed = append(failed, NewMCPConnectFailure(name, err))
 				continue
 			}
 			registered = append(registered, name)
@@ -242,14 +296,15 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		cwd := StdioCwd(base.Dir, base.DirPinned, workdir)
 		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, cwd); err != nil {
 			if base.Required {
-				return registered, fmt.Errorf("register server %q: %w", name, err)
+				return registered, failed, fmt.Errorf("register server %q: %w", name, err)
 			}
 			log.Printf("mcp: skipping best-effort server %q — failed to register: %v", name, err)
+			failed = append(failed, NewMCPConnectFailure(name, err))
 			continue
 		}
 		registered = append(registered, name)
 	}
-	return registered, nil
+	return registered, failed, nil
 }
 
 func upperAccount(account string) string {
