@@ -78,7 +78,9 @@ type Agent struct {
 	conn updater
 	// lifetime ends when the ACP client's connection closes (stdin EOF), and
 	// every prompt's stop signal derives from it: a client that hangs up mid
-	// turn has its turns stopped, as a session/cancel would.
+	// turn triggers the stop of every prompt in flight, as a session/cancel
+	// would. Known gap, closed separately: run returns as soon as the
+	// connection closes, so `fleet acp` may exit before that Stop is sent.
 	lifetime context.Context
 
 	mu       sync.Mutex
@@ -123,6 +125,12 @@ type session struct {
 	// accepted it (or, sent with no conversation, per user), so a retry
 	// posted into a conversation created since would run the input again.
 	keyConv map[string]string
+	// stoppedKeys holds every key that was unresolved when its prompt began
+	// and that fleet then confirmed stopped. A prompt that took such a key
+	// as its arrival key (see Prompt) must not fall back to it: the Stop
+	// settled that message, and the same text sent again runs. Like
+	// unsettled, it is one small entry per lost answer, never evicted.
+	stoppedKeys map[string]bool
 }
 
 // target returns the conversation a prompt under key is sent to: the one
@@ -177,6 +185,15 @@ func (s *session) setUnsettled(message, key string) {
 	s.unsettled[textKey(message)] = key
 }
 
+// markStopped records that fleet confirmed key's prompt stopped (stoppedKeys).
+// Under mu, like every read of stoppedKeys.
+func (s *session) markStopped(key string) {
+	if s.stoppedKeys == nil {
+		s.stoppedKeys = map[string]bool{}
+	}
+	s.stoppedKeys[key] = true
+}
+
 // peekUnsettled is message's unresolved key ("" = none), read without mu by a
 // prompt that has just arrived, possibly while another prompt holds the
 // session (see Prompt).
@@ -204,7 +221,8 @@ func NewAgent(client turnClient, cfgErr error, publicURL string, timeout time.Du
 
 // SetConnection wires the connection session/update notifications go out on.
 // When it reports the client hanging up (the SDK connection's Done), that
-// ends the agent's lifetime, which stops every prompt still in flight.
+// ends the agent's lifetime, which triggers the stop of every prompt still in
+// flight (see lifetime for the gap).
 func (a *Agent) SetConnection(c updater) {
 	a.conn = c
 	if d, ok := c.(interface{ Done() <-chan struct{} }); ok {
@@ -279,9 +297,12 @@ func (a *Agent) NewSession(_ context.Context, p acpsdk.NewSessionRequest) (acpsd
 // prompt is answered, so neither can happen here.
 //
 // It reaches the prompts in flight when it is handled. The SDK runs each
-// request on its own goroutine but queues notifications, so a prompt sent
-// right behind a session/cancel can, rarely, already be in flight and be
-// cancelled with them, as under the SDK's own handling.
+// request on its own goroutine but queues notifications, so the wire order
+// of a prompt and a session/cancel sent close together is not kept, as
+// under the SDK's own handling. Rarely, a prompt sent right behind the
+// cancel is already tracked and is cancelled with the rest. Or one sent
+// right before it is not tracked yet, escapes the cancel, and runs once the
+// stopped turn has ended.
 func (a *Agent) Cancel(_ context.Context, p acpsdk.CancelNotification) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -328,11 +349,11 @@ func (a *Agent) CloseSession(_ context.Context, p acpsdk.CloseSessionRequest) (a
 // notifications.
 //
 // Only an explicit stop ends a prompt early: a session/cancel (Cancel), the
-// client's connection closing, or the --timeout. ctx is not a stop signal,
-// since the SDK also cancels it when a newer prompt arrives on the session
-// (see Cancel). Such a prompt is not stopped: prompts on a session run one at
-// a time, so the newer one waits for the session and the earlier one runs to
-// its own outcome. A newer prompt that carries the same idempotency key (the
+// client's connection closing (see lifetime), or the --timeout. ctx is not a
+// stop signal, since the SDK also cancels it when a newer prompt arrives on
+// the session (see Cancel). Such a prompt is not stopped: prompts on a
+// session run one at a time, so the newer one waits for the session and the
+// earlier one runs to its own outcome. A newer prompt that carries the same idempotency key (the
 // same messageId, or the same text while an earlier attempt's outcome is
 // unknown) is a resend of it, and fleet answers it with that input, never
 // running it twice. A `$/cancel_request` naming the prompt reaches it only as
@@ -354,15 +375,16 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 		return acpsdk.PromptResponse{}, acpsdk.NewInvalidParams(map[string]any{"error": err.Error()})
 	}
 
-	// Tracked from arrival, not from when it gets the session, so a
-	// session/cancel also reaches a prompt still waiting for it.
-	cancelCtx, release := a.track(p.SessionId)
-	defer release()
 	// The text's unresolved key as this prompt arrives. If a resend of that
 	// key is running now and answered while this prompt waits, the key is
 	// settled by the time this one gets the session; this prompt is still a
 	// resend of the same message, so it keeps that key (idempotencyKey).
 	earlier := sess.peekUnsettled(message)
+	// Tracked from arrival, not from when it gets the session, so a
+	// session/cancel also reaches a prompt still waiting for it. The last
+	// arrival step: a tracked prompt has its arrival key.
+	cancelCtx, release := a.track(p.SessionId)
+	defer release()
 
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
@@ -384,8 +406,9 @@ func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.Prom
 // as a new message instead.
 //
 // cancelCtx is the prompt's stop signal (Agent.track): it ends on a
-// session/cancel or when the client hangs up. ctx is the SDK's request
-// context, used only for its values (see Prompt).
+// session/cancel or when the client hangs up (see Agent.lifetime for that
+// gap). ctx is the SDK's request context, used only for its values (see
+// Prompt).
 func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptRequest, sess *session, message, key string) (acpsdk.PromptResponse, error) {
 	// stopCtx ends when the client cancels (session/cancel, or hangs up) or
 	// the timeout fires. The stream itself runs on a context that ignores
@@ -410,6 +433,9 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 	// Whether key was already unresolved (an earlier attempt's answer was
 	// lost): a refusal of THIS attempt says nothing about that one.
 	_, wasUnresolved := sess.keyConv[key]
+	// Whether key is its text's unresolved key, which a prompt arriving while
+	// this one runs takes as its arrival key (see stoppedKeys).
+	textUnresolved := sess.unsettled[textKey(message)] == key
 	tr := newTranslator(p.SessionId, target, func(u acpsdk.SessionUpdate) {
 		if a.conn != nil {
 			_ = a.conn.SessionUpdate(sendCtx, acpsdk.SessionNotification{SessionId: p.SessionId, Update: u})
@@ -478,6 +504,9 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 		// The Stop by key found the input already finished: nothing was
 		// stopped, and it is not an unconfirmed stop either.
 		stopErr, stop.alreadyEnded = nil, true
+	}
+	if textUnresolved && stoppedForGood(stop, stopErr) {
+		sess.markStopped(key)
 	}
 	sess.retainKey(textMsg, key, target, convID, keep && !stoppedForGood(stop, stopErr), stopErr, queued)
 	// A staged approval stays pending in fleet whatever ended the turn —
@@ -712,10 +741,13 @@ func idempotencyKey(messageID *string, sess *session, message, earlier string) s
 	if k, ok := sess.unsettled[textKey(message)]; ok {
 		return k
 	}
-	if earlier != "" {
+	if earlier != "" && !sess.stoppedKeys[earlier] {
 		// Settled while this prompt waited for the session, by the resend of
 		// it that was running then: this is another resend of the same
 		// message, answered with that input rather than run a second time.
+		// Not when that settling was a Stop fleet confirmed: the stopped
+		// message is over, and the same text sent again runs, as it would
+		// had it been sent after the Stop settled.
 		return earlier
 	}
 	return "fleet-acp-" + randomID()
