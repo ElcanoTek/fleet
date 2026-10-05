@@ -1332,8 +1332,7 @@ const maxConnectorInfraRetries = 2
 
 // connectorInfraRetryDelays are the pauses before those re-runs (±10%
 // jitter): long enough for a DNS or vendor auth blip to clear, short enough
-// that a daily refresh still lands the same hour. A variable so tests do not
-// wait.
+// that a daily refresh still lands the same hour.
 var connectorInfraRetryDelays = []time.Duration{5 * time.Minute, 10 * time.Minute}
 
 func connectorInfraRetryDelay(retry int) time.Duration {
