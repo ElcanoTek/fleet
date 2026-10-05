@@ -33,9 +33,16 @@ which concatenates every round, contained every requested item.
   enters the answer. That keeps #1563's rule that a pre-audit draft is
   superseded by the post-audit text, so the gates never judge text the result
   does not include.
-- Each repair nudge (verifier and reviewer) now says the earlier text stays
-  part of the answer and the next text is appended, so the model writes a
-  supplement instead of restating the report twice.
+- When a repair round's text already contains the judged text, or is
+  contained in it, or equals it once whitespace is collapsed, only the longer
+  text is kept, so a model that restates its whole report does not persist it
+  twice. A true supplement is appended.
+- A **reviewer** (phone-a-friend) repair is different. Its round's text is the
+  corrected answer, so it *replaces* the reviewed text rather than following
+  the wrong one, unless the repair round produced no text.
+- The verifier's repair nudge says the earlier text stays and the next is
+  appended (write only what was missing). The reviewer's nudge says the next
+  text replaces the answer (write the whole corrected answer).
 - The `(no final response text)` marker still stands in when the run has
   produced no text at all. Truncation is unchanged
   (`truncateFinalResponseForVerifier`).
@@ -48,7 +55,9 @@ alone would have let a supplement-only answer pass and then persisted just
 the supplement. So the persisted success text changed too: it is now the
 judged answer plus the final round.
 `TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker` (the #1570
-Codex P1) became `…KeepsJudgedAnswer`. A textless repair round after a
+Codex P1) became `…KeepsJudgedAnswer`. `TestScheduledReviewerRepairReverifies`
+keeps its original assertion that the re-check does not carry the reviewed
+answer. A textless repair round after a
 rejected report is now judged on that report, which is the text the run
 persists. The original P1, judging an earlier draft while persisting empty
 text, cannot happen.
@@ -66,21 +75,33 @@ check then dead-lettered the task as `non-retryable failure (terminal)` after
 
 - `mcp.IsTransientConnectError` classifies a registration failure. Transient:
   a DNS failure, a timeout or deadline, a refused, reset or unreachable
-  connection, an HTTP 5xx or 429, or a JSON-RPC error (answered, or carried
-  on an `id:null` response) whose message says temporary, unavailable or
-  retry. A 401, 403 or other 4xx, a bad URL and a protocol error are not.
+  connection, an HTTP 500, 502, 503, 504 or 429, or a JSON-RPC error
+  (answered, or carried on an `id:null` response) whose message says the
+  condition is temporary ("temporar…", "try again", "service unavailable").
+  Not transient: a 401, 403 or other 4xx, a 501 and other 5xx, a bad URL, a
+  protocol error, and a JSON-RPC message that only says "retry" or
+  "unavailable" ("Invalid API key. Do not retry.", "This tool is unavailable
+  on your plan") or explicitly says not to retry.
   `mcp.ConnectErrorSummary` renders a credential-free cause (never the URL, a
   header or a body). The `id:null` error is now a typed
   `*mcp.UnattributedResponseError` with the same text. It deliberately does
   not unwrap to `*RPCError`.
-- `mcp.RetryTransientConnect` makes three attempts, 2 s and then 5 s apart,
-  respecting ctx and logging each retry. It applies to bundle HTTP servers
+- `mcp.RetryTransientConnect` makes up to three attempts, 2 s and then 5 s
+  apart, respecting ctx and logging each retry. It retries only *fast*
+  transient failures: a timeout or deadline is not retried, because a server
+  that accepts the connection and never answers already spent the whole
+  request timeout (up to 2 minutes). Every pause and retried attempt is
+  charged to one **15 s allowance per run** (`mcp.MaxConnectRetryBudget`),
+  shared by every server in the bundle binding and the remote overlay. A
+  pause that does not fit stops the retry, and a retried attempt runs under a
+  deadline of what is left. It applies to bundle HTTP servers
   (`agentcore.BindMCPSelectionReport`) and to hosted connections
   (`BuildRemoteMCPOverlay`). It is **opt-in through the context**
-  (`mcp.WithConnectRetry`). Scheduled runs set it, and across the broker it
-  rides `ScopeSpec.RetryTransientConnect`. Interactive chat turns do not set
-  it, so a turn never waits seconds on a server that is down, or whose host
-  does not resolve. Stdio servers are started once, as before.
+  (`mcp.WithConnectRetry`, set once per scheduled run). Across the broker the
+  allowance crosses as `ScopeSpec.ConnectRetryBudgetMs`, and the child
+  reports what it spent (`ConnectRetrySpentMs`), which is charged back.
+  Interactive chat turns do not set it, so a turn never waits on a server
+  that is down. Stdio servers are started once, as before.
 - Every failed registration is reported as an `agentcore.MCPConnectFailure`
   {server, detail, transient}. Bundle scopes report theirs over the broker
   wire (`SkippedServer.Detail/Transient`); before this change bundle scopes
@@ -97,17 +118,22 @@ check then dead-lettered the task as `non-retryable failure (terminal)` after
   `infra_retry_count`, never `attempt_count`, so the task's `max_retries` is
   untouched. Then the class follows the RetryPolicy (`connector_unavailable`
   is a valid `retry_on`/`no_retry_on` value; default: no retry). The
-  dead-letter carries `run_outcome = connector_unavailable`, and its reason
-  starts `connector unavailable after 2 infra re-run(s)`. The park breaker
-  skips it in both positions
+  dead-letter carries `run_outcome = connector_unavailable`, with the failed
+  connectors and causes in `run_outcome_detail`, and its reason starts
+  `connector unavailable after 2 infra re-run(s)`. The park breaker skips it
+  in both positions — **up to three consecutive** outage dead-letters, which
+  park the chain with a reason naming the connector and the streak
   ([ADR-0077](adr/0077-connector-outage-is-not-a-recurrence-strike.md)).
   Replay resets the count and the outcome. It is excluded from Sentry like
   other weather.
 
 **Limits.** A bare `required_tools` name cannot be traced to a server whose
 catalog was never fetched, so it is attributed to the outage when one exists.
-A connector that stays down for days dead-letters one occurrence a day
-without parking, and each dead-letter still notifies. A run whose prompt
+DNS "no such host" stays transient (the 2026-10-02 production blip was
+exactly that and cleared within minutes), so a typo'd host costs three ticks
+of dead-letters, each notifying, before the bounded breaker parks it. A hung
+server (timeout) is not retried within the run but is still re-run at the
+occurrence level, costing one request timeout per attempt. A run whose prompt
 declares no requirements is unchanged beyond the in-run retry: it still
 proceeds without the skipped server.
 
@@ -181,12 +207,18 @@ behavior (the record's key, or none).
 - **A:** `scheduled_completion_test.go` holds the production reproduction
   (`TestScheduledVerifierRepairSupplementPassesOnCombinedAnswer`, which
   reproduces the 3-check dead-letter without the fix), the textless-run
-  marker, and the reviewer re-verification. `mode_parity_test.go` holds
+  marker, the reviewer re-verification (replace),
+  `TestComposeRunAnswer` (append, dedupe, replace) and
+  `TestScheduledVerifierRepairThatRestatesTheReportPersistsItOnce`. `mode_parity_test.go` holds
   `TestRunAnswerProvider_ComposedAnswerIsTheResult`.
-- **B:** `mcp/transient_test.go` (the classifier and the retry against a flaky
-  handshake server), `agentcore/mcp_selection_degrade_test.go`,
+- **B:** `mcp/transient_test.go` (the classifier, including "Do not retry", a
+  plan-unavailable message and a 501 as terminal; the retry against a flaky
+  handshake server; no retry on a timeout; the shared run budget),
+  `mcpbroker` (`TestClientServer_ScopeCarriesTheRunConnectRetryBudget`),
+  `agentcore/mcp_selection_degrade_test.go`,
   `scheduledrun/requirements_outage_test.go`,
-  `sched/storage/run_outcome_test.go` and `runner/refresh_reliability_test.go`.
+  `sched/storage/run_outcome_test.go` (including the three-in-a-row park)
+  and `runner/refresh_reliability_test.go`.
 - **C:** `models/execution_requirements_blocked_test.go`,
   `agent/completion_blocked_test.go`,
   `scheduledrun/requirements_completion_test.go`, the storage and runner tests

@@ -233,7 +233,10 @@ Every status badge means one of eleven things. What each one means, and what to 
 > prompt requires was briefly unreachable goes back to `SCHEDULED` and runs
 > again a few minutes later, twice at most, without using up the task's own
 > retries. If the connector is still down after that it is dead-lettered, but
-> that dead-letter does not count toward stopping a recurring schedule.
+> that dead-letter does not count toward stopping a recurring schedule — unless
+> it happens three runs in a row, which stops the schedule with a reason that
+> names the connector, because a connector that is down that long needs
+> fixing.
 
 ## 5. Everyday actions
 

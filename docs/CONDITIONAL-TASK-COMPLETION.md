@@ -174,13 +174,20 @@ produce an actionable roster error. Tools may be native names, server tool names
 or Fleet's full `mcp_<server>_<tool>` names; full names avoid ambiguity. Model
 resolution already happens before the run and remains mandatory.
 
-**A connector outage is not a roster error.** A scheduled run retries a
-server's registration that fails transiently — a DNS lookup failure, a timeout,
-a refused or reset connection, an HTTP 5xx or 429, or a JSON-RPC error whose
-message says it is temporary — three times, 2 s and then 5 s apart, before the
-server is skipped (an interactive chat turn tries once). When every missing
-name is then explained by a server that failed to connect *transiently* in
-this run, the dispatch error is the same roster message followed by
+**A connector outage is not a roster error.** A connect failure is
+*transient* when it is a DNS lookup failure, a timeout, a refused, reset or
+unreachable connection, an HTTP 500, 502, 503, 504 or 429, or a JSON-RPC error
+whose message says the condition is temporary ("temporarily unavailable",
+"service unavailable", "try again"; never one that says "do not retry", and
+bare "retry" or "unavailable" are not enough). A scheduled run retries a
+server's registration that fails *fast* and transiently — every transient
+cause except a timeout, which has already spent the whole request timeout —
+up to three times, 2 s and then 5 s apart, before the server is skipped. All
+of a run's retries share one 15 s allowance (pauses and retried attempts), so
+the retry never adds more than that to a run however many servers fail. An
+interactive chat turn tries once. When every missing name is then explained by
+a server that failed to connect *transiently* in this run (a timeout
+included), the dispatch error is the same roster message followed by
 `server <name> failed to connect this run (<cause>)`, and it is classified
 `connector_unavailable`, not `terminal`:
 
@@ -193,10 +200,15 @@ this run, the dispatch error is the same roster message followed by
   `connector unavailable after 2 infra re-run(s)`. It does **not** count toward
   the two-consecutive-dead-letters park breaker
   ([ADR-0077](adr/0077-connector-outage-is-not-a-recurrence-strike.md)), in
-  either position.
+  either position — up to a bound: the **third consecutive** occurrence that
+  dead-letters on a connector outage parks the chain, with the reason
+  `A required connector has been unreachable for 3 consecutive occurrences:
+  <connector> (<cause>). …`, because a typo'd or decommissioned host, or a
+  closed port, fails the same way forever.
 - A server that is not configured or not selected, a tool name no connected
   server provides, and a connect failure that is not transient (a 401/403, a
-  bad URL, a protocol error) stay the terminal roster error they were. A
+  501, a bad URL, a protocol error, a JSON-RPC error that does not say it is
+  temporary) stay the terminal roster error they were. A
   missing tool is traced to the failed server by its full
   `mcp_<server>_<tool>` name; a bare name cannot be traced to a server whose
   catalog was never fetched, so it is attributed to the run's transient
