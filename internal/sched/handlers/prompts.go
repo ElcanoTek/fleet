@@ -35,6 +35,12 @@ type PromptLibraryItem struct {
 	Path          string    `json:"path,omitempty"`
 	CreatedAt     time.Time `json:"created_at,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	// Fields and PromptTemplate make a Git entry a form prompt: the picker
+	// collects the fields and inserts the rendered template instead of
+	// Content. Only Git entries that declare a valid form carry them (see
+	// clientconfig.parsePromptForm); workspace (database) prompts never do.
+	Fields         []clientconfig.PromptField `json:"fields,omitempty"`
+	PromptTemplate string                     `json:"prompt_template,omitempty"`
 }
 
 type PromptLibraryWrite struct {
@@ -42,6 +48,18 @@ type PromptLibraryWrite struct {
 	Description string `json:"description"`
 	Content     string `json:"content"`
 	Visibility  string `json:"visibility"`
+}
+
+// promptLibraryItemFromGit is the wire item for one bundle prompt. Git entries
+// are workspace-visible and read-only to everyone, admins included: the file in
+// the config repository is the source of truth.
+func promptLibraryItemFromGit(gp clientconfig.Prompt) PromptLibraryItem {
+	return PromptLibraryItem{
+		ID: gp.ID, Name: gp.Name, Description: gp.Description,
+		Content: gp.Content, Source: "git", Visibility: "workspace",
+		ReadOnly: true, Path: gp.Path,
+		Fields: gp.Fields, PromptTemplate: gp.PromptTemplate,
+	}
 }
 
 func promptLibraryItemFromModel(p *models.PromptLibraryEntry, owner string, admin bool) PromptLibraryItem {
@@ -76,11 +94,7 @@ func (h *Handlers) promptItems(r *http.Request) ([]PromptLibraryItem, error) {
 			log.Printf("prompt library: %s", problem)
 		}
 		for _, gp := range gitPrompts {
-			items = append(items, PromptLibraryItem{
-				ID: gp.ID, Name: gp.Name, Description: gp.Description,
-				Content: gp.Content, Source: "git", Visibility: "workspace",
-				ReadOnly: true, Path: gp.Path,
-			})
+			items = append(items, promptLibraryItemFromGit(gp))
 		}
 	}
 	dbPrompts, err := h.storage.ListPromptLibrary(r.Context(), owner)
