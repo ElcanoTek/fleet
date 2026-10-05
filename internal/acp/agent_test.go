@@ -571,6 +571,77 @@ func TestPromptTextFlattensAttachments(t *testing.T) {
 	}
 }
 
+// An embedded resource that carries its own code fences stays whole inside
+// fleet's: the fence is longer than any backtick run in the text, so no line
+// of the file can close it early and go on as if it were the user's prompt.
+// The first case is the exact text CodeCompanion.nvim sends for a buffer.
+func TestEmbeddedResourceFenceEnclosesItsText(t *testing.T) {
+	codeCompanion := "<attachment filepath=\"/path/sample3.py\" buffer_number=\"1\">User's current visible code in a file (including line numbers). This should be the main focus:\n" +
+		"````python\n" +
+		"1 |def secret_number():\n" +
+		"2 |    return 3157\n" +
+		"````\n" +
+		"</attachment>"
+	for _, tc := range []struct{ name, text, fence string }{
+		{"codecompanion buffer", codeCompanion, "`````"},
+		{"no backticks", "module x", "```"},
+		{"inline code only", "use `x` or ``y``", "```"},
+		{"three and four backtick fences", "```go\nx := 1\n```\n````\ny\n````", "`````"},
+		{"fence at the very start", "```\nnever closed", "````"},
+		{"indented fence and trailing newline", "  ````\n", "`````"},
+		{"long run on its own line", "x\n" + strings.Repeat("`", 12) + "\ny", strings.Repeat("`", 13)},
+		{"long run mid-line", "a" + strings.Repeat("`", 12) + "b", strings.Repeat("`", 13)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := promptText([]acpsdk.ContentBlock{
+				{Resource: &acpsdk.ContentBlockResource{Type: "resource", Resource: acpsdk.EmbeddedResourceResource{
+					TextResourceContents: &acpsdk.TextResourceContents{Uri: "file:///repo/f", Text: tc.text},
+				}}},
+				acpsdk.TextBlock("What does it return?"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "Contents of file:///repo/f:\n" + tc.fence + "\n" + tc.text + "\n" + tc.fence + "\n\nWhat does it return?"
+			if got != want {
+				t.Errorf("prompt =\n%s\nwant\n%s", got, want)
+			}
+			body, rest := firstFencedBlock(t, got)
+			if body != tc.text {
+				t.Errorf("fenced block holds %q, want the whole resource text %q", body, tc.text)
+			}
+			if rest != "\nWhat does it return?" {
+				t.Errorf("after the fence: %q, want only the user's own text", rest)
+			}
+		})
+	}
+}
+
+// firstFencedBlock reads md's first backtick-fenced code block the way
+// CommonMark does — it ends at the first line, indented at most three spaces,
+// of at least as many backticks as its opener with nothing after them but
+// blanks — and returns the block's text and everything after its closing line.
+func firstFencedBlock(t *testing.T, md string) (body, rest string) {
+	t.Helper()
+	backticks := func(s string) int { return len(s) - len(strings.TrimLeft(s, "`")) }
+	lines := strings.Split(md, "\n")
+	for i, open := range lines {
+		n := backticks(open)
+		if n < 3 {
+			continue
+		}
+		for j := i + 1; j < len(lines); j++ {
+			l := strings.TrimLeft(lines[j], " ")
+			if m := backticks(l); len(lines[j])-len(l) <= 3 && m >= n && strings.Trim(l[m:], " \t") == "" {
+				return strings.Join(lines[i+1:j], "\n"), strings.Join(lines[j+1:], "\n")
+			}
+		}
+		t.Fatalf("the fence on line %d never closes:\n%s", i+1, md)
+	}
+	t.Fatalf("no fenced block in %q", md)
+	return "", ""
+}
+
 // A Stop fleet did not accept must not be reported as a clean stop: the turn
 // outlives its stream, so the client is told it may still be running.
 func TestUnconfirmedStopIsNotReportedAsStopped(t *testing.T) {
