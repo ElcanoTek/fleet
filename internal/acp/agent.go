@@ -787,8 +787,10 @@ func requestError(err error) error {
 
 // promptText flattens an ACP prompt into the one message a fleet turn takes.
 // Text blocks are joined; a resource_link becomes a Markdown link and an
-// embedded text resource is inlined under its URI, so the model sees what the
-// user attached. Images, audio and binary blobs are refused (not advertised).
+// embedded text resource is inlined under its URI, in a fence its text cannot
+// close (fenced), so the model sees what the user attached and where it ends.
+// Nor can a URI or a link's name break out of its line (uriLineBreaks).
+// Images, audio and binary blobs are refused (not advertised).
 func promptText(blocks []acpsdk.ContentBlock) (string, error) {
 	var parts []string
 	for _, b := range blocks {
@@ -796,11 +798,12 @@ func promptText(blocks []acpsdk.ContentBlock) (string, error) {
 		case b.Text != nil:
 			parts = append(parts, b.Text.Text)
 		case b.ResourceLink != nil:
-			name := orDefault(b.ResourceLink.Name, b.ResourceLink.Uri)
-			parts = append(parts, fmt.Sprintf("[%s](%s)", name, b.ResourceLink.Uri))
+			uri := uriLineBreaks.Replace(b.ResourceLink.Uri)
+			name := nameLineBreaks.Replace(orDefault(b.ResourceLink.Name, uri))
+			parts = append(parts, fmt.Sprintf("[%s](%s)", name, uri))
 		case b.Resource != nil && b.Resource.Resource.TextResourceContents != nil:
 			r := b.Resource.Resource.TextResourceContents
-			parts = append(parts, fmt.Sprintf("Contents of %s:\n```\n%s\n```", r.Uri, r.Text))
+			parts = append(parts, fmt.Sprintf("Contents of %s:\n%s", uriLineBreaks.Replace(r.Uri), fenced(r.Text)))
 		case b.Image != nil:
 			return "", errors.New("fleet acp does not accept image content (promptCapabilities.image is false)")
 		case b.Audio != nil:
@@ -814,6 +817,49 @@ func promptText(blocks []acpsdk.ContentBlock) (string, error) {
 		return "", errors.New("empty prompt")
 	}
 	return msg, nil
+}
+
+// A URI and a link's name sit inside a line fleet writes, so a line break in
+// one would start Markdown of its own: a URI of "file:///x\n````" makes the
+// next line "````:", a fence opener that runs on over fleet's own fence, the
+// file and the user's question. A URI cannot hold a raw line break (RFC 3986),
+// so one is percent-encoded, the URI's own spelling of the same bytes; a name
+// is only a label, so a line break in it becomes a space.
+var (
+	uriLineBreaks  = strings.NewReplacer("\r", "%0D", "\n", "%0A")
+	nameLineBreaks = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
+)
+
+// fenced wraps an attachment's text in a backtick code fence the text cannot
+// close. CommonMark ends a fenced block at the first line of at least as many
+// backticks as its opener, and attachments carry fences of their own
+// (CodeCompanion.nvim renders a buffer as an <attachment> around a ````python
+// block, and a client set up to send that as an embedded resource hands it to
+// fleet as is), so a fixed ``` would end at the first such line inside the
+// attachment and the rest of the file would read as the user's own prompt
+// text, to the model and in the web chat. The fence is one longer than the
+// longest backtick run anywhere in the text, and never shorter than four. The
+// web chat's autoFenceRawHtmlDocument pre-processor
+// (web/src/app/chat/ui/AssistantContent.tsx) treats every line that starts
+// with ``` as a fence, whatever its length, so an unclosed ``` in one
+// attachment can lead it to insert its own ```html ... ``` pair inside
+// fleet's block for the next; a bare ``` closes a three-backtick fence but
+// never a four. The text is kept exactly, on lines of its own: a run at its
+// very start cannot merge into the opener, and the closer always starts a
+// fresh line, whether or not the text ends in a newline.
+func fenced(text string) string {
+	// Bytewise is safe: '`' never occurs inside a multi-byte UTF-8 sequence.
+	longest, run := 0, 0
+	for i := 0; i < len(text); i++ {
+		if text[i] != '`' {
+			run = 0
+			continue
+		}
+		run++
+		longest = max(longest, run)
+	}
+	fence := strings.Repeat("`", max(4, longest+1))
+	return fence + "\n" + text + "\n" + fence
 }
 
 func randomID() string {

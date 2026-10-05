@@ -10,12 +10,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	gmtext "github.com/yuin/goldmark/text"
 
 	"github.com/ElcanoTek/fleet/internal/chattui"
 )
@@ -575,7 +579,7 @@ func TestPromptTextFlattensAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Review this", "[main.go](file:///repo/main.go)", "Contents of file:///repo/go.mod:\n```\nmodule x\n```"} {
+	for _, want := range []string{"Review this", "[main.go](file:///repo/main.go)", "Contents of file:///repo/go.mod:\n````\nmodule x\n````"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt %q missing %q", got, want)
 		}
@@ -584,6 +588,175 @@ func TestPromptTextFlattensAttachments(t *testing.T) {
 		t.Error("an empty prompt must be refused")
 	}
 }
+
+// An embedded resource that carries its own code fences stays whole inside
+// fleet's: the fence is longer than any backtick run in the text, so no line
+// of the file can close it early and go on as if it were the user's prompt.
+// The first case is CodeCompanion.nvim's rendering of a buffer, byte for byte,
+// as a client set up to send it as an embedded resource delivers it.
+func TestEmbeddedResourceFenceEnclosesItsText(t *testing.T) {
+	codeCompanion := "<attachment filepath=\"/path/sample3.py\" buffer_number=\"1\">User's current visible code in a file (including line numbers). This should be the main focus:\n" +
+		"````python\n" +
+		"1 |def secret_number():\n" +
+		"2 |    return 3157\n" +
+		"````\n" +
+		"</attachment>"
+	for _, tc := range []struct{ name, text, fence string }{
+		{"codecompanion buffer", codeCompanion, "`````"},
+		{"no backticks", "module x", "````"},
+		{"inline code only", "use `x` or ``y``", "````"},
+		{"three and four backtick fences", "```go\nx := 1\n```\n````\ny\n````", "`````"},
+		{"fence at the very start", "```\nnever closed", "````"},
+		{"only backticks", "```", "````"},
+		{"indented fence and trailing newline", "  ````\n", "`````"},
+		{"CRLF lines", "x\r\n````\r\ny\r\n", "`````"},
+		{"lone CR lines", "x\r````\ry", "`````"},
+		{"empty", "", "````"},
+		{"long run on its own line", "x\n" + strings.Repeat("`", 12) + "\ny", strings.Repeat("`", 13)},
+		{"long run mid-line", "a" + strings.Repeat("`", 12) + "b", strings.Repeat("`", 13)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := promptText([]acpsdk.ContentBlock{embeddedText("file:///repo/f", tc.text), acpsdk.TextBlock("What does it return?")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "Contents of file:///repo/f:\n" + tc.fence + "\n" + tc.text + "\n" + tc.fence + "\n\nWhat does it return?"
+			if got != want {
+				t.Errorf("prompt =\n%s\nwant\n%s", got, want)
+			}
+			wantBlocks := []mdBlock{
+				{kind: "Paragraph", text: "Contents of file:///repo/f:"},
+				{kind: "FencedCodeBlock", text: fencedContent(tc.text)},
+				{kind: "Paragraph", text: "What does it return?"},
+			}
+			if blocks := markdownBlocks(got); !slices.Equal(blocks, wantBlocks) {
+				t.Errorf("parsed as %q\nwant      %q", blocks, wantBlocks)
+			}
+		})
+	}
+}
+
+// Two attachments, the first with an unclosed ``` line and the second a raw
+// HTML document. The web chat's autoFenceRawHtmlDocument pre-processor
+// (TypeScript, so not run here) flips its own in-a-fence state on every line
+// that starts with ```, whatever its length, so the first attachment puts it
+// out of step and it wraps the second's document in a ```html line and a bare
+// ``` — inside fleet's block. The test makes those two insertions: a bare ```
+// would close a three-backtick fence, and the HTML's tail would render as
+// prose while fleet's own closer swallowed the user's question.
+func TestFenceSurvivesTheWebHTMLPreprocessor(t *testing.T) {
+	a := "```\nnever closed"
+	b := "<!DOCTYPE html>\n<html>…</html>\n<!-- c -->\nafter html"
+	got, err := promptText([]acpsdk.ContentBlock{
+		embeddedText("file:///repo/a", a),
+		embeddedText("file:///repo/b.html", b),
+		acpsdk.TextBlock("What does it return?"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := strings.NewReplacer("\n<!DOCTYPE html>\n", "\n```html\n<!DOCTYPE html>\n", "</html>\n", "</html>\n```\n").Replace(got)
+	if web == got {
+		t.Fatalf("the pre-processor's insertions did not apply to %q", got)
+	}
+	for _, tc := range []struct{ name, md, b string }{
+		{"as sent", got, b},
+		{"after the web pre-processor", web, "```html\n<!DOCTYPE html>\n<html>…</html>\n```\n<!-- c -->\nafter html"},
+	} {
+		want := []mdBlock{
+			{kind: "Paragraph", text: "Contents of file:///repo/a:"},
+			{kind: "FencedCodeBlock", text: fencedContent(a)},
+			{kind: "Paragraph", text: "Contents of file:///repo/b.html:"},
+			{kind: "FencedCodeBlock", text: fencedContent(tc.b)},
+			{kind: "Paragraph", text: "What does it return?"},
+		}
+		if blocks := markdownBlocks(tc.md); !slices.Equal(blocks, want) {
+			t.Errorf("%s:\n%s\nparsed as %q\nwant      %q", tc.name, tc.md, blocks, want)
+		}
+	}
+}
+
+// A line break in a URI or a link's name stays on fleet's line instead of
+// starting Markdown of its own: "file:///x\n````" would make "````:" a fence
+// opener that runs on over the attachment and the user's question.
+func TestLineBreaksStayInsideURIsAndNames(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		block acpsdk.ContentBlock
+		want  []mdBlock
+	}{
+		{"embedded resource URI", embeddedText("file:///x\n````", "print(1)"), []mdBlock{
+			{kind: "Paragraph", text: "Contents of file:///x%0A````:"},
+			{kind: "FencedCodeBlock", text: "print(1)\n"},
+		}},
+		{"embedded resource URI with CRLF", embeddedText("file:///x\r\n````", "print(1)"), []mdBlock{
+			{kind: "Paragraph", text: "Contents of file:///x%0D%0A````:"},
+			{kind: "FencedCodeBlock", text: "print(1)\n"},
+		}},
+		{"resource_link URI", acpsdk.ResourceLinkBlock("main.go", "file:///x\n````"), []mdBlock{
+			{kind: "Paragraph", text: "[main.go](file:///x%0A````)", link: "file:///x%0A````"},
+		}},
+		{"resource_link name", acpsdk.ResourceLinkBlock("a\n```\r\nb", "file:///x"), []mdBlock{
+			{kind: "Paragraph", text: "[a ``` b](file:///x)", link: "file:///x"},
+		}},
+		{"resource_link named by its URI", acpsdk.ResourceLinkBlock("", "file:///x\n>q"), []mdBlock{
+			{kind: "Paragraph", text: "[file:///x%0A>q](file:///x%0A>q)", link: "file:///x%0A>q"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := promptText([]acpsdk.ContentBlock{tc.block, acpsdk.TextBlock("What does it return?")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := slices.Concat(tc.want, []mdBlock{{kind: "Paragraph", text: "What does it return?"}})
+			if blocks := markdownBlocks(got); !slices.Equal(blocks, want) {
+				t.Errorf("%s\nparsed as %q\nwant      %q", got, blocks, want)
+			}
+		})
+	}
+}
+
+func embeddedText(uri, text string) acpsdk.ContentBlock {
+	return acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{TextResourceContents: &acpsdk.TextResourceContents{Uri: uri, Text: text}})
+}
+
+// mdBlock is one top-level block of a parsed prompt: its goldmark kind, its
+// source text (a fenced block's content, a paragraph's inline source), and
+// the destination of the first link in it, if any.
+type mdBlock struct{ kind, text, link string }
+
+// markdownBlocks parses md with goldmark, the CommonMark parser fleet's own
+// HTML export uses, so a test checks what a renderer makes of a prompt rather
+// than what a hand-rolled reader thinks. goldmark ends lines at "\n" and
+// "\r\n" only, where CommonMark (and the web chat's micromark) also ends one
+// at a lone "\r", so a lone CR is turned into a line break first.
+func markdownBlocks(md string) []mdBlock {
+	src := []byte(loneCR.Replace(md))
+	doc := goldmark.DefaultParser().Parse(gmtext.NewReader(src))
+	var out []mdBlock
+	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
+		b := mdBlock{kind: n.Kind().String()}
+		for i := 0; i < n.Lines().Len(); i++ {
+			seg := n.Lines().At(i)
+			b.text += string(seg.Value(src))
+		}
+		for c := n.FirstChild(); c != nil && b.link == ""; c = c.NextSibling() {
+			if l, ok := c.(*ast.Link); ok {
+				b.link = string(l.Destination)
+			}
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+var loneCR = strings.NewReplacer("\r\n", "\r\n", "\r", "\n")
+
+// fencedContent is what CommonMark reads as the content of fleet's block
+// around text: every content line keeps its line ending, so it is the text
+// plus the newline fleet writes before the closer, with markdownBlocks' line
+// endings.
+func fencedContent(text string) string { return loneCR.Replace(text + "\n") }
 
 // A Stop fleet did not accept must not be reported as a clean stop: the turn
 // outlives its stream, so the client is told it may still be running.
