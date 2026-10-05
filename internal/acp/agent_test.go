@@ -1230,6 +1230,34 @@ func TestAcceptedNoteNamesThePlaceInLine(t *testing.T) {
 	}
 }
 
+// A resend answered with an earlier attempt says where that attempt is. A
+// direct input's row settles a moment after its turn's stream ends, so
+// "running" may be a turn that has just finished, and the note says so
+// rather than claiming it is still running.
+func TestAcceptedNoteForAReplay(t *testing.T) {
+	const where = "the fleet web chat"
+	for _, tc := range []struct {
+		name string
+		q    chattui.QueuedError
+		want string
+	}{
+		{"running", chattui.QueuedError{Mode: "direct", State: "running", Replay: true},
+			"fleet already has this message from an earlier attempt, which is running or has just finished (it is not run twice). Follow it at " + where},
+		{"injected", chattui.QueuedError{State: "injected", Replay: true},
+			"fleet already has this message from an earlier attempt, which is running or has just finished (it is not run twice). Follow it at " + where},
+		{"completed", chattui.QueuedError{Mode: "direct", State: "completed", Replay: true},
+			"fleet already took this message from an earlier attempt (it is not run twice). How that turn ended — its reply, or an error — is in " + where},
+		{"cancelled", chattui.QueuedError{Mode: "direct", State: "cancelled", Replay: true},
+			"an earlier attempt of this message was cancelled (stopped, or it failed before it started), so it did not run. To run it, send it again as a new message."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := acceptedNote(&tc.q, where); got != tc.want {
+				t.Errorf("note = %q\nwant   %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Cancelled while fleet was queueing the prompt (another surface owns the
 // running turn): the queued item is withdrawn, so it cannot run after the user
 // stopped it.
@@ -1279,7 +1307,7 @@ func TestReplayOfAnAcceptedInput(t *testing.T) {
 		}
 	}
 	for state, want := range map[string]string{
-		"running":   "already running this message from an earlier attempt",
+		"running":   "already has this message from an earlier attempt, which is running or has just finished (it is not run twice). Follow it at",
 		"completed": "already took this message from an earlier attempt (it is not run twice). How that turn ended — its reply, or an error — is in",
 	} {
 		t.Run(state, func(t *testing.T) {

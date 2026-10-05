@@ -329,6 +329,23 @@ func TestQueuedErrorNamesThePlaceInLine(t *testing.T) {
 	}
 }
 
+// A replay's message says where the earlier input is. Its row settles a
+// moment after its turn's stream ends, so "running" may be a turn that has
+// just finished, and the message allows for that.
+func TestQueuedErrorForAReplay(t *testing.T) {
+	for state, want := range map[string]string{
+		"running":   "this message is already running or has just finished (it was accepted earlier)",
+		"injected":  "this message is already running or has just finished (it was accepted earlier)",
+		"completed": "this message already ran (it was accepted earlier)",
+		"cancelled": "this message was accepted earlier but did not run",
+	} {
+		q := QueuedError{Mode: "direct", State: state, Replay: true}
+		if got := q.Error(); got != want {
+			t.Errorf("%s: Error() = %q, want %q", state, got, want)
+		}
+	}
+}
+
 func TestCancelNamesTheTurn(t *testing.T) {
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

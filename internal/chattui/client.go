@@ -166,7 +166,9 @@ func (e *QueuedError) Replayed() bool {
 func (e *QueuedError) Error() string {
 	switch e.State {
 	case "running", "injected":
-		return "this message is already running (it was accepted earlier)"
+		// The row settles a moment after its turn's stream ends, so a turn
+		// that has just finished can still be reported running.
+		return "this message is already running or has just finished (it was accepted earlier)"
 	case "completed":
 		return "this message already ran (it was accepted earlier)"
 	case "cancelled":
