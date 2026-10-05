@@ -166,31 +166,13 @@ type harness struct {
 	fleet  *fakeFleet
 	client *recordingClient
 	conn   *acpsdk.ClientSideConnection
-	// arrived receives one value per session/prompt the SDK hands the Agent.
-	arrived chan struct{}
+	agent  *Agent
 	// hangUp closes the client's side of stdin, as a client exiting does.
 	hangUp func()
 	// raw writes one JSON-RPC line to fleet acp's stdin, for a message the
 	// SDK client does not send on its own. The pipe keeps it whole beside
 	// the SDK's writes, each of which is also one whole line.
 	raw func(line string)
-}
-
-// arrivals is the Agent as the SDK sees it, reporting each session/prompt as
-// it is dispatched. By then the SDK has already cancelled the request context
-// of the session's previous prompt (it does that for every new prompt), so a
-// test can act on exactly that moment.
-type arrivals struct {
-	*Agent
-	arrived chan<- struct{}
-}
-
-func (x arrivals) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
-	select {
-	case x.arrived <- struct{}{}:
-	default: // a test that does not watch arrivals
-	}
-	return x.Agent.Prompt(ctx, p)
 }
 
 type harnessOpts struct {
@@ -226,8 +208,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 	a2cR, a2cW := io.Pipe()
 	rc := &recordingClient{}
 	conn := acpsdk.NewClientSideConnection(rc, c2aW, a2cR)
-	arrived := make(chan struct{}, 16)
-	agentConn := acpsdk.NewAgentSideConnection(arrivals{Agent: ag, arrived: arrived}, a2cW, c2aR)
+	agentConn := acpsdk.NewAgentSideConnection(ag, a2cW, c2aR)
 	ag.SetConnection(agentConn)
 	t.Cleanup(func() {
 		for _, c := range []io.Closer{c2aR, c2aW, a2cR, a2cW} {
@@ -235,7 +216,7 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		}
 	})
 	return &harness{
-		fleet: ff, client: rc, conn: conn, arrived: arrived,
+		fleet: ff, client: rc, conn: conn, agent: ag,
 		hangUp: func() { _ = c2aW.Close() },
 		raw: func(line string) {
 			if _, err := io.WriteString(c2aW, line+"\n"); err != nil {
@@ -246,23 +227,38 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 }
 
 // promptAsync sends a prompt (with messageID, when not nil) without waiting
-// for its answer, and returns once the Agent has it.
-func (h *harness) promptAsync(t *testing.T, sid acpsdk.SessionId, text string, messageID *string) <-chan promptResult {
+// for its answer, and returns once the Agent tracks inFlight prompts on the
+// session, this one included: it has then taken every arrival step (the SDK
+// has superseded the prompt before it, it has its arrival key, and a
+// session/cancel reaches it). Answered prompts leave the count, so inFlight
+// counts only those still running or waiting.
+func (h *harness) promptAsync(t *testing.T, sid acpsdk.SessionId, text string, messageID *string, inFlight int) <-chan promptResult {
 	t.Helper()
-	for len(h.arrived) > 0 {
-		<-h.arrived // earlier prompts', all dispatched already
-	}
 	done := make(chan promptResult, 1)
 	go func() {
 		r, err := h.conn.Prompt(context.Background(), acpsdk.PromptRequest{SessionId: sid, MessageId: messageID, Prompt: []acpsdk.ContentBlock{acpsdk.TextBlock(text)}})
 		done <- promptResult{r, err}
 	}()
-	select {
-	case <-h.arrived:
-	case <-time.After(10 * time.Second):
-		t.Fatalf("prompt %q never reached the agent", text)
-	}
+	h.waitTracked(t, sid, inFlight)
 	return done
+}
+
+// waitTracked waits until the Agent tracks exactly n prompts on sid.
+func (h *harness) waitTracked(t *testing.T, sid acpsdk.SessionId, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		h.agent.mu.Lock()
+		got := len(h.agent.inflight[sid])
+		h.agent.mu.Unlock()
+		if got == n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d prompts in flight on the session, want %d", got, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 type promptResult struct {
@@ -1270,9 +1266,9 @@ func TestCancelledPromptIsNeverSubmitted(t *testing.T) {
 		heldTurn(w, r, "conv-w", "turn-w", started, release)
 	}})
 	sid := h.newSession(t)
-	first := h.promptAsync(t, sid, "long job", nil)
+	first := h.promptAsync(t, sid, "long job", nil, 1)
 	<-started
-	second := h.promptAsync(t, sid, "and then this", nil)
+	second := h.promptAsync(t, sid, "and then this", nil, 2)
 	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
 		t.Fatal(err)
 	}
@@ -1309,9 +1305,9 @@ func TestResendWhileRunningIsAReplayNotAStop(t *testing.T) {
 	}})
 	sid := h.newSession(t)
 	mid := "res-B"
-	first := h.promptAsync(t, sid, "run the slow job", &mid)
+	first := h.promptAsync(t, sid, "run the slow job", &mid, 1)
 	<-started
-	second := h.promptAsync(t, sid, "run the slow job", &mid) // the client's retry
+	second := h.promptAsync(t, sid, "run the slow job", &mid, 2) // the client's retry
 	time.Sleep(stopWindow)
 	close(release)
 
@@ -1360,9 +1356,9 @@ func TestTextResendWhileRunningIsAReplay(t *testing.T) {
 	if _, err := h.prompt(sid, "book the room"); err == nil {
 		t.Fatal("want the lost-answer error")
 	}
-	first := h.promptAsync(t, sid, "book the room", nil)
+	first := h.promptAsync(t, sid, "book the room", nil, 1)
 	<-started
-	second := h.promptAsync(t, sid, "book the room", nil)
+	second := h.promptAsync(t, sid, "book the room", nil, 2)
 	time.Sleep(stopWindow)
 	close(release)
 
@@ -1401,9 +1397,9 @@ func TestSecondPromptWhileRunningWaitsItsTurn(t *testing.T) {
 		heldTurn(w, r, "conv-1", "turn-1", started, release)
 	}})
 	sid := h.newSession(t)
-	first := h.promptAsync(t, sid, "first job", nil)
+	first := h.promptAsync(t, sid, "first job", nil, 1)
 	<-started
-	second := h.promptAsync(t, sid, "second job", nil)
+	second := h.promptAsync(t, sid, "second job", nil, 2)
 	time.Sleep(stopWindow)
 	if n := h.fleet.nth(); n != 1 {
 		t.Errorf("chats = %d while the first turn runs, want 1: the second waits for the session", n)
@@ -1446,9 +1442,9 @@ func TestCancelAfterASupersededPromptStopsTheNewerOne(t *testing.T) {
 		heldTurn(w, r, "conv-1", "turn-1", started1, release1)
 	}})
 	sid := h.newSession(t)
-	first := h.promptAsync(t, sid, "first job", nil)
+	first := h.promptAsync(t, sid, "first job", nil, 1)
 	<-started1
-	second := h.promptAsync(t, sid, "second job", nil)
+	second := h.promptAsync(t, sid, "second job", nil, 2)
 	close(release1)
 	if r := await(t, first, "the first prompt"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
 		t.Errorf("first prompt = %+v, %v; want its own end_turn", r.resp, r.err)
@@ -1471,10 +1467,15 @@ func TestCancelAfterASupersededPromptStopsTheNewerOne(t *testing.T) {
 	}
 }
 
-// A client that hangs up (closes fleet acp's stdin) mid-turn has the turn
-// stopped server-side, as a session/cancel would, and a prompt still waiting
-// for the session is never submitted: nobody is left to read either answer.
-func TestHangUpStopsTheTurn(t *testing.T) {
+// A guard of the Agent's side of a hang-up (it passes on main too): when the
+// client closes fleet acp's stdin mid-turn, the Agent triggers the stop of
+// every prompt in flight, as a session/cancel would. The running turn gets a
+// Stop and answers cancelled, and a prompt still waiting for the session is
+// never submitted. This harness does not exit: that `fleet acp` stays alive
+// until the Stop is answered (bounded), and handles signals and a broken
+// stdout the same way, is run's side, pinned by the TestRun* and
+// TestProcess* tests in run_test.go.
+func TestHangUpTriggersTheAgentsStop(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	defer close(release)
 	var h *harness
@@ -1486,15 +1487,16 @@ func TestHangUpStopsTheTurn(t *testing.T) {
 		heldTurn(w, r, "conv-h", "turn-h", started, release)
 	}})
 	sid := h.newSession(t)
-	_ = h.promptAsync(t, sid, "long job", nil)
+	first := h.promptAsync(t, sid, "long job", nil, 1)
 	<-started
-	_ = h.promptAsync(t, sid, "queued behind it", nil)
+	second := h.promptAsync(t, sid, "queued behind it", nil, 2)
 	h.hangUp()
-	deadline := time.Now().Add(10 * time.Second)
-	for len(h.fleet.cancelsSnapshot()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	// The answers still reach the client: only its side of stdin is closed.
+	for i, done := range []<-chan promptResult{first, second} {
+		if r := await(t, done, fmt.Sprintf("prompt %d after the hang-up", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+			t.Errorf("prompt %d = %+v, %v; want cancelled", i+1, r.resp, r.err)
+		}
 	}
-	time.Sleep(stopWindow) // the waiting prompt gets the session meanwhile
 	h.fleet.mu.Lock()
 	defer h.fleet.mu.Unlock()
 	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-h {"scope":"turn","turn_id":"turn-h"}` {
@@ -1525,6 +1527,135 @@ func (f *fakeFleet) awaitStop(t *testing.T) []string {
 			t.Fatal("the fake never received a Stop")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A text-only prompt whose lost answer's Stop fleet confirmed drops its key,
+// so the same text sent again runs. That holds for one sent while that Stop
+// is still settling: it arrives with the stopped key as its arrival key, but
+// must not fall back to it, or it would be answered "an earlier attempt of
+// this message was cancelled" instead of running.
+func TestTextSentAgainDuringAConfirmedStopRuns(t *testing.T) {
+	started, settle := make(chan struct{}), make(chan struct{})
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, _ *http.Request) {
+		switch {
+		case h.fleet.nth() == 1:
+			w.w.WriteHeader(http.StatusOK) // the answer is lost; fleet never committed the input
+		case h.fleet.nth() == 2: // the resend runs it until it is stopped
+			w.emit("conversation", map[string]any{"id": "conv-s"})
+			w.emit("turn.started", map[string]any{"turn_id": "turn-s"})
+			close(started)
+			<-settle
+			w.emit("turn.cancelled", map[string]any{})
+		case h.fleet.resent():
+			replayAck(w, "cancelled", "conv-s")
+		default:
+			w.emit("conversation", map[string]any{"id": "conv-s"})
+			w.emit("text.delta", map[string]any{"text": "booked"})
+			w.emit("turn.completed", map[string]any{})
+		}
+	}})
+	// The Stop settles on the turn's own terminal frame, which the test holds.
+	prevSettle := stopSettleWait
+	stopSettleWait = 10 * time.Second
+	t.Cleanup(func() { stopSettleWait = prevSettle })
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "book the room"); err == nil {
+		t.Fatal("want the lost-answer error")
+	}
+	first := h.promptAsync(t, sid, "book the room", nil, 1)
+	<-started
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	// The Stop is out, so the cancel has been handled: the next prompt is
+	// sent after it, and the cancel does not reach it.
+	deadline := time.Now().Add(10 * time.Second)
+	for len(h.fleet.cancelsSnapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	second := h.promptAsync(t, sid, "book the room", nil, 2)
+	close(settle)
+
+	if r := await(t, first, "the stopped resend"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Errorf("stopped resend = %+v, %v; want cancelled", r.resp, r.err)
+	}
+	if r := await(t, second, "the text sent again"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+		t.Errorf("text sent again = %+v, %v; want end_turn", r.resp, r.err)
+	}
+	if text := h.client.text(); !strings.Contains(text, "booked") || strings.Contains(text, "send it again as a new message") {
+		t.Errorf("text = %q, want the message run again, not the cancelled replay", text)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.chats) != 3 || h.fleet.chats[2].InputID == h.fleet.chats[0].InputID {
+		t.Errorf("chats = %+v, want the text sent again under a fresh key", h.fleet.chats)
+	}
+}
+
+// Every prompt leaves inflight once it is answered (completed, failed, or
+// cancelled while running or while waiting), so a session/cancel reaches only
+// prompts still open, and the registry does not grow.
+func TestInflightEmptiesWhenPromptsAreAnswered(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		switch h.fleet.nth() {
+		case 1:
+			w.emit("conversation", map[string]any{"id": "conv-i"})
+			w.emit("turn.completed", map[string]any{})
+		case 3:
+			heldTurn(w, r, "conv-i", "turn-i", started, release)
+		default:
+			w.emit("turn.error", map[string]any{"message": "provider failed"})
+		}
+	}})
+	sid := h.newSession(t)
+	if _, err := h.prompt(sid, "fine"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.prompt(sid, "fails"); err == nil {
+		t.Fatal("want the turn error")
+	}
+	first := h.promptAsync(t, sid, "long job", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "waiting", nil, 2)
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	await(t, first, "the running prompt")
+	await(t, second, "the waiting prompt")
+	h.agent.mu.Lock()
+	defer h.agent.mu.Unlock()
+	if len(h.agent.inflight) != 0 {
+		t.Errorf("inflight = %v after every prompt was answered, want empty", h.agent.inflight)
+	}
+}
+
+// inflight is keyed apart from the sessions for this: a session/cancel still
+// reaches a prompt whose session was closed (session/close) while it ran, so
+// its turn is stopped instead of left with no way to stop it.
+func TestCancelReachesAPromptOfAClosedSession(t *testing.T) {
+	started := make(chan struct{})
+	h := newHarness(t, harnessOpts{turn: blockingTurn(started)})
+	sid := h.newSession(t)
+	done := h.promptAsync(t, sid, "long job", nil, 1)
+	<-started
+	if _, err := h.conn.CloseSession(context.Background(), acpsdk.CloseSessionRequest{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.conn.Cancel(context.Background(), acpsdk.CancelNotification{SessionId: sid}); err != nil {
+		t.Fatal(err)
+	}
+	if r := await(t, done, "the prompt of the closed session"); r.err != nil || r.resp.StopReason != acpsdk.StopReasonCancelled {
+		t.Errorf("prompt = %+v, %v; want cancelled", r.resp, r.err)
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	if len(h.fleet.cancels) != 1 || h.fleet.cancels[0] != `conv-slow {"scope":"turn","turn_id":"turn-slow"}` {
+		t.Errorf("cancels = %q, want the closed session's turn stopped", h.fleet.cancels)
 	}
 }
 

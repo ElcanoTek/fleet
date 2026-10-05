@@ -1,0 +1,51 @@
+# A form prompt (docs/PROMPT-LIBRARY.md, "Form prompts"). Picking it in the
+# prompt library opens a form built from `fields`; submitting renders
+# `promptTemplate` with the answers and inserts the result into the draft.
+# A template line whose tokens are all left blank is dropped, so each optional
+# field sits on a line of its own.
+name: Meeting follow-up
+description: Fill in a short form and get a follow-up message drafted from your meeting notes.
+fields:
+  - key: meeting
+    label: Meeting
+    type: text
+    required: true
+    placeholder: Quarterly planning with the design team
+  - key: notes
+    label: Notes or key points
+    type: textarea
+    required: true
+    placeholder: "Ship in May; Sam owns the vendor shortlist; budget still open"
+    hint: Rough notes are fine. Attach a transcript to the message if you have one.
+  - key: tone
+    label: Tone
+    type: select
+    default: Neutral
+    options: [Friendly, Neutral, Formal]
+  - key: words
+    label: Target length (words)
+    type: number
+    min: 50
+    default: 200
+  - key: window
+    label: Follow-up window
+    type: daterange
+    advanced: true
+  - key: actions
+    label: Add an action-items table
+    type: toggle
+    default: true
+    advanced: true
+  - key: extra
+    label: Anything else
+    type: textarea
+    advanced: true
+promptTemplate: |-
+  Draft a follow-up message for the meeting below. Separate decisions from open questions, and ask me before inventing an owner or a date.
+  Meeting: {meeting}
+  Notes: {notes}
+  Tone: {tone}
+  Target length: about {words} words
+  Follow-up window: {window}
+  Include an action-items table with owners and due dates: {actions}
+  Also: {extra}
