@@ -101,6 +101,9 @@ type Agent struct {
 	// completionAnySucceeded is Options.CompletionAnySucceeded as a set; empty
 	// means no deterministic completion predicate.
 	completionAnySucceeded map[string]bool
+	// completionBlocked is Options.CompletionBlockedWhen as sets; nil means no
+	// blocked rule (completion_blocked.go).
+	completionBlocked *completionBlockedRule
 
 	// ── sub-agents (#175, part b) ──
 	// subagent carries the spawn_subagent feature gate, recursion/fan-out caps,
@@ -276,6 +279,12 @@ type Options struct {
 	// end-of-run verifier or phone-a-friend. nil = no predicate: every finish
 	// is verified exactly as before.
 	CompletionAnySucceeded []string
+	// CompletionBlockedWhen is the completion clause's optional blocked rule
+	// (EXECUTION REQUIREMENTS completion.blocked_when), resolved by the driver:
+	// a predicate-completed run whose recording call carried a declared
+	// blocked value finishes as success with run outcome "blocked". nil = no
+	// rule.
+	CompletionBlockedWhen *CompletionBlockedWhen
 
 	// ── sub-agents (#175 part b, #1043) ──
 	// Subagent configures the spawn_subagent native tool. The DRIVERS compose
@@ -393,6 +402,7 @@ func NewAgent(opts Options) *Agent {
 		for _, name := range opts.CompletionAnySucceeded {
 			a.completionAnySucceeded[name] = true
 		}
+		a.completionBlocked = newCompletionBlockedRule(opts.CompletionBlockedWhen)
 	}
 	// The parent task id labels any sub-agent this run spawns (#264 traceability).
 	// A child inherits this same value (buildChild), so every descendant's session
@@ -518,11 +528,26 @@ type scheduledPolicy struct {
 	// roundFinalText is the closing assistant text of the round that just
 	// ended, handed over by the core (RoundFinalTextReceiver) immediately
 	// before each CanFinish. It is provably tied to the round boundary — a
-	// textless repair round yields "" — so the finish gates never combine a
-	// previous round's rejected draft with the current round's evidence. The
-	// session cannot supply this: the driver persists the completed response
-	// only after agentcore.Run returns.
+	// textless repair round yields "" — and the session cannot supply it: the
+	// driver persists the completed response only after agentcore.Run returns.
 	roundFinalText string
+	// judgedAnswer is the run's answer as it stood when a model finish gate
+	// (the end-of-run verifier, the phone-a-friend reviewer) last judged it and
+	// sent the run back for repair. The repair round's closing text is APPENDED
+	// to it: a repair asked for what was missing, and in production the model
+	// answered with exactly that — a short supplement — which the verifier,
+	// judging the supplement alone, declared a missing report on every check
+	// until the run dead-lettered while the text it left behind held every
+	// requested item. RunAnswer hands the same composition back to the core as
+	// the run's final text, so the gates judge the answer the user receives.
+	// A round the audit/finish enforcement refused never enters it: that is a
+	// pre-audit draft, superseded by the next round's text as before.
+	judgedAnswer string
+	// replaceJudged is set when the phone-a-friend reviewer sent the answer
+	// back: the repair round's text is the CORRECTED answer, so it replaces
+	// the reviewed text instead of being appended after the wrong one (a
+	// textless repair round keeps the reviewed text).
+	replaceJudged bool
 	// runCtx is the run's context, captured at build time so the end-of-run
 	// verifier's and phone-a-friend reviewer's model calls honor the run's
 	// deadline/cancellation (CanFinish itself takes no ctx). Falls back to
@@ -537,6 +562,11 @@ type scheduledPolicy struct {
 	// actually succeeded. A later verdict (a re-verification after a
 	// phone-a-friend repair) clears it.
 	verifierWarning string
+	// blockedDetail is set when the completion predicate completed the run and
+	// the task's blocked rule matched the recording call
+	// (evaluateBlockedOutcome): the detail persisted as run outcome "blocked"
+	// once the run has actually succeeded.
+	blockedDetail string
 }
 
 // verifierRetryDelay is the pause before the one retry of a verifier call that
@@ -549,18 +579,78 @@ func (p *scheduledPolicy) SetRoundFinalText(text string) {
 	p.roundFinalText = text
 }
 
-// latestRunText returns the run's latest assistant text for the finish gates:
-// the closing message of the round that just ended, as handed over by the
-// core. A round that produced no text yields "", which the verifier surfaces
-// as the explicit "(no final response text)" marker — never stale prose from
-// an earlier, rejected round.
+// latestRunText returns the run's answer for the finish gates: the answer a
+// gate last sent back for repair (judgedAnswer), followed by the closing
+// message of the round that just ended — the same text RunAnswer makes the
+// run's result. A run that has produced no text at all yields "", which the
+// verifier surfaces as the explicit "(no final response text)" marker; prose
+// from a round the audit/finish enforcement refused is never included,
+// because the result does not include it either.
 func (p *scheduledPolicy) latestRunText() string {
-	return strings.TrimSpace(p.roundFinalText)
+	return composeRunAnswer(p.judgedAnswer, p.roundFinalText, p.replaceJudged)
 }
 
+// RunAnswer is the run's final text once CanFinish has granted completion:
+// the judged answer composed with the final round's closing text, i.e.
+// exactly what the finish gates approved.
+func (p *scheduledPolicy) RunAnswer(roundText string) string {
+	return composeRunAnswer(p.judgedAnswer, roundText, p.replaceJudged)
+}
+
+// keepJudgedAnswer records that a model finish gate judged the current answer
+// and sent the run back for repair: the repair round's text is composed with
+// it (composeRunAnswer) rather than replacing it.
+func (p *scheduledPolicy) keepJudgedAnswer() {
+	p.judgedAnswer = p.latestRunText()
+	p.replaceJudged = false
+}
+
+// composeRunAnswer combines the answer judged so far with a round's closing
+// text:
+//   - a textless round keeps the judged answer, and with nothing judged the
+//     round's text is the answer;
+//   - replace (a reviewer-forced repair) makes the round's text the answer;
+//   - when one text already contains the other — compared with whitespace
+//     collapsed, so equal texts count — only the longer is kept: a model that
+//     restated its whole report in the repair round would otherwise persist
+//     it twice;
+//   - otherwise the round's text is a true supplement, appended after a blank
+//     line.
+func composeRunAnswer(judged, round string, replace bool) string {
+	judged, round = strings.TrimSpace(judged), strings.TrimSpace(round)
+	switch {
+	case round == "":
+		return judged
+	case judged == "" || replace:
+		return round
+	}
+	normJudged, normRound := strings.Join(strings.Fields(judged), " "), strings.Join(strings.Fields(round), " ")
+	switch {
+	case strings.Contains(normRound, normJudged):
+		return round
+	case strings.Contains(normJudged, normRound):
+		return judged
+	}
+	return judged + "\n\n" + round
+}
+
+// repairAnswerNote tells the model how a verifier repair round composes with
+// the answer it already gave, so the supplement it writes reads as one answer
+// instead of restating the report a second time.
+const repairAnswerNote = "Your closing text so far stays part of this run's final answer and your next closing text is appended to it, so write only what was missing or needs correcting — do not restate the rest."
+
+// reviewerRepairAnswerNote is the reviewer's counterpart: the repair round's
+// text replaces the reviewed answer, so it must be the whole corrected answer.
+const reviewerRepairAnswerNote = "Your next closing text replaces your previous answer, so write the complete corrected answer."
+
 // The core hands the policy each round's closing text before consulting
-// CanFinish; this is the seam the finish gates read the run's answer through.
-var _ agentcore.RoundFinalTextReceiver = (*scheduledPolicy)(nil)
+// CanFinish, and takes the composed answer back once the run may finish; these
+// are the seams the finish gates read, and the result carries, the run's
+// answer through.
+var (
+	_ agentcore.RoundFinalTextReceiver = (*scheduledPolicy)(nil)
+	_ agentcore.RunAnswerProvider      = (*scheduledPolicy)(nil)
+)
 
 func (p *scheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
 	return p.inner.BeforeToolCall(toolName, toolCallID, rawInput)
@@ -609,6 +699,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		// finished: the predicate, not an unverified pass, completed it.
 		p.verifierWarning = ""
 		p.recordCompletionPredicate(tool)
+		p.evaluateBlockedOutcome()
 		return true, nil
 	}
 
@@ -655,10 +746,12 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 			// record: the pre-#1602 semantics — the check is spent.
 			p.verificationAttempts++
 			log.Printf("verifier failed: %v", err)
+			p.keepJudgedAnswer()
 			return p.verificationFailed("Completion verification could not produce a valid verdict: "+err.Error(), records)
 		case len(missing) > 0:
 			p.verificationAttempts++
 			p.verifierWarning = ""
+			p.keepJudgedAnswer()
 			return p.verificationFailed(fmt.Sprintf("End-of-run verification found unresolved required actions: %v", missing), records)
 		default:
 			p.verificationAttempts++
@@ -674,7 +767,8 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	// reviewed is claimed before the call, so a reviewer-forced repair round is
 	// never re-reviewed — but it MUST be re-verified: the repair changed the
 	// answer the verifier approved, so verified is reset and Gate 1 runs again
-	// against the repaired round's own closing text.
+	// against the repaired answer (the repair round's closing text, which
+	// replaces the reviewed one; the reviewed one if the round has none).
 	if !p.reviewed && p.agent != nil && p.agent.phoneAFriendEnabled && p.agent.reviewerModel != nil {
 		p.reviewed = true
 		records := buildToolExecSummary(p.agent.logSession)
@@ -684,11 +778,13 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 			log.Printf("phone_a_friend review skipped: %v", err)
 		} else if len(issues) > 0 {
 			p.verified = false
+			p.keepJudgedAnswer()
+			p.replaceJudged = true
 			return false, []string{fmt.Sprintf(
 				"A reviewer model (phone a friend) found problems with the current answer/work that must be "+
 					"addressed before finishing: %v. Revise the work to fix each one, or call "+
-					"confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
-				issues)}
+					"confirm_audit(success=false, user_visible_summary=...) to abort explicitly. %s",
+				issues, reviewerRepairAnswerNote)}
 		}
 	}
 
@@ -916,7 +1012,7 @@ func (p *scheduledPolicy) verificationFailed(detail string, records []toolExecRe
 			agentcore.ErrCompletionUnverified, p.verificationAttempts, detail, successfulConnectorCalls(records))
 		return false, nil
 	}
-	return false, []string{detail + " Check the existing tool evidence and complete genuinely missing work. Do not repeat successful external actions merely to supply evidence; use read-only verification instead. Completion will be checked again."}
+	return false, []string{detail + " Check the existing tool evidence and complete genuinely missing work. Do not repeat successful external actions merely to supply evidence; use read-only verification instead. " + repairAnswerNote + " Completion will be checked again."}
 }
 
 // successfulConnectorCalls renders the connector (mcp_*) calls that succeeded
@@ -1243,6 +1339,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		return err
 	}
 	policy.persistVerifierWarning()
+	policy.persistBlockedOutcome()
 	return nil
 }
 

@@ -33,6 +33,41 @@ export function taskRunLabel(task: Task, maxLength = 60): string {
   return firstLine ? truncate(firstLine, maxLength) : task.id.slice(0, 8);
 }
 
+// blockedReason is why a run finished Blocked — a success whose declared
+// completion clause recorded a blocked outcome (run_outcome "blocked") — or
+// null for every other run. The detail is the recording call's own outcome
+// value and explanation.
+export function blockedReason(task: Task): string | null {
+  if (task.status !== "success" || task.run_outcome !== "blocked") return null;
+  return (
+    (task.run_outcome_detail ?? "").trim() ||
+    "The run completed without publishing: its completion clause recorded a blocked outcome."
+  );
+}
+
+// TaskStatusBadge is a task's status pill: its lifecycle status, except that
+// a Blocked run reads "blocked" in amber, with the reason on hover, instead of
+// a green success that hides a dashboard which stopped updating.
+export function TaskStatusBadge({ task }: { task: Task }) {
+  const blocked = blockedReason(task);
+  if (blocked) {
+    return (
+      <span
+        className="status-badge status-blocked"
+        title={`Blocked: ${blocked}`}
+        data-testid="status-blocked"
+      >
+        blocked
+      </span>
+    );
+  }
+  return (
+    <span className={`status-badge status-${task.status ?? "unknown"}`}>
+      {task.status ?? "-"}
+    </span>
+  );
+}
+
 // scheduleStoppedReason is why a recurring task's schedule stopped at this
 // occurrence (the dead-letter breaker parked it), or null when it did not.
 // An older parked row may carry no recorded reason.

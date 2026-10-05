@@ -98,8 +98,8 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 
 	// Stage the proposal as a schedule_task approval, reusing the same
 	// persistence + summary + card the #239 gate produces. A capturing sink grabs
-	// the emitted card payload; a generous 1h window since this is a deliberate,
-	// user-initiated action they may take a moment to review.
+	// the emitted card payload. Like every card that only stages a task change,
+	// it waits stagedTaskApprovalTimeoutSeconds (a day) by default.
 	sink := &promoteCaptureSink{}
 	stager := &approvalStager{
 		ctx:            ctx,
@@ -107,10 +107,9 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 		conversationID: convID,
 		userEmail:      user,
 		sink:           sink,
-		// Honor the conversation's per-chat approval-timeout override if set
-		// (same as the turn-time stager); otherwise fall back to a generous 1h
-		// window, since this is a deliberate user-initiated action they may take a
-		// moment to review.
+		// Same resolution as the turn-time stager. A schedule_task card skips
+		// the global layer (resolveTimeoutSeconds): the day-long staged-task
+		// window applies unless the conversation's override is longer.
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
 		globalTimeoutSeconds: promoteApprovalTimeoutSeconds,
 		// The promoted task inherits this conversation's connectors (ADR-0068)
@@ -128,9 +127,10 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 	})
 }
 
-// promoteApprovalTimeoutSeconds is the default-deny window for a promote card:
-// generous (1h) because the user explicitly initiated it and reviews a
-// synthesized prompt before approving.
+// promoteApprovalTimeoutSeconds is the promote stager's global layer. The
+// promote card is a schedule_task card, which resolveTimeoutSeconds gives the
+// day-long staged-task window instead, so this applies only if the stager is
+// ever used for another tool.
 const promoteApprovalTimeoutSeconds = 3600
 
 // transcriptFromHistory renders the user/assistant TEXT turns of a conversation

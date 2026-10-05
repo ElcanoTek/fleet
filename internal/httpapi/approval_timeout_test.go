@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -38,6 +39,13 @@ func TestResolveTimeoutSeconds(t *testing.T) {
 		{"global default when no conv override", 300, nil, "bash", 300},
 		{"hardcoded default when global non-positive", 0, nil, "bash", defaultApprovalTimeoutSeconds},
 		{"non-positive conv override ignored", 300, intPtr(0), "bash", 300},
+		// Cards that only stage a task change wait a day, not the global hour.
+		{"schedule_task waits a day over the global", 3600, nil, "schedule_task", 86400},
+		{"manage_tasks waits a day over the global", 3600, nil, "manage_tasks", 86400},
+		{"staged task card ignores a shorter conv override", 3600, intPtr(120), "manage_tasks", 86400},
+		{"staged task card ignores a non-positive global", 0, nil, "schedule_task", 86400},
+		{"staged task card takes a longer conv override", 3600, intPtr(90000), "schedule_task", 90000},
+		{"other handler-only cards keep the global", 3600, nil, "suggest_advanced_model", 3600},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,6 +54,26 @@ func TestResolveTimeoutSeconds(t *testing.T) {
 				t.Errorf("resolveTimeoutSeconds(%q) = %d, want %d", tc.tool, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestResolveTimeoutSeconds_StagedTaskCardHonorsPerToolManifest: an operator
+// who names a task tool in the bundle's critical_tool_timeouts keeps that
+// window — the day-long default only replaces the global layers.
+func TestResolveTimeoutSeconds_StagedTaskCardHonorsPerToolManifest(t *testing.T) {
+	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		CriticalToolTimeouts: map[string]int{"manage_tasks": 600},
+	})
+	a := &approvalStager{globalTimeoutSeconds: 3600}
+	if got := a.resolveTimeoutSeconds("manage_tasks"); got != 600 {
+		t.Errorf("manage_tasks with a manifest timeout = %d, want 600", got)
+	}
+	if got := a.resolveTimeoutSeconds("schedule_task"); got != stagedTaskApprovalTimeoutSeconds {
+		t.Errorf("schedule_task without one = %d, want %d", got, stagedTaskApprovalTimeoutSeconds)
+	}
+	if got := a.expiryUnixFor("schedule_task") - time.Now().Unix(); got < stagedTaskApprovalTimeoutSeconds-5 {
+		t.Errorf("persisted schedule_task deadline is %ds out, want about a day", got)
 	}
 }
 

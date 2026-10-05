@@ -387,7 +387,8 @@ Three rules for every card. **Read what is about to happen**, not just the
 button: the card exists to tell you. **Cancel is free**: the assistant continues
 without doing the thing, and you can ask it to try a different way. **Cards
 expire**: a card left unanswered times out to no, and the transcript records that
-it did.
+it did. By default an action card waits an hour; a **Schedule a task** or
+**Change a task** card, which changes nothing until you approve it, waits a day.
 
 After you approve, the card shows what actually happened: it ran, it failed, it
 is still running, or — for an older card whose run finished before outcomes were

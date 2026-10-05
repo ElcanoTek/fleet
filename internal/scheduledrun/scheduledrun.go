@@ -848,7 +848,14 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// Wire per-task MCP credential-account isolation. Broker mode opens one
 	// child-owned scope per run; the compatibility path builds the same dedicated
 	// always-on-plus-optional selection locally.
-	mcpBinding, err := r.bindTaskMCPRuntime(ctx, task)
+	//
+	// An unattended run retries a server's fast, transient registration
+	// failure (a DNS blip, a vendor's "temporarily unavailable") a few seconds
+	// apart before skipping it. mcpCtx carries ONE retry allowance
+	// (mcp.MaxConnectRetryBudget) shared by the bundle binding and the remote
+	// overlay below, so the retry never adds more than that to the run.
+	mcpCtx := mcp.WithConnectRetry(ctx)
+	mcpBinding, err := r.bindTaskMCPRuntime(mcpCtx, task)
 	if err != nil {
 		return nil, false, "", err
 	}
@@ -859,7 +866,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// so a headless run reaches them without mutating the shared/per-run client.
 	// Optional servers stay best-effort. An explicitly required server missing
 	// from the resulting roster fails preflight before model execution.
-	remoteOverlay, err := r.buildTaskRemoteOverlayChecked(ctx, task, mcpBinding, requirements, nativeTools)
+	remoteOverlay, err := r.buildTaskRemoteOverlayChecked(mcpCtx, task, mcpBinding, requirements, nativeTools)
 	if err != nil {
 		return nil, false, "", err
 	}
@@ -994,6 +1001,10 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		// EXECUTION REQUIREMENTS completion.any_succeeded, resolved against this
 		// run's roster at dispatch. nil = none declared, verifier as before.
 		CompletionAnySucceeded: requirements.completionTools(),
+		// Its optional blocked rule (completion.blocked_when): a run the
+		// predicate completed whose recording call declared a blocked outcome
+		// finishes as success with run outcome "blocked".
+		CompletionBlockedWhen: requirements.completionBlockedWhen(),
 		// Governed sub-agents / delegation (#175, #264, #1043): ON by default —
 		// registered whenever the fleet-wide flag AND this task's allow_delegation
 		// are both true (each defaults true; each is an independent kill switch,
@@ -1308,12 +1319,16 @@ func unknownMCPSelectionError(pins map[string]string) error {
 }
 
 // taskMCPBinding is the scheduled Agent's transport-neutral per-run MCP wiring.
+// connectFailures are the selected bundle servers that failed to register for
+// this run (credential-free), which the requirements check reads to tell a
+// connector outage from a roster that genuinely lacks a server.
 type taskMCPBinding struct {
-	client  *mcp.Client
-	broker  agentcore.MCPBroker
-	catalog []mcp.ServerTool
-	workdir string
-	cleanup func()
+	client          *mcp.Client
+	broker          agentcore.MCPBroker
+	catalog         []mcp.ServerTool
+	workdir         string
+	cleanup         func()
+	connectFailures []agentcore.MCPConnectFailure
 }
 
 func (b taskMCPBinding) discoveryCatalog() []mcp.ServerTool {
@@ -1339,14 +1354,14 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 		if r.mgr != nil && r.mgr.MCPClient() == nil && r.mgr.MCPBroker() != nil {
 			return taskMCPBinding{}, errors.New("scheduled MCP broker requires a task scope opener")
 		}
-		client, cleanup, workdir, err := r.bindTaskMCP(ctx, task, denyAll)
+		client, cleanup, workdir, failed, err := r.bindTaskMCP(ctx, task, denyAll)
 		if err != nil {
 			return taskMCPBinding{}, err
 		}
 		// Keep catalog nil so agentcore re-discovers the mutable local client on
 		// every MCP-dirty rebuild after mcp_load_servers. discoveryCatalog still
 		// snapshots it for remote-server shadowing before the run starts.
-		return taskMCPBinding{client: client, workdir: workdir, cleanup: cleanup}, nil
+		return taskMCPBinding{client: client, workdir: workdir, cleanup: cleanup, connectFailures: failed}, nil
 	}
 
 	selection := agentcore.MCPSelection{}
@@ -1388,7 +1403,7 @@ func (r *Runner) bindTaskMCPRuntime(ctx context.Context, task *models.Task) (tas
 	if scope.Catalog != nil && catalog == nil {
 		catalog = []mcp.ServerTool{}
 	}
-	return taskMCPBinding{broker: scope.Broker, catalog: catalog, workdir: workdir, cleanup: cleanup}, nil
+	return taskMCPBinding{broker: scope.Broker, catalog: catalog, workdir: workdir, cleanup: cleanup, connectFailures: scope.ConnectFailures}, nil
 }
 
 func (r *Runner) taskMCPSelection(task *models.Task) agentcore.MCPSelection {
@@ -1488,7 +1503,10 @@ func (r *Runner) taskMCPToolAllowlist() agentcore.MCPAllowlist {
 // The third return is the resolved ${FLEET_WORKSPACE} directory used for this
 // task's connector ledger reconciliation ("" when no selected server references
 // the token).
-func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll bool) (*mcp.Client, func(), string, error) {
+//
+// The fourth return lists the selected servers that failed to register
+// (agentcore.BindMCPSelectionReport), for the requirements check.
+func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll bool) (*mcp.Client, func(), string, []agentcore.MCPConnectFailure, error) {
 	noop := func() {}
 	if denyAll {
 		// An empty per-run client, NOT the shared one: the shared client already
@@ -1501,7 +1519,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 			if err := client.Close(); err != nil {
 				log.Printf("scheduled task %s: error closing empty per-run MCP client: %v", task.ID, err)
 			}
-		}, "", nil
+		}, "", nil, nil
 	}
 	selection := r.taskMCPSelection(task)
 
@@ -1524,13 +1542,13 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 	workdir, err := r.prepareTaskMCPWorkspace(task, selection)
 	if err != nil {
 		cleanup()
-		return nil, noop, "", err
+		return nil, noop, "", nil, err
 	}
 
-	registered, err := agentcore.BindMCPSelection(ctx, client, selection, bases, workdir)
+	registered, failed, err := agentcore.BindMCPSelectionReport(ctx, client, selection, bases, workdir)
 	if err != nil {
 		cleanup() // reap any subprocesses bound before the failure
-		return nil, noop, "", fmt.Errorf("bind task mcp selection: %w", err)
+		return nil, noop, "", nil, fmt.Errorf("bind task mcp selection: %w", err)
 	}
 	// Inline http_tools (issue #261) are global manifest tools with no per-task
 	// selection (like a non-optional server), so register them on this per-run
@@ -1543,7 +1561,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 		agent.RegisterA2APeers(client, r.cfg.A2APeers, task.A2ADelegationDepth)
 	}
 	log.Printf("scheduled task %s: bound %d MCP server(s) on per-run client: %v", task.ID, len(registered), registered)
-	return client, cleanup, workdir, nil
+	return client, cleanup, workdir, failed, nil
 }
 
 // stageTaskInputs copies collision-safe upload objects into the dedicated MCP
@@ -1653,6 +1671,12 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 		// bytes, the runner fails the contract loudly rather than committing
 		// corrupted-but-schema-shaped output.
 		OutputJSON: agentcore.RedactSecrets(ls.SnapshotOutputJSON()),
+	}
+	// The declared run outcome (completion.blocked_when) rides to the runner
+	// like output_json; the detail quotes a tool argument, so it is redacted.
+	if outcome, detail := ls.SnapshotRunOutcome(); outcome != "" {
+		out.RunOutcome = outcome
+		out.RunOutcomeDetail = agentcore.RedactSecrets(detail)
 	}
 	// Aux-usage ledger (#1118): carry the run's labeled host-side model-call
 	// records (verifier / phone-a-friend) into the persisted session.

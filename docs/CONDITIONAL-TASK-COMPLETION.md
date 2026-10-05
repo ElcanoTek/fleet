@@ -47,7 +47,9 @@ visits enclosing scalar fields before deeper profiles so a large nested profile
 does not crowd out the enclosing outcome/version fields.
 
 The verifier's third input is the run's final response — the closing assistant
-message, bounded and delimited as its own section. A task requirement to
+message, bounded and delimited as its own section. After a repair round it is
+the answer the verifier sent back followed by what the repair added, which is
+also the text the run persists. A task requirement to
 report/summarize/state something in the run's own output is satisfied when that
 message contains the content; deliverables that require a tool call (email
 send, page write, file upload, ...) are still only satisfied by that call. The
@@ -171,6 +173,56 @@ run's MCP scope and remote overlay are opened, missing advertised servers/tools
 produce an actionable roster error. Tools may be native names, server tool names,
 or Fleet's full `mcp_<server>_<tool>` names; full names avoid ambiguity. Model
 resolution already happens before the run and remains mandatory.
+
+**A connector outage is not a roster error.** A connect failure is
+*transient* when it is a DNS lookup failure, a timeout, a refused, reset or
+unreachable connection, an HTTP 500, 502, 503, 504 or 429, or a JSON-RPC error
+whose message says the condition is temporary ("temporarily unavailable",
+"service unavailable", "try again"; never one that says "do not retry", and
+bare "retry" or "unavailable" are not enough). A scheduled run retries a
+server's registration that fails *fast* and transiently — every transient
+cause except a timeout, which has already spent the whole request timeout —
+up to three times, 2 s and then 5 s apart, before the server is skipped. All
+of a run's retries share one 15 s allowance (pauses and retried attempts), so
+the retry never adds more than that to a run however many servers fail. An
+interactive chat turn tries once. When every missing name is then explained by
+a server that failed to connect *transiently* in this run (a timeout
+included), the dispatch error is the same roster message followed by
+`server <name> failed to connect this run (<cause>)`, and it is classified
+`connector_unavailable`, not `terminal`:
+
+- The runner re-runs the same occurrence about 5 minutes and then about
+  10 minutes later. These re-runs do not spend the task's `max_retries`
+  (`infra_retry_count` counts them).
+- If the connector is still down after that, the class follows the task's
+  `retry_policy` like any other (by default: dead-letter). The dead-letter is
+  recorded with run outcome `connector_unavailable` and its reason starts
+  `connector unavailable after 2 infra re-run(s)`. It does **not** count toward
+  the two-consecutive-dead-letters park breaker
+  ([ADR-0077](adr/0077-connector-outage-is-not-a-recurrence-strike.md)), in
+  either position — up to a bound: the **third consecutive** occurrence that
+  dead-letters on a connector outage parks the chain, with the reason
+  `A required connector has been unreachable for 3 consecutive occurrences:
+  <connector> (<cause>). …`, because a typo'd or decommissioned host, or a
+  closed port, fails the same way forever.
+- A server that is not configured or not selected, a tool name no connected
+  server provides, and a connect failure that is not transient (a 401/403, a
+  501, a bad URL, a protocol error, a JSON-RPC error that does not say it is
+  temporary) stay the terminal roster error they were. A
+  missing tool is traced to the failed server by its full
+  `mcp_<server>_<tool>` name; a bare name cannot be traced to a server whose
+  catalog was never fetched, so it is attributed to the run's transient
+  outage as a whole when there is one.
+
+**`serialization_key`** (optional) declares the task's mutual-exclusion key
+([TASK-SERIALIZATION.md](TASK-SERIALIZATION.md)), e.g. `"pages:<slug>"`. It
+must match `^[A-Za-z0-9_.:/-]{1,200}$`; anything else is refused at save. A
+task **created** without an explicit `serialization_key` takes the declared
+one, whatever the write path — the API, chat `schedule_task`, a prompt pasted
+into the Operations Center form, an import, or a recurrence spawn. An explicit
+task value always wins. The key stays immutable on an existing row, so a
+prompt edit that adds the declaration takes effect from the next occurrence
+(which is created from the edited prompt), not on the edited row itself.
 
 `"roster":"required_tools_only"` (#1603) additionally narrows the run's MCP
 roster to the tools `required_tools` names:
@@ -309,6 +361,66 @@ chosen by the producer, like `required_tools`. Fleet does not know what
 `record_refresh_check` means, and the bundle and the producer own the
 contract that its success is completion. Regenerate producer prompts to gain
 the clause; existing prompts keep the verifier.
+
+### A blocked outcome is visible (`completion.blocked_when`)
+
+A refresh that correctly decides not to publish — its source was unreachable,
+the data failed a check — records that through the same completion tool, and
+used to finish as a plain green success. In production 26% of refresh runs
+ended that way, and a dashboard could stop updating for 10–14 days while
+every run read green. The clause may say which recordings mean "blocked":
+
+```text
+EXECUTION REQUIREMENTS (JSON):
+{"completion":{"any_succeeded":["mcp_pages_record_refresh_check","mcp_pages_update_page_data","mcp_pages_update_page_data_upload"],"blocked_when":{"tool":"mcp_pages_record_refresh_check","argument":"outcome","in":["blocked","failed","source_unreachable"],"detail_argument":"detail"}}}
+```
+
+- `tool` — required; must also be listed in `any_succeeded`, spelled the same
+  way (the rule qualifies how the predicate completed the run). Same
+  identifier rule as every other name; resolved against the roster like
+  `any_succeeded`.
+- `argument` — required; a top-level argument name of that tool's input
+  (`^[A-Za-z_][A-Za-z0-9_]{0,63}$`). Nested fields are not matched.
+- `in` — required; 1 to 20 values, each 1 to 100 printable characters,
+  matched exactly against the argument's string value.
+- `detail_argument` — optional; a top-level string argument of the same call
+  whose text (whitespace collapsed, at most 300 characters) explains the
+  outcome. Without it the detail is `<argument>=<value>` alone.
+
+A malformed rule is refused at save time and at dispatch with a message that
+names the field. Unknown keys inside it are ignored, and a Fleet build that
+predates the rule ignores the whole `blocked_when` key, so producers can emit
+it before every deployment has upgraded.
+
+**At finish**, when the run completes through the predicate, the rule
+matches when:
+
+1. no `any_succeeded` tool *other than* `tool` succeeded during the run (a run
+   that published is never blocked, whatever it recorded), and
+2. the **last** successful execution of `tool` passed `argument` with a value
+   listed in `in`.
+
+A matching run still **finishes successfully** — retry, dead-letter and
+recurrence behave exactly as for any success — but:
+
+- the task carries run outcome `blocked` and the detail
+  (`outcome=source_unreachable: <the call's detail text>`), persisted on the
+  task row (`run_outcome`, `run_outcome_detail`, migration 074);
+- the Operations Center shows an amber **Blocked** badge instead of the green
+  success one, in the task list, the run history and the task detail, which
+  also gains a *Blocked* row with the reason; `fleet sched task list` shows
+  `success (blocked)`, and the task's `result` starts with `[blocked]`;
+- the session log gains a `[completion_blocked] …` breadcrumb;
+- the success notification's message says `Blocked: <detail>`. When a
+  recurring lineage reaches **three consecutive** blocked occurrences, that
+  run's notification is sent as a failure instead
+  (`Blocked 3 runs in a row — the schedule keeps running, …`), so an owner who
+  subscribes only to failures hears about a dashboard that stopped updating.
+  It fires once per streak, at the third run. Nothing parks: the next run that
+  publishes ends the streak.
+
+Fleet assigns no meaning to the tool, the argument or the values beyond that
+match; the producer owns which recordings mean blocked.
 
 ## Scope
 

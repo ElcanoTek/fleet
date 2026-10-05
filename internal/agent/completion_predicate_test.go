@@ -133,6 +133,7 @@ func scriptedRun(t *testing.T, steps []struct{ tool, input string }, verifier, r
 		for _, name := range predicate {
 			a.completionAnySucceeded[name] = true
 		}
+		a.completionBlocked = newCompletionBlockedRule(testBlockedRule)
 	}
 	rec := &eventRecorder{}
 	err := a.Execute(agentcore.WithStreamObserver(context.Background(), rec), "Refresh the page; when the source has no new coverage, record a refresh check instead of publishing.")
@@ -140,6 +141,10 @@ func scriptedRun(t *testing.T, steps []struct{ tool, input string }, verifier, r
 }
 
 var pagesPredicate = []string{"mcp_pages_update_page_data", "mcp_pages_update_page_data_upload", "mcp_pages_record_refresh_check"}
+
+// testBlockedRule is the completion.blocked_when scriptedRun installs with the
+// predicate; nil (the default) declares none.
+var testBlockedRule *CompletionBlockedWhen
 
 // The issue's acceptance: a Pages refresh whose declared completion tool
 // (record_refresh_check, the no-update branch) succeeded finishes with no

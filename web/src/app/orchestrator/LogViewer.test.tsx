@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, within, cleanup, fireEvent } from "@testing-library/react";
 import { LogViewer } from "./LogViewer";
 import { OrchestratorError } from "@/app/shared/lib/orchestratorApi";
 import type { LogSession, Task } from "@/app/shared/lib/orchestratorApi";
@@ -253,6 +253,26 @@ describe("LogViewer task-detail modal", () => {
     const summary = await screen.findByTestId("task-summary");
     expect(summary).toHaveTextContent("⏹ Schedule stopped");
     expect(screen.getByTestId("schedule-stopped")).toHaveTextContent(reason);
+  });
+
+  it("shows a Blocked run as blocked, with why, instead of plain success", async () => {
+    mockSession(RICH_SESSION);
+    render(
+      <LogViewer
+        task={{
+          ...DONE_TASK,
+          status: "success",
+          run_outcome: "blocked",
+          run_outcome_detail: "outcome=source_unreachable: the mailbox had no report for 2026-10-04",
+        }}
+        onClose={() => {}}
+      />,
+    );
+    const summary = await screen.findByTestId("task-summary");
+    expect(within(summary).getByTestId("status-blocked")).toHaveTextContent("blocked");
+    expect(screen.getByTestId("blocked-reason")).toHaveTextContent(
+      "outcome=source_unreachable: the mailbox had no report for 2026-10-04",
+    );
   });
 
   it("shows no stop notice for a schedule that continues", async () => {

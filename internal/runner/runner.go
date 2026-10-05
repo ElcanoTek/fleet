@@ -1065,7 +1065,15 @@ func (p *Pool) finishSuccess(task *models.Task, session *models.LogSession, outp
 	if landedTask != nil {
 		task = landedTask
 		// Terminal success: fire the outbound notification off-thread (#208).
-		p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
+		// A blocked success (completion.blocked_when) says so, and the third
+		// blocked occurrence in a row of a recurring lineage is raised as a
+		// failure-class alert instead: the dashboard it maintains has stopped
+		// updating while every run reads green. Nothing parks.
+		if task.IsRunOutcome(models.RunOutcomeBlocked) {
+			p.notifyBlockedSuccess(task, session, time.Since(start))
+		} else {
+			p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
+		}
 		// If this run answered an inbound email (#511), reply to the sender with
 		// the result. Off-thread, no-op unless the run came from an email trigger.
 		p.maybeReplyToEmailEvent(task, session)
@@ -1107,7 +1115,8 @@ func runEligibleForStructuredCommit(runErr error, wasPaused, wasStopped bool, co
 func reportableRunFailure(runErr error, wasPaused, wasStopped bool) bool {
 	return runErr != nil && !wasPaused && !wasStopped &&
 		!transientAgentFailure(runErr) && !errors.Is(runErr, agentcore.ErrRunCancelled) &&
-		!errors.Is(runErr, agentcore.ErrAuditAborted)
+		!errors.Is(runErr, agentcore.ErrAuditAborted) &&
+		!errors.Is(runErr, agentcore.ErrConnectorUnavailable)
 }
 
 // validateStructuredRunOutput is defense in depth around TaskRunner
@@ -1305,9 +1314,60 @@ func classifyFailure(err error) string {
 		return models.FailureOutputFormat
 	case errors.Is(err, agentcore.ErrStructuredOutputPersistence):
 		return models.FailureOutputPersist
+	case errors.Is(err, agentcore.ErrConnectorUnavailable):
+		return models.FailureConnectorUnavailable
 	default:
 		return models.FailureTerminal
 	}
+}
+
+// maxConnectorInfraRetries bounds how many times one occurrence is re-run
+// because a declared connector was unavailable (FailureConnectorUnavailable).
+// These re-runs are the runner's own: they never spend the task's
+// max_retries. Two re-runs cover a vendor or DNS outage of up to about a
+// quarter of an hour; past that the class follows the task's RetryPolicy like
+// any other (default: dead-letter, which the recurrence park breaker does not
+// count).
+const maxConnectorInfraRetries = 2
+
+// connectorInfraRetryDelays are the pauses before those re-runs (±10%
+// jitter): long enough for a DNS or vendor auth blip to clear, short enough
+// that a daily refresh still lands the same hour.
+var connectorInfraRetryDelays = []time.Duration{5 * time.Minute, 10 * time.Minute}
+
+func connectorInfraRetryDelay(retry int) time.Duration {
+	d := connectorInfraRetryDelays[len(connectorInfraRetryDelays)-1]
+	if retry >= 0 && retry < len(connectorInfraRetryDelays) {
+		d = connectorInfraRetryDelays[retry]
+	}
+	if d <= 0 {
+		return time.Second // keep the re-queued time strictly in the future
+	}
+	//nolint:gosec // G404: jitter only spreads re-runs; not security-sensitive.
+	jitter := time.Duration(rand.Int64N(int64(d/5)+1)) - d/10 // ±10%
+	return d + jitter
+}
+
+// requeueForConnectorOutage re-runs an occurrence whose declared connector
+// was unavailable, on the runner's infra budget. It reports whether the
+// re-run was scheduled; false sends the caller down the ordinary
+// classification (budget spent, or the requeue write failed).
+func (p *Pool) requeueForConnectorOutage(task *models.Task, session *models.LogSession, runErr error, leaseOwner uuid.UUID) bool {
+	if task.InfraRetryCount >= maxConnectorInfraRetries {
+		return false
+	}
+	delay := connectorInfraRetryDelay(task.InfraRetryCount)
+	when := time.Now().UTC().Add(delay)
+	msg := fmt.Sprintf("Task could not start (%s, infra re-run %d of %d); re-running in %s without spending a retry: %v",
+		models.FailureConnectorUnavailable, task.InfraRetryCount+1, maxConnectorInfraRetries, delay.Round(time.Second), runErr)
+	if _, err := p.store.RequeueTaskForInfraRetryWithContext(context.Background(), task.ID, leaseOwner, when, msg); err != nil {
+		log.Printf("runner: failed to re-queue task %s after a connector outage: %v; classifying normally", task.ID, err)
+		return false
+	}
+	log.Printf("runner: task %s could not start (%s); infra re-run %d of %d at %s",
+		task.ID, models.FailureConnectorUnavailable, task.InfraRetryCount+1, maxConnectorInfraRetries, when.Format(time.RFC3339))
+	p.submitLog(task, session, msg)
+	return true
 }
 
 // handleRunFailure is the single retry/DLQ classifier for both agent failures
@@ -1319,6 +1379,23 @@ func classifyFailure(err error) string {
 // successor is spawned (or parked) by that storage write, not here.
 func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, runErr error, leaseOwner uuid.UUID, start time.Time) {
 	class := classifyFailure(runErr)
+	// A declared connector that failed to connect transiently is weather, not
+	// the task: re-run the same occurrence a few minutes later on the runner's
+	// own bounded budget before the RetryPolicy is consulted at all.
+	if class == models.FailureConnectorUnavailable && p.requeueForConnectorOutage(task, session, runErr, leaseOwner) {
+		return
+	}
+	// The outage dead-letter is recorded as such, with the connectors that
+	// failed, so the recurrence park breaker exempts it — up to its bound,
+	// after which it parks naming them (storage deadLetterParkReason).
+	outcome, outcomeDetail := "", ""
+	if class == models.FailureConnectorUnavailable {
+		outcome = models.RunOutcomeConnectorUnavailable
+		var outage *agentcore.ConnectorUnavailableError
+		if errors.As(runErr, &outage) {
+			outcomeDetail = truncateRunes(outage.Connectors(), maxRunOutcomeDetailRunes)
+		}
+	}
 	if task.RetryPolicy.ShouldRetryClass(class) && task.AttemptCount < task.MaxRetries {
 		backoff := retryBackoff(task.AttemptCount, task.RetryPolicy)
 		when := time.Now().UTC().Add(backoff)
@@ -1345,7 +1422,7 @@ func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, r
 	p.clearPendingQA(task, leaseOwner)
 	if task.RetryPolicy.ShouldRetryClass(class) {
 		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s) (%s): %v", task.AttemptCount+1, class, runErr)
-		if p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", leaseOwner, start) {
+		if p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", outcome, outcomeDetail, leaseOwner, start) {
 			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 			p.maybeAnalyzeFailure(task, session, runErr)
 		}
@@ -1353,7 +1430,10 @@ func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, r
 	}
 
 	reason := fmt.Sprintf("non-retryable failure (%s): %v", class, runErr)
-	if p.sendToDeadLetter(task, session, runErr, reason, class, leaseOwner, start) {
+	if outcome != "" {
+		reason = fmt.Sprintf("connector unavailable after %d infra re-run(s) (%s): %v", task.InfraRetryCount, class, runErr)
+	}
+	if p.sendToDeadLetter(task, session, runErr, reason, class, outcome, outcomeDetail, leaseOwner, start) {
 		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 		p.maybeAnalyzeFailure(task, session, runErr)
 	}
@@ -1406,9 +1486,9 @@ func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
 // gate the failure notification + diagnosis on it (#580): when even the
 // fallback is rejected the DB no longer records this run's outcome and no
 // external side effect may fire.
-func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass string, leaseOwner uuid.UUID, start time.Time) bool {
+func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass, outcome, outcomeDetail string, leaseOwner uuid.UUID, start time.Time) bool {
 	attempts := task.AttemptCount + 1
-	dl, err := p.store.DeadLetterTaskWithContext(context.Background(), task.ID, leaseOwner, reason, attempts)
+	dl, err := p.store.DeadLetterTaskWithOutcomeWithContext(context.Background(), task.ID, leaseOwner, reason, attempts, outcome, outcomeDetail)
 	if err != nil {
 		log.Printf("runner: failed to dead-letter task %s: %v; falling back to error status", task.ID, err)
 		landed := true
@@ -1526,14 +1606,39 @@ func (p *Pool) reportStatusForLease(taskID, leaseOwner uuid.UUID, status models.
 // in detail, that the page was unchanged and why — which was the single most
 // useful field in the record, and the only one that would have told an operator
 // a dashboard had stopped refreshing while every run showed green.
+//
+// A run that ended through its declared completion clause with a blocked
+// outcome (completion.blocked_when) lands as a success carrying run outcome
+// "blocked" and its detail (migration 074), so the Operations Center and
+// `fleet sched` show it as Blocked rather than plain green.
 func (p *Pool) reportSuccess(taskID, leaseOwner uuid.UUID, output json.RawMessage, session *models.LogSession) (*models.Task, error) {
 	msg := successMessage(session)
-	return p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, leaseOwner, &models.StatusUpdate{
+	update := &models.StatusUpdate{
 		TaskID:     taskID,
 		Status:     models.TaskStatusSuccess,
 		Message:    &msg,
 		OutputJSON: output,
-	})
+	}
+	if outcome, detail := sessionRunOutcome(session); outcome != "" {
+		update.RunOutcome = &outcome
+		if detail != "" {
+			update.RunOutcomeDetail = &detail
+		}
+	}
+	return p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, leaseOwner, update)
+}
+
+// maxRunOutcomeDetailRunes bounds the outcome detail persisted on the row.
+const maxRunOutcomeDetailRunes = 500
+
+// sessionRunOutcome is the declared run outcome the driver handed over
+// (models.LogSession.RunOutcome), flattened and bounded. Only the outcomes a
+// success may carry are honoured.
+func sessionRunOutcome(session *models.LogSession) (outcome, detail string) {
+	if session == nil || session.RunOutcome != models.RunOutcomeBlocked {
+		return "", ""
+	}
+	return session.RunOutcome, truncateRunes(collapseWhitespace(session.RunOutcomeDetail), maxRunOutcomeDetailRunes)
 }
 
 // successMessage is the agent's final answer, bounded and flattened to one
@@ -1555,6 +1660,12 @@ func successMessage(session *models.LogSession) string {
 	}
 	if hasMessageType(session, agentcore.MessageTypeCompletionUnverifiedVerifierError) {
 		summary = "[" + agentcore.MessageTypeCompletionUnverifiedVerifierError + "] " + summary
+	}
+	// A blocked run (completion.blocked_when) leads with the flag too, so a
+	// reader of the plain result — the API, an export — sees it is not an
+	// ordinary success.
+	if outcome, _ := sessionRunOutcome(session); outcome == models.RunOutcomeBlocked {
+		summary = "[" + models.RunOutcomeBlocked + "] " + summary
 	}
 	return truncateRunes(summary, maxTerminalMessageRunes)
 }
