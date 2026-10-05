@@ -2648,9 +2648,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         // ctx.gap: the replay skipped events we never received, so an empty
         // slot means "we missed the answer", not "there was no answer".
         // Leave it empty and let settleStreamedSlot pull the real one from
-        // Postgres once the stream has drained.
+        // Postgres once the stream has drained. A slot already marked
+        // stopped keeps its banner as the explanation, as in streamTurn's
+        // finalizer.
         content:
-          m.content || (m.reasoning || ctx.gap ? "" : "No response returned."),
+          m.content ||
+          (m.reasoning || ctx.gap || m.cancelled ? "" : "No response returned."),
         state: "done",
         summary: {
           costUsd: p.cost_usd ?? 0,
@@ -3603,8 +3606,13 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
 
     patchAssistantMessage(target, assistantId, (m) => ({
       ...m,
+      // A stopped turn (turn.cancelled — an API cancel, a time or cost limit)
+      // already says so in its own "Turn stopped." banner; filler text under
+      // it is a second, vaguer account of the same turn that a reload, which
+      // reads Postgres, would not show.
       content:
-        m.content || (m.reasoning || ctx.gap ? "" : "No response returned."),
+        m.content ||
+        (m.reasoning || ctx.gap || m.cancelled ? "" : "No response returned."),
       state: "done",
     }));
     // A replay gap (server-side sliding-window eviction on a long, chatty

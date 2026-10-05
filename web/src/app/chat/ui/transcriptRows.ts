@@ -73,6 +73,27 @@ export function showsEmptyReplyNotice(message: Message): boolean {
   );
 }
 
+/**
+ * canRetryTurn answers: may this assistant turn offer Retry (or Regenerate)?
+ *
+ * Every Retry under a turn runs retryLastUserMessage, which acts on the
+ * conversation's LAST turn whichever bubble the button sits under: it drops
+ * the last user message, truncates the last turn server-side
+ * (`mode=edit_last`) and re-sends that prompt. Under an older turn that is a
+ * destructive mis-action — the newest reply is deleted and the newest prompt
+ * re-runs, approval-gated side effects included. So the button is offered only
+ * where it does what it says: on the latest assistant turn, and not while a
+ * turn is streaming. An older turn keeps its label ("Turn stopped.", "Turn
+ * failed.") without the button.
+ */
+export function canRetryTurn(
+  message: Message,
+  lastAssistantMessageId: number | null,
+  isStreaming: boolean,
+): boolean {
+  return message.id === lastAssistantMessageId && !isStreaming;
+}
+
 export type BuildTranscriptRowsInput = {
   messages: Message[];
   /** Index into `messages` of the compaction summary, or -1 when there is none. */

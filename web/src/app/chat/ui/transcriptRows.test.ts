@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTranscriptRows,
+  canRetryTurn,
   messageHasRenderableContent,
   showsEmptyReplyNotice,
   type BuildTranscriptRowsInput,
@@ -178,5 +179,34 @@ describe("showsEmptyReplyNotice", () => {
         memoryProposals: [{ id: "p1", content: "fact", status: "pending" }],
       }),
     ).toBe(false);
+  });
+});
+
+// Every Retry under a turn runs retryLastUserMessage, which truncates the
+// conversation's NEWEST turn server-side and re-sends the NEWEST prompt —
+// whichever bubble the button sits under. Offered under an older turn it
+// deletes a later reply and re-runs a later prompt, so only the latest
+// assistant turn may offer it (the gate Regenerate always had).
+describe("canRetryTurn", () => {
+  const stopped = (id: number): Message => ({ ...assistantMsg(id, ""), cancelled: true });
+
+  it("offers Retry on the latest assistant turn when nothing is streaming", () => {
+    expect(canRetryTurn(stopped(4), 4, false)).toBe(true);
+    expect(canRetryTurn({ ...assistantMsg(4, ""), failed: true }, 4, false)).toBe(true);
+    expect(canRetryTurn(assistantMsg(4, ""), 4, false)).toBe(true);
+  });
+
+  it("withholds it from an older turn, whatever state that turn ended in", () => {
+    expect(canRetryTurn(stopped(2), 4, false)).toBe(false);
+    expect(canRetryTurn({ ...assistantMsg(2, ""), failed: true }, 4, false)).toBe(false);
+    expect(canRetryTurn(assistantMsg(2, ""), 4, false)).toBe(false);
+  });
+
+  it("withholds it while a turn is streaming, even on the latest turn", () => {
+    expect(canRetryTurn(stopped(4), 4, true)).toBe(false);
+  });
+
+  it("withholds it when the transcript has no assistant turn to point at", () => {
+    expect(canRetryTurn(stopped(4), null, false)).toBe(false);
   });
 });

@@ -1072,10 +1072,12 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // replay must too. Marking only the summary left the message looking
       // like a completed turn, and the transcript then said "The assistant
       // finished without a written reply." about a turn the user had stopped.
-      // Text that streamed before the stop is kept, as it is live. (Startup
-      // recovery writes the same summary under a turn a server restart cut
-      // short, after its own "interrupted" note — so that one reads as
-      // stopped too, which it was.)
+      // Text that streamed before the stop is kept, as it is live. The same
+      // summary is written for a turn the platform ended early — the per-turn
+      // time or cost/token limit — and those read "Turn stopped." live too.
+      // Startup recovery also writes one under a turn a server restart
+      // interrupted (recorded server-side as an error): it reads as stopped
+      // here, and its "interrupted" note above says why.
       if (c.cancelled === true) current.cancelled = true;
       continue;
     }

@@ -64,6 +64,7 @@ import { humanToolLabel, liveSubagentLabel, shortModelName, type Message } from 
 import { InjectedContextNote } from "./InjectedContextNote";
 import {
   buildTranscriptRows,
+  canRetryTurn,
   showsEmptyReplyNotice,
   type TranscriptRow,
 } from "./transcriptRows";
@@ -575,6 +576,9 @@ export function ChatTranscript({
                     // the stats chip waits until the turn completes
                     // since its numbers don't exist until then.
                     const showExecutionTrail = showStats && hasExecutionTrail;
+                    // Retry and Regenerate both re-run the conversation's LAST
+                    // turn, so they are offered only under it (canRetryTurn).
+                    const canRetry = canRetryTurn(message, lastAssistantMessageId, isStreaming);
                     // Two signals feed the thinking indicator:
                     //
                     //   activeToolName — the most recent tool call's
@@ -804,13 +808,16 @@ export function ChatTranscript({
                               {message.cancelled ? (
                                 <div className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
                                   <span className="inline-block size-1.5 rounded-full bg-[var(--color-text-muted)]" />
-                                  Turn stopped. <button
-                                    type="button"
-                                    className="underline hover:text-[var(--color-text-primary)]"
-                                    onClick={() => void retryLastUserMessage()}
-                                  >
-                                    Retry
-                                  </button>
+                                  Turn stopped.{" "}
+                                  {canRetry ? (
+                                    <button
+                                      type="button"
+                                      className="underline hover:text-[var(--color-text-primary)]"
+                                      onClick={() => void retryLastUserMessage()}
+                                    >
+                                      Retry
+                                    </button>
+                                  ) : null}
                                 </div>
                               ) : null}
 
@@ -889,13 +896,16 @@ export function ChatTranscript({
                               })() : message.failed ? (
                                 <div className="flex items-center gap-2 text-[0.75rem] text-[var(--color-danger)]">
                                   <span className="inline-block size-1.5 rounded-full bg-[var(--color-danger)]" />
-                                  Turn failed. <button
-                                    type="button"
-                                    className="underline hover:text-[var(--color-text-primary)]"
-                                    onClick={() => void retryLastUserMessage()}
-                                  >
-                                    Retry
-                                  </button>
+                                  Turn failed.{" "}
+                                  {canRetry ? (
+                                    <button
+                                      type="button"
+                                      className="underline hover:text-[var(--color-text-primary)]"
+                                      onClick={() => void retryLastUserMessage()}
+                                    >
+                                      Retry
+                                    </button>
+                                  ) : null}
                                 </div>
                               ) : null}
 
@@ -919,13 +929,15 @@ export function ChatTranscript({
                                 <div className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
                                   <span className="inline-block size-1.5 rounded-full bg-[var(--color-text-muted)]" />
                                   The assistant finished without a written reply.{" "}
-                                  <button
-                                    type="button"
-                                    className="underline hover:text-[var(--color-text-primary)]"
-                                    onClick={() => void retryLastUserMessage()}
-                                  >
-                                    Retry
-                                  </button>
+                                  {canRetry ? (
+                                    <button
+                                      type="button"
+                                      className="underline hover:text-[var(--color-text-primary)]"
+                                      onClick={() => void retryLastUserMessage()}
+                                    >
+                                      Retry
+                                    </button>
+                                  ) : null}
                                 </div>
                               ) : null}
 
@@ -986,10 +998,7 @@ export function ChatTranscript({
                               {message.state === "done" && message.content ? (
                                 <div className="flex items-center gap-3 text-[0.7rem]">
                                   <CopyButton text={message.content} />
-                                  {!message.cancelled &&
-                                  !message.failed &&
-                                  message.id === lastAssistantMessageId &&
-                                  !isStreaming ? (
+                                  {!message.cancelled && !message.failed && canRetry ? (
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"

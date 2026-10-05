@@ -313,19 +313,81 @@ test("a stopped turn still reads as stopped after a reload", async ({ page, cont
   const emptyReply = page.getByText("The assistant finished without a written reply.");
   const stoppedChip = page.getByText(/^stopped · /);
 
-  // Live: the stop is what the turn says about itself.
+  // Not a check of the live render: fulfillSse hands over the whole stream in
+  // one chunk, so the stream's finalizer reads a transcript ref that has not
+  // caught up yet, reconciles, and adopts the persisted copy at once. This
+  // block is therefore already a replay check (on a build without the replay
+  // fix it fails right here, before any reload).
   await expect(stopped).toBeVisible({ timeout: 15_000 });
   await expect(stoppedChip).toBeVisible();
   await expect(emptyReply).toHaveCount(0);
 
-  // Reloaded from history: the same turn, the same story.
+  // The reload proves a cold load from history tells the same story, and the
+  // latest turn keeps its Retry.
   await page.reload();
   await expect(
     page.getByRole("region", { name: "Conversation" }).getByText("Use run_python to sleep for 60 seconds"),
   ).toBeVisible({ timeout: 15_000 });
   await expect(stopped).toBeVisible();
+  await expect(stopped.getByRole("button", { name: "Retry" })).toBeVisible();
   await expect(stoppedChip).toBeVisible();
   await expect(emptyReply).toHaveCount(0);
+});
+
+// Retry re-runs the conversation's LAST turn wherever it is clicked: it
+// truncates the newest turn server-side and re-sends the newest prompt. Under
+// an older stopped turn that deletes a later reply and re-runs a later prompt,
+// so only the latest turn offers it; an older one keeps its label alone.
+test("only the latest turn offers Retry; an older stopped turn keeps its label", async ({ page }) => {
+  const conversation = { id: "conv-mixed", title: "Stopped, then done, then stopped" };
+  await mockChatBoot(page, { conversations: [conversation] });
+  const stoppedTurn = (first: number, prompt: string): Array<Record<string, unknown>> => [
+    { id: first, role: "user", type: "text", content: { text: prompt } },
+    {
+      id: first + 1,
+      role: "assistant",
+      type: "tool_call",
+      content: { id: `call-${first}`, name: "run_python", input: "{}" },
+    },
+    {
+      id: first + 2,
+      role: "tool",
+      type: "tool_result",
+      content: { id: `call-${first}`, name: "run_python", text: "python execution cancelled", is_err: true },
+    },
+    { id: first + 3, role: "assistant", type: "turn_summary", content: { cost_usd: 0.001, cancelled: true } },
+  ];
+  await page.route("**/api/conversations/conv-mixed", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    return r.fulfill({
+      json: {
+        conversation: { ...conversation, persona: "default", model: "test-model", pinned: false },
+        history: [
+          ...stoppedTurn(1, "first: sleep for a minute"),
+          { id: 5, role: "user", type: "text", content: { text: "second: just say hi" } },
+          { id: 6, role: "assistant", type: "text", content: { text: "Hi there." } },
+          { id: 7, role: "assistant", type: "turn_summary", content: { cost_usd: 0.001 } },
+          ...stoppedTurn(8, "third: sleep again"),
+        ],
+        pending_approvals: [],
+        resolved_approvals: [],
+        pending_memory_proposals: [],
+      },
+    });
+  });
+
+  await page.goto("/chat");
+  await expect(page.getByText("Hi there.")).toBeVisible({ timeout: 15_000 });
+
+  const stopped = page.getByText("Turn stopped.");
+  await expect(stopped).toHaveCount(2);
+  // The older stopped turn: the label, no button.
+  await expect(stopped.first().getByRole("button", { name: "Retry" })).toHaveCount(0);
+  // The latest turn is stopped too, and it still offers Retry.
+  await expect(stopped.last().getByRole("button", { name: "Retry" })).toBeVisible();
+  // One Retry in the whole transcript, and no empty-reply net.
+  await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(1);
+  await expect(page.getByText("The assistant finished without a written reply.")).toHaveCount(0);
 });
 
 test("config-driven empty-state cards render from a stubbed /api/client-config", async ({ page }) => {
