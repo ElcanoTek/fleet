@@ -29,6 +29,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,10 @@ type Agent struct {
 	// drained are inFlight's waiters, closed when the last prompt in flight
 	// is answered.
 	drained []chan struct{}
+	// turns holds the translator of every prompt submitting or streaming a
+	// fleet turn (watchTurn), so a shutdown that gives up waiting on one can
+	// name its conversation (stoppingConversations).
+	turns map[*translator]struct{}
 }
 
 // session maps one ACP session onto one fleet conversation. The conversation
@@ -214,6 +219,7 @@ func NewAgent(client turnClient, cfgErr error, publicURL string, timeout time.Du
 		diag:      io.Discard,
 		sessions:  map[acpsdk.SessionId]*session{},
 		inflight:  map[acpsdk.SessionId]map[uint64]context.CancelFunc{},
+		turns:     map[*translator]struct{}{},
 	}
 }
 
@@ -354,6 +360,42 @@ func (a *Agent) inFlight() (int, <-chan struct{}) {
 	return n, idle
 }
 
+// watchTurn registers a running prompt's translator until the returned
+// func is called, for stoppingConversations.
+func (a *Agent) watchTurn(tr *translator) (done func()) {
+	a.mu.Lock()
+	a.turns[tr] = struct{}{}
+	a.mu.Unlock()
+	return func() {
+		a.mu.Lock()
+		delete(a.turns, tr)
+		a.mu.Unlock()
+	}
+}
+
+// stoppingConversations says where to check on the fleet turns still in
+// flight (conversationPointer), for a shutdown that gave up waiting on them.
+// Each is read off its prompt's translator: the session's convID is guarded
+// by the session's lock, which the stuck prompt itself holds for as long as
+// it runs.
+func (a *Agent) stoppingConversations() []string {
+	a.mu.Lock()
+	running := make([]*translator, 0, len(a.turns))
+	for tr := range a.turns {
+		running = append(running, tr)
+	}
+	a.mu.Unlock()
+	var where []string
+	for _, tr := range running {
+		where = append(where, a.conversationPointer(tr.conversationID()))
+	}
+	if len(where) == 0 {
+		where = append(where, a.conversationPointer(""))
+	}
+	slices.Sort(where)
+	return slices.Compact(where)
+}
+
 // CloseSession forgets the session. The fleet conversation stays, like any
 // other chat, visible in the web UI.
 func (a *Agent) CloseSession(_ context.Context, p acpsdk.CloseSessionRequest) (acpsdk.CloseSessionResponse, error) {
@@ -455,6 +497,7 @@ func (a *Agent) promptOnce(ctx, cancelCtx context.Context, p acpsdk.PromptReques
 			_ = a.conn.SessionUpdate(sendCtx, acpsdk.SessionNotification{SessionId: p.SessionId, Update: u})
 		}
 	})
+	defer a.watchTurn(tr)()
 
 	streamDone := make(chan struct{})
 	stopped := make(chan stopOutcome, 1)

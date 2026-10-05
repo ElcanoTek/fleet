@@ -201,8 +201,14 @@ func (c *acpClient) openSession() string {
 	c.t.Helper()
 	c.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}`)
 	c.next()
-	c.send(`{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}`)
-	m := c.next()
+	return c.newSession(2)
+}
+
+// newSession opens another ACP session, as request id.
+func (c *acpClient) newSession(id int) string {
+	c.t.Helper()
+	c.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}`, id))
+	m := c.answer(id)
 	result, _ := m["result"].(map[string]any)
 	sid, _ := result["sessionId"].(string)
 	if sid == "" {
@@ -278,6 +284,14 @@ type stdioRun struct {
 
 func startRun(t *testing.T, ff *fakeFleet) *stdioRun {
 	t.Helper()
+	stderr := &lockedBuffer{}
+	return startRunWithStderr(t, ff, stderr, stderr)
+}
+
+// startRunWithStderr is startRun with errOut as run's stderr; the test reads
+// what reached it from stderr.
+func startRunWithStderr(t *testing.T, ff *fakeFleet, stderr *lockedBuffer, errOut io.Writer) *stdioRun {
+	t.Helper()
 	// The fake sends no terminal frame after a Stop; do not wait long for
 	// one (the real server sends turn.cancelled).
 	prevSettle := stopSettleWait
@@ -292,12 +306,12 @@ func startRun(t *testing.T, ff *fakeFleet) *stdioRun {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	r := &stdioRun{
-		acpClient: newACPClient(t, inW, outR, &lockedBuffer{}),
+		acpClient: newACPClient(t, inW, outR, stderr),
 		stop:      make(chan os.Signal, 1),
 		exit:      make(chan int, 1),
 	}
 	go func() {
-		r.exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--token-file", tokenFile}, inR, outW, r.stderr, func() <-chan os.Signal { return r.stop })
+		r.exit <- run([]string{"--server", srv.URL, "--email", "bot@example.com", "--token-file", tokenFile}, inR, outW, errOut, func() <-chan os.Signal { return r.stop })
 		// The SDK writes a prompt's answer just after the prompt returns,
 		// which can be after run has: stdout stays open a moment longer, so
 		// a frame written after the client went away reaches rest() rather
@@ -420,7 +434,7 @@ func TestRunGivesUpOnAStuckStopAfterTheBound(t *testing.T) {
 	if waited := time.Since(hungUp); waited < hangUpWait {
 		t.Errorf("exited %s after the hang-up, before the %s bound", waited, hangUpWait)
 	}
-	if want := "fleet acp: gave up after 300ms waiting for the in-flight fleet turns to stop; exiting anyway. A turn may still be running: check the fleet web chat"; !strings.Contains(r.stderr.String(), want) {
+	if want := "fleet acp: gave up after 300ms waiting for the in-flight fleet turns to finish stopping; exiting anyway. A Stop may not have reached fleet, or fleet had not confirmed it, so a turn may still be running: check the fleet web chat (conversation conv-slow)\n"; !strings.Contains(r.stderr.String(), want) {
 		t.Errorf("stderr lacks %q:\n%s", want, r.stderr)
 	}
 	// Let the held Stop finish before the cleanup restores the waits it reads.
@@ -452,7 +466,7 @@ func TestRunTreatsAStopSignalAsAHangUp(t *testing.T) {
 		t.Errorf("written to stdout after the signal: %q", extra)
 	}
 	stderr := r.stderr.String()
-	for _, want := range []string{"fleet acp: signal terminated with 1 prompt in flight", "its turn was stopped"} {
+	for _, want := range []string{"fleet acp: got SIGTERM with 1 prompt in flight", "its turn was stopped"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr lacks %q:\n%s", want, stderr)
 		}
@@ -494,6 +508,87 @@ func TestRunWithNothingInFlightExitsAtOnce(t *testing.T) {
 	}
 }
 
+// gatedWriter is a stderr nobody drains: every write blocks until open is
+// closed, then lands in buf.
+type gatedWriter struct {
+	open chan struct{}
+	buf  *lockedBuffer
+}
+
+func (g gatedWriter) Write(p []byte) (int, error) {
+	<-g.open
+	return g.buf.Write(p)
+}
+
+// A client that goes away may leave stderr a full pipe that nobody drains.
+// What fleet acp says then must not hold the shutdown past its bound: each
+// line is waited for at most stderrWait, so run still returns, here with a
+// Stop that never gets its answer either.
+func TestRunExitsThoughStderrIsStuck(t *testing.T) {
+	prevWait, prevStderr := hangUpWait, stderrWait
+	hangUpWait, stderrWait = 300*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { hangUpWait, stderrWait = prevWait, prevStderr })
+	started, hold := make(chan struct{}), make(chan struct{})
+	ff := &fakeFleet{t: t, cancelHold: hold, turn: blockingTurn(started)}
+	stuck := gatedWriter{open: make(chan struct{}), buf: &lockedBuffer{}}
+	r := startRunWithStderr(t, ff, stuck.buf, stuck)
+	release := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(release)
+	unstick := sync.OnceFunc(func() { close(stuck.open) })
+	t.Cleanup(unstick)
+	sid := r.openSession()
+	r.prompt(3, sid, "long job")
+	r.working()
+	_ = r.in.Close()
+
+	ff.awaitStop(t)
+	if code := r.awaitExit(5 * time.Second); code != 0 {
+		t.Errorf("exit %d, want 0", code)
+	}
+	// stderr drains at last, and the held Stop finishes, before the cleanup
+	// restores the waits they read.
+	unstick()
+	release()
+	r.awaitStderr("its turn was stopped")
+	if want := "fleet acp: gave up after 300ms"; !strings.Contains(r.stderr.String(), want) {
+		t.Errorf("stderr lacks %q:\n%s", want, r.stderr)
+	}
+}
+
+// A prompt that arrives after a SIGTERM, on a stdin the client still holds
+// open, is never submitted: fleet acp is shutting down, and nobody would
+// read its answer.
+func TestRunSubmitsNothingAfterAStopSignal(t *testing.T) {
+	started, hold := make(chan struct{}), make(chan struct{})
+	var ff *fakeFleet
+	ff = &fakeFleet{t: t, cancelHold: hold, turn: heldUntilStopped(&ff, started)}
+	r := startRun(t, ff)
+	release := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(release)
+	sid := r.openSession()
+	other := r.newSession(3) // idle: a prompt there need not wait for a session
+	r.prompt(4, sid, "long job")
+	r.working()
+	r.stop <- syscall.SIGTERM
+	ff.awaitStop(t) // shutting down, its Stop held
+
+	r.prompt(5, other, "a late prompt")
+	time.Sleep(stopWindow) // it reaches the agent while run waits
+	release()
+	if code := r.awaitExit(10 * time.Second); code != 0 {
+		t.Errorf("exit %d, want 0", code)
+	}
+	ff.mu.Lock()
+	chats := len(ff.chats)
+	ff.mu.Unlock()
+	if chats != 1 {
+		t.Errorf("%d prompts reached fleet, want 1: the late one must not be submitted", chats)
+	}
+	if extra := r.rest(); len(extra) != 0 {
+		t.Errorf("written to stdout after the signal: %q", extra)
+	}
+}
+
 // TestMain re-execs this test binary as a real `fleet acp` process when
 // FLEET_ACP_TEST_CHILD holds its arguments (a JSON array), so what Run does
 // to the whole process — relaying SIGTERM/SIGINT/SIGHUP, restoring their
@@ -521,7 +616,9 @@ type acpProcess struct {
 	exited chan error
 }
 
-func startProcess(t *testing.T, ff *fakeFleet) *acpProcess {
+// startProcess starts the child. With wrap, it is started as wrap followed
+// by this test binary's path (a shell that execs "$0", say).
+func startProcess(t *testing.T, ff *fakeFleet, wrap ...string) *acpProcess {
 	t.Helper()
 	srv := httptest.NewServer(ff)
 	t.Cleanup(srv.Close)
@@ -539,6 +636,9 @@ func startProcess(t *testing.T, ff *fakeFleet) *acpProcess {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0])
+	if len(wrap) > 0 {
+		cmd = exec.Command(wrap[0], append(wrap[1:], os.Args[0])...)
+	}
 	cmd.Env = append(os.Environ(), "FLEET_ACP_TEST_CHILD="+string(argv))
 	stderr := &lockedBuffer{}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, stderr
@@ -618,7 +718,7 @@ func TestProcessStopsItsTurnOnASignal(t *testing.T) {
 			if err := p.awaitExit(10 * time.Second); err != nil {
 				t.Errorf("exit = %v, want status 0 (stderr: %s)", err, p.stderr)
 			}
-			if want := "fleet acp: signal " + sig.String() + " with 1 prompt in flight"; !strings.Contains(p.stderr.String(), want) {
+			if want := "fleet acp: got " + signalName(sig) + " with 1 prompt in flight"; !strings.Contains(p.stderr.String(), want) {
 				t.Errorf("stderr lacks %q:\n%s", want, p.stderr)
 			}
 		})
@@ -656,9 +756,11 @@ func TestProcessSecondSignalExitsAtOnce(t *testing.T) {
 
 // An editor that crashes takes the read end of fleet acp's stdout with it,
 // and the turn keeps streaming. The write that fails must not kill the
-// process (Go's default for a broken stdout is death by SIGPIPE), or the
-// hang-up that follows (stdin EOF) could never stop the turn.
-func TestProcessSurvivesABrokenStdout(t *testing.T) {
+// process (Go's default for a broken stdout is death by SIGPIPE), and it is
+// itself the client going away: the turn is stopped and fleet acp exits,
+// without waiting for a stdin EOF that may never come (stdin stays open
+// here).
+func TestProcessStopsItsTurnWhenStdoutBreaks(t *testing.T) {
 	started, more := make(chan struct{}), make(chan struct{})
 	ff := &fakeFleet{t: t, turn: func(w *sseWriter, r *http.Request) {
 		w.emit("conversation", map[string]any{"id": "conv-slow"})
@@ -679,18 +781,53 @@ func TestProcessSurvivesABrokenStdout(t *testing.T) {
 	p.startLongTurn()
 	_ = p.stdout.Close() // the client's end of stdout is gone
 	sendMore()           // the turn streams on: the child writes to a broken pipe
-	time.Sleep(stopWindow)
-	select {
-	case err := <-p.exited:
-		t.Fatalf("fleet acp died writing to a closed stdout (%v), so its turn was never stopped", err)
-	default:
-	}
-	_ = p.in.Close() // and its stdin: the client has gone
 	if got := ff.awaitStop(t); got[0] != slowTurnStop {
 		t.Errorf("Stop = %q, want the running turn's", got)
 	}
 	if err := p.awaitExit(10 * time.Second); err != nil {
 		t.Errorf("exit = %v, want status 0 (stderr: %s)", err, p.stderr)
+	}
+	if want := "fleet acp: the ACP client stopped reading stdout ("; !strings.Contains(p.stderr.String(), want) {
+		t.Errorf("stderr lacks %q:\n%s", want, p.stderr)
+	}
+}
+
+// A SIGHUP (or SIGINT) the process was started with ignored — nohup, or a
+// `trap "" HUP` in the shell that launches it — stays ignored: it neither
+// stops the turn nor ends fleet acp. Go keeps no inherited ignore of
+// SIGTERM, so a SIGTERM is handled even under `trap "" TERM`.
+func TestProcessKeepsAnInheritedSignalIgnore(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh to start the child with signals ignored")
+	}
+	started := make(chan struct{})
+	ff := &fakeFleet{t: t, turn: blockingTurn(started)}
+	p := startProcess(t, ff, sh, "-c", `trap "" HUP TERM; exec "$0"`)
+	p.startLongTurn()
+	if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(stopWindow) // time enough for a wrongly handled SIGHUP to send its Stop
+	if got := ff.cancelsSnapshot(); len(got) != 0 {
+		t.Fatalf("a SIGHUP started ignored stopped the turn: Stops = %q", got)
+	}
+	select {
+	case err := <-p.exited:
+		t.Fatalf("fleet acp exited (%v) on a SIGHUP it was started with ignored", err)
+	default:
+	}
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if got := ff.awaitStop(t); got[0] != slowTurnStop {
+		t.Errorf("Stop = %q, want the running turn's", got)
+	}
+	if err := p.awaitExit(10 * time.Second); err != nil {
+		t.Errorf("exit = %v, want status 0 (stderr: %s)", err, p.stderr)
+	}
+	if want := "fleet acp: got SIGTERM with 1 prompt in flight"; !strings.Contains(p.stderr.String(), want) {
+		t.Errorf("stderr lacks %q:\n%s", want, p.stderr)
 	}
 }
 

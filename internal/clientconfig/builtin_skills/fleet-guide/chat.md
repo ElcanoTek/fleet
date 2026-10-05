@@ -103,7 +103,10 @@ and each message becomes a normal fleet chat turn as the user named by
 any other. Replies, reasoning and tool steps stream to the client. If a step
 needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
-not accepted.
+not accepted. If you close the editor, or it stops the agent, while a reply is
+still running, that turn is stopped in fleet too. A message fleet had already
+queued behind another turn still runs, and an agent that is force-killed
+leaves its turn running: stop it from the web chat.
 
 ### What happens when you ask
 
