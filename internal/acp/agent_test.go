@@ -1034,7 +1034,7 @@ func TestQueuedPromptIsAcceptedNotFailed(t *testing.T) {
 		}
 		w.w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.w.WriteHeader(http.StatusAccepted)
-		_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"in-7","position":2,"state":"queued"},"conversation_id":"conv-q"}`)
+		_, _ = io.WriteString(w.w, `{"queued":true,"input":{"id":"in-7","position":2,"ahead":0,"state":"queued"},"conversation_id":"conv-q"}`)
 	}})
 	sid := h.newSession(t)
 	if _, err := h.prompt(sid, "first"); err != nil {
@@ -1044,8 +1044,10 @@ func TestQueuedPromptIsAcceptedNotFailed(t *testing.T) {
 	if err != nil || resp.StopReason != acpsdk.StopReasonEndTurn {
 		t.Fatalf("got %+v, %v; want an accepted end_turn", resp, err)
 	}
-	if got := h.client.text(); !strings.Contains(got, "queued (position 2)") {
-		t.Errorf("no queued notice: %q", got)
+	// position is the ordering key (2 here, over an earlier completed input),
+	// never shown as a place in line; ahead is the place.
+	if got := h.client.text(); !strings.Contains(got, "your message was queued and will run after it (next in line)") || strings.Contains(got, "position") {
+		t.Errorf("queued notice = %q, want the place in line and no position", got)
 	}
 	h.fleet.mu.Lock()
 	defer h.fleet.mu.Unlock()
@@ -1189,6 +1191,42 @@ func TestRetryReusesTheIdempotencyKey(t *testing.T) {
 	}
 	if !strings.HasPrefix(k(3), "acp-msg-") || !strings.HasSuffix(k(3), "-"+msgHash(mid)) {
 		t.Errorf("messageId key = %q", k(3))
+	}
+}
+
+// The queued note names the place in line the server counted ("ahead"),
+// never the position ordering key, and names none when the server sent no
+// count (an older server, or a count that failed).
+func TestAcceptedNoteNamesThePlaceInLine(t *testing.T) {
+	ahead := func(n int) *int { return &n }
+	const where = "the fleet web chat"
+	for _, tc := range []struct {
+		name string
+		q    chattui.QueuedError
+		want string
+	}{
+		{"next", chattui.QueuedError{Position: 40, Ahead: ahead(0), State: "queued"},
+			"fleet is already running a turn in this conversation, so your message was queued and will run after it (next in line). Follow it at " + where},
+		{"one ahead", chattui.QueuedError{Position: -3, Ahead: ahead(1), State: "queued"},
+			"fleet is already running a turn in this conversation, so your message was queued and will run after it and 1 other queued message. Follow it at " + where},
+		{"two ahead", chattui.QueuedError{Position: 9, Ahead: ahead(2), State: "queued"},
+			"fleet is already running a turn in this conversation, so your message was queued and will run after it and 2 other queued messages. Follow it at " + where},
+		{"no count", chattui.QueuedError{Position: 7, State: "queued"},
+			"fleet is already running a turn in this conversation, so your message was queued and will run after it. Follow it at " + where},
+		{"replay next", chattui.QueuedError{Position: 12, Ahead: ahead(0), State: "queued", Replay: true},
+			"this message is already queued from an earlier attempt (next in line). Follow it at " + where},
+		{"replay one ahead", chattui.QueuedError{Position: 12, Ahead: ahead(1), State: "queued", Replay: true},
+			"this message is already queued from an earlier attempt, with 1 other queued message ahead of it. Follow it at " + where},
+		{"replay two ahead", chattui.QueuedError{Position: 12, Ahead: ahead(2), State: "queued", Replay: true},
+			"this message is already queued from an earlier attempt, with 2 other queued messages ahead of it. Follow it at " + where},
+		{"replay no count", chattui.QueuedError{Position: 12, State: "queued", Replay: true},
+			"this message is already queued from an earlier attempt. Follow it at " + where},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := acceptedNote(&tc.q, where); got != tc.want {
+				t.Errorf("note = %q\nwant   %q", got, tc.want)
+			}
+		})
 	}
 }
 

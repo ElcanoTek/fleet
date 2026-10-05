@@ -92,6 +92,7 @@ type chatStore interface {
 	CancelUnlaunchedInput(ctx context.Context, id string) (bool, error)
 	SettleDirectInput(ctx context.Context, id, turnID string) error
 	CountPendingInputs(ctx context.Context, convID string) (int, error)
+	InputsAhead(ctx context.Context, id string) (ahead int, inLine bool, err error)
 	ListQueuedInputs(ctx context.Context, userEmail, convID string) ([]store.InputQueueRow, error)
 	ClaimNextQueuedInput(ctx context.Context, convID, turnID string) (*store.InputQueueRow, error)
 	MarkInputInjected(ctx context.Context, id, turnID string) (bool, error)

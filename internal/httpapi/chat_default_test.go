@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -882,6 +883,38 @@ func (s *fakeChatStore) CountPendingInputs(_ context.Context, convID string) (in
 		}
 	}
 	return n, nil
+}
+
+// InputsAhead mirrors the store's place-in-line count: still-queued,
+// unstamped rows of the same conversation that sort before id in (position,
+// created_at, id) — and "not in line" unless id itself is such a row.
+func (s *fakeChatStore) InputsAhead(_ context.Context, id string) (int, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	drainable := func(it store.InputQueueRow) bool {
+		return it.State == store.InputStateQueued && it.Mode != store.InputModeDirect &&
+			!slices.Contains(s.stopRequested, it.ConversationID+"/"+it.ClientInputID)
+	}
+	var me *store.InputQueueRow
+	for i := range s.queue {
+		if s.queue[i].ID == id {
+			me = &s.queue[i]
+		}
+	}
+	if me == nil || !drainable(*me) {
+		return 0, false, nil
+	}
+	n := 0
+	for _, it := range s.queue {
+		if it.ConversationID != me.ConversationID || !drainable(it) {
+			continue
+		}
+		if it.Position < me.Position ||
+			(it.Position == me.Position && (it.CreatedAt < me.CreatedAt || (it.CreatedAt == me.CreatedAt && it.ID < me.ID))) {
+			n++
+		}
+	}
+	return n, true, nil
 }
 
 func (s *fakeChatStore) ListQueuedInputs(_ context.Context, _, convID string) ([]store.InputQueueRow, error) {

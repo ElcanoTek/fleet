@@ -136,7 +136,14 @@ type turnRequest struct {
 type QueuedError struct {
 	ConversationID string
 	InputID        string
-	Position       int
+	// Position is the row's ordering key, not a place in line: it is
+	// allocated over every input the conversation still retains (finished
+	// ones included, for the queue's retention window), and send-now can
+	// make it zero or negative. Ahead is the place in line — how many queued inputs
+	// run before this one, 0 meaning next — and nil when the server sent
+	// none (an older server, a failed count, or an input not queued).
+	Position int
+	Ahead    *int
 	// Mode and State are the input row's: a replay of an input_id the
 	// server already accepted reports where that input is now — still
 	// queued, running, completed, or cancelled (nothing ran). Mode "direct"
@@ -165,7 +172,48 @@ func (e *QueuedError) Error() string {
 	case "cancelled":
 		return "this message was accepted earlier but did not run"
 	}
-	return fmt.Sprintf("a turn is already running in this conversation, so the message was queued (position %d) and will run after it", e.Position)
+	return "a turn is already running in this conversation, so the message was queued and will run after it" + e.RunsAfterSuffix()
+}
+
+// The two suffixes below name a queued input's place in line from Ahead, in
+// the two sentence shapes the clients use; both are "" when the server
+// reported no place, which is left unsaid rather than guessed (Position is
+// not one). "it" in the sentences they complete is the running turn, so a
+// count is phrased as other queued messages, never as "ahead of it".
+
+// RunsAfterSuffix completes "...was queued and will run after it":
+// " (next in line)", " and 1 other queued message", " and 2 other queued
+// messages", or "".
+func (e *QueuedError) RunsAfterSuffix() string {
+	switch {
+	case e.Ahead == nil || *e.Ahead < 0:
+		return ""
+	case *e.Ahead == 0:
+		return " (next in line)"
+	default:
+		return " and " + otherQueued(*e.Ahead)
+	}
+}
+
+// StillQueuedSuffix completes "this message is already queued from an
+// earlier attempt": " (next in line)", ", with 2 other queued messages ahead
+// of it", or "".
+func (e *QueuedError) StillQueuedSuffix() string {
+	switch {
+	case e.Ahead == nil || *e.Ahead < 0:
+		return ""
+	case *e.Ahead == 0:
+		return " (next in line)"
+	default:
+		return ", with " + otherQueued(*e.Ahead) + " ahead of it"
+	}
+}
+
+func otherQueued(n int) string {
+	if n == 1 {
+		return "1 other queued message"
+	}
+	return fmt.Sprintf("%d other queued messages", n)
 }
 
 // StatusError is a non-2xx answer to POST /chat. Code lets a caller tell an
@@ -226,6 +274,7 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 			Input          struct {
 				ID       string `json:"id"`
 				Position int    `json:"position"`
+				Ahead    *int   `json:"ahead"`
 				Mode     string `json:"mode"`
 				State    string `json:"state"`
 			} `json:"input"`
@@ -233,7 +282,7 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		derr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&ack)
 		if derr == nil && ack.Queued {
 			id := orDefault(ack.ConversationID, convID)
-			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position, Mode: ack.Input.Mode, State: ack.Input.State, Replay: resp.StatusCode == http.StatusOK}
+			return id, &QueuedError{ConversationID: id, InputID: ack.Input.ID, Position: ack.Input.Position, Ahead: ack.Input.Ahead, Mode: ack.Input.Mode, State: ack.Input.State, Replay: resp.StatusCode == http.StatusOK}
 		}
 		// An unreadable acknowledgement (the connection closed mid-body) is not
 		// a refusal: fleet may well have queued the message. Report it as a

@@ -716,9 +716,9 @@ func acceptedNote(q *chattui.QueuedError, where string) string {
 	case q.Replayed() && q.State == "cancelled":
 		return "an earlier attempt of this message was cancelled (stopped, or it failed before it started), so it did not run. To run it, send it again as a new message."
 	case q.Replayed():
-		return fmt.Sprintf("this message is already queued from an earlier attempt (position %d). Follow it at %s", q.Position, where)
+		return "this message is already queued from an earlier attempt" + q.StillQueuedSuffix() + ". Follow it at " + where
 	default:
-		return fmt.Sprintf("fleet is already running a turn in this conversation, so your message was queued (position %d) and will run after it. Follow it at %s", q.Position, where)
+		return "fleet is already running a turn in this conversation, so your message was queued and will run after it" + q.RunsAfterSuffix() + ". Follow it at " + where
 	}
 }
 
