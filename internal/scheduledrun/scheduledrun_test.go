@@ -446,7 +446,7 @@ func TestBindTaskMCP_CompatibilityUnionsAlwaysOnWithOptionalChoices(t *testing.T
 	}}}
 
 	t.Run("empty selection binds always-on only", func(t *testing.T) {
-		client, cleanup, _, err := r.bindTaskMCP(context.Background(), &models.Task{ID: uuid.New()}, false)
+		client, cleanup, _, _, err := r.bindTaskMCP(context.Background(), &models.Task{ID: uuid.New()}, false)
 		if err != nil {
 			cleanup()
 			t.Fatalf("bindTaskMCP: %v", err)
@@ -459,7 +459,7 @@ func TestBindTaskMCP_CompatibilityUnionsAlwaysOnWithOptionalChoices(t *testing.T
 
 	t.Run("optional choice adds without replacing always-on", func(t *testing.T) {
 		task := &models.Task{ID: uuid.New(), MCPSelection: models.MCPSelection{{Server: "xandr"}}}
-		client, cleanup, _, err := r.bindTaskMCP(context.Background(), task, false)
+		client, cleanup, _, _, err := r.bindTaskMCP(context.Background(), task, false)
 		if err != nil {
 			cleanup()
 			t.Fatalf("bindTaskMCP: %v", err)
@@ -480,7 +480,7 @@ func callWhoami(t *testing.T, r *Runner, sel models.MCPSelection, serverName str
 	defer cancel()
 
 	task := &models.Task{MCPSelection: sel}
-	client, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
+	client, cleanup, _, _, err := r.bindTaskMCP(ctx, task, false)
 	if err != nil {
 		cleanup()
 		t.Fatalf("bindTaskMCP(%+v): %v", sel, err)
@@ -559,7 +559,7 @@ func TestScheduledRunner_RefusesAccountWithoutCreds(t *testing.T) {
 	defer cancel()
 
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "acct", Account: "client_c"}}}
-	client, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
+	client, cleanup, _, _, err := r.bindTaskMCP(ctx, task, false)
 	defer cleanup()
 	if err == nil {
 		t.Fatalf("expected refusal binding an account with no <VAR>_CLIENT_C creds, got client=%v", client)
@@ -578,7 +578,7 @@ func TestScheduledRunner_PerRunClientClosedReapsSubprocess(t *testing.T) {
 	defer cancel()
 
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "acct", Account: "client_a"}}}
-	client, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
+	client, cleanup, _, _, err := r.bindTaskMCP(ctx, task, false)
 	if err != nil {
 		cleanup()
 		t.Fatalf("bindTaskMCP: %v", err)
@@ -599,7 +599,7 @@ func TestScheduledRunner_UnknownServerFailsFast(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "nope"}}}
-	_, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
+	_, cleanup, _, _, err := r.bindTaskMCP(ctx, task, false)
 	defer cleanup()
 	if err == nil {
 		t.Fatalf("expected unknown-server error for selection referencing an unconfigured server")
@@ -613,7 +613,7 @@ func TestScheduledRunner_DisabledServerFailsFast(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "disabled"}}}
-	_, cleanup, _, err := r.bindTaskMCP(ctx, task, false)
+	_, cleanup, _, _, err := r.bindTaskMCP(ctx, task, false)
 	defer cleanup()
 	if err == nil {
 		t.Fatal("disabled server remained selectable through the per-run binder")

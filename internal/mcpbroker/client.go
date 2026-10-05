@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // errClientClosed is returned for calls made on, or outstanding when, a Client
@@ -110,6 +111,12 @@ var _ agentcore.MCPBroker = (*Scope)(nil)
 // public account/server names, task identity, or a remote user's email only;
 // connector credential values never cross this connection.
 func (c *Client) OpenScope(ctx context.Context, spec ScopeSpec) (*Scope, error) {
+	// The run's connect-retry allowance (mcp.WithConnectRetry) crosses as what
+	// is left of it, and what the child spent is charged back, so the retry
+	// adds at most mcp.MaxConnectRetryBudget to the run across every scope.
+	if spec.ConnectRetryBudgetMs == 0 {
+		spec.ConnectRetryBudgetMs = mcp.ConnectRetryBudgetLeft(ctx).Milliseconds()
+	}
 	resp, err := c.roundtrip(ctx, request{
 		ID:        c.nextID.Add(1),
 		Method:    methodOpenScope,
@@ -118,6 +125,7 @@ func (c *Client) OpenScope(ctx context.Context, spec ScopeSpec) (*Scope, error) 
 	if err != nil {
 		return nil, err
 	}
+	mcp.SpendConnectRetryBudget(ctx, time.Duration(resp.ConnectRetrySpentMs)*time.Millisecond)
 	if resp.Err != "" {
 		return nil, errors.New(resp.Err)
 	}
@@ -163,8 +171,25 @@ func (s *Scope) Tools() []ToolDescriptor {
 	return cloneToolDescriptors(s.tools)
 }
 
-// Skipped returns public remote-server names that were selected but unavailable
-// while the scope opened. It is empty for bundle scopes.
+// ConnectFailures returns the skipped servers whose registration failed while
+// the scope opened, with the credential-free detail and transient flag the
+// child reported (SkippedServer). Nil when every selected server connected.
+func (s *Scope) ConnectFailures() []agentcore.MCPConnectFailure {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []agentcore.MCPConnectFailure
+	for _, sk := range s.skipped {
+		if sk.Detail == "" {
+			continue
+		}
+		out = append(out, agentcore.MCPConnectFailure{Server: sk.Name, Detail: sk.Detail, Transient: sk.Transient})
+	}
+	return out
+}
+
+// Skipped returns public server names that were selected but unavailable
+// while the scope opened: remote servers that could not be mounted, and the
+// bundle servers of a bundle scope that failed to register.
 func (s *Scope) Skipped() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

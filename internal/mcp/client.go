@@ -1540,7 +1540,7 @@ func interpretJSONRPC(response *jsonrpcEnvelope, wantID int) (json.RawMessage, e
 		// but surface that error text so the operator debugs the
 		// server's real complaint, not a phantom id mismatch.
 		if len(response.Error) > 0 && string(response.Error) != nullString {
-			return nil, fmt.Errorf("MCP http: response id %s does not match request id %d (response carried error: %s)", response.ID.String(), wantID, string(response.Error))
+			return nil, newUnattributedResponseError(response.ID.String(), wantID, response.Error)
 		}
 		return nil, fmt.Errorf("MCP http: response id %s does not match request id %d", response.ID.String(), wantID)
 	}

@@ -8,8 +8,10 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -266,7 +268,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					write(resp)
 					return
 				}
-				resp.Scope, resp.Tools, resp.Skipped, resp.Err = openScope(callCtx, scoped, req.ScopeSpec)
+				resp.Scope, resp.Tools, resp.Skipped, resp.ConnectRetrySpentMs, resp.Err = openScope(callCtx, scoped, req.ScopeSpec)
 				write(resp)
 			}(req)
 
@@ -353,19 +355,24 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	}
 }
 
-func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (string, []ToolDescriptor, []SkippedServer, string) {
+// openScope opens one scope on the backend. A spec carrying a connect-retry
+// allowance (ScopeSpec.ConnectRetryBudgetMs) opens it under that allowance,
+// and the returned spentMs is what its retries used.
+func openScope(ctx context.Context, backend ScopedBackend, spec ScopeSpec) (id string, tools []ToolDescriptor, skipped []SkippedServer, spentMs int64, errText string) {
 	if err := validateScopeSpec(spec); err != nil {
-		return "", nil, nil, err.Error()
+		return "", nil, nil, 0, err.Error()
 	}
+	ctx = mcp.WithConnectRetryBudget(ctx, time.Duration(spec.ConnectRetryBudgetMs)*time.Millisecond)
 	id, tools, skipped, err := backend.OpenScope(ctx, spec)
+	spentMs = mcp.ConnectRetrySpent(ctx).Milliseconds()
 	if err != nil {
 		logMasked("scope open", "", err)
-		return "", nil, nil, errBrokerScopeOpenFailed
+		return "", nil, nil, spentMs, errBrokerScopeOpenFailed
 	}
 	if id == "" {
-		return "", nil, nil, "mcpbroker: backend returned an empty scope ID"
+		return "", nil, nil, spentMs, "mcpbroker: backend returned an empty scope ID"
 	}
-	return id, tools, skipped, ""
+	return id, tools, skipped, spentMs, ""
 }
 
 func validateScopeSpec(spec ScopeSpec) error {

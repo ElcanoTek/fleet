@@ -184,12 +184,39 @@ const maxApprovalTimeoutSeconds = 86400
 // the promote card's deliberate 1h window and the config env default.
 const defaultApprovalTimeoutSeconds = 3600
 
+// stagedTaskApprovalTimeoutSeconds is the default-deny window for a card that
+// only STAGES a task change (schedule_task, manage_tasks): a day, the same
+// ceiling a per-conversation override may reach. Such a card has no side
+// effect while it is pending — nothing touches the task store until it is
+// approved — so default-deny protects nothing, while denying it silently drops
+// a change the user asked for. On production a manage_tasks card that would
+// have replaced a refresh task's prompt sat for the global hour, was
+// auto-denied unnoticed, and the old prompt kept running.
+const stagedTaskApprovalTimeoutSeconds = maxApprovalTimeoutSeconds
+
+// stagesTaskChangeOnly reports whether toolName's card only stages a task
+// change: the two task tools, whose tool bodies never run (handler-only).
+func stagesTaskChangeOnly(toolName string) bool {
+	return toolName == tools.ScheduleTaskToolName || toolName == tools.ManageTasksToolName
+}
+
 // resolveTimeoutSeconds applies the #225 resolution chain for toolName, highest
 // priority first: per-tool manifest override → per-conversation override →
 // global env default → hardcoded default. Always returns a positive value.
+//
+// A card that only stages a task change skips the global and hardcoded
+// layers: it waits stagedTaskApprovalTimeoutSeconds, or a per-conversation
+// override when that is longer. An explicit per-tool manifest value still
+// wins — the operator named that tool.
 func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
 	if t := agentcore.ApprovalTimeoutForTool(toolName); t > 0 {
 		return t
+	}
+	if stagesTaskChangeOnly(toolName) {
+		if a.convTimeoutSeconds != nil && *a.convTimeoutSeconds > stagedTaskApprovalTimeoutSeconds {
+			return *a.convTimeoutSeconds
+		}
+		return stagedTaskApprovalTimeoutSeconds
 	}
 	if a.convTimeoutSeconds != nil && *a.convTimeoutSeconds > 0 {
 		return *a.convTimeoutSeconds

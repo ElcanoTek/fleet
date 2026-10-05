@@ -23,12 +23,14 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { useToast } from "@/app/shared/ui/Toast";
 import {
+  blockedReason,
   createdByLabel,
   scheduleLabel,
   scheduleStoppedReason,
   scheduleTitle,
   taskRunLabel,
   TaskSlaBadge,
+  TaskStatusBadge,
 } from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import {
@@ -139,14 +141,7 @@ function TaskSummary({ task }: { task: Task }) {
         <code title={task.id}>{task.id.slice(0, 8)}…</code>
       ),
     },
-    {
-      label: "Status",
-      node: (
-        <span className={`status-badge status-${task.status ?? "unknown"}`}>
-          {task.status ?? "-"}
-        </span>
-      ),
-    },
+    { label: "Status", node: <TaskStatusBadge task={task} /> },
     { label: "SLA", node: <TaskSlaBadge task={task} /> },
     {
       label: "Schedule",
@@ -164,6 +159,14 @@ function TaskSummary({ task }: { task: Task }) {
     items.push({
       label: "Schedule stopped",
       node: <span data-testid="schedule-stopped">{stopped}</span>,
+    });
+  }
+  // A Blocked run says why in the summary too, for the same reason.
+  const blocked = blockedReason(task);
+  if (blocked) {
+    items.push({
+      label: "Blocked",
+      node: <span data-testid="blocked-reason">{blocked}</span>,
     });
   }
   if (task.status === "paused_awaiting_wake") {
@@ -1264,10 +1267,7 @@ function LogViewerBody({
         <div className="modal-body" data-testid="log-modal-body">
           <div className="task-detail-bar" data-testid="task-detail-bar">
             <span className="task-detail-status">
-              Status:{" "}
-              <span className={`status-badge status-${task.status ?? "unknown"}`}>
-                {task.status ?? "-"}
-              </span>
+              Status: <TaskStatusBadge task={task} />
             </span>
             <span className="task-detail-actions">
               {attempts.length > 0 ? (
@@ -1506,9 +1506,7 @@ function TaskRunHistory({
                   <span className="task-history-time">
                     {formatTimeFirst(run.created_at)}
                   </span>
-                  <span className={`status-badge status-${run.status ?? "unknown"}`}>
-                    {run.status ?? "-"}
-                  </span>
+                  <TaskStatusBadge task={run} />
                   <TaskSlaBadge task={run} />
                   <code className="task-history-id">{run.id.slice(0, 8)}</code>
                   {current ? (

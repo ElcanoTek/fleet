@@ -1303,9 +1303,13 @@ check, and a run that did the work and said so still dead-letters as
 `ErrCompletionUnverified`. The core hands the policy the closing text of the
 round that just ended before each `CanFinish` consultation (the
 `RoundFinalTextReceiver` seam), because the session log only gains the closing
-message after `agentcore.Run` returns — and because the value is computed
-per round, a repair round that produces no text yields the explicit marker
-rather than an earlier round's rejected draft. For tasks with an output
+message after `agentcore.Run` returns. The policy judges the run's *answer*:
+when a model gate sends an answered round back for repair, that round's text
+stays part of the answer and the repair round's text is appended, and the
+policy hands the same composition back as the run's final text
+(`RunAnswerProvider`), so the gates judge exactly what the task result
+carries. A round the audit/finish enforcement refused is superseded, never
+appended. For tasks with an output
 schema this is the round's free-form closing text: the terminal
 structured-output phase runs after the gates and the JSON it persists is
 schema-validated there, not judged by the verifier (the draft is what carries

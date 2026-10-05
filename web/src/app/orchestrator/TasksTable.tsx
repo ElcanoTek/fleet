@@ -13,6 +13,7 @@ import {
   slaBadge,
   taskRunLabel,
   TaskSlaBadge,
+  TaskStatusBadge,
 } from "./taskDisplay";
 
 // Statuses whose tasks can be edited: pending/scheduled edit in place;
@@ -398,9 +399,7 @@ export function TasksTable({
                       />
                     </td>
                     <td>
-                      <span className={`status-badge status-${task.status ?? "unknown"}`}>
-                        {task.status ?? "-"}
-                      </span>
+                      <TaskStatusBadge task={task} />
                     </td>
                     <td>
                       <TaskSlaBadge task={task} />
@@ -519,9 +518,7 @@ export function TasksTable({
                   onClick={() => onOpenLogs(task)}
                 >
                   <span className="task-card-top">
-                    <span className={`status-badge status-${task.status ?? "unknown"}`}>
-                      {task.status ?? "-"}
-                    </span>
+                    <TaskStatusBadge task={task} />
                     {badge ? (
                       <span className={`sla-badge sla-badge-${badge.tone}`}>{badge.label}</span>
                     ) : task.expected_duration_minutes ? (

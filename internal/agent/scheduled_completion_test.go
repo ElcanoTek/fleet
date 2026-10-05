@@ -162,9 +162,11 @@ func (m *reviewerForcesRepair) Generate(_ context.Context, call fantasy.Call) (*
 
 // TestScheduledReviewerRepairReverifies pins the Gate 2 → Gate 1 invalidation:
 // the reviewer approves nothing here — it forces a repair, and the repaired
-// round's closing text must go through the verifier again. Pre-fix the verifier
-// ran once (verified stayed true after the reviewer's repair round), so a
-// repair could swap in an unverified answer and still finish.
+// answer must go through the verifier again. Pre-fix the verifier ran once
+// (verified stayed true after the reviewer's repair round), so a repair could
+// swap in an unverified answer and still finish. The repair round's text is
+// the corrected answer: it REPLACES the reviewed one (never appended after
+// the wrong answer), and it is what the run persists.
 func TestScheduledReviewerRepairReverifies(t *testing.T) {
 	verifier := &gateOneCapturingVerifier{}
 	reviewer := &reviewerForcesRepair{t: t}
@@ -203,11 +205,93 @@ func TestScheduledReviewerRepairReverifies(t *testing.T) {
 		t.Error("first verification must judge the first answer")
 	}
 	if !strings.Contains(verifier.prompts[1], "Revised answer with the coverage window") {
-		t.Error("second verification must judge the repaired round's own text")
+		t.Error("second verification must judge the repaired round's text")
 	}
 	if strings.Contains(verifier.prompts[1], "First answer.") {
-		t.Error("second verification carried the pre-repair answer — the gate must see the current round's text only")
+		t.Error("second verification carried the reviewed answer — a reviewer repair replaces it")
 	}
+	want := "Revised answer with the coverage window 2026-09-01..2026-09-15."
+	if got := lastAssistantContent(a.logSession); got != want {
+		t.Errorf("persisted answer = %q, want the corrected answer alone %q", got, want)
+	}
+}
+
+// TestComposeRunAnswer pins how a repair round's text combines with the
+// answer a gate judged: a true supplement is appended, a restatement that
+// contains the judged text (or is contained in it, or equals it with
+// different whitespace) keeps only the longer text, and a reviewer repair
+// replaces the judged text unless the repair round produced none.
+func TestComposeRunAnswer(t *testing.T) {
+	const report = "Refresh published. Coverage 2026-09-01..2026-09-15."
+	for _, tc := range []struct {
+		name          string
+		judged, round string
+		replace       bool
+		want          string
+	}{
+		{"supplement appended", report, "Report dates skipped: none.", false, report + "\n\nReport dates skipped: none."},
+		{"restated report plus the missing item kept once", report, report + "\nReport dates skipped: none.", false, report + "\nReport dates skipped: none."},
+		{"repeat with different whitespace kept once", report, "  Refresh published.\n\nCoverage   2026-09-01..2026-09-15. ", false, "Refresh published.\n\nCoverage   2026-09-01..2026-09-15."},
+		{"a fragment of the judged text adds nothing", report, "Coverage 2026-09-01..2026-09-15.", false, report},
+		{"textless round keeps the judged answer", report, "", false, report},
+		{"nothing judged yet", "", "First answer.", false, "First answer."},
+		{"reviewer repair replaces", "Wrong answer.", "Corrected answer.", true, "Corrected answer."},
+		{"textless reviewer repair keeps the reviewed answer", "Reviewed answer.", "  ", true, "Reviewed answer."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := composeRunAnswer(tc.judged, tc.round, tc.replace); got != tc.want {
+				t.Fatalf("composeRunAnswer = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestScheduledVerifierRepairThatRestatesTheReportPersistsItOnce: a model that
+// answers the repair by restating its whole report plus the missing item must
+// not persist the report twice.
+func TestScheduledVerifierRepairThatRestatesTheReportPersistsItOnce(t *testing.T) {
+	verifier := &supplementRepairVerifierModel{}
+	const first = "Refresh published. Coverage 2026-09-01..2026-09-15."
+	const restated = first + " Report dates skipped: none."
+	calls := 0
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		return func(yield func(fantasy.StreamPart) bool) {
+			switch step {
+			case 0:
+				input := `{"success":true,"critical_actions":[],"reasoning":"Refreshed the page","artifacts_checked":["page"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			case 1:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: first})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			default:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: restated})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+	if err := a.Execute(context.Background(), "Refresh the page, then report the coverage window and any report dates skipped."); err != nil {
+		t.Fatalf("run rejected: %v", err)
+	}
+	if got := lastAssistantContent(a.logSession); got != restated {
+		t.Fatalf("persisted answer = %q, want the restated report once %q", got, restated)
+	}
+}
+
+// lastAssistantContent is the run's persisted final answer: the content of the
+// session's last assistant message, as the runner's successMessage reads it.
+func lastAssistantContent(session *LogSession) string {
+	messages := session.SnapshotMessages()
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == roleAssistant {
+			return messages[i].Content
+		}
+	}
+	return ""
 }
 
 // issuesOnceReviewer flags needs_revision with one actionable issue, exactly
@@ -288,14 +372,16 @@ func (m *textlessRepairVerifierModel) Generate(_ context.Context, call fantasy.C
 	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: verdict}}, FinishReason: fantasy.FinishReasonStop}, nil
 }
 
-// TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker is the Codex P1
-// reproduction: round 1 closes with a prose report and the verifier rejects it
-// for a missing action; the repair round makes ONLY the tool call and leaves no
-// assistant text. The next gate must see the explicit "(no final response
-// text)" marker — never the rejected round's draft, which combined with the
-// fresh tool evidence could approve a run whose closing report never happened
-// (completeRun would persist the textless round's empty FinalText as success).
-func TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker(t *testing.T) {
+// TestScheduledVerifierTextlessRepairRoundKeepsJudgedAnswer is the Codex P1
+// scenario from the verifier's FINAL RESPONSE change, under the rule that the
+// gates judge what the run persists: round 1 closes with a prose report and
+// the verifier rejects it for a missing action; the repair round makes ONLY
+// the tool call and leaves no assistant text. The re-check judges the report
+// the verifier already saw plus the fresh tool evidence — and that report is
+// the answer the run persists, so a report that never happened cannot be
+// approved (the original P1: the gate saw an earlier draft while completeRun
+// persisted the textless round's empty text as success).
+func TestScheduledVerifierTextlessRepairRoundKeepsJudgedAnswer(t *testing.T) {
 	verifier := &textlessRepairVerifierModel{t: t}
 	calls := 0
 	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
@@ -338,16 +424,128 @@ func TestScheduledVerifierTextlessRepairRoundSeesNoResponseMarker(t *testing.T) 
 	if !strings.Contains(verifier.prompts[0], "Report: all done, v856 live.") {
 		t.Error("first gate must carry the round's closing report")
 	}
-	// Gate 2 after the textless repair round sees the explicit marker, NOT the
-	// rejected round's stale draft.
-	if !strings.Contains(verifier.prompts[1], verifierNoFinalResponseMarker) {
-		t.Errorf("second gate missing the %q marker", verifierNoFinalResponseMarker)
+	// The re-check after the textless repair round judges the run's answer —
+	// the judged report — never the no-response marker for text that exists.
+	if !strings.Contains(verifier.prompts[1], "Report: all done, v856 live.") {
+		t.Error("second gate lost the judged report the run persists")
 	}
-	if strings.Contains(verifier.prompts[1], "Report: all done, v856 live.") {
-		t.Error("second gate carried the rejected round's stale report — a textless repair round must not reuse earlier prose")
+	if strings.Contains(verifier.prompts[1], verifierNoFinalResponseMarker) {
+		t.Errorf("second gate showed the %q marker for a run that has an answer", verifierNoFinalResponseMarker)
 	}
 	if !strings.Contains(verifier.prompts[1], "/ok") || !strings.Contains(verifier.prompts[1], "/revision") {
 		t.Error("second gate must still carry the repair round's fresh tool evidence")
+	}
+	if got := lastAssistantContent(a.logSession); got != "Report: all done, v856 live." {
+		t.Errorf("persisted answer = %q, want the judged report", got)
+	}
+}
+
+// supplementRepairVerifierModel stands in for the production verifier: it
+// approves only a FINAL RESPONSE that names both requested items, and records
+// every prompt.
+type supplementRepairVerifierModel struct {
+	itMockModel
+	prompts []string
+}
+
+func (m *supplementRepairVerifierModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	raw, _ := json.Marshal(call.Prompt)
+	m.prompts = append(m.prompts, string(raw))
+	_, response, _ := strings.Cut(string(raw), "FINAL RESPONSE (")
+	var missing []string
+	for _, item := range []string{"Coverage 2026-09-01..2026-09-15", "Report dates skipped: none"} {
+		if !strings.Contains(response, item) {
+			missing = append(missing, "report "+item)
+		}
+	}
+	verdict, _ := json.Marshal(map[string]any{"missing_actions": append([]string{}, missing...), "reasoning": "checked the final response"})
+	return &fantasy.Response{Content: []fantasy.Content{fantasy.TextContent{Text: string(verdict)}}, FinishReason: fantasy.FinishReasonStop}, nil
+}
+
+// TestScheduledVerifierRepairSupplementPassesOnCombinedAnswer is the production
+// reproduction (Pages refresh, 2026-09): the verifier rejects the first report
+// for one missing item, the repair round answers with ONLY the missing
+// sentence, and the run used to dead-letter after three checks because each
+// re-check judged that sentence alone. The re-check must judge the combined
+// answer, pass, and persist that same combined text as the run's result.
+func TestScheduledVerifierRepairSupplementPassesOnCombinedAnswer(t *testing.T) {
+	verifier := &supplementRepairVerifierModel{}
+	calls := 0
+	var repairNudge string
+	model := &itMockModel{streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		if step == 2 {
+			raw, _ := json.Marshal(call.Prompt)
+			repairNudge = string(raw)
+		}
+		return func(yield func(fantasy.StreamPart) bool) {
+			switch step {
+			case 0:
+				input := `{"success":true,"critical_actions":[],"reasoning":"Refreshed the page","artifacts_checked":["page"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			case 1:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Refresh published. Coverage 2026-09-01..2026-09-15."})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			default:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: "Report dates skipped: none."})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+
+	err := a.Execute(context.Background(), "Refresh the page, then report the coverage window and any report dates skipped.")
+	if err != nil {
+		t.Fatalf("run rejected although the combined answer has every item: %v", err)
+	}
+	if len(verifier.prompts) != 2 {
+		t.Fatalf("verifier calls = %d, want 2 (reject the first report, approve the supplemented one)", len(verifier.prompts))
+	}
+	if !strings.Contains(repairNudge, repairAnswerNote) {
+		t.Error("the repair nudge must tell the model its next text is appended to the answer")
+	}
+	want := "Refresh published. Coverage 2026-09-01..2026-09-15.\n\nReport dates skipped: none."
+	if !strings.Contains(verifier.prompts[1], "Refresh published. Coverage 2026-09-01..2026-09-15.\\n\\nReport dates skipped: none.") {
+		t.Errorf("re-check did not judge the combined answer: %s", verifier.prompts[1])
+	}
+	if got := lastAssistantContent(a.logSession); got != want {
+		t.Errorf("persisted answer = %q, want the verified combined answer %q", got, want)
+	}
+}
+
+// TestScheduledVerifierTextlessRunSeesNoResponseMarker keeps the explicit
+// marker for a run that produced no assistant text in any round: the gate must
+// be able to flag a demanded report that is genuinely absent.
+func TestScheduledVerifierTextlessRunSeesNoResponseMarker(t *testing.T) {
+	verifier := &textlessRepairVerifierModel{t: t}
+	calls := 0
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := calls
+		calls++
+		return func(yield func(fantasy.StreamPart) bool) {
+			if step == 0 {
+				input := `{"success":true,"critical_actions":[],"reasoning":"Reconciled report","artifacts_checked":["report"],"workflow_sections_checked":["completion"],"send_contract_checked":true,"attachments_checked":[],"remaining_risks":[]}`
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "audit", ToolCallName: "confirm_audit", ToolCallInput: input})
+			}
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+		}, nil
+	}}
+	a := newTestScheduledAgent(t, model)
+	a.fallbackModel = verifier
+
+	if err := a.Execute(context.Background(), "Reconcile the report and state the outcome."); err != nil {
+		t.Fatalf("run rejected: %v", err)
+	}
+	if len(verifier.prompts) != 2 {
+		t.Fatalf("verifier calls = %d, want 2", len(verifier.prompts))
+	}
+	for i, prompt := range verifier.prompts {
+		if !strings.Contains(prompt, verifierNoFinalResponseMarker) {
+			t.Errorf("gate %d missing the %q marker for a textless run", i+1, verifierNoFinalResponseMarker)
+		}
 	}
 }
 

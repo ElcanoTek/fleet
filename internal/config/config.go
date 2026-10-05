@@ -872,7 +872,10 @@ type Config struct {
 	// hardcoded fallback); the admin Features panel can override it live
 	// (approval_timeout_seconds — read through LiveApprovalTimeoutSeconds).
 	// A value <= 0 is treated as "use the hardcoded default" at resolution time,
-	// never as "deny instantly".
+	// never as "deny instantly". Cards that only stage a task change
+	// (schedule_task, manage_tasks) do not use this layer: they have no side
+	// effect while pending, so they wait a day unless the per-tool manifest
+	// names them or the per-conversation override is longer.
 	ApprovalTimeoutSeconds int
 
 	// AutoApproveInTest auto-approves executable critical tools (#225).

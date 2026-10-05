@@ -233,6 +233,72 @@ func TestRoundFinalTextReceiver_PinnedToRoundBoundary(t *testing.T) {
 	}
 }
 
+// answerComposingPolicy is roundTextRecordingPolicy plus RunAnswerProvider:
+// it keeps the rejected round's text and composes the run's answer from it.
+type answerComposingPolicy struct {
+	roundTextRecordingPolicy
+	answers []string
+}
+
+func (p *answerComposingPolicy) RunAnswer(roundText string) string {
+	p.answers = append(p.answers, roundText)
+	return p.texts[0] + " + " + roundText
+}
+
+// replaceRecordingObserver records every text.replace payload.
+type replaceRecordingObserver struct{ replaced []string }
+
+func (o *replaceRecordingObserver) Observe(eventType string, payload map[string]any) {
+	if eventType == evtTextReplace {
+		text, _ := payload[evtFieldText].(string)
+		o.replaced = append(o.replaced, text)
+	}
+}
+
+// TestRunAnswerProvider_ComposedAnswerIsTheResult pins the second half of the
+// seam: once the policy grants completion, the answer it composed — not the
+// final round's text alone — is Result.FinalText and the text live clients
+// are told to show, so a policy's gates judge exactly what the run persists.
+// It is asked once, for the round that finished.
+func TestRunAnswerProvider_ComposedAnswerIsTheResult(t *testing.T) {
+	round := 0
+	model := &mockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			round++
+			text := "Report: all done."
+			if round > 1 {
+				text = "Supplement: none skipped."
+			}
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text", Delta: text})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}, nil
+		},
+	}
+	policy := &answerComposingPolicy{roundTextRecordingPolicy: roundTextRecordingPolicy{inner: NewInteractivePolicy(0, 0, nil, nil)}}
+	observer := &replaceRecordingObserver{}
+	res, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:    stubInput{system: "sys", user: "report", label: "run-answer"},
+		Observer: observer,
+		Policy:   policy,
+		Executor: &stubExecutor{},
+		Model:    model,
+	})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	const want = "Report: all done. + Supplement: none skipped."
+	if res.FinalText != want {
+		t.Fatalf("FinalText = %q, want the composed answer %q", res.FinalText, want)
+	}
+	if len(policy.answers) != 1 || policy.answers[0] != "Supplement: none skipped." {
+		t.Fatalf("RunAnswer calls = %v, want one call with the finishing round's text", policy.answers)
+	}
+	if n := len(observer.replaced); n == 0 || observer.replaced[n-1] != want {
+		t.Fatalf("text.replace = %v, want the composed answer last", observer.replaced)
+	}
+}
+
 // TestSeamPurity_NoModeBranchInTrunk is the structural guard for the whole
 // "one loop, Mode + four seams are the only divergence" thesis: the trunk must
 // not branch on the Mode enum. Divergence belongs in the seam constructors

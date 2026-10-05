@@ -82,6 +82,14 @@ export type Task = {
   // stopped here; the reason can be absent on an older parked row.
   recurrence_parked_at?: string | null;
   recurrence_parked_reason?: string | null;
+  // How a terminal run ended beyond its status (migration 074). "blocked": a
+  // success whose EXECUTION REQUIREMENTS completion.blocked_when matched the
+  // call that completed it — the run decided not to publish — shown as
+  // Blocked, not plain success, with run_outcome_detail as the reason.
+  // "connector_unavailable": a dead-letter caused by a declared connector
+  // that failed to connect. Absent for every other run.
+  run_outcome?: string | null;
+  run_outcome_detail?: string | null;
   // IANA zone the cron recurrence fires in (e.g. "America/New_York"). The
   // server always returns the resolved zone; older payloads may omit it.
   timezone?: string;

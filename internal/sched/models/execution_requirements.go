@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -54,14 +56,65 @@ type ExecutionRequirements struct {
 	// null, otherwise ExecutionRequirementsRosterRequiredToolsOnly — the
 	// parser refuses every other value. Read it through RosterNarrowing.
 	Roster *string `json:"roster"`
+	// SerializationKey is the producer's declared mutual-exclusion key
+	// (docs/TASK-SERIALIZATION.md), e.g. "pages:<slug>": nil when absent or
+	// null, otherwise a value matching SerializationKeyPattern. A task created
+	// without an explicit serialization_key takes this one (NewTask), so a task
+	// saved from chat or pasted into the task form is serialized like one the
+	// producer created through the API. Fleet never interprets it.
+	SerializationKey *string `json:"serialization_key"`
 }
+
+// SerializationKeyPattern is the rule for a DECLARED serialization_key,
+// quoted in the rejection: bounded, and limited to the characters a key such
+// as "pages:<slug>" or "client/<id>" needs. (An explicit task field keeps its
+// own, opaque contract.)
+const SerializationKeyPattern = `^[A-Za-z0-9_.:/-]{1,200}$`
+
+var declaredSerializationKey = regexp.MustCompile(SerializationKeyPattern)
 
 // ExecutionCompletion is the completion clause (#1602): the run is complete
 // once ANY listed tool has a successful execution. Names take the forms
 // required_tools accepts. Unknown sibling keys are ignored.
 type ExecutionCompletion struct {
 	AnySucceeded []string `json:"any_succeeded"`
+	// BlockedWhen optionally marks a predicate-completed run as BLOCKED rather
+	// than plain success (nil = never). See CompletionBlockedWhen.
+	BlockedWhen *CompletionBlockedWhen `json:"blocked_when"`
 }
+
+// CompletionBlockedWhen is the completion clause's optional blocked rule: a
+// run that completed through the predicate, in which no any_succeeded tool
+// other than Tool succeeded, and whose LAST successful execution of Tool
+// passed a top-level string argument named Argument with a value listed in
+// In, finishes successfully but with run outcome "blocked" — shown as Blocked
+// in the Operations Center, not plain green. It is how a producer says "this
+// recording call means the run correctly decided not to publish"; Fleet
+// assigns no meaning to the tool, the argument or the values beyond that
+// match. DetailArgument optionally names a top-level string argument of the
+// same call whose (bounded) text explains the outcome.
+//
+// It changes nothing about retry, dead-letter or recurrence: a blocked run is
+// a success. Unknown keys are ignored, so an older build that does not know
+// the rule ignores it entirely.
+type CompletionBlockedWhen struct {
+	Tool           string   `json:"tool"`
+	Argument       string   `json:"argument"`
+	In             []string `json:"in"`
+	DetailArgument string   `json:"detail_argument"`
+}
+
+// BlockedWhenArgumentPattern is the rule for blocked_when's argument and
+// detail_argument: a top-level JSON argument name, quoted in rejections.
+const BlockedWhenArgumentPattern = `^[A-Za-z_][A-Za-z0-9_]{0,63}$`
+
+var blockedWhenArgument = regexp.MustCompile(BlockedWhenArgumentPattern)
+
+// Bounds of blocked_when's value list.
+const (
+	maxBlockedWhenValues     = 20
+	maxBlockedWhenValueRunes = 100
+)
 
 // RosterNarrowing is the declared roster narrowing: "" for none (no
 // declaration, or no roster key), else ExecutionRequirementsRosterRequiredToolsOnly.
@@ -121,6 +174,17 @@ func ParseExecutionRequirements(prompt string) (*ExecutionRequirements, error) {
 	return found, nil
 }
 
+// DeclaredSerializationKey is the serialization_key a prompt's EXECUTION
+// REQUIREMENTS declare, or "" when it declares none — no declaration, no key,
+// or a malformed declaration (which every save path refuses on its own).
+func DeclaredSerializationKey(prompt string) string {
+	req, err := ParseExecutionRequirements(prompt)
+	if err != nil || req == nil || req.SerializationKey == nil {
+		return ""
+	}
+	return *req.SerializationKey
+}
+
 // ValidateExecutionRequirements reports whether a task prompt's optional
 // EXECUTION REQUIREMENTS declaration is well-formed: ParseExecutionRequirements
 // without the result. A prompt with no marker is valid.
@@ -166,6 +230,15 @@ func decodeExecutionRequirements(body string) (*ExecutionRequirements, error) {
 			}
 		}
 	}
+	if req.SerializationKey != nil && !declaredSerializationKey.MatchString(*req.SerializationKey) {
+		return nil, fmt.Errorf("execution requirements: invalid serialization_key %q; allowed %s",
+			truncate.Clamp(*req.SerializationKey, maxQuotedRequirementIdentifier, "…"), SerializationKeyPattern)
+	}
+	if req.Completion != nil && req.Completion.BlockedWhen != nil {
+		if err := validateBlockedWhen(req.Completion); err != nil {
+			return nil, err
+		}
+	}
 	if req.Roster != nil && *req.Roster != ExecutionRequirementsRosterRequiredToolsOnly {
 		// An explicitly empty value is refused like any other: an unset
 		// template variable must not silently turn off an opt-in that exists
@@ -174,4 +247,45 @@ func decodeExecutionRequirements(body string) (*ExecutionRequirements, error) {
 			truncate.Clamp(*req.Roster, maxQuotedRequirementIdentifier, "…"), ExecutionRequirementsRosterRequiredToolsOnly)
 	}
 	return req, nil
+}
+
+// validateBlockedWhen checks completion.blocked_when's shape: a tool that the
+// same clause's any_succeeded lists (the rule qualifies how the predicate
+// completed the run, so a tool that cannot complete it would never match), a
+// top-level argument name, and 1–20 non-empty, bounded, printable values.
+func validateBlockedWhen(c *ExecutionCompletion) error {
+	bw := c.BlockedWhen
+	quote := func(v string) string { return truncate.Clamp(v, maxQuotedRequirementIdentifier, "…") }
+	if len(c.AnySucceeded) == 0 {
+		return fmt.Errorf("execution requirements: completion.blocked_when needs completion.any_succeeded; it qualifies how that predicate completed the run")
+	}
+	if !executionRequirementName.MatchString(bw.Tool) {
+		return fmt.Errorf("execution requirements: invalid tool identifier %q in completion.blocked_when.tool; allowed %s",
+			quote(bw.Tool), ExecutionRequirementNamePattern)
+	}
+	listed := false
+	for _, name := range c.AnySucceeded {
+		listed = listed || name == bw.Tool
+	}
+	if !listed {
+		return fmt.Errorf("execution requirements: completion.blocked_when.tool %q is not listed in completion.any_succeeded; list it there too, spelled the same way", quote(bw.Tool))
+	}
+	if !blockedWhenArgument.MatchString(bw.Argument) {
+		return fmt.Errorf("execution requirements: invalid argument name %q in completion.blocked_when.argument; a top-level argument name, allowed %s",
+			quote(bw.Argument), BlockedWhenArgumentPattern)
+	}
+	if bw.DetailArgument != "" && !blockedWhenArgument.MatchString(bw.DetailArgument) {
+		return fmt.Errorf("execution requirements: invalid argument name %q in completion.blocked_when.detail_argument; a top-level argument name, allowed %s",
+			quote(bw.DetailArgument), BlockedWhenArgumentPattern)
+	}
+	if len(bw.In) == 0 || len(bw.In) > maxBlockedWhenValues {
+		return fmt.Errorf("execution requirements: completion.blocked_when.in must list 1 to %d values (got %d)", maxBlockedWhenValues, len(bw.In))
+	}
+	for i, v := range bw.In {
+		if strings.TrimSpace(v) == "" || utf8.RuneCountInString(v) > maxBlockedWhenValueRunes || strings.IndexFunc(v, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+			return fmt.Errorf("execution requirements: invalid value %q in completion.blocked_when.in[%d]; each value is 1 to %d printable characters",
+				quote(v), i, maxBlockedWhenValueRunes)
+		}
+	}
+	return nil
 }

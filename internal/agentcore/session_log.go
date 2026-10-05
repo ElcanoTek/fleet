@@ -80,6 +80,12 @@ type LogSession struct {
 	// bytes agentcore validated — the runner commits THESE (post-redaction),
 	// never a re-parse of the redacted final message text.
 	OutputJSON string `json:"output_json,omitempty"`
+	// RunOutcome / RunOutcomeDetail are the declared outcome of a run that
+	// finished successfully — "blocked" when the task's completion clause
+	// (completion.blocked_when) matched the call that completed it — set by
+	// the scheduled driver only after the run succeeded. Empty otherwise.
+	RunOutcome       string `json:"run_outcome,omitempty"`
+	RunOutcomeDetail string `json:"run_outcome_detail,omitempty"`
 	// AuxUsage is the labeled ledger of host-side auxiliary model calls made on
 	// behalf of the run but OUTSIDE its governed loop's step accounting (#1118):
 	// the end-of-run verifier, the phone-a-friend reviewer, and the scheduled
@@ -220,6 +226,26 @@ func (ls *LogSession) SetOutputJSON(v string) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	ls.OutputJSON = v
+}
+
+// SetRunOutcome records a successful run's declared outcome (see RunOutcome).
+func (ls *LogSession) SetRunOutcome(outcome, detail string) {
+	if ls == nil {
+		return
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	ls.RunOutcome, ls.RunOutcomeDetail = outcome, detail
+}
+
+// SnapshotRunOutcome returns the recorded run outcome and its detail.
+func (ls *LogSession) SnapshotRunOutcome() (outcome, detail string) {
+	if ls == nil {
+		return "", ""
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	return ls.RunOutcome, ls.RunOutcomeDetail
 }
 
 // SnapshotOutputJSON returns the validated terminal structured output.

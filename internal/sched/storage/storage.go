@@ -1515,6 +1515,12 @@ func applySuccessOrErrorTransition(task *models.Task, update *models.StatusUpdat
 	if update.Status == models.TaskStatusError {
 		task.OutputJSON = nil
 	}
+	// The run outcome (migration 074) belongs to THIS terminal transition: a
+	// success without one clears a value an earlier run of the row left.
+	task.RunOutcome, task.RunOutcomeDetail = update.RunOutcome, update.RunOutcomeDetail
+	if update.Status != models.TaskStatusSuccess {
+		task.RunOutcome, task.RunOutcomeDetail = nil, nil
+	}
 	// A terminal transition consumes any resumed ask/answer state. Doing this in
 	// the same transaction is important for structured persistence retries: a
 	// refused success must leave the answer intact for the next whole-task attempt.
@@ -1550,6 +1556,20 @@ func applySuccessOrErrorTransition(task *models.Task, update *models.StatusUpdat
 // tick (contrast DeadLetterTaskWithContext, which is a terminal transition and
 // does spawn for a recurring occurrence). Returns the updated task.
 func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, nodeID uuid.UUID, scheduledFor time.Time, msg string) (*models.Task, error) {
+	return s.requeueTaskForRetry(ctx, taskID, nodeID, scheduledFor, msg, false)
+}
+
+// RequeueTaskForInfraRetryWithContext is RequeueTaskForRetryWithContext for a
+// run that failed on infrastructure weather the task cannot be blamed for — a
+// declared connector that failed to connect (models.FailureConnectorUnavailable):
+// it increments InfraRetryCount instead of AttemptCount, so the re-run never
+// spends the task's own max_retries. The runner bounds the count. Same lease
+// gate, same fresh-attempt reset, same occurrence (no recurrence spawn).
+func (s *Storage) RequeueTaskForInfraRetryWithContext(ctx context.Context, taskID, nodeID uuid.UUID, scheduledFor time.Time, msg string) (*models.Task, error) {
+	return s.requeueTaskForRetry(ctx, taskID, nodeID, scheduledFor, msg, true)
+}
+
+func (s *Storage) requeueTaskForRetry(ctx context.Context, taskID, nodeID uuid.UUID, scheduledFor time.Time, msg string, infra bool) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
 		return nil, err
@@ -1572,7 +1592,11 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 		return task, nil
 	}
 
-	task.AttemptCount++
+	if infra {
+		task.InfraRetryCount++
+	} else {
+		task.AttemptCount++
+	}
 	task.Status = models.TaskStatusScheduled
 	task.ScheduledFor = &scheduledFor
 	task.StartedAt = nil
@@ -1620,6 +1644,15 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 // agree. attempts is the total number of attempts made (AttemptCount+1 at the
 // call site).
 func (s *Storage) DeadLetterTaskWithContext(ctx context.Context, taskID, nodeID uuid.UUID, reason string, attempts int) (*models.Task, error) {
+	return s.DeadLetterTaskWithOutcomeWithContext(ctx, taskID, nodeID, reason, attempts, "", "")
+}
+
+// DeadLetterTaskWithOutcomeWithContext is DeadLetterTaskWithContext that also
+// records how the run ended (Task.RunOutcome, migration 074) and its detail
+// in the same transaction — models.RunOutcomeConnectorUnavailable, with the
+// failed connectors, for a dead-letter caused by a connector outage, which
+// the park breaker below exempts up to its bound. "" records no outcome.
+func (s *Storage) DeadLetterTaskWithOutcomeWithContext(ctx context.Context, taskID, nodeID uuid.UUID, reason string, attempts int, outcome, detail string) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
 		return nil, err
@@ -1646,6 +1679,13 @@ func (s *Storage) DeadLetterTaskWithContext(ctx context.Context, taskID, nodeID 
 	task.CompletedAt = &now
 	task.DeadLetteredAt = &now
 	task.DeadLetterAttempts = attempts
+	task.RunOutcome, task.RunOutcomeDetail = nil, nil
+	if outcome != "" {
+		task.RunOutcome = &outcome
+		if detail != "" {
+			task.RunOutcomeDetail = &detail
+		}
+	}
 	task.OutputJSON = nil
 	task.LeaseOwner = nil
 	task.LeaseExpiresAt = nil
@@ -1794,6 +1834,10 @@ func (s *Storage) ReplayDeadLetteredTaskWithPrompt(ctx context.Context, taskID u
 
 	task.Status = models.TaskStatusPending
 	task.AttemptCount = 0
+	// A replay is a fresh slate for the connector-outage re-runs and the
+	// previous run's outcome too (migration 074).
+	task.InfraRetryCount = 0
+	task.RunOutcome, task.RunOutcomeDetail = nil, nil
 	task.ScheduledFor = nil
 	task.StartedAt = nil
 	task.CompletedAt = nil
@@ -2056,6 +2100,30 @@ func (s *Storage) settleDeadLetteredRecurrenceSpawn(ctx context.Context, taskID 
 // lookup failed; the caller rolls back so the sweep retries rather than
 // parking on a transient read failure.
 func deadLetterParkReason(ctx context.Context, tx *sql.Tx, current *models.Task) (reason string, ok bool) {
+	// A dead-letter caused by a connector outage (migration 074) is weather,
+	// not the job: one vendor blip used to stop a daily schedule until a human
+	// replayed it, so it does not park the chain, and predecessorIsDeadLettered
+	// does not count it either. Weather clears, though; a typo'd or
+	// decommissioned host fails the same way forever. So the exemption is
+	// bounded (ADR-0077): the connectorOutageParkStreak-th consecutive outage
+	// dead-letter parks, with a reason that names the connector.
+	if current.IsRunOutcome(models.RunOutcomeConnectorUnavailable) {
+		streak, err := connectorOutageStreak(ctx, tx, current, connectorOutageParkStreak)
+		if err != nil {
+			log.Printf("Error checking connector-outage recurrence breaker for task %s: %v (the reconciliation sweep will retry)", current.ID, err)
+			return "", false
+		}
+		if streak < connectorOutageParkStreak {
+			return "", true
+		}
+		connectors := "a required connector"
+		if current.RunOutcomeDetail != nil && strings.TrimSpace(*current.RunOutcomeDetail) != "" {
+			connectors = strings.TrimSpace(*current.RunOutcomeDetail)
+		}
+		return fmt.Sprintf("A required connector has been unreachable for %d consecutive occurrences: %s. "+
+			"Each one dead-lettered before it could start, so the schedule stopped. "+
+			"Fix the connector (its host, URL or credentials), then replay this occurrence to resume the schedule.", streak, connectors), true
+	}
 	if rerr := models.ValidateExecutionRequirements(current.Prompt); rerr != nil {
 		return fmt.Sprintf("%v. Every occurrence would dead-letter the same way, so the schedule stopped on the first one. "+
 			"Replay this occurrence with a corrected prompt (fleet sched dlq replay --prompt-file) to resume it with its task memory.", rerr), true
@@ -2076,21 +2144,92 @@ func deadLetterParkReason(ctx context.Context, tx *sql.Tx, current *models.Task)
 // (ADR-0070). Queried through the caller's tx so it cannot deadlock against
 // BeginTx's reserved connection when FLEET_SCHED_DB_MAX_CONNS=1. A missing
 // predecessor (first occurrence, or the prior row was pruned) is not
-// consecutive failure; the chain continues.
+// consecutive failure; the chain continues. A predecessor dead-lettered by a
+// connector outage (run_outcome connector_unavailable, migration 074) does not
+// count either.
 func predecessorIsDeadLettered(ctx context.Context, tx *sql.Tx, task *models.Task) (bool, error) {
 	if task.PreviousOccurrenceID == nil {
 		return false, nil
 	}
 	var status models.TaskStatus
+	var outcome sql.NullString
 	err := tx.QueryRowContext(ctx,
-		`SELECT status FROM tasks WHERE id = $1`, *task.PreviousOccurrenceID).Scan(&status)
+		`SELECT status, run_outcome FROM tasks WHERE id = $1`, *task.PreviousOccurrenceID).Scan(&status, &outcome)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
 		return false, err
 	}
-	return status == models.TaskStatusDeadLettered, nil
+	return status == models.TaskStatusDeadLettered && outcome.String != models.RunOutcomeConnectorUnavailable, nil
+}
+
+// connectorOutageParkStreak is how many consecutive occurrences of a
+// recurring chain may dead-letter on a connector outage before the breaker
+// parks it (ADR-0077). Each such occurrence has already been re-run twice by
+// the runner, so three occurrences mean nine failed attempts across three
+// schedule ticks — not a blip.
+const connectorOutageParkStreak = 3
+
+// connectorOutageStreak counts current (itself a connector-outage dead-letter)
+// and the immediately preceding occurrences that also dead-lettered on a
+// connector outage, walking previous_occurrence_id, at most limit. Queried
+// through the caller's tx, like predecessorIsDeadLettered.
+func connectorOutageStreak(ctx context.Context, tx *sql.Tx, current *models.Task, limit int) (int, error) {
+	streak := 1
+	prev := current.PreviousOccurrenceID
+	for streak < limit && prev != nil {
+		var status models.TaskStatus
+		var outcome, next sql.NullString
+		err := tx.QueryRowContext(ctx,
+			`SELECT status, run_outcome, previous_occurrence_id FROM tasks WHERE id = $1`, *prev).Scan(&status, &outcome, &next)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return streak, err
+		}
+		if status != models.TaskStatusDeadLettered || outcome.String != models.RunOutcomeConnectorUnavailable {
+			break
+		}
+		streak++
+		prev = nil
+		if next.Valid && next.String != "" {
+			if id, perr := uuid.Parse(next.String); perr == nil {
+				prev = &id
+			}
+		}
+	}
+	return streak, nil
+}
+
+// BlockedStreak counts the consecutive occurrences, ending at taskID and
+// walking back through previous_occurrence_id, that succeeded with run
+// outcome "blocked" (migration 074) — at most limit of them. 0 when taskID
+// itself is not a blocked success. The runner alerts the owner when a
+// recurring lineage reaches a streak (the dashboard it maintains has stopped
+// updating while every run reads green); nothing parks.
+func (s *Storage) BlockedStreak(ctx context.Context, taskID uuid.UUID, limit int) (int, error) {
+	streak := 0
+	id := taskID.String()
+	for streak < limit && id != "" {
+		var status models.TaskStatus
+		var outcome, prev sql.NullString
+		err := s.db.Conn().QueryRowContext(ctx,
+			`SELECT status, run_outcome, previous_occurrence_id FROM tasks WHERE id = $1`, id).Scan(&status, &outcome, &prev)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return streak, err
+		}
+		if status != models.TaskStatusSuccess || outcome.String != models.RunOutcomeBlocked {
+			break
+		}
+		streak++
+		id = prev.String
+	}
+	return streak, nil
 }
 
 // ReconcileRecurrences is the recurrence-chain repair sweep (#1116), run every
