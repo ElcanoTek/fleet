@@ -543,6 +543,11 @@ type scheduledPolicy struct {
 	// A round the audit/finish enforcement refused never enters it: that is a
 	// pre-audit draft, superseded by the next round's text as before.
 	judgedAnswer string
+	// replaceJudged is set when the phone-a-friend reviewer sent the answer
+	// back: the repair round's text is the CORRECTED answer, so it replaces
+	// the reviewed text instead of being appended after the wrong one (a
+	// textless repair round keeps the reviewed text).
+	replaceJudged bool
 	// runCtx is the run's context, captured at build time so the end-of-run
 	// verifier's and phone-a-friend reviewer's model calls honor the run's
 	// deadline/cancellation (CanFinish itself takes no ctx). Falls back to
@@ -582,40 +587,61 @@ func (p *scheduledPolicy) SetRoundFinalText(text string) {
 // from a round the audit/finish enforcement refused is never included,
 // because the result does not include it either.
 func (p *scheduledPolicy) latestRunText() string {
-	return joinRunAnswer(p.judgedAnswer, p.roundFinalText)
+	return composeRunAnswer(p.judgedAnswer, p.roundFinalText, p.replaceJudged)
 }
 
 // RunAnswer is the run's final text once CanFinish has granted completion:
-// the judged answer plus the final round's closing text, i.e. exactly what the
-// finish gates approved.
+// the judged answer composed with the final round's closing text, i.e.
+// exactly what the finish gates approved.
 func (p *scheduledPolicy) RunAnswer(roundText string) string {
-	return joinRunAnswer(p.judgedAnswer, roundText)
+	return composeRunAnswer(p.judgedAnswer, roundText, p.replaceJudged)
 }
 
 // keepJudgedAnswer records that a model finish gate judged the current answer
-// and sent the run back for repair: the repair round's text is appended to it
-// rather than replacing it.
+// and sent the run back for repair: the repair round's text is composed with
+// it (composeRunAnswer) rather than replacing it.
 func (p *scheduledPolicy) keepJudgedAnswer() {
 	p.judgedAnswer = p.latestRunText()
+	p.replaceJudged = false
 }
 
-// joinRunAnswer appends a round's closing text to the answer judged so far,
-// separated by a blank line; either side may be empty.
-func joinRunAnswer(judged, round string) string {
+// composeRunAnswer combines the answer judged so far with a round's closing
+// text:
+//   - a textless round keeps the judged answer, and with nothing judged the
+//     round's text is the answer;
+//   - replace (a reviewer-forced repair) makes the round's text the answer;
+//   - when one text already contains the other — compared with whitespace
+//     collapsed, so equal texts count — only the longer is kept: a model that
+//     restated its whole report in the repair round would otherwise persist
+//     it twice;
+//   - otherwise the round's text is a true supplement, appended after a blank
+//     line.
+func composeRunAnswer(judged, round string, replace bool) string {
 	judged, round = strings.TrimSpace(judged), strings.TrimSpace(round)
 	switch {
-	case judged == "":
-		return round
 	case round == "":
+		return judged
+	case judged == "" || replace:
+		return round
+	}
+	normJudged, normRound := strings.Join(strings.Fields(judged), " "), strings.Join(strings.Fields(round), " ")
+	switch {
+	case strings.Contains(normRound, normJudged):
+		return round
+	case strings.Contains(normJudged, normRound):
 		return judged
 	}
 	return judged + "\n\n" + round
 }
 
-// repairAnswerNote tells the model how a gate's repair round composes with the
-// answer it already gave, so the supplement it writes reads as one answer
+// repairAnswerNote tells the model how a verifier repair round composes with
+// the answer it already gave, so the supplement it writes reads as one answer
 // instead of restating the report a second time.
 const repairAnswerNote = "Your closing text so far stays part of this run's final answer and your next closing text is appended to it, so write only what was missing or needs correcting — do not restate the rest."
+
+// reviewerRepairAnswerNote is the reviewer's counterpart: the repair round's
+// text replaces the reviewed answer, so it must be the whole corrected answer.
+const reviewerRepairAnswerNote = "Your next closing text replaces your previous answer, so write the complete corrected answer."
 
 // The core hands the policy each round's closing text before consulting
 // CanFinish, and takes the composed answer back once the run may finish; these
@@ -741,8 +767,8 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	// reviewed is claimed before the call, so a reviewer-forced repair round is
 	// never re-reviewed — but it MUST be re-verified: the repair changed the
 	// answer the verifier approved, so verified is reset and Gate 1 runs again
-	// against the repaired answer (the reviewed answer plus the repair round's
-	// closing text).
+	// against the repaired answer (the repair round's closing text, which
+	// replaces the reviewed one; the reviewed one if the round has none).
 	if !p.reviewed && p.agent != nil && p.agent.phoneAFriendEnabled && p.agent.reviewerModel != nil {
 		p.reviewed = true
 		records := buildToolExecSummary(p.agent.logSession)
@@ -753,11 +779,12 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		} else if len(issues) > 0 {
 			p.verified = false
 			p.keepJudgedAnswer()
+			p.replaceJudged = true
 			return false, []string{fmt.Sprintf(
 				"A reviewer model (phone a friend) found problems with the current answer/work that must be "+
 					"addressed before finishing: %v. Revise the work to fix each one, or call "+
 					"confirm_audit(success=false, user_visible_summary=...) to abort explicitly. %s",
-				issues, repairAnswerNote)}
+				issues, reviewerRepairAnswerNote)}
 		}
 	}
 
