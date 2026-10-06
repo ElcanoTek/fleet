@@ -182,7 +182,17 @@ function useLocalToday(): Date {
 function UpcomingWeek({ runs, today }: { runs: UpcomingRun[]; today: Date }) {
   // weekOffset pages whole weeks: 0 = this week, 1 = next, … The upcoming
   // feed only projects forward, so past weeks aren't offered.
-  const [weekOffset, setWeekOffset] = useState(0);
+  // The offset is remembered together with the week it was chosen in, and
+  // reads as 0 once `today` rolls into a new week: a board paged ahead on
+  // Saturday would otherwise jump a further week at midnight, past the
+  // refreshed projection. Derived at render, so no effect resets it.
+  const thisWeek = dayKey(
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay()),
+  );
+  const [paged, setPaged] = useState({ week: thisWeek, offset: 0 });
+  const weekOffset = paged.week === thisWeek ? paged.offset : 0;
+  const setWeekOffset = (next: (w: number) => number) =>
+    setPaged({ week: thisWeek, offset: next(weekOffset) });
   const sunday = new Date(
     today.getFullYear(),
     today.getMonth(),

@@ -267,3 +267,33 @@ describe("UpcomingPanel week view across midnight", () => {
     await waitFor(() => expect(upcomingRuns).toHaveBeenCalledTimes(2));
   });
 });
+
+describe("UpcomingPanel week paging across the week rollover", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    window.localStorage.clear();
+  });
+
+  it("returns a paged-ahead board to the current week when Saturday rolls into Sunday", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(2026, 9, 10, 23, 59, 0)); // Saturday
+    mockRuns([
+      { task_id: "t1", prompt: "Wednesday job", next_run: new Date(2026, 9, 14, 9).toISOString(), recurring: false },
+    ]);
+    render(<UpcomingPanel />);
+    fireEvent.click(await screen.findByTestId("upcoming-view-week"));
+    await screen.findByTestId("upcoming-week");
+    // Page to next week (Oct 11–17), which holds the run.
+    fireEvent.click(screen.getByRole("button", { name: /next week/i }));
+    expect(screen.getByTestId("upcoming-week")).toHaveTextContent("Wednesday job");
+
+    // Midnight: Oct 11–17 is now THIS week. The board shows it (offset reset),
+    // not Oct 18–24, which would be a whole week past what it was showing.
+    await act(async () => {
+      vi.advanceTimersByTime(2 * 60 * 1000);
+    });
+    const days = screen.getByTestId("upcoming-week").querySelectorAll(".upcoming-week-day");
+    expect(days[0].className).toContain("upcoming-week-day--today");
+    expect(screen.getByTestId("upcoming-week")).toHaveTextContent("Wednesday job");
+  });
+});
