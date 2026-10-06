@@ -64,39 +64,31 @@ version: 2
 #     `nodejs<major>` package read from the same web/.nvmrc.
 #
 # So bumping node is a deliberate, human-initiated change: edit web/.nvmrc,
-# and CI + bootstrap + doctor + update all follow. Check the release line first
-# — production should track Active or Maintenance LTS, never Current. The move
-# to the next LTS line is not left to memory: node-lts-reminder.yml files an
-# issue (with the full declaration-point checklist) once the target major's
-# scheduled LTS date passes while web/.nvmrc is still behind (#1300).
+# and CI + bootstrap + doctor + update all follow. fleet tracks the LATEST node
+# major — Current included (ADR-0078, which retired the earlier "Active or
+# Maintenance LTS, never Current" rule). The move is not left to memory:
+# node-latest-reminder.yml files an issue (with the declaration-point
+# checklist) once nodejs.org publishes a major newer than web/.nvmrc.
 #
-# WHY "never Current", concretely — the rule reads like plain conservatism, and
-# then someone points out that the major on offer becomes LTS in a few weeks and
-# argues to go early. Two things answer that:
+# Why "latest" is safe here when "never Current" used to be the rule:
 #
-#   * ODD majors never become LTS AT ALL. nodejs/Release's schedule.json gives
-#     v24 lts=2025-10-28 and v26 lts=2026-10-28, but v25 and v27 have no `lts`
-#     key whatsoever. v25 lived from 2025-10-15 to 2026-06-01 — seven and a half
-#     months, total. Nothing here proposes a node major any more (the one
-#     `docker` entry that saw a node base image left with scripts/rampart-service,
-#     ADR-0063), but a hand-made bump to an odd major would look exactly as
-#     green as an even one. "Never Current" is what makes that categorically
-#     unmergeable instead of a judgement call in review.
-#   * For an EVEN major, Current is a waiting room, and waiting is nearly free
-#     here, because dnf enforces the same delay anyway. bootstrap.sh installs
-#     the VERSIONED stream (nodejs<major>, nodejs<major>-npm), and the distro
-#     packages those on roughly the LTS cadence: while node 26 was Current,
-#     Fedora 44 carried nodejs24 and no nodejs26 at all. Moving web/.nvmrc ahead
-#     of the RPM does not get you node 26 — it drops every fresh box onto
-#     bootstrap's unversioned-`nodejs` fallback and its warning. So confirm the
-#     `nodejs<major>` package actually exists before touching .nvmrc.
+#   * The odd-major trap is gone. Through v25, odd majors never became LTS and
+#     lived ~7 months. nodejs/Release's schedule.json now gives v27 an `alpha`
+#     phase followed by a release in April 2027 that becomes LTS that October:
+#     from 27 on, node ships one major a year and every one becomes LTS.
+#   * The distro lag no longer strands a box. bootstrap.sh and doctor.sh still
+#     prefer the VERSIONED dnf stream (nodejs<major>, nodejs<major>-npm), but
+#     when Fedora has not packaged the new major yet (node 26 reached F45
+#     only), they install the signed nodejs.org release instead — the node
+#     analogue of GOTOOLCHAIN=auto. See fleet_node_tarball_install in
+#     scripts/lib/node-version.sh.
 #
 # Deliberately NOT expressed as an `ignore` rule for major node bumps. Silencing
-# them would remove the only signal that a new line exists, which is precisely
-# how the go.mod toolchain pin sat at 1.26.7 after 1.27.0 shipped (Dependabot
-# does not touch the `go` directive either — see above). A red PR that fails
-# scripts/check_versions_test.go is an annoying but working reminder; silence is
-# not. Close such a PR with the reason, and let the next one arrive.
+# them would remove a signal that a new line exists, which is precisely how the
+# go.mod toolchain pin sat at 1.26.7 after 1.27.0 shipped (Dependabot does not
+# touch the `go` directive either — see above). An @types/node major ahead of
+# web/.nvmrc fails scripts/check_versions_test.go: take it as the cue to bump
+# the runtime with it, in one PR.
 
 updates:
   # Go module (go.mod / go.sum at the repo root).
