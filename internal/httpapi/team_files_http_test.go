@@ -440,9 +440,9 @@ func TestTeammateBranchCopiesSharedFiles(t *testing.T) {
 	}
 }
 
-// The branch's "seen" high-water mark is read before the copy: a source
-// message that lands WHILE the files are being copied is not in the branch,
-// so the viewer is told the source has added messages since.
+// The branch's "seen" high-water mark is the branch point: a source message
+// that lands WHILE the files are being copied is not in the branch, so the
+// viewer is told the source has added messages since.
 func TestTeammateBranchMidCopyMessageReportsChanged(t *testing.T) {
 	f := newFilesFixture(t)
 	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
@@ -468,6 +468,46 @@ func TestTeammateBranchMidCopyMessageReportsChanged(t *testing.T) {
 	}](t, convSub(t, f.srv, "GET", "bob@x.com", f.chat.ID, "team-view", ""))
 	if tv.ViewerBranch == nil || !tv.ViewerBranch.ChangedSince {
 		t.Errorf("viewer_branch = %+v, want changed_since after a mid-copy message", tv.ViewerBranch)
+	}
+}
+
+// The teammate branches at the message they last saw (their last poll); a
+// source message sent after that but BEFORE the branch POST is not in the
+// branch either, so it must report changed_since rather than count as seen.
+func TestTeammateBranchAtOlderPointReportsChanged(t *testing.T) {
+	f := newFilesFixture(t)
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	point := msgs[len(msgs)-1].ID
+	// The owner replies after the teammate's last poll, before they branch.
+	if _, err := f.st.AppendHistory(f.ctx, f.chat.ID, []agent.HistoryEntry{textEntry("assistant", "newer")}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"branch_point_message_id": point})
+	w := convSub(t, f.srv, "POST", "bob@x.com", f.chat.ID, "branch", string(body))
+	if w.Code != 201 {
+		t.Fatalf("branch: %d %s", w.Code, w.Body.String())
+	}
+	tv := decode[struct {
+		ViewerBranch *store.ViewerBranch `json:"viewer_branch"`
+	}](t, convSub(t, f.srv, "GET", "bob@x.com", f.chat.ID, "team-view", ""))
+	if tv.ViewerBranch == nil || !tv.ViewerBranch.ChangedSince {
+		t.Errorf("viewer_branch = %+v, want changed_since for a message past the branch point", tv.ViewerBranch)
+	}
+}
+
+// Branching at the newest message with nothing after it reports no change.
+func TestTeammateBranchAtLatestReportsUnchanged(t *testing.T) {
+	f := newFilesFixture(t)
+	msgs, _ := f.st.LoadHistory(f.ctx, f.chat.ID)
+	body, _ := json.Marshal(map[string]any{"branch_point_message_id": msgs[len(msgs)-1].ID})
+	if w := convSub(t, f.srv, "POST", "bob@x.com", f.chat.ID, "branch", string(body)); w.Code != 201 {
+		t.Fatalf("branch: %d %s", w.Code, w.Body.String())
+	}
+	tv := decode[struct {
+		ViewerBranch *store.ViewerBranch `json:"viewer_branch"`
+	}](t, convSub(t, f.srv, "GET", "bob@x.com", f.chat.ID, "team-view", ""))
+	if tv.ViewerBranch == nil || tv.ViewerBranch.ChangedSince {
+		t.Errorf("viewer_branch = %+v, want unchanged", tv.ViewerBranch)
 	}
 }
 

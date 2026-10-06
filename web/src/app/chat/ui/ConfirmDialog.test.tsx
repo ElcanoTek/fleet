@@ -235,6 +235,38 @@ describe("DeleteProjectConfirmDialog", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
+  it("holds Delete project until the counts land", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await gate;
+        return new Response(
+          JSON.stringify({ memories: 0, chats: 1, members: 1, team_shared_chats: 0 }),
+          { status: 200 },
+        );
+      }),
+    );
+    const onConfirm = vi.fn();
+    render(
+      <DeleteProjectConfirmDialog
+        projectId="p1"
+        projectName="test 2"
+        onCancel={() => {}}
+        onConfirm={onConfirm}
+      />,
+    );
+    const del = screen.getByRole("button", { name: "Delete project" });
+    expect(del).toBeDisabled();
+    fireEvent.click(del);
+    expect(onConfirm).not.toHaveBeenCalled();
+    release?.();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Delete project" })).toBeEnabled());
+  });
+
   it("states what is lost without inventing counts when it has no id", () => {
     render(
       <DeleteProjectConfirmDialog onCancel={() => {}} onConfirm={() => {}} />,

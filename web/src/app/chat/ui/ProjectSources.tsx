@@ -118,10 +118,16 @@ export function ProjectSources({
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const groupRefs = useRef(new Map<string, HTMLDivElement>());
 
+  // Counts the per-file toggles that have landed. A listing read while one
+  // landed may predate it, and applying it would repaint the file as it was
+  // before the click; such a listing is dropped and read again instead.
+  const toggleWrites = useRef(0);
+  const [relist, setRelist] = useState(0);
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       void (async () => {
+        const writesAtStart = toggleWrites.current;
         try {
           const data = (await fetchProjectSources(projectId)) as {
             groups?: SourcesGroup[];
@@ -129,6 +135,10 @@ export function ProjectSources({
             files?: LegacyFile[];
           };
           if (cancelled) return;
+          if (toggleWrites.current !== writesAtStart) {
+            setRelist((n) => n + 1);
+            return;
+          }
           setGroups(
             Array.isArray(data.groups)
               ? data.groups
@@ -146,7 +156,7 @@ export function ProjectSources({
     return () => {
       cancelled = true;
     };
-  }, [projectId, reloadKey]);
+  }, [projectId, reloadKey, relist]);
 
   // Teammates' groups first, then the caller's own; most recently active
   // first within each.
@@ -233,6 +243,7 @@ export function ProjectSources({
     setError(null);
     try {
       const res = await setOutputShared(g.conversation_id, f.path, !f.shared);
+      toggleWrites.current += 1;
       const sharedBy = new Map(res.outputs.map((o) => [o.path, o.shared]));
       setGroups((prev) =>
         (prev ?? []).map((x) =>

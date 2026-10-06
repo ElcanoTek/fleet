@@ -86,6 +86,11 @@ export function deleteChatsText(impact: ProjectImpact | null): string {
 
 // The /impact read both delete confirms (settings panel, rail kebab) and the
 // B28 line share. settled=false until it lands; impact=null = couldn't count.
+// Every new enabled read starts unsettled again: a count from an earlier
+// opening (Only you → back → Only you) is stale, and a confirm gated on
+// "settled" must wait for the fresh one rather than reuse it. The reset runs
+// in the read's cleanup — whenever it is disabled or re-keyed — so the next
+// enabled read begins from {settled:false} without a set-state in the body.
 export function useImpact(projectId: string, enabled: boolean) {
   const [state, setState] = useState<{
     settled: boolean;
@@ -108,6 +113,7 @@ export function useImpact(projectId: string, enabled: boolean) {
     })();
     return () => {
       cancelled = true;
+      setState({ settled: false, impact: null });
     };
   }, [projectId, enabled]);
   return state;
@@ -484,8 +490,12 @@ export function ProjectSettingsDialog({
             </button>
             <button
               type="button"
+              // The list above promises real counts; the delete waits until
+              // they land (a failed count still settles, with honest wording).
+              disabled={!impactState.settled}
               className={pillDanger}
               onClick={() => {
+                if (!impactState.settled) return;
                 onClose();
                 onDelete();
               }}

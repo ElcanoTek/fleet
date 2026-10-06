@@ -3500,9 +3500,16 @@ export function ChatExperience({
     const moved = await applyMoveToProject(moveChat.id, created.id);
     if (!moved) return null; // the rail toast already says why
     const team = created.team_id;
-    if (!team || !conv) {
+    if (!team) {
       notify({
         message: `Created ${created.name} and moved the chat in.`,
+      });
+      return null;
+    }
+    if (!conv) {
+      // The dialog promised the share too; never let it go silently missing.
+      notify({
+        message: `Created ${created.name} and moved the chat in, but couldn’t share it with ${team}. Share it from the chat’s Share button.`,
       });
       return null;
     }

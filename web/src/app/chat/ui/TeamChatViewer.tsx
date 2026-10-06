@@ -23,7 +23,7 @@
 // The view is LIVE: the owner may keep working, so it re-reads the snapshot
 // on a short interval while the tab is visible (and on returning to it).
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { Icon } from "./Icon";
 import { LockGlyph, TeamGlyph } from "./ShareGlyphs";
@@ -113,16 +113,25 @@ export function TeamChatViewer({
   // failure keeps what is on screen rather than replacing the transcript
   // with an error, but a 404 means the chat stopped being shared with this
   // reader, and showing the old transcript after that would be a lie.
+  //
+  // Reads can overlap (the poll, a visibility refresh, the first load), and
+  // responses can land out of order. Each read takes a generation number and
+  // only the LATEST read's outcome — snapshot, 404 or error — is applied, so
+  // an older response can never repaint a transcript (or resurrect one after
+  // a newer 404) over a newer one.
+  const loadGen = useRef(0);
   const load = useCallback(
     async (quiet: boolean, isCancelled: () => boolean) => {
+      const gen = ++loadGen.current;
+      const stale = () => isCancelled() || gen !== loadGen.current;
       try {
         const url = conversationApiUrl(conversationId, "/team-view");
         if (!url) {
-          if (!isCancelled()) setLoadError("This chat link has an invalid id.");
+          if (!stale()) setLoadError("This chat link has an invalid id.");
           return;
         }
         const res = await fetch(url, { cache: "no-store" });
-        if (isCancelled()) return;
+        if (stale()) return;
         if (!res.ok) {
           if (res.status === 404) {
             setSnapshot(null);
@@ -133,7 +142,7 @@ export function TeamChatViewer({
           return;
         }
         const data = (await res.json()) as TeamChatSnapshot;
-        if (!isCancelled()) {
+        if (!stale()) {
           // Accepting a snapshot retires any earlier load failure: a first
           // load that failed and a poll that then succeeded must not leave
           // the stale "Couldn’t load" message on screen.
@@ -141,7 +150,7 @@ export function TeamChatViewer({
           setSnapshot(data);
         }
       } catch {
-        if (!quiet && !isCancelled()) setLoadError("Couldn’t reach the server.");
+        if (!quiet && !stale()) setLoadError("Couldn’t reach the server.");
       }
     },
     [conversationId],

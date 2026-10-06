@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { ProjectHome } from "./ProjectHome";
+import { ProjectSources } from "./ProjectSources";
 import { ChatToastProvider } from "./ChatToasts";
 import { buildGettingStarted, type GettingStartedInput } from "./ProjectGettingStarted";
 import type { Project } from "./ProjectsModal";
@@ -405,6 +406,50 @@ describe("Your chats", () => {
     );
   });
 
+  it("a count read for an earlier opening never settles a re-opened confirm", async () => {
+    const held: Array<(r: Response) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/conversations/c1/outputs"))
+          return new Promise<Response>((resolve) => held.push(resolve));
+        if (url.endsWith("/my-state"))
+          return new Response(JSON.stringify(DONE["/my-state"]), { status: 200 });
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+    renderHome({ chats: [chat("c1", "Spread study", { team_visible: true })] });
+    const openConfirm = async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Who can see this chat: quant" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Only you/ }));
+      return screen.findByTestId("row-unshare-confirm");
+    };
+    let confirm = await openConfirm();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep sharing" }));
+    confirm = await openConfirm();
+    await waitFor(() => expect(held).toHaveLength(2));
+    // The FIRST opening's read lands now: the fresh confirm keeps counting.
+    await act(async () => {
+      held[0](
+        new Response(JSON.stringify({ outputs: [], total: 9, shared_count: 9, team_visible: true }), {
+          status: 200,
+        }),
+      );
+    });
+    expect(confirm).toHaveTextContent("Counting its shared files…");
+    expect(within(confirm).getByRole("button", { name: "Stop sharing" })).toBeDisabled();
+    await act(async () => {
+      held[1](
+        new Response(JSON.stringify({ outputs: [], total: 4, shared_count: 2, team_visible: true }), {
+          status: 200,
+        }),
+      );
+    });
+    expect(confirm).toHaveTextContent("2 shared files will stop being shared too.");
+    expect(within(confirm).getByRole("button", { name: "Stop sharing" })).toBeEnabled();
+  });
+
   it("More sharing options opens the share dialog", async () => {
     mockApi(DONE);
     const { props } = renderHome();
@@ -644,5 +689,83 @@ describe("Sources", () => {
     await waitFor(() =>
       expect(calls.some((c) => c.url === "/api/conversations/t1/team-files/x.xlsx")).toBe(true),
     );
+  });
+});
+
+describe("Sources — a listing read before a toggle landed", () => {
+  it("is dropped and read again rather than repainting the old state", async () => {
+    const after = GROUPS.map((g) =>
+      g.conversation_id === "c1"
+        ? {
+            ...g,
+            shared_count: 2,
+            files: g.files.map((f) => (f.path === "out/b.csv" ? { ...f, shared: true } : f)),
+          }
+        : g,
+    );
+    let listing = 0;
+    let releaseStale: (() => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/files")) {
+          listing += 1;
+          if (listing === 2) {
+            // The reload started before the toggle, and lands after it.
+            await new Promise<void>((resolve) => {
+              releaseStale = resolve;
+            });
+            return new Response(JSON.stringify({ groups: GROUPS }), { status: 200 });
+          }
+          return new Response(JSON.stringify({ groups: listing === 1 ? GROUPS : after }), {
+            status: 200,
+          });
+        }
+        if (url.endsWith("/outputs/share") && init?.method === "POST")
+          return new Response(
+            JSON.stringify({
+              outputs: [
+                { path: "out/a.csv", name: "a.csv", size: 1, modified_at: 1, shared: true },
+                { path: "out/b.csv", name: "b.csv", size: 1, modified_at: 1, shared: true },
+              ],
+              total: 2,
+              shared_count: 2,
+              team_visible: true,
+            }),
+            { status: 200 },
+          );
+        return new Response("{}", { status: 200 });
+      }),
+    );
+    const props = {
+      projectId: "p1",
+      teamName: "quant",
+      focus: null,
+      sourcesOpen: { c1: true },
+      onSourcesOpenChange: () => {},
+    };
+    const { rerender } = render(<ProjectSources {...props} reloadKey={0} />);
+    await screen.findByText("b.csv");
+    rerender(<ProjectSources {...props} reloadKey={1} />);
+    await waitFor(() => expect(releaseStale).toBeDefined());
+    const group = document.querySelector(
+      `[data-testid=sources-group][data-conversation-id="c1"]`,
+    ) as HTMLElement;
+    fireEvent.click(within(group).getByRole("button", { name: /b\.csv is only you/ }));
+    await waitFor(() => expect(group).toHaveTextContent("2 files · 2 shared"));
+    await act(async () => {
+      releaseStale?.();
+    });
+    // The stale listing (b.csv unshared) is not applied; a fresh read is.
+    await waitFor(() => expect(listing).toBe(3));
+    await waitFor(() =>
+      expect(
+        document.querySelector(`[data-testid=sources-group][data-conversation-id="c1"]`),
+      ).toHaveTextContent("2 files · 2 shared"),
+    );
+    expect(
+      document.querySelector(`[data-testid=sources-group][data-conversation-id="c1"]`),
+    ).not.toHaveTextContent("1 shared");
   });
 });

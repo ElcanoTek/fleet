@@ -202,7 +202,13 @@ export function MoveChatConfirmDialog({
         busy={count === undefined}
         onCancel={onCancel}
         onConfirm={onPinAndConfirm}
-        secondary={{ label: "Remove", onClick: onConfirm }}
+        // Both ways forward stop sharing, so both wait for the count the
+        // sentence quotes (a failed count settles to the unnumbered copy).
+        secondary={{
+          label: "Remove",
+          onClick: onConfirm,
+          disabled: count === undefined,
+        }}
         testId="move-chat-confirm"
       >
         <p className="m-0" data-testid="move-chat-confirm-body">

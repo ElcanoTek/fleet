@@ -265,21 +265,27 @@ export function YourChatsSection({
   const sharedCount = chats.filter((c) => c.team_visible).length;
   // The confirm before a chat goes back to Only you: the chat, and how many
   // shared files stop with it (null = still counting; undefined = unknown).
+  // `req` identifies the opening: a count only settles the confirm it was
+  // read for, so a slow read from an earlier opening (Keep sharing, then the
+  // same pill again) can neither settle a fresh confirm early nor overwrite
+  // the newer count.
   const [unshare, setUnshare] = useState<{
     chat: ProjectChatEntry;
     files: number | null | undefined;
+    req: object;
   } | null>(null);
 
   const requestUnshare = (chat: ProjectChatEntry) => {
-    setUnshare({ chat, files: null });
+    const req = {};
+    setUnshare({ chat, files: null, req });
     void fetchConversationOutputs(chat.id).then(
       (o) =>
         setUnshare((cur) =>
-          cur && cur.chat.id === chat.id ? { ...cur, files: o.shared_count } : cur,
+          cur && cur.req === req ? { ...cur, files: o.shared_count } : cur,
         ),
       () =>
         setUnshare((cur) =>
-          cur && cur.chat.id === chat.id ? { ...cur, files: undefined } : cur,
+          cur && cur.req === req ? { ...cur, files: undefined } : cur,
         ),
     );
   };

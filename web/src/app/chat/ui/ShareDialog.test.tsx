@@ -299,8 +299,10 @@ describe("ShareDialog — A4: team project, not shared", () => {
         "Teammates find it on Knowertech’s home, read it, and branch it into their own chat.",
       ),
     ).toBeInTheDocument();
-    expect(await screen.findByTestId("share-file-line")).toHaveTextContent(
-      "Files it creates will be shared too.",
+    await waitFor(() =>
+      expect(screen.getByTestId("share-file-line")).toHaveTextContent(
+        "Files it creates will be shared too.",
+      ),
     );
   });
 
@@ -427,6 +429,20 @@ describe("ShareDialog — A5: shared", () => {
     );
   });
 
+  it("Copy link for <team> says so when the clipboard refuses, with the link", async () => {
+    const writeText = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    Object.assign(navigator, { clipboard: { writeText } });
+    renderDialog({ conversation: shared, project: teamProject });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy link for Elcano" }));
+    });
+    expect(await screen.findByTestId("chat-toast")).toHaveTextContent(
+      `Couldn’t copy the link. Copy it from here: ${window.location.origin}/chat?team=c1`,
+    );
+  });
+
   it("A5b: Stop sharing confirms inline with the shared-file count", async () => {
     const props = renderDialog({
       conversation: shared,
@@ -456,12 +472,64 @@ describe("ShareDialog — A5: shared", () => {
     );
   });
 
-  it("A5b with no shared files says teammates lose access", () => {
+  it("A5b with no shared files says teammates lose access", async () => {
     renderDialog({ conversation: shared, project: teamProject });
     fireEvent.click(screen.getByRole("button", { name: "Stop sharing" }));
-    expect(screen.getByRole("alertdialog")).toHaveTextContent(
-      "Stop sharing with Elcano? Teammates lose access right away.",
+    await waitFor(() =>
+      expect(screen.getByRole("alertdialog")).toHaveTextContent(
+        "Stop sharing with Elcano? Teammates lose access right away.",
+      ),
     );
+  });
+
+  it("A5b waits for the shared-file count before Stop sharing is enabled", async () => {
+    let release: ((o: ConversationOutputs) => void) | undefined;
+    const props = renderDialog({
+      conversation: shared,
+      project: teamProject,
+      loadOutputs: vi.fn(
+        () =>
+          new Promise<ConversationOutputs>((resolve) => {
+            release = resolve;
+          }),
+      ),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop sharing" }));
+    const confirm = screen.getByRole("alertdialog");
+    expect(confirm).toHaveTextContent("Stop sharing with Elcano? Counting shared files…");
+    // Not the zero-file sentence while the count is unknown.
+    expect(confirm).not.toHaveTextContent("Teammates lose access right away.");
+    const stop = within(confirm).getByRole("button", { name: "Stop sharing" });
+    expect(stop).toBeDisabled();
+    fireEvent.click(stop);
+    expect(props.onStopSharingWithTeam).not.toHaveBeenCalled();
+    await act(async () => {
+      release?.(outputs([file(), file({ path: "b.csv", name: "b.csv" })]));
+    });
+    expect(confirm).toHaveTextContent("2 shared files will stop being shared too.");
+    expect(within(confirm).getByRole("button", { name: "Stop sharing" })).toBeEnabled();
+  });
+
+  it("A5b with a failed count says files stop being shared, without a number, and still stops", async () => {
+    const props = renderDialog({
+      conversation: shared,
+      project: teamProject,
+      loadOutputs: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop sharing" }));
+    const confirm = screen.getByRole("alertdialog");
+    await waitFor(() =>
+      expect(confirm).toHaveTextContent(
+        "Stop sharing with Elcano? Its shared files will stop being shared too.",
+      ),
+    );
+    expect(confirm).not.toHaveTextContent("Teammates lose access right away.");
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Stop sharing" }));
+    });
+    expect(props.onStopSharingWithTeam).toHaveBeenCalled();
   });
 });
 
@@ -481,11 +549,84 @@ describe("ShareDialog — A6: team project with a public link", () => {
     expect(screen.getByLabelText("Share link URL")).toHaveValue(
       "https://fleet.example/shared/tok",
     );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Share with Elcano" })).toBeEnabled(),
+    );
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Share with Elcano" }));
     });
     expect(props.onShareWithTeam).toHaveBeenCalled();
     expect(props.onStopLink).not.toHaveBeenCalled();
+  });
+
+  it("shows the file line and checklist, and sends the owner's exclusions", async () => {
+    const props = renderDialog({
+      conversation: conversation({ project_id: "p1", share_token: "tok" }),
+      project: teamProject,
+      loadOutputs: vi.fn(async () =>
+        outputs([file(), file({ path: "pacing_notes.json", name: "pacing_notes.json" })]),
+      ),
+    });
+    expect(await screen.findByText("Includes 2 files")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Choose…" }));
+    const group = screen.getByRole("group", { name: "Files to share" });
+    fireEvent.click(within(group).getAllByRole("checkbox")[1]);
+    expect(screen.getByText("Includes 1 file")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Share with Elcano" }));
+    });
+    expect(props.onShareWithTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "c1" }),
+      ["pacing_notes.json"],
+    );
+  });
+});
+
+describe("ShareDialog — A4 outputs load state", () => {
+  it("holds Share while the file list is loading", async () => {
+    let release: ((o: ConversationOutputs) => void) | undefined;
+    const props = renderDialog({
+      conversation: inTeamProject,
+      project: teamProject,
+      loadOutputs: vi.fn(
+        () =>
+          new Promise<ConversationOutputs>((resolve) => {
+            release = resolve;
+          }),
+      ),
+    });
+    const share = screen.getByRole("button", { name: "Share with Elcano" });
+    expect(share).toBeDisabled();
+    expect(screen.getByTestId("share-file-line")).toHaveTextContent("Listing this chat’s files…");
+    fireEvent.click(share);
+    expect(props.onShareWithTeam).not.toHaveBeenCalled();
+    await act(async () => {
+      release?.(outputs([file()]));
+    });
+    expect(screen.getByText("Includes 1 file")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Share with Elcano" })).toBeEnabled();
+  });
+
+  it("says so when the file list fails, and still lets the owner share", async () => {
+    const props = renderDialog({
+      conversation: inTeamProject,
+      project: teamProject,
+      loadOutputs: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("share-file-line")).toHaveTextContent(
+        "Couldn’t list this chat’s files. Sharing shares the files it presented; you can adjust them in Sources afterwards.",
+      ),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Share with Elcano" }));
+    });
+    expect(props.onShareWithTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "c1" }),
+      undefined,
+    );
   });
 });
 

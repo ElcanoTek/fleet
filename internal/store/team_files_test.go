@@ -141,10 +141,8 @@ func TestBranchOriginAndViewerBranches(t *testing.T) {
 		t.Fatalf("team view: %v", err)
 	}
 	last := view.Messages[len(view.Messages)-1].ID
-	hw, err := f.s.MaxMessageID(f.ctx, c.ID)
-	if err != nil || hw < last {
-		t.Fatalf("MaxMessageID = %d, %v (last visible %d)", hw, err, last)
-	}
+	// The high-water mark is the branch point the copy used.
+	hw := last
 
 	br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, last, "Spread study (branch)")
 	if err != nil {
@@ -502,16 +500,17 @@ func TestArchivedChatCannotBeSharedAndUnarchiveStaysPrivate(t *testing.T) {
 	}
 }
 
-// The high-water mark is the one read BEFORE the branch, passed in — never
-// re-read when the origin is recorded. A source message that lands between
+// The high-water mark is the branch point, passed in — never re-read from
+// the source when the origin is recorded. A source message that lands between
 // the branch's copy and the origin write is not in the branch, so it must
 // report changed_since.
 func TestBranchOriginHighWaterIsNotReadAfterCopy(t *testing.T) {
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
-	hw, err := f.s.MaxMessageID(f.ctx, c.ID)
-	if err != nil || hw == 0 {
-		t.Fatalf("MaxMessageID = %d, %v", hw, err)
+	var hw int64
+	if err := f.s.db.QueryRowContext(f.ctx,
+		`SELECT COALESCE(MAX(id), 0) FROM messages WHERE conversation_id = $1`, c.ID).Scan(&hw); err != nil || hw == 0 {
+		t.Fatalf("max message id = %d, %v", hw, err)
 	}
 	br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, hw, "b")
 	if err != nil {

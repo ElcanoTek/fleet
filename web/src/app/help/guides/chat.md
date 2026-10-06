@@ -598,7 +598,7 @@ whole job for the situation you are in:
 | The chat is in no project | **Move and share** into a project already shared with your team, or **Create shared project** if there is none yet — the chat moves in and is shared. |
 | The chat is in a personal project | **Share project first**, which takes you to the project home with the confirmation open; afterwards the getting-started card offers to share the chat in one click. |
 | The chat is in a project shared with your team | **Share with** your team. **Includes N files · Choose…** lets you untick files before sharing. |
-| The chat is shared | **Copy link for** your team, plus **Stop sharing** (which asks first and says how many files stop being shared). |
+| The chat is shared | **Copy link for** your team, plus **Stop sharing** (which asks first and, when it can count them, says how many files stop being shared). |
 | You are not on a team | Nothing to share with yet; the dialog says how to get onto one. |
 
 **What it shares.** Your messages, the assistant's replies, and the **files the

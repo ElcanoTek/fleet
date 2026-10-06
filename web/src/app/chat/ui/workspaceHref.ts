@@ -541,14 +541,32 @@ function rewriteFileRefs(markdown: string, r: FileRefRenderers): string {
 
   const lines = scanFenced(markdown.split("\n"));
   const refs = new Map<string, FileRef>();
+  // Every label's FIRST definition, workspace or not: CommonMark (and the Go
+  // parser the server withholds with) resolve a label to its first
+  // definition and ignore later ones, so a later `[x]: out/a.csv` under an
+  // earlier `[x]: https://…` is not a workspace reference — and a later
+  // `[x]: https://…` under an earlier workspace one must not take over once
+  // the first is dropped. true = the first definition was a workspace file.
+  const firstDef = new Map<string, boolean>();
   const defLines = new Set<number>();
   lines.forEach((line, i) => {
     if (line.code) return;
     const def = MD_REF_DEF.exec(line.text);
     if (!def) return;
+    const label = normalizeRefLabel(def[1]);
     const ref = workspaceFileRef(def[2] ?? def[3] ?? "");
+    const seen = firstDef.get(label);
+    if (seen !== undefined) {
+      // A duplicate never renders. Drop it when it names a workspace file
+      // (nothing to resurrect) or when the first one was dropped (so it
+      // cannot become the first); an inert external duplicate under an
+      // external first definition stays exactly as written.
+      if (ref || seen) defLines.add(i);
+      return;
+    }
+    firstDef.set(label, Boolean(ref));
     if (!ref) return;
-    refs.set(normalizeRefLabel(def[1]), ref);
+    refs.set(label, ref);
     // Drop the definition itself: with it gone the usages this pass rewrites
     // cannot be resurrected by a later one, and a usage it missed renders as
     // literal bracket text rather than as a link.

@@ -117,6 +117,81 @@ describe("ProjectSettingsDialog", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
   });
 
+  it("B28: re-choosing Only you waits for a fresh count, not the earlier one", async () => {
+    const gates: Array<() => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/impact")) {
+          await new Promise<void>((resolve) => gates.push(resolve));
+          return new Response(JSON.stringify(IMPACT), { status: 200 });
+        }
+        return new Response(JSON.stringify({ members: [] }), { status: 200 });
+      }),
+    );
+    renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: /Only you/ }));
+    await waitFor(() => expect(gates).toHaveLength(1));
+    gates[0]();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+    // Back to the team, then Only you again: the second /impact is held.
+    fireEvent.click(screen.getByRole("radio", { name: /Elcano/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Only you/ }));
+    await waitFor(() => expect(gates).toHaveLength(2));
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("dialog")).toHaveTextContent("Counting what changes…");
+    gates[1]();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+  });
+
+  it("B29: Delete project waits for the counts before it can delete", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith("/impact")) {
+          await gate;
+          return new Response(JSON.stringify(IMPACT), { status: 200 });
+        }
+        return new Response(JSON.stringify({ members: [] }), { status: 200 });
+      }),
+    );
+    const props = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Delete project" }));
+    const panel = screen.getByRole("alertdialog", { name: "Delete Knowertech?" });
+    const del = within(panel).getByRole("button", { name: "Delete project" });
+    expect(del).toBeDisabled();
+    fireEvent.click(del);
+    expect(props.onDelete).not.toHaveBeenCalled();
+    release?.();
+    await waitFor(() =>
+      expect(within(panel).getByRole("button", { name: "Delete project" })).toBeEnabled(),
+    );
+  });
+
+  it("B29: a failed count still lets the owner delete, with honest wording", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).endsWith("/impact")
+          ? new Response("boom", { status: 500 })
+          : new Response(JSON.stringify({ members: [] }), { status: 200 }),
+      ),
+    );
+    const props = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Delete project" }));
+    const panel = screen.getByRole("alertdialog", { name: "Delete Knowertech?" });
+    await waitFor(() =>
+      expect(panel).toHaveTextContent("Every chat in it leaves the project and becomes temporary."),
+    );
+    fireEvent.click(within(panel).getByRole("button", { name: "Delete project" }));
+    expect(props.onDelete).toHaveBeenCalledTimes(1);
+  });
+
   it("B26: no team — the team option is unavailable, with the A3a guidance", () => {
     stub();
     renderDialog({ project: PRIVATE, myTeam: "", isAdmin: true });

@@ -40,12 +40,6 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 	// shared is set when the parent is a TEAMMATE's chat: the branch then
 	// carries the parent's shared outputs as the brancher's own copies.
 	var shared *store.TeamSharedConversation
-	// sourceHighWater is the source's message-id high-water mark, read
-	// BEFORE the transcript snapshot and the copy (teammate path only): a
-	// source message that lands while the branch is being made is then
-	// above it, so the branch reports "added messages since you branched"
-	// rather than counting a message it never saw as seen.
-	var sourceHighWater int64
 	parent, err := s.store.Get(r.Context(), user, parentConvID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -56,11 +50,6 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		parentTitle = parent.Title
 	default:
 		var serr error
-		sourceHighWater, serr = s.store.MaxMessageID(r.Context(), parentConvID)
-		if serr != nil {
-			http.Error(w, serr.Error(), http.StatusInternalServerError)
-			return
-		}
 		shared, serr = s.store.GetTeamVisibleConversation(r.Context(), user, parentConvID)
 		if serr != nil {
 			http.Error(w, serr.Error(), http.StatusInternalServerError)
@@ -112,7 +101,15 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if shared != nil {
-		branch.BranchOrigin = s.carrySharedFilesIntoBranch(r.Context(), shared, branch, sourceHighWater)
+		// The "seen" high-water mark is the branch point the copy actually
+		// used, not the source's newest message: the copy took exactly the
+		// source messages with id <= the branch point, so every source
+		// message above it — one sent before this POST but after the
+		// teammate's last poll as much as one that lands mid-copy — is
+		// genuinely not in the branch and must report "added messages since
+		// you branched". (BranchConversation has verified the point is a
+		// message of this source, so it is a real source id.)
+		branch.BranchOrigin = s.carrySharedFilesIntoBranch(r.Context(), shared, branch, body.BranchPointMessageID)
 	}
 	writeJSONStatus(w, http.StatusCreated, branch)
 }
@@ -136,8 +133,9 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 // so the branch renders it as a locked name rather than a live link that
 // 404s against the brancher's workspace.
 //
-// sourceHighWater is the source's message-id high-water mark read before the
-// branch was made; it is recorded verbatim, never re-read after the copy.
+// sourceHighWater is the branch point the copy used (every source message
+// above it is not in the branch); it is recorded verbatim, never re-read from
+// the source.
 //
 // Best-effort past the branch itself: the conversation already exists, so a
 // failure here is logged and the branch is returned without (some of) its

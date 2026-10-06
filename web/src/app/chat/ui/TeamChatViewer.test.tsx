@@ -344,6 +344,83 @@ describe("TeamChatViewer — live (the owner keeps working)", () => {
     expect(screen.queryByText("Break spend down by channel.")).toBeNull();
   });
 
+  it("applies only the latest of two overlapping reads, whichever lands first", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const newer: Snap = {
+      ...WITH_FILES,
+      messages: [
+        ...WITH_FILES.messages,
+        { id: 3, role: "user", type: "text", content: { text: "Now by region." } },
+      ],
+    };
+    const held: Array<(r: Response) => void> = [];
+    let mode: "now" | "hold" = "now";
+    stubFetch(() =>
+      mode === "now"
+        ? json(WITH_FILES)
+        : new Promise<Response>((resolve) => held.push(resolve)),
+    );
+    renderFull(WITH_FILES);
+    await screen.findByText("Break spend down by channel.");
+
+    mode = "hold";
+    // Read 1: the poll. Read 2: a visibility refresh while 1 is in flight.
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(held).toHaveLength(2));
+    // The newer read lands first…
+    await act(async () => {
+      held[1](json(newer));
+    });
+    expect(await screen.findByText("Now by region.")).toBeInTheDocument();
+    // …then the older one, a 404: it must not drop the newer transcript.
+    await act(async () => {
+      held[0](json({}, 404));
+    });
+    expect(screen.getByText("Now by region.")).toBeInTheDocument();
+    expect(screen.queryByText("This chat isn’t shared with your team anymore.")).toBeNull();
+  });
+
+  it("does not let an older snapshot repaint over a newer one", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const newer: Snap = {
+      ...WITH_FILES,
+      messages: [
+        ...WITH_FILES.messages,
+        { id: 3, role: "user", type: "text", content: { text: "Now by region." } },
+      ],
+    };
+    const held: Array<(r: Response) => void> = [];
+    let mode: "now" | "hold" = "now";
+    stubFetch(() =>
+      mode === "now"
+        ? json(WITH_FILES)
+        : new Promise<Response>((resolve) => held.push(resolve)),
+    );
+    renderFull(WITH_FILES);
+    await screen.findByText("Break spend down by channel.");
+    mode = "hold";
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(held).toHaveLength(2));
+    await act(async () => {
+      held[1](json(newer));
+    });
+    expect(await screen.findByText("Now by region.")).toBeInTheDocument();
+    await act(async () => {
+      held[0](json(WITH_FILES));
+    });
+    expect(screen.getByText("Now by region.")).toBeInTheDocument();
+  });
+
   it("clears a failed first load once a poll succeeds", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     let status = 500;

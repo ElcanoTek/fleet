@@ -218,6 +218,44 @@ describe("MoveChatConfirmDialog", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
+  it("B32: holds BOTH Remove and Pin it and remove until the count settles", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await gate;
+        return new Response("nope", { status: 500 });
+      }),
+    );
+    const onConfirm = vi.fn();
+    const onPinAndConfirm = vi.fn();
+    render(
+      <MoveChatConfirmDialog
+        confirm={{ kind: "unshare-unfile", team: "Elcano", conversationId: "c1" }}
+        onCancel={noop}
+        onConfirm={onConfirm}
+        onPinAndConfirm={onPinAndConfirm}
+      />,
+    );
+    const remove = screen.getByRole("button", { name: "Remove" });
+    const pin = screen.getByRole("button", { name: "Pin it and remove" });
+    expect(remove).toBeDisabled();
+    expect(pin).toBeDisabled();
+    fireEvent.click(remove);
+    fireEvent.click(pin);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onPinAndConfirm).not.toHaveBeenCalled();
+    // A failed count settles too: unnumbered copy, both actions available.
+    release?.();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove" })).toBeEnabled());
+    expect(screen.getByRole("dialog")).toHaveTextContent("along with shared files.");
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   it("names the audience 'your team' when no team name is known", () => {
     stubOutputs(0);
     render(

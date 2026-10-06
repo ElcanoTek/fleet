@@ -221,31 +221,42 @@ export function ShareDialog({
         : team;
 
   // Outputs: read whenever the file line can show (A4/A5/A6). Keyed by chat
-  // id so a stale read for another chat never paints this one.
+  // id AND read generation, so a stale read for another chat (or an earlier
+  // read of this one) never paints this one, and a re-read after a share is
+  // "loading" again rather than the old counts. Three honest states:
+  // loading (nothing that promises a count is enabled yet), ready, and
+  // failed (said plainly — never rendered as zero files).
   const wantsOutputs =
     state === "A4" || state === "A5" || state === "A6";
   const conversationId = conversation?.id ?? "";
-  const [outputs, setOutputs] = useState<{
-    id: string;
-    data: ConversationOutputs;
-  } | null>(null);
   const [outputsTick, setOutputsTick] = useState(0);
+  const outputsKey = `${conversationId}:${outputsTick}`;
+  const [outputs, setOutputs] = useState<
+    | { key: string; status: "ready"; data: ConversationOutputs }
+    | { key: string; status: "failed" }
+    | null
+  >(null);
   useEffect(() => {
     if (!wantsOutputs || !conversationId) return;
     let cancelled = false;
-    loadOutputs(conversationId)
-      .then((data) => {
-        if (!cancelled) setOutputs({ id: conversationId, data });
-      })
-      .catch(() => {
-        // Best-effort: without the read the file line stays quiet rather
-        // than claiming a count it does not know.
-      });
+    const key = `${conversationId}:${outputsTick}`;
+    loadOutputs(conversationId).then(
+      (data) => {
+        if (!cancelled) setOutputs({ key, status: "ready", data });
+      },
+      () => {
+        if (!cancelled) setOutputs({ key, status: "failed" });
+      },
+    );
     return () => {
       cancelled = true;
     };
   }, [wantsOutputs, conversationId, loadOutputs, outputsTick]);
-  const files = outputs?.id === conversationId ? outputs.data : null;
+  const outputsLoad = outputs?.key === outputsKey ? outputs : null;
+  const outputsStatus: "loading" | "ready" | "failed" = outputsLoad
+    ? outputsLoad.status
+    : "loading";
+  const files = outputsLoad?.status === "ready" ? outputsLoad.data : null;
 
   // Checklist (A4): paths the owner UNchecked. Seeded from the server's
   // exclusions so sharing again restores earlier choices (#29).
@@ -331,13 +342,127 @@ export function ShareDialog({
       toast.notify({
         message: `Link copied. Only ${team} members can open it.`,
       });
+    // A blocked (or missing) clipboard is not a copied link — but the
+    // owner clicked, so say so and hand them the link to copy themselves
+    // rather than letting the click do nothing.
+    const failed = () =>
+      toast.notify({
+        message: `Couldn’t copy the link. Copy it from here: ${url}`,
+      });
     const clip =
       typeof navigator !== "undefined" ? navigator.clipboard : undefined;
-    if (!clip) return;
-    void clip.writeText(url).then(done, () => {
-      // A blocked clipboard is not a copied link; say nothing false.
-    });
+    if (!clip) {
+      failed();
+      return;
+    }
+    void clip.writeText(url).then(done, failed);
   };
+
+  // The A4/A6 file line and its Choose… checklist: the same control in both
+  // states, so a chat with a public link in a team project shares with the
+  // owner's file choices too. The main Share button waits while the list is
+  // loading; a failed list says so and still lets the owner share.
+  const shareFileChooser =
+    outputsStatus === "failed" ? (
+      <p
+        data-testid="share-file-line"
+        className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78rem] text-[var(--color-text-secondary)]"
+      >
+        <Icon name="file-text" className="size-3.5 shrink-0" />
+        <span>
+          Couldn’t list this chat’s files. Sharing shares the files it
+          presented; you can adjust them in Sources afterwards.
+        </span>
+      </p>
+    ) : outputsStatus === "loading" ? (
+      <p
+        data-testid="share-file-line"
+        className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78rem] text-[var(--color-text-muted)]"
+      >
+        <Icon name="file-text" className="size-3.5 shrink-0" />
+        <span>Listing this chat’s files…</span>
+      </p>
+    ) : files ? (
+      <div className="flex flex-col gap-2">
+        <p
+          data-testid="share-file-line"
+          className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78rem] text-[var(--color-text-secondary)]"
+        >
+          <Icon name="file-text" className="size-3.5 shrink-0" />
+          {files.total > 0 ? (
+            <>
+              <span>
+                Includes{" "}
+                {filesLabel(
+                  files.outputs.length - effectiveUnchecked.length,
+                )}
+              </span>
+              <span
+                aria-hidden="true"
+                className="text-[var(--color-text-muted)]"
+              >
+                ·
+              </span>
+              <button
+                type="button"
+                aria-expanded={chooseOpen}
+                className={LINK_BTN}
+                onClick={() => {
+                  if (!chooseOpen && unchecked === null)
+                    setUnchecked(effectiveUnchecked);
+                  setChooseOpen(!chooseOpen);
+                }}
+              >
+                {chooseOpen ? "Done" : "Choose…"}
+              </button>
+            </>
+          ) : (
+            <span>Files it creates will be shared too.</span>
+          )}
+        </p>
+        {chooseOpen && files.outputs.length > 0 ? (
+          <div
+            role="group"
+            aria-label="Files to share"
+            className="flex max-h-52 flex-col overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] p-1"
+          >
+            {files.outputs.map((f) => {
+              const checked = !effectiveUnchecked.includes(f.path);
+              return (
+                <label
+                  key={f.path}
+                  aria-label={`${f.name}, ${formatBytes(f.size)}, ${formatDay(f.modified_at)}`}
+                  className="flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 hover:bg-[var(--color-overlay-soft)]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() =>
+                      setUnchecked(
+                        checked
+                          ? [...effectiveUnchecked, f.path]
+                          : effectiveUnchecked.filter(
+                              (p) => p !== f.path,
+                            ),
+                      )
+                    }
+                    className="m-0 size-[0.95rem] shrink-0 accent-[var(--color-primary)]"
+                  />
+                  <span className="flex min-w-0 flex-1 flex-col gap-px">
+                    <span className="text-[0.78rem] text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
+                      {f.name}
+                    </span>
+                    <span className="font-[family-name:var(--font-code)] text-[0.6875rem] tabular-nums text-[var(--color-text-muted)]">
+                      {formatBytes(f.size)} · {formatDay(f.modified_at)}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    ) : null;
 
   return (
     <DialogShell
@@ -547,92 +672,12 @@ export function ShareDialog({
                   Teammates find it on {project?.name}’s home, read it, and
                   branch it into their own chat.
                 </p>
-                {files ? (
-                  <div className="flex flex-col gap-2">
-                    <p
-                      data-testid="share-file-line"
-                      className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78rem] text-[var(--color-text-secondary)]"
-                    >
-                      <Icon name="file-text" className="size-3.5 shrink-0" />
-                      {files.total > 0 ? (
-                        <>
-                          <span>
-                            Includes{" "}
-                            {filesLabel(
-                              files.outputs.length - effectiveUnchecked.length,
-                            )}
-                          </span>
-                          <span
-                            aria-hidden="true"
-                            className="text-[var(--color-text-muted)]"
-                          >
-                            ·
-                          </span>
-                          <button
-                            type="button"
-                            aria-expanded={chooseOpen}
-                            className={LINK_BTN}
-                            onClick={() => {
-                              if (!chooseOpen && unchecked === null)
-                                setUnchecked(effectiveUnchecked);
-                              setChooseOpen(!chooseOpen);
-                            }}
-                          >
-                            {chooseOpen ? "Done" : "Choose…"}
-                          </button>
-                        </>
-                      ) : (
-                        <span>Files it creates will be shared too.</span>
-                      )}
-                    </p>
-                    {chooseOpen && files.outputs.length > 0 ? (
-                      <div
-                        role="group"
-                        aria-label="Files to share"
-                        className="flex max-h-52 flex-col overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] p-1"
-                      >
-                        {files.outputs.map((f) => {
-                          const checked = !effectiveUnchecked.includes(f.path);
-                          return (
-                            <label
-                              key={f.path}
-                              aria-label={`${f.name}, ${formatBytes(f.size)}, ${formatDay(f.modified_at)}`}
-                              className="flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 hover:bg-[var(--color-overlay-soft)]"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() =>
-                                  setUnchecked(
-                                    checked
-                                      ? [...effectiveUnchecked, f.path]
-                                      : effectiveUnchecked.filter(
-                                          (p) => p !== f.path,
-                                        ),
-                                  )
-                                }
-                                className="m-0 size-[0.95rem] shrink-0 accent-[var(--color-primary)]"
-                              />
-                              <span className="flex min-w-0 flex-1 flex-col gap-px">
-                                <span className="text-[0.78rem] text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
-                                  {f.name}
-                                </span>
-                                <span className="font-[family-name:var(--font-code)] text-[0.6875rem] tabular-nums text-[var(--color-text-muted)]">
-                                  {formatBytes(f.size)} · {formatDay(f.modified_at)}
-                                </span>
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
+                {shareFileChooser}
                 <div>
                   <button
                     type="button"
                     className={PRIMARY_BTN}
-                    disabled={working}
+                    disabled={working || outputsStatus === "loading"}
                     onClick={() => void shareNow(conversation)}
                   >
                     Share with {team}
@@ -714,14 +759,21 @@ export function ShareDialog({
               >
                 <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]">
                   Stop sharing with {team}?{" "}
-                  {files && files.shared_count > 0
-                    ? `${plural(files.shared_count, "shared file", "shared files")} will stop being shared too.`
-                    : "Teammates lose access right away."}
+                  {outputsStatus === "loading"
+                    ? "Counting shared files…"
+                    : outputsStatus === "failed" || !files
+                      ? "Its shared files will stop being shared too."
+                      : files.shared_count > 0
+                        ? `${plural(files.shared_count, "shared file", "shared files")} will stop being shared too.`
+                        : "Teammates lose access right away."}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    disabled={working}
+                    // The sentence above names the count it stops; the
+                    // confirm waits for it (a failed count still allows it,
+                    // with the honest no-number sentence).
+                    disabled={working || outputsStatus === "loading"}
                     onClick={() => void stopSharing(conversation)}
                     className={`inline-flex min-h-[1.875rem] items-center rounded-full border border-[var(--color-danger)] bg-[var(--color-danger)] px-3.5 text-[0.78rem] font-semibold text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
                   >
@@ -751,11 +803,12 @@ export function ShareDialog({
                     {project?.name}’s home.
                   </p>
                 </div>
+                {shareFileChooser}
                 <div>
                   <button
                     type="button"
                     className={PRIMARY_BTN}
-                    disabled={working}
+                    disabled={working || outputsStatus === "loading"}
                     onClick={() => void shareNow(conversation)}
                   >
                     Share with {team}

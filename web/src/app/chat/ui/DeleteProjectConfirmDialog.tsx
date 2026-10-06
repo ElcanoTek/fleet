@@ -70,8 +70,13 @@ export function DeleteProjectConfirmDialog({
         </button>
         <button
           type="button"
-          className="rounded-md px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)]"
-          onClick={onConfirm}
+          // Waits for the counts the list promises; a failed read still
+          // settles, with the honest "what, not how much" wording.
+          disabled={!state.settled}
+          className="rounded-md px-3 py-1.5 text-[0.8rem] font-medium text-[var(--color-danger)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] disabled:opacity-50"
+          onClick={() => {
+            if (state.settled) onConfirm();
+          }}
         >
           Delete project
         </button>

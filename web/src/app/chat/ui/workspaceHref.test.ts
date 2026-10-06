@@ -627,6 +627,34 @@ describe("linkSharedFiles — the teammate's view of the owner's outputs", () =>
     ).toBe(`Saved to [data\\.csv](${TEAM}data.csv).`);
   });
 
+  it("resolves a duplicate reference label to its FIRST definition, like CommonMark", () => {
+    // External first: the label is the external link; the later workspace
+    // duplicate is inert and dropped, and the use is left alone.
+    const extFirst = ["See [x].", "", "[x]: https://example.com/a", "[x]: data.csv"].join("\n");
+    expect(linkSharedFiles(extFirst, links)).toBe(
+      ["See [x].", "", "[x]: https://example.com/a"].join("\n"),
+    );
+    expect(redactUnsharedFiles(extFirst, IMAGE_PLACEHOLDER)).toBe(
+      ["See [x].", "", "[x]: https://example.com/a"].join("\n"),
+    );
+    // Workspace first: the use is rewritten from it, and the later external
+    // duplicate cannot become the label's definition once the first is gone.
+    const wsFirst = ["See [x].", "", "[x]: old.csv", "[x]: https://example.com/a"].join("\n");
+    expect(linkSharedFiles(wsFirst, links)).toBe(
+      `See [old\\.csv (not shared)]${LOCK}.\n`,
+    );
+    expect(redactUnsharedFiles(wsFirst, IMAGE_PLACEHOLDER)).toBe(
+      "See old\\.csv (file not shared).\n",
+    );
+    // Two workspace definitions: the first (shared) wins over the later one.
+    const twoWs = ["See [x].", "", "[x]: data.csv", "[x]: old.csv"].join("\n");
+    expect(linkSharedFiles(twoWs, links)).toBe(`See [x](${TEAM}data.csv).\n`);
+    // External duplicates of an external label stay exactly as written.
+    const twoExt = ["See [x].", "", "[x]: https://a.example", "[x]: https://b.example"].join("\n");
+    expect(redactUnsharedFiles(twoExt, IMAGE_PLACEHOLDER)).toBe(twoExt);
+    expect(linkSharedFiles(twoExt, links)).toBe(twoExt);
+  });
+
   it("never mints a URL for a path outside the shared set, traversal included", () => {
     const out = linkSharedFiles(
       "[x](../data.csv) [y](%2e%2e/data.csv) [z](secret/data.csv)",
