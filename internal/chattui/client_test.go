@@ -179,6 +179,11 @@ func TestClientStream_ErrorBodyRedactsEchoedToken(t *testing.T) {
 			status: http.StatusBadGateway,
 			body:   "upstream refused; request had X-Chat-Server-Token: super-secret-token",
 		},
+		{
+			name:   "400 echoing the header",
+			status: http.StatusBadRequest,
+			body:   "bad request; request had X-Chat-Server-Token: super-secret-token",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

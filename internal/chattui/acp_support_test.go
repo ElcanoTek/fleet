@@ -244,6 +244,69 @@ func TestStream403NamesTheRefusalReason(t *testing.T) {
 	}
 }
 
+// A 400 is fleet refusing the request, not the user: it is quoted as a
+// rejection, never as "not authorized", while a 401 keeps naming the user.
+// The non-empty 400 bodies are the exact bytes POST /chat writes (http.Error
+// appends "\n"); the 401 body stands in for a proxy's, since fleet chat and
+// fleet acp never send what fleet's own 401 answers.
+func TestStream400IsARejectionNotAnAuthFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "body over the 1 MB cap",
+			status: http.StatusBadRequest,
+			body:   "bad json: http: request body too large\n",
+			want:   "server rejected the request (400): bad json: http: request body too large",
+		},
+		{
+			name:   "empty message",
+			status: http.StatusBadRequest,
+			body:   "message is required\n",
+			want:   "server rejected the request (400): message is required",
+		},
+		{
+			name:   "lockdown model",
+			status: http.StatusBadRequest,
+			body:   "model not allowed in lockdown mode\n",
+			want:   "server rejected the request (400): model not allowed in lockdown mode",
+		},
+		{
+			name:   "empty body",
+			status: http.StatusBadRequest,
+			body:   "",
+			want:   "server rejected the request (400)",
+		},
+		{
+			name:   "401 still names the user",
+			status: http.StatusUnauthorized,
+			body:   "unauthorized\n",
+			want:   "not authorized (401) for nobody@example.com: unauthorized",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			_, err := NewClient(Config{ServerURL: srv.URL, Email: "nobody@example.com", Token: "super-secret-token"}).Stream(context.Background(), "hi", "", func(Event) {})
+			var se *StatusError
+			if !errors.As(err, &se) || se.Code != tt.status {
+				t.Fatalf("err = %#v, want *StatusError %d", err, tt.status)
+			}
+			if se.Error() != tt.want {
+				t.Errorf("message = %q\nwant      %q", se.Error(), tt.want)
+			}
+		})
+	}
+}
+
 // A stream that dies before its first frame still reports the conversation
 // the server named on the response headers (#1591).
 func TestStreamReportsTheHeaderConversationID(t *testing.T) {

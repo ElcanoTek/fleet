@@ -307,8 +307,19 @@ func (c *Client) StreamInput(ctx context.Context, message, convID, inputID strin
 		switch resp.StatusCode {
 		case http.StatusForbidden:
 			return convID, &StatusError{Code: resp.StatusCode, msg: forbiddenMessage(c.cfg.Email, excerpt)}
-		case http.StatusUnauthorized, http.StatusBadRequest:
+		case http.StatusUnauthorized:
 			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("not authorized (%d) for %s: %s", resp.StatusCode, c.cfg.Email, msg)}
+		case http.StatusBadRequest:
+			// A 400 is fleet refusing the request itself (a body over the chat
+			// server's 1 MB cap, an empty message, a model lockdown mode refuses),
+			// not who sent it: the one identity 400, a missing X-User-Email,
+			// never comes from `fleet chat` or `fleet acp`, which refuse an
+			// empty email before sending anything. So it is quoted as a
+			// rejection, never as "not authorized".
+			if msg == "" {
+				return convID, &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400)"}
+			}
+			return convID, &StatusError{Code: resp.StatusCode, msg: "server rejected the request (400): " + msg}
 		default:
 			return convID, &StatusError{Code: resp.StatusCode, msg: fmt.Sprintf("server returned %d: %s", resp.StatusCode, msg)}
 		}
