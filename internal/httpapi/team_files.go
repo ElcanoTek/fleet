@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -306,6 +307,16 @@ func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile)
 
 var errBranchCopyBudget = errors.New("branch copy budget exhausted")
 
+// errBranchCopyShort is a copy that read fewer bytes than the file had when
+// it was stat'd: the source was truncated (or replaced) mid-copy, so the
+// bytes we have are not the file the owner shared. It is withheld, never
+// copied as a silently truncated file.
+var errBranchCopyShort = errors.New("source changed during copy")
+
+// branchCopyAfterStat is a test seam run between the source stat and the
+// copy; nil in production.
+var branchCopyAfterStat func(srcPath string)
+
 func copyOneOutput(srcDir string, dst *os.Root, rel string, budget int64) (int64, error) {
 	in, info, err := openWorkspaceFileNoFollow(srcDir, rel)
 	if err != nil {
@@ -314,6 +325,9 @@ func copyOneOutput(srcDir string, dst *os.Root, rel string, budget int64) (int64
 	defer in.Close()
 	if info.Size() > budget {
 		return 0, errBranchCopyBudget
+	}
+	if branchCopyAfterStat != nil {
+		branchCopyAfterStat(filepath.Join(srcDir, filepath.FromSlash(rel)))
 	}
 	if dir := path.Dir(rel); dir != "." {
 		if err := dst.MkdirAll(dir, 0o755); err != nil {
@@ -329,6 +343,12 @@ func copyOneOutput(srcDir string, dst *os.Root, rel string, budget int64) (int64
 	n, err := io.Copy(out, io.LimitReader(in, info.Size()))
 	if cerr := out.Close(); err == nil {
 		err = cerr
+	}
+	// io.Copy over a LimitReader reports an early EOF as success, so a
+	// source truncated between the stat and the copy would land as a
+	// shorter file. Require the full stat'd size.
+	if err == nil && n != info.Size() {
+		err = errBranchCopyShort
 	}
 	if err != nil {
 		_ = dst.Remove(rel)

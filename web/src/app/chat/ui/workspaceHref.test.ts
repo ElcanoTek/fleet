@@ -574,6 +574,49 @@ describe("linkSharedFiles — the teammate's view of the owner's outputs", () =>
     );
   });
 
+  it("rewrites both halves of a clickable thumbnail", () => {
+    // shared thumb → shared full: a thumbnail link, both on the team route.
+    expect(linkSharedFiles("[![t](daily_spend.png)](data.csv)", links)).toBe(
+      `[![t](${TEAM}daily_spend.png)](${TEAM}data.csv)`,
+    );
+    // shared thumb → unshared full: the image stays, the link locks.
+    expect(linkSharedFiles("[![t](daily_spend.png)](full.png)", links)).toBe(
+      `![t](${TEAM}daily_spend.png) [full\\.png (not shared)]${LOCK}`,
+    );
+    // unshared thumb → shared full: the thumb locks, the full is linked by name.
+    expect(linkSharedFiles("[![t](thumb.png)](data.csv)", links)).toBe(
+      `[thumb\\.png (not shared)]${LOCK} [data\\.csv](${TEAM}data.csv)`,
+    );
+    // both unshared: two locked names; the same file: one.
+    expect(linkSharedFiles("[![t](thumb.png)](full.png)", links)).toBe(
+      `[thumb\\.png (not shared)]${LOCK} [full\\.png (not shared)]${LOCK}`,
+    );
+    expect(linkSharedFiles("[![t](chart.png)](chart.png)", links)).toBe(
+      `[chart\\.png (not shared)]${LOCK}`,
+    );
+    // An external thumbnail linking to a workspace file, and the reverse.
+    expect(linkSharedFiles("[![t](https://cdn.example/t.png)](full.png)", links)).toBe(
+      `![t](https://cdn.example/t.png) [full\\.png (not shared)]${LOCK}`,
+    );
+    expect(linkSharedFiles("[![t](daily_spend.png)](https://example.com/x)", links)).toBe(
+      `[![t](${TEAM}daily_spend.png)](https://example.com/x)`,
+    );
+    // Nothing in any of them still points at the owner's workspace.
+    for (const md of [
+      "[![t](daily_spend.png)](full.png)",
+      "[![t](thumb.png)](data.csv)",
+      "[![t](thumb.png)](full.png)",
+    ]) {
+      expect(linkSharedFiles(md, links)).not.toMatch(/\]\((?:full|thumb)\.png\)/);
+    }
+  });
+
+  it("leaves the public redaction of a clickable thumbnail unchanged", () => {
+    expect(redactUnsharedFiles("[![t](thumb.png)](full.png)", IMAGE_PLACEHOLDER)).toBe(
+      "full\\.png (file not shared)",
+    );
+  });
+
   it("handles reference-style and bare routes by the same rules", () => {
     const md = ["See [the data][d] and [old][o].", "", "[d]: data.csv", "[o]: old.csv"].join("\n");
     expect(linkSharedFiles(md, links)).toBe(

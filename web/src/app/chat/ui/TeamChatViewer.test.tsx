@@ -314,4 +314,21 @@ describe("TeamChatViewer — live (the owner keeps working)", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Break spend down by channel.")).toBeNull();
   });
+
+  it("clears a failed first load once a poll succeeds", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let status = 500;
+    stubFetch(() => (status === 200 ? json(WITH_FILES) : json({}, status)));
+    renderFull(WITH_FILES);
+    expect(await screen.findByText("Couldn’t load this chat (HTTP 500).")).toBeInTheDocument();
+
+    status = 200;
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    expect(await screen.findByText("Break spend down by channel.")).toBeInTheDocument();
+    // Neither above the transcript nor beside the Branch button.
+    expect(screen.queryByText(/Couldn’t load this chat/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });

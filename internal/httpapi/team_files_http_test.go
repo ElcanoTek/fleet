@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -157,6 +158,14 @@ func TestShareWithTeamCarriesFiles(t *testing.T) {
 	}
 	if w := convSub(t, f.srv, "POST", "bob@x.com", f.chat.ID, "share-with-team", `{"visible":false}`); w.Code != 404 {
 		t.Errorf("teammate share-with-team: %d, want 404", w.Code)
+	}
+	// An archived chat cannot be shared: 409 with the sentence that says why.
+	if err := f.st.SetArchived(f.ctx, "alice@x.com", f.chat.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	w = convSub(t, f.srv, "POST", "alice@x.com", f.chat.ID, "share-with-team", `{"visible":true}`)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "unarchive") {
+		t.Errorf("share while archived: %d %q, want 409 naming unarchive", w.Code, w.Body.String())
 	}
 }
 
@@ -519,12 +528,15 @@ func TestProjectFilesGrouped(t *testing.T) {
 
 func TestProjectMyStateEndpoint(t *testing.T) {
 	f := newTeamHTTPFixture(t)
-	w := projectSub(t, f.srv, "PUT", "bob@x.com", f.project.ID+"/my-state", `{"kept_personal":true,"sources_open":{"c1":true}}`)
+	// sources_open keys are chat ids in the project; keys naming no live chat
+	// here are pruned on write.
+	w := projectSub(t, f.srv, "PUT", "bob@x.com", f.project.ID+"/my-state",
+		`{"kept_personal":true,"sources_open":{"`+f.chat.ID+`":true,"no-such-chat":true}}`)
 	if w.Code != 200 {
 		t.Fatalf("put: %d %s", w.Code, w.Body.String())
 	}
 	got := decode[store.ProjectUserState](t, projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/my-state", ""))
-	if !got.KeptPersonal || got.HasSharedChat || !got.SourcesOpen["c1"] {
+	if _, stale := got.SourcesOpen["no-such-chat"]; !got.KeptPersonal || got.HasSharedChat || !got.SourcesOpen[f.chat.ID] || stale {
 		t.Errorf("state = %+v", got)
 	}
 	// has_shared_chat is not client-writable.
@@ -534,5 +546,47 @@ func TestProjectMyStateEndpoint(t *testing.T) {
 	}
 	if w := projectSub(t, f.srv, "GET", "zoe@x.com", f.project.ID+"/my-state", ""); w.Code != 404 {
 		t.Errorf("non-member: %d, want 404", w.Code)
+	}
+}
+
+// TestCopyOneOutputRejectsShortCopy: a source truncated between the stat and
+// the copy must not land in the branch as a silently shorter file. The
+// LimitReader-bounded io.Copy reports the early EOF as success, so the copy
+// checks the byte count against the stat'd size, removes the partial file and
+// errors (the caller then withholds it).
+func TestCopyOneOutputRejectsShortCopy(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "report.csv"), []byte("a,b\n1,2\n3,4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dstDir := t.TempDir()
+	dst, err := os.OpenRoot(dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	branchCopyAfterStat = func(p string) {
+		if err := os.Truncate(p, 3); err != nil {
+			t.Errorf("truncate: %v", err)
+		}
+	}
+	t.Cleanup(func() { branchCopyAfterStat = nil })
+
+	n, err := copyOneOutput(src, dst, "report.csv", 1<<20)
+	if !errors.Is(err, errBranchCopyShort) {
+		t.Fatalf("copyOneOutput = (%d, %v), want errBranchCopyShort", n, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dstDir, "report.csv")); !os.IsNotExist(statErr) {
+		t.Fatalf("partial copy left behind: %v", statErr)
+	}
+
+	// Untouched source copies in full.
+	branchCopyAfterStat = nil
+	if err := os.WriteFile(filepath.Join(src, "ok.csv"), []byte("full"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := copyOneOutput(src, dst, "ok.csv", 1<<20); err != nil || n != 4 {
+		t.Fatalf("full copy = (%d, %v), want (4, nil)", n, err)
 	}
 }

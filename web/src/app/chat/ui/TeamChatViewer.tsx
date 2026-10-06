@@ -93,6 +93,10 @@ export function TeamChatViewer({
   onOpenBranch?: (conversationId: string) => void;
 }) {
   const [snapshot, setSnapshot] = useState<TeamChatSnapshot | null>(null);
+  // Two errors, two places: a LOAD failure replaces the transcript, a branch
+  // failure sits beside the branch button. Kept apart so a successful poll
+  // after a failed first load can clear the one without wiping the other.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [branching, setBranching] = useState(false);
   const { notify } = useChatToast();
@@ -106,7 +110,7 @@ export function TeamChatViewer({
       try {
         const url = conversationApiUrl(conversationId, "/team-view");
         if (!url) {
-          if (!isCancelled()) setError("This chat link has an invalid id.");
+          if (!isCancelled()) setLoadError("This chat link has an invalid id.");
           return;
         }
         const res = await fetch(url, { cache: "no-store" });
@@ -114,16 +118,22 @@ export function TeamChatViewer({
         if (!res.ok) {
           if (res.status === 404) {
             setSnapshot(null);
-            setError("This chat isn’t shared with your team anymore.");
+            setLoadError("This chat isn’t shared with your team anymore.");
           } else if (!quiet) {
-            setError(`Couldn’t load this chat (HTTP ${res.status}).`);
+            setLoadError(`Couldn’t load this chat (HTTP ${res.status}).`);
           }
           return;
         }
         const data = (await res.json()) as TeamChatSnapshot;
-        if (!isCancelled()) setSnapshot(data);
+        if (!isCancelled()) {
+          // Accepting a snapshot retires any earlier load failure: a first
+          // load that failed and a poll that then succeeded must not leave
+          // the stale "Couldn’t load" message on screen.
+          setLoadError(null);
+          setSnapshot(data);
+        }
       } catch {
-        if (!quiet && !isCancelled()) setError("Couldn’t reach the server.");
+        if (!quiet && !isCancelled()) setLoadError("Couldn’t reach the server.");
       }
     },
     [conversationId],
@@ -258,13 +268,13 @@ export function TeamChatViewer({
             beside the button that caused it (see the sticky bar below), which
             on any transcript longer than a viewport is the only place the
             reader is looking. */}
-        {error && !snapshot ? (
+        {loadError && !snapshot ? (
           <p className="mb-4 rounded-[0.75rem] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.8rem] text-[var(--color-danger)]">
-            {error}
+            {loadError}
           </p>
         ) : null}
 
-        {!snapshot && !error ? (
+        {!snapshot && !loadError ? (
           <p className="text-[0.875rem] text-[var(--color-text-muted)]">Loading…</p>
         ) : null}
 

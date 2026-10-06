@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS conversation_output_exclusions (
 -- key on purpose — a branch outlives its source being deleted, and the record
 -- of where it came from must outlive it too.
 --
+-- source_max_message_id is the source's high-water mark at branch time (its
+-- MAX(messages.id) then): "has added messages since you branched" is any
+-- source message with a larger id. An id, not branched_at against
+-- messages.created_at, because both are whole seconds — a message written in
+-- the same second as the branch would otherwise never count.
+--
 -- files_announced is the one-shot latch for the injected first-turn note that
 -- tells the agent which files it actually has (the transcript can mention
 -- files that were withheld).
@@ -34,6 +40,7 @@ CREATE TABLE IF NOT EXISTS conversation_branch_origins (
     -- once the source is unshared, its later renames are not theirs to see.
     source_title           TEXT NOT NULL DEFAULT '',
     branched_at            BIGINT NOT NULL,
+    source_max_message_id  BIGINT NOT NULL DEFAULT 0,
     copied_files           JSONB NOT NULL DEFAULT '[]'::jsonb,
     withheld_files         JSONB NOT NULL DEFAULT '[]'::jsonb,
     files_announced        BOOLEAN NOT NULL DEFAULT FALSE

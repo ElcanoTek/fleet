@@ -562,7 +562,7 @@ you hover over it. Here is everything in it.
 | **Save as workflow** | Turn the whole conversation into a reusable workflow template in the prompt library. See [From chat to a task](#10-from-chat-to-a-task). |
 | **Share…** | Opens the share dialog: sharing with your team first, then **Share outside your team** (a public link). See [Sharing with your team](#sharing-with-your-team). |
 | **Select** | Enter selection mode to pin, label, or delete several conversations at once. |
-| **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from the **Archived** group. Archiving a chat shared with your team stops sharing it (it asks first, with the number of shared files); unarchived, it comes back as **Only you**. |
+| **Archive** | Put it away without deleting it. Archived conversations never expire and can be unarchived from the **Archived** group. Archiving a chat shared with your team stops sharing it (it asks first, with the number of shared files); unarchived, it comes back as **Only you**. An archived chat can't be shared with your team; unarchive it first. |
 | **Delete** | Remove the conversation and everything it produced. There is a confirmation, and no undo. For a chat shared with your team, the confirmation says what the team loses; teammates who branched it keep their copies. |
 
 > **What expires, and when.** An unpinned conversation that is not in a project,

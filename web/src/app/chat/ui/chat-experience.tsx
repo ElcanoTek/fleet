@@ -3878,9 +3878,11 @@ export function ChatExperience({
   // B17 (#40): in the owner's team-shared chat, each output chip carries a
   // "Shared" / "Not shared" marker that opens Sources. The per-file states
   // come from GET /conversations/{id}/outputs, re-read when the chat gains a
-  // message (a reply may present a new output) and whenever the share dialog
-  // closes (its checklist may have changed them). Private chats get no
-  // context at all, so their transcript renders exactly as before.
+  // message (a reply may present a new output), whenever the share dialog
+  // closes (its checklist may have changed them), and whenever the project
+  // home closes (the markers' own "open Sources" goes there, and its per-file
+  // toggles change them). Private chats get no context at all, so their
+  // transcript renders exactly as before.
   const activeTeamShared = Boolean(activeConversation?.team_visible);
   const activeSharedProjectId = activeConversation?.project_id ?? "";
   const [outputShares, setOutputShares] = useState<{
@@ -3888,8 +3890,11 @@ export function ChatExperience({
     shared: Map<string, boolean>;
   } | null>(null);
   const shareDialogOpen = shareDialog !== null;
+  const projectHomeOpen = projectHome !== null;
   useEffect(() => {
-    if (!activeTeamShared || !activeConversationId || shareDialogOpen) return;
+    if (!activeTeamShared || !activeConversationId || shareDialogOpen || projectHomeOpen) {
+      return;
+    }
     let cancelled = false;
     const id = activeConversationId;
     fetchConversationOutputs(id)
@@ -3910,6 +3915,7 @@ export function ChatExperience({
     activeTeamShared,
     activeConversationId,
     shareDialogOpen,
+    projectHomeOpen,
     messages.length,
   ]);
   const outputShareMarkers = useMemo(

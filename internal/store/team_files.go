@@ -30,6 +30,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 )
@@ -225,6 +226,11 @@ type BranchOrigin struct {
 	BranchedAt           int64        `json:"branched_at"`
 	CopiedFiles          []BranchFile `json:"copied_files"`
 	WithheldFiles        []string     `json:"withheld_files"`
+	// SourceMaxMessageID is the source's MAX(messages.id) at branch time —
+	// the high-water mark ViewerBranches compares against. Zero on record
+	// means "take it now" (RecordBranchOrigin reads it in the same
+	// statement). Never sent: a message id of someone else's chat.
+	SourceMaxMessageID int64 `json:"-"`
 	// SourceStillShared is computed per read: whether the branch's owner can
 	// still team-view the source. The banner links back only while it is
 	// true, so it never offers a door that 404s.
@@ -252,17 +258,21 @@ func (s *Store) RecordBranchOrigin(ctx context.Context, branchConvID string, o B
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO conversation_branch_origins
 			(conversation_id, source_conversation_id, source_owner_email, source_title,
-			 branched_at, copied_files, withheld_files, files_announced)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, FALSE)
+			 branched_at, source_max_message_id, copied_files, withheld_files, files_announced)
+		VALUES ($1, $2, $3, $4, $5,
+		        COALESCE(NULLIF($8::bigint, 0),
+		                 (SELECT MAX(m.id) FROM messages m WHERE m.conversation_id = $2), 0),
+		        $6::jsonb, $7::jsonb, FALSE)
 		ON CONFLICT (conversation_id) DO UPDATE SET
 			source_conversation_id = EXCLUDED.source_conversation_id,
 			source_owner_email = EXCLUDED.source_owner_email,
 			source_title = EXCLUDED.source_title,
 			branched_at = EXCLUDED.branched_at,
+			source_max_message_id = EXCLUDED.source_max_message_id,
 			copied_files = EXCLUDED.copied_files,
 			withheld_files = EXCLUDED.withheld_files`,
 		branchConvID, o.SourceConversationID, normalizeEmail(o.SourceOwnerEmail), o.SourceTitle,
-		o.BranchedAt, string(copied), string(withheld))
+		o.BranchedAt, string(copied), string(withheld), o.SourceMaxMessageID)
 	return err
 }
 
@@ -374,7 +384,9 @@ type ViewerBranch struct {
 	// was made. Messages, not conversations.updated_at: the latter also moves
 	// on a rename, a share toggle or an archive, and the banner this feeds
 	// says "has added messages since you branched" — which must be true when
-	// it is shown.
+	// it is shown. Measured against the source's message-id high-water mark
+	// recorded at branch time, not timestamps: created_at and branched_at are
+	// whole seconds, so a message in the branch's own second would be missed.
 	ChangedSince bool `json:"changed_since"`
 }
 
@@ -389,8 +401,9 @@ func (s *Store) ViewerBranches(ctx context.Context, viewerEmail string, sourceID
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (o.source_conversation_id)
 		       o.source_conversation_id, o.conversation_id, o.branched_at,
-		       COALESCE((SELECT MAX(m.created_at) FROM messages m
-		                 WHERE m.conversation_id = o.source_conversation_id), 0) > o.branched_at
+		       EXISTS (SELECT 1 FROM messages m
+		               WHERE m.conversation_id = o.source_conversation_id
+		                 AND m.id > o.source_max_message_id)
 		FROM conversation_branch_origins o
 		JOIN conversations c ON c.id = o.conversation_id
 		WHERE c.user_email = $1 AND c.deleted_at IS NULL
@@ -510,8 +523,10 @@ type ProjectUserState struct {
 }
 
 // maxSourcesOpenEntries bounds the stored open/closed map. One entry per chat
-// group a person ever toggled; a project with more chats than this simply
-// forgets the oldest-written choices' surplus.
+// group a person toggled; keys for chats that left the project or were
+// deleted are pruned on every write, and if the map is still over the bound
+// the stored choices the write did not change are evicted first — the choice
+// being written always lands.
 const maxSourcesOpenEntries = 500
 
 // GetProjectUserState returns email's state for projectID (zero value when
@@ -537,42 +552,147 @@ func (s *Store) GetProjectUserState(ctx context.Context, projectID, email string
 
 // UpdateProjectUserState applies a partial update: a nil keptPersonal leaves
 // it alone, and sourcesOpen is MERGED into the stored map (a client toggling
-// one group sends one key). has_shared_chat is not client-writable — see
+// one group may send one key). has_shared_chat is not client-writable — see
 // MarkProjectSharedChat.
+//
+// The merge is a read-modify-write, so it runs under the row's lock
+// (SELECT ... FOR UPDATE after an insert-if-absent): two concurrent writes
+// from two devices — one setting kept_personal, one toggling a group — both
+// land instead of the later one overwriting the earlier with its stale read.
 func (s *Store) UpdateProjectUserState(ctx context.Context, projectID, email string, keptPersonal *bool, sourcesOpen map[string]bool) (ProjectUserState, error) {
 	email = normalizeEmail(email)
-	cur, err := s.GetProjectUserState(ctx, projectID, email)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return cur, err
+		return ProjectUserState{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO project_user_state (project_id, user_email, updated_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (project_id, user_email) DO NOTHING`,
+		projectID, email, now); err != nil {
+		return ProjectUserState{}, err
+	}
+	cur := ProjectUserState{SourcesOpen: map[string]bool{}}
+	var raw []byte
+	if err := tx.QueryRowContext(ctx, `
+		SELECT kept_personal, has_shared_chat, sources_open
+		FROM project_user_state WHERE project_id = $1 AND user_email = $2
+		FOR UPDATE`,
+		projectID, email).Scan(&cur.KeptPersonal, &cur.HasSharedChat, &raw); err != nil {
+		return ProjectUserState{}, err
+	}
+	if err := json.Unmarshal(raw, &cur.SourcesOpen); err != nil || cur.SourcesOpen == nil {
+		cur.SourcesOpen = map[string]bool{}
 	}
 	if keptPersonal != nil {
 		cur.KeptPersonal = *keptPersonal
 	}
+	// changed holds the keys this write actually set to a new value: the
+	// ones that must survive eviction.
+	changed := map[string]bool{}
 	for k, v := range sourcesOpen {
 		if k == "" || len(k) > 128 {
 			continue
 		}
-		if _, exists := cur.SourcesOpen[k]; !exists && len(cur.SourcesOpen) >= maxSourcesOpenEntries {
-			continue
+		if old, ok := cur.SourcesOpen[k]; !ok || old != v {
+			changed[k] = true
 		}
 		cur.SourcesOpen[k] = v
 	}
-	raw, err := json.Marshal(cur.SourcesOpen)
-	if err != nil {
-		return cur, err
+	if len(sourcesOpen) > 0 {
+		if err := pruneSourcesOpen(ctx, tx, projectID, cur.SourcesOpen, sourcesOpen, changed); err != nil {
+			return ProjectUserState{}, err
+		}
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO project_user_state (project_id, user_email, kept_personal, has_shared_chat, sources_open, updated_at)
-		VALUES ($1, $2, $3, FALSE, $4::jsonb, $5)
-		ON CONFLICT (project_id, user_email) DO UPDATE SET
-			kept_personal = EXCLUDED.kept_personal,
-			sources_open = EXCLUDED.sources_open,
-			updated_at = EXCLUDED.updated_at`,
-		projectID, email, cur.KeptPersonal, string(raw), time.Now().Unix())
+	merged, err := json.Marshal(cur.SourcesOpen)
 	if err != nil {
-		return cur, err
+		return ProjectUserState{}, err
 	}
-	return s.GetProjectUserState(ctx, projectID, email)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE project_user_state SET kept_personal = $3, sources_open = $4::jsonb, updated_at = $5
+		WHERE project_id = $1 AND user_email = $2`,
+		projectID, email, cur.KeptPersonal, string(merged), now); err != nil {
+		return ProjectUserState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ProjectUserState{}, err
+	}
+	return cur, nil
+}
+
+// pruneSourcesOpen drops keys of open (in place) that no longer name a live
+// chat in projectID — a group that can no longer be shown has no state worth
+// keeping — then, if the map is still over maxSourcesOpenEntries, evicts in
+// order: stored keys this write did not mention, then keys it re-sent
+// unchanged, and only then keys it changed (deterministic within each tier).
+// So a person with a full map can always record a new choice.
+func pruneSourcesOpen(ctx context.Context, tx *sql.Tx, projectID string, open, sent, changed map[string]bool) error {
+	keys := make([]string, 0, len(open))
+	for k := range open {
+		keys = append(keys, k)
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id FROM conversations
+		WHERE id = ANY($1) AND project_id = $2 AND deleted_at IS NULL`, keys, projectID)
+	if err != nil {
+		return err
+	}
+	live := make(map[string]bool, len(keys))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		live[id] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if !live[k] {
+			delete(open, k)
+		}
+	}
+	over := len(open) - maxSourcesOpenEntries
+	if over <= 0 {
+		return nil
+	}
+	tier := func(k string) int {
+		switch {
+		case changed[k]:
+			return 2
+		case sentKey(sent, k):
+			return 1
+		default:
+			return 0
+		}
+	}
+	victims := make([]string, 0, len(open))
+	for k := range open {
+		victims = append(victims, k)
+	}
+	sort.Slice(victims, func(i, j int) bool {
+		ti, tj := tier(victims[i]), tier(victims[j])
+		if ti != tj {
+			return ti < tj
+		}
+		return victims[i] < victims[j]
+	})
+	for _, k := range victims[:over] {
+		delete(open, k)
+	}
+	return nil
+}
+
+func sentKey(sent map[string]bool, k string) bool {
+	_, ok := sent[k]
+	return ok
 }
 
 // MarkProjectSharedChat records that email has shared a chat in projectID —

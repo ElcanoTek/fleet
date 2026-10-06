@@ -178,10 +178,12 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	}
 	stored, err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
 	if err != nil {
-		// A chat with no team, or no team-shared project to appear in, cannot
-		// be shared — 409 with the store's sentence, which names which of the
-		// two it is. This is a refusal of the request, not a server fault.
-		if errors.Is(err, store.ErrNoTeamToShareWith) || errors.Is(err, store.ErrNoTeamShareHome) {
+		// A chat with no team, no team-shared project to appear in, or that
+		// is archived cannot be shared — 409 with the store's sentence, which
+		// names which it is. This is a refusal of the request, not a server
+		// fault.
+		if errors.Is(err, store.ErrNoTeamToShareWith) || errors.Is(err, store.ErrNoTeamShareHome) ||
+			errors.Is(err, store.ErrArchivedNotShareable) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}

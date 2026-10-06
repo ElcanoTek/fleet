@@ -1074,8 +1074,12 @@ func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned 
 // already refused an archived chat, so this changes no access at the moment
 // of archiving — what it changes is unarchive, which brings the chat back as
 // Only you rather than silently re-exposing it (and every output presented in
-// it since) to the team. The owner's per-file exclusions are untouched, so
-// sharing again restores their earlier file choices.
+// it since) to the team. Unarchive clears them too, unconditionally: whatever
+// state the archived row is in (a pre-ADR-0079 share that was archived before
+// this rule, or any write that slipped past SetConversationTeamVisible's
+// archived refusal), unarchive never reopens team access. The owner's
+// per-file exclusions are untouched, so sharing again restores their earlier
+// file choices.
 func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archived bool) error {
 	now := time.Now().Unix()
 	var archivedAt any // NULL when unarchiving
@@ -1085,10 +1089,9 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
-			team_visible = (CASE WHEN $6 THEN FALSE ELSE team_visible END),
-			team_shared_with = (CASE WHEN $6 THEN NULL ELSE team_shared_with END)
+			team_visible = FALSE, team_shared_with = NULL
 		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
-		archivedAt, pinned, now, convID, userEmail, archived,
+		archivedAt, pinned, now, convID, userEmail,
 	)
 	if err != nil {
 		return err
@@ -1666,6 +1669,11 @@ var (
 	// ErrNoTeamShareHome: the chat is not in a project shared with the owner's
 	// team, so a teammate would have no surface listing it.
 	ErrNoTeamShareHome = errors.New("a chat can only be shared with your team from inside a project that is shared with that team")
+	// ErrArchivedNotShareable: the chat is archived. Every team read gate
+	// refuses an archived chat, and unarchive brings a chat back unshared,
+	// so a share stored now would be invisible until unarchive and then
+	// dropped by it — refused instead, so the owner is told to unarchive.
+	ErrArchivedNotShareable = errors.New("an archived chat can't be shared with your team; unarchive it first")
 )
 
 // SetConversationTeamVisible flips a conversation's team_visible flag (#237)
@@ -1690,6 +1698,11 @@ var (
 // membership with no way to take it back. Enforcing it here is what makes "a
 // team-shared chat always has a home" true rather than hoped for.
 //
+// Opting in is also refused for an ARCHIVED chat (ErrArchivedNotShareable):
+// unarchive brings a chat back unshared (SetArchived), so a share stored while
+// archived would either be silently dropped or — before that rule — silently
+// re-expose the chat on unarchive. The owner unarchives first.
+//
 // Opting OUT is never refused. Revocation must work from whatever state a row
 // is in, including one a pre-054 client created.
 func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error) {
@@ -1713,16 +1726,20 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	// who owns no such chat learns nothing about teams or projects (404), and
 	// only an owner sees which of the two share preconditions they are missing.
 	var homeTeam sql.NullString
+	var archived bool
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT p.team_id
+		SELECT p.team_id, c.archived_at IS NOT NULL
 		FROM conversations c
 		LEFT JOIN projects p ON p.id = c.project_id
 		WHERE c.id = $1 AND c.user_email = $2 AND c.deleted_at IS NULL`,
-		convID, ownerEmail).Scan(&homeTeam); err != nil {
+		convID, ownerEmail).Scan(&homeTeam, &archived); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, ErrConversationNotFound
 		}
 		return false, err
+	}
+	if archived {
+		return false, ErrArchivedNotShareable
 	}
 	var ownerTeam sql.NullString
 	if err := s.db.QueryRowContext(ctx,
@@ -1740,13 +1757,21 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 		`UPDATE conversations c SET
 			team_visible = TRUE, team_shared_with = $1, updated_at = $2
 		 WHERE c.id = $3 AND c.user_email = $4 AND c.deleted_at IS NULL
+		   AND c.archived_at IS NULL
 		   AND EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id AND p.team_id = $1)`,
 		team, now, convID, ownerEmail)
 	if err != nil {
 		return false, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// Lost a race with a write that moved the chat or unshared the project.
+		// Lost a race with a write that moved, archived or deleted the chat,
+		// or unshared the project. Re-read which, so the sentence is right.
+		var archivedNow bool
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT archived_at IS NOT NULL FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
+			convID, ownerEmail).Scan(&archivedNow); err == nil && archivedNow {
+			return false, ErrArchivedNotShareable
+		}
 		return false, ErrNoTeamShareHome
 	}
 	return true, nil

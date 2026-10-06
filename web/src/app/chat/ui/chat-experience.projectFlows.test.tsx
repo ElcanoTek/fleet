@@ -74,6 +74,9 @@ function mockBackend() {
     if (url === "/api/conversations/conv-a")
       return json({ conversation: CONVS[0], history: [] });
     if (url === "/api/conversations/conv-a/inflight") return json({ inflight: false });
+    if (url === "/api/conversations/conv-s")
+      return json({ conversation: CONVS[1], history: [] });
+    if (url === "/api/conversations/conv-s/inflight") return json({ inflight: false });
     if (url === "/api/projects") return json({ projects });
     if (url === "/api/me/team")
       return json({ email: "user@example.com", role: "member", team_id: "Elcano", admin: false });
@@ -247,5 +250,30 @@ describe("New project (B27)", () => {
       team_shared: true,
     });
     expect(await screen.findByTestId("project-home")).toBeInTheDocument();
+  });
+});
+
+describe("output share markers (B17)", () => {
+  it("re-reads the per-file states when the project home closes", async () => {
+    const fetchMock = mockBackend();
+    await mountChat();
+    const outputReads = () =>
+      fetchMock.mock.calls.filter(
+        ([u, init]) =>
+          String(u) === "/api/conversations/conv-s/outputs" && (init?.method ?? "GET") === "GET",
+      ).length;
+
+    fireEvent.click(screen.getByRole("button", { name: /^Project Quant \(/ }));
+    fireEvent.click(await screen.findByText("Shared chat"));
+    await waitFor(() => expect(screen.getByTitle("Click to rename")).toHaveTextContent("Shared chat"));
+    await waitFor(() => expect(outputReads()).toBeGreaterThanOrEqual(1));
+    const before = outputReads();
+
+    // Sources lives on the project home; its toggles change the markers.
+    fireEvent.click(screen.getByRole("button", { name: "Open project Quant" }));
+    await screen.findByTestId("project-home");
+    fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+    await waitFor(() => expect(screen.queryByTestId("project-home")).toBeNull());
+    await waitFor(() => expect(outputReads()).toBeGreaterThan(before));
   });
 });

@@ -293,6 +293,16 @@ const MD_LINK = new RegExp(
   `(!?)\\[([^\\]]*)\\]\\(\\s*${MD_DEST}${MD_TITLE}\\s*\\)`,
   "g",
 );
+// A clickable thumbnail — `[![alt](thumb.png)](full.png)` — matched as ONE
+// unit. The image and link passes cannot handle it piecewise: once the inner
+// image is rewritten, MD_LINK's label (`[^\]]*`) stops at the image's own
+// `]`, matches `[![alt](…)` as a link to the INNER destination, and the
+// outer `(full.png)` is never seen. Groups: alt, inner angled/bare, outer
+// angled/bare.
+const MD_LINKED_IMAGE = new RegExp(
+  `\\[\\s*!\\[([^\\]]*)\\]\\(\\s*${MD_DEST}${MD_TITLE}\\s*\\)\\s*\\]\\(\\s*${MD_DEST}${MD_TITLE}\\s*\\)`,
+  "g",
+);
 // Reference form — `[label][ref]`, collapsed `[ref][]`, shortcut `[ref]` —
 // paired with its `[ref]: dest` definition line. `(?!\()` keeps it off an
 // inline link the passes above left alone.
@@ -401,7 +411,40 @@ export function linkSharedFiles(
   };
   const locked = (ref: FileRef) =>
     `[${escapeMarkdown(ref.name)}${LOCKED_SUFFIX}](${LOCKED_FILE_HREF})`;
+  // What a withheld reference becomes on its own: a plain name for an upload,
+  // the locked marker for an unshared output.
+  const withheld = (ref: FileRef, d: "upload" | "locked") =>
+    d === "upload" ? escapeMarkdown(ref.name) : locked(ref);
+  // A destination's fate: a URL it may keep (external, or a shared output's
+  // team-files route) or a withheld rendering.
+  const resolve = (
+    ref: FileRef | null,
+    dest: string,
+  ): { url: string } | { text: string; ref: FileRef } => {
+    if (!ref) return { url: wrapDest(dest) };
+    const d = decide(ref);
+    return d === "upload" || d === "locked" ? { text: withheld(ref, d), ref } : d;
+  };
   return rewriteFileRefs(markdown, {
+    // Both halves of a clickable thumbnail by the same rules as everywhere
+    // else: a live image inside a live link stays a thumbnail link; a
+    // withheld half becomes its locked name beside whatever half survives —
+    // never a team view whose outer link still points at the owner's file.
+    linkedImage: (innerRef, innerDest, alt, outerRef, outerDest) => {
+      const inner = resolve(innerRef, innerDest);
+      const outer = resolve(outerRef, outerDest);
+      const innerMd = "url" in inner ? `![${alt}](${inner.url})` : inner.text;
+      if ("url" in outer) {
+        if ("url" in inner) return `[${innerMd}](${outer.url})`;
+        const label = outerRef ? escapeMarkdown(outerRef.name) : alt || outer.url;
+        return `${innerMd} [${label}](${outer.url})`;
+      }
+      if ("url" in inner) return `${innerMd} ${outer.text}`;
+      // Both withheld: one name when they are the same file.
+      return inner.ref.path !== null && inner.ref.path === outer.ref.path
+        ? inner.text
+        : `${inner.text} ${outer.text}`;
+    },
     image: (ref, alt) => {
       const d = decide(ref);
       if (d === "upload") return escapeMarkdown(ref.name);
@@ -470,6 +513,20 @@ type FileRefRenderers = {
   link: (ref: FileRef, label: string) => string;
   /** A bare route pasted into prose. */
   bare: (ref: FileRef) => string;
+  /**
+   * A clickable thumbnail, `[![alt](inner)](outer)`, where at least one of
+   * the two destinations is a workspace file (a null ref is an external
+   * destination, passed through as `innerDest`/`outerDest`). Optional: a
+   * caller without it gets the piecewise image-then-link passes (what the
+   * public redaction has always done).
+   */
+  linkedImage?: (
+    inner: FileRef | null,
+    innerDest: string,
+    alt: string,
+    outer: FileRef | null,
+    outerDest: string,
+  ) => string;
 };
 
 /**
@@ -554,9 +611,24 @@ function redactChunk(
   refs: Map<string, FileRef>,
   r: FileRefRenderers,
 ): string {
+  let out = chunk;
+  const linkedImage = r.linkedImage;
+  if (linkedImage) {
+    out = out.replace(
+      MD_LINKED_IMAGE,
+      (whole, alt, innerAngled, innerBare, outerAngled, outerBare) => {
+        const innerDest = innerAngled ?? innerBare ?? "";
+        const outerDest = outerAngled ?? outerBare ?? "";
+        const inner = workspaceFileRef(innerDest);
+        const outer = workspaceFileRef(outerDest);
+        if (!inner && !outer) return whole;
+        return linkedImage(inner, innerDest, alt, outer, outerDest);
+      },
+    );
+  }
   // Images first: an image nested in a link (`[![alt](chart.png)](chart.png)`)
   // must lose its inner destination before the link pass reads the label.
-  let out = chunk.replace(MD_IMAGE, (whole, alt, angled, bare) => {
+  out = out.replace(MD_IMAGE, (whole, alt, angled, bare) => {
     const ref = workspaceFileRef(angled ?? bare ?? "");
     return ref ? r.image(ref, alt) : whole;
   });
@@ -594,6 +666,11 @@ function withheldFile(filename: string): string {
 // `[`). Escaping them keeps the marker literal text.
 function escapeMarkdown(text: string): string {
   return text.replace(/[\\`*_{}[\]<>()#+\-.!|~]/g, "\\$&");
+}
+
+/** An external destination re-emitted as-is, angle-bracketed if it needs it. */
+function wrapDest(dest: string): string {
+  return /[\s()]/.test(dest) ? `<${dest}>` : dest;
 }
 
 function normalizeRefLabel(label: string): string {

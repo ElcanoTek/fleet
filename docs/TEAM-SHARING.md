@@ -104,8 +104,11 @@ it — pinned by `TestMoveBetweenSameTeamProjectsKeepsSharing`).
 the stamped audience in the same statement. Every read already refused an
 archived chat, so nothing changes at the moment of archiving; what changes is
 unarchive, which brings the chat back as Only you rather than silently handing
-the team everything presented in it since. The owner's file choices are kept,
-so sharing again restores them.
+the team everything presented in it since. Unarchive clears the flag and the
+stamp too, whatever state the row is in, and an archived chat cannot be shared
+at all: `share-with-team` with `visible: true` answers 409 ("an archived chat
+can't be shared with your team; unarchive it first"). Stopping sharing is never
+refused. The owner's file choices are kept, so sharing again restores them.
 
 **And no chat is left filed in a project its owner cannot see.** That is the
 other half of the same rule, and unsharing alone got it wrong. The rail lists
@@ -262,7 +265,9 @@ open it.
 still exists, with `changed_since` = the original gained *messages* after the
 branch was made. Messages rather than `updated_at`, because a rename or a share
 toggle also moves `updated_at`, and the banner says "has added messages since
-you branched". There is no per-person read state.
+you branched". Measured by message id against the source's highest message id
+at branch time (`source_max_message_id`), not by timestamp, because both clocks
+are whole seconds. There is no per-person read state.
 
 **Sources, grouped.** `GET /projects/{id}/files` answers `groups`, one per chat
 with files: the caller's own chats (`mine: true`, every non-upload file, each
@@ -287,7 +292,12 @@ proxy; that half lives in `web/src/proxy.ts`.
 project, "Keep personal" (the getting-started card dismissed for good), whether
 they have shared a chat in it (set server-side by a successful
 `share-with-team`, never by the client), and which Sources groups they left
-open — so it follows them across devices.
+open — so it follows them across devices. Updates are merged under a row lock,
+so two devices writing at once do not overwrite each other. The open-groups map
+is capped at 500 chats; each write drops entries for chats that left the
+project or were deleted, and if it is still full, stored choices the write did
+not touch make room — a new choice is never refused. The rows go
+with the user when the account is deleted.
 
 ## Team learnings
 

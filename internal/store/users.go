@@ -736,6 +736,15 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM user_skills WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete user skills: %w", err)
 	}
+	// Per-project UI state (migration 070) is keyed by email with no FK to
+	// users, so it goes explicitly — in OTHER people's projects too, which
+	// the project cascade below does not reach. Left behind, it would greet
+	// a new account re-created under the same address with the old one's
+	// card dismissals and open groups.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM project_user_state WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete project user state: %w", err)
+	}
 	// Owned projects: mirror DeleteProject — detach every member's
 	// conversations (the history belongs to its user), delete the shared
 	// project memories (they are project state), then the projects.
