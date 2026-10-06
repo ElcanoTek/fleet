@@ -505,13 +505,13 @@ func (a *Agent) CloseSession(_ context.Context, p acpsdk.CloseSessionRequest) (a
 // session (see Cancel). Such a prompt is not stopped: prompts on a session
 // run one at a time, in the order they arrived (see track), so the newer
 // one waits for the session and the earlier one runs to its own outcome. A
-// newer prompt that carries the same idempotency key (the
-// same messageId, or the same text while an earlier attempt's outcome is
-// unknown) is a resend of it, and fleet answers it with that input, never
-// running it twice. A `$/cancel_request` naming the prompt reaches it only as
-// ctx, indistinguishable from that supersede, so it is ignored; ACP lets an
-// agent ignore `$/` notifications, and session/cancel is its way to stop a
-// turn (the Go SDK's client sends one along with its `$/cancel_request`).
+// newer prompt that carries the same idempotency key (the same messageId, or
+// the same text while an earlier attempt's outcome is unknown) is a resend
+// of it, and fleet answers it with that input, never running it twice. A
+// `$/cancel_request` naming the prompt reaches it only as ctx,
+// indistinguishable from that supersede, so it is ignored; ACP lets an agent
+// ignore `$/` notifications, and session/cancel is its way to stop a turn
+// (the Go SDK's client sends one along with its `$/cancel_request`).
 func (a *Agent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
 	if a.cfgErr != nil {
 		return acpsdk.PromptResponse{}, acpsdk.NewAuthRequired(map[string]any{"error": a.cfgErr.Error()})
