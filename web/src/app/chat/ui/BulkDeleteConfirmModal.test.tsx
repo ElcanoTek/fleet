@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
+import {
+  BulkDeleteConfirmModal,
+  MAX_COUNTED_SHARED_CHATS,
+  SHARED_COUNT_CONCURRENCY,
+} from "./BulkDeleteConfirmModal";
 
 // The multi-select delete (#279) must not be the quiet way around B33: when
 // the selection holds team-shared chats, it names the team's loss with the
@@ -93,6 +97,55 @@ describe("BulkDeleteConfirmModal", () => {
         "1 of these is shared with Quant, 1 with Ops and 1 with Risk. They lose access to them. Teammates who branched them keep their copies.",
       ),
     );
+  });
+
+  it("counts with bounded concurrency", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const fetchMock = vi.fn(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return new Response(
+        JSON.stringify({ outputs: [], total: 1, shared_count: 1, team_visible: true }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const ids = Array.from({ length: MAX_COUNTED_SHARED_CHATS }, (_, i) => `c${i}`);
+    render(
+      <BulkDeleteConfirmModal
+        count={ids.length}
+        sharedLoss={[{ conversationIds: ids, team: "Elcano" }]}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("bulk-delete-shared-loss")).toHaveTextContent(
+        `and their ${MAX_COUNTED_SHARED_CHATS} shared files`,
+      ),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_COUNTED_SHARED_CHATS);
+    expect(peak).toBeLessThanOrEqual(SHARED_COUNT_CONCURRENCY);
+  });
+
+  it("past the counting cap fetches nothing and uses the unnumbered copy at once", () => {
+    const fetchMock = stubOutputs({});
+    const ids = Array.from({ length: MAX_COUNTED_SHARED_CHATS + 1 }, (_, i) => `c${i}`);
+    render(
+      <BulkDeleteConfirmModal
+        count={ids.length}
+        sharedLoss={[{ conversationIds: ids, team: "Elcano" }]}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("bulk-delete-shared-loss")).toHaveTextContent(
+      `${ids.length} of these are shared with Elcano. Elcano loses access to them and their shared files.`,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("drops the number when a count fails", async () => {

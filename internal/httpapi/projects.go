@@ -513,6 +513,18 @@ type sourcesGroup struct {
 // stall the project home. Newest-first, so the cap drops the oldest entries.
 const maxProjectFiles = 200
 
+// Sources reads every chat it lists — a workspace walk plus output discovery
+// per chat — so the number of chats is bounded too, per half: the
+// maxSourcesGroups most recently active chats WITH files are listed, and at
+// most maxSourcesChatsScanned chats are examined to find them (a project of
+// hundreds of file-less chats must not cost hundreds of reads). Anything left
+// over is reported through `truncated` (and the additive `groups_truncated`).
+// Vars so tests can shrink them.
+var (
+	maxSourcesGroups       = 50
+	maxSourcesChatsScanned = 200
+)
+
 // maxWorkspaceWalkEntries bounds the directory entries one workspace walk
 // visits. The heap below bounds what is KEPT; this bounds the work, so a tree
 // with millions of entries cannot stall the project home either. Past it the
@@ -550,8 +562,9 @@ func (h *newestFiles) Pop() any {
 // collected whole and sorted. Symlinks are skipped (WalkDir does not follow
 // them): every workspace carries the bundle-mount symlinks (personas,
 // protocols, shared, skills, system_prompts) pointing OUTSIDE the root, and a
-// Sources entry must be a real file the user can open. The attachments/
-// subtree is skipped whole: uploads are never listed in Sources (ADR-0079).
+// Sources entry must be a real file the user can open. The attachments/ and
+// user-skills/ subtrees are skipped whole: uploads and the owner's
+// materialized private skills are never listed in Sources (ADR-0079).
 func walkWorkspaceFiles(convID string, limit int) (files []sourcesFile, truncated bool) {
 	root, err := filepath.EvalSymlinks(tools.WorkspaceDirForConversation(convID))
 	if err != nil {
@@ -577,7 +590,10 @@ func walkWorkspaceFiles(convID string, limit int) (files []sourcesFile, truncate
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if rel == uploadsDir {
+			// attachments/ and user-skills/ (privateWorkspaceDirs) are the
+			// owner's uploads and private skills fleet put there, not work
+			// the chat produced.
+			if isPrivateWorkspacePath(rel) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -621,6 +637,10 @@ func walkWorkspaceFiles(convID string, limit int) (files []sourcesFile, truncate
 //     same gates as team-conversations): their SHARED outputs only, downloaded
 //     through the team-files route, which re-checks every gate.
 //
+// Each half lists at most maxSourcesGroups chats (the most recently active
+// with files), examining at most maxSourcesChatsScanned; the rest is reported
+// as truncated.
+//
 // Chats with no files are omitted. `files` is the legacy flat list of the
 // caller's own files, kept for older clients. Another member's PRIVATE chat
 // is never read here — the teammate half starts from the team listing.
@@ -636,8 +656,14 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	ids := make([]string, 0, len(convs))
-	for _, c := range convs {
+	// Most recently active first (the listing's order, made explicit here
+	// because the caps below keep the head of it).
+	sortConversationsRecentFirst(convs)
+	ids := make([]string, 0, min(len(convs), maxSourcesChatsScanned))
+	for i, c := range convs {
+		if i >= maxSourcesChatsScanned {
+			break
+		}
 		ids = append(ids, c.ID)
 	}
 	origins, err := s.store.BranchOriginsFor(ctx, ids)
@@ -648,8 +674,13 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 
 	groups := []sourcesGroup{}
 	flat := []projectFile{}
-	truncated := false
-	for _, conv := range convs {
+	truncated, groupsTruncated := false, false
+	mineGroups := 0
+	for i, conv := range convs {
+		if mineGroups >= maxSourcesGroups || i >= maxSourcesChatsScanned {
+			groupsTruncated = true
+			break
+		}
 		all, walkTruncated := walkWorkspaceFiles(conv.ID, maxProjectFiles)
 		if walkTruncated {
 			truncated = true
@@ -719,6 +750,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 			})
 		}
 		groups = append(groups, g)
+		mineGroups++
 	}
 
 	team, err := s.store.ListProjectTeamConversations(ctx, user, p.ID)
@@ -726,7 +758,13 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	for _, conv := range team {
+	sortConversationsRecentFirst(team)
+	teamGroups := 0
+	for i, conv := range team {
+		if teamGroups >= maxSourcesGroups || i >= maxSourcesChatsScanned {
+			groupsTruncated = true
+			break
+		}
 		outs, outsTruncated, err := s.ownerOutputs(ctx, conv.ID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -761,6 +799,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 			truncated = true
 		}
 		groups = append(groups, g)
+		teamGroups++
 	}
 
 	sort.SliceStable(flat, func(i, j int) bool { return flat[i].ModifiedAt > flat[j].ModifiedAt })
@@ -768,7 +807,22 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		flat = flat[:maxProjectFiles]
 		truncated = true
 	}
-	writeJSON(w, map[string]any{"groups": groups, "files": flat, "truncated": truncated})
+	writeJSON(w, map[string]any{
+		"groups": groups, "files": flat,
+		"truncated":        truncated || groupsTruncated,
+		"groups_truncated": groupsTruncated,
+	})
+}
+
+// sortConversationsRecentFirst orders chats most recently active first
+// (updated_at desc, then id desc — the store listings' own order).
+func sortConversationsRecentFirst(convs []store.Conversation) {
+	sort.SliceStable(convs, func(i, j int) bool {
+		if convs[i].UpdatedAt != convs[j].UpdatedAt {
+			return convs[i].UpdatedAt > convs[j].UpdatedAt
+		}
+		return convs[i].ID > convs[j].ID
+	})
 }
 
 // projectMyState handles GET/PUT /projects/{id}/my-state — the caller's own

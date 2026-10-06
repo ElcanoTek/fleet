@@ -7,7 +7,8 @@
 // re-checked on every request and none sufficient alone:
 //
 //  1. the caller can read the chat through the team door right now — the
-//     exact GetTeamVisibleConversation gate team-view uses (owner's opt-in,
+//     exact GetTeamVisibleConversation gate team-view uses, read as
+//     CanTeamRead without the transcript (owner's opt-in,
 //     caller's team is the audience the owner named, not archived/deleted);
 //  2. <path> is a CURRENT output — presented in an assistant reply AND a
 //     regular file on disk now — matched by exact string against that list,
@@ -42,16 +43,29 @@ import (
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
-// ownerOutputs loads convID's history and exclusions and resolves its
-// outputs. The caller has already established that the caller may see them.
-// truncated reports that the transcript references more distinct files than
-// discovery considers (maxOutputReferences); the oldest were skipped.
+// ownerOutputs loads what discovery needs of convID's history and its
+// exclusions and resolves its outputs. The caller has already established
+// that the caller may see them. truncated reports that the transcript
+// references more distinct files than discovery considers
+// (maxOutputReferences, or the visit budget); the oldest were skipped.
 func (s *Server) ownerOutputs(ctx context.Context, convID string) (outs []outputFile, truncated bool, err error) {
-	history, err := s.store.LoadHistory(ctx, convID)
+	history, err := s.discoveryHistory(ctx, convID, 0)
 	if err != nil {
 		return nil, false, err
 	}
 	return s.outputsFromHistory(ctx, convID, history)
+}
+
+// discoveryHistory reads only the rows output discovery visits — the
+// rendered replies' text and the boundaries between them, newest first,
+// stopped where discovery's own budget (maxDiscoveryReplies /
+// maxDiscoveryBytes) would stop — through message id `through` (0 = all).
+// Discovery over it is identical to discovery over the full history: every
+// row the walk reads is here, in order, and the rows it ignores are not.
+// It is NOT a transcript (user rows carry no text) and is never rendered.
+func (s *Server) discoveryHistory(ctx context.Context, convID string, through int64) ([]agent.HistoryEntry, error) {
+	cut := discoveryCutoff{maxReplies: maxDiscoveryReplies, maxBytes: maxDiscoveryBytes}
+	return s.store.LoadDiscoveryHistory(ctx, convID, through, maxDiscoveryBytes, cut.more)
 }
 
 // outputsFromHistory is ownerOutputs for a caller that already holds the
@@ -167,27 +181,35 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 	notFound := func() { http.Error(w, "not found", http.StatusNotFound) }
 	// relPath arrives already percent-decoded once by net/http, which is the
 	// same decoded form outputs are recorded in; it is never decoded again.
-	if !store.ValidOutputPath(relPath) || isUploadPath(relPath) {
+	if !store.ValidOutputPath(relPath) || isPrivateWorkspacePath(relPath) {
 		notFound()
 		return
 	}
 	// Gate 1: team-readable right now (the owner reading their own shared
-	// chat resolves too, exactly like team-view).
-	snap, err := s.store.GetTeamVisibleConversation(r.Context(), user, convID)
+	// chat resolves too, exactly like team-view). The light gate — the same
+	// teamReadableClause, no transcript — because the download needs only
+	// the rows discovery reads, not the whole history.
+	ok, err := s.store.CanTeamRead(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if snap == nil {
+	if !ok {
 		notFound()
 		return
 	}
-	// Gates 2 and 3: a current output, not excluded. The transcript the
-	// outputs are derived from is the same filtered one the teammate reads.
+	// Gates 2 and 3: a current output, not excluded. The rows the outputs are
+	// derived from are a subset of the filtered transcript the teammate
+	// reads (assistant text and reply boundaries — discoveryHistory).
 	// A path older than the discovery bound (maxOutputReferences) is not in
 	// this list and is refused like any non-output: the bound narrows what
 	// can be downloaded, never widens it.
-	outs, _, err := s.outputsFromHistory(r.Context(), snap.ID, snap.Messages)
+	history, err := s.discoveryHistory(r.Context(), convID, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	outs, _, err := s.outputsFromHistory(r.Context(), convID, history)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -203,7 +225,7 @@ func (s *Server) handleTeamFile(w http.ResponseWriter, r *http.Request, user, co
 		notFound()
 		return
 	}
-	f, info, err := openWorkspaceFileNoFollow(tools.WorkspaceDirForConversation(snap.ID), relPath)
+	f, info, err := openWorkspaceFileNoFollow(tools.WorkspaceDirForConversation(convID), relPath)
 	if err != nil {
 		notFound()
 		return
@@ -269,7 +291,13 @@ const maxBranchCopyBytes int64 = 1 << 30
 // O_EXCL, 0o644 files and 0o755 directories (the sandbox uid must read them).
 // A destination path that would traverse one of the workspace's seeded
 // bundle symlinks is refused by the root and the file is withheld.
-func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile) (copied []store.BranchFile, withheld []string) {
+//
+// stillReadable is the team-read gate, asked again before EACH file: the copy
+// can run for a while, and once the owner stops sharing (or archives, or the
+// brancher leaves the team) every file not yet copied is withheld — the gate
+// that let the branch start does not keep the door open for the rest of it.
+// nil means no re-check (tests of the copy mechanics alone).
+func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile, stillReadable func() bool) (copied []store.BranchFile, withheld []string) {
 	copied, withheld = []store.BranchFile{}, []string{}
 	var shared []outputFile
 	for _, o := range outs {
@@ -284,7 +312,7 @@ func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile)
 	}
 	dstDir, err := tools.EnsureWorkspaceDir(dstConvID)
 	if err != nil {
-		log.Printf("branch files: workspace for %s: %v", logSafeSlug(dstConvID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		log.Printf("branch files: workspace for %s: %v", logSafeSlug(dstConvID), logSafe(err.Error()))
 		for _, o := range shared {
 			withheld = append(withheld, o.Path)
 		}
@@ -292,7 +320,7 @@ func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile)
 	}
 	dst, err := os.OpenRoot(dstDir)
 	if err != nil {
-		log.Printf("branch files: open workspace for %s: %v", logSafeSlug(dstConvID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		log.Printf("branch files: open workspace for %s: %v", logSafeSlug(dstConvID), logSafe(err.Error()))
 		for _, o := range shared {
 			withheld = append(withheld, o.Path)
 		}
@@ -301,10 +329,19 @@ func copySharedOutputsIntoBranch(srcConvID, dstConvID string, outs []outputFile)
 	defer dst.Close()
 	srcDir := tools.WorkspaceDirForConversation(srcConvID)
 	var budget = maxBranchCopyBytes
+	closed := false
 	for _, o := range shared {
+		if !closed && stillReadable != nil && !stillReadable() {
+			closed = true
+			log.Printf("branch files: %s is no longer readable by the brancher; withholding the remaining files of %s", logSafeSlug(srcConvID), logSafeSlug(dstConvID))
+		}
+		if closed {
+			withheld = append(withheld, o.Path)
+			continue
+		}
 		n, err := copyOneOutput(srcDir, dst, o.Path, budget)
 		if err != nil {
-			log.Printf("branch files: %q not copied into %s: %v", logSafeSlug(o.Path), logSafeSlug(dstConvID), logSafe(err.Error())) //nolint:gosec // G706: %q and logSafe strip CR/LF from the path, the id and the error text.
+			log.Printf("branch files: %q not copied into %s: %v", logSafeSlug(o.Path), logSafeSlug(dstConvID), logSafe(err.Error()))
 			withheld = append(withheld, o.Path)
 			continue
 		}

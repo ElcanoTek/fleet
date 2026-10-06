@@ -30,9 +30,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/agent"
 )
 
 // teamReadableClause is GetTeamVisibleConversation's WHERE, factored so the
@@ -74,6 +77,117 @@ func (s *Store) CanTeamRead(ctx context.Context, callerEmail, convID string) (bo
 		`SELECT EXISTS (SELECT 1 FROM conversations c WHERE `+teamReadableClause+`)`,
 		convID, callerEmail, team).Scan(&ok)
 	return ok, err
+}
+
+// ── output discovery's narrow history read ──────────────────────────────────
+
+// discoveryHistoryPage is how many rows one LoadDiscoveryHistory round trip
+// fetches; a var so tests can shrink it and exercise the paging.
+var discoveryHistoryPage = 500
+
+// SetDiscoveryHistoryPageForTest shrinks the LoadDiscoveryHistory page so a
+// test outside this package can exercise the paging; it returns the restore.
+// Test-only — never call it from production code.
+func SetDiscoveryHistoryPageForTest(n int) (restore func()) {
+	old := discoveryHistoryPage
+	discoveryHistoryPage = n
+	return func() { discoveryHistoryPage = old }
+}
+
+// LoadDiscoveryHistory is the history read behind output discovery — the
+// outputs listing, Sources, the team-files download gate and a teammate's
+// branch copy — narrowed to the rows discovery actually reads, so none of
+// those routes loads a chat's whole history (tool results, reasoning) to
+// find the few links its replies present.
+//
+// Rows come from the same filter teamTranscriptEntry applies: user/assistant
+// text, and a compaction summary (or a boundary standing in for one) as a
+// content-free agent.EntryTypeSummaryBoundary. Only ASSISTANT text carries its
+// content; a user row is returned as a content-free "{}" — discovery uses it
+// only as the boundary between rendered replies. This is a discovery input,
+// never a transcript: nothing reads it back to a person.
+//
+// Rows are read NEWEST first, in pages, only through id <= throughID (0 = no
+// bound — a branch reads exactly what it copied). Each row is handed to more
+// before the next is read; when more returns false the walk stops, keeping
+// that row (the caller's budget check needs to see the row that crossed it).
+// A page is also cut in SQL at maxBytes of assistant-text bytes counted from
+// the newest row, so a page of huge replies is never fetched past the budget
+// the caller would stop at anyway. The result is in ascending id order, like
+// LoadHistory.
+//
+// Unscoped by caller: every caller has already passed an ownership or
+// team-read gate for convID.
+func (s *Store) LoadDiscoveryHistory(ctx context.Context, convID string, throughID int64, maxBytes int64, more func(agent.HistoryEntry) bool) ([]agent.HistoryEntry, error) {
+	if throughID <= 0 {
+		throughID = math.MaxInt64
+	}
+	var newestFirst []agent.HistoryEntry
+	cursor := throughID
+	var used int64 // assistant-text bytes read so far
+	for {
+		// 'summary_boundary' is agent.EntryTypeSummaryBoundary, as in
+		// BranchConversation's redacted copy (a constant literal, so the
+		// query is never built by concatenation).
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT id, role, type, body, sz FROM (
+				SELECT id, role, type,
+				       CASE WHEN type = 'text' AND role = 'assistant' THEN content ELSE '{}' END AS body,
+				       CASE WHEN type = 'text' AND role = 'assistant' THEN octet_length(content) ELSE 0 END AS sz,
+				       COALESCE(SUM(CASE WHEN type = 'text' AND role = 'assistant' THEN octet_length(content) ELSE 0 END)
+				                OVER (ORDER BY id DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS before
+				FROM messages
+				WHERE conversation_id = $1 AND id <= $2
+				  AND ((type = 'text' AND role IN ('user', 'assistant'))
+				       OR type IN ('summary', 'summary_boundary'))
+			) t
+			WHERE before <= $3
+			ORDER BY id DESC
+			LIMIT $4`,
+			convID, cursor, maxBytes-used, discoveryHistoryPage)
+		if err != nil {
+			return nil, err
+		}
+		n := 0
+		stop := false
+		for rows.Next() {
+			var e agent.HistoryEntry
+			var body string
+			var size int64
+			if err := rows.Scan(&e.ID, &e.Role, &e.Type, &body, &size); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			n++
+			cursor = e.ID - 1
+			used += size
+			e.Content = json.RawMessage(body)
+			if kept, ok := teamTranscriptEntry(e); ok {
+				e = kept
+			}
+			newestFirst = append(newestFirst, e)
+			if !more(e) {
+				stop = true
+				break
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		// A short page is the end of the history (or of the byte budget,
+		// past which the SQL cut keeps nothing).
+		if stop || n < discoveryHistoryPage || used > maxBytes {
+			break
+		}
+	}
+	out := make([]agent.HistoryEntry, len(newestFirst))
+	for i, e := range newestFirst {
+		out[len(newestFirst)-1-i] = e
+	}
+	return out, nil
 }
 
 // ── per-file share state ────────────────────────────────────────────────────

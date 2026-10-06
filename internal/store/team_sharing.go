@@ -97,6 +97,35 @@ type TeamSharedConversation struct {
 // migration 054. Membership state is never leaked: every refusal is the same
 // nil.
 func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*TeamSharedConversation, error) {
+	out, err := s.GetTeamVisibleConversationMeta(ctx, callerEmail, convID)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	msgs, err := s.LoadHistory(ctx, out.ID)
+	if err != nil {
+		return nil, err
+	}
+	// Transcript only — the same filter the public snapshot applies, and for
+	// the same reason: the full history carries tool_call / tool_result /
+	// reasoning entries whose content can include command output and API
+	// responses that were never part of what the owner shared.
+	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
+	for _, m := range msgs {
+		if b, ok := teamTranscriptEntry(m); ok {
+			out.Messages = append(out.Messages, b)
+		}
+	}
+	return out, nil
+}
+
+// GetTeamVisibleConversationMeta is GetTeamVisibleConversation without the
+// transcript: the same gate and the same row, Messages left nil. It is for a
+// caller that needs the chat's identity under the team-read gate but not its
+// history — the branch (which copies messages with its own narrowed query)
+// and anything that runs output discovery through LoadDiscoveryHistory —
+// so a teammate's branch or file download never loads every row of the
+// owner's chat (tool results and reasoning included) only to throw it away.
+func (s *Store) GetTeamVisibleConversationMeta(ctx context.Context, callerEmail, convID string) (*TeamSharedConversation, error) {
 	callerEmail = normalizeEmail(callerEmail)
 	if convID == "" {
 		return nil, nil
@@ -129,21 +158,6 @@ func (s *Store) GetTeamVisibleConversation(ctx context.Context, callerEmail, con
 			return nil, nil
 		}
 		return nil, err
-	}
-
-	msgs, err := s.LoadHistory(ctx, out.ID)
-	if err != nil {
-		return nil, err
-	}
-	// Transcript only — the same filter the public snapshot applies, and for
-	// the same reason: the full history carries tool_call / tool_result /
-	// reasoning entries whose content can include command output and API
-	// responses that were never part of what the owner shared.
-	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
-	for _, m := range msgs {
-		if b, ok := teamTranscriptEntry(m); ok {
-			out.Messages = append(out.Messages, b)
-		}
 	}
 	return &out, nil
 }

@@ -27,20 +27,43 @@ export type BulkSharedLoss = {
   team?: string;
 };
 
+// Counting a selection's shared files costs one outputs read per shared chat,
+// so it is bounded: at most SHARED_COUNT_CONCURRENCY reads in flight, and past
+// MAX_COUNTED_SHARED_CHATS selected shared chats it is not attempted at all —
+// the copy says "and their shared files" without a number straight away (the
+// same copy a failed count gets) rather than firing dozens of reads and
+// holding the confirm on them.
+export const MAX_COUNTED_SHARED_CHATS = 25;
+export const SHARED_COUNT_CONCURRENCY = 4;
+
+// mapLimited is Promise.all over items with at most `limit` calls in flight.
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 // useSummedSharedFiles sums shared_count over ids: undefined while loading,
-// null when any count failed (the copy then drops the number), else the sum.
+// null when any count failed or the selection is too large to count (the copy
+// then drops the number), else the sum.
 function useSummedSharedFiles(ids: string[] | undefined): number | null | undefined {
   const key = (ids ?? []).join("\n");
+  const tooMany = (ids?.length ?? 0) > MAX_COUNTED_SHARED_CHATS;
   const [state, setState] = useState<{ key: string; total: number | null } | null>(null);
   useEffect(() => {
-    if (!key) return;
+    if (!key || tooMany) return;
     let cancelled = false;
-    void Promise.all(
-      key.split("\n").map((id) =>
-        fetchConversationOutputs(id)
-          .then((r) => (typeof r.shared_count === "number" ? r.shared_count : null))
-          .catch(() => null),
-      ),
+    void mapLimited(key.split("\n"), SHARED_COUNT_CONCURRENCY, (id) =>
+      fetchConversationOutputs(id)
+        .then((r) => (typeof r.shared_count === "number" ? r.shared_count : null))
+        .catch(() => null),
     ).then((counts) => {
       if (cancelled) return;
       const total = counts.some((c) => c === null)
@@ -51,8 +74,9 @@ function useSummedSharedFiles(ids: string[] | undefined): number | null | undefi
     return () => {
       cancelled = true;
     };
-  }, [key]);
+  }, [key, tooMany]);
   if (!key) return 0;
+  if (tooMany) return null;
   return state?.key === key ? state.total : undefined;
 }
 

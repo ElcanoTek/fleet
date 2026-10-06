@@ -273,6 +273,16 @@ type chatStore interface {
 	// the read-only transcript a teammate opens from the project home. nil =
 	// not readable, indistinguishable from "no such chat".
 	GetTeamVisibleConversation(ctx context.Context, callerEmail, convID string) (*store.TeamSharedConversation, error)
+	// GetTeamVisibleConversationMeta is the same gate and row without the
+	// transcript (the branch and the team-files gate, which never need it).
+	GetTeamVisibleConversationMeta(ctx context.Context, callerEmail, convID string) (*store.TeamSharedConversation, error)
+	// CanTeamRead is the same gate as a yes/no, no row and no history: the
+	// branch copy re-checks it before each file.
+	CanTeamRead(ctx context.Context, callerEmail, convID string) (bool, error)
+	// LoadDiscoveryHistory is output discovery's narrow, budget-bounded,
+	// newest-first history read (see the store doc). Callers have already
+	// passed an ownership or team-read gate.
+	LoadDiscoveryHistory(ctx context.Context, convID string, throughID, maxBytes int64, more func(agent.HistoryEntry) bool) ([]agent.HistoryEntry, error)
 	// TeamViewVersion is team-view's cheap ETag read: same gate, no history
 	// load. "" = not readable (the handler answers 404, never 304).
 	TeamViewVersion(ctx context.Context, callerEmail, convID string) (string, error)

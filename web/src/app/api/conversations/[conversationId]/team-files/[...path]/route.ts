@@ -23,6 +23,20 @@ type RouteContext = {
  * and active document types (HTML, SVG, XML) forced to download.
  */
 export async function GET(_request: NextRequest, context: RouteContext) {
+  return proxyTeamFile("GET", context);
+}
+
+/**
+ * HEAD /api/conversations/:id/team-files/:...path — the same gate and the same
+ * headers, no body (the Go handler serves HEAD too). Forwarded as a HEAD
+ * rather than left to Next's GET fallback, which would pull the whole file
+ * from chat-server only to drop it.
+ */
+export async function HEAD(_request: NextRequest, context: RouteContext) {
+  return proxyTeamFile("HEAD", context);
+}
+
+async function proxyTeamFile(method: "GET" | "HEAD", context: RouteContext) {
   const session = await getServerSession();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -37,7 +51,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     upstream = await chatServerFetch(
       session,
       `/conversations/${encodeURIComponent(conversationId)}/team-files/${upstreamPath}`,
-      { method: "GET" },
+      { method },
     );
   } catch (err) {
     return NextResponse.json(
@@ -46,8 +60,8 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     );
   }
 
-  if (!upstream.ok || !upstream.body) {
-    const text = await upstream.text();
+  if (!upstream.ok || (method === "GET" && !upstream.body)) {
+    const text = method === "HEAD" ? null : await upstream.text();
     return new NextResponse(text, { status: upstream.status });
   }
 
@@ -67,5 +81,5 @@ export async function GET(_request: NextRequest, context: RouteContext) {
       `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
     );
   }
-  return new NextResponse(upstream.body, { status: 200, headers });
+  return new NextResponse(method === "HEAD" ? null : upstream.body, { status: 200, headers });
 }

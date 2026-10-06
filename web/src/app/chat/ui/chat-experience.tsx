@@ -78,6 +78,7 @@ import { ConversationSidebar } from "./ConversationSidebar";
 import { SavePromptDialog } from "./SavePromptDialog";
 import { ChatShareControls, ShareDialog } from "./ShareDialog";
 import { OutputShareContext } from "./OutputShareMarkers";
+import { useOutputShareStates } from "./useOutputShareStates";
 import {
   fetchConversationOutputs,
   fetchTeamLinkStatus,
@@ -3972,52 +3973,25 @@ export function ChatExperience({
 
   // B17 (#40): in the owner's team-shared chat, each output chip carries a
   // "Shared" / "Not shared" marker that opens Sources. The per-file states
-  // come from GET /conversations/{id}/outputs, re-read when the chat gains a
-  // message (a reply may present a new output), whenever the share dialog
-  // closes (its checklist may have changed them), and whenever the project
-  // home closes (the markers' own "open Sources" goes there, and its per-file
-  // toggles change them). Private chats get no context at all, so their
-  // transcript renders exactly as before.
+  // come from GET /conversations/{id}/outputs (useOutputShareStates), re-read
+  // when the chat gains a message, when its turn settles (a reply may present
+  // a new output, and the message count moves at send time — before the
+  // reply exists), whenever the share dialog closes (its checklist may have
+  // changed them), and whenever the project home closes (the markers' own
+  // "open Sources" goes there, and its per-file toggles change them). Private
+  // chats get no context at all, so their transcript renders exactly as
+  // before.
   const activeTeamShared = Boolean(activeConversation?.team_visible);
   const activeSharedProjectId = activeConversation?.project_id ?? "";
-  const [outputShares, setOutputShares] = useState<{
-    id: string;
-    shared: Map<string, boolean>;
-  } | null>(null);
   const shareDialogOpen = shareDialog !== null;
   const projectHomeOpen = projectHome !== null;
-  useEffect(() => {
-    if (!activeTeamShared || !activeConversationId || shareDialogOpen || projectHomeOpen) {
-      return;
-    }
-    let cancelled = false;
-    const id = activeConversationId;
-    fetchConversationOutputs(id)
-      .then((res) => {
-        if (cancelled) return;
-        setOutputShares({
-          id,
-          shared: new Map(res.outputs.map((o) => [o.path, o.shared])),
-        });
-      })
-      .catch(() => {
-        // No markers rather than wrong ones: this refresh exists because the
-        // states may have changed (a reply, the share dialog, Sources), so a
-        // failed read must not leave the PREVIOUS map's Shared / Not shared
-        // labels standing as if they were current.
-        if (cancelled) return;
-        setOutputShares((prev) => (prev?.id === id ? null : prev));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeTeamShared,
-    activeConversationId,
-    shareDialogOpen,
-    projectHomeOpen,
-    messages.length,
-  ]);
+  const outputShares = useOutputShareStates({
+    conversationId: activeConversationId,
+    enabled: activeTeamShared,
+    paused: shareDialogOpen || projectHomeOpen,
+    turnActive: isStreaming,
+    messageCount: messages.length,
+  });
   const outputShareMarkers = useMemo(
     () =>
       activeTeamShared &&

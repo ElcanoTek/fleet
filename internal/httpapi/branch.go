@@ -51,7 +51,10 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		parentTitle = parent.Title
 	default:
 		var serr error
-		shared, serr = s.store.GetTeamVisibleConversation(r.Context(), user, parentConvID)
+		// The gate and the row only: BranchConversation copies the messages
+		// with its own narrowed read, and the file half reads just what
+		// discovery needs — neither wants the whole transcript loaded here.
+		shared, serr = s.store.GetTeamVisibleConversationMeta(r.Context(), user, parentConvID)
 		if serr != nil {
 			http.Error(w, serr.Error(), http.StatusInternalServerError)
 			return
@@ -152,28 +155,48 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 		SourceMaxMessageID:   sourceHighWater,
 		SourceStillShared:    true,
 	}
+	// The branch is already committed, so everything below runs on a context
+	// detached from the request's cancellation, bounded on its own: a client
+	// that gave up (or a proxy that timed out) mid-copy must not turn into a
+	// branch whose files silently "did not come" — or one with copied files
+	// but no origin (no banner, no locked names, links that 404).
+	copyCtx, cancelCopy := context.WithTimeout(context.WithoutCancel(ctx), branchCopyTimeout)
+	defer cancelCopy()
 	// Only what the branch actually copied: the source messages up to and
 	// including the branch point. A reply after it is not in the branch, so
 	// its files are neither copied nor named as withheld.
-	history := historyThrough(src.Messages, sourceHighWater)
-	outs, outsTruncated, err := s.outputsFromHistory(ctx, src.ID, history)
+	history, err := s.discoveryHistory(copyCtx, src.ID, sourceHighWater)
+	var outsTruncated bool
 	if err != nil {
-		log.Printf("branch files: outputs of %s: %v", logSafeSlug(src.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		log.Printf("branch files: history of %s: %v", logSafeSlug(src.ID), logSafe(err.Error()))
 	} else {
-		origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(src.ID, branch.ID, outs)
+		var outs []outputFile
+		outs, outsTruncated, err = s.outputsFromHistory(copyCtx, src.ID, history)
+		if err != nil {
+			log.Printf("branch files: outputs of %s: %v", logSafeSlug(src.ID), logSafe(err.Error()))
+		} else {
+			// Re-checked before every file: the copy can take a while, and
+			// an owner who stops sharing (or archives) mid-copy has closed
+			// the door for the files not yet copied.
+			stillReadable := func() bool {
+				ok, gerr := s.store.CanTeamRead(copyCtx, branch.UserEmail, src.ID)
+				if gerr != nil {
+					log.Printf("branch files: re-check %s: %v", logSafeSlug(src.ID), logSafe(gerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+				}
+				return gerr == nil && ok
+			}
+			origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(src.ID, branch.ID, outs, stillReadable)
+		}
 	}
 	var refsTruncated bool
 	origin.WithheldFiles, refsTruncated = withholdUncopiedReferences(history, origin.CopiedFiles, origin.WithheldFiles)
 	origin.WithheldTruncated = outsTruncated || refsTruncated
-	// The branch is already committed and the copy above can take a while:
-	// a client that gave up (or a proxy that timed out) by now must not leave
-	// a branch with copied files but no origin — no banner, no locked names,
-	// links that 404. So the origin is written on a context detached from
-	// the request's cancellation, bounded on its own.
+	// The origin write gets its own budget: a copy that used all of
+	// branchCopyTimeout must still be able to record what it did.
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), branchOriginRecordTimeout)
 	defer cancel()
 	if err := s.store.RecordBranchOrigin(recordCtx, branch.ID, origin); err != nil {
-		log.Printf("branch files: record origin of %s: %v", logSafeSlug(branch.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		log.Printf("branch files: record origin of %s: %v", logSafeSlug(branch.ID), logSafe(err.Error()))
 	}
 	return &origin
 }
@@ -181,17 +204,9 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 // branchOriginRecordTimeout bounds the detached origin write above.
 const branchOriginRecordTimeout = 10 * time.Second
 
-// historyThrough returns the entries of history with an id at or below
-// through — what BranchConversation copies. Entries are in id order.
-func historyThrough(history []agent.HistoryEntry, through int64) []agent.HistoryEntry {
-	out := make([]agent.HistoryEntry, 0, len(history))
-	for _, e := range history {
-		if e.ID <= through {
-			out = append(out, e)
-		}
-	}
-	return out
-}
+// branchCopyTimeout bounds the detached discovery + file copy above. Past it
+// the remaining files are withheld (named in the branch, not copied).
+var branchCopyTimeout = 2 * time.Minute // a var so tests can shrink it
 
 // withholdUncopiedReferences appends to withheld every workspace path the
 // transcript's assistant replies link or embed that was neither copied nor

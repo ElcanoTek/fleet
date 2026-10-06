@@ -567,8 +567,11 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	}
 	if parent == nil {
 		// Not the caller's own — the one other readable case is a chat a
-		// teammate shared with the team.
-		shared, terr := s.GetTeamVisibleConversation(ctx, userEmail, parentConvID)
+		// teammate shared with the team. The gate only: the copy below reads
+		// the messages itself (narrowed to what the gate lets a teammate
+		// read), so loading the whole transcript here would be a second full
+		// read of the owner's history for nothing.
+		shared, terr := s.GetTeamVisibleConversationMeta(ctx, userEmail, parentConvID)
 		if terr != nil {
 			return nil, terr
 		}

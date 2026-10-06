@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -52,6 +53,23 @@ import (
 // uploadsDir is the workspace subdirectory uploads are staged into
 // (stageAttachmentsIntoWorkspace). Nothing under it is ever an output.
 const uploadsDir = "attachments"
+
+// privateWorkspaceDirs are the workspace subdirectories fleet itself writes
+// for the OWNER alone, which therefore can never be outputs, whatever a reply
+// links: never shared or counted, never copied into a teammate's branch,
+// refused by the team-files gate, and skipped by the Sources walk.
+//
+//   - uploadsDir: the owner's uploads.
+//   - userSkillsRoot: the owner's PRIVATE skills, materialized as
+//     user-skills/<name>/SKILL.md into every workspace of theirs
+//     (materializeUserSkills) — a reply that links one must not hand it to
+//     the team.
+//
+// The other fleet-made entries in a chat workspace — the bundle doc
+// symlinks EnsureWorkspaceDir seeds (protocols, personas, system_prompts,
+// skills, shared) — are symlinks, which openWorkspaceFileNoFollow refuses
+// and the Sources walk does not follow, so they need no entry here.
+var privateWorkspaceDirs = []string{uploadsDir, userSkillsRoot}
 
 var (
 	sandboxSchemePrefix = regexp.MustCompile(`(?i)^sandbox:/*`)
@@ -310,6 +328,44 @@ func recentRenderedReplies(history []agent.HistoryEntry, maxReplies, maxBytes in
 	return replies, false
 }
 
+// discoveryCutoff decides, row by row and newest first, when
+// recentRenderedReplies would stop reading a history — the same reply and
+// byte budgets, the same accounting. It is what lets the store read only as
+// much history as discovery will visit (LoadDiscoveryHistory): more reports
+// whether the walk still wants rows OLDER than e. The row on which it answers
+// false is kept, so the walk itself sees the budget being crossed and reports
+// truncated exactly as it would over the full history.
+type discoveryCutoff struct {
+	maxReplies, maxBytes int
+	replies, used        int
+	open, nonEmpty       bool
+}
+
+func (c *discoveryCutoff) more(e agent.HistoryEntry) bool {
+	switch {
+	case isRenderedMessageBoundary(e):
+		// recentRenderedReplies' flush: an open reply counts once it has text.
+		if c.open && c.nonEmpty {
+			c.replies++
+		}
+		c.open, c.nonEmpty = false, false
+	case e.Role == "assistant" && e.Type == "text":
+		if !c.open && c.replies >= c.maxReplies {
+			return false
+		}
+		c.used += len(e.Content)
+		if c.used > c.maxBytes {
+			return false
+		}
+		var tc agent.TextContent
+		if err := json.Unmarshal(e.Content, &tc); err == nil && tc.Text != "" {
+			c.nonEmpty = true
+		}
+		c.open = true
+	}
+	return true
+}
+
 // presentedWorkspacePaths returns every workspace-relative path the
 // assistant's text replies link or embed (within the discovery visit budget),
 // in first-seen order, deduplicated.
@@ -364,7 +420,7 @@ func boundedPresentedPaths(history []agent.HistoryEntry, limit int, includeUploa
 		for j := len(dests) - 1; j >= 0; j-- {
 			d := dests[j]
 			p, ok := resolveWorkspaceRelPath(d)
-			if !ok || seen[p] || (!includeUploads && isUploadPath(p)) {
+			if !ok || seen[p] || (!includeUploads && isPrivateWorkspacePath(p)) {
 				continue
 			}
 			if len(paths) >= limit {
@@ -388,9 +444,16 @@ type outputFile struct {
 	Shared     bool   `json:"shared"`
 }
 
-// isUploadPath reports whether rel lives under the uploads dir.
-func isUploadPath(rel string) bool {
-	return rel == uploadsDir || strings.HasPrefix(rel, uploadsDir+"/")
+// isPrivateWorkspacePath reports whether rel lives under one of the owner-private
+// workspace dirs (privateWorkspaceDirs) — uploads, and the owner's
+// materialized private skills. Nothing there is ever an output.
+func isPrivateWorkspacePath(rel string) bool {
+	for _, d := range privateWorkspaceDirs {
+		if rel == d || strings.HasPrefix(rel, d+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // errNotAWorkspaceFile covers every way a path fails to name a regular file
@@ -457,7 +520,16 @@ func openWorkspaceFileNoFollow(wsDir, rel string) (*os.File, fs.FileInfo, error)
 	if !want.Mode().IsRegular() {
 		return nil, nil, errNotAWorkspaceFile
 	}
-	f, err := cur.OpenFile(leaf, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if workspaceOpenAfterLstat != nil {
+		workspaceOpenAfterLstat(filepath.Join(wsDir, filepath.FromSlash(rel)))
+	}
+	// O_NONBLOCK: the leaf was a regular file when Lstat'ed, but the owner's
+	// sandbox can swap it for a FIFO before the open, and a blocking open of
+	// a FIFO with no writer never returns — a request (or a branch copy)
+	// hung for good. Non-blocking, the open returns at once and the SameFile
+	// + IsRegular check below refuses it. For a regular file O_NONBLOCK is a
+	// no-op on Linux: reads behave exactly as before.
+	f, err := cur.OpenFile(leaf, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -468,6 +540,10 @@ func openWorkspaceFileNoFollow(wsDir, rel string) (*os.File, fs.FileInfo, error)
 	}
 	return f, got, nil
 }
+
+// workspaceOpenAfterLstat is a test seam run between the leaf's Lstat and
+// its open in openWorkspaceFileNoFollow; nil in production.
+var workspaceOpenAfterLstat func(fullPath string)
 
 // statWorkspaceFileNoFollow is openWorkspaceFileNoFollow for a listing: the
 // same no-symlink rule, the descriptor closed straight away.

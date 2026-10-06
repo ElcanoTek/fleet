@@ -596,6 +596,22 @@ describe("decideReadOnlyFile — the read-only views' render-time file policy", 
     });
   });
 
+  it("renders the owner's private skill files as plain names, like uploads", () => {
+    expect(decideReadOnlyFile("user-skills/pricing/SKILL.md", team)).toEqual({
+      kind: "upload",
+      name: "SKILL.md",
+      path: "user-skills/pricing/SKILL.md",
+    });
+    // Even if a stale or hostile shared list names one, no URL is minted.
+    const listed = {
+      mode: "shared" as const,
+      links: { shared: new Set(["user-skills/pricing/SKILL.md"]), fileUrl: (p: string) => `${TEAM}${p}` },
+    };
+    expect(decideReadOnlyFile("user-skills/pricing/SKILL.md", listed).kind).toBe("upload");
+    // Only the top-level dir is private: a nested user-skills/ is an ordinary path.
+    expect(decideReadOnlyFile("out/user-skills/x.md", team).kind).toBe("locked");
+  });
+
   it("never mints a URL for a path outside the shared set, traversal included", () => {
     for (const raw of ["secret/data.csv", `/api/conversations/${CONV}/workspace/%2e%2e/data.csv`]) {
       expect(decideReadOnlyFile(raw, team).kind).toBe("locked");

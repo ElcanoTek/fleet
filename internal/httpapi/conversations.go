@@ -362,8 +362,9 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	// A teammate's download of one shared output (ADR-0079) —
 	// GET /conversations/{id}/team-files/<path>. Deliberately NOT owner-gated:
 	// like team-view, its gate is the team read plus the per-file share state,
-	// enforced inside.
-	if sub == "team-files" && r.Method == http.MethodGet {
+	// enforced inside. HEAD too: the handler serves it (ServeContent answers
+	// the headers alone), and the (sub, method) table below would 405 it.
+	if sub == "team-files" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		s.handleTeamFile(w, r, user, id, subArg)
 		return
 	}

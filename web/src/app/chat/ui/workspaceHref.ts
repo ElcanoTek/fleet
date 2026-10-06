@@ -365,8 +365,19 @@ export const LOCKED_SUFFIX = " (not shared)";
 /** The marker a withheld file renders with on a public link (and as before). */
 export const WITHHELD_SUFFIX = NOT_SHARED_SUFFIX;
 
-/** Uploads live here; they are never outputs and never shared. */
-const UPLOADS_DIR = "attachments/";
+/**
+ * The owner-private workspace dirs: `attachments/` (their uploads) and
+ * `user-skills/` (their private skills, which fleet materializes into every
+ * workspace of theirs). Nothing under either is ever an output or shared —
+ * the server fences the same two (privateWorkspaceDirs in outputs.go) — so
+ * the team view renders a reference into them as a plain name.
+ */
+const PRIVATE_WORKSPACE_DIRS = ["attachments/", "user-skills/"];
+
+/** isPrivateWorkspacePath: under one of PRIVATE_WORKSPACE_DIRS. */
+export function isPrivateWorkspacePath(path: string): boolean {
+  return PRIVATE_WORKSPACE_DIRS.some((dir) => path.startsWith(dir));
+}
 
 export type SharedFileLinks = {
   /** The owner's shared outputs, by workspace-relative path (`out/report.xlsx`). */
@@ -394,7 +405,10 @@ export type ReadOnlyFileDecision =
   | { kind: "external" }
   /** A shared output: link/image at `url` (the team-files route). */
   | { kind: "shared"; name: string; path: string; url: string }
-  /** An upload on the team view: its plain name (uploads are never outputs). */
+  /**
+   * An upload (or the owner's private skill file) on the team view: its plain
+   * name — neither is ever an output.
+   */
   | { kind: "upload"; name: string; path: string }
   /** Team view, not shared: the locked name. */
   | { kind: "locked"; name: string; path: string | null }
@@ -416,7 +430,7 @@ export function decideReadOnlyFile(
   const ref = workspaceFileRef(raw);
   if (!ref) return { kind: "external" };
   if (policy.mode === "withhold") return { kind: "withheld", ...ref };
-  if (ref.path && ref.path.startsWith(UPLOADS_DIR)) {
+  if (ref.path && isPrivateWorkspacePath(ref.path)) {
     return { kind: "upload", name: ref.name, path: ref.path };
   }
   if (ref.path && policy.links.shared.has(ref.path)) {

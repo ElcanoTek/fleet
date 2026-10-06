@@ -16,7 +16,7 @@ vi.mock("@/app/lib/chatServer", () => ({
   chatServerFetch: (...args: unknown[]) => chatServerFetchMock(...args),
 }));
 
-import { GET } from "./route";
+import { GET, HEAD } from "./route";
 
 const request = new NextRequest("https://fleet.example.com/api/conversations/conv-1/team-files/out/x");
 const ctx = (path: string[]) => ({
@@ -80,5 +80,31 @@ describe("GET /api/conversations/[conversationId]/team-files/[...path]", () => {
     chatServerFetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
     const res = await GET(request, ctx(["x.csv"]));
     expect(res.status).toBe(502);
+  });
+
+  it("forwards HEAD as a HEAD and answers the headers with no body", async () => {
+    chatServerFetchMock.mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: { "Content-Type": "image/svg+xml", "Content-Length": "42" },
+      }),
+    );
+    const res = await HEAD(request, ctx(["out", "chart.svg"]));
+    expect(res.status).toBe(200);
+    expect(chatServerFetchMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "/conversations/conv-1/team-files/out/chart.svg",
+      { method: "HEAD" },
+    );
+    expect(res.body).toBeNull();
+    expect(res.headers.get("Content-Length")).toBe("42");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      "attachment; filename*=UTF-8''chart.svg",
+    );
+
+    chatServerFetchMock.mockResolvedValue(new Response(null, { status: 404 }));
+    const miss = await HEAD(request, ctx(["held.json"]));
+    expect(miss.status).toBe(404);
   });
 });

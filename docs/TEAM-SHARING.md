@@ -238,7 +238,16 @@ Two consequences follow, both deliberate:
 
 - **Uploads are never outputs** — never shared, listed in Sources, counted in
   a file line, checklist or toast, or downloadable by a teammate — even when a
-  reply links one.
+  reply links one. The same holds for `user-skills/`, where fleet materializes
+  the owner's PRIVATE skills (`user-skills/<name>/SKILL.md`) into every
+  workspace of theirs: never an output, never copied into a branch (a branch
+  names a linked one as withheld), skipped by the Sources walk, refused by the
+  download gate, and rendered as a plain name in the team view, like an
+  upload. These two (`attachments/`, `user-skills/`) are the only
+  fleet-written real directories in a chat workspace; the bundle entries
+  `EnsureWorkspaceDir` seeds (`protocols`, `personas`, `system_prompts`,
+  `skills`, `shared`) are symlinks, which the no-symlink opener refuses and
+  the Sources walk does not follow.
 - **A file the agent wrote without presenting it is not an output.** It is
   never shared or counted, and stays a download-only row in its owner's Sources.
 
@@ -259,7 +268,13 @@ teammate can download, never widens it. The walk also stops READING after the
 first (a reply the byte budget would cut is skipped whole, never parsed
 without its start), and reports that through the same truncated flags — so a
 long chat with no links costs a bounded parse per read, not a transcript-sized
-one.
+one. The READ is bounded the same way: every route but `team-view` (which
+renders the transcript anyway) loads only the rows discovery visits —
+assistant text with its content, and user text and summaries as content-free
+reply boundaries, newest first, paged, and stopped where the walk's own reply
+and byte budgets stop it (`LoadDiscoveryHistory`) — never the whole history
+with its tool results and reasoning. Discovery over that read is identical to
+discovery over the full history.
 
 **Escaped destinations.** CommonMark backslash escapes (`[r](my\_file.csv)`,
 any ASCII punctuation, bare or `<…>`, inline or in a reference definition) are
@@ -285,11 +300,15 @@ toggles one file at a time.
 **The download gate.** `GET /conversations/{id}/team-files/<path>` is the first
 cross-user file read in fleet, and it re-checks three things on every request:
 the caller can read the chat through the team door right now (the same gate as
-`team-view`), `<path>` is — by exact string match — a current output, and the
-owner has not excluded it. The file is then opened refusing a symlink at *any*
+`team-view`, checked without loading the transcript), `<path>` is — by exact
+string match — a current output, and the owner has not excluded it. `HEAD` is
+served through the same gate (headers only), on the Go side and in the web
+proxy. The file is then opened refusing a symlink at *any*
 component, each step proven to be the entry that was checked, so the owner's
 sandbox (which can write the workspace) cannot swap a shared name for a link to
-an upload or an unchecked file between the check and the read. Responses carry
+an upload or an unchecked file between the check and the read. The leaf is
+opened non-blocking, so a name swapped for a FIFO in that window is refused at
+once rather than hanging the read. Responses carry
 `nosniff` and `Content-Security-Policy: sandbox`; HTML, SVG and XML are always
 downloads, never rendered — on the Go side and again in the web proxy.
 
@@ -325,7 +344,12 @@ brancher's own files (0644 files, 0755 directories, written through an
 `os.Root` on the new workspace; the source is read with the same no-symlink
 opener as downloads; a file whose size or modification time changed while it
 was being copied — truncated, or rewritten in place to the same length — is
-withheld rather than copied as a mix of two versions). They never update: later unshares, edits or deletions by
+withheld rather than copied as a mix of two versions). The team gate is
+re-checked before each file: once the owner stops sharing (or archives) mid-copy,
+every file not yet copied is withheld. The discovery and copy run detached from
+the request's cancellation, bounded at two minutes (files past it are
+withheld), so a client that gives up mid-branch does not get a branch whose
+files silently did not come. They never update: later unshares, edits or deletions by
 the owner do not reach them. Unshared outputs are recorded as `withheld_files`
 and stay locked names in the branch's transcript — as is every other workspace
 reference the transcript links that the branch did not receive (an upload,
@@ -372,7 +396,10 @@ files) is kept for older clients, and also skips uploads now. The UI decides
 the order; the server returns both kinds. A chat's outputs are resolved
 independently of the bounded workspace walk, so a walk that finds nothing
 (its entry budget spent on a tree of empty directories, say) still lists every
-current output; a chat is left out only when both are empty.
+current output; a chat is left out only when both are empty. Each half lists
+at most the 50 most recently active chats with files, examining at most 200
+chats to find them; past either bound the response says `truncated: true`
+(and the additive `groups_truncated: true`).
 
 **The team link.** `/chat?team=<id>` lands a signed-in teammate on the
 read-only view. `GET /conversations/{id}/team-link` tells the client where to
