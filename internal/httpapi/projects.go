@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -525,6 +526,37 @@ var (
 	maxSourcesChatsScanned = 200
 )
 
+// The per-half caps above multiply per-chat ceilings (a 4 MiB transcript
+// parse, up to 500 output stats, a bounded workspace walk), so one request is
+// also bounded as a whole: at most maxSourcesDiscoveries chats are examined
+// across BOTH halves, and none is started once sourcesDiscoveryBudget has
+// elapsed. What that leaves out is reported as truncated, like the per-half
+// cuts. The focused chat is the one exception (one more examination), so
+// "Manage in Sources" still lands. Vars so tests can shrink them.
+var (
+	maxSourcesDiscoveries  = 100
+	sourcesDiscoveryBudget = 4 * time.Second
+)
+
+// sourcesBudget is one Sources request's shared discovery budget.
+type sourcesBudget struct {
+	left     int
+	deadline time.Time
+}
+
+func newSourcesBudget() *sourcesBudget {
+	return &sourcesBudget{left: maxSourcesDiscoveries, deadline: time.Now().Add(sourcesDiscoveryBudget)}
+}
+
+// spend takes one chat examination from the budget; false once it is spent.
+func (b *sourcesBudget) spend() bool {
+	if b.left <= 0 || !time.Now().Before(b.deadline) {
+		return false
+	}
+	b.left--
+	return true
+}
+
 // maxWorkspaceWalkEntries bounds the directory entries one workspace walk
 // visits. The heap below bounds what is KEPT; this bounds the work, so a tree
 // with millions of entries cannot stall the project home either. Past it the
@@ -638,8 +670,9 @@ func walkWorkspaceFiles(convID string, limit int) (files []sourcesFile, truncate
 //     through the team-files route, which re-checks every gate.
 //
 // Each half lists at most maxSourcesGroups chats (the most recently active
-// with files), examining at most maxSourcesChatsScanned; the rest is reported
-// as truncated.
+// with files), examining at most maxSourcesChatsScanned, and the request as a
+// whole examines at most maxSourcesDiscoveries chats within
+// sourcesDiscoveryBudget; the rest is reported as truncated.
 //
 // The optional ?focus=<conversation id> names the chat a "Manage in Sources"
 // link sends the caller to: its group is included even past those caps, when
@@ -713,7 +746,8 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 	// focusDone is set once the focused chat has been examined (listed, or
 	// found to have no files) so it is never listed twice.
 	focusDone := focus == ""
-	mineCut, err := listSourcesHalf(convs, focus, &focusDone, addMine)
+	budget := newSourcesBudget()
+	mineCut, err := listSourcesHalf(convs, focus, &focusDone, budget, addMine)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -738,7 +772,7 @@ func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.P
 		return ok, nil
 	}
 
-	teamCut, err := listSourcesHalf(team, focus, &focusDone, addTeam)
+	teamCut, err := listSourcesHalf(team, focus, &focusDone, budget, addTeam)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -865,14 +899,15 @@ func (s *Server) teamSourcesGroup(ctx context.Context, conv store.Conversation) 
 
 // listSourcesHalf adds the groups of one half of Sources (the caller's own
 // chats, or the team's) through add, most recently active first, up to
-// maxSourcesGroups groups out of at most maxSourcesChatsScanned chats; cut
-// reports that either bound left chats out. The focused chat (if not done
-// yet) is added even past the bounds — but only from this list, so focus
-// never reaches a chat the listing's own gates did not return.
-func listSourcesHalf(list []store.Conversation, focus string, focusDone *bool, add func(store.Conversation) (bool, error)) (cut bool, err error) {
+// maxSourcesGroups groups out of at most maxSourcesChatsScanned chats, each
+// examination spending one unit of the request-wide budget; cut reports that
+// any bound left chats out. The focused chat (if not done yet) is added even
+// past the bounds — but only from this list, so focus never reaches a chat
+// the listing's own gates did not return.
+func listSourcesHalf(list []store.Conversation, focus string, focusDone *bool, budget *sourcesBudget, add func(store.Conversation) (bool, error)) (cut bool, err error) {
 	n := 0
 	for i, conv := range list {
-		if n >= maxSourcesGroups || i >= maxSourcesChatsScanned {
+		if n >= maxSourcesGroups || i >= maxSourcesChatsScanned || !budget.spend() {
 			cut = true
 			break
 		}

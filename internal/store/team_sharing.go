@@ -219,7 +219,10 @@ func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string)
 			       OR m.type IN ('summary', '`+agent.EntryTypeSummaryBoundary+`'))
 		) msg
 		CROSS JOIN LATERAL (
-			SELECT COUNT(*) AS n, COALESCE(md5(string_agg(e.path, E'\n' ORDER BY e.path)), '') AS h
+			-- Length-prefixed, so no two different sets aggregate to the
+			-- same string (a path may itself contain the separator).
+			SELECT COUNT(*) AS n,
+			       COALESCE(md5(string_agg(length(e.path)::text || ':' || e.path, '' ORDER BY e.path)), '') AS h
 			FROM conversation_output_exclusions e
 			WHERE e.conversation_id = c.id
 		) ex
@@ -229,7 +232,7 @@ func (s *Store) TeamViewVersion(ctx context.Context, callerEmail, convID string)
 			JOIN conversations bc ON bc.id = o.conversation_id
 			WHERE o.source_conversation_id = c.id
 			  AND bc.user_email = $2 AND bc.deleted_at IS NULL
-			ORDER BY o.branched_at DESC, o.conversation_id DESC
+			ORDER BY o.seq DESC
 			LIMIT 1
 		) vb ON TRUE
 		WHERE `+teamReadableClause,

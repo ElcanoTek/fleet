@@ -295,7 +295,9 @@ file the checklist did not show (missing on disk when the dialog loaded, past
 the 500-reference bound) is left alone, so re-sharing with everything checked
 cannot quietly re-expose it if it comes back. A client that omits
 `listed_paths` is taken to have shown the chat's current outputs. Sources
-toggles one file at a time.
+toggles one file at a time. A chat holds at most 2,000 exclusions: a write that
+would add more is refused with `409` and changes nothing — never pruned, since
+dropping an old exclusion would re-share that file if it came back.
 
 **The download gate.** `GET /conversations/{id}/team-files/<path>` is the first
 cross-user file read in fleet, and it re-checks three things on every request:
@@ -327,7 +329,7 @@ not read the chat gets the same `404` whatever `If-None-Match` says, never a
 `304`. It fingerprints the chat row (`updated_at`, title, owner, audience,
 project and the project's name), the visible transcript (count and highest id
 of the user/assistant text and summary rows), the exclusion set (count plus a
-hash of the sorted paths), the caller's own latest branch of the chat (which
+hash of the sorted, length-prefixed paths), the caller's own latest branch of the chat (which
 with the transcript decides `viewer_branch` / `changed_since`), and the
 caller. A 200's ETag is the version read before its body was built, so a change
 landing in between only makes the next poll refetch. **Not covered:** the
@@ -406,8 +408,9 @@ independently of the bounded workspace walk, so a walk that finds nothing
 (its entry budget spent on a tree of empty directories, say) still lists every
 current output; a chat is left out only when both are empty. Each half lists
 at most the 50 most recently active chats with files, examining at most 200
-chats to find them; past either bound the response says `truncated: true`
-(and the additive `groups_truncated: true`). An optional `?focus=<chat id>`
+chats to find them, and the request as a whole examines at most 100 chats
+across both halves, starting none after four seconds; past any bound the
+response says `truncated: true` (and the additive `groups_truncated: true`). An optional `?focus=<chat id>`
 (sent by "Manage in Sources") lists that chat's group even past both bounds,
 but only when it is in one of the two listings above — the caller's own chat
 in this project, or a teammate's chat passing the same team gates; any other

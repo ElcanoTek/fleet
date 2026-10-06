@@ -641,3 +641,113 @@ func TestReleaseBranchFilesAnnouncement(t *testing.T) {
 		t.Errorf("releasing a non-branch is a no-op, got %v", err)
 	}
 }
+
+// "The viewer's most recent branch" survives branches made in the same
+// second: branched_at is whole seconds and branch ids are random, so the
+// recording order (seq) breaks the tie — for ViewerBranches and for the
+// team-view version that feeds the conditional poll alike.
+func TestViewerBranchesSameSecondUsesRecordingOrder(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	view, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
+	if err != nil || view == nil || len(view.Messages) == 0 {
+		t.Fatalf("team view: %v", err)
+	}
+	last := view.Messages[len(view.Messages)-1].ID
+	versions := map[string]bool{}
+	for i := 0; i < 6; i++ {
+		br, err := f.s.BranchConversation(f.ctx, "bob@x.com", c.ID, last, fmt.Sprintf("b%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.s.RecordBranchOrigin(f.ctx, br.ID, BranchOrigin{
+			SourceConversationID: c.ID, SourceOwnerEmail: "alice@x.com", SourceTitle: "Spread study",
+			BranchedAt: 1767225600, SourceMaxMessageID: last, // one shared second
+		}); err != nil {
+			t.Fatal(err)
+		}
+		vb, err := f.s.ViewerBranches(f.ctx, "bob@x.com", []string{c.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := vb[c.ID].ConversationID; got != br.ID {
+			t.Fatalf("branch %d: most recent = %s, want the one just made (%s)", i, got, br.ID)
+		}
+		v, err := f.s.TeamViewVersion(f.ctx, "bob@x.com", c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if versions[v] {
+			t.Fatalf("branch %d: team-view version %q repeats an earlier one", i, v)
+		}
+		versions[v] = true
+	}
+}
+
+// The exclusion fingerprint is unambiguous: two different sets whose paths
+// join to the same newline-separated string still version differently.
+func TestTeamViewVersionExclusionSetsDoNotCollide(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	version := func(paths ...string) string {
+		t.Helper()
+		if _, err := f.s.db.ExecContext(f.ctx,
+			`DELETE FROM conversation_output_exclusions WHERE conversation_id = $1`, c.ID); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			if _, err := f.s.db.ExecContext(f.ctx,
+				`INSERT INTO conversation_output_exclusions (conversation_id, path, created_at) VALUES ($1, $2, 0)`, c.ID, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		v, err := f.s.TeamViewVersion(f.ctx, "bob@x.com", c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if a, b := version("a\nb", "c"), version("a", "b\nc"); a == b {
+		t.Errorf("exclusion sets {a\\nb, c} and {a, b\\nc} share version %q", a)
+	}
+}
+
+// The exclusion set is bounded per chat: a write that would take it past
+// maxExclusionsPerConversation is refused whole (nothing inserted), and
+// re-sharing — a delete — still works at the cap. Nothing is pruned.
+func TestExclusionsCappedPerConversation(t *testing.T) {
+	f := newTeamFixture(t)
+	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
+	if _, err := f.s.db.ExecContext(f.ctx, `
+		INSERT INTO conversation_output_exclusions (conversation_id, path, created_at)
+		SELECT $1, 'old/' || g, 0 FROM generate_series(1, $2::int) g`, c.ID, maxExclusionsPerConversation); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		var n int
+		if err := f.s.db.QueryRowContext(f.ctx,
+			`SELECT COUNT(*) FROM conversation_output_exclusions WHERE conversation_id = $1`, c.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := f.s.SetOutputShared(f.ctx, "alice@x.com", c.ID, "new.csv", false); !errors.Is(err, ErrTooManyExclusions) {
+		t.Fatalf("SetOutputShared past the cap = %v, want ErrTooManyExclusions", err)
+	}
+	if err := f.s.ApplyOutputChecklist(f.ctx, "alice@x.com", c.ID, []string{"x.csv", "y.csv"}, []string{"x.csv"}); !errors.Is(err, ErrTooManyExclusions) {
+		t.Fatalf("ApplyOutputChecklist past the cap = %v, want ErrTooManyExclusions", err)
+	}
+	if n := count(); n != maxExclusionsPerConversation {
+		t.Fatalf("a refused write left %d exclusions, want %d", n, maxExclusionsPerConversation)
+	}
+	// Already-excluded paths are not new rows: re-asserting one is fine.
+	if err := f.s.SetOutputShared(f.ctx, "alice@x.com", c.ID, "old/1", false); err != nil {
+		t.Fatalf("re-excluding an existing path at the cap: %v", err)
+	}
+	if err := f.s.SetOutputShared(f.ctx, "alice@x.com", c.ID, "old/1", true); err != nil {
+		t.Fatalf("re-sharing at the cap: %v", err)
+	}
+	if err := f.s.SetOutputShared(f.ctx, "alice@x.com", c.ID, "new.csv", false); err != nil {
+		t.Fatalf("one under the cap: %v", err)
+	}
+}

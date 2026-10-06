@@ -405,6 +405,71 @@ func TestProjectFilesCapsGroupsPerHalf(t *testing.T) {
 	}
 }
 
+// One Sources request is bounded as a whole, not just per half: once the
+// shared discovery budget (a chat count across both halves, and a deadline)
+// is spent, no further chat is examined and the response says so. The
+// focused chat is still examined, so "Manage in Sources" lands.
+func TestProjectFilesRequestWideDiscoveryBudget(t *testing.T) {
+	f := newFilesFixture(t)
+	c2, err := f.st.CreateConversation(f.ctx, "alice@x.com", "Second", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetConversationProject(f.ctx, "alice@x.com", c2.ID, f.project.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(f.root, c2.ID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.root, c2.ID, "two.csv"), []byte("2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AppendHistory(f.ctx, c2.ID, []agent.HistoryEntry{textEntry("assistant", "[two](two.csv)")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.SetConversationTeamVisible(f.ctx, "alice@x.com", c2.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	type body struct {
+		Groups []struct {
+			ConversationID string `json:"conversation_id"`
+		} `json:"groups"`
+		Truncated       bool `json:"truncated"`
+		GroupsTruncated bool `json:"groups_truncated"`
+	}
+	ids := func(b body) []string {
+		out := make([]string, 0, len(b.Groups))
+		for _, g := range b.Groups {
+			out = append(out, g.ConversationID)
+		}
+		return out
+	}
+
+	oldN, oldT := maxSourcesDiscoveries, sourcesDiscoveryBudget
+	t.Cleanup(func() { maxSourcesDiscoveries, sourcesDiscoveryBudget = oldN, oldT })
+
+	// The count: one examination for the whole request.
+	maxSourcesDiscoveries = 1
+	for _, who := range []string{"alice@x.com", "bob@x.com"} {
+		got := decode[body](t, projectSub(t, f.srv, "GET", who, f.project.ID+"/files", ""))
+		if len(got.Groups) != 1 || !got.GroupsTruncated || !got.Truncated {
+			t.Errorf("%s count-capped: %v truncated=%v", who, ids(got), got.GroupsTruncated)
+		}
+	}
+
+	// The deadline: already spent, so nothing is examined — except the focus.
+	maxSourcesDiscoveries = oldN
+	sourcesDiscoveryBudget = 0
+	got := decode[body](t, projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/files", ""))
+	if len(got.Groups) != 0 || !got.GroupsTruncated {
+		t.Errorf("deadline-capped: %v truncated=%v, want none and truncated", ids(got), got.GroupsTruncated)
+	}
+	got = decode[body](t, projectSub(t, f.srv, "GET", "bob@x.com", f.project.ID+"/files?focus="+c2.ID, ""))
+	if len(got.Groups) != 1 || got.Groups[0].ConversationID != c2.ID {
+		t.Errorf("deadline-capped with focus: %v, want only %s", ids(got), c2.ID)
+	}
+}
+
 // A discovery that fails after the branch is committed (here: the copy budget
 // is already spent) copies nothing and can name nothing as withheld. The
 // origin must fail CLOSED — recorded as truncated, so the web's allow-list

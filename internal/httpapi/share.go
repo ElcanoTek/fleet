@@ -180,6 +180,8 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 			switch {
 			case errors.Is(err, store.ErrInvalidOutputPath):
 				http.Error(w, "invalid unshared_paths", http.StatusBadRequest)
+			case errors.Is(err, store.ErrTooManyExclusions):
+				http.Error(w, err.Error(), http.StatusConflict)
 			case errors.Is(err, store.ErrConversationNotFound):
 				http.Error(w, "not found", http.StatusNotFound)
 			default:

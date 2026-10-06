@@ -137,6 +137,8 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 			switch {
 			case errors.Is(err, store.ErrInvalidOutputPath):
 				http.Error(w, "invalid path", http.StatusBadRequest)
+			case errors.Is(err, store.ErrTooManyExclusions):
+				http.Error(w, err.Error(), http.StatusConflict)
 			case errors.Is(err, store.ErrConversationNotFound):
 				http.Error(w, "not found", http.StatusNotFound)
 			default:

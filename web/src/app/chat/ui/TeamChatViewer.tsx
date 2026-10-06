@@ -127,6 +127,11 @@ export function TeamChatViewer({
   // version read instead of a full transcript load. Cleared with the
   // snapshot (a 404), so the next read after that is unconditional.
   const etagRef = useRef<string | null>(null);
+  // Whether a snapshot is on screen. A quiet read only hides its failure
+  // when there is something to keep showing: a poll that supersedes the
+  // still-pending first load (and so makes that load's outcome stale) must
+  // report its own failure, or the reader is left on "Loading…" for good.
+  const hasSnapshot = useRef(false);
   const load = useCallback(
     async (quiet: boolean, isCancelled: () => boolean) => {
       const gen = ++loadGen.current;
@@ -152,9 +157,10 @@ export function TeamChatViewer({
         if (!res.ok) {
           if (res.status === 404) {
             etagRef.current = null;
+            hasSnapshot.current = false;
             setSnapshot(null);
             setLoadError("This chat isn’t shared with your team anymore.");
-          } else if (!quiet) {
+          } else if (!quiet || !hasSnapshot.current) {
             setLoadError(`Couldn’t load this chat (HTTP ${res.status}).`);
           }
           return;
@@ -166,10 +172,11 @@ export function TeamChatViewer({
           // the stale "Couldn’t load" message on screen.
           setLoadError(null);
           setSnapshot(data);
+          hasSnapshot.current = true;
           etagRef.current = res.headers.get("ETag");
         }
       } catch {
-        if (!quiet && !stale()) setLoadError("Couldn’t reach the server.");
+        if ((!quiet || !hasSnapshot.current) && !stale()) setLoadError("Couldn’t reach the server.");
       }
     },
     [conversationId],
@@ -180,6 +187,7 @@ export function TeamChatViewer({
     const isCancelled = () => cancelled;
     // A different chat (or a remount) starts unconditional.
     etagRef.current = null;
+    hasSnapshot.current = false;
     queueMicrotask(() => void load(false, isCancelled));
     const visible = () =>
       typeof document === "undefined" || document.visibilityState === "visible";

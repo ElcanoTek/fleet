@@ -50,7 +50,12 @@ CREATE TABLE IF NOT EXISTS conversation_branch_origins (
     copied_files           JSONB NOT NULL DEFAULT '[]'::jsonb,
     withheld_files         JSONB NOT NULL DEFAULT '[]'::jsonb,
     withheld_truncated     BOOLEAN NOT NULL DEFAULT FALSE,
-    files_announced        BOOLEAN NOT NULL DEFAULT FALSE
+    files_announced        BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Recording order, for "the viewer's most recent branch": branched_at is
+    -- whole seconds and conversation ids are random, so two branches made in
+    -- one second need a monotonic tie-breaker. The origin is recorded before
+    -- the branch request returns, so for one person this is creation order.
+    seq                    BIGSERIAL NOT NULL
 );
 -- "Has this viewer branched that chat?" is asked by source id.
 CREATE INDEX IF NOT EXISTS idx_branch_origins_source

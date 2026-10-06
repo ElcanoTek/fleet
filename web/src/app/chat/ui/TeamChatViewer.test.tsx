@@ -501,4 +501,25 @@ describe("TeamChatViewer — live (the owner keeps working)", () => {
     expect(screen.queryByText(/Couldn’t load this chat/)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
+  it("a poll that supersedes the pending first load still reports its failure", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let first = true;
+    const fetchFn = stubFetch(() => {
+      if (first) {
+        first = false;
+        return new Promise<Response>(() => {}); // the first load never lands
+      }
+      return json({}, 500);
+    });
+    renderFull(WITH_FILES);
+    // Let the first load start (it is queued as a microtask) before the poll.
+    await act(async () => {});
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    // Nothing on screen to keep: the quiet read must say so, not leave
+    // the reader on "Loading…".
+    expect(await screen.findByText("Couldn’t load this chat (HTTP 500).")).toBeInTheDocument();
+  });
 });

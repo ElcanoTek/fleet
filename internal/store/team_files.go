@@ -201,6 +201,17 @@ const maxOutputPathLen = 1024
 // relative, slash-separated workspace path.
 var ErrInvalidOutputPath = errors.New("invalid output path")
 
+// ErrTooManyExclusions refuses an exclusion write that would take one chat
+// past maxExclusionsPerConversation. Refused, never pruned: dropping an old
+// exclusion would quietly re-share that file if it ever came back.
+var ErrTooManyExclusions = errors.New("too many unshared files in this chat")
+
+// maxExclusionsPerConversation bounds the exclusion set every outputs read,
+// download gate and team-view version materializes. Discovery considers at
+// most 500 outputs, so a real chat stays far below it; it exists so repeated
+// writes of arbitrary paths cannot grow those hot-path reads without bound.
+const maxExclusionsPerConversation = 2000
+
 // ValidOutputPath reports whether p has the shape an output path always has:
 // relative, slash-separated, no empty / "." / ".." segment, no NUL or
 // backslash, bounded length. Outputs are produced in exactly this shape, so
@@ -240,16 +251,33 @@ func (s *Store) ListOutputExclusions(ctx context.Context, convID string) (map[st
 
 // ownsLiveConversationTx is the ownership gate every exclusion write runs
 // under. It locks the conversation row so a concurrent delete cannot race the
-// insert into a foreign-key error.
+// insert into a foreign-key error, and so two exclusion writes for one chat
+// serialize (FOR NO KEY UPDATE conflicts with itself) — which is what keeps
+// the per-chat cap exact under concurrent requests.
 func ownsLiveConversationTx(ctx context.Context, tx *sql.Tx, ownerEmail, convID string) error {
 	var one int
 	err := tx.QueryRowContext(ctx,
-		`SELECT 1 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR SHARE`,
+		`SELECT 1 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR NO KEY UPDATE`,
 		convID, normalizeEmail(ownerEmail)).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrConversationNotFound
 	}
 	return err
+}
+
+// exclusionCapTx fails the write when the chat now holds more exclusions than
+// maxExclusionsPerConversation. Run after the inserts, inside the same
+// transaction, so a refused write leaves nothing behind.
+func exclusionCapTx(ctx context.Context, tx *sql.Tx, convID string) error {
+	var n int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM conversation_output_exclusions WHERE conversation_id = $1`, convID).Scan(&n); err != nil {
+		return err
+	}
+	if n > maxExclusionsPerConversation {
+		return ErrTooManyExclusions
+	}
+	return nil
 }
 
 // SetOutputShared records the owner's choice for one output: shared=false
@@ -275,6 +303,9 @@ func (s *Store) SetOutputShared(ctx context.Context, ownerEmail, convID, path st
 			`INSERT INTO conversation_output_exclusions (conversation_id, path, created_at)
 			 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
 			convID, path, time.Now().Unix())
+		if err == nil {
+			err = exclusionCapTx(ctx, tx, convID)
+		}
 	}
 	if err != nil {
 		return err
@@ -334,6 +365,11 @@ func (s *Store) ApplyOutputChecklist(ctx context.Context, ownerEmail, convID str
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO conversation_output_exclusions (conversation_id, path, created_at)
 			 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, convID, p, now); err != nil {
+			return err
+		}
+	}
+	if len(excluded) > 0 {
+		if err := exclusionCapTx(ctx, tx, convID); err != nil {
 			return err
 		}
 	}
@@ -566,7 +602,7 @@ func (s *Store) ViewerBranches(ctx context.Context, viewerEmail string, sourceID
 		JOIN conversations c ON c.id = o.conversation_id
 		WHERE c.user_email = $1 AND c.deleted_at IS NULL
 		  AND o.source_conversation_id = ANY($2)
-		ORDER BY o.source_conversation_id, o.branched_at DESC, o.conversation_id DESC`,
+		ORDER BY o.source_conversation_id, o.seq DESC`,
 		normalizeEmail(viewerEmail), sourceIDs)
 	if err != nil {
 		return nil, err
