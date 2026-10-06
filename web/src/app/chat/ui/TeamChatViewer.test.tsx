@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { TeamChatViewer } from "./TeamChatViewer";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { ChatToastProvider } from "./ChatToasts";
+import { TEAM_VIEW_POLL_MS, TeamChatViewer } from "./TeamChatViewer";
 
 // What a teammate actually meets when they open a chat someone shared with the
 // team (Item C4, ADR-0057). Two guarantees are covered here, both reported from
@@ -61,13 +62,11 @@ function renderViewer() {
   );
 }
 
-// JSX wraps the explainer across source lines; the DOM collapses that to
-// single spaces, so match on normalized text.
-const squash = (s: string) => s.replace(/\s+/g, " ").trim();
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("TeamChatViewer — the read-only transcript withholds files (#9)", () => {
@@ -99,20 +98,15 @@ describe("TeamChatViewer — the read-only transcript withholds files (#9)", () 
   });
 });
 
-describe("TeamChatViewer — the Branch CTA (#10)", () => {
-  it("keeps the button and its explainer exactly as they were", async () => {
+describe("TeamChatViewer — the Branch CTA (#10, B19)", () => {
+  it("says whose chat this is where the composer would be, with the one action", async () => {
     renderViewer();
 
     const button = await screen.findByRole("button", {
       name: "Branch to continue in your own chat",
     });
     expect(button).toBeEnabled();
-    expect(
-      screen.getByText((_, node) =>
-        squash(node?.textContent ?? "") ===
-        "You get your own copy in this project — private until you share it. sam’s chat is unchanged.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Read-only. This is Sam’s chat.")).toBeInTheDocument();
   });
 
   it("fades into the page background instead of plating a panel over the transcript", async () => {
@@ -137,33 +131,187 @@ describe("TeamChatViewer — the Branch CTA (#10)", () => {
     expect(cta.className).not.toContain("bg-[var(--color-surface-1)]");
   });
 
-  it("leaves the button an opaque control with a soft shadow", async () => {
+  it("sits the line and button in an opaque, positioned bar above the fade", async () => {
     renderViewer();
 
     const button = await screen.findByRole("button", {
       name: "Branch to continue in your own chat",
     });
-    // Opaque so conversation content never shows through the control itself,
-    // shadowed so it reads as sitting above the page.
-    expect(button.className).toContain("bg-[var(--color-surface-1)]");
-    expect(button.className).toContain("shadow-[var(--shadow-md)]");
-    // Unchanged from the shipped control: full width, same padding, same radius.
-    expect(button.className).toContain("w-full");
-    expect(button.className).toContain("px-4");
-    expect(button.className).toContain("py-3");
-    expect(button.className).toContain("rounded-[var(--radius-lg)]");
+    // The primary action: the brand fill with its purpose-built foreground.
+    expect(button.className).toContain("bg-[var(--color-primary)]");
+    expect(button.className).toContain("text-[var(--color-on-primary)]");
+    // The bar is opaque so conversation content never shows through, and
+    // positioned so it paints over the absolutely-positioned fade.
+    const bar = button.parentElement!;
+    expect(bar.className).toContain("bg-[var(--color-surface-1)]");
+    expect(bar.className).toContain("relative");
+    expect(bar.className).toContain("shadow-[var(--shadow-md)]");
+  });
+});
+
+// ── B19–B21 with the extended team-view (files, project, viewer_branch) ────
+
+const CONV = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+const WITH_FILES = {
+  ...SNAPSHOT,
+  id: CONV,
+  project_id: "proj-1",
+  project_name: "Knowertech",
+  files: [
+    { path: "daily_spend_by_channel.png", name: "daily_spend_by_channel.png", size: 10, modified_at: 1, shared: true },
+    { path: "daily_spend_by_channel.csv", name: "daily_spend_by_channel.csv", size: 10, modified_at: 1, shared: false },
+  ],
+  viewer_branch: null as null | { conversation_id: string; branched_at: number; changed_since: boolean },
+};
+
+type Snap = typeof WITH_FILES;
+
+function stubFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+  const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => handler(String(input), init));
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status });
+}
+
+function renderFull(
+  snap: Snap,
+  props: Partial<React.ComponentProps<typeof TeamChatViewer>> = {},
+) {
+  return render(
+    <ChatToastProvider>
+      <TeamChatViewer
+        conversationId={CONV}
+        onBack={() => {}}
+        onBranched={() => {}}
+        {...props}
+      />
+    </ChatToastProvider>,
+  );
+}
+
+describe("TeamChatViewer — read-only view with shared files (B19)", () => {
+  it("serves a shared output from the team-files route and locks an unshared one", async () => {
+    stubFetch((url) => (url.includes("/team-view") ? json(WITH_FILES) : json({})));
+    const { container } = renderFull(WITH_FILES);
+
+    const locked = await screen.findByTestId("locked-file");
+    expect(locked).toHaveTextContent("daily_spend_by_channel.csv (not shared)");
+    expect(container.querySelector('a[href*="daily_spend_by_channel.csv"]')).toBeNull();
+    await waitFor(() => {
+      const img = container.querySelector("img");
+      expect(img?.getAttribute("src")).toBe(
+        `/api/conversations/${CONV}/team-files/daily_spend_by_channel.png`,
+      );
+    });
+    // Nothing is ever requested from the owner's own workspace route.
+    expect(container.innerHTML).not.toContain("/workspace/");
   });
 
-  it("keeps the explainer above the fade so it stays legible over the transcript", async () => {
-    renderViewer();
+  it("shows the project breadcrumb, the title and who shared it", async () => {
+    stubFetch(() => json(WITH_FILES));
+    const onOpenProject = vi.fn();
+    renderFull(WITH_FILES, { onOpenProject });
 
-    await screen.findByRole("button", { name: "Branch to continue in your own chat" });
-    const cta = screen.getByTestId("team-branch-cta");
-    // The fade is absolutely positioned, so the copy over it must be
-    // positioned too or it paints underneath.
-    await waitFor(() => {
-      const explainer = cta.querySelector("p");
-      expect(explainer?.className).toContain("relative");
+    fireEvent.click(await screen.findByRole("button", { name: "Knowertech" }));
+    expect(onOpenProject).toHaveBeenCalledWith("proj-1");
+    expect(screen.getByRole("heading", { name: "Channel spend review" })).toBeInTheDocument();
+    expect(screen.getByTestId("team-view-shared-by")).toHaveTextContent(`Shared by ${OWNER}`);
+  });
+});
+
+describe("TeamChatViewer — branching (B20)", () => {
+  it("creates '<chat> (branch)', confirms with the toast, and opens the branch", async () => {
+    const fetchMock = stubFetch((url) => {
+      if (url.includes("/team-view")) return json(WITH_FILES);
+      if (url.includes("/branch")) return json({ id: "new-conv" }, 201);
+      return json({});
     });
+    const onBranched = vi.fn();
+    renderFull(WITH_FILES, { onBranched });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Branch to continue in your own chat" }),
+    );
+    await waitFor(() => expect(onBranched).toHaveBeenCalledWith("new-conv"));
+    const branchCall = fetchMock.mock.calls.find(([u]) => String(u).includes("/branch"));
+    expect(JSON.parse(String(branchCall?.[1]?.body))).toEqual({
+      branch_point_message_id: 2,
+      title: "Channel spend review (branch)",
+    });
+    expect(
+      await screen.findByText("Branched into your own chat. Shared files came with it."),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("TeamChatViewer — coming back to a chat you branched (B21)", () => {
+  const BRANCHED: Snap = {
+    ...WITH_FILES,
+    viewer_branch: { conversation_id: "my-branch", branched_at: 1759622400, changed_since: true },
+  };
+
+  it("links to the branch, says the owner has added messages, and offers Branch again", async () => {
+    stubFetch(() => json(BRANCHED));
+    const onOpenBranch = vi.fn();
+    renderFull(BRANCHED, { onOpenBranch });
+
+    const banner = await screen.findByTestId("viewer-branch-banner");
+    expect(banner).toHaveTextContent(/You branched this on Oct \d+/);
+    expect(banner).toHaveTextContent("Sam has added messages since you branched.");
+    fireEvent.click(screen.getByRole("button", { name: "Open your branch" }));
+    expect(onOpenBranch).toHaveBeenCalledWith("my-branch");
+    expect(screen.getByRole("button", { name: "Branch again" })).toBeInTheDocument();
+  });
+
+  it("omits the 'added messages' line when nothing changed since", async () => {
+    const same = { ...BRANCHED, viewer_branch: { ...BRANCHED.viewer_branch!, changed_since: false } };
+    stubFetch(() => json(same));
+    renderFull(same);
+    const banner = await screen.findByTestId("viewer-branch-banner");
+    expect(banner).not.toHaveTextContent("added messages");
+  });
+});
+
+describe("TeamChatViewer — live (the owner keeps working)", () => {
+  it("re-reads the chat on an interval and shows new messages", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let snap: Snap = WITH_FILES;
+    const fetchMock = stubFetch(() => json(snap));
+    renderFull(WITH_FILES);
+    await screen.findByText("Break spend down by channel.");
+
+    snap = {
+      ...WITH_FILES,
+      messages: [
+        ...WITH_FILES.messages,
+        { id: 3, role: "user", type: "text", content: { text: "Now by region." } },
+      ],
+    };
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    expect(await screen.findByText("Now by region.")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("drops the transcript when the chat stops being shared", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let status = 200;
+    stubFetch(() => (status === 200 ? json(WITH_FILES) : json({}, 404)));
+    renderFull(WITH_FILES);
+    await screen.findByText("Break spend down by channel.");
+
+    status = 404;
+    await act(async () => {
+      vi.advanceTimersByTime(TEAM_VIEW_POLL_MS);
+    });
+    expect(
+      await screen.findByText("This chat isn’t shared with your team anymore."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Break spend down by channel.")).toBeNull();
   });
 });

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  LOCKED_FILE_HREF,
   PENDING_CONV_KEY,
+  linkSharedFiles,
   redactUnsharedFiles,
+  teamFileDownloadName,
+  workspaceFileRef,
   resolveTaskWorkspaceHref,
   resolveWorkspaceHref,
   unsharedFileName,
@@ -520,5 +524,99 @@ describe("redactUnsharedFiles", () => {
     const md = "Revenue rose 12% in Q3 — mostly paid search.";
     expect(redactUnsharedFiles(md, IMAGE_PLACEHOLDER)).toBe(md);
     expect(redactUnsharedFiles("", IMAGE_PLACEHOLDER)).toBe("");
+  });
+});
+
+// The team view (B19): shared outputs become live team-files links, every
+// other workspace reference a locked name, uploads plain names. The public
+// link keeps redactUnsharedFiles — pinned at the end of this block.
+describe("linkSharedFiles — the teammate's view of the owner's outputs", () => {
+  const links = {
+    shared: new Set(["daily_spend.png", "out/report final.xlsx", "data.csv"]),
+    fileUrl: (path: string) =>
+      `/api/conversations/${CONV}/team-files/${path
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`,
+  };
+  const TEAM = `/api/conversations/${CONV}/team-files/`;
+  const LOCK = `(${LOCKED_FILE_HREF})`;
+
+  it("points a shared output's link and image at the team-files route", () => {
+    expect(linkSharedFiles("[the data](data.csv)", links)).toBe(
+      `[the data](${TEAM}data.csv)`,
+    );
+    expect(linkSharedFiles("![Spend](daily_spend.png)", links)).toBe(
+      `![Spend](${TEAM}daily_spend.png)`,
+    );
+    // Nested folders and encoded names resolve to the same shared path.
+    expect(linkSharedFiles("[r](out/report%20final.xlsx)", links)).toBe(
+      `[r](${TEAM}out/report%20final.xlsx)`,
+    );
+    expect(
+      linkSharedFiles(`[r](sandbox:/opt/chat/workspace/${CONV}/data.csv)`, links),
+    ).toBe(`[r](${TEAM}data.csv)`);
+  });
+
+  it("renders an unshared output as a locked name, never a live link", () => {
+    expect(linkSharedFiles("[v1](exclusion_list_v1.json)", links)).toBe(
+      `[exclusion\\_list\\_v1\\.json (not shared)]${LOCK}`,
+    );
+    // An unshared image is a locked name too: nothing is fetched.
+    expect(linkSharedFiles("![c](chart.png)", links)).toBe(
+      `[chart\\.png (not shared)]${LOCK}`,
+    );
+  });
+
+  it("names an upload plainly — uploads are never outputs, so never 'not shared'", () => {
+    expect(linkSharedFiles("[brief](attachments/brief.pdf)", links)).toBe(
+      "brief\\.pdf",
+    );
+  });
+
+  it("handles reference-style and bare routes by the same rules", () => {
+    const md = ["See [the data][d] and [old][o].", "", "[d]: data.csv", "[o]: old.csv"].join("\n");
+    expect(linkSharedFiles(md, links)).toBe(
+      `See [the data](${TEAM}data.csv) and [old\\.csv (not shared)]${LOCK}.\n`,
+    );
+    expect(
+      linkSharedFiles(`Saved to /api/conversations/${CONV}/workspace/data.csv.`, links),
+    ).toBe(`Saved to [data\\.csv](${TEAM}data.csv).`);
+  });
+
+  it("never mints a URL for a path outside the shared set, traversal included", () => {
+    const out = linkSharedFiles(
+      "[x](../data.csv) [y](%2e%2e/data.csv) [z](secret/data.csv)",
+      links,
+    );
+    expect(out).not.toContain("team-files");
+  });
+
+  it("leaves external links, anchors and code alone", () => {
+    const md = "[docs](https://example.com/a.csv) `[x](data.csv)`\n```\n[y](data.csv)\n```";
+    expect(linkSharedFiles(md, links)).toBe(md);
+  });
+
+  it("does not change what a public link shows (files are never exposed there)", () => {
+    expect(redactUnsharedFiles("[the data](data.csv)", "Image withheld.")).toBe(
+      "data\\.csv (file not shared)",
+    );
+  });
+});
+
+describe("workspaceFileRef / teamFileDownloadName", () => {
+  it("resolves the workspace-relative path a reference names", () => {
+    expect(workspaceFileRef("out/a%20b.csv")).toEqual({ name: "a b.csv", path: "out/a b.csv" });
+    expect(workspaceFileRef(`/api/conversations/${CONV}/workspace/x/y.png`)).toEqual({
+      name: "y.png",
+      path: "x/y.png",
+    });
+    expect(workspaceFileRef("https://example.com/y.png")).toBeNull();
+  });
+
+  it("names a team-files download and nothing else", () => {
+    expect(teamFileDownloadName(`/api/conversations/${CONV}/team-files/out/a%20b.csv`)).toBe("a b.csv");
+    expect(teamFileDownloadName(`/api/conversations/${CONV}/workspace/a.csv`)).toBeNull();
+    expect(teamFileDownloadName("https://evil.example/api/conversations/x/team-files/a")).toBeNull();
   });
 });

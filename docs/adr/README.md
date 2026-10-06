@@ -65,7 +65,7 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0054](0054-agent-plugins.md) | Agent Plugins load as bundle content, translated onto the existing skills + MCP primitives | Accepted |
 | [0055](0055-kubernetes-skills-staged-into-the-workspace-claim.md) | On the kubernetes backend the skills tree is staged into the workspace claim | Accepted; amends ADR-0049 |
 | [0056](0056-a2a-outbound-delegation.md) | Outbound A2A delegation as bundle-declared tools over the MCP seam | Accepted |
-| [0057](0057-team-shared-chats-live-in-team-shared-projects.md) | A team-shared chat lives inside a team-shared project | Accepted; amends ADR-0013 |
+| [0057](0057-team-shared-chats-live-in-team-shared-projects.md) | A team-shared chat lives inside a team-shared project | Accepted; amends ADR-0013; transcript-only rule superseded by ADR-0079 |
 | [0058](0058-per-conversation-attachment-scoping.md) | Attachments are scoped per conversation; the uploads tree is mounted into no sandbox | Accepted |
 | [0059](0059-date-based-rolling-releases.md) | Date-based rolling releases; every green push to `main` is tagged automatically | Accepted; re-anchors ADR-0012 |
 | [0060](0060-remove-the-fleet-admin-shim.md) | Remove the `fleet-admin` shim, and evict it from the boxes that have it | Accepted; completes ADR-0012 |
@@ -87,3 +87,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0076](0076-fleet-publishes-account-events.md) | Fleet publishes signed account events; for centrally managed identities the most recent change wins (amends ADR-0074; amended for teams 2026-09-30) | Accepted |
 | [0077](0077-connector-outage-is-not-a-recurrence-strike.md) | A dead-letter caused by a declared connector that failed to connect transiently is re-run first and never counts toward the recurrence park breaker (amends ADR-0070) | Accepted |
 | [0078](0078-track-the-latest-node-major.md) | Track the latest node major (retires "LTS, never Current"); install the signed nodejs.org build when the distro has no `nodejs<major>` stream | Accepted |
+| [0079](0079-a-team-share-carries-the-chats-outputs.md) | A team share carries the chat's outputs (files the agent presented, minus the owner's exclusions), served through a per-request gated, no-symlink team-files route; a teammate's branch copies them; archive unshares (supersedes ADR-0057's transcript-only rule) | Accepted |

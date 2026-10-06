@@ -72,13 +72,26 @@ import { ProjectHome, TeamLearningsPanel } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
 import {
   ConversationTotalsChip,
-  TeamSharedChip,
   type PendingAttachment,
 } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { SavePromptDialog } from "./SavePromptDialog";
-import { ShareDialog } from "./ShareDialog";
+import { ChatShareControls, ShareDialog } from "./ShareDialog";
+import { OutputShareContext } from "./OutputShareMarkers";
+import {
+  fetchConversationOutputs,
+  fetchTeamLinkStatus,
+  shareChatWithTeam,
+  sharedToast,
+  type BranchOrigin,
+  type ShareWithTeamResult,
+  type TeamLinkStatus,
+} from "./teamSharing";
 import { TeamChatViewer } from "./TeamChatViewer";
+// Team links (B22/B23), branch banners (B20) and a branch's withheld files.
+import { TeamLinkNotice, type TeamLinkNoticeState } from "./TeamLinkNotice";
+import { BranchOriginBanner } from "./TeamBranchBanners";
+import { WithheldFilesContext } from "./LockedFiles";
 import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
@@ -95,8 +108,13 @@ import { DeleteProjectConfirmDialog } from "./DeleteProjectConfirmDialog";
 import {
   decideMoveConfirm,
   MoveChatConfirmDialog,
+  SharedChatLossConfirmDialog,
   type MoveConfirm,
 } from "./MoveChatConfirmDialog";
+// Project settings / New project (B26–B31, B27) and the move toast (B11).
+import { NewProjectDialog, type NewProjectInput } from "./NewProjectDialog";
+import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+import { useChatToast } from "./ChatToasts";
 import {
   afterDeleteAllUnpinned,
   countDeletedByDeleteAllUnpinned,
@@ -881,11 +899,40 @@ export function ChatExperience({
   const [projectHome, setProjectHome] = useState<null | {
     id: string;
     settings?: boolean;
+    // "Share project first" (B14): open with the share-the-project confirm
+    // up, naming the chat the owner came from.
+    shareFirst?: { conversationId: string; title: string };
+    // "Manage in Sources" / a toast's "Manage": open at this chat's group.
+    sourcesFocus?: string;
   }>(null);
+  // New project (B27): null = closed. teamPreselected / moveChat are the
+  // share dialog's A1b path ("Create shared project"): the team starts
+  // selected, and on create the chat moves in and is shared.
+  const [newProjectDialog, setNewProjectDialog] = useState<null | {
+    teamPreselected?: boolean;
+    moveChat?: { id: string; title: string };
+  }>(null);
+  // A shared chat staged for archiving while B34's confirm is up.
+  const [pendingSharedArchive, setPendingSharedArchive] =
+    useState<ConversationSummary | null>(null);
+  // Toasts with one action (ChatToasts): the move toast's "Share with
+  // <team>", and the confirmations the project flows end with.
+  const { notify } = useChatToast();
   // A teammate's team-shared chat, open in the read-only viewer (ADR-0057).
   // The conversation id alone: the viewer is always opened FROM a project
   // home, which stays set underneath, so Back is just "close me".
   const [teamChatView, setTeamChatView] = useState<string | null>(null);
+  // A team link (`/chat?team=<id>`) that did not open: B22 (signed in, not
+  // on the chat's team) or B23 (not shared anymore). A full-page dead end
+  // like the viewer; opening any conversation dismisses it.
+  const [teamLinkNotice, setTeamLinkNotice] =
+    useState<TeamLinkNoticeState | null>(null);
+  // branch_origin from GET /conversations/{id}, per conversation: present
+  // only on a teammate's branch, it drives the B20 banner and which files
+  // the branch transcript renders as locked names.
+  const [branchOrigins, setBranchOrigins] = useState<
+    Record<string, BranchOrigin>
+  >({});
 
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
@@ -2248,6 +2295,7 @@ export function ChatExperience({
       // made every rail click look like the app had frozen: the only way out
       // was the viewer's own back arrow.
       setTeamChatView(null);
+      setTeamLinkNotice(null);
     }
     // If this conversation is currently streaming, the local in-memory
     // copy has the in-flight UI updates that the server hasn't
@@ -2298,7 +2346,12 @@ export function ChatExperience({
       });
       if (!response.ok) throw new Error("Unable to load conversation.");
       const data = (await response.json()) as {
-        conversation: ConversationSummary;
+        conversation: ConversationSummary & {
+          branch_origin?: BranchOrigin | null;
+        };
+        // A teammate's branch only (B20); read from either level so the
+        // banner does not depend on where the handler nests it.
+        branch_origin?: BranchOrigin | null;
         history: HistoryEntry[] | null;
         pending_approvals?: Array<{
           approval_id: string;
@@ -2376,6 +2429,17 @@ export function ChatExperience({
       if (attachedConvIdsRef.current.has(conversationId)) return;
       if (recoveryTokenRef.current(conversationId) !== recoveryTokenAtStart)
         return;
+      {
+        const origin =
+          data.branch_origin ?? data.conversation.branch_origin ?? null;
+        setBranchOrigins((prev) => {
+          if (!origin && !(conversationId in prev)) return prev;
+          const nextOrigins = { ...prev };
+          if (origin) nextOrigins[conversationId] = origin;
+          else delete nextOrigins[conversationId];
+          return nextOrigins;
+        });
+      }
       const next = historyToMessages(data.history ?? []);
 
       // Re-attach approval cards + memory proposals so a page reload (or the
@@ -2965,7 +3029,12 @@ export function ChatExperience({
   // startProjectChat creates a conversation bound to a project (#509) — the
   // server validates membership and inherits the project's defaults +
   // curated connector selection — then opens it.
-  const startProjectChat = async (projectID: string) => {
+  // afterCreate runs once the conversation exists and before it opens — the
+  // project home's "New chat · Shared with <team>" shares it there.
+  const startProjectChat = async (
+    projectID: string,
+    afterCreate?: (conversationId: string) => Promise<void>,
+  ) => {
     try {
       const response = await fetch("/api/conversations", {
         method: "POST",
@@ -2986,6 +3055,7 @@ export function ChatExperience({
       const conv = (await response.json()) as { id?: string };
       if (!conv.id) return;
       setProjectsModal(null);
+      if (afterCreate) await afterCreate(conv.id);
       await refreshConversations();
       await loadConversation(conv.id);
     } catch (err) {
@@ -3108,7 +3178,27 @@ export function ChatExperience({
   // The read-only viewer takes the same slot as the project home (it is opened
   // FROM it), so exactly one of the two renders and the live chat stays
   // mounted-but-hidden underneath either.
-  const fullPageOverlay = Boolean(projectHomeProject) || Boolean(teamChatView);
+  const fullPageOverlay =
+    Boolean(projectHomeProject) ||
+    Boolean(teamChatView) ||
+    Boolean(teamLinkNotice);
+
+  // A teammate's branch (B20): the banner, and the outputs its transcript
+  // names that were NOT shared at branch time — those render as locked names,
+  // because the branch's workspace does not have them.
+  const activeBranchOrigin = activeConversationId
+    ? branchOrigins[activeConversationId]
+    : undefined;
+  const withheldFiles = useMemo(
+    () =>
+      activeConversationId && activeBranchOrigin?.withheld_files?.length
+        ? {
+            conversationId: activeConversationId,
+            withheld: new Set(activeBranchOrigin.withheld_files),
+          }
+        : null,
+    [activeConversationId, activeBranchOrigin],
+  );
 
   // The team-shared projects this user can promote a personal memory into
   // (Item D5). A personal project has no team to learn anything, so it is not
@@ -3141,10 +3231,14 @@ export function ChatExperience({
   // ADR-0057); what this surface holds is the chat's project's team, then the
   // caller's own team. "your team" is the honest fallback — never a guess at a
   // name.
-  const activeChatTeamAudience =
-    (activeConversation?.project_id
-      ? projects.find((p) => p.id === activeConversation.project_id)?.team_id
+  // The audience a chat is (or would be) shared WITH: its project's team,
+  // then the caller's own team (the stamp lives server-side; ADR-0057). The
+  // one rule every header chip, share toast and loss confirm names a team by.
+  const audienceForChat = (c?: ConversationSummary | null): string | undefined =>
+    (c?.project_id
+      ? projects.find((p) => p.id === c.project_id)?.team_id
       : undefined) || myTeam;
+  const activeChatTeamAudience = audienceForChat(activeConversation);
 
   const closeProjectsModal = () => {
     setProjectsModal(null);
@@ -3250,35 +3344,6 @@ export function ChatExperience({
     }
   };
 
-  // shareProject toggles team sharing (#509's membership model: a project
-  // with the owner's team_id is visible to every same-team user). The server
-  // resolves the team — and 400s with guidance when the owner has none, so
-  // that message is surfaced verbatim rather than a generic failure.
-  const shareProject = async (projectID: string, shared: boolean) => {
-    try {
-      const res = await fetch(
-        `/api/projects/${encodeURIComponent(projectID)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ team_shared: shared }),
-        },
-      );
-      if (!res.ok) {
-        const detail = (await res.text()).trim();
-        console.error("share project failed:", res.status, detail);
-        showRailError(
-          detail || `Couldn't update sharing (HTTP ${res.status}).`,
-        );
-        return;
-      }
-      void loadProjects();
-    } catch (err) {
-      console.error("share project error:", err);
-      showRailError("Couldn't update sharing — network error.");
-    }
-  };
-
   // updateProject is the project home's mutation seam (instructions edits
   // and the per-project settings dialog): a bare PATCH passthrough that
   // reports success so the home keeps unsaved drafts on failure, refreshing
@@ -3352,7 +3417,7 @@ export function ChatExperience({
   // (Item A6). The rail kebab has no page to load those counts on, so it
   // confirms with the same in-app dialog and the shorter copy, pointing at
   // the project home for the counts and the export.
-  const deleteProject = async (projectID: string) => {
+  const deleteProject = async (projectID: string): Promise<boolean> => {
     try {
       const res = await fetch(
         `/api/projects/${encodeURIComponent(projectID)}`,
@@ -3361,14 +3426,94 @@ export function ChatExperience({
       if (!res.ok) {
         console.error("delete project failed:", res.status, await res.text());
         showRailError(`Couldn't delete the project (HTTP ${res.status}).`);
-        return;
+        return false;
       }
       await loadProjects();
       await refreshConversations();
+      return true;
     } catch (err) {
       console.error("delete project error:", err);
       showRailError("Couldn't delete the project — network error.");
+      return false;
     }
+  };
+
+  // openNewProjectDialog opens New project (B27). Every "create a project"
+  // entry point lands here: the rail's +, the Projects modal, and the share
+  // dialog's A1b "Create shared project" — which passes the chat to move in
+  // and preselects the team.
+  const openNewProjectDialog = (opts?: {
+    teamPreselected?: boolean;
+    moveChat?: { id: string; title: string };
+  }) => {
+    setProjectsModal(null);
+    setNewProjectDialog({
+      teamPreselected: opts?.teamPreselected,
+      moveChat: opts?.moveChat,
+    });
+  };
+
+  // createProjectFromDialog is New project's Create. Resolves null on
+  // success, or the sentence the dialog shows.
+  //
+  // Plain create lands on the new project's home. From the share dialog
+  // (moveChat set) the user STAYS on the chat: the chat moves in and, when
+  // the project is shared, is shared with its outputs (the owner's earlier
+  // per-file choices kept) — then one toast says all three happened.
+  const createProjectFromDialog = async (
+    input: NewProjectInput,
+  ): Promise<string | null> => {
+    let created: Project;
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: input.name,
+          instructions: input.instructions,
+          team_shared: input.teamShared,
+        }),
+      });
+      if (!res.ok) {
+        const detail = (await res.text()).trim();
+        return detail && detail.length <= 300
+          ? detail
+          : `Couldn't create the project (HTTP ${res.status}).`;
+      }
+      created = (await res.json()) as Project;
+    } catch {
+      return "Couldn't reach the server — no project was created.";
+    }
+    const moveChat = newProjectDialog?.moveChat;
+    setNewProjectDialog(null);
+    await loadProjects();
+    if (!moveChat) {
+      setTeamChatView(null);
+      setProjectHome({ id: created.id });
+      return null;
+    }
+    const conv =
+      conversations.find((c) => c.id === moveChat.id) ??
+      archivedConversations.find((c) => c.id === moveChat.id);
+    const moved = await applyMoveToProject(moveChat.id, created.id);
+    if (!moved) return null; // the rail toast already says why
+    const team = created.team_id;
+    if (!team || !conv) {
+      notify({
+        message: `Created ${created.name} and moved the chat in.`,
+      });
+      return null;
+    }
+    const shared = await setTeamShared(
+      { ...conv, project_id: created.id },
+      true,
+    );
+    notify({
+      message: shared?.team_visible
+        ? `Created ${created.name}, moved the chat in, and shared it with ${team}.`
+        : `Created ${created.name} and moved the chat in, but couldn’t share it with ${team}. Share it from the chat’s Share button.`,
+    });
+    return null;
   };
 
   // pendingProjectDelete holds the rail kebab's staged project deletion while
@@ -3407,9 +3552,19 @@ export function ChatExperience({
     // server clears the flag on the way out (ADR-0057) — so clear it locally
     // in the same update, rather than letting the rail claim a share the
     // server has already dropped.
+    // Same rule as decideMoveConfirm: only a move into a project shared with
+    // the SAME team keeps the share.
+    const fromTeam = conv?.project_id
+      ? projects.find((p) => p.id === conv.project_id)?.team_id
+      : undefined;
     const leavingTeamShare =
       Boolean(conv?.team_visible) &&
-      !projects.some((p) => p.id === projectID && p.team_id);
+      !projects.some(
+        (p) =>
+          p.id === projectID &&
+          p.team_id &&
+          (!fromTeam || p.team_id === fromTeam),
+      );
     const refile = (c: ConversationSummary): ConversationSummary =>
       c.id === conversationId
         ? {
@@ -3470,6 +3625,11 @@ export function ChatExperience({
       conversations.find((c) => c.id === conversationId) ??
       archivedConversations.find((c) => c.id === conversationId);
     const target = projects.find((p) => p.id === projectID);
+    // The team the chat's CURRENT project is shared with: a move between two
+    // projects shared with the same team keeps the chat shared (#25).
+    const sourceTeam = conv?.project_id
+      ? projects.find((p) => p.id === conv.project_id)?.team_id || undefined
+      : undefined;
     const confirm = decideMoveConfirm({
       conversation: conv,
       projectID,
@@ -3478,17 +3638,54 @@ export function ChatExperience({
             id: target.id,
             name: target.name,
             teamShared: Boolean(target.team_id),
+            team: target.team_id || undefined,
           }
         : null,
-      // The audience is the team the chat is stamped with; the caller's own
-      // team is the closest name this surface holds for it.
-      team: myTeam,
+      sourceTeam,
+      // The audience is the team the chat is stamped with: its project's
+      // team, then the caller's own as the closest name this surface holds.
+      team: sourceTeam || myTeam,
     });
     if (confirm) {
       setPendingMove({ conversationId, projectID, confirm });
       return;
     }
-    await applyMoveToProject(conversationId, projectID);
+    const moved = await applyMoveToProject(conversationId, projectID);
+    // B11 (#24): moving only moves — it never shares. Into a project shared
+    // with the team, a private chat stays Only you, and the toast says so with
+    // the one-click way to share it.
+    if (
+      moved &&
+      conv &&
+      !conv.team_visible &&
+      target?.team_id &&
+      conv.project_id !== projectID
+    ) {
+      const team = target.team_id;
+      notify({
+        message: `Moved to ${target.name}. Only you can see it.`,
+        action: {
+          label: `Share with ${team}`,
+          onClick: () => {
+            void (async () => {
+              const res = await setTeamShared(
+                { ...conv, project_id: projectID },
+                true,
+              );
+              if (res?.team_visible)
+                notify(
+                  sharedToast(conv.title, team, res.shared_files, () => {
+                    setTeamChatView(null);
+                    setProjectHome({ id: projectID, sourcesFocus: conv.id });
+                  }),
+                );
+              else
+                showRailError(`Couldn't share “${conv.title}” with ${team}.`);
+            })();
+          },
+        },
+      });
+    }
   };
 
   // The Share dialog (#226 UX, extended by ADR-0057): one dialog, two
@@ -3617,15 +3814,19 @@ export function ChatExperience({
 
   // setTeamShared flips the OTHER scope (ADR-0013's per-conversation opt-in,
   // surfaced by ADR-0057). Optimistic like the link path; a failed write
-  // re-reads the truth rather than leaving the toggle lying.
+  // re-reads the truth rather than leaving the control lying. Resolves the
+  // server's result — the shared-file count every share toast quotes — or
+  // null on failure (shareError then carries the reason). `unsharedPaths`
+  // (the dialog checklist) replaces the chat's excluded-file set; omitted,
+  // the owner's earlier file choices stand.
   const setTeamShared = async (
     conversation: ConversationSummary,
     visible: boolean,
-  ): Promise<void> => {
-    const teamShareUrl = conversationApiUrl(conversation.id, "/share-with-team");
-    if (!teamShareUrl) {
+    unsharedPaths?: string[],
+  ): Promise<ShareWithTeamResult | null> => {
+    if (!conversationApiUrl(conversation.id, "/share-with-team")) {
       setShareError("Couldn't change team sharing — this chat has an invalid id.");
-      return;
+      return null;
     }
     setShareBusy(true);
     setShareError(null);
@@ -3634,39 +3835,108 @@ export function ChatExperience({
     setConversations((current) => current.map(patch));
     setArchivedConversations((current) => current.map(patch));
     try {
-      const response = await fetch(teamShareUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ visible }),
-      });
-      if (!response.ok) {
-        // 409 is the server naming a precondition the user can act on — no
-        // team, or a chat with no team-shared project to appear in
-        // (ADR-0057). Show its sentence rather than a status code.
-        const reason =
-          response.status === 409
-            ? (await response.text()).trim()
-            : `Couldn't ${visible ? "share" : "unshare"} the chat with your team (HTTP ${response.status}).`;
-        setShareError(reason || "Couldn't share the chat with your team.");
-        await refreshConversations();
-      } else {
-        // Trust the STORED state, not what we asked for.
-        const stored = (await response.json().catch(() => null)) as {
-          team_visible?: boolean;
-        } | null;
-        if (stored && stored.team_visible !== visible) {
-          await refreshConversations();
-        }
-      }
-    } catch {
+      const stored = await shareChatWithTeam(
+        conversation.id,
+        visible,
+        unsharedPaths,
+      );
+      // Trust the STORED state, not what we asked for.
+      if (stored.team_visible !== visible) await refreshConversations();
+      return stored;
+    } catch (err) {
+      // The server's 409 names a precondition the user can act on — no
+      // team, or a chat with no team-shared project to appear in
+      // (ADR-0057) — and shareChatWithTeam surfaces its body as the message.
+      const reason = err instanceof Error ? err.message.trim() : "";
       setShareError(
-        "Couldn't reach the server — the chat's team sharing is unchanged.",
+        reason && !reason.startsWith("request failed")
+          ? reason
+          : `Couldn't ${visible ? "share" : "stop sharing"} the chat with your team.`,
       );
       await refreshConversations();
+      return null;
     } finally {
       setShareBusy(false);
     }
   };
+
+  // moveAndShareWithTeam is the share dialog's A1 "Move and share": file the
+  // chat into a project shared with the caller's team, then share it there.
+  // Never a silent half: a failed move stops before the share, and the rail
+  // toast already says why.
+  const moveAndShareWithTeam = async (
+    conversation: ConversationSummary,
+    projectID: string,
+  ): Promise<ShareWithTeamResult | null> => {
+    const moved = await applyMoveToProject(conversation.id, projectID);
+    if (!moved) return null;
+    return setTeamShared({ ...conversation, project_id: projectID }, true);
+  };
+
+  // B17 (#40): in the owner's team-shared chat, each output chip carries a
+  // "Shared" / "Not shared" marker that opens Sources. The per-file states
+  // come from GET /conversations/{id}/outputs, re-read when the chat gains a
+  // message (a reply may present a new output) and whenever the share dialog
+  // closes (its checklist may have changed them). Private chats get no
+  // context at all, so their transcript renders exactly as before.
+  const activeTeamShared = Boolean(activeConversation?.team_visible);
+  const activeSharedProjectId = activeConversation?.project_id ?? "";
+  const [outputShares, setOutputShares] = useState<{
+    id: string;
+    shared: Map<string, boolean>;
+  } | null>(null);
+  const shareDialogOpen = shareDialog !== null;
+  useEffect(() => {
+    if (!activeTeamShared || !activeConversationId || shareDialogOpen) return;
+    let cancelled = false;
+    const id = activeConversationId;
+    fetchConversationOutputs(id)
+      .then((res) => {
+        if (cancelled) return;
+        setOutputShares({
+          id,
+          shared: new Map(res.outputs.map((o) => [o.path, o.shared])),
+        });
+      })
+      .catch(() => {
+        // Best-effort: no markers rather than wrong ones.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeTeamShared,
+    activeConversationId,
+    shareDialogOpen,
+    messages.length,
+  ]);
+  const outputShareMarkers = useMemo(
+    () =>
+      activeTeamShared &&
+      activeConversationId &&
+      outputShares?.id === activeConversationId
+        ? {
+            conversationId: activeConversationId,
+            shared: outputShares.shared,
+            team: activeChatTeamAudience || "your team",
+            onOpenSources: () => {
+              if (!activeSharedProjectId) return;
+              setTeamChatView(null);
+              setProjectHome({
+                id: activeSharedProjectId,
+                sourcesFocus: activeConversationId,
+              });
+            },
+          }
+        : null,
+    [
+      activeTeamShared,
+      activeConversationId,
+      outputShares,
+      activeChatTeamAudience,
+      activeSharedProjectId,
+    ],
+  );
 
   // toggleArchive moves a conversation between the active and archived lists
   // (#282). Optimistic: the row hops sections immediately; on a backend error
@@ -3695,6 +3965,9 @@ export function ChatExperience({
           {
             ...conversation,
             pinned: false,
+            // Archiving unshares server-side (#28); unarchiving brings the
+            // chat back as Only you (#29), so the row stays unbadged.
+            team_visible: false,
             archived_at: Math.floor(Date.now() / 1000),
           },
           ...current,
@@ -3705,7 +3978,10 @@ export function ChatExperience({
         current.filter((c) => c.id !== conversation.id),
       );
       setConversations((current) =>
-        [{ ...conversation, archived_at: null }, ...current].sort((a, b) => {
+        [
+          { ...conversation, team_visible: false, archived_at: null },
+          ...current,
+        ].sort((a, b) => {
           if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
           return b.updated_at - a.updated_at;
         }),
@@ -3730,6 +4006,31 @@ export function ChatExperience({
       setConversations(prev);
       setArchivedConversations(prevArchived);
     }
+  };
+
+  // The live summary of a chat that is shared with the team right now, or
+  // undefined — what decides whether a delete/archive needs the B33/B34
+  // confirm.
+  const sharedChatById = (id: string): ConversationSummary | undefined => {
+    const c =
+      conversations.find((x) => x.id === id) ??
+      archivedConversations.find((x) => x.id === id);
+    return c?.team_visible ? c : undefined;
+  };
+
+  // requestArchive is what the rail and the `a` shortcut call. Archiving a
+  // SHARED chat ends its teammates' access, so it asks first (B34) with the
+  // shared-file count; a private chat archives straight away, as before, and
+  // unarchiving never asks (it comes back as Only you).
+  const requestArchive = async (
+    conversation: ConversationSummary,
+    archived: boolean,
+  ) => {
+    if (archived && conversation.team_visible) {
+      setPendingSharedArchive(conversation);
+      return;
+    }
+    await toggleArchive(conversation, archived);
   };
 
   const renameConversation = async (
@@ -4118,7 +4419,7 @@ export function ChatExperience({
         key: "a",
         enabled: listNavActive && focusedConv !== null,
         handler: () => {
-          if (focusedConv) void toggleArchive(focusedConv, true);
+          if (focusedConv) void requestArchive(focusedConv, true);
         },
       },
       {
@@ -4534,6 +4835,54 @@ export function ChatExperience({
       }
     }
 
+    // Team link (?team=<conversation id>, "Copy link for <team>"): consumed
+    // and stripped like ?c=, then resolved by the server, which alone knows
+    // which page this viewer may see (docs/TEAM-SHARING.md):
+    //   owner       → the boot load below opens the chat normally;
+    //   open        → the read-only viewer (B19);
+    //   not_on_team → B22, not_shared → B23 — dead ends that reveal nothing
+    //                 about the chat beyond what the server sent.
+    // A failed lookup falls back to the viewer, which reports its own error.
+    let teamLinkId: string | null = null;
+    let teamLink: Promise<TeamLinkStatus | null> | null = null;
+    {
+      const params = new URLSearchParams(window.location.search);
+      const t = params.get("team");
+      if (t !== null) {
+        params.delete("team");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : ""),
+        );
+      }
+      if (isRealConvId(t) && conversationApiUrl(t)) {
+        const id = t;
+        teamLinkId = id;
+        teamLink = fetchTeamLinkStatus(id).catch(() => null);
+        void teamLink.then((status) => {
+          if (cancelled || status?.status === "owner") return;
+          setProjectHome(null);
+          if (!status || status.status === "open") {
+            setTeamLinkNotice(null);
+            setTeamChatView(id);
+            return;
+          }
+          setTeamChatView(null);
+          setTeamLinkNotice(
+            status.status === "not_on_team"
+              ? {
+                  kind: "not_on_team",
+                  team: status.team_id || "this team",
+                  viewerEmail: status.viewer_email,
+                }
+              : { kind: "not_shared", project: status.project },
+          );
+        });
+      }
+    }
+
     // Personas — nice-to-have; the server falls back to default. Sets the
     // roster always, but the default persona only when no conversation loads.
     const loadPersonas = async () => {
@@ -4635,7 +4984,11 @@ export function ChatExperience({
 
         // A deep-linked conversation outranks "most recent" — that's the
         // conversation the user was just sent to open.
-        const target = deepLinkConvId ?? convs[0]?.id ?? null;
+        // A team link to the viewer's OWN chat opens it like ?c= does.
+        const ownerLink =
+          teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
+        if (cancelled) return;
+        const target = deepLinkConvId ?? ownerLink ?? convs[0]?.id ?? null;
         if (!target) {
           setActiveConversationId(null);
           return;
@@ -4737,6 +5090,14 @@ export function ChatExperience({
       if (deepLinkConvId) {
         willLoadConversation = true;
         void loadConversationRef.current(deepLinkConvId, {});
+      }
+      if (teamLink && teamLinkId) {
+        const id = teamLinkId;
+        void teamLink.then((status) => {
+          if (cancelled || status?.status !== "owner") return;
+          willLoadConversation = true;
+          void loadConversationRef.current(id, {});
+        });
       }
     } else {
       void loadInitialState();
@@ -4866,7 +5227,7 @@ export function ChatExperience({
           loadConversation={loadConversation}
           streamingConvs={streamingConvs}
           togglePin={togglePin}
-          toggleArchive={toggleArchive}
+          toggleArchive={requestArchive}
           renameConversation={renameConversation}
           downloadConversation={downloadConversation}
           promoteConversation={promoteConversation}
@@ -4897,7 +5258,7 @@ export function ChatExperience({
             exitSelectMode();
           }}
           searchShortcut={searchShortcut}
-          onCreateProject={() => setProjectsModal({ create: true })}
+          onCreateProject={() => openNewProjectDialog()}
           onOpenProjectHome={(projectID, settings) => {
             setTeamChatView(null);
             setProjectHome({ id: projectID, settings });
@@ -4905,9 +5266,11 @@ export function ChatExperience({
           onPinProject={(projectID, pinned) =>
             void pinProject(projectID, pinned)
           }
-          onShareProject={(projectID, shared) =>
-            void shareProject(projectID, shared)
-          }
+          onNewChatInProject={(projectID) => {
+            setTeamChatView(null);
+            setProjectHome(null);
+            void startProjectChat(projectID);
+          }}
           onRenameProject={(projectID, name) =>
             void renameProject(projectID, name)
           }
@@ -5042,6 +5405,7 @@ export function ChatExperience({
 
         {pendingProjectDelete ? (
           <DeleteProjectConfirmDialog
+            projectId={pendingProjectDelete}
             projectName={
               projects.find((x) => x.id === pendingProjectDelete)?.name
             }
@@ -5061,6 +5425,56 @@ export function ChatExperience({
             onStartChat={(id) => void startProjectChat(id)}
             initialCreate={projectsModal.create}
             initialSelectedId={projectsModal.selectId}
+            // One "New project" and one "Project settings" everywhere (B27,
+            // B26–B31): the modal hands off to them instead of its own form.
+            onNewProject={() => openNewProjectDialog()}
+            onEditProject={(id) => {
+              setProjectsModal(null);
+              setTeamChatView(null);
+              setProjectHome({ id, settings: true });
+            }}
+          />
+        ) : null}
+
+        {newProjectDialog ? (
+          <NewProjectDialog
+            team={myTeam}
+            isAdmin={myTeamAdmin}
+            teamPreselected={newProjectDialog.teamPreselected}
+            moveChat={newProjectDialog.moveChat}
+            onClose={() => setNewProjectDialog(null)}
+            onCreate={createProjectFromDialog}
+          />
+        ) : null}
+
+        {/* Project settings (owner only) — opened from the project home's
+            gear and the rail project menu, both via projectHome.settings. */}
+        {projectHome?.settings &&
+        projectHomeProject &&
+        projectHomeProject.owner_email === userEmail ? (
+          <ProjectSettingsDialog
+            key={projectHomeProject.id}
+            project={projectHomeProject}
+            myTeam={myTeam}
+            isAdmin={myTeamAdmin}
+            onClose={() =>
+              setProjectHome((cur) => (cur ? { ...cur, settings: false } : cur))
+            }
+            onSave={(patch) => updateProject(projectHomeProject.id, patch)}
+            onTransfer={(toEmail) =>
+              transferProject(projectHomeProject.id, toEmail)
+            }
+            onDelete={() => {
+              const id = projectHomeProject.id;
+              const name = projectHomeProject.name;
+              setProjectHome(null);
+              void deleteProject(id).then((ok) => {
+                if (ok)
+                  notify({
+                    message: `${name} was deleted. Its chats are now temporary.`,
+                  });
+              });
+            }}
           />
         ) : null}
 
@@ -5475,7 +5889,6 @@ export function ChatExperience({
               ) ?? null
             }
             myTeam={myTeam}
-            userEmail={userEmail}
             isAdmin={myTeamAdmin}
             teamSharedProjects={teamSharedProjects}
             error={shareError}
@@ -5490,21 +5903,41 @@ export function ChatExperience({
                 .catch(() => setShareLinkCopied(false));
             }}
             onStopLink={(c) => void unshareConversation(c)}
-            onSetTeamShared={(c, visible) => void setTeamShared(c, visible)}
-            // Deliberately does NOT close the dialog: the move is optimistic
-            // upstream, so staying open is what lets the team toggle go live
-            // in place instead of sending the user back to re-open Share.
-            onMoveToProject={(conversationId, projectID) =>
-              void moveConversationToProject(conversationId, projectID)
+            onShareWithTeam={(c, unsharedPaths) =>
+              setTeamShared(c, true, unsharedPaths)
             }
-            onOpenProjectSettings={(projectID) => {
+            onStopSharingWithTeam={(c) => setTeamShared(c, false)}
+            // Stays open after the move: the dialog re-renders in the shared
+            // state (A5) with the team link one click away.
+            onMoveAndShare={(c, projectID) => moveAndShareWithTeam(c, projectID)}
+            // A1b: New project with the team preselected; on create the chat
+            // moves in and is shared (the New project dialog owns that).
+            onCreateSharedProject={(c) => {
+              setShareError(null);
+              setShareDialog(null);
+              openNewProjectDialog({
+                teamPreselected: true,
+                moveChat: { id: c.id, title: c.title },
+              });
+            }}
+            // A2: the project home opens with "Share <project> with <team>?"
+            // already up, naming this chat as the next step (B14).
+            onShareProjectFirst={(c, projectID) => {
+              setShareError(null);
               setShareDialog(null);
               setTeamChatView(null);
-              setProjectHome({ id: projectID, settings: true });
+              setProjectHome({
+                id: projectID,
+                shareFirst: { conversationId: c.id, title: c.title },
+              });
             }}
-            onOpenProjects={() => {
+            // "Manage in Sources" and the share toast's "Manage": Sources
+            // with this chat's group open and scrolled into view (#05).
+            onManageInSources={(c, projectID) => {
+              setShareError(null);
               setShareDialog(null);
-              setProjectsModal({});
+              setTeamChatView(null);
+              setProjectHome({ id: projectID, sourcesFocus: c.id });
             }}
             onClose={() => {
               setShareError(null);
@@ -5529,7 +5962,38 @@ export function ChatExperience({
             onClose={() => setDownloadTarget(null)}
           />
         ) : null}
-        {pendingDeleteConversation ? (
+        {/* B33 / B34: deleting or archiving a SHARED chat ends its
+            teammates' access, so each says so first with the shared-file
+            count. A private chat keeps today's delete confirm (below) and
+            archives without one. */}
+        {pendingDeleteConversation &&
+        sharedChatById(pendingDeleteConversation.id) ? (
+          <SharedChatLossConfirmDialog
+            kind="delete"
+            conversationId={pendingDeleteConversation.id}
+            chatTitle={pendingDeleteConversation.title}
+            team={audienceForChat(sharedChatById(pendingDeleteConversation.id))}
+            busy={isDeletingConversation}
+            onCancel={() => setPendingDeleteConversation(null)}
+            onConfirm={() => void confirmDeleteConversation()}
+          />
+        ) : null}
+        {pendingSharedArchive ? (
+          <SharedChatLossConfirmDialog
+            kind="archive"
+            conversationId={pendingSharedArchive.id}
+            chatTitle={pendingSharedArchive.title}
+            team={audienceForChat(pendingSharedArchive)}
+            onCancel={() => setPendingSharedArchive(null)}
+            onConfirm={() => {
+              const conv = pendingSharedArchive;
+              setPendingSharedArchive(null);
+              void toggleArchive(conv, true);
+            }}
+          />
+        ) : null}
+        {pendingDeleteConversation &&
+        !sharedChatById(pendingDeleteConversation.id) ? (
           <DialogShell
             label="Delete chat?"
             scrimLabel="Close delete confirmation"
@@ -5709,21 +6173,33 @@ export function ChatExperience({
                   <span className="hidden sm:inline">Lockdown</span>
                 </span>
               ) : null}
-              {/* "Shared with team" in the chat header (finding #4). The rail
-                  row and the project-home row already badge a team-shared
-                  chat, and both are gone exactly when it matters: the rail
-                  collapses, and under 900px it is a drawer. The header is the
-                  one surface still on screen while you type, so this is where
-                  someone composing into a shared chat can see that their team
-                  will be able to read it — and the badge is the button that
-                  opens the dialog controlling it. Not gated on ownership: the
-                  chip states a fact about the chat, not a permission. */}
-              {activeConversation?.team_visible ? (
-                <TeamSharedChip
-                  audience={activeChatTeamAudience}
-                  onClick={() => openShareDialog(activeConversation)}
+              {/* Sharing entry point (#12): the visibility chip ("Only you",
+                  "Shared with <team>", "Public link") and a Share button, on
+                  every chat — the header is the one surface still on screen
+                  while you type (finding #4), so who can read this chat is
+                  stated here and both controls open the dialog that changes
+                  it. */}
+              {activeConversation ? (
+                <ChatShareControls
+                  conversation={activeConversation}
+                  team={activeChatTeamAudience}
+                  onOpen={() => openShareDialog(activeConversation)}
                 />
               ) : null}
+            </div>
+          ) : null}
+
+          {/* B20: a teammate's branch says where it came from, and links back
+              to the owner's live chat only while that is still shared. */}
+          {activeBranchOrigin && !fullPageOverlay ? (
+            <div className="px-4 pt-2 sm:px-6">
+              <BranchOriginBanner
+                origin={activeBranchOrigin}
+                onOpenSource={(id) => {
+                  setProjectHome(null);
+                  setTeamChatView(id);
+                }}
+              />
             </div>
           ) : null}
 
@@ -5738,11 +6214,12 @@ export function ChatExperience({
               )}
               userEmail={userEmail}
               isOwner={projectHomeProject.owner_email === userEmail}
-              initialSettingsOpen={projectHome?.settings}
-              onSettingsClosed={(open) =>
+              // Settings render as ProjectSettingsDialog (below, owner only);
+              // the home's gear and visibility pill just ask for it.
+              onOpenSettings={() =>
                 setProjectHome((cur) =>
                   cur && cur.id === projectHomeProject.id
-                    ? { ...cur, settings: open }
+                    ? { ...cur, settings: true }
                     : cur,
                 )
               }
@@ -5754,10 +6231,22 @@ export function ChatExperience({
                 setProjectHome(null);
                 void loadConversation(conversationId);
               }}
-              onNewChat={() => {
+              onNewChat={(afterCreate) => {
                 setProjectHome(null);
-                void startProjectChat(projectHomeProject.id);
+                void startProjectChat(projectHomeProject.id, afterCreate);
               }}
+              shareFirst={projectHome?.shareFirst}
+              sourcesFocus={projectHome?.sourcesFocus}
+              onOpenShareDialog={(conversationId) => {
+                const conv = conversations.find((c) => c.id === conversationId);
+                if (conv) openShareDialog(conv);
+              }}
+              onManageSources={(conversationId) => {
+                const projectID = projectHomeProject.id;
+                setTeamChatView(null);
+                setProjectHome({ id: projectID, sourcesFocus: conversationId });
+              }}
+              onChatsChanged={() => void refreshConversations()}
               onSaveInstructions={(instructions) =>
                 updateProject(projectHomeProject.id, { instructions })
               }
@@ -5765,13 +6254,6 @@ export function ChatExperience({
               onUpdateSettings={(patch) =>
                 updateProject(projectHomeProject.id, patch)
               }
-              onTransfer={(toEmail) =>
-                transferProject(projectHomeProject.id, toEmail)
-              }
-              onDelete={() => {
-                setProjectHome(null);
-                void deleteProject(projectHomeProject.id);
-              }}
             />
           ) : null}
 
@@ -5788,6 +6270,26 @@ export function ChatExperience({
                 void refreshConversations();
                 void loadConversation(newConversationId);
               }}
+              onOpenProject={(projectID) => {
+                setTeamChatView(null);
+                setProjectHome({ id: projectID });
+              }}
+              onOpenBranch={(conversationId) =>
+                void loadConversation(conversationId)
+              }
+            />
+          ) : null}
+
+          {/* A team link that did not open (B22 / B23). Below the viewer and
+              the project home in priority, so opening either from here
+              covers it; opening a conversation clears it. */}
+          {teamLinkNotice && !teamChatView && !projectHomeProject ? (
+            <TeamLinkNotice
+              notice={teamLinkNotice}
+              onOpenProject={(projectID) => {
+                setTeamLinkNotice(null);
+                setProjectHome({ id: projectID });
+              }}
             />
           ) : null}
 
@@ -5801,6 +6303,8 @@ export function ChatExperience({
               fullPageOverlay ? "hidden" : "",
             ].join(" ")}
           >
+            <OutputShareContext.Provider value={outputShareMarkers}>
+            <WithheldFilesContext.Provider value={withheldFiles}>
             <ChatTranscript
               conversationRef={conversationRef}
               streamEndRef={streamEndRef}
@@ -5844,6 +6348,8 @@ export function ChatExperience({
               loadRankedModels={loadRankedModels}
               loadCatalogModels={loadCatalogModels}
             />
+            </WithheldFilesContext.Provider>
+            </OutputShareContext.Provider>
 
             <section className="motion-safe:animate-pop-up-base relative z-10 pb-[calc(env(safe-area-inset-bottom,0px)+0.35rem)] sm:pb-4">
               {showJumpToLatest ? (

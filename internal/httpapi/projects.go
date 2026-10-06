@@ -182,6 +182,8 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			s.projectImpact(w, r, p)
 		case "files":
 			s.projectFiles(w, r, p)
+		case "my-state":
+			s.projectMyState(w, r, p)
 		case "export":
 			s.projectExport(w, r, p)
 		default:
@@ -302,10 +304,30 @@ func (s *Server) projectTeamConversations(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if list == nil {
-		list = []store.Conversation{}
+	// Each row says whether the viewer has branched it ("You branched this",
+	// ADR-0079). The row itself still opens the owner's live chat.
+	ids := make([]string, 0, len(list))
+	for _, c := range list {
+		ids = append(ids, c.ID)
 	}
-	writeJSON(w, map[string]any{"conversations": list})
+	branches, err := s.store.ViewerBranches(r.Context(), user, ids)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type teamConversation struct {
+		store.Conversation
+		ViewerBranch *store.ViewerBranch `json:"viewer_branch"`
+	}
+	out := make([]teamConversation, 0, len(list))
+	for _, c := range list {
+		item := teamConversation{Conversation: c}
+		if vb, ok := branches[c.ID]; ok {
+			item.ViewerBranch = &vb
+		}
+		out = append(out, item)
+	}
+	writeJSON(w, map[string]any{"conversations": out})
 }
 
 // projectImpact handles GET /projects/{id}/impact — the counts the project's
@@ -438,7 +460,8 @@ func (s *Server) projectMembersByID(w http.ResponseWriter, r *http.Request, user
 	writeJSON(w, map[string]any{"members": emails})
 }
 
-// projectFile is one entry in the project home's Sources list.
+// projectFile is one entry in the LEGACY flat Sources list (`files`), kept
+// for clients that predate the grouped shape.
 type projectFile struct {
 	ConversationID    string `json:"conversation_id"`
 	ConversationTitle string `json:"conversation_title"`
@@ -450,80 +473,263 @@ type projectFile struct {
 	ModifiedAt int64  `json:"modified_at"`
 }
 
-// maxProjectFiles caps the Sources listing — a runaway workspace (a build
-// tree, node_modules the agent unpacked) must not stall the project home.
-// Newest-first, so the cap drops the oldest entries.
+// sourcesFile is one file in a Sources group.
+type sourcesFile struct {
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	ModifiedAt int64  `json:"modified_at"`
+	// Shared is "an output the owner has not unchecked". Always false for a
+	// non-output, which is download-only and never shared.
+	Shared bool `json:"shared"`
+	// Output: presented in a reply (a file chip). Only outputs are counted.
+	Output bool `json:"output"`
+	// YourCopy: copied in when the caller branched a teammate's chat.
+	YourCopy bool `json:"your_copy"`
+}
+
+// sourcesGroup is one chat's files on the project home's Sources panel.
+type sourcesGroup struct {
+	ConversationID string `json:"conversation_id"`
+	Title          string `json:"title"`
+	OwnerEmail     string `json:"owner_email"`
+	// Mine: the caller owns the chat ("Your chats"); otherwise it is a
+	// teammate's shared chat ("From your team").
+	Mine        bool `json:"mine"`
+	TeamVisible bool `json:"team_visible"`
+	// IsBranch: the caller's branch of a teammate's chat (its copied files
+	// are labelled "Your copy · <date>").
+	IsBranch     bool          `json:"is_branch"`
+	BranchedAt   int64         `json:"branched_at,omitempty"`
+	LastActiveAt int64         `json:"last_active_at"`
+	FileCount    int           `json:"file_count"`
+	SharedCount  int           `json:"shared_count"`
+	Files        []sourcesFile `json:"files"`
+}
+
+// maxProjectFiles caps each Sources group (and the legacy flat list) — a
+// runaway workspace (a build tree, node_modules the agent unpacked) must not
+// stall the project home. Newest-first, so the cap drops the oldest entries.
 const maxProjectFiles = 200
 
+// walkWorkspaceFiles lists every regular, non-upload file in convID's
+// workspace, newest first. Symlinks are skipped (WalkDir does not follow
+// them): every workspace carries the bundle-mount symlinks (personas,
+// protocols, shared, skills, system_prompts) pointing OUTSIDE the root, and a
+// Sources entry must be a real file the user can open. The attachments/
+// subtree is skipped whole: uploads are never listed in Sources (ADR-0079).
+func walkWorkspaceFiles(convID string) []sourcesFile {
+	files := []sourcesFile{}
+	root, err := filepath.EvalSymlinks(tools.WorkspaceDirForConversation(convID))
+	if err != nil {
+		// Most conversations never touched a file — no workspace dir.
+		return files
+	}
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		// Per-entry errors (perms, vanished mid-walk) skip the entry,
+		// never abort the whole listing.
+		if walkErr != nil {
+			return nil //nolint:nilerr // best-effort listing
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return nil //nolint:nilerr // best-effort listing
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel == uploadsDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil //nolint:nilerr // best-effort listing
+		}
+		files = append(files, sourcesFile{
+			Path:       rel,
+			Name:       d.Name(),
+			Size:       info.Size(),
+			ModifiedAt: info.ModTime().Unix(),
+		})
+		return nil
+	})
+	sort.SliceStable(files, func(i, j int) bool {
+		if files[i].ModifiedAt != files[j].ModifiedAt {
+			return files[i].ModifiedAt > files[j].ModifiedAt
+		}
+		return files[i].Path < files[j].Path
+	})
+	return files
+}
+
 // projectFiles handles GET /projects/{id}/files — the project home's Sources
-// panel: every workspace file (uploads, generated CSVs/plots, …) across the
-// CALLER'S OWN conversations in the project, newest first. Same privacy rule
-// as projectConversations: another member's files are never listed. Download
-// goes through the existing per-conversation workspace streamer, which owns
-// the path-traversal guards.
+// panel, grouped by chat (ADR-0079):
+//
+//   - the caller's OWN chats: every regular file in each workspace except
+//     uploads, each flagged output / shared / your_copy. Non-outputs are
+//     download-only and never counted;
+//   - teammates' chats shared with the caller's team in THIS project (the
+//     same gates as team-conversations): their SHARED outputs only, downloaded
+//     through the team-files route, which re-checks every gate.
+//
+// Chats with no files are omitted. `files` is the legacy flat list of the
+// caller's own files, kept for older clients. Another member's PRIVATE chat
+// is never read here — the teammate half starts from the team listing.
 func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.Project) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	user := userFromCtx(r.Context())
-	convs, err := s.store.ListProjectConversationsForUser(r.Context(), user, p.ID)
+	ctx := r.Context()
+	user := userFromCtx(ctx)
+	convs, err := s.store.ListProjectConversationsForUser(ctx, user, p.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	files := []projectFile{}
+	ids := make([]string, 0, len(convs))
+	for _, c := range convs {
+		ids = append(ids, c.ID)
+	}
+	origins, err := s.store.BranchOriginsFor(ctx, ids)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	groups := []sourcesGroup{}
+	flat := []projectFile{}
+	truncated := false
 	for _, conv := range convs {
-		wsDir := tools.WorkspaceDirForConversation(conv.ID)
-		root, err := filepath.EvalSymlinks(wsDir)
-		if err != nil {
-			// Most conversations never touched a file — no workspace dir.
+		all := walkWorkspaceFiles(conv.ID)
+		if len(all) == 0 {
 			continue
 		}
-		title := conv.Title
-		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-			// Per-entry errors (perms, vanished mid-walk) skip the entry,
-			// never abort the whole listing.
-			if walkErr != nil || d.IsDir() {
-				return nil //nolint:nilerr // best-effort listing
+		outs, err := s.ownerOutputs(ctx, conv.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		byPath := make(map[string]outputFile, len(outs))
+		for _, o := range outs {
+			byPath[o.Path] = o
+		}
+		copied := map[string]bool{}
+		g := sourcesGroup{
+			ConversationID: conv.ID,
+			Title:          conv.Title,
+			OwnerEmail:     conv.UserEmail,
+			Mine:           true,
+			TeamVisible:    conv.TeamVisible,
+			LastActiveAt:   conv.UpdatedAt,
+			FileCount:      len(outs),
+			SharedCount:    countShared(outs),
+		}
+		if o := origins[conv.ID]; o != nil {
+			g.IsBranch, g.BranchedAt = true, o.BranchedAt
+			for _, f := range o.CopiedFiles {
+				copied[f.Path] = true
 			}
-			info, err := d.Info()
-			if err != nil {
-				return nil //nolint:nilerr // best-effort listing
-			}
-			// Regular files only. Every conversation workspace carries the
-			// bundle-mount symlinks (personas, protocols, shared, skills,
-			// system_prompts) pointing OUTSIDE the workspace root; WalkDir
-			// does not follow them, so each surfaced as a "file" whose size
-			// was the length of its target path — and whose download
-			// correctly tripped the workspace path-traversal guard, dumping
-			// "path escapes workspace" into a tab. They are plumbing, not
-			// sources: a Sources entry must be a real file the user can open.
-			if !info.Mode().IsRegular() {
-				return nil
-			}
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return nil //nolint:nilerr // best-effort listing
-			}
-			files = append(files, projectFile{
-				ConversationID:    conv.ID,
-				ConversationTitle: title,
-				Path:              filepath.ToSlash(rel),
-				Name:              d.Name(),
-				Size:              info.Size(),
-				ModifiedAt:        info.ModTime().Unix(),
+		}
+		for _, f := range all {
+			flat = append(flat, projectFile{
+				ConversationID: conv.ID, ConversationTitle: conv.Title,
+				Path: f.Path, Name: f.Name, Size: f.Size, ModifiedAt: f.ModifiedAt,
 			})
-			return nil
-		})
+			if o, ok := byPath[f.Path]; ok {
+				f.Output, f.Shared = true, o.Shared
+			}
+			f.YourCopy = copied[f.Path]
+			g.Files = append(g.Files, f)
+		}
+		if len(g.Files) > maxProjectFiles {
+			g.Files = g.Files[:maxProjectFiles]
+			truncated = true
+		}
+		groups = append(groups, g)
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].ModifiedAt > files[j].ModifiedAt })
-	truncated := false
-	if len(files) > maxProjectFiles {
-		files = files[:maxProjectFiles]
+
+	team, err := s.store.ListProjectTeamConversations(ctx, user, p.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, conv := range team {
+		outs, err := s.ownerOutputs(ctx, conv.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		g := sourcesGroup{
+			ConversationID: conv.ID,
+			Title:          conv.Title,
+			OwnerEmail:     conv.UserEmail,
+			TeamVisible:    conv.TeamVisible,
+			LastActiveAt:   conv.UpdatedAt,
+			Files:          []sourcesFile{},
+		}
+		for _, o := range outs {
+			if !o.Shared {
+				continue // a teammate never sees a file the owner held back
+			}
+			g.Files = append(g.Files, sourcesFile{
+				Path: o.Path, Name: o.Name, Size: o.Size, ModifiedAt: o.ModifiedAt,
+				Shared: true, Output: true,
+			})
+		}
+		if len(g.Files) == 0 {
+			continue
+		}
+		g.FileCount, g.SharedCount = len(g.Files), len(g.Files)
+		if len(g.Files) > maxProjectFiles {
+			g.Files = g.Files[:maxProjectFiles]
+			truncated = true
+		}
+		groups = append(groups, g)
+	}
+
+	sort.SliceStable(flat, func(i, j int) bool { return flat[i].ModifiedAt > flat[j].ModifiedAt })
+	if len(flat) > maxProjectFiles {
+		flat = flat[:maxProjectFiles]
 		truncated = true
 	}
-	writeJSON(w, map[string]any{"files": files, "truncated": truncated})
+	writeJSON(w, map[string]any{"groups": groups, "files": flat, "truncated": truncated})
+}
+
+// projectMyState handles GET/PUT /projects/{id}/my-state — the caller's own
+// UI state for this project (ADR-0079): the getting-started card's "Keep
+// personal" and has-shared-a-chat, and which Sources groups they left open.
+// Stored per user so it follows them across devices. PUT takes any subset of
+// {kept_personal, sources_open} (sources_open merges) and answers the full
+// state; has_shared_chat is set server-side by a successful share only.
+func (s *Server) projectMyState(w http.ResponseWriter, r *http.Request, p *store.Project) {
+	user := userFromCtx(r.Context())
+	switch r.Method {
+	case http.MethodGet:
+		st, err := s.store.GetProjectUserState(r.Context(), p.ID, user)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, st)
+	case http.MethodPut:
+		var body struct {
+			KeptPersonal *bool           `json:"kept_personal"`
+			SourcesOpen  map[string]bool `json:"sources_open"`
+		}
+		if !decodeJSONBody(w, r, &body) {
+			return
+		}
+		st, err := s.store.UpdateProjectUserState(r.Context(), p.ID, user, body.KeptPersonal, body.SourcesOpen)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, st)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // mayManageProjectMemory reports whether user may mutate this team learning:

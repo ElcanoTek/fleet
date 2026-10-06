@@ -181,6 +181,11 @@ type Conversation struct {
 	// are different and a single unlabeled icon conflated them. Set via
 	// POST /conversations/{id}/share-with-team.
 	TeamVisible bool `json:"team_visible,omitempty"`
+	// BranchOrigin is set, by the handlers that serve it, on a TEAMMATE'S
+	// branch only (ADR-0079): whose chat it came from and which shared files
+	// were copied in. Never scanned from the conversations row — it lives in
+	// conversation_branch_origins — so every listing leaves it nil and omits it.
+	BranchOrigin *BranchOrigin `json:"branch_origin,omitempty"`
 }
 
 // ThinkingConfig is the persisted shape of a conversation's extended-thinking
@@ -1063,6 +1068,14 @@ func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned 
 // pin: "pinned" means keep-prominent, which is the opposite of filing away, so
 // the two states are mutually exclusive (the issue's pinned-interaction rule).
 // A soft-deleted conversation is not mutable (deleted_at IS NULL, #596).
+//
+// Archiving also UNSHARES the chat with the team (ADR-0079): team_visible and
+// the stamped audience are cleared in the same statement. Every read gate
+// already refused an archived chat, so this changes no access at the moment
+// of archiving — what it changes is unarchive, which brings the chat back as
+// Only you rather than silently re-exposing it (and every output presented in
+// it since) to the team. The owner's per-file exclusions are untouched, so
+// sharing again restores their earlier file choices.
 func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archived bool) error {
 	now := time.Now().Unix()
 	var archivedAt any // NULL when unarchiving
@@ -1071,8 +1084,11 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 		archivedAt = now
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
-		archivedAt, pinned, now, convID, userEmail,
+		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
+			team_visible = (CASE WHEN $6 THEN FALSE ELSE team_visible END),
+			team_shared_with = (CASE WHEN $6 THEN NULL ELSE team_shared_with END)
+		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
+		archivedAt, pinned, now, convID, userEmail, archived,
 	)
 	if err != nil {
 		return err

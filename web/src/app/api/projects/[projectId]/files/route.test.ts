@@ -31,7 +31,7 @@ describe("GET /api/projects/[projectId]/files", () => {
     chatServerFetchMock.mockReset();
     getServerSessionMock.mockResolvedValue({ email: "alice@example.com", exp: 0, epoch: "e1" });
     chatServerFetchMock.mockResolvedValue(
-      new Response('{"files":[],"truncated":false}', { status: 200 }),
+      new Response('{"groups":[],"files":[],"truncated":false}', { status: 200 }),
     );
   });
 
@@ -42,7 +42,7 @@ describe("GET /api/projects/[projectId]/files", () => {
   it("proxies to the Go Sources handler and forwards the response", async () => {
     const res = await GET(request, context);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ files: [], truncated: false });
+    expect(await res.json()).toEqual({ groups: [], files: [], truncated: false });
     expect(chatServerFetchMock).toHaveBeenCalledWith(
       expect.objectContaining({ email: "alice@example.com" }),
       "/projects/p-growth/files",

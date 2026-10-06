@@ -331,18 +331,167 @@ export function redactUnsharedFiles(
   markdown: string,
   imagePlaceholder: string,
 ): string {
+  return rewriteFileRefs(markdown, {
+    image: () => imagePlaceholder,
+    link: (ref) => withheldFile(ref.name),
+    bare: (ref) => withheldFile(ref.name),
+  });
+}
+
+// ── the team view: shared outputs become live, the rest stay locked ────────
+//
+// A chat shared with the team now carries its OUTPUTS (docs/TEAM-SHARING.md):
+// every file the agent presented in a reply, minus the ones the owner
+// unchecked. A teammate fetches a shared one through the team-files route —
+// never the owner-scoped workspace route — so the rewrite below points each
+// shared reference there, and renders every other workspace reference as a
+// locked name. The public share link does NOT come through here: it keeps
+// redactUnsharedFiles above, because public links never expose files.
+
+/**
+ * The destination a locked file reference renders with. An in-page anchor on
+ * purpose: it survives react-markdown's URL sanitizer and the workspace
+ * rewrite unchanged (both pass `#…` through), and the assistant renderer
+ * recognizes it and draws the name with a lock glyph instead of an anchor. A
+ * renderer that does not know it still shows "name (not shared)" — a link to
+ * nowhere on this page, never a request.
+ */
+export const LOCKED_FILE_HREF = "#fleet-file-not-shared";
+
+/** The marker a locked output renders with, after its filename (B19). */
+export const LOCKED_SUFFIX = " (not shared)";
+
+/** Uploads live here; they are never outputs and never shared. */
+const UPLOADS_DIR = "attachments/";
+
+export type SharedFileLinks = {
+  /** The owner's shared outputs, by workspace-relative path (`out/report.xlsx`). */
+  shared: ReadonlySet<string>;
+  /** Builds the reader's download URL for a shared path (teamFileUrl). */
+  fileUrl: (path: string) => string;
+};
+
+/**
+ * linkSharedFiles is the team view's counterpart of redactUnsharedFiles. It
+ * finds the same workspace references (same parser, same traversal rejects)
+ * and decides each one by its workspace-relative path:
+ *
+ *   - a SHARED output → its link or image points at `fileUrl(path)`, so it is
+ *     a live download, and an image renders inline from that URL;
+ *   - an upload (`attachments/…`) → its plain filename, as before: uploads are
+ *     never outputs, so saying "not shared" would suggest the owner could;
+ *   - anything else (an unchecked output, a file that is not an output, an
+ *     unparseable route) → `[name (not shared)](#fleet-file-not-shared)`, the
+ *     locked name.
+ *
+ * Only paths in `shared` can produce a live URL, and the URL is built from
+ * the server's own list — so a prompt-injected reference can never mint a
+ * download for a file the owner did not share; the server re-checks anyway.
+ */
+export function linkSharedFiles(
+  markdown: string,
+  links: SharedFileLinks,
+): string {
+  const decide = (ref: FileRef): { url: string } | "upload" | "locked" => {
+    if (ref.path && ref.path.startsWith(UPLOADS_DIR)) return "upload";
+    if (ref.path && links.shared.has(ref.path)) {
+      return { url: links.fileUrl(ref.path) };
+    }
+    return "locked";
+  };
+  const locked = (ref: FileRef) =>
+    `[${escapeMarkdown(ref.name)}${LOCKED_SUFFIX}](${LOCKED_FILE_HREF})`;
+  return rewriteFileRefs(markdown, {
+    image: (ref, alt) => {
+      const d = decide(ref);
+      if (d === "upload") return escapeMarkdown(ref.name);
+      if (d === "locked") return locked(ref);
+      return `![${alt}](${d.url})`;
+    },
+    link: (ref, label) => {
+      const d = decide(ref);
+      if (d === "upload") return escapeMarkdown(ref.name);
+      if (d === "locked") return locked(ref);
+      return `[${label}](${d.url})`;
+    },
+    bare: (ref) => {
+      const d = decide(ref);
+      if (d === "upload") return escapeMarkdown(ref.name);
+      if (d === "locked") return locked(ref);
+      return `[${escapeMarkdown(ref.name)}](${d.url})`;
+    },
+  });
+}
+
+/**
+ * workspaceFileRef resolves an href to the workspace file it names: its
+ * display name and, when the path is safe to compare, its workspace-relative
+ * path (`out/chart.png`, segments percent-decoded). null for everything that
+ * is not a workspace reference (http(s), mailto, data:, anchors). Same rules
+ * as unsharedFileName, which is this function's `name`.
+ */
+export function workspaceFileRef(
+  raw: string | undefined | null,
+): FileRef | null {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (!value) return null;
+  const route = OWNER_SCOPED_FILE_ROUTE.exec(value);
+  if (route) {
+    const rest = value.slice(route[0].length).split(/[?#]/)[0];
+    const segments = rest.split("/").filter((s) => s.length > 0);
+    const traversal = segments.some((s) => isDotOrDotDot(fullyDecodeSegment(s)));
+    return {
+      name: routeBasename(value),
+      path:
+        traversal || segments.length === 0
+          ? null
+          : segments.map(decodeURIComponentSafe).join("/"),
+    };
+  }
+  const scoped = resolveScopedWorkspaceHref(value, "/");
+  if (!scoped.isWorkspaceFile) return null;
+  return {
+    name: scoped.downloadFilename,
+    path: scoped.href
+      .slice(1)
+      .split("/")
+      .map(decodeURIComponentSafe)
+      .join("/"),
+  };
+}
+
+/** A workspace file a transcript references. */
+export type FileRef = { name: string; path: string | null };
+
+type FileRefRenderers = {
+  /** `![alt](dest)` naming a workspace file. */
+  image: (ref: FileRef, alt: string) => string;
+  /** `[label](dest)` (or a reference-style use) naming one. */
+  link: (ref: FileRef, label: string) => string;
+  /** A bare route pasted into prose. */
+  bare: (ref: FileRef) => string;
+};
+
+/**
+ * The one parser both rewrites share: finds every workspace reference in a
+ * bubble's markdown (inline, reference-style, bare routes — never inside code)
+ * and hands each to the caller's renderer. Reference definitions naming a
+ * workspace file are dropped and their uses rendered inline, so no later pass
+ * can resurrect the original destination.
+ */
+function rewriteFileRefs(markdown: string, r: FileRefRenderers): string {
   if (!markdown) return markdown;
 
   const lines = scanFenced(markdown.split("\n"));
-  const refs = new Map<string, string>();
+  const refs = new Map<string, FileRef>();
   const defLines = new Set<number>();
   lines.forEach((line, i) => {
     if (line.code) return;
     const def = MD_REF_DEF.exec(line.text);
     if (!def) return;
-    const name = unsharedFileName(def[2] ?? def[3] ?? "");
-    if (!name) return;
-    refs.set(normalizeRefLabel(def[1]), name);
+    const ref = workspaceFileRef(def[2] ?? def[3] ?? "");
+    if (!ref) return;
+    refs.set(normalizeRefLabel(def[1]), ref);
     // Drop the definition itself: with it gone the usages this pass rewrites
     // cannot be resurrected by a later one, and a usage it missed renders as
     // literal bracket text rather than as a link.
@@ -352,9 +501,7 @@ export function redactUnsharedFiles(
   const out: string[] = [];
   lines.forEach((line, i) => {
     if (defLines.has(i)) return;
-    out.push(
-      line.code ? line.text : redactLine(line.text, refs, imagePlaceholder),
-    );
+    out.push(line.code ? line.text : redactLine(line.text, refs, r));
   });
   return out.join("\n");
 }
@@ -391,50 +538,49 @@ function scanFenced(lines: string[]): ScannedLine[] {
 
 function redactLine(
   line: string,
-  refs: Map<string, string>,
-  imagePlaceholder: string,
+  refs: Map<string, FileRef>,
+  r: FileRefRenderers,
 ): string {
   // split() on a single-group regex interleaves the separators at odd indexes,
   // so the code spans come back untouched.
   return line
     .split(INLINE_CODE)
-    .map((part, i) =>
-      i % 2 === 1 ? part : redactChunk(part, refs, imagePlaceholder),
-    )
+    .map((part, i) => (i % 2 === 1 ? part : redactChunk(part, refs, r)))
     .join("");
 }
 
 function redactChunk(
   chunk: string,
-  refs: Map<string, string>,
-  imagePlaceholder: string,
+  refs: Map<string, FileRef>,
+  r: FileRefRenderers,
 ): string {
   // Images first: an image nested in a link (`[![alt](chart.png)](chart.png)`)
   // must lose its inner destination before the link pass reads the label.
-  let out = chunk.replace(MD_IMAGE, (whole, _alt, angled, bare) =>
-    unsharedFileName(angled ?? bare ?? "") ? imagePlaceholder : whole,
-  );
-  out = out.replace(MD_LINK, (whole, bang, _label, angled, bare) => {
+  let out = chunk.replace(MD_IMAGE, (whole, alt, angled, bare) => {
+    const ref = workspaceFileRef(angled ?? bare ?? "");
+    return ref ? r.image(ref, alt) : whole;
+  });
+  out = out.replace(MD_LINK, (whole, bang, label, angled, bare) => {
     if (bang) return whole;
-    const name = unsharedFileName(angled ?? bare ?? "");
-    return name ? withheldFile(name) : whole;
+    const ref = workspaceFileRef(angled ?? bare ?? "");
+    return ref ? r.link(ref, label) : whole;
   });
   if (refs.size > 0) {
-    out = out.replace(MD_REF_USE, (whole, bang, label, ref) => {
+    out = out.replace(MD_REF_USE, (whole, bang, label, refLabel) => {
       const key = normalizeRefLabel(
-        typeof ref === "string" && ref.trim() ? ref : label,
+        typeof refLabel === "string" && refLabel.trim() ? refLabel : label,
       );
-      const name = refs.get(key);
-      if (!name) return whole;
-      return bang ? imagePlaceholder : withheldFile(name);
+      const ref = refs.get(key);
+      if (!ref) return whole;
+      return bang ? r.image(ref, label) : r.link(ref, label);
     });
   }
   return out.replace(BARE_FILE_REF, (whole) => {
     // Keep sentence punctuation the URL ran into out of the filename.
     const trailing = /[.,;:!?)\]]+$/.exec(whole)?.[0] ?? "";
     const core = trailing ? whole.slice(0, -trailing.length) : whole;
-    const name = unsharedFileName(core);
-    return name ? withheldFile(name) + trailing : whole;
+    const ref = workspaceFileRef(core);
+    return ref ? r.bare(ref) + trailing : whole;
   });
 }
 
@@ -452,4 +598,22 @@ function escapeMarkdown(text: string): string {
 
 function normalizeRefLabel(label: string): string {
   return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// The teammate download route: /api/conversations/<id>/team-files/<path>.
+// Root-relative only, like OWNER_SCOPED_FILE_ROUTE and for the same reason.
+const TEAM_FILE_ROUTE =
+  /^\/api\/conversations\/[A-Za-z0-9_-]+\/team-files\/(?=[^/])/;
+
+/**
+ * The filename to save a team-files download as, or null when `href` is not
+ * a team-files route. The assistant renderer uses it to give a shared output
+ * in the teammate view the same `download` treatment an owner's workspace
+ * link gets, so clicking it saves the file instead of navigating away from
+ * the read-only view.
+ */
+export function teamFileDownloadName(href: string | undefined | null): string | null {
+  const value = typeof href === "string" ? href : "";
+  if (!TEAM_FILE_ROUTE.test(value)) return null;
+  return routeBasename(value) || null;
 }

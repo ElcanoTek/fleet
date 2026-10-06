@@ -112,3 +112,76 @@ describe("ReadOnlyTranscript — files the reader cannot fetch", () => {
     ).toBeInTheDocument();
   });
 });
+
+// The team door with the owner's shared outputs (B19): shared files are live
+// downloads from the team-files route, unshared ones are locked names, and the
+// public door ignores `sharedFiles` entirely — public links never expose files.
+describe("ReadOnlyTranscript — shared outputs on the team door", () => {
+  const CONV = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const FILES_TRANSCRIPT = [
+    {
+      id: 1,
+      role: "assistant",
+      type: "text",
+      content: {
+        text: [
+          "![Daily spend](daily_spend.png)",
+          "",
+          "Data: [daily_spend.csv](daily_spend.csv)",
+          "",
+          "Old list: [exclusion_list_v1.json](exclusion_list_v1.json)",
+        ].join("\n"),
+      },
+    },
+  ];
+  const sharedFiles = {
+    shared: new Set(["daily_spend.png", "daily_spend.csv"]),
+    fileUrl: (p: string) => `/api/conversations/${CONV}/team-files/${encodeURIComponent(p)}`,
+  };
+
+  function renderWith(audience: ReadOnlyAudience) {
+    return render(
+      <ReadOnlyTranscript
+        bubbles={toBubbles(FILES_TRANSCRIPT)}
+        audience={audience}
+        sharedFiles={sharedFiles}
+        renderAssistant={(text) => renderAssistantContent(text, false, null)}
+      />,
+    );
+  }
+
+  it("makes a shared output a download from the team-files route", () => {
+    renderWith("team");
+    const link = screen.getByRole("link", { name: "daily_spend.csv" });
+    expect(link).toHaveAttribute(
+      "href",
+      `/api/conversations/${CONV}/team-files/daily_spend.csv`,
+    );
+    expect(link).toHaveAttribute("download", "daily_spend.csv");
+  });
+
+  it("renders a shared image inline from the team-files route", () => {
+    const { container } = renderWith("team");
+    const img = container.querySelector("img");
+    expect(img?.getAttribute("src")).toBe(
+      `/api/conversations/${CONV}/team-files/daily_spend.png`,
+    );
+  });
+
+  it("shows an unshared output as a locked name with no anchor", () => {
+    const { container } = renderWith("team");
+    const locked = screen.getByTestId("locked-file");
+    expect(locked).toHaveTextContent("exclusion_list_v1.json (not shared)");
+    expect(locked.querySelector("svg")).not.toBeNull();
+    expect(container.querySelector('a[href*="exclusion_list"]')).toBeNull();
+    expect(container.querySelector('a[href^="#"]')).toBeNull();
+  });
+
+  it("ignores shared files on a public link: transcript only", () => {
+    const { container } = renderWith("link");
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.innerHTML).not.toContain("team-files");
+    expect(screen.getByText(/daily_spend\.csv \(file not shared\)/)).toBeInTheDocument();
+  });
+});

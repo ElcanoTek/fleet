@@ -1,84 +1,183 @@
 "use client";
 
-// The Share dialog: one container, two audiences (#226 + ADR-0013, joined by
-// ADR-0057).
+// The Share dialog (ADR-0057; docs/TEAM-SHARING.md "Share dialog").
 //
-// Sharing used to mean exactly one thing here — mint a public link — while a
-// second, quite different sharing scope existed at the API and nowhere in the
-// UI, and Settings → Team's copy already promised users they could "share it
-// with your team from its own menu". This dialog makes that true and keeps the
-// two scopes visibly apart:
+// One team block, always first, and one public-link row below it. The team
+// block names the team, stays at full contrast in every state, and carries
+// exactly ONE main button that completes the whole fix for the state the chat
+// is in — the reader never has to leave, find a second surface, and come back:
 //
-//   • Share with team — your team, read-only, revocable, no URL exists.
-//   • Share by link   — anyone who has the URL, including people outside the
-//                       deployment. Read-only, revocable.
+//   A1   no project, a project shared with the team exists → pick one, "Move and share"
+//   A1b  no project, none shared with the team            → "Create shared project"
+//   A2   personal project                                  → "Share project first"
+//   A3a  caller on no team                                 → guidance + an unavailable control
+//   A4   team project, chat not shared                     → file line + "Share with <team>"
+//   A5   chat shared                                       → "Copy link for <team>" + Stop sharing
+//   A5b  stop sharing, confirming                          → names the shared-file count
+//   A6   team project, chat has a public link              → warning + "Share with <team>"
 //
-// Team sharing is deliberately NARROWER here than the backend allows: it is
-// offered only for a chat inside a TEAM-SHARED PROJECT. That is not a
-// technical limit, it is the product one — the project home's Team section is
-// the single place a teammate goes looking, so a team-shared chat with no
-// project would be visible to people with no surface that lists it. When the
-// toggle is unavailable the helper text says which of the two situations the
-// user is in and what to do about it, rather than greying out silently.
+// plus the case the canvas calls s7: the chat's project is shared with a team
+// the caller is not in. Its fix is the A1 one — move the chat into one of the
+// caller's own team projects — so it reuses that picker with its own sentence.
 //
-// Two things that section learned from QA (C-2 / B-4):
+// The rule underneath is unchanged (ADR-0057): a chat is shared with a team
+// only when it sits in a project shared with that team AND its owner shares
+// it. Every state above is a route to satisfying that rule, never a way
+// round it — the server refuses anything else with a 409, and that sentence
+// is shown here, in front of the control it refused.
 //
-//  1. ONE disabled treatment, applied to every unavailable state. A bare
-//     `disabled` on a native checkbox is very nearly invisible — the box still
-//     looks live, the pointer stays an arrow, and nothing but the prose says
-//     otherwise — so it read as a broken control rather than an unavailable
-//     one. `CONTROL_UNAVAILABLE` + `aria-disabled` is that treatment, and it
-//     is derived from the same `canTeamShare` the `disabled` attribute is, so
-//     no state can drift out of it.
-//  2. The section OFFERS the fix, it does not only describe it. Each
-//     unavailable state carries the action that resolves it: move the chat
-//     into one of your team-shared projects (a select, right here — the move
-//     is optimistic upstream, so the toggle goes live in this same dialog),
-//     share the project with your team (owner), ask the owner (member), share
-//     *a* project with your team first, or — with no team at all — the same
-//     role-branched pointer the Projects modal gives.
+// Sharing a chat shares its OUTPUTS (files the agent presented in a reply),
+// minus any the owner unchecked. The dialog reads them from
+// GET /conversations/{id}/outputs; uploads are never outputs, so they are
+// never listed or counted here.
 //
-// Every one of those affordances is behind an OPTIONAL prop. Absent the prop
-// the section degrades to the descriptive copy it had before rather than
-// claiming something it cannot know: "you have no team-shared projects" is a
-// statement, and it must not be made from an unread list.
+// Buttons name the team, never the project (#11): the project is where the
+// chat lives, the team is who will see it.
 
 import type { ConversationSummary } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
-import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
-import { useId, useState } from "react";
+import { LockGlyph, ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { Icon } from "./Icon";
+import { formatBytes } from "./formatters";
+import { useChatToast } from "./ChatToasts";
+import {
+  fetchConversationOutputs,
+  filesLabel,
+  formatDay,
+  plural,
+  sharedToast,
+  teamLinkUrl,
+  type ConversationOutputs,
+  type ShareWithTeamResult,
+} from "./teamSharing";
+import { useEffect, useId, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 
-// The single unavailable treatment: dimmed, and a pointer that says the
-// control will not respond. Paired everywhere with the native `disabled` (so
-// it is genuinely inert, not a handler that no-ops) and `aria-disabled` (so a
-// screen reader is told, not left to infer it from the sentence beside it).
-const CONTROL_UNAVAILABLE = "cursor-not-allowed opacity-50";
+// ── shared button looks (live Fleet tokens only) ─────────────────────────
+const FOCUS =
+  "focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
+const PRIMARY_BTN = `inline-flex min-h-9 items-center gap-2 rounded-full border border-[var(--color-primary)] bg-[var(--color-primary)] px-4 py-2 text-[0.8125rem] font-semibold leading-tight text-[var(--color-on-primary)] transition hover:bg-[var(--color-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const SECONDARY_BTN = `inline-flex min-h-[2.125rem] items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] bg-transparent px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const DANGER_OUTLINE_BTN = `inline-flex min-h-[2.125rem] items-center rounded-full border border-[var(--color-danger-border)] bg-transparent px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`;
+const LINK_BTN = `p-0 text-[0.78rem] font-medium text-[var(--color-accent)] underline underline-offset-2 ${FOCUS}`;
+const BODY = "m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]";
+const STRONG = "font-semibold text-[var(--color-text-primary)]";
 
-// Why the team toggle is unavailable — one case per fix, because the fixes
-// differ. `null` is not in the union: it means the toggle is live.
-type UnavailableReason =
-  // The caller is in no team at all — there is no audience to name, and the
-  // server refuses the share for exactly that reason.
-  | "no-team"
-  // The chat's project is shared with a team the caller is not in.
-  | "other-team"
-  // Personal (un-shared) project, and the caller owns it: they can fix it.
-  | "personal-owner"
-  // Personal project owned by someone else: only that someone can fix it.
-  | "personal-member"
-  // Personal project, and we do not know who is asking (no `userEmail`) — so
-  // offer neither the owner's action nor the member's, and say nothing.
-  | "personal-unknown"
-  // The chat is in no project.
-  | "no-project";
+/** Which of the dialog's team-block states the chat is in. Pure, exported for tests. */
+export type TeamShareState =
+  | "A1" // no project; a team project to move into exists
+  | "A1b" // no project; no team project yet
+  | "A2" // personal project
+  | "A3a" // caller on no team
+  | "A4" // team project, not shared
+  | "A5" // shared
+  | "A6" // team project, public link, not shared
+  | "other-team"; // project shared with a team the caller is not in
+
+export function teamShareState({
+  conversation,
+  project,
+  myTeam,
+  moveTargets,
+}: {
+  conversation: ConversationSummary;
+  project: Project | null;
+  myTeam?: string;
+  moveTargets: Project[];
+}): TeamShareState {
+  // Shared wins over everything: whatever else has changed since (the owner
+  // left the team, the project was re-shared), stopping is always possible
+  // and is what the owner most needs here. The server never refuses a revoke.
+  if (conversation.team_visible) return "A5";
+  // "" is a READ empty team; undefined is unread and claims nothing.
+  if (myTeam === "") return "A3a";
+  if (project?.team_id) {
+    if (myTeam !== undefined && project.team_id !== myTeam) return "other-team";
+    return conversation.share_token ? "A6" : "A4";
+  }
+  if (project) return "A2";
+  return moveTargets.length > 0 ? "A1" : "A1b";
+}
+
+/** "In Knowertech · Shared with Elcano" — the subline under the title. */
+function visibilityLabel(
+  conversation: Pick<ConversationSummary, "team_visible" | "share_token">,
+  team: string,
+): string {
+  if (conversation.team_visible) {
+    return conversation.share_token
+      ? `Shared with ${team} and by link`
+      : `Shared with ${team}`;
+  }
+  return conversation.share_token ? "Public link" : "Only you";
+}
+
+export type ShareDialogProps = {
+  // null when the conversation vanished under the dialog (deleted in another
+  // tab): the dialog then says so instead of rendering controls that would
+  // act on nothing.
+  conversation: ConversationSummary | null;
+  /** The chat's project, when it is in one. */
+  project: Project | null;
+  /** The caller's team: "" = on no team (read), undefined = not read yet. */
+  myTeam?: string;
+  /** Fleet admin? Only phrases the no-team guidance (A3a). */
+  isAdmin?: boolean;
+  /**
+   * Team-shared projects the caller can see. The dialog narrows them to the
+   * caller's OWN team (the server pairs a chat's project against the caller's
+   * team, so another team's project is not a fix) for the A1 picker.
+   */
+  teamSharedProjects?: Project[];
+  busy: boolean;
+  /** The public link was just copied. */
+  copied: boolean;
+  /** The last failure or refusal (the server's 409 sentence), shown inline. */
+  error?: string | null;
+  buildShareUrl: (token: string) => string;
+  onCreateLink: (conversation: ConversationSummary) => void;
+  onCopyLink: (url: string) => void;
+  onStopLink: (conversation: ConversationSummary) => void;
+  /**
+   * Share with the team (A4/A6). `unsharedPaths`, when given, REPLACES the
+   * chat's excluded-file set (the checklist); omitted, earlier choices stand.
+   * Resolves null on failure (the caller sets `error`).
+   */
+  onShareWithTeam: (
+    conversation: ConversationSummary,
+    unsharedPaths?: string[],
+  ) => Promise<ShareWithTeamResult | null>;
+  /** Stop sharing with the team (A5b). Resolves null on failure. */
+  onStopSharingWithTeam: (
+    conversation: ConversationSummary,
+  ) => Promise<ShareWithTeamResult | null>;
+  /** A1: move into `projectId`, then share. Resolves null on failure. */
+  onMoveAndShare: (
+    conversation: ConversationSummary,
+    projectId: string,
+  ) => Promise<ShareWithTeamResult | null>;
+  /** A1b: New project with the team preselected; on create the chat moves in and is shared. */
+  onCreateSharedProject: (conversation: ConversationSummary) => void;
+  /** A2: open the project home with "Share <project> with <team>?" already open. */
+  onShareProjectFirst: (
+    conversation: ConversationSummary,
+    projectId: string,
+  ) => void;
+  /** "Manage in Sources" / the toast's "Manage": the project home's Sources at this chat. */
+  onManageInSources: (
+    conversation: ConversationSummary,
+    projectId: string,
+  ) => void;
+  /** Test seam; defaults to GET /conversations/{id}/outputs. */
+  loadOutputs?: (conversationId: string) => Promise<ConversationOutputs>;
+  onClose: () => void;
+};
 
 export function ShareDialog({
   conversation,
   project,
   myTeam,
-  userEmail,
   isAdmin,
   teamSharedProjects,
   busy,
@@ -88,495 +187,790 @@ export function ShareDialog({
   onCreateLink,
   onCopyLink,
   onStopLink,
-  onSetTeamShared,
-  onMoveToProject,
-  onOpenProjectSettings,
-  onOpenProjects,
+  onShareWithTeam,
+  onStopSharingWithTeam,
+  onMoveAndShare,
+  onCreateSharedProject,
+  onShareProjectFirst,
+  onManageInSources,
+  loadOutputs = fetchConversationOutputs,
   onClose,
-}: {
-  // null when the conversation vanished under the dialog (deleted in another
-  // tab): the dialog then says so instead of rendering controls that would
-  // act on nothing.
-  conversation: ConversationSummary | null;
-  // The chat's project, when it is in one — decides whether team sharing is
-  // available and phrases the helper text when it is not.
-  project: Project | null;
-  myTeam?: string;
-  // The signed-in user, used only to tell a project's OWNER from a member: the
-  // personal-project fix is "share it" for one and "ask them" for the other.
-  // undefined = unknown, and then neither is claimed.
-  userEmail?: string;
-  // Whether the caller is a fleet admin. Only consulted in the no-team state,
-  // where the pointer differs by role (most fleet users are admins; telling an
-  // admin to go ask an admin is worse than useless). undefined = unknown → a
-  // neutral pointer that names both surfaces.
-  isAdmin?: boolean;
-  // The team-shared projects the caller can file this chat into. undefined =
-  // the list was never passed, which is NOT the same as empty — the dialog
-  // stays silent rather than asserting there are none.
-  teamSharedProjects?: Project[];
-  busy: boolean;
-  copied: boolean;
-  // The last failure or refusal from a share action, shown inside the dialog.
-  // The server's `409` names a precondition the reader can act on (no team, no
-  // team-shared home — ADR-0057); a toast behind this modal is not where that
-  // sentence belongs.
-  error?: string | null;
-  buildShareUrl: (token: string) => string;
-  onCreateLink: (conversation: ConversationSummary) => void;
-  onCopyLink: (url: string) => void;
-  onStopLink: (conversation: ConversationSummary) => void;
-  onSetTeamShared: (
-    conversation: ConversationSummary,
-    visible: boolean,
-  ) => void;
-  // Re-file this chat into a project — the same (conversationId, projectID)
-  // move the rail's kebab performs. Optimistic upstream, which is what lets
-  // the toggle go live without closing this dialog.
-  onMoveToProject?: (conversationId: string, projectID: string) => void;
-  onOpenProjectSettings: (projectID: string) => void;
-  // Open the Projects surface — offered when the caller has a team but no
-  // team-shared project to put this chat in.
-  onOpenProjects?: () => void;
-  onClose: () => void;
-}) {
+}: ShareDialogProps) {
+  const toast = useChatToast();
   const token = conversation?.share_token ?? "";
-  const teamShared = Boolean(conversation?.team_visible);
-  const projectIsTeamShared = Boolean(project?.team_id);
-  const teamName = project?.team_id || myTeam || "your team";
-  // Only a chat inside a project shared WITH YOUR TEAM can be team-shared, and
-  // the server enforces exactly that (ADR-0057) — so the gate here has to
-  // match it or the dialog offers a control the API refuses. `myTeam ===
-  // undefined` means the team hasn't been read yet; don't disable on unknown.
-  const inMyTeamsProject =
-    projectIsTeamShared && (myTeam === undefined || project?.team_id === myTeam);
-  // Un-sharing is always available. A chat can be in a state the share rules
-  // no longer allow (its owner left the team, the project was re-shared
-  // elsewhere), and that is precisely when its owner most needs the checkbox
-  // to work — the server never refuses a revoke either.
-  const canTeamShare = inMyTeamsProject || teamShared;
-  // "" is a READ empty team (the caller has none); undefined is an unread one.
-  const callerHasNoTeam = myTeam === "";
-  const iOwnProject =
-    userEmail && project?.owner_email
-      ? project.owner_email === userEmail
-      : undefined;
+  // The audience: the team the chat's project is shared with, else the
+  // caller's own. "your team" is the honest fallback, never a guessed name.
+  const team = project?.team_id || myTeam || "your team";
 
-  const unavailable: UnavailableReason | null = canTeamShare
-    ? null
-    : callerHasNoTeam
-      ? "no-team"
-      : projectIsTeamShared
-        ? "other-team"
-        : project
-          ? iOwnProject === undefined
-            ? "personal-unknown"
-            : iOwnProject
-              ? "personal-owner"
-              : "personal-member"
-          : "no-project";
+  const moveTargets = (teamSharedProjects ?? []).filter(
+    (p) =>
+      Boolean(p.team_id) &&
+      (myTeam ? p.team_id === myTeam : true) &&
+      p.id !== project?.id,
+  );
 
-  // Move targets: team-shared projects in the caller's OWN team (the server
-  // pairs the chat's project against the caller's team, so another team's
-  // project is not a fix), minus the one the chat is already in.
-  const moveTargets =
-    teamSharedProjects === undefined
-      ? undefined
-      : teamSharedProjects.filter(
-          (p) =>
-            Boolean(p.team_id) &&
-            (myTeam ? p.team_id === myTeam : true) &&
-            p.id !== project?.id,
-        );
+  const state: TeamShareState | null = conversation
+    ? teamShareState({ conversation, project, myTeam, moveTargets })
+    : null;
+  // The A1 target team is the caller's team (the picker only lists those).
+  const audience =
+    state === "A1" || state === "A1b" || state === "other-team"
+      ? myTeam || "your team"
+      : state === "A3a"
+        ? "your team"
+        : team;
 
-  const teamCheckboxId = useId();
+  // Outputs: read whenever the file line can show (A4/A5/A6). Keyed by chat
+  // id so a stale read for another chat never paints this one.
+  const wantsOutputs =
+    state === "A4" || state === "A5" || state === "A6";
+  const conversationId = conversation?.id ?? "";
+  const [outputs, setOutputs] = useState<{
+    id: string;
+    data: ConversationOutputs;
+  } | null>(null);
+  const [outputsTick, setOutputsTick] = useState(0);
+  useEffect(() => {
+    if (!wantsOutputs || !conversationId) return;
+    let cancelled = false;
+    loadOutputs(conversationId)
+      .then((data) => {
+        if (!cancelled) setOutputs({ id: conversationId, data });
+      })
+      .catch(() => {
+        // Best-effort: without the read the file line stays quiet rather
+        // than claiming a count it does not know.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsOutputs, conversationId, loadOutputs, outputsTick]);
+  const files = outputs?.id === conversationId ? outputs.data : null;
 
-  const toggleUnavailable = busy || Boolean(unavailable);
+  // Checklist (A4): paths the owner UNchecked. Seeded from the server's
+  // exclusions so sharing again restores earlier choices (#29).
+  const [chooseOpen, setChooseOpen] = useState(false);
+  const [unchecked, setUnchecked] = useState<string[] | null>(null);
+  const effectiveUnchecked =
+    unchecked ??
+    (files ? files.outputs.filter((f) => !f.shared).map((f) => f.path) : []);
 
-  // Revoking a link is destructive for whoever holds the URL (it dies the
-  // moment the DELETE lands), so it takes the same two-step confirm as the
-  // app's other irreversible actions — inline, because a dialog over a dialog
-  // is worse than a second sentence. Cleared whenever the link goes away.
+  // A1 picker.
+  const [picked, setPicked] = useState<string>("");
+  const pickedId = picked || moveTargets[0]?.id || "";
+
+  // A5b.
   const [confirmStop, setConfirmStop] = useState(false);
-  const stopArmed = confirmStop && Boolean(token);
+  // Public-link row: collapsed unless a link already exists (#03).
+  const [linkOpen, setLinkOpen] = useState(Boolean(token));
+  const [confirmStopLink, setConfirmStopLink] = useState(false);
+  const [pending, setPending] = useState(false);
+  const working = busy || pending;
+
+  const linkRowId = useId();
+  const pickerId = useId();
+
+  const confirmShared = (
+    c: ConversationSummary,
+    result: ShareWithTeamResult,
+    projectId: string,
+    teamName: string,
+  ) => {
+    toast.notify(
+      sharedToast(
+        c.title,
+        teamName,
+        result.shared_files,
+        projectId ? () => onManageInSources(c, projectId) : undefined,
+      ),
+    );
+  };
+
+  const run = async (fn: () => Promise<void>) => {
+    setPending(true);
+    try {
+      await fn();
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const shareNow = (c: ConversationSummary) =>
+    run(async () => {
+      // Only send the checklist when the owner opened it: otherwise the
+      // server's existing exclusions stand untouched.
+      const paths = chooseOpen || unchecked ? effectiveUnchecked : undefined;
+      const result = await onShareWithTeam(c, paths);
+      if (!result) return;
+      setChooseOpen(false);
+      setUnchecked(null);
+      setOutputsTick((t) => t + 1);
+      confirmShared(c, result, project?.id ?? "", team);
+    });
+
+  const moveAndShare = (c: ConversationSummary) =>
+    run(async () => {
+      if (!pickedId) return;
+      const target = moveTargets.find((p) => p.id === pickedId);
+      const result = await onMoveAndShare(c, pickedId);
+      if (!result) return;
+      setOutputsTick((t) => t + 1);
+      confirmShared(c, result, pickedId, target?.team_id || audience);
+    });
+
+  const stopSharing = (c: ConversationSummary) =>
+    run(async () => {
+      const result = await onStopSharingWithTeam(c);
+      setConfirmStop(false);
+      if (result) setOutputsTick((t) => t + 1);
+    });
+
+  const copyTeamLink = (c: ConversationSummary) => {
+    const url = teamLinkUrl(c.id);
+    const done = () =>
+      toast.notify({
+        message: `Link copied. Only ${team} members can open it.`,
+      });
+    const clip =
+      typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+    if (!clip) return;
+    void clip.writeText(url).then(done, () => {
+      // A blocked clipboard is not a copied link; say nothing false.
+    });
+  };
 
   return (
     <DialogShell
       label="Share this chat"
       scrimLabel="Close share dialog"
       onDismiss={onClose}
-      className="max-w-[28rem] p-5"
+      className="max-w-[29rem] p-5"
     >
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-          Share {conversation ? `“${conversation.title}”` : "this chat"}
-        </h2>
+      <div className="mb-3.5 flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <h2 className="m-0 text-[1.0625rem] font-medium leading-[1.3] text-[var(--color-text-primary)] [text-wrap:pretty]">
+            Share {conversation ? `“${conversation.title}”` : "this chat"}
+          </h2>
+          {conversation ? (
+            <p
+              data-testid="share-dialog-where"
+              className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78rem] text-[var(--color-text-secondary)]"
+            >
+              {project ? (
+                <Icon name="folder" className="size-3.5 shrink-0" />
+              ) : null}
+              <span>{project ? `In ${project.name}` : "Not in a project"}</span>
+              <span aria-hidden="true" className="text-[var(--color-text-muted)]">
+                ·
+              </span>
+              <VisibilityPill conversation={conversation} team={team} />
+            </p>
+          ) : null}
+        </div>
         <CloseButton label="Close share dialog" onClick={onClose} />
       </div>
 
-      {!conversation ? (
-        <p className="text-[0.875rem] text-[var(--color-text-secondary)]">
-          This chat is no longer available.
-        </p>
+      {!conversation || !state ? (
+        <p className={BODY}>This chat is no longer available.</p>
       ) : (
-        <>
-          {/* The server's own sentence when it refuses (409) — the reason is
-              actionable, so it belongs in front of the control that was
-              refused, not in a toast behind the dialog. */}
+        <div className="flex flex-col gap-3.5">
           {error ? (
             <p
               role="alert"
-              className="mb-3 rounded-[0.6rem] border border-[var(--color-danger-border)] px-2.5 py-1.5 text-[0.78rem] leading-[1.55] text-[var(--color-danger)]"
+              className="m-0 rounded-[var(--radius-md)] border border-[var(--color-danger-border)] px-2.5 py-1.5 text-[0.78rem] leading-[1.55] text-[var(--color-danger)]"
             >
               {error}
             </p>
           ) : null}
 
-          {/* ── Scope 1: the team ───────────────────────────────────── */}
-          <section className="mb-4 rounded-[0.9rem] border border-[var(--color-border)] p-3">
-            {/* The helper text sits OUTSIDE the <label>: it holds a button
-                ("project settings"), and an interactive element inside a
-                label activates that label's control when clicked. */}
-            <div className="flex items-start gap-2.5">
-              {/* A disabled input swallows pointer events in most browsers,
-                  so the not-allowed cursor has to live on a wrapper. */}
-              <span
-                className={`mt-0.5 inline-flex ${toggleUnavailable ? "cursor-not-allowed" : ""}`}
-              >
-                <input
-                  id={teamCheckboxId}
-                  type="checkbox"
-                  className={toggleUnavailable ? CONTROL_UNAVAILABLE : ""}
-                  checked={teamShared}
-                  disabled={toggleUnavailable}
-                  aria-disabled={toggleUnavailable || undefined}
-                  aria-label={`Share with ${teamName}`}
-                  onChange={(e) => {
-                    // `disabled` is the real treatment — a browser will not
-                    // dispatch this at all. The guard is the belt to that
-                    // braces: a synthetic click (jsdom, an extension, a
-                    // future styled control) must not reach the server with
-                    // a request ADR-0057 says it will refuse.
-                    if (toggleUnavailable) return;
-                    onSetTeamShared(conversation, e.target.checked);
-                  }}
-                />
-              </span>
-              <div className="min-w-0 flex-1">
-                <label
-                  htmlFor={teamCheckboxId}
-                  className={`flex items-center gap-1.5 text-[0.875rem] font-medium text-[var(--color-text-primary)] ${toggleUnavailable ? CONTROL_UNAVAILABLE : ""}`}
-                >
-                  <TeamGlyph className="size-3.5 shrink-0" />
-                  Share with team{project?.team_id ? ` (${project.team_id})` : ""}
-                </label>
-                {/* The copy stays at full contrast in every state: the
-                    control is what is unavailable, the explanation of why is
-                    the one thing the reader needs to be able to read. */}
-                <p className="mt-1 block text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                  {inMyTeamsProject ? (
-                    teamShared ? (
-                      <>
-                        Your team can read this chat from{" "}
-                        <strong className="font-medium">{project?.name}</strong>
-                        ’s home page and branch it to build on it. They
-                        can&rsquo;t change it, and files in the chat&rsquo;s
-                        workspace are not shared.
-                      </>
-                    ) : (
-                      <>
-                        Teammates get a read-only view on{" "}
-                        <strong className="font-medium">{project?.name}</strong>
-                        ’s home page. Revocable any time.
-                      </>
-                    )
-                  ) : teamShared && project ? (
-                    // Shared, but the pairing has since broken. Say so, and
-                    // leave the checkbox live so it can be taken back.
+          {/* ── The team block: always first, always full contrast ── */}
+          <section
+            aria-label="Share with your team"
+            data-testid="share-team-block"
+            data-state={state}
+            className="flex flex-col gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-primary)_9%,transparent)] p-3.5"
+          >
+            <h3 className="m-0 flex items-center gap-2 text-[0.9rem] font-semibold text-[var(--color-text-primary)]">
+              <TeamGlyph className="size-4 shrink-0" />
+              {state === "A5" ? `Shared with ${team}` : `Share with ${audience}`}
+            </h3>
+
+            {state === "A1" || state === "other-team" ? (
+              <>
+                <p className={BODY}>
+                  {state === "other-team" && project ? (
                     <>
-                      This chat is still shared with{" "}
-                      <strong className="font-medium">{teamName}</strong>, but{" "}
-                      <strong className="font-medium">{project.name}</strong>{" "}
-                      is no longer shared with your team. Un-tick to stop
-                      sharing it.
-                    </>
-                  ) : projectIsTeamShared && project ? (
-                    <>
-                      <strong className="font-medium">{project.name}</strong>{" "}
-                      is shared with{" "}
-                      <strong className="font-medium">{project.team_id}</strong>
-                      , which you aren&rsquo;t in — so you can&rsquo;t share a
-                      chat into it.
-                    </>
-                  ) : project ? (
-                    <>
-                      <strong className="font-medium">{project.name}</strong>{" "}
-                      isn&rsquo;t shared with your team. Share the project
-                      first
-                      {/* The inline link is the OWNER's fix. Withhold it from
-                          someone we know is not the owner — project settings
-                          are owner-only, so it would point a member at a
-                          door that is locked for them; they get "ask the
-                          owner" below instead. */}
-                      {project.owner_email && iOwnProject !== false ? (
-                        <>
-                          {" "}
-                          —{" "}
-                          <button
-                            type="button"
-                            className="underline hover:text-[var(--color-text-primary)]"
-                            onClick={() => onOpenProjectSettings(project.id)}
-                          >
-                            project settings
-                          </button>
-                        </>
-                      ) : null}
-                      .
+                      <strong className={STRONG}>{project.name}</strong> is
+                      shared with <strong className={STRONG}>{project.team_id}</strong>,
+                      and you’re not in that team. To share this chat with{" "}
+                      {audience}, move it to a project shared with {audience}.
                     </>
                   ) : (
-                    "Move this chat into a team-shared project to share it with your team."
+                    <>
+                      To share a chat with {audience}, it needs to be in a
+                      project shared with {audience}. Pick one and this chat
+                      will move into it.
+                    </>
                   )}
                 </p>
-                {unavailable ? (
-                  <TeamShareFix
-                    reason={unavailable}
-                    conversation={conversation}
-                    project={project}
-                    moveTargets={moveTargets}
-                    isAdmin={isAdmin}
-                    busy={busy}
-                    onMoveToProject={onMoveToProject}
-                    onOpenProjectSettings={onOpenProjectSettings}
-                    onOpenProjects={onOpenProjects}
-                  />
-                ) : null}
-              </div>
-            </div>
-          </section>
-
-          {/* ── Scope 2: a public link ──────────────────────────────── */}
-          <section className="mb-4 rounded-[0.9rem] border border-[var(--color-border)] p-3">
-            <p className="m-0 flex items-center gap-1.5 text-[0.875rem] font-medium text-[var(--color-text-primary)]">
-              <ShareGlyph className="size-3.5 shrink-0" />
-              Share by link
-            </p>
-            {token ? (
-              <>
-                <p className="mb-2 mt-1 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                  <strong className="font-medium">
-                    Anyone with this link
-                  </strong>{" "}
-                  can view a read-only copy — including people outside your
-                  team.
-                </p>
-                <div className="flex items-center gap-2">
-                  <input
-                    readOnly
-                    aria-label="Share link URL"
-                    value={buildShareUrl(token)}
-                    onFocus={(e) => e.currentTarget.select()}
-                    className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 font-mono text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => onCopyLink(buildShareUrl(token))}
-                    className="shrink-0 rounded-full border border-[var(--color-accent)] px-3.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)]"
-                  >
-                    {copied ? "Copied ✓" : "Copy link"}
-                  </button>
-                </div>
-                {stopArmed ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                      Anyone holding the link loses access at once.
-                    </span>
+                {moveTargets.length > 0 ? (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <label
+                        htmlFor={pickerId}
+                        className="text-[0.75rem] text-[var(--color-text-muted)]"
+                      >
+                        Project shared with {audience}
+                      </label>
+                      <select
+                        id={pickerId}
+                        value={pickedId}
+                        disabled={working}
+                        onChange={(e) => setPicked(e.target.value)}
+                        className="h-9 min-w-0 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                      >
+                        {moveTargets.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <button
+                        type="button"
+                        className={PRIMARY_BTN}
+                        disabled={working || !pickedId}
+                        onClick={() => void moveAndShare(conversation)}
+                      >
+                        Move and share
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div>
                     <button
                       type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setConfirmStop(false);
-                        onStopLink(conversation);
-                      }}
-                      className="rounded-full border border-[var(--color-danger-border)] bg-[var(--color-danger)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      className={PRIMARY_BTN}
+                      disabled={working}
+                      onClick={() => onCreateSharedProject(conversation)}
                     >
-                      {busy ? "Stopping…" : "Stop sharing"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => setConfirmStop(false)}
-                      className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-                    >
-                      Keep the link
+                      <Icon name="plus" className="size-3.5" />
+                      Create shared project
                     </button>
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setConfirmStop(true)}
-                    className="mt-2 rounded-full border border-[var(--color-danger-border)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Stop sharing the link
-                  </button>
                 )}
               </>
-            ) : (
+            ) : null}
+
+            {state === "A1b" ? (
               <>
-                <p className="mb-2 mt-1 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
-                  Creates a URL anyone can open — read-only, and not limited
-                  to your team. Revocable any time.
+                <p className={BODY}>
+                  To share a chat with {audience}, it needs to be in a project
+                  shared with {audience}. Create one to move this chat into.
                 </p>
-                {/* `disabled` while a share request is in flight: a second
-                    click used to mint a second POST (and a second toast). */}
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onCreateLink(conversation)}
-                  className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {busy ? "Creating…" : "Create link"}
-                </button>
+                <div>
+                  <button
+                    type="button"
+                    className={PRIMARY_BTN}
+                    disabled={working}
+                    onClick={() => onCreateSharedProject(conversation)}
+                  >
+                    <Icon name="plus" className="size-3.5" />
+                    Create shared project
+                  </button>
+                </div>
               </>
-            )}
+            ) : null}
+
+            {state === "A2" && project ? (
+              <>
+                <p className={BODY}>
+                  <strong className={STRONG}>{project.name}</strong> isn’t
+                  shared with {audience}, so its chats are private to you.
+                  Share the project first, then this chat.
+                </p>
+                <div>
+                  <button
+                    type="button"
+                    className={SECONDARY_BTN}
+                    disabled={working}
+                    onClick={() => onShareProjectFirst(conversation, project.id)}
+                  >
+                    <Icon name="folder" className="size-3.5" />
+                    Share project first
+                  </button>
+                </div>
+              </>
+            ) : null}
+
+            {state === "A3a" ? (
+              <>
+                <p className={BODY}>
+                  You’re not on a team yet, so there’s no one to share with.
+                </p>
+                <ul className="m-0 flex list-disc flex-col gap-1 pl-[1.125rem] text-[0.78rem] leading-[1.5] text-[var(--color-text-secondary)]">
+                  {isAdmin !== false ? (
+                    <li>
+                      <strong className={STRONG}>Admins:</strong> add yourself
+                      in Settings → Admin → Users, or create a team in Settings
+                      → Team.
+                    </li>
+                  ) : null}
+                  {isAdmin !== true ? (
+                    <li>
+                      <strong className={STRONG}>Everyone else:</strong> ask an
+                      admin to add you to a team.
+                    </li>
+                  ) : null}
+                </ul>
+                <div>
+                  {/* The one unavailable control: dashed outline, a lock, and
+                      the word itself (#10). Only the control looks off — the
+                      block around it stays at full contrast. */}
+                  <button
+                    type="button"
+                    disabled
+                    aria-disabled="true"
+                    className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-full border border-dashed border-[var(--color-border-strong)] bg-transparent px-4 text-[0.8125rem] font-semibold text-[var(--color-text-disabled)]"
+                  >
+                    <LockGlyph className="size-3.5" />
+                    Share with a team (unavailable)
+                  </button>
+                </div>
+              </>
+            ) : null}
+
+            {state === "A4" ? (
+              <>
+                <p className={BODY}>
+                  Teammates find it on {project?.name}’s home, read it, and
+                  branch it into their own chat.
+                </p>
+                {files ? (
+                  <div className="flex flex-col gap-2">
+                    <p
+                      data-testid="share-file-line"
+                      className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78rem] text-[var(--color-text-secondary)]"
+                    >
+                      <Icon name="file-text" className="size-3.5 shrink-0" />
+                      {files.total > 0 ? (
+                        <>
+                          <span>
+                            Includes{" "}
+                            {filesLabel(
+                              files.outputs.length - effectiveUnchecked.length,
+                            )}
+                          </span>
+                          <span
+                            aria-hidden="true"
+                            className="text-[var(--color-text-muted)]"
+                          >
+                            ·
+                          </span>
+                          <button
+                            type="button"
+                            aria-expanded={chooseOpen}
+                            className={LINK_BTN}
+                            onClick={() => {
+                              if (!chooseOpen && unchecked === null)
+                                setUnchecked(effectiveUnchecked);
+                              setChooseOpen(!chooseOpen);
+                            }}
+                          >
+                            {chooseOpen ? "Done" : "Choose…"}
+                          </button>
+                        </>
+                      ) : (
+                        <span>Files it creates will be shared too.</span>
+                      )}
+                    </p>
+                    {chooseOpen && files.outputs.length > 0 ? (
+                      <div
+                        role="group"
+                        aria-label="Files to share"
+                        className="flex max-h-52 flex-col overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] p-1"
+                      >
+                        {files.outputs.map((f) => {
+                          const checked = !effectiveUnchecked.includes(f.path);
+                          return (
+                            <label
+                              key={f.path}
+                              aria-label={`${f.name}, ${formatBytes(f.size)}, ${formatDay(f.modified_at)}`}
+                              className="flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 hover:bg-[var(--color-overlay-soft)]"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() =>
+                                  setUnchecked(
+                                    checked
+                                      ? [...effectiveUnchecked, f.path]
+                                      : effectiveUnchecked.filter(
+                                          (p) => p !== f.path,
+                                        ),
+                                  )
+                                }
+                                className="m-0 size-[0.95rem] shrink-0 accent-[var(--color-primary)]"
+                              />
+                              <span className="flex min-w-0 flex-1 flex-col gap-px">
+                                <span className="text-[0.78rem] text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
+                                  {f.name}
+                                </span>
+                                <span className="font-[family-name:var(--font-code)] text-[0.6875rem] tabular-nums text-[var(--color-text-muted)]">
+                                  {formatBytes(f.size)} · {formatDay(f.modified_at)}
+                                </span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div>
+                  <button
+                    type="button"
+                    className={PRIMARY_BTN}
+                    disabled={working}
+                    onClick={() => void shareNow(conversation)}
+                  >
+                    Share with {team}
+                  </button>
+                </div>
+              </>
+            ) : null}
+
+            {state === "A5" && !confirmStop ? (
+              <>
+                <p className={BODY}>
+                  Teammates can read it and branch it, but can’t edit it. Only{" "}
+                  {team} members can open the link.
+                </p>
+                {files ? (
+                  <p
+                    data-testid="share-file-line"
+                    className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78rem] text-[var(--color-text-secondary)]"
+                  >
+                    <Icon name="file-text" className="size-3.5 shrink-0" />
+                    {files.total > 0 ? (
+                      <>
+                        <span>
+                          {Math.min(files.shared_count, files.total)} of{" "}
+                          {filesLabel(files.total)} shared
+                        </span>
+                        {project ? (
+                          <>
+                            <span
+                              aria-hidden="true"
+                              className="text-[var(--color-text-muted)]"
+                            >
+                              ·
+                            </span>
+                            <button
+                              type="button"
+                              className={LINK_BTN}
+                              onClick={() =>
+                                onManageInSources(conversation, project.id)
+                              }
+                            >
+                              Manage in Sources
+                            </button>
+                          </>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span>Files it creates will be shared too.</span>
+                    )}
+                  </p>
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className={PRIMARY_BTN}
+                    disabled={working}
+                    onClick={() => copyTeamLink(conversation)}
+                  >
+                    <TeamGlyph className="size-3.5" />
+                    Copy link for {team}
+                  </button>
+                  <button
+                    type="button"
+                    className={DANGER_OUTLINE_BTN}
+                    disabled={working}
+                    onClick={() => setConfirmStop(true)}
+                  >
+                    Stop sharing
+                  </button>
+                </div>
+              </>
+            ) : null}
+
+            {state === "A5" && confirmStop ? (
+              <div
+                role="alertdialog"
+                aria-label="Stop sharing"
+                className="flex flex-col gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3"
+              >
+                <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]">
+                  Stop sharing with {team}?{" "}
+                  {files && files.shared_count > 0
+                    ? `${plural(files.shared_count, "shared file", "shared files")} will stop being shared too.`
+                    : "Teammates lose access right away."}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() => void stopSharing(conversation)}
+                    className={`inline-flex min-h-[1.875rem] items-center rounded-full border border-[var(--color-danger)] bg-[var(--color-danger)] px-3.5 text-[0.78rem] font-semibold text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${FOCUS}`}
+                  >
+                    Stop sharing
+                  </button>
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() => setConfirmStop(false)}
+                    className={`inline-flex min-h-[1.875rem] items-center rounded-full border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-60 ${FOCUS}`}
+                  >
+                    Keep sharing
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {state === "A6" ? (
+              <>
+                <div className="flex items-start gap-2.5 rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--color-warning-strong)_50%,transparent)] bg-[color-mix(in_srgb,var(--color-warning-strong)_12%,transparent)] px-3 py-2.5">
+                  <Icon
+                    name="warning"
+                    className="mt-0.5 size-3.5 shrink-0 text-[var(--color-warning-soft)]"
+                  />
+                  <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]">
+                    Teammates can’t branch from a link, and it won’t show on{" "}
+                    {project?.name}’s home.
+                  </p>
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    className={PRIMARY_BTN}
+                    disabled={working}
+                    onClick={() => void shareNow(conversation)}
+                  >
+                    Share with {team}
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </section>
+
+          {/* ── Public link: one collapsed row, behavior unchanged ── */}
+          <section
+            aria-label="Share outside your team"
+            className="flex flex-col rounded-[var(--radius-lg)] border border-[var(--color-border)]"
+          >
+            <button
+              type="button"
+              aria-expanded={linkOpen}
+              aria-controls={linkRowId}
+              onClick={() => setLinkOpen(!linkOpen)}
+              className={`flex items-center gap-2.5 rounded-[var(--radius-lg)] bg-transparent px-3.5 py-3 text-left text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] ${FOCUS}`}
+            >
+              <ShareGlyph className="size-4 shrink-0 text-[var(--color-text-secondary)]" />
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-[0.84rem] font-medium">
+                  Share outside your team
+                </span>
+                <span className="text-[0.75rem] text-[var(--color-text-muted)]">
+                  {token
+                    ? "Link is on. Anyone with it can read the transcript, never files."
+                    : "Public link. Transcript only, never files."}
+                </span>
+              </span>
+              <Icon
+                name={linkOpen ? "chevron-down" : "chevron-right"}
+                className="size-4 shrink-0 text-[var(--color-text-muted)]"
+              />
+            </button>
+            {linkOpen ? (
+              <div id={linkRowId} className="flex flex-col gap-2.5 px-3.5 pb-3.5">
+                {token ? (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <input
+                        readOnly
+                        aria-label="Share link URL"
+                        value={buildShareUrl(token)}
+                        onFocus={(e) => e.currentTarget.select()}
+                        className="h-8 min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 font-mono text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => onCopyLink(buildShareUrl(token))}
+                        className={`h-8 shrink-0 rounded-full border border-[var(--color-accent)] px-3.5 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] ${FOCUS}`}
+                      >
+                        {copied ? "Copied ✓" : "Copy link"}
+                      </button>
+                    </div>
+                    {/* Revoking is destructive for whoever holds the URL, so
+                        it keeps its two-step confirm (unchanged behavior). */}
+                    {confirmStopLink ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]">
+                          Anyone holding the link loses access at once.
+                        </span>
+                        <button
+                          type="button"
+                          disabled={working}
+                          onClick={() => {
+                            setConfirmStopLink(false);
+                            onStopLink(conversation);
+                          }}
+                          className={`rounded-full border border-[var(--color-danger-border)] bg-[var(--color-danger)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
+                        >
+                          {busy ? "Stopping…" : "Stop the public link"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={working}
+                          onClick={() => setConfirmStopLink(false)}
+                          className={`rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50 ${FOCUS}`}
+                        >
+                          Keep the link
+                        </button>
+                      </div>
+                    ) : (
+                      <div>
+                        <button
+                          type="button"
+                          disabled={working}
+                          onClick={() => setConfirmStopLink(true)}
+                          className={`rounded-full border border-[var(--color-danger-border)] px-3 py-1 text-[0.75rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
+                        >
+                          Stop the public link
+                        </button>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p className="m-0 text-[0.78rem] leading-[1.5] text-[var(--color-text-secondary)]">
+                      Anyone with the link can read the transcript, including
+                      people outside your team. They can’t branch it, and files
+                      are never included.
+                    </p>
+                    <div>
+                      {/* `disabled` while a request is in flight: a second
+                          click used to mint a second POST. */}
+                      <button
+                        type="button"
+                        disabled={working}
+                        onClick={() => onCreateLink(conversation)}
+                        className={`rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`}
+                      >
+                        {busy ? "Creating…" : "Create public link"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
           </section>
 
           <div className="flex justify-end">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+              className={`rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] ${FOCUS}`}
             >
               Done
             </button>
           </div>
-        </>
+        </div>
       )}
     </DialogShell>
   );
 }
 
-// TeamShareFix is the "offer the fix, don't just describe it" half of the team
-// section: for each unavailable state, the one action that resolves it.
-//
-// It renders NOTHING when it cannot honestly offer anything — an unread
-// project list, or a personal project whose owner we cannot identify. Silence
-// there leaves the adaptive sentence above as the whole answer, which is what
-// the dialog did before and is still true.
-function TeamShareFix({
-  reason,
+// The visibility pill: Only you (lock), Shared with <team> (people), or
+// Public link (chain). Used in the dialog's subline and the chat header.
+function VisibilityPill({
   conversation,
-  project,
-  moveTargets,
-  isAdmin,
-  busy,
-  onMoveToProject,
-  onOpenProjectSettings,
-  onOpenProjects,
+  team,
 }: {
-  reason: UnavailableReason;
-  conversation: ConversationSummary;
-  project: Project | null;
-  moveTargets: Project[] | undefined;
-  isAdmin?: boolean;
-  busy: boolean;
-  onMoveToProject?: (conversationId: string, projectID: string) => void;
-  onOpenProjectSettings: (projectID: string) => void;
-  onOpenProjects?: () => void;
+  conversation: Pick<ConversationSummary, "team_visible" | "share_token">;
+  team: string;
 }) {
-  const line = "mt-2 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)]";
-  const linkish =
-    "underline hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]";
+  const shared = Boolean(conversation.team_visible);
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-px text-[0.72rem] ${
+        shared
+          ? "border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] text-[var(--color-text-primary)]"
+          : "border-[var(--color-border)] text-[var(--color-text-secondary)]"
+      }`}
+    >
+      {shared ? (
+        <TeamGlyph className="size-3 shrink-0" />
+      ) : conversation.share_token ? (
+        <ShareGlyph className="size-3 shrink-0" />
+      ) : (
+        <LockGlyph className="size-3 shrink-0" />
+      )}
+      {visibilityLabel(conversation, team)}
+    </span>
+  );
+}
 
-  if (reason === "no-team") {
-    // Verbatim the Projects modal's pointer, for the same reason it branches:
-    // most fleet users are admins, and sending one of them to ask someone else
-    // would be worse than useless.
-    return (
-      <p className={line}>
-        {isAdmin === undefined
-          ? "You’re not on a team yet. Teams are managed in Settings → Team, or by an admin in Settings → Admin → Users."
-          : isAdmin
-            ? "You’re not on a team yet. Add yourself to one in Settings → Admin → Users, or create one in Settings → Team."
-            : "You’re not on a team yet. Ask an admin to add you in Settings → Admin → Users."}
-      </p>
-    );
-  }
-
-  if (reason === "personal-unknown") return null;
-
-  if (reason === "personal-owner" && project) {
-    return (
+// ChatShareControls: the chat header's sharing entry point (#12) — the
+// visibility chip ("Only you" / "Shared with <team>" / "Public link") and a
+// Share button, on every chat. Both open the share dialog: the chip states a
+// fact, and the dialog is where that fact is changed. The chip's label
+// collapses to its glyph on a phone; its accessible name carries the state at
+// every width.
+export function ChatShareControls({
+  conversation,
+  team,
+  onOpen,
+}: {
+  conversation: Pick<ConversationSummary, "team_visible" | "share_token">;
+  team?: string;
+  onOpen: () => void;
+}) {
+  const label = visibilityLabel(conversation, team || "your team");
+  const shared = Boolean(conversation.team_visible);
+  return (
+    <span className="ml-auto inline-flex shrink-0 items-center gap-2">
       <button
         type="button"
-        onClick={() => onOpenProjectSettings(project.id)}
-        className="mt-2 rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+        data-testid="chat-header-visibility-chip"
+        aria-label={`${label} — open sharing`}
+        title={`${label}. Click to change sharing.`}
+        onClick={onOpen}
+        className={`inline-flex h-[1.625rem] items-center gap-1.5 rounded-full border px-2.5 text-[0.75rem] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] ${FOCUS} ${
+          shared
+            ? "border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] text-[var(--color-text-primary)]"
+            : "border-[var(--color-border)] text-[var(--color-text-secondary)]"
+        }`}
       >
-        Share this project with your team
+        {shared ? (
+          <TeamGlyph className="size-3 shrink-0" />
+        ) : conversation.share_token ? (
+          <ShareGlyph className="size-3 shrink-0" />
+        ) : (
+          <LockGlyph className="size-3 shrink-0" />
+        )}
+        <span className="hidden sm:inline">{label}</span>
       </button>
-    );
-  }
-
-  if (reason === "personal-member" && project) {
-    return (
-      <p className={line}>
-        Ask{" "}
-        <strong className="font-medium">
-          {project.owner_email || "the project’s owner"}
-        </strong>{" "}
-        to share this project with your team.
-      </p>
-    );
-  }
-
-  // "no-project" and "other-team": the fix is the same — put this chat in one
-  // of the caller's OWN team-shared projects.
-  if (moveTargets === undefined) return null;
-
-  if (moveTargets.length === 0) {
-    return (
-      <p className={line}>
-        Share a project with your team first
-        {onOpenProjects ? (
-          <>
-            {" "}
-            —{" "}
-            <button type="button" className={linkish} onClick={onOpenProjects}>
-              Projects
-            </button>
-          </>
-        ) : null}
-        .
-      </p>
-    );
-  }
-
-  if (!onMoveToProject) return null;
-
-  return (
-    <label className="mt-2 flex flex-wrap items-center gap-2 text-[0.78rem] text-[var(--color-text-secondary)]">
-      <span>Move to project</span>
-      {/* Uncontrolled-looking on purpose: the value snaps back to the
-          placeholder because the move re-renders this section as the ENABLED
-          toggle — the select has done its job and is gone. */}
-      <select
-        aria-label="Move to project"
-        className="min-w-0 max-w-[14rem] flex-1 truncate rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-        value=""
-        disabled={busy}
-        onChange={(e) => {
-          const id = e.target.value;
-          if (id) onMoveToProject(conversation.id, id);
-        }}
+      <button
+        type="button"
+        data-testid="chat-header-share"
+        onClick={onOpen}
+        className={`inline-flex h-[1.875rem] items-center rounded-full border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] ${FOCUS}`}
       >
-        <option value="">Choose a team-shared project…</option>
-        {moveTargets.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-            {p.team_id ? ` (${p.team_id})` : ""}
-          </option>
-        ))}
-      </select>
-    </label>
+        Share
+      </button>
+    </span>
   );
 }

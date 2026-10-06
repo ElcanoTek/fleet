@@ -55,12 +55,16 @@ recorded in ADR-0057: the project home's **Team** section is the one place a
 teammate looks, so a team-shared chat with no project would be readable by
 people with no surface listing it.
 
-**Branching a teammate's chat copies only the transcript.** The fork carries
-user/assistant text and no image references — the same filter the read applies
-— and inherits the parent's lockdown. The owner's own branch still copies their
-history in full. Without that split the filter would have been decorative: one
-click turns a redacted read into a full-history chat the brancher owns and can
-read without any filter at all.
+**Branching a teammate's chat copies the transcript and the SHARED files.**
+The fork carries user/assistant text and no image references — the same filter
+the read applies — and inherits the parent's lockdown. Since ADR-0079 it also
+carries every output the owner has shared at that moment, copied into the
+branch's own workspace at the same relative path so the links in the copied
+transcript resolve (see "Files in a team share" below). The owner's own branch
+still copies their history in full and copies no files — it never needed to.
+Without that split the transcript filter would have been decorative: one click
+turns a redacted read into a full-history chat the brancher owns and can read
+without any filter at all.
 
 What a teammate gets is a **read-only view** of the transcript — literally the
 same renderer a public share link uses (`ReadOnlyTranscript`; the two differ
@@ -71,11 +75,14 @@ theirs from the first byte, filed into the same project, private until they
 share it, and unaffected if the original is later unshared or deleted. The
 owner's chat is never modified: conversations keep exactly one owner.
 
-**What team sharing exposes is the transcript only.** Tool calls, tool results
-and reasoning are filtered out server-side (the same filter the public snapshot
-applies), and attachments and generated files stay behind the owner-scoped
-workspace route. A shared conversation *about* a report does not hand out the
-report.
+**What team sharing exposes is the transcript and the chat's outputs.** Tool
+calls, tool results and reasoning are filtered out server-side (the same filter
+the public snapshot applies). Files go with the share since ADR-0079 — but only
+the files the agent *presented*, minus any the owner unchecked, and never an
+upload; see "Files in a team share" below. This replaces the earlier
+"transcript only" rule, under which a teammate got a chat ending in "here is
+the report" and no report. A public link is unchanged: transcript only, never
+files.
 
 **The pairing is enforced by the store, not just offered by the UI.** Sharing
 is refused (`409`, with the reason) unless the caller is in a team and the chat
@@ -88,7 +95,17 @@ them and displayed by nothing — permanent, and unrevokable from any screen.
 the project personal, deleting the project, leaving the team, or being moved to
 another team by an admin all unshare it — in the same statement or transaction
 as the change that caused it. See ADR-0057 for why, and
-`internal/store/team_sharing.go` for where.
+`internal/store/team_sharing.go` for where. A move between two projects shared
+with the same team keeps the chat shared, files included
+(`SetConversationProject` keeps the stamp when the destination's team matches
+it — pinned by `TestMoveBetweenSameTeamProjectsKeepsSharing`).
+
+**Archiving unshares too** (ADR-0079). `SetArchived(true)` clears the flag and
+the stamped audience in the same statement. Every read already refused an
+archived chat, so nothing changes at the moment of archiving; what changes is
+unarchive, which brings the chat back as Only you rather than silently handing
+the team everything presented in it since. The owner's file choices are kept,
+so sharing again restores them.
 
 **And no chat is left filed in a project its owner cannot see.** That is the
 other half of the same rule, and unsharing alone got it wrong. The rail lists
@@ -160,14 +177,117 @@ than re-pointing them.
 
 | Route | Who | What |
 | --- | --- | --- |
-| `POST /conversations/{id}/share-with-team` | owner | the opt-in; stamps the owner's team as the audience. `409` when there is no team or no team-shared home; the response reports the state it **stored** |
-| `GET /conversations/{id}/team-view` | a teammate (or the owner) | the read-only transcript |
-| `POST /conversations/{id}/branch` | anyone who can *read* the parent | fork into a chat you own |
-| `GET /projects/{id}/team-conversations` | members | the project home's Team section |
+| `POST /conversations/{id}/share-with-team` | owner | the opt-in; stamps the owner's team as the audience. `409` when there is no team or no team-shared home. Body `{visible, unshared_paths?}` — `unshared_paths` (with `visible: true`) replaces the file exclusions. Answers `{team_visible, shared_files, total_files}`: the state it **stored**, and the shared-file count (for an unshare, how many just stopped being shared) |
+| `GET /conversations/{id}/outputs` | owner | the chat's outputs, newest first, each with its own `shared` state, plus `total` / `shared_count` |
+| `POST /conversations/{id}/outputs/share` | owner | share or unshare one output: `{path, shared}` |
+| `GET /conversations/{id}/team-view` | a teammate (or the owner) | the read-only transcript, plus `project_id` / `project_name`, `files` (every output; an unshared one is a name only) and `viewer_branch` |
+| `GET /conversations/{id}/team-files/<path>` | a teammate (or the owner) | one shared output's bytes — see the gate below |
+| `GET /conversations/{id}/team-link` | any signed-in user | where a team link lands them: `owner` / `open` / `not_on_team` / `not_shared` |
+| `POST /conversations/{id}/branch` | anyone who can *read* the parent | fork into a chat you own; a teammate's branch also copies the shared files and answers with `branch_origin` |
+| `GET /projects/{id}/team-conversations` | members | the project home's Team section; each row carries the caller's `viewer_branch` |
+| `GET /projects/{id}/files` | members | Sources, grouped by chat (see below) |
+| `GET`/`PUT /projects/{id}/my-state` | members | the caller's own card and Sources state for this project |
 | `GET /projects/{id}/impact` | members | the counts both destructive confirms quote: what a delete destroys, and how many teammates' chats an untick would unfile |
 
 Every refusal on the read paths is a `404`, indistinguishable from "no such
-chat" — team membership is not probeable from here.
+chat" — team membership is not probeable from here. The team link is the one
+read that answers a non-reader with something other than 404, and it says
+only what routing needs (below).
+
+## Files in a team share
+
+ADR-0079 records the decision; this is how it works.
+
+**An output is a file the agent presented.** The destination of a markdown
+link or image — inline or reference-style — in an assistant *text* reply, that
+the web UI would turn into a workspace file chip, that exists right now as a
+regular file in the chat's workspace, and that is not under `attachments/`.
+The rule is a Go port of `resolveScopedWorkspaceHref`
+(`web/src/app/chat/ui/workspaceHref.ts`) in `internal/httpapi/outputs.go`, so
+what the owner sees as a chip and what a teammate may download cannot drift.
+Two consequences follow, both deliberate:
+
+- **Uploads are never outputs** — never shared, listed in Sources, counted in
+  a file line, checklist or toast, or downloadable by a teammate — even when a
+  reply links one.
+- **A file the agent wrote without presenting it is not an output.** It is
+  never shared or counted, and stays a download-only row in its owner's Sources.
+
+The output set is computed from the transcript and the disk on every read; it
+is not stored. A file deleted from the workspace stops being an output at once.
+
+**Per-file state is an exclusion list, default shared.** Sharing a chat shares
+all its outputs, including ones presented later — a shared chat is live, and its
+files are too — minus any the owner unchecked
+(`conversation_output_exclusions`, migration 070). An unchecked file stays
+unchecked across stop sharing, sharing again, archive, unarchive and moves. The
+"fast paths" (the row pill, the getting-started card, the move toast, a new
+chat started shared) never touch exclusions; the share dialog's checklist sends
+`unshared_paths` and replaces them, and Sources toggles one file at a time.
+
+**The download gate.** `GET /conversations/{id}/team-files/<path>` is the first
+cross-user file read in fleet, and it re-checks three things on every request:
+the caller can read the chat through the team door right now (the same gate as
+`team-view`), `<path>` is — by exact string match — a current output, and the
+owner has not excluded it. The file is then opened refusing a symlink at *any*
+component, each step proven to be the entry that was checked, so the owner's
+sandbox (which can write the workspace) cannot swap a shared name for a link to
+an upload or an unchecked file between the check and the read. Responses carry
+`nosniff` and `Content-Security-Policy: sandbox`; HTML, SVG and XML are always
+downloads, never rendered — on the Go side and again in the web proxy.
+
+**The team view** lists every output in `files`, with `shared` saying whether
+it is a live download or a locked name. A withheld file's size and date are
+zeroed for a teammate: its name is already in the transcript, nothing else
+about it was shared.
+
+**Branch contents.** A teammate's branch gets every output shared at the moment
+of branching, copied into its own workspace at the same relative path, as the
+brancher's own files (0644 files, 0755 directories, written through an
+`os.Root` on the new workspace; the source is read with the same no-symlink
+opener as downloads). They never update: later unshares, edits or deletions by
+the owner do not reach them. Unshared outputs are recorded as `withheld_files`
+and stay locked names in the branch's transcript. The origin — source, owner,
+the title as the brancher saw it, time, copied and withheld files — is stored
+in `conversation_branch_origins` and served as `branch_origin` on the branch
+response and on `GET /conversations/{id}`, with `source_still_shared` so the
+banner links back only while the original is still readable. On the branch's
+**first turn** the agent is told which files it has and that any other file the
+transcript mentions did not come with it (one-shot, via a latch on the origin
+row); without that it reads a link to a withheld file and confidently tries to
+open it.
+
+**"You branched this."** `viewer_branch` (on `team-view` and on each
+`team-conversations` row) is the caller's most recent branch of the chat that
+still exists, with `changed_since` = the original gained *messages* after the
+branch was made. Messages rather than `updated_at`, because a rename or a share
+toggle also moves `updated_at`, and the banner says "has added messages since
+you branched". There is no per-person read state.
+
+**Sources, grouped.** `GET /projects/{id}/files` answers `groups`, one per chat
+with files: the caller's own chats (`mine: true`, every non-upload file, each
+flagged `output` / `shared` / `your_copy`, with `is_branch` and `branched_at`
+for a teammate branch) and the teammates' chats shared with the caller's team
+in this project (their shared outputs only — the same gates as
+`team-conversations`, downloads through `team-files`). `file_count` and
+`shared_count` count outputs only. The flat `files` list (the caller's own
+files) is kept for older clients, and also skips uploads now. The UI decides
+the order; the server returns both kinds.
+
+**The team link.** `/chat?team=<id>` lands a signed-in teammate on the
+read-only view. `GET /conversations/{id}/team-link` tells the client where to
+go: `owner` (open it normally), `open`, `not_on_team` (the chat IS currently
+shared; carries the audience `team_id` and nothing about the chat — no title,
+no project), or `not_shared` (anything else: unknown id, private, archived,
+deleted, unshared; carries the chat's project only when the caller can see that
+project anyway). Signed-out visitors are routed through sign-in by the web
+proxy; that half lives in `web/src/proxy.ts`.
+
+**Per-person project state.** `project_user_state` stores, per user per
+project, "Keep personal" (the getting-started card dismissed for good), whether
+they have shared a chat in it (set server-side by a successful
+`share-with-team`, never by the client), and which Sources groups they left
+open — so it follows them across devices.
 
 ## Team learnings
 
@@ -262,7 +382,14 @@ once-per-account act, and two surfaces already own it. So:
 - **No write access for teammates.** Branch is the way to build on someone's
   chat. Co-authoring a live conversation is a different feature (one workspace,
   one sandbox, one cost ledger).
-- **No file sharing through a team share.** Transcript only, deliberately.
+- **No file versions.** `report_v1.xlsx` and `report_v2.xlsx` are two files;
+  overwriting a file in place changes what the shared name serves.
+- **No "every file the agent created" sharing.** Only presented files are
+  outputs (ADR-0079); a file the agent never linked stays private to its owner.
+- **A branch copies at most 1 GiB.** Shared outputs past that budget — or any
+  that cannot be copied, e.g. a path that would cross one of the workspace's
+  bundle symlinks — are recorded as withheld, not copied, and the branch still
+  succeeds.
 - **No repeated-corrections detector.** See "The auto-proposal question"
   below — it is decided, not deferred.
 - **No campaign lifecycle** (archive/complete), **no per-project bindings** for

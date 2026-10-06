@@ -16,11 +16,23 @@ import remarkGfm from "remark-gfm";
 import { CopyButton } from "./ChatChips";
 import { DiffBlock } from "./DiffBlock";
 import { isUnifiedDiff } from "@/app/lib/diffUtils";
-import { PENDING_CONV_KEY, resolveWorkspaceHref } from "./workspaceHref";
+import {
+  LOCKED_FILE_HREF,
+  PENDING_CONV_KEY,
+  resolveWorkspaceHref,
+  teamFileDownloadName,
+} from "./workspaceHref";
+// B19/B20 locked file names (teammate view sentinel + a branch's withheld files).
+import { LockedFileLabel, WithheldFileGate } from "./LockedFiles";
 import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
 // WorkspaceImage moved to its own module so ToolChips can use it without
 // statically importing this (now lazy-loaded) ReactMarkdown pipeline.
 import { WorkspaceImage } from "./WorkspaceImage";
+import {
+  OutputShareMarker,
+  useOutputShareMarkers,
+  workspacePathFromHref,
+} from "./OutputShareMarkers";
 
 // ── markdown renderer ────────────────────────────────────────────────────
 
@@ -215,17 +227,19 @@ export default function AssistantMarkdown({
     // pass through unchanged so e.g. inline base64 still works and
     // the agent can still link to public images.
     img: ({ src, alt, title }) => {
-      const { href } = resolveWorkspaceHref(
+      const { href, downloadFilename: imageName } = resolveWorkspaceHref(
         typeof src === "string" ? src : "",
         conversationId,
       );
       return (
-        <WorkspaceImage
-          key={href}
-          src={href}
-          alt={alt ?? ""}
-          title={title ?? undefined}
-        />
+        <WithheldFileGate href={href} name={imageName}>
+          <WorkspaceImage
+            key={href}
+            src={href}
+            alt={alt ?? ""}
+            title={title ?? undefined}
+          />
+        </WithheldFileGate>
       );
     },
     // Same rewrite for <a href>: when the agent writes
@@ -241,6 +255,11 @@ export default function AssistantMarkdown({
     // it, react-markdown's bare <a> inherits body color and looks
     // identical to surrounding text.
     a: ({ href, title, children }) => {
+      // A locked file the teammate view named but does not hand over
+      // (linkSharedFiles): its name and a lock, never an anchor.
+      if (href === LOCKED_FILE_HREF) {
+        return <LockedFileLabel>{children}</LockedFileLabel>;
+      }
       const {
         href: resolved,
         isWorkspaceFile,
@@ -259,11 +278,15 @@ export default function AssistantMarkdown({
         // Pass the original basename so the browser saves with the
         // name the agent referenced, not a percent-encoded URL slice.
         extraProps.download = downloadFilename || "";
+      } else if (teamFileDownloadName(resolved)) {
+        // A shared output in the teammate view: same save-don't-navigate
+        // treatment as the owner's own workspace link.
+        extraProps.download = teamFileDownloadName(resolved) ?? "";
       } else if (isExternal) {
         extraProps.target = "_blank";
         extraProps.rel = "noopener noreferrer";
       }
-      return (
+      const link = (
         <a
           className="assistant-markdown-link"
           href={resolved || undefined}
@@ -272,6 +295,18 @@ export default function AssistantMarkdown({
         >
           {children}
         </a>
+      );
+      // B17: an owner's team-shared chat marks each output chip Shared /
+      // Not shared. Only workspace files can be outputs; everything else —
+      // and every chat with no marker context — renders unchanged.
+      return isWorkspaceFile ? (
+        <WithheldFileGate href={resolved} name={downloadFilename}>
+          <OutputLinkWithMarker href={resolved} fallbackName={downloadFilename}>
+            {link}
+          </OutputLinkWithMarker>
+        </WithheldFileGate>
+      ) : (
+        link
       );
     },
     strong: ({ children }) => (
@@ -413,3 +448,34 @@ function InlineHtmlPreview({
   );
 }
 
+
+// OutputLinkWithMarker appends the B17 share marker to a workspace link when
+// the transcript sits under an OutputShareContext (an owner's team-shared
+// chat) and the link's path is one of that chat's outputs. It reads the
+// context itself so the memoised `components` map keeps its identity.
+function OutputLinkWithMarker({
+  href,
+  fallbackName,
+  children,
+}: {
+  href: string;
+  fallbackName: string;
+  children: ReactNode;
+}) {
+  const markers = useOutputShareMarkers();
+  if (!markers) return <>{children}</>;
+  const path = workspacePathFromHref(href, markers.conversationId);
+  const shared = path === null ? undefined : markers.shared.get(path);
+  if (path === null || shared === undefined) return <>{children}</>;
+  return (
+    <>
+      {children}
+      <OutputShareMarker
+        name={path.split("/").pop() || fallbackName}
+        shared={shared}
+        team={markers.team}
+        onClick={() => markers.onOpenSources(path)}
+      />
+    </>
+  );
+}

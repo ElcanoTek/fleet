@@ -1,8 +1,24 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getAuthSigningPubkey } from "@/app/lib/auth";
 import { getOidcConfig, shouldAutoStartLogin } from "@/app/lib/oidc";
 import { getServerBranding } from "@/app/lib/serverBranding";
+import { TEAM_LINK_COOKIE, isTeamLinkId } from "@/app/lib/teamLinkCookie";
 import LoginCard from "./login-card";
+
+// teamLinkPending: the visitor is signing in to open a team link (B24). The
+// proxy sends them here with `?team_link=1` and parks the chat id in a cookie;
+// the cookie is checked too so the copy survives a failed attempt, whose
+// redirect back (`/login?e=…`) drops the query.
+async function teamLinkPending(params: URLSearchParams): Promise<boolean> {
+  if (params.get("team_link") === "1") return true;
+  try {
+    return isTeamLinkId((await cookies()).get(TEAM_LINK_COOKIE)?.value);
+  } catch {
+    // Outside a request scope (unit tests) there are no cookies to read.
+    return false;
+  }
+}
 
 // force-dynamic is load-bearing: the deploy build (scripts/update.sh) runs in a
 // staging dir with .env.local excluded, so AUTH_SIGNING_PUBKEY is unset at
@@ -51,8 +67,10 @@ export default async function LoginPage({
   // yields fleet's defaults rather than failing the one page a locked-out
   // operator needs to reach.
   const branding = await getServerBranding();
+  const teamLink = await teamLinkPending(params);
   return (
     <LoginCard
+      teamLink={teamLink}
       magicLinkLoginEnabled={getAuthSigningPubkey() !== ""}
       oidcEnabled={oidc !== null}
       oidcLabel={oidc?.buttonLabel ?? "Sign in with SSO"}

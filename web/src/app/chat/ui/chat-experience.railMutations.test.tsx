@@ -247,7 +247,9 @@ describe("creating a share link against a failing backend", () => {
 
     await pickRowAction("Beta chat", "Share…");
     const dialog = await screen.findByRole("dialog", { name: "Share this chat" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create link" }));
+    // The public link lives in its own collapsed row below the team block.
+    fireEvent.click(within(dialog).getByRole("button", { name: /Share outside your team/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create public link" }));
 
     // The dialog carries its own failure line…
     const alert = await within(dialog).findByRole("alert");
@@ -255,6 +257,6 @@ describe("creating a share link against a failing backend", () => {
     // …and the viewport-level rail toast stays quiet: a share failure is not a
     // rail failure, and the two used to share one state.
     expect(screen.getAllByRole("alert")).toHaveLength(1);
-    expect(within(dialog).getByRole("button", { name: "Create link" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "Create public link" })).toBeEnabled();
   });
 });

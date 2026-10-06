@@ -9,8 +9,10 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -34,6 +36,9 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 	// user-scoped, so a foreign/unknown id yields nil). Also gives us the
 	// parent title for the default branch name.
 	parentTitle := ""
+	// shared is set when the parent is a TEAMMATE's chat: the branch then
+	// carries the parent's shared outputs as the brancher's own copies.
+	var shared *store.TeamSharedConversation
 	parent, err := s.store.Get(r.Context(), user, parentConvID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -43,7 +48,8 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 	case parent != nil:
 		parentTitle = parent.Title
 	default:
-		shared, serr := s.store.GetTeamVisibleConversation(r.Context(), user, parentConvID)
+		var serr error
+		shared, serr = s.store.GetTeamVisibleConversation(r.Context(), user, parentConvID)
 		if serr != nil {
 			http.Error(w, serr.Error(), http.StatusInternalServerError)
 			return
@@ -93,5 +99,46 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		}
 		return
 	}
+	if shared != nil {
+		branch.BranchOrigin = s.carrySharedFilesIntoBranch(r.Context(), shared, branch)
+	}
 	writeJSONStatus(w, http.StatusCreated, branch)
+}
+
+// carrySharedFilesIntoBranch is the file half of a teammate's branch
+// (ADR-0079): every output the owner has SHARED at this moment is copied into
+// the new branch's workspace at the same relative path — so the links in the
+// copied transcript resolve against the brancher's own workspace — and the
+// origin is recorded so the branch can say where it came from and the agent
+// in it can be told which files it actually has.
+//
+// The copies are the brancher's from the first byte: later unshares, edits or
+// deletions by the owner never reach them. Outputs the owner unchecked are
+// recorded as withheld; their names stay in the transcript, as locked names.
+// The owner's OWN branch is untouched by this — it already reads their
+// workspace through their own history and needs no copy.
+//
+// Best-effort past the branch itself: the conversation already exists, so a
+// failure here is logged and the branch is returned without (some of) its
+// files rather than turned into an error the user cannot act on.
+func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.TeamSharedConversation, branch *store.Conversation) *store.BranchOrigin {
+	origin := store.BranchOrigin{
+		SourceConversationID: src.ID,
+		SourceOwnerEmail:     src.OwnerEmail,
+		SourceTitle:          src.Title,
+		BranchedAt:           branch.CreatedAt,
+		CopiedFiles:          []store.BranchFile{},
+		WithheldFiles:        []string{},
+		SourceStillShared:    true,
+	}
+	outs, err := s.outputsFromHistory(ctx, src.ID, src.Messages)
+	if err != nil {
+		log.Printf("branch files: outputs of %s: %v", logSafeSlug(src.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+	} else {
+		origin.CopiedFiles, origin.WithheldFiles = copySharedOutputsIntoBranch(src.ID, branch.ID, outs)
+	}
+	if err := s.store.RecordBranchOrigin(ctx, branch.ID, origin); err != nil {
+		log.Printf("branch files: record origin of %s: %v", logSafeSlug(branch.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+	}
+	return &origin
 }

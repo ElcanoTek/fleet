@@ -50,6 +50,7 @@ export default function LoginCard({
   title,
   tagline,
   appName,
+  teamLink = false,
 }: {
   magicLinkLoginEnabled: boolean;
   oidcEnabled?: boolean;
@@ -58,6 +59,13 @@ export default function LoginCard({
   tagline: string;
   /** The bundle's app_name, rendered as the small uppercase wordmark above the title. */
   appName: string;
+  /**
+   * The visitor opened a team link while signed out (B24): say why they are
+   * signing in, and that they will land on the chat afterwards (the proxy
+   * redirects there once a session exists). Replaces the bundle's welcome copy
+   * for this one visit only.
+   */
+  teamLink?: boolean;
 }) {
   const [loginError, setLoginError] = useState<string | null>(null);
 
@@ -118,10 +126,12 @@ export default function LoginCard({
           {appName}
         </div>
         <h1 className="font-heading mb-2 text-[1.75rem] leading-[1.2] font-bold tracking-[-0.01em] text-[var(--color-text-primary)]">
-          {title}
+          {teamLink ? "Sign in to open this chat" : title}
         </h1>
         <p className="mb-6 text-[1rem] leading-[1.5] text-[var(--color-text-muted)]">
-          {tagline}
+          {teamLink
+            ? "You’ll go straight to the chat after you sign in."
+            : tagline}
         </p>
 
         {loginError ? (

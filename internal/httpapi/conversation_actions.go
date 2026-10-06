@@ -166,8 +166,18 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		}
 		memProposals = append(memProposals, entry)
 	}
+	// A teammate's branch carries where it came from and which shared files
+	// were copied in (ADR-0079) — the branch banner and its "Your copy"
+	// labels. Display data: a failed read degrades to no banner.
+	origin, oerr := s.store.GetBranchOrigin(r.Context(), user, id)
+	if oerr != nil {
+		log.Printf("conversation get: branch origin of %s: %v", logSafeSlug(id), logSafe(oerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		origin = nil
+	}
+	conv.BranchOrigin = origin
 	writeJSON(w, map[string]any{
-		"conversation": conv,
+		"conversation":  conv,
+		"branch_origin": origin,
 		// historyForClient, not the raw entries: the owner's own read is the
 		// one surface that carries each turn's `injected_context` as its own
 		// field, so the transcript can render server-injected context outside

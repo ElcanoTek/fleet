@@ -276,6 +276,22 @@ type chatStore interface {
 	// LeaveTeamImpact is what leaving the team costs — quoted in the confirm.
 	LeaveTeamImpact(ctx context.Context, email, teamID string) (store.LeaveTeamImpact, error)
 	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error)
+	// Files in a team share (ADR-0079). Per-file share state is stored as
+	// exclusions (default shared); a teammate branch records its origin and
+	// the shared files copied into it; the team link resolves to a status
+	// that reveals nothing beyond routing; per-person project UI state.
+	ListOutputExclusions(ctx context.Context, convID string) (map[string]bool, error)
+	SetOutputShared(ctx context.Context, ownerEmail, convID, path string, shared bool) error
+	ReplaceOutputExclusions(ctx context.Context, ownerEmail, convID string, paths []string) error
+	RecordBranchOrigin(ctx context.Context, branchConvID string, o store.BranchOrigin) error
+	GetBranchOrigin(ctx context.Context, ownerEmail, convID string) (*store.BranchOrigin, error)
+	BranchOriginsFor(ctx context.Context, convIDs []string) (map[string]*store.BranchOrigin, error)
+	ClaimBranchFilesAnnouncement(ctx context.Context, convID string) (*store.BranchOrigin, error)
+	ViewerBranches(ctx context.Context, viewerEmail string, sourceIDs []string) (map[string]store.ViewerBranch, error)
+	ResolveTeamLink(ctx context.Context, callerEmail, convID string) (store.TeamLink, error)
+	GetProjectUserState(ctx context.Context, projectID, email string) (store.ProjectUserState, error)
+	UpdateProjectUserState(ctx context.Context, projectID, email string, keptPersonal *bool, sourcesOpen map[string]bool) (store.ProjectUserState, error)
+	MarkProjectSharedChat(ctx context.Context, projectID, email string) error
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
 	// MigrationStatus reports applied vs pending chat-DB migrations for
 	// GET /admin/migrations (#256). Read-only.

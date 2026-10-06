@@ -111,31 +111,40 @@ when they have any.
 - `GET /conversations/{id}/team-view` — the read-only transcript, gated on the
   caller's `team_id` matching the audience the owner **named** when they shared
   (`conversations.team_shared_with`, migration 054) AND the owner's opt-in
-  still being on. Transcript only: no tool calls, no reasoning, no workspace
-  files.
+  still being on. No tool calls, no reasoning — but, since ADR-0079, the
+  chat's **outputs** (files the agent presented, never uploads) minus any the
+  owner unchecked, downloadable through
+  `GET /conversations/{id}/team-files/<path>`, which re-checks every gate per
+  request.
 - `POST /conversations/{id}/branch` accepts a parent the caller can read, so a
   teammate builds on the work by forking it into a chat they own. A fork of
-  someone else's chat copies only what `team-view` showed, and keeps the
-  parent's lockdown.
+  someone else's chat copies only what `team-view` showed — the transcript and
+  the files shared at that moment, as the brancher's own copies at the same
+  paths — and keeps the parent's lockdown.
 
 `POST /conversations/{id}/share-with-team` refuses (`409`) unless the caller is
 in a team and the chat is in a project shared with that team, and reports the
 state it stored. Every write that takes a chat's home away clears the flag and
 the audience with it: moving it out (or into another team's project),
 un-sharing the project (or re-sharing it with a different team), deleting the
-project, leaving the team, and being moved between teams by an admin. Un-sharing
-is never refused. Details and rationale:
-[`TEAM-SHARING.md`](TEAM-SHARING.md) + ADR-0057.
+project, leaving the team, and being moved between teams by an admin — and,
+since ADR-0079, archiving it (unarchive brings it back as Only you, with the
+owner's file choices kept). Un-sharing is never refused. Details and rationale:
+[`TEAM-SHARING.md`](TEAM-SHARING.md) + ADR-0057 + ADR-0079.
 
 Two things the project home says out loud about that state. Its header chip
 **names the team** — *"Shared with Testing"*, never a bare "Shared with team" —
 and when the owner is no longer in that team (an admin moved them, which
 unshared their chats but left the project pointed at the old team) one line
 under the chip says so and names both ways out: share it with the team they are
-in now, or make it personal. And the **Sources** panel lists *the viewer's own*
-files only, and its empty state says so — a team share exposes the transcript,
-never the files, so copy promising "files from this project's chats" described
-files that exist and are withheld by design.
+in now, or make it personal. And the **Sources** panel is grouped by chat
+(ADR-0079): the viewer's own chats, with every file except uploads (only the
+outputs are counted and shareable; other files are download-only), and the
+teammates' chats shared with them in this project, with just the files those
+owners shared. A person's open/closed groups and the getting-started card's
+"Keep personal" are stored per user per project (`GET`/`PUT
+/projects/{id}/my-state`). See [`TEAM-SHARING.md`](TEAM-SHARING.md) "Files in
+a team share".
 
 ## Export / audit
 

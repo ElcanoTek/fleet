@@ -96,7 +96,7 @@ function renderSidebar(overrides: Record<string, unknown> = {}) {
     onCreateProject: noop,
     onOpenProjectHome: noop,
     onPinProject: noop,
-    onShareProject: noop,
+    onNewChatInProject: noop,
     onRenameProject: noop,
     onDeleteProject: noop,
     projects: [PROJECT],

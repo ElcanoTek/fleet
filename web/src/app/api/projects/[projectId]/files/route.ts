@@ -6,10 +6,13 @@ export const runtime = "nodejs";
 
 type Params = { params: Promise<{ projectId: string }> };
 
-// Project home Sources panel (ProjectHome.tsx): workspace files across the
-// caller's own conversations in the project. Privacy scoping and the listing
-// cap live in the Go handler (internal/httpapi/projects.go → projectFiles);
-// downloads go through the per-conversation workspace streamer, not here.
+// Project home Sources panel (ProjectHome.tsx), grouped by chat (ADR-0079):
+// the caller's own chats (every non-upload file, flagged output/shared/your
+// copy) and teammates' shared chats in this project (their SHARED outputs
+// only), plus the legacy flat `files` list of the caller's own files. Privacy
+// scoping, the share gates and the listing cap live in the Go handler
+// (internal/httpapi/projects.go → projectFiles); downloads go through the
+// owner's workspace streamer or the teammate team-files route, not here.
 export async function GET(_request: NextRequest, { params }: Params) {
   const session = await getServerSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

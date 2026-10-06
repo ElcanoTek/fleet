@@ -350,6 +350,24 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Outputs (ADR-0079) — GET /conversations/{id}/outputs and
+	// POST /conversations/{id}/outputs/share. Owner-only; routed here because
+	// the toggle carries a second path segment the (sub, method) table does
+	// not see.
+	if sub == "outputs" {
+		s.handleConversationOutputs(w, r, user, id, subArg)
+		return
+	}
+
+	// A teammate's download of one shared output (ADR-0079) —
+	// GET /conversations/{id}/team-files/<path>. Deliberately NOT owner-gated:
+	// like team-view, its gate is the team read plus the per-file share state,
+	// enforced inside.
+	if sub == "team-files" && r.Method == http.MethodGet {
+		s.handleTeamFile(w, r, user, id, subArg)
+		return
+	}
+
 	// Tool-call audit log — `GET /conversations/{id}/audit` returns the
 	// persistent, queryable history of every tool the agent ran in this
 	// conversation (#224). Membership-scoped: 404 for a conversation the
@@ -513,6 +531,12 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	// owner's per-chat opt-in) live in the store.
 	{sub: "team-view", method: http.MethodGet}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleConversationTeamView(w, r, id, user)
+	},
+	// Where a team link should land this caller (ADR-0079): owner / open /
+	// not_on_team / not_shared. Not owner-gated — it is how a non-owner is
+	// routed — and it reveals nothing beyond the status.
+	{sub: "team-link", method: http.MethodGet}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
+		s.handleTeamLink(w, r, user, id)
 	},
 	{sub: "mcp-servers", method: http.MethodGet}:  withOwnedConversation("not found", (*Server).handleConversationMCPServersGet),
 	{sub: "mcp-servers", method: http.MethodPost}: (*Server).handleConversationMCPServersSet,

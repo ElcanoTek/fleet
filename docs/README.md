@@ -105,8 +105,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **Sharing work inside a project** (team-shared chats and the read-only view
   teammates branch from, "team learnings" as the user-facing name for a
   project's shared memory, the vocabulary, and why a team-shared chat can only
-  live inside a team-shared project): [`docs/TEAM-SHARING.md`](TEAM-SHARING.md)
+  live inside a team-shared project; since ADR-0079 a share carries the chat's
+  outputs, a teammate's branch copies them, and archive unshares):
+  [`docs/TEAM-SHARING.md`](TEAM-SHARING.md)
   + [ADR-0057](adr/0057-team-shared-chats-live-in-team-shared-projects.md)
+  + [ADR-0079](adr/0079-a-team-share-carries-the-chats-outputs.md)
 - **Agent Plugins** (the portable `plugin.json` + `skills/` + `mcp.json`
   package format from agent-plugins.org, loaded from the bundle's `plugins/`
   dir and `plugin_roots:`; how it maps onto the skills tree + MCP catalog, the

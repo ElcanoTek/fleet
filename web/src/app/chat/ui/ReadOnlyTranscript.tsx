@@ -24,9 +24,19 @@
 // those as live links promised a download that could never arrive, so they
 // render as plain text naming the file instead (redactUnsharedFiles). Not a
 // disabled link: a disabled link is still a dead promise.
+//
+// The team door is the one exception, and only for OUTPUTS the owner shared
+// (docs/TEAM-SHARING.md): given `sharedFiles`, those references point at the
+// team-files route and work, and every other workspace reference renders as a
+// locked name (linkSharedFiles). The public link never passes `sharedFiles`,
+// so it stays transcript-only — public links never expose files.
 
 import type { ReactNode } from "react";
-import { redactUnsharedFiles } from "./workspaceHref";
+import {
+  linkSharedFiles,
+  redactUnsharedFiles,
+  type SharedFileLinks,
+} from "./workspaceHref";
 
 export type RawEntry = {
   // Present on the team-shared snapshot, which keeps persisted ids so a reader
@@ -94,13 +104,21 @@ export function ReadOnlyTranscript({
   audience,
   renderAssistant,
   actions,
+  sharedFiles,
 }: {
   bubbles: Bubble[];
   audience: ReadOnlyAudience;
   renderAssistant: (text: string) => ReactNode;
   actions?: (bubble: Bubble) => ReactNode;
+  // Team door only: the owner's shared outputs and how to fetch one. Ignored
+  // for a public link, which never exposes files whatever a caller passes.
+  sharedFiles?: SharedFileLinks;
 }) {
   const imagePlaceholder = IMAGE_NOT_SHARED[audience];
+  const rewrite = (text: string) =>
+    audience === "team" && sharedFiles
+      ? linkSharedFiles(text, sharedFiles)
+      : redactUnsharedFiles(text, imagePlaceholder);
   return (
     <div className="flex flex-col gap-5">
       {bubbles.map((b, i) =>
@@ -119,7 +137,7 @@ export function ReadOnlyTranscript({
                 bubble the snapshot carried, so the team viewer's Copy hands
                 over the owner's text as written rather than a paraphrase of
                 it. The file is unreachable either way. */}
-            {renderAssistant(redactUnsharedFiles(b.text, imagePlaceholder))}
+            {renderAssistant(rewrite(b.text))}
             {actions ? (
               <div className="mt-2 flex items-center gap-3 text-[0.7rem]">
                 {actions(b)}
