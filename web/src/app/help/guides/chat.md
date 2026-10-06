@@ -105,6 +105,13 @@ needs approval, the reply ends with a link or a `fleet chat --approve` command,
 because approvals are settled in fleet, not in the client. Images and audio are
 not accepted.
 
+A message sent from the client while an earlier one is still running does not
+stop it. It waits, and messages on the same session run one at a time, in the
+order `fleet acp` received them. Up to 20 can wait behind the one running. A
+21st is refused straight away with an error saying the session already has a
+prompt running and 20 waiting. It is not sent to fleet, so send it again once
+the earlier ones have been answered, or cancel them from the client.
+
 ### What happens when you ask
 
 The assistant does the work rather than describing it. It has a private working

@@ -1566,6 +1566,55 @@ func TestTextSentAgainDuringAConfirmedStopRuns(t *testing.T) {
 	}
 }
 
+// Prompts waiting for a session run in the order they were tracked, even
+// when a later one reaches the session first: here "second" is held between
+// tracking and its wait (where the SDK's goroutine scheduling can leave it)
+// until "third" is already waiting. Arrival is the order of track calls; the
+// SDK does not promise its handlers start in wire order.
+func TestWaitingPromptsRunInArrivalOrder(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	gate := make(chan struct{})
+	prevHook := promptTracked
+	promptTracked = func(message string) {
+		if message == "second" {
+			<-gate
+		}
+	}
+	t.Cleanup(func() { promptTracked = prevHook })
+	var h *harness
+	h = newHarness(t, harnessOpts{turn: func(w *sseWriter, r *http.Request) {
+		if h.fleet.nth() > 1 {
+			w.emit("conversation", map[string]any{"id": "conv-o"})
+			w.emit("turn.completed", map[string]any{})
+			return
+		}
+		heldTurn(w, r, "conv-o", "turn-o", started, release)
+	}})
+	sid := h.newSession(t)
+	first := h.promptAsync(t, sid, "first", nil, 1)
+	<-started
+	second := h.promptAsync(t, sid, "second", nil, 2)
+	third := h.promptAsync(t, sid, "third", nil, 3)
+	time.Sleep(stopWindow) // "third" is waiting for the session; "second" is still held
+	close(gate)
+	time.Sleep(stopWindow) // "second" is waiting too, behind "third" for the session's mutex
+	close(release)
+	for i, done := range []<-chan promptResult{first, second, third} {
+		if r := await(t, done, fmt.Sprintf("prompt %d", i+1)); r.err != nil || r.resp.StopReason != acpsdk.StopReasonEndTurn {
+			t.Errorf("prompt %d = %+v, %v; want end_turn", i+1, r.resp, r.err)
+		}
+	}
+	h.fleet.mu.Lock()
+	defer h.fleet.mu.Unlock()
+	order := make([]string, 0, len(h.fleet.chats))
+	for _, c := range h.fleet.chats {
+		order = append(order, c.Message)
+	}
+	if strings.Join(order, ",") != "first,second,third" {
+		t.Errorf("fleet received %q, want the prompts in the order they arrived", order)
+	}
+}
+
 // Prompts waiting behind a session's running turn are bounded: they have not
 // reached fleet, so the server's input-queue cap cannot see them. One beyond
 // maxWaitingPrompts is refused at once, never held or sent, and the ones
@@ -1717,6 +1766,9 @@ func TestInflightEmptiesWhenPromptsAreAnswered(t *testing.T) {
 	defer h.agent.mu.Unlock()
 	if len(h.agent.inflight) != 0 {
 		t.Errorf("inflight = %v after every prompt was answered, want empty", h.agent.inflight)
+	}
+	if len(h.agent.line) != 0 {
+		t.Errorf("line = %v after every prompt was answered, want empty", h.agent.line)
 	}
 }
 
